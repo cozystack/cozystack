@@ -1,0 +1,24 @@
+suite: cloudflare-tunnel-gateway-controller PackageSource
+# The controller ships its CRDs in crds/ and has added new kinds across minor
+# releases (GatewayConfig, ExternalBackend). Helm never touches crds/ on
+# upgrade, so the PackageSource opts into CreateReplace; without it a chart
+# bump lands the new controller binary on an existing cluster with the old
+# CRD set. It also depends on the Gateway API CRDs, which cozystack installs as
+# their own package rather than through networking.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: sets upgradeCRDs to CreateReplace and depends on gateway-api-crds
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cloudflare-tunnel-gateway-controller
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].install.upgradeCRDs
+          value: CreateReplace
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.gateway-api-crds

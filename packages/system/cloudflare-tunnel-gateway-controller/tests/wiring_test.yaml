@@ -1,0 +1,107 @@
+suite: cloudflare-tunnel-gateway-controller cozystack wiring
+
+# Pins what values.yaml overrides on the vendored chart, so a `make update`
+# that re-vendors a chart ignoring them, or a dropped override, fails here
+# rather than on a cluster: the single credentials Secret both planes read,
+# the cozystack cluster domain in the controller flags, digest-pinned images,
+# the tunnel ID being the one input the operator has to supply, and the
+# controller-side hostname-ownership layer that keeps tenants on the shared
+# tunnel inside their own apex.
+
+templates:
+  - charts/cloudflare-tunnel-gateway-controller/templates/deployment.yaml
+  - charts/cloudflare-tunnel-gateway-controller/templates/deployment-proxy.yaml
+  - charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml
+  - charts/cloudflare-tunnel-gateway-controller/templates/gatewayclass.yaml
+  - charts/cloudflare-tunnel-gateway-controller/templates/validatingadmissionpolicy-hostname-ownership.yaml
+
+release:
+  name: cloudflare-tunnel-gateway-controller
+  namespace: cozy-cloudflare-tunnel-gateway-controller
+
+set:
+  cloudflare-tunnel-gateway-controller:
+    gatewayClassConfig:
+      tunnelID: 00000000-0000-4000-8000-000000000000
+
+tests:
+  - it: reads the API token and the tunnel token from one operator-created Secret
+    asserts:
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml
+        equal:
+          path: spec.cloudflareCredentialsSecretRef.name
+          value: cloudflare-tunnel-credentials
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/deployment-proxy.yaml
+        equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="TUNNEL_TOKEN")].valueFrom.secretKeyRef
+          value:
+            name: cloudflare-tunnel-credentials
+            key: tunnel-token
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-token-secret=cozy-cloudflare-tunnel-gateway-controller/cloudflare-tunnel-credentials
+
+  - it: passes the tunnel ID through to the GatewayClassConfig behind the cloudflare-tunnel class
+    asserts:
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml
+        equal:
+          path: spec.tunnelID
+          value: 00000000-0000-4000-8000-000000000000
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclass.yaml
+        equal:
+          path: metadata.name
+          value: cloudflare-tunnel
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclass.yaml
+        equal:
+          path: spec.parametersRef.kind
+          value: GatewayClassConfig
+
+  - it: uses the cozystack cluster domain instead of the chart's cluster.local fallback
+    template: charts/cloudflare-tunnel-gateway-controller/templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cluster-domain=cozy.local
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-endpoints=http://cloudflare-tunnel-gateway-controller-proxy-headless.cozy-cloudflare-tunnel-gateway-controller.svc.cozy.local:8081/config
+
+  - it: pins both images by digest
+    asserts:
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/deployment.yaml
+        matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^ghcr\.io/lexfrei/cloudflare-tunnel-gateway-controller:[0-9.]+@sha256:[0-9a-f]{64}$
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/deployment-proxy.yaml
+        matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^ghcr\.io/lexfrei/cloudflare-tunnel-gateway-controller-proxy:[0-9.]+@sha256:[0-9a-f]{64}$
+
+  - it: binds route hostnames to the tenant apex label in the controller, not at admission
+    asserts:
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --hostname-ownership-enforce=true
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --hostname-ownership-label-key=namespace.cozystack.io/host
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --hostname-ownership-namespace-selector=namespace.cozystack.io/host
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/validatingadmissionpolicy-hostname-ownership.yaml
+        hasDocuments:
+          count: 0
+
+  - it: refuses to render without a tunnel ID and names the missing value
+    template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml
+    set:
+      cloudflare-tunnel-gateway-controller:
+        gatewayClassConfig:
+          tunnelID: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: gatewayClassConfig.tunnelID is required
