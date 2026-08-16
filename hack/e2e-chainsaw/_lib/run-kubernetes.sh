@@ -4311,20 +4311,6 @@ cozy_report_node_join_failure() {
     kubectl -n cozy-linstor exec deploy/linstor-controller \
     --container=linstor-controller -- linstor --no-color r l
 
-  # (d) What the tenant HelmReleases did to themselves. The table printed at the
-  # top of this block says which of them are Ready; this says whether one was
-  # torn down and put back on the way here, which is the same question the guard
-  # asks after the assertions and cannot ask from there, because this block ends
-  # in the exit that keeps it from ever running. A teardown of the tenant CNI or
-  # CSI shows up as exactly this failure -- no node ever turns Ready -- and
-  # without this the removal that preceded it is named nowhere in the run.
-  #
-  # After (c) because (c) is two reads and this is a handful per release, and
-  # ahead of the collectors below because those cost minutes. It carries its own
-  # wall clock as well, so a namespace whose apiserver answers slowly costs a
-  # stated number of seconds rather than however many releases are in it.
-  cozy_report_helmrelease_remediation tenant-test "kubernetes-${test_name}" "(d) " || true
-
   # Order below is load-bearing and the phase budget is why. The budget declines
   # whatever has not started when it runs out, so what runs last is what gets
   # declined -- and (c) is the discriminator for mode 2b, the failure this whole
@@ -4406,6 +4392,29 @@ cozy_report_node_join_failure() {
     echo "=== (b1) tenant worker guest serial console (management cluster, ns tenant-test) ==="
     cozy_capture_tenant_serial_console 'node-join failed: captured after fewer than 2 tenant nodes became Ready inside the deadline' 6 || true
   fi
+
+  # (e) What the tenant HelmReleases did to themselves. The table printed at the
+  # top of this block says which of them are Ready; this says whether one was
+  # torn down and put back on the way here, which is the same question the guard
+  # asks after the assertions and cannot ask from there, because this block ends
+  # in the exit that keeps it from ever running. A teardown of the tenant CNI or
+  # CSI shows up as exactly this failure -- no node ever turns Ready -- and
+  # without this the removal that preceded it is named nowhere in the run.
+  #
+  # Below the console rather than above it, and the ordering rule is the
+  # evidence, not the price. The console is the only artefact that survives a
+  # worker which never reached apid, which is the dominant shape of this
+  # failure: nothing else in this block describes that worker at all. This
+  # classification is cheap and it discriminates, but what it reads lives on the
+  # management cluster and outlives the run, so a walk the budget declines here
+  # can be answered afterwards from the objects themselves. An irreplaceable
+  # artefact is collected before a replaceable one, whichever is cheaper.
+  #
+  # Its own wall clock still applies, so a namespace whose apiserver answers
+  # slowly costs a stated number of seconds rather than however many releases
+  # happen to be in it. A decline is announced rather than silent, because a
+  # missing section reads like a namespace that had nothing to report.
+  cozy_report_helmrelease_remediation tenant-test "kubernetes-${test_name}" "(e) " || true
 
   # (d) What the workers got, what they were denied, and what the sandbox nodes
   # under them lost to their own hypervisor. Its question has no other answer
@@ -4648,8 +4657,8 @@ _cozy_guard_kubectl() {
 # declares uninstall-and-reinstall their recovery path; the run has no measurement of how
 # often they take it, and failing a 25-minute bringup on a release doing what it
 # is configured to do is how a guard ends up switched off. That the configuration
-# is itself the defect is true and is not this guard's to assert - it is filed
-# separately. A "failed" Snapshot is reported for the same reason and one more:
+# is itself the defect is true and is not this guard's to assert - it is
+# cozystack/cozystack#3555. A "failed" Snapshot is reported for the same reason and one more:
 # under RetryOnFailure it is not even remediation, just an attempt that kept its
 # manifests and was retried.
 #
