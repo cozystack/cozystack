@@ -46,7 +46,7 @@ type ConfigSpec struct {
 	// MachineHealthCheck tuning for worker node groups.
 	// +kubebuilder:default:={}
 	NodeHealthCheck NodeHealthCheck `json:"nodeHealthCheck"`
-	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
+	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See https://cozystack.io/docs/v1.6/kubernetes/oidc-authentication/ for the operator guide.
 	// +kubebuilder:default:={}
 	Oidc OIDC `json:"oidc"`
 }

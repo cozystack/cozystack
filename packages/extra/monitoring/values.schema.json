@@ -597,7 +597,7 @@
       }
     },
     "oidc": {
-      "description": "OIDC authentication for the Grafana instance. See docs/oidc-grafana.md for the operator guide.",
+      "description": "OIDC authentication for the Grafana instance. See https://cozystack.io/docs/v1.6/operations/services/monitoring/oidc-authentication/ for the operator guide.",
       "type": "object",
       "default": {},
       "required": [

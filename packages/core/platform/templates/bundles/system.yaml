@@ -252,8 +252,8 @@
        (internal/operator/package_reconciler.go:197-201 skips
        components without `install:` before ever reaching the
        hr.Spec.Values assignment). Server-level GrafanaAdmin
-       promotion is out of scope for Phase 1; see
-       docs/oidc-grafana.md. */}}
+       promotion is not implemented; see
+       https://cozystack.io/docs/v1.6/operations/services/monitoring/oidc-authentication/. */}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.monitoring-application" "oidc" $) }}
 {{- else }}

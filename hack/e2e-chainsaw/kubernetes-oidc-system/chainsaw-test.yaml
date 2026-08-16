@@ -6,7 +6,7 @@
 # Does NOT spin up a full Kamaji control plane: that path is covered by the
 # kubernetes-latest/previous suites and would add another ~25 min bringup for
 # a feature whose end-to-end OIDC browser flow is explicitly out of scope
-# (see docs/oidc-tenant.md -> Phase 1). minReplicas: 0 means no worker VMs;
+# (see https://cozystack.io/docs/v1.6/kubernetes/oidc-authentication/). minReplicas: 0 means no worker VMs;
 # the suite runs in minutes. Accordingly the HR is only asserted to EXIST
 # (cozystack-api materialised it), never Ready.
 #

@@ -21,7 +21,7 @@ extract_has() {
 
 DOCKERFILE="$PWD/packages/system/multus/images/multus-cni/Dockerfile"
 KUBEOVN_VALUES="$PWD/packages/system/kubeovn/values.yaml"
-DOC="$PWD/docs/vm-external-vlan.md"
+DOC="$PWD/packages/system/multus/README.md"
 PLATFORM_VALUES="$PWD/packages/core/platform/values.yaml"
 TEMPLATE="$PWD/packages/system/multus/templates/multus-daemonset-thick.yml"
 PATCHFILE="$PWD/packages/system/multus/patches/customize-deployment.patch"
@@ -154,7 +154,7 @@ PATCHFILE="$PWD/packages/system/multus/patches/customize-deployment.patch"
     if extract_has "$extract" "$plugin"; then
         echo "packages/system/multus/images/multus-cni/Dockerfile now extracts" >&2
         echo "./$plugin, which this package deliberately does not stage, and" >&2
-        echo "which docs/vm-external-vlan.md names as left alone." >&2
+        echo "which packages/system/multus/README.md names as left alone." >&2
         if [ "$plugin" = loopback ]; then
           echo "The init container would then replace the node's loopback plugin" >&2
           echo "on every restart. The runtime calls loopback for every pod" >&2
@@ -166,7 +166,7 @@ PATCHFILE="$PWD/packages/system/multus/patches/customize-deployment.patch"
           echo "long-running daemon and a socket on the host, which this" >&2
           echo "package does not run." >&2
         fi
-        echo "Update the guide in the same commit if this is deliberate." >&2
+        echo "Update the multus README in the same commit if this is deliberate." >&2
         return 1
     fi
   done
@@ -194,7 +194,7 @@ PATCHFILE="$PWD/packages/system/multus/patches/customize-deployment.patch"
     printf '%s\n' "$staged" >&2
     echo "expected these 14:" >&2
     printf '%s\n' "$expected" >&2
-    echo "docs/vm-external-vlan.md tells operators the package installs 14 of" >&2
+    echo "packages/system/multus/README.md tells operators the package installs 14 of" >&2
     echo "the upstream reference plugins and names the four it leaves alone," >&2
     echo "so that sentence is now wrong. Update it in the same commit." >&2
     return 1
@@ -203,7 +203,7 @@ PATCHFILE="$PWD/packages/system/multus/patches/customize-deployment.patch"
   for plugin in bridge macvlan ipvlan; do
     if ! extract_has "$extract" "$plugin"; then
         echo "packages/system/multus/images/multus-cni/Dockerfile no longer extracts" >&2
-        echo "./$plugin into /cni-plugins, but docs/vm-external-vlan.md tells operators" >&2
+        echo "./$plugin into /cni-plugins, but packages/system/multus/README.md tells operators" >&2
         echo "the package stages it. The init container installs whatever is in that" >&2
         echo "directory and skips silently when it is absent, so a NAD naming" >&2
         echo "$plugin would go back to failing with" >&2
@@ -413,8 +413,8 @@ PATCHFILE="$PWD/packages/system/multus/patches/customize-deployment.patch"
   fi
 }
 
-@test "the VLAN guide's remediation quotes what the daemonset actually emits" {
-  # The guide names a log line and a container; both spellings live in the
+@test "the multus README's remediation quotes what the daemonset actually emits" {
+  # The README names a log line and a container; both spellings live in the
   # manifest.
   grep -qF -- 'no /cni-plugins in this image; skipping staging' "$TEMPLATE"
   grep -qF -- 'no /cni-plugins in this image; skipping staging' "$DOC"
@@ -433,13 +433,13 @@ PATCHFILE="$PWD/packages/system/multus/patches/customize-deployment.patch"
   # only loopback arrives from anywhere else (cilium and kube-ovn install it).
   grep -qF -- 'and leaves `loopback`, `dhcp`, `dummy` and `tap` alone' "$DOC"
   if grep -qF -- '`tap` to the node image' "$DOC"; then
-    echo "the guide again attributes the unstaged plugins to the node image;" >&2
+    echo "the README again attributes the unstaged plugins to the node image;" >&2
     echo "staging exists because that image may not carry them" >&2
     return 1
   fi
 
   if grep -qF -- 'immediately above' "$DOC"; then
-    echo "the guide again promises the cause sits immediately above the" >&2
+    echo "the README again promises the cause sits immediately above the" >&2
     echo "'failed to install:' summary. It does not when more than one plugin" >&2
     echo "fails: the summary is printed once, after the loop." >&2
     return 1
@@ -454,7 +454,7 @@ PATCHFILE="$PWD/packages/system/multus/patches/customize-deployment.patch"
   # the general case -- that one stays open deliberately.
   grep -qE -- '(^|[^[:alnum:]])set the opt-out before upgrading' "$DOC"
   if grep -qiE -- '(do not|never|no need to|dont|don.t) set the opt-out' "$DOC"; then
-    echo "the guide now tells operators NOT to set the opt-out before" >&2
+    echo "the README now tells operators NOT to set the opt-out before" >&2
     echo "upgrading. Declining afterwards does not restore a replaced plugin," >&2
     echo "so the instruction has to stay as it is." >&2
     return 1
