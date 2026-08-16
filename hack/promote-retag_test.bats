@@ -387,3 +387,48 @@ EOF
   ! grep -q '^copy ' "$tmp/skopeo.log"
   rm -rf "$tmp"
 }
+
+# The workflow invokes this script as ./.promote-scripts/hack/promote-retag.sh
+# with the working directory pointing at the RELEASE tree — two path
+# resolutions that have to stay independent: the helper is sourced relative to
+# the script (`$(dirname "$0")/lib/image-refs.sh`) while the package scan is
+# relative to the working directory (`collect_image_refs packages`). Every
+# other case here runs from the repo root, where those two happen to be the
+# same directory, so none of them would notice the source line being "tidied"
+# to `. hack/lib/image-refs.sh` — and that tidy-up breaks the next promotion
+# only after the tag and the release are already irreversible.
+@test "runs with the script dir and the scanned tree in different places" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  root="$PWD"
+
+  # A stand-in release tree: only the package files the selector scans, at the
+  # same relative paths. Deliberately no hack/ inside it, so the helper cannot
+  # resolve from the working directory and must come from the script's own dir.
+  for pkg in system/kamaji system/linstor; do
+    mkdir -p "$tmp/tree/packages/$pkg"
+    cp "packages/$pkg/values.yaml" "$tmp/tree/packages/$pkg/values.yaml"
+  done
+  [ ! -e "$tmp/tree/hack" ]
+
+  cd "$tmp/tree"
+  rc=0
+  env -u REGISTRY "$root/hack/promote-retag.sh" v9.9.9 --dry-run \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  cd "$root"
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc invoked by absolute path from $tmp/tree" >&2
+    echo "--- script stderr ---" >&2; cat "$tmp/err" >&2
+    echo "--- script stdout ---" >&2; cat "$tmp/out" >&2
+    return "$rc"
+  fi
+
+  # Sourcing resolved against the script dir, and the scan against the working
+  # directory: both packages copied into the stand-in tree are in the plan.
+  grep -q 'docker://ghcr.io/cozystack/cozystack/kamaji@sha256:' "$tmp/out"
+  grep -q 'docker://ghcr.io/cozystack/cozystack/linstor-csi@sha256:' "$tmp/out"
+
+  # And the scan really did read the stand-in tree rather than the repo it was
+  # launched from — a package present only in the repo must be absent here.
+  ! grep -q 'docker://ghcr.io/cozystack/cozystack/redis-operator@sha256:' "$tmp/out"
+}
