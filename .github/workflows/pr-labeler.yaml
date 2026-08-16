@@ -102,6 +102,8 @@ jobs:
               'tcp-balancer':        'area/networking',
               'securitygroups':      'area/networking',
               'cozy-proxy':          'area/networking',
+              'cloudflare-tunnel':   'area/networking',
+              'cloudflare-tunnel-gateway-controller': 'area/networking',
 
               // area/cilium
               'cilium':              'area/cilium',
