@@ -107,8 +107,18 @@ EOF
 }
 
 @test "No KeycloakClient / Scope are created in the cozy realm" {
-  # Only meaningful when the EDP CRDs exist on the cluster.
-  if ! kubectl api-resources --api-group=v1.edp.epam.com >/dev/null 2>&1; then
+  # Only meaningful when the EDP CRDs exist on the cluster. Test the OUTPUT,
+  # not the exit code: `kubectl api-resources` exits 0 for an absent API group
+  # and just prints an empty list, so an exit-code guard never skips.
+  #
+  # A discovery call that FAILS is a different case from an empty list: it means
+  # we cannot tell, so skipping would report success for a cluster this test
+  # never checked. Fail loudly there and skip only on a genuinely empty list.
+  if ! EDP_RESOURCES=$(kubectl api-resources --api-group=v1.edp.epam.com --output=name 2>&1); then
+    echo "kubectl api-resources failed, cannot tell whether the EDP Keycloak CRDs are present: ${EDP_RESOURCES}" >&2
+    return 1
+  fi
+  if ! echo "${EDP_RESOURCES}" | grep -q '^keycloakclients\.'; then
     skip "EDP Keycloak operator CRDs not present on this cluster"
   fi
 
