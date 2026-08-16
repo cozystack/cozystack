@@ -1,0 +1,1538 @@
+suite: TLS configuration for MariaDB
+
+# "Managed" means the chart issues the CA and server certificate; "unmanaged"
+# means the operator keeps its own. Neither enforces: enforcement is opt-in
+# through tls.required and defaults to false. TLS itself is on in every row —
+# the operator serves it regardless — so no row here turns TLS off.
+#
+# Managing TLS is opt-in and is NOT derived from external:
+#   1. external=false, tls.issuer unset  → unmanaged
+#   2. external=true,  tls.issuer unset  → unmanaged (external does not imply it)
+#   3. external=true,  tls.issuer=operator  → unmanaged (explicit, same result)
+#   4. external=any,   tls.issuer=cert-manager   → managed (the only way in)
+#
+# Scope caveat for the backup cases below. They pin the client flags in the
+# rendered script, and that script does not run today: the CronJob reads the
+# root password from Secret <release> key root-password, while the chart
+# renders <release>-credentials key root, so the pod never leaves
+# CreateContainerConfigError. That mismatch predates this branch and is not
+# fixed here — fixing it would start scheduled dumps on every instance with
+# backups enabled. The cases stay because the flag defect they cover was real:
+# the MariaDB client rejects the MySQL-only --ssl-mode at argument parsing, so
+# whenever the job is repaired or removed, these are what stop it coming back.
+# Until then, read them as pinning the template, not as covering a live path.
+
+release:
+  name: my-mariadb
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+
+tests:
+  # -------------------------------------------------------------------
+  # Case 1: external=false, tls.issuer unset → no TLS resources
+  # -------------------------------------------------------------------
+  - it: "certmanager.yaml renders no documents when external=false and tls.issuer is unset"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # spec.tls.enabled is true in every configuration, because the operator
+  # substitutes TLS{Enabled: true} whenever spec.tls is absent — omitting the
+  # block does not disable TLS, it only hides that TLS is on. Enforcement is
+  # stated explicitly in every configuration too, defaulting to false. What the
+  # unmanaged case must NOT carry is the certificate references: those select
+  # chart-owned material that does not exist there.
+  - it: "mariadb.yaml declares TLS enabled but unmanaged when external=false and tls.issuer is unset"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: false
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - equal:
+          path: spec.tls.required
+          value: false
+      - notExists:
+          path: spec.tls.serverCertSecretRef
+      - notExists:
+          path: spec.tls.serverCASecretRef
+
+  # Enforcement is not gated on managed TLS. It works against the operator's own
+  # certificates, so dropping it here would accept required: true and silently
+  # not enforce — the worst outcome for a setting that exists to refuse
+  # unprotected connections.
+  - it: "unmanaged TLS still honours an explicit required=true"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: false
+      tls:
+        required: true
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - equal:
+          path: spec.tls.required
+          value: true
+      - notExists:
+          path: spec.tls.serverCertSecretRef
+
+  - it: "operator-issued TLS honours required=true even with issuer set explicitly"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: true
+      tls:
+        issuer: operator
+        required: true
+    asserts:
+      - equal:
+          path: spec.tls.required
+          value: true
+      - notExists:
+          path: spec.tls.serverCASecretRef
+
+  # -------------------------------------------------------------------
+  # Case 2: tls.issuer=cert-manager → managed. external only adds the external SAN;
+  # it does not select managed TLS on its own.
+  # -------------------------------------------------------------------
+  - it: "certmanager.yaml renders 4 documents (selfsigned Issuer, CA Cert, CA Issuer, leaf Cert) when tls.issuer=cert-manager"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "first document is a selfsigned Issuer when TLS is managed"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: apiVersion
+          value: cert-manager.io/v1
+      - equal:
+          path: kind
+          value: Issuer
+      - equal:
+          path: metadata.name
+          value: my-mariadb-selfsigned
+      - exists:
+          path: spec.selfSigned
+
+  - it: "second document is the CA Certificate when TLS is managed"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: my-mariadb-ca
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.secretName
+          value: my-mariadb-ca-tls
+      - equal:
+          path: spec.issuerRef.name
+          value: my-mariadb-selfsigned
+
+  - it: "third document is the CA Issuer when TLS is managed"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: Issuer
+      - equal:
+          path: metadata.name
+          value: my-mariadb-ca
+      - equal:
+          path: spec.ca.secretName
+          value: my-mariadb-ca-tls
+
+  - it: "fourth document is the leaf Certificate when TLS is managed"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: my-mariadb-tls
+      - equal:
+          path: spec.secretName
+          value: my-mariadb-tls
+      - equal:
+          path: spec.isCA
+          value: false
+      - equal:
+          path: spec.issuerRef.name
+          value: my-mariadb-ca
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+
+  - it: "leaf Certificate SAN list contains internal primary and secondary service names when external=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test.svc.cluster.local"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-primary"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-primary.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-primary.tenant-test.svc.cluster.local"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-secondary"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-secondary.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-secondary.tenant-test.svc.cluster.local"
+      - contains:
+          path: spec.dnsNames
+          content: "localhost"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc.cluster.local"
+
+  # The full SAN set, pinned exactly. The operator cannot issue this certificate
+  # for us — its TLS spec has no alt-names field, so the external hostname could
+  # never be included — which means this list is maintained by hand against the
+  # operator's service naming.
+  #
+  # What this pins is the template against an accidental edit: lengthEqual makes
+  # it catch an addition as well as a removal. What it cannot do is notice the
+  # operator renaming a service, because the expected list here is a copy of what
+  # the template produces, not of what the operator expects. That gap needs an
+  # e2e case that actually completes a handshake.
+  - it: "leaf Certificate SAN set is exactly the expected list"
+    templates:
+      - templates/certmanager.yaml
+    documentIndex: 3
+    set:
+      external: true
+      tls:
+        issuer: cert-manager
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 18
+      - equal:
+          path: spec.dnsNames
+          value:
+            - localhost
+            - "*.my-mariadb-internal"
+            - "*.my-mariadb-internal.tenant-test"
+            - "*.my-mariadb-internal.tenant-test.svc"
+            - "*.my-mariadb-internal.tenant-test.svc.cluster.local"
+            - my-mariadb
+            - my-mariadb.tenant-test
+            - my-mariadb.tenant-test.svc
+            - my-mariadb.tenant-test.svc.cluster.local
+            - my-mariadb-primary
+            - my-mariadb-primary.tenant-test
+            - my-mariadb-primary.tenant-test.svc
+            - my-mariadb-primary.tenant-test.svc.cluster.local
+            - my-mariadb-secondary
+            - my-mariadb-secondary.tenant-test
+            - my-mariadb-secondary.tenant-test.svc
+            - my-mariadb-secondary.tenant-test.svc.cluster.local
+            - my-mariadb.example.com
+
+  - it: "leaf Certificate SAN list includes external hostname when external=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.example.com"
+
+  - it: "mariadb.yaml sets spec.tls.enabled=true and serverCertSecretRef + serverCASecretRef pointing to chart secrets when external=true"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - equal:
+          path: spec.tls.required
+          value: false
+      - equal:
+          path: spec.tls.serverCertSecretRef.name
+          value: my-mariadb-tls
+      - equal:
+          path: spec.tls.serverCASecretRef.name
+          value: my-mariadb-ca-tls
+      - notExists:
+          path: spec.tls.serverCertIssuerRef
+
+  # -------------------------------------------------------------------
+  # Case 3: external=true, tls.issuer=operator → explicit override wins
+  # -------------------------------------------------------------------
+  - it: "certmanager.yaml renders no documents when tls.issuer=operator even if external=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+      tls:
+        issuer: operator
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # tls.issuer: operator means "do not manage TLS", never "turn TLS off" — the
+  # operator cannot be told to turn it off. Rendering enabled: false here would
+  # be the one change that actually downgrades an existing instance.
+  - it: "mariadb.yaml keeps TLS enabled but unmanaged when tls.issuer=operator even if external=true"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: true
+      tls:
+        issuer: operator
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - equal:
+          path: spec.tls.required
+          value: false
+      - notExists:
+          path: spec.tls.serverCertSecretRef
+      - notExists:
+          path: spec.tls.serverCASecretRef
+
+  # -------------------------------------------------------------------
+  # Case 4: external=false, tls.issuer=cert-manager → explicit override wins
+  # -------------------------------------------------------------------
+  - it: "certmanager.yaml renders 4 documents when tls.issuer=cert-manager even if external=false"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+      tls:
+        issuer: cert-manager
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "leaf Certificate SAN list does NOT include external hostname when external=false but tls.issuer=cert-manager"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+      tls:
+        issuer: cert-manager
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: "my-mariadb.example.com"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-primary"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-secondary"
+      - contains:
+          path: spec.dnsNames
+          content: "localhost"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc.cluster.local"
+
+  - it: "mariadb.yaml sets spec.tls.enabled=true with both cert refs when tls.issuer=cert-manager even if external=false"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: false
+      tls:
+        issuer: cert-manager
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - equal:
+          path: spec.tls.required
+          value: false
+      - equal:
+          path: spec.tls.serverCertSecretRef.name
+          value: my-mariadb-tls
+      - equal:
+          path: spec.tls.serverCASecretRef.name
+          value: my-mariadb-ca-tls
+      - notExists:
+          path: spec.tls.serverCertIssuerRef
+
+  # -------------------------------------------------------------------
+  # Naming: resource names are derived from release name
+  # -------------------------------------------------------------------
+  - it: "selfsigned Issuer name uses release name as prefix"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 0
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: "^my-mariadb-"
+
+  - it: "CA Certificate duration is set to 5 years"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.duration
+          value: "43800h"
+
+  - it: "CA Certificate privateKey.rotationPolicy is Never"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+
+  - it: "leaf Certificate privateKey.rotationPolicy is Always"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+
+  # Both, because cert-manager rejects duration <= renewBefore at admission:
+  # pinning only one lets the other drift into a pair that renders but will not
+  # apply.
+  - it: "leaf Certificate has duration and renewBefore set"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.renewBefore
+          value: "720h"
+      - equal:
+          path: spec.duration
+          value: "8760h"
+
+  # -------------------------------------------------------------------
+  # NB6: dashboard-resourcemap.yaml exposure is TLS-state independent.
+  #
+  # The tenant grant used to follow the issuer and hand out the
+  # cert-manager Secrets whenever TLS was on. Those Secrets carry private
+  # keys, so the grant is now a flat invariant instead: no TLS state may put
+  # them in the Role. All four issuer/external combinations are checked so a
+  # regression cannot hide in the branch that happens to enable TLS.
+  # -------------------------------------------------------------------
+  - it: "RBAC excludes TLS secrets when external=false and tls.issuer unset"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: false
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+
+  - it: "RBAC excludes TLS secrets when external=true and tls.issuer unset"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: true
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+
+  - it: "RBAC excludes TLS secrets when tls.issuer=operator even if external=true"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: true
+      tls:
+        issuer: operator
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+
+  - it: "RBAC excludes TLS secrets when tls.issuer=cert-manager even if external=false"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: false
+      tls:
+        issuer: cert-manager
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+
+  # -------------------------------------------------------------------
+  # B2: issuer resolution must survive explicit tls=null without panic
+  # -------------------------------------------------------------------
+  - it: "issuer resolution survives explicit tls=null without panic (certmanager renders 0 docs)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls: null
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # tls: null is the same as unset, and unset no longer means "follow external".
+  - it: "issuer resolution survives explicit tls=null with external=true (stays operator-issued)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls: null
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # -------------------------------------------------------------------
+  # B1: CA cert usages — signing + cert sign + crl sign, no key encipherment
+  # crl sign added for conventional compliance (RFC 5280).
+  # -------------------------------------------------------------------
+  - it: "CA cert has correct usages (signing + cert sign + crl sign)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 1
+    asserts:
+      - notContains:
+          path: spec.usages
+          content: key encipherment
+      - contains:
+          path: spec.usages
+          content: signing
+      - contains:
+          path: spec.usages
+          content: cert sign
+      - contains:
+          path: spec.usages
+          content: crl sign
+      - lengthEqual:
+          path: spec.usages
+          count: 3
+
+  # -------------------------------------------------------------------
+  # K1: crl sign in CA cert usages (RFC 5280 conventional compliance)
+  # -------------------------------------------------------------------
+  - it: "CA cert usages contain crl sign"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 1
+    asserts:
+      - contains:
+          path: spec.usages
+          content: crl sign
+
+  # -------------------------------------------------------------------
+  # NB7: cert-manager Secret names are pinned. They are referenced by the
+  # operator (serverCASecretRef / serverCertSecretRef) and by the backup
+  # CronJob volume, so a rename must break loudly here rather than at runtime.
+  # -------------------------------------------------------------------
+  - it: "leaf cert secretName is pinned"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: my-mariadb-tls
+
+  - it: "CA cert secretName is pinned"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: my-mariadb-ca-tls
+
+  # The tls.required default and both explicit overrides are covered together
+  # with the unmanaged case, further down under "Tenant exposure".
+
+  # -------------------------------------------------------------------
+  # B4: external absent (no value set) must not append an external SAN
+  # The guard `| default false` ensures omitted external never produces
+  # a malformed entry like "my-mariadb." in the SAN list.
+  # -------------------------------------------------------------------
+  - it: "leaf cert SAN list has no external entry when external is not set"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: "my-mariadb.example.com"
+
+  # -------------------------------------------------------------------
+  # B2: tls.issuer unset resolves to the operator
+  # kindIs "invalid" catches the unset case. The schema constrains the field to
+  # the enum, so an explicit tls.issuer: null is rejected before rendering and
+  # only the unset path reaches the helper. This says nothing about tls: null —
+  # blanking the whole map is a different value, is allowed, and is covered
+  # separately above.
+  # -------------------------------------------------------------------
+  # external no longer implies managed TLS. Deriving it would swap the CA of an
+  # existing external instance on the next platform upgrade, with no action from
+  # its owner, and without raising the security floor — those instances already
+  # serve TLS under the operator's CA.
+  - it: "tls.issuer unset with external=true does NOT manage TLS"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "tls.issuer unset with external=false renders no chart certificates"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # -------------------------------------------------------------------
+  # NB: the leaf is a server certificate and nothing else. The operator issues
+  # its own server certificates with server auth alone and keeps client auth on
+  # separate client certificates, so the chart matches that split: a user
+  # declared REQUIRE X509 accepts any client certificate signed by a trusted
+  # CA, and client auth here would make the server key usable as one.
+  # digital signature is what the ECDSA key needs for the ECDHE signature;
+  # key encipherment is RSA key transport and is inapplicable to P-256.
+  # Absence of CA-only EKUs (cert sign, signing) is also verified.
+  # -------------------------------------------------------------------
+  - it: "leaf cert usages are exactly server auth and digital signature"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+      - contains:
+          path: spec.usages
+          content: digital signature
+      - notContains:
+          path: spec.usages
+          content: client auth
+      - notContains:
+          path: spec.usages
+          content: key encipherment
+      - notContains:
+          path: spec.usages
+          content: cert sign
+      - notContains:
+          path: spec.usages
+          content: signing
+      - lengthEqual:
+          path: spec.usages
+          count: 2
+
+  # -------------------------------------------------------------------
+  # C: digital signature in leaf cert usages
+  # Required for TLS 1.3 and TLS 1.2 ECDHE — strict clients (Go
+  # crypto/tls, BoringSSL) reject handshakes without this usage.
+  # -------------------------------------------------------------------
+  - it: "leaf cert usages contain digital signature"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: digital signature
+
+  # -------------------------------------------------------------------
+  # tls.issuer round-trip through the helper
+  # The schema constrains the field to the enum, so anything outside it — a
+  # number, a typo — is rejected before the helper runs. What reaches the
+  # helper is one of the two strings, and it compares them as strings; unset
+  # resolves to the operator via kindIs "invalid".
+  # -------------------------------------------------------------------
+  - it: "cert-manager issuer survives the toString round-trip in the helper"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  # -------------------------------------------------------------------
+  # K2: short-form SAN variants for ndots-shortened clients
+  # <name>.<ns> (without .svc) and *.<name>-internal (without <ns>.svc)
+  # cover clients that search-domain-shorten hostnames before sending DNS
+  # queries, which can produce names that bypass the full-form SANs.
+  # -------------------------------------------------------------------
+  - it: "leaf cert SAN list contains short-form <name>.<ns> entries"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-primary.tenant-test"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-secondary.tenant-test"
+
+  # The headless wildcard must cover the same four resolution depths as every
+  # named service. A client resolving the 3-label form (low ndots, or a search
+  # domain) presents that name at handshake time, so a gap fails verification.
+  - it: "leaf cert SAN list covers all four depths of the headless wildcard"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc.cluster.local"
+
+  # external=true requires a hostname for the LoadBalancer SAN. Without the
+  # guard the template dereferences nil and dies with a raw Go pointer error
+  # that says nothing about which value is missing.
+  - it: "external=true without _namespace.host fails with an actionable message"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      external: true
+      _namespace: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "external is true but _namespace.host is not set"
+
+  # -------------------------------------------------------------------
+  # ECDSA: CA and leaf use ECDSA P-256
+  # Smaller keys, faster handshakes, stronger per-bit security than RSA.
+  # rotationPolicy preserved: Never for CA, Always for leaf.
+  # -------------------------------------------------------------------
+  - it: "CA cert uses ECDSA P-256 algorithm"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: "leaf cert uses ECDSA P-256 algorithm"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: "CA cert rotationPolicy is Never (ECDSA)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+
+  - it: "leaf cert rotationPolicy is Always (ECDSA)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+
+  # -------------------------------------------------------------------
+  # E: backup CronJob mounts the TLS trust anchor when TLS is managed.
+  # When require_secure_transport=ON, the backup mysqldump/mysql commands need
+  # SSL flags to connect. The anchor comes from the operator's ca-bundle, not
+  # from the leaf Secret — see the volume test below for why.
+  # -------------------------------------------------------------------
+  - it: "backup CronJob has tls-ca volumeMount when tls.issuer=cert-manager"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /etc/mysql-ssl
+            name: tls-ca
+            readOnly: true
+
+  # The trust anchor comes from the operator's CA bundle, not the leaf Secret:
+  # the bundle spans a CA rollover, the leaf only holds the current signer.
+  - it: "backup CronJob takes tls-ca volume from the operator CA bundle when tls.issuer=cert-manager"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.volumes
+          content:
+            name: tls-ca
+            secret:
+              secretName: my-mariadb-ca-bundle
+              optional: true
+              items:
+              - key: ca.crt
+                path: ca.crt
+      # The leaf Secret must not be mounted into the backup Pod at all.
+      - notContains:
+          path: spec.jobTemplate.spec.template.spec.volumes
+          content:
+            name: tls-ca
+            secret:
+              secretName: my-mariadb-tls
+              items:
+              - key: ca.crt
+                path: ca.crt
+
+  # These two used to assert the volume was absent when TLS is unmanaged. It is
+  # now always mounted, because the backup client always verifies. They also
+  # never actually asserted that: notContains compares whole list entries, so
+  # a partial {name: tls-ca} matched nothing and passed either way.
+  - it: "backup CronJob mounts the CA bundle when tls.issuer=operator"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      tls:
+        issuer: operator
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.volumes
+          content:
+            name: tls-ca
+            secret:
+              secretName: my-mariadb-ca-bundle
+              optional: true
+              items:
+              - key: ca.crt
+                path: ca.crt
+
+  - it: "backup CronJob mounts the CA bundle when external=false and tls.issuer unset"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      external: false
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.volumes
+          content:
+            name: tls-ca
+            secret:
+              secretName: my-mariadb-ca-bundle
+              optional: true
+              items:
+              - key: ca.crt
+                path: ca.crt
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /etc/mysql-ssl
+            name: tls-ca
+            readOnly: true
+
+  # -------------------------------------------------------------------
+  # CA publication contract. The chart owns the cert-manager chain, so it
+  # labels the CA Secret itself. The labels mark the key-bearing CA Secret as
+  # the source for a key-free projection published to the tenant; the tenant
+  # never reads this Secret directly. Only the CA carries the labels — the
+  # leaf Secret holds the server private key and must never be published.
+  # -------------------------------------------------------------------
+  # The trust anchor is published from the operator's key-free ca-bundle, named
+  # by the ApplicationDefinition, so neither cert-manager Secret may be marked
+  # as a publication source. A publish label here would create a second path,
+  # and it would run right next to the CA private key.
+  - it: "no cert-manager Secret is marked as a CA publication source"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    asserts:
+      - equal:
+          path: spec.isCA
+          value: true
+        documentIndex: 1
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+        documentIndex: 1
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
+        documentIndex: 1
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+        documentIndex: 3
+
+  # The leaf must present a non-empty Subject CN for clients that still verify
+  # against it rather than the SAN list.
+  - it: "leaf Certificate sets a commonName"
+    templates:
+      - templates/certmanager.yaml
+    documentIndex: 3
+    set:
+      tls:
+        issuer: cert-manager
+    asserts:
+      - equal:
+          path: spec.commonName
+          value: my-mariadb
+
+  - it: "leaf Certificate is never labelled for CA publication"
+    templates:
+      - templates/certmanager.yaml
+    documentIndex: 3
+    set:
+      tls:
+        issuer: cert-manager
+    asserts:
+      - equal:
+          path: spec.isCA
+          value: false
+      # The leaf carries the operator watch label but must never be marked as a
+      # publication source: its Secret holds the server private key.
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
+
+  # Both Secrets are referenced by the MariaDB CR (serverCASecretRef /
+  # serverCertSecretRef), and the operator gates those watches on this label.
+  # Without it a cert-manager renewal is not observed until the next resync.
+  - it: "both Certificates label their Secrets for the operator watch"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    asserts:
+      - exists:
+          path: spec.secretTemplate.labels["k8s.mariadb.com/watch"]
+        documentIndex: 1
+      - exists:
+          path: spec.secretTemplate.labels["k8s.mariadb.com/watch"]
+        documentIndex: 3
+
+  # The publication labels are rendered inside the cert-manager gate, so under
+  # the operator issuer the chain does not exist at all and nothing is marked
+  # for publication.
+  - it: "no CA publication labels are rendered under the operator issuer"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: operator
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # -------------------------------------------------------------------
+  # Tenant exposure. The dashboard Role is the tenant-facing grant, so the
+  # key-bearing cert-manager Secrets must not appear in it under any TLS
+  # state. The tenant gets the key-free projection instead.
+  # -------------------------------------------------------------------
+  - it: "dashboard Role grants the key-free bundle but never the key-bearing Secrets"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    documentIndex: 0
+    set:
+      tls:
+        issuer: cert-manager
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-credentials
+      # The operator-reconciled bundle holds ca.crt only, so it is the trust
+      # anchor the tenant is allowed to read.
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-bundle
+
+  # The bundle exists in every configuration, because the chart always asks the
+  # operator to serve TLS. Gating the grant on managed TLS would leave the
+  # default instance serving TLS with no way for the tenant to fetch the CA.
+  - it: "dashboard Role grants the CA bundle even when TLS is unmanaged"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    documentIndex: 0
+    set:
+      tls:
+        issuer: operator
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-bundle
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+
+  # The CR must not advertise enforcement the server does not apply. The
+  # operator treats an absent required as false, so a schema default of true
+  # would make `kubectl get mariadb` claim plaintext is refused on an unmanaged
+  # instance where it is not.
+  - it: "unmanaged TLS advertises no enforcement in the rendered CR"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: false
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - equal:
+          path: spec.tls.required
+          value: false
+
+  # Enforcement is opt-in: it must follow the published trust anchor, not lead
+  # it. Defaulting to true would refuse plaintext connections on the next
+  # platform upgrade while the tenant still has no CA to verify the server
+  # with, and with no way to set the escape hatch beforehand.
+  - it: "managed TLS does not enforce by default"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    asserts:
+      - equal:
+          path: spec.tls.required
+          value: false
+
+  # The kindIs "invalid" guard on required is defensive only: an explicit null
+  # never reaches the template, because the schema types the field as a boolean
+  # and rejects it first. Pin that, so the guard is not mistaken for a live path
+  # and the rejection is not silently relaxed later.
+  - it: "an explicit required=null is rejected by the schema, not rendered"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        issuer: cert-manager
+        required: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "values don't meet the specifications of the schema(s) in the following chart(s):\nmariadb:\n- at '/tls/required': got null, want boolean\n"
+
+  - it: "managed TLS honours an explicit required=true"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        issuer: cert-manager
+        required: true
+    asserts:
+      - equal:
+          path: spec.tls.required
+          value: true
+
+  - it: "managed TLS preserves an explicit required=false"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        issuer: cert-manager
+        required: false
+    asserts:
+      - equal:
+          path: spec.tls.required
+          value: false
+
+  # -------------------------------------------------------------------
+  # Cluster-domain fallback. The platform injects _cluster.cluster-domain
+  # (networking.clusterDomain, "cozy.local"), but the chart-level fallback
+  # must match it: these FQDNs land in the leaf certificate SAN list, and the
+  # backup client verifies the server hostname against exactly that list. A
+  # fallback pointing at the upstream Kubernetes default instead of the
+  # Cozystack one would silently produce certificates that fail verification.
+  # -------------------------------------------------------------------
+  # The fallback must also survive _cluster being absent entirely, not just the
+  # key being blank — otherwise `index` errors before the default is reached
+  # and the fallback is dead code.
+  - it: "leaf certificate SANs fall back to cozy.local when _cluster is null"
+    templates:
+      - templates/certmanager.yaml
+    documentIndex: 3
+    set:
+      tls:
+        issuer: cert-manager
+      _cluster: null
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test.svc.cozy.local"
+
+  - it: "leaf certificate SANs fall back to cozy.local when cluster-domain is unset"
+    templates:
+      - templates/certmanager.yaml
+    documentIndex: 3
+    set:
+      tls:
+        issuer: cert-manager
+      # helm-unittest deep-merges `set` over the suite defaults, so the key is
+      # blanked rather than removed to exercise the fallback branch.
+      _cluster:
+        cluster-domain: ""
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test.svc.cozy.local"
+      - notContains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test.svc.cluster.local"
+
+  # -------------------------------------------------------------------
+  # E: backup script uses MariaDB-native TLS verification flags.
+  #
+  # The backup image is alpine + mariadb-client, so the script is parsed by
+  # the MariaDB client, not the MySQL one. The two dialects differ:
+  #
+  #   MySQL 8    : --ssl-mode=VERIFY_IDENTITY
+  #   MariaDB    : --ssl-ca=<file> --ssl-verify-server-cert
+  #
+  # The MariaDB client has no --ssl-mode option at all and rejects it during
+  # argument parsing ("unknown variable 'ssl-mode=...'", exit 7) before any
+  # connection is attempted, so a single --ssl-mode occurrence fails every
+  # TLS-enabled backup run. These tests therefore assert the dialect, not the
+  # mere presence of some SSL string.
+  # -------------------------------------------------------------------
+  # A missing CA file is reported by the client only as "TLS/SSL error: No such
+  # file or directory", with no path, so the script has to name it itself.
+  - it: "backup-script Secret checks the CA file exists and names it"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      # -s as well as -r: the operator drops expired certificates when building
+      # the bundle, so a fully expired CA set leaves ca.crt present but empty,
+      # and a readability-only check would fall through to the opaque client
+      # error this guard exists to replace.
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: '! -r /etc/mysql-ssl/ca\.crt'
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: '! -s /etc/mysql-ssl/ca\.crt'
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'is missing or empty'
+      # The Secret name is the "names it" half of this case, and the reason the
+      # CronJob carries MYSQL_CA_SECRET at all: the client reports a missing CA
+      # without saying which file or where it came from.
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'projected from Secret \$\{MYSQL_CA_SECRET\}'
+      # Match the whole construct, not its parts. Asserting the test expression
+      # and the message separately leaves the thing that makes it a guard —
+      # aborting — unpinned: flipping the exit status to 0, or short-circuiting
+      # the condition, keeps every substring above intact while the backup runs
+      # on regardless and can report success having dumped nothing.
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'if \[ ! -r /etc/mysql-ssl/ca\.crt \] \|\| \[ ! -s /etc/mysql-ssl/ca\.crt \]; then(.|\n)*exit 1(.|\n)*fi'
+
+  - it: "backup CronJob passes the CA Secret name to the script"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].env
+          content:
+            name: MYSQL_CA_SECRET
+            value: my-mariadb-ca-bundle
+
+  - it: "backup-script Secret uses MariaDB TLS verification flags when tls.issuer=cert-manager"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      # --ssl-ca alone only supplies the trust anchor; without
+      # --ssl-verify-server-cert the MariaDB client skips hostname
+      # verification, which would silently downgrade the connection.
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-ca=/etc/mysql-ssl/ca\\.crt"
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-verify-server-cert"
+
+  # Regression guard: no MySQL-8-only option may reach the MariaDB client, in
+  # any TLS state. Anchored on the option name so both --ssl-mode=VALUE and a
+  # bare --ssl-mode are caught. All three states that reach the client are
+  # covered: both issuers, and an external instance on the default issuer.
+  - it: "backup-script Secret never emits the MySQL-only --ssl-mode option (tls.issuer=cert-manager)"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-mode"
+
+  # An external instance on the default issuer is the common case,
+  # so it is the one most likely to run the backup against a TLS-enforcing
+  # server — it needs the same guarantees as the explicit path.
+  - it: "backup-script Secret uses MariaDB flags for an external instance on the default issuer"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      external: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-ca=/etc/mysql-ssl/ca\\.crt"
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-verify-server-cert"
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-mode"
+
+  # Both client invocations must carry $SSL_OPTS. If only one does, that leg
+  # connects without TLS verification while the suite still looks green.
+  - it: "backup-script Secret passes SSL_OPTS to both mysql and mysqldump"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        issuer: cert-manager
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "mysql -u \"\\$MYSQL_USER\" -h \"\\$MYSQL_HOST\" \\$SSL_OPTS"
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "mysqldump -u \"\\$MYSQL_USER\" -h \"\\$MYSQL_HOST\" \\$SSL_OPTS"
+
+  # The backup client verifies in every configuration. The server always serves
+  # TLS and the operator always reconciles the CA bundle, so there is nothing to
+  # gain from connecting unverified — and enforcement can be switched on
+  # independently of managed TLS, which would make an unverified backup client
+  # fail outright.
+  - it: "backup-script Secret still uses MariaDB TLS flags when tls.issuer=operator"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        issuer: operator
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-ca=/etc/mysql-ssl/ca\\.crt"
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-verify-server-cert"
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-mode"
+
+  # The combination that used to break every backup run: enforcement on while
+  # TLS is unmanaged left the client with no CA and no verification flags.
+  - it: "backup-script Secret verifies when enforcement is on and TLS is unmanaged"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        required: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-ca=/etc/mysql-ssl/ca\\.crt"
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-verify-server-cert"
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'SSL_OPTS=""'
+
+  - it: "backup CronJob mounts the CA bundle when enforcement is on and TLS is unmanaged"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      tls:
+        required: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.volumes
+          content:
+            name: tls-ca
+            secret:
+              secretName: my-mariadb-ca-bundle
+              optional: true
+              items:
+              - key: ca.crt
+                path: ca.crt
+
+  - it: "backup CronJob has tls-ca volumeMount when external=true and tls.issuer unset"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      external: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /etc/mysql-ssl
+            name: tls-ca
+            readOnly: true

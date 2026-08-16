@@ -1,0 +1,171 @@
+#!/usr/bin/env bats
+# Unit test: mariadb-rd cozyrds. The chart's helm-unittest suite cannot reach
+# this file, so its Secret-exposure invariants are pinned here.
+#
+# Read the coverage honestly. Seven of these eleven tests are live, all against
+# parts of the API that exist today: secrets.include (the bundle is exposed by
+# name, no key-bearing Secret is listed), the empty-selector guards, and the
+# four covering secrets.exclude — that its entries are name-scoped, that every
+# key-bearing and credential Secret is named there, and that it does not swallow
+# what the tenant is meant to receive.
+#
+# The other four are placeholders: the three reading caCert and the one reading
+# the tenant-ca label. That field is not in ApplicationDefinitionSpec yet and
+# nothing writes that label, so they check that the block we intend to ship is
+# present and spelled consistently, not that it does anything. If the API lands
+# with different names they will need updating; they cannot detect that on their
+# own.
+
+REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
+COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
+
+# Placeholder (see header): pins the intended spelling, not a live behaviour.
+# `.release` is deliberate here and is not the same context as the selectors
+# below: this field is rendered by the CA-extraction controller, which supplies
+# a release variable, while resourceNames is rendered by the lineage webhook,
+# which supplies only kind, name and namespace.
+@test "mariadb-rd declares the CA source as the operator ca-bundle" {
+  grep -q 'sourceSecretName: "{{ .release }}-ca-bundle"' "$COZYRDS"
+}
+
+# Placeholder (see header): the source key is read by nothing yet.
+@test "mariadb-rd extracts ca.crt from the declared source" {
+  grep -q "sourceKey: ca.crt" "$COZYRDS"
+}
+
+# -ca-tls and -tls hold the CA and server private keys. Declaring either as the
+# publication source would run the extraction next to private key material.
+# Placeholder (see header): the declaration is inert, but keeping a key-bearing
+# name out of it means the block is already correct when the API arrives.
+@test "mariadb-rd never names a key-bearing Secret as the CA source" {
+  # Quote-agnostic: an unquoted value is just as wrong as a quoted one.
+  if grep -E "sourceSecretName:.*-(ca-)?tls[\"[:space:]]*$" "$COZYRDS"; then
+    echo "CA source points at a key-bearing Secret" >&2
+    exit 1
+  fi
+}
+
+# The RBAC grant in dashboard-resourcemap.yaml and this list have to agree:
+# the Role decides whether the tenant may read the bundle, this decides whether
+# it is surfaced as a tenant resource at all.
+#
+# Scoped to secrets.include rather than the whole file: the bundle is named in
+# a comment and in caCert too, and matching either of those would let the
+# include entry be deleted while this still passed.
+@test "mariadb-rd exposes the operator CA bundle by name" {
+  awk '/^  secrets:/{sec=1; inc=0; next}
+       /^  [a-z]/{sec=0; inc=0}
+       sec && /^    include:/{inc=1; next}
+       sec && /^    [a-z]/{inc=0}
+       sec && inc' "$COZYRDS" | grep -q "mariadb-{{ .name }}-ca-bundle"
+}
+
+# Placeholder (see header): nothing writes this label yet.
+@test "mariadb-rd selects the tenant CA projection by label" {
+  # Must appear inside a matchLabels selector, not merely somewhere in the file:
+  # the label only exposes the projection when it is what the selector matches on.
+  grep -A2 "matchLabels:" "$COZYRDS" | grep -q "internal.cozystack.io/tenant-ca: \"true\""
+}
+
+# An empty matchLabels compiles to a match-everything selector. The lineage
+# webhook only evaluates it for objects whose ownership resolves to this
+# instance, so the blast radius is the instance's own Secrets rather than the
+# whole namespace — but that set includes -ca-tls and -tls, the key-bearing
+# pair this design keeps away from the tenant. Both spellings are empty: the
+# inline "matchLabels: {}" and a bare "matchLabels:" with nothing nested.
+@test "mariadb-rd has no empty matchLabels selector" {
+  if grep -qE "matchLabels:[[:space:]]*\{[[:space:]]*\}" "$COZYRDS"; then
+    echo "Found an inline empty matchLabels selector (matches every Secret the instance owns)" >&2
+    exit 1
+  fi
+  # A bare matchLabels: must be followed by a more-indented "key: value" line.
+  awk '
+    /matchLabels:[[:space:]]*$/ {
+      match($0, /^[[:space:]]*/); indent = RLENGTH
+      if ((getline nextline) <= 0) { print "matchLabels: at end of file"; exit 1 }
+      match(nextline, /^[[:space:]]*/)
+      if (RLENGTH <= indent || nextline !~ /:/) {
+        print "Found a bare matchLabels: with no labels under it (matches every Secret the instance owns)"
+        exit 1
+      }
+    }
+  ' "$COZYRDS"
+}
+
+@test "mariadb-rd does not expose key-bearing TLS Secrets by name" {
+  # Scoped to secrets.include — a -tls entry under services: is a Service name,
+  # and under secrets.exclude it is the backstop doing its job; neither must
+  # trip this. Brace spacing is not pinned, the entry may be quoted, and a
+  # trailing comment must not hide it.
+  awk '/^  secrets:/{sec=1; inc=0; next}
+       /^  [a-z]/{sec=0; inc=0}
+       sec && /^    include:/{inc=1; next}
+       sec && /^    [a-z]/{inc=0}
+       sec && inc' "$COZYRDS" \
+    | sed 's/#.*$//' \
+    | grep -E "^[[:space:]]*-[[:space:]].*-(ca-)?tls\"?[[:space:]]*$" && {
+        echo "Found a key-bearing TLS Secret in the tenant include list" >&2
+        exit 1
+      }
+  return 0
+}
+
+# Extracts the exclude block alone. The two lists sit at the same indentation,
+# so an unscoped grep is satisfied by an entry in either one — which would let a
+# name be MOVED from exclude to include, the single most dangerous edit here,
+# without any guard noticing.
+excluded_block() {
+  awk '/^  secrets:/{sec=1; ex=0; next}
+       /^  [a-z]/{sec=0; ex=0}
+       sec && /^    exclude:/{ex=1; next}
+       sec && /^    [a-z]/{ex=0}
+       sec && ex' "$COZYRDS"
+}
+
+# The names below only constrain anything while they sit under resourceNames:
+# matchName returns true for every name when resourceNames is nil, so an exclude
+# entry that lost that key would match everything and void the backstop while
+# each name was still present in the block.
+@test "mariadb-rd scopes the exclude entries by name" {
+  excluded_block | grep -q "^      - resourceNames:\$"
+}
+
+# Exclude backstop. The include selector matches by label with no name
+# constraint, so these names are the enumerable part of the gap: exclude wins
+# over include in matchResourceToExcludeInclude, so a Secret named here cannot
+# be promoted even if it acquires the label.
+@test "mariadb-rd excludes every key-bearing Secret" {
+  block="$(excluded_block)"
+  for n in ca-tls tls ca server-cert client-cert; do
+    echo "$block" | grep -q "^          - mariadb-{{ .name }}-$n\$" || {
+      echo "key-bearing Secret -$n missing from exclude" >&2
+      exit 1
+    }
+  done
+}
+
+@test "mariadb-rd excludes internal credentials and backup keys" {
+  block="$(excluded_block)"
+  for n in root password repl-password metrics-password metrics-config backup regsecret; do
+    echo "$block" | grep -q "^          - mariadb-{{ .name }}-$n\$" || {
+      echo "credential Secret -$n missing from exclude" >&2
+      exit 1
+    }
+  done
+}
+
+# The backstop must not swallow what the tenant is supposed to receive: exclude
+# beats include, so an over-broad entry here silently removes the trust anchor.
+@test "mariadb-rd does not exclude the Secrets it exposes" {
+  excluded=$(awk '/^  secrets:/{sec=1; ex=0; next}
+                  /^  [a-z]/{sec=0; ex=0}
+                  sec && /^    exclude:/{ex=1; next}
+                  sec && /^    [a-z]/{ex=0}
+                  sec && ex' "$COZYRDS")
+  for n in credentials ca-bundle; do
+    if echo "$excluded" | grep -q -- "-$n\$"; then
+      echo "exclude list contains -$n, which the tenant is meant to read" >&2
+      exit 1
+    fi
+  done
+}

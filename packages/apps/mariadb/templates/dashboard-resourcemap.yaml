@@ -22,7 +22,23 @@ rules:
   resources:
   - secrets
   resourceNames:
+  # The cert-manager Secrets are deliberately absent: -ca-tls and -tls hold
+  # private keys, so granting them here would hand the tenant signing material
+  # instead of a trust anchor.
   - {{ .Release.Name }}-credentials
+  # -ca-bundle is reconciled by the operator whenever TLS is on, which for this
+  # chart is always, so the grant is ungated: gating it on managed TLS would
+  # leave the default instance serving TLS with no way for the tenant to fetch
+  # the CA and verify it. The Secret holds only ca.crt, never a private key,
+  # and it tracks CA rollovers.
+  #
+  # Granted here rather than through cozy-lib's caCertSecret helper. That helper
+  # renders the anchor from a CA passed in as a template value, and this CA is
+  # generated at runtime — by the operator, or by cert-manager — so the chart
+  # never has the PEM at render time, and lookup is not available to the
+  # helm-controller. Naming the Secret the operator already maintains is the
+  # only form that works here.
+  - {{ .Release.Name }}-ca-bundle
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io
