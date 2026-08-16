@@ -87,7 +87,7 @@ spec:
 {{- toYaml .Values.manager.livenessProbe | nindent 10 }}
         env:
         - name: DNS_BASE
-          value: {{ .Values.manager.dnsBase }}
+          value: {{ .Values.global.clusterDomain | default .Values.manager.dnsBase }}
         - name: PARALLEL_RECOVERY_ENABLED
           value: "{{ .Values.manager.parallelRecoveryEnabled }}"
         - name: PPROF_ENDPOINTS_ENABLED
