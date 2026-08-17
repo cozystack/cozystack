@@ -60,11 +60,7 @@ tests:
       - documentIndex: 5
         matchRegex:
           path: stringData["alertmanager.yaml"]
-          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".'
-      - documentIndex: 5
-        matchRegex:
-          path: stringData["alertmanager.yaml"]
-          pattern: '  - receiver: email\n    group_by: \[alertname, cluster\]\n    repeat_interval: 12h\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".'
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: email\n    group_by: \[alertname, cluster\]\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".'
       - documentSelector:
           path: kind
           value: VMAlertmanager
@@ -213,3 +209,41 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "alerta.alerts.email.authUsername is required when secretName is set"
+
+  - it: fails the render when only repeatInterval is set
+    set:
+      alerta:
+        alerts:
+          email:
+            repeatInterval: "6h"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when repeatInterval is not a duration
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "tomorrow"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval must be a duration such as 30s, 5m or 12h, got "tomorrow"'
+
+  - it: quotes a custom repeatInterval so a stray value cannot break out of the config
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "1h30m"
+    asserts:
+      - documentIndex: 5
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    repeat_interval: "1h30m"\n'

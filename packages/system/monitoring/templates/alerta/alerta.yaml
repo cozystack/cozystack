@@ -7,7 +7,7 @@
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 
 {{- $email := ((.Values.alerta.alerts).email) | default dict }}
-{{- $emailEnabled := or $email.to $email.smarthost $email.from $email.authUsername $email.secretName $email.subject $email.bodyHtml }}
+{{- $emailEnabled := or $email.to $email.smarthost $email.from $email.authUsername $email.secretName $email.subject $email.bodyHtml $email.repeatInterval }}
 {{- if $emailEnabled }}
 {{- if not (and $email.to $email.smarthost $email.from) }}
 {{- fail "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts" }}
@@ -17,6 +17,9 @@
 {{- end }}
 {{- if and $email.secretName (not $email.authUsername) }}
 {{- fail "alerta.alerts.email.authUsername is required when secretName is set" }}
+{{- end }}
+{{- if and $email.repeatInterval (not (regexMatch "^([0-9]+(ms|[smhdwy]))+$" (toString $email.repeatInterval))) }}
+{{- fail (printf "alerta.alerts.email.repeatInterval must be a duration such as 30s, 5m or 12h, got %q" (toString $email.repeatInterval)) }}
 {{- end }}
 {{- end }}
 
@@ -283,7 +286,9 @@ stringData:
         - 'notify_email="true"'
       - receiver: email
         group_by: [alertname, cluster]
-        repeat_interval: {{ $email.repeatInterval | default "12h" }}
+        group_wait: 1m
+        group_interval: 5m
+        repeat_interval: {{ $email.repeatInterval | default "12h" | quote }}
         matchers:
         - 'severity=~"critical|major"'
         - 'notify_email="true"'
