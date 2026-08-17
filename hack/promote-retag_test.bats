@@ -17,6 +17,13 @@
 # so the harness's `set -e` does not abort first. mikefarah yq is assumed
 # present (provided by the test toolchain, like the other yq-using bats here).
 #
+# A negative expectation must be COUNTED — `[ "$(grep -c X f)" -eq 0 ]` — never
+# written as `! grep -q X f`. POSIX and bash both exempt a `!`-negated pipeline
+# from errexit, so the `!` form cannot fail a test: it is a comment that looks
+# like an assertion. Six of them lived here, each proven inert by mutating the
+# script under test (an unconditional copy before the write-once probe, and a
+# MOVE_LATEST default of 1, both of which the `!` form waved through).
+#
 # Run with: hack/cozytest.sh hack/promote-retag_test.bats
 #           (or `bats hack/promote-retag_test.bats` if the bats binary is
 #           installed; cozytest.sh is the CI path.)
@@ -214,7 +221,7 @@ _refute_duplicate_destinations() {
   # The stable tag is in the copy plan...
   grep -qE 'docker://ghcr\.io/cozystack/cozystack/[^ ]*:v9\.9\.9' "$tmp/out"
   # ...but nothing moves :latest.
-  ! grep -qE 'docker://[^ ]+:latest' "$tmp/out"
+  [ "$(grep -cE 'docker://[^ ]+:latest' "$tmp/out")" -eq 0 ]
   rm -rf "$tmp"
 }
 
@@ -300,7 +307,7 @@ _refute_duplicate_destinations() {
 
   grep -q "already at ${digest}; skipping stable copy" "$tmp/out"
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 2 ]
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  [ "$(grep -c '^copy ' "$tmp/skopeo.log")" -eq 0 ]
   rm -rf "$tmp"
 }
 
@@ -373,7 +380,7 @@ _refute_duplicate_destinations() {
   [ "$rc" -ne 0 ]
   grep -q "already exists at '${published_digest}'; refusing to move it to '${rc_digest}'" "$tmp/err"
   # The refusal must happen BEFORE any write.
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  [ "$(grep -c '^copy ' "$tmp/skopeo.log")" -eq 0 ]
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 1 ]
   rm -rf "$tmp"
 }
@@ -399,10 +406,10 @@ _refute_duplicate_destinations() {
   # an overwrite of a published stable tag.
   [ "$rc" -ne 0 ]
   grep -q 'returned no manifest bytes' "$tmp/err"
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  [ "$(grep -c '^copy ' "$tmp/skopeo.log")" -eq 0 ]
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 1 ]
   # The empty-input hash must never appear: that is the guard being absent.
-  ! grep -q 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' "$tmp/err"
+  [ "$(grep -c 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' "$tmp/err")" -eq 0 ]
   rm -rf "$tmp"
 }
 
@@ -428,7 +435,7 @@ _refute_duplicate_destinations() {
   [ "$rc" -ne 0 ]
   grep -q 'cannot be treated as unpublished' "$tmp/err"
   grep -q '429' "$tmp/err"
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  [ "$(grep -c '^copy ' "$tmp/skopeo.log")" -eq 0 ]
   rm -rf "$tmp"
 }
 
