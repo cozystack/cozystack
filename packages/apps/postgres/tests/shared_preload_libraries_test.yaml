@@ -1,0 +1,124 @@
+suite: shared preload libraries allowlist
+
+# postgresql.sharedPreloadLibraries maps onto the CloudNativePG Cluster field of the
+# same meaning, which the operator renders into postgresql.conf and which is additive
+# to the operator's own defaults.
+#
+# It exists because shared_preload_libraries stays blocked in postgresql.parameters:
+# that parameter is free text and accepts a path, so it can point at a writable
+# location such as the PGDATA volume. A bare library name from this allowlist can only
+# resolve inside $libdir, which sits on the read-only image filesystem, so the code
+# execution vector the block defends against does not apply. Every name in the list
+# ships with the CloudNativePG PostgreSQL image.
+#
+# Preloading is the only way to enable modules that allocate shared memory at
+# postmaster start. pg_stat_statements is the motivating case: CREATE EXTENSION
+# succeeds without preloading, but every read of the view then fails with
+# 'pg_stat_statements must be loaded via "shared_preload_libraries"'.
+#
+# The enum in values.schema.json is the guard the negative cases below exercise: it
+# rejects a value before rendering starts. The template carries the same allowlist as
+# a backstop for renders that bypass schema validation, which is why those two checks
+# assert the schema error rather than the template one.
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+tests:
+  - it: "the field is absent by default, leaving the operator defaults untouched"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - notExists:
+          path: spec.postgresql.shared_preload_libraries
+
+  - it: "an allowed library is rendered onto the CNPG field"
+    set:
+      postgresql:
+        sharedPreloadLibraries:
+          - pg_stat_statements
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.shared_preload_libraries
+          value:
+            - pg_stat_statements
+
+  - it: "order is preserved for several allowed libraries"
+    set:
+      postgresql:
+        sharedPreloadLibraries:
+          - pg_stat_statements
+          - auto_explain
+          - pgaudit
+          - pg_prewarm
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.shared_preload_libraries
+          value:
+            - pg_stat_statements
+            - auto_explain
+            - pgaudit
+            - pg_prewarm
+
+  - it: "preloading does not disturb postgresql.parameters"
+    set:
+      postgresql:
+        sharedPreloadLibraries:
+          - pg_stat_statements
+        parameters:
+          max_connections: 200
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.max_connections
+          value: "200"
+      - equal:
+          path: spec.postgresql.parameters.max_wal_senders
+          value: "30"
+
+  - it: "a library outside the allowlist is rejected by the schema"
+    set:
+      postgresql:
+        sharedPreloadLibraries:
+          - pg_cron
+    asserts:
+      - failedTemplate:
+          errorPattern: "postgresql/sharedPreloadLibraries/0.*value must be one of 'pg_stat_statements', 'auto_explain', 'pgaudit', 'pg_prewarm'"
+
+  - it: "an absolute path is rejected by the schema, which is the vector the parameter block defends against"
+    set:
+      postgresql:
+        sharedPreloadLibraries:
+          - /var/lib/postgresql/data/pgdata/evil.so
+    asserts:
+      - failedTemplate:
+          errorPattern: "postgresql/sharedPreloadLibraries/0.*value must be one of 'pg_stat_statements', 'auto_explain', 'pgaudit', 'pg_prewarm'"
+
+  - it: "shared_preload_libraries stays blocked as a parameter even when the allowlist is used"
+    set:
+      postgresql:
+        sharedPreloadLibraries:
+          - pg_stat_statements
+        parameters:
+          shared_preload_libraries: pg_stat_statements
+    asserts:
+      - failedTemplate:
+          errorMessage: "SECURITY: Parameter 'shared_preload_libraries' is blocked. This parameter can enable arbitrary code execution and must not be set by tenants."

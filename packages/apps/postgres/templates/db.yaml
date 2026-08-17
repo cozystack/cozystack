@@ -201,6 +201,25 @@ spec:
   {{- end }}
   {{- end }}
   postgresql:
+    {{- /*
+      Preloading is exposed as a closed allowlist rather than through the blocked
+      shared_preload_libraries parameter. The parameter is free text and accepts a
+      path, so it can point at a writable location; a bare name from this list can
+      only resolve inside $libdir, which lives on the read-only image filesystem.
+      The names below all ship with the CloudNativePG PostgreSQL image. The enum in
+      values.schema.json is the primary guard; this check backs it up for renders
+      that bypass schema validation.
+    */ -}}
+    {{- with .Values.postgresql.sharedPreloadLibraries }}
+    {{- $allowedPreload := list "pg_stat_statements" "auto_explain" "pgaudit" "pg_prewarm" }}
+    shared_preload_libraries:
+      {{- range . }}
+      {{- if not (has . $allowedPreload) }}
+      {{- fail (printf "SECURITY: shared preload library %q is not allowed. Allowed: %s. Loading a library from an arbitrary path enables code execution inside the instance." . (join ", " $allowedPreload)) }}
+      {{- end }}
+      - {{ quote . }}
+      {{- end }}
+    {{- end }}
     parameters:
       {{- $defaults := dict "max_wal_senders" "30" }}
       {{- $params := merge (dict) .Values.postgresql.parameters $defaults }}

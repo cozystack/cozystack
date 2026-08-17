@@ -138,6 +138,8 @@ type PostgreSQL struct {
 	// PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 	// +kubebuilder:default:={"max_connections":"100"}
 	Parameters map[string]intstr.IntOrString `json:"parameters,omitempty"`
+	// Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. Required by modules that allocate shared memory and cannot be loaded per session, `pg_stat_statements` and `auto_explain` among them. Changing the list restarts PostgreSQL.
+	SharedPreloadLibraries []PreloadLibrary `json:"sharedPreloadLibraries,omitempty"`
 }
 
 type Quorum struct {
@@ -179,6 +181,9 @@ type User struct {
 	// Whether the user has replication privileges.
 	Replication bool `json:"replication,omitempty"`
 }
+
+// +kubebuilder:validation:Enum="pg_stat_statements";"auto_explain";"pgaudit";"pg_prewarm"
+type PreloadLibrary string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string

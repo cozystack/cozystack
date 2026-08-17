@@ -173,6 +173,19 @@
             ],
             "x-kubernetes-int-or-string": true
           }
+        },
+        "sharedPreloadLibraries": {
+          "description": "Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. Required by modules that allocate shared memory and cannot be loaded per session, `pg_stat_statements` and `auto_explain` among them. Changing the list restarts PostgreSQL.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "pg_stat_statements",
+              "auto_explain",
+              "pgaudit",
+              "pg_prewarm"
+            ]
+          }
         }
       }
     },
