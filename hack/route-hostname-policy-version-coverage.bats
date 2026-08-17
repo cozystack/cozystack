@@ -60,7 +60,26 @@ policy_versions() {
     | yq eval-all \
       "select(.kind == \"ValidatingAdmissionPolicy\" and .metadata.name == \"$1\")
        | .spec.matchConstraints.resourceRules[]
-       | select(.resources[] == \"$2\") | .apiVersions[]" - | sort -u
+       | select(.resources[] | select(. == \"$2\")) | .apiVersions[]" - | sort -u
+}
+
+# Echoes, space-prefixed, each served version the policy does not name. The
+# comparison lives here rather than inline so the fixtures at the bottom can
+# drive it with synthetic input; neutering it turns them red.
+#
+# Membership by loop rather than comm(1) with process substitution: the
+# cozytest.sh harness rejects <(...) with a syntax error, which exits non-zero
+# and would read as a genuine failure.
+uncovered() {
+  served=$1
+  named=$2
+  out=
+  for version in $served; do
+    if ! echo "$named" | grep -qxF "$version"; then
+      out="$out $version"
+    fi
+  done
+  echo "$out"
 }
 
 # Fails on an empty set from either side: a yq expression that stops matching
@@ -83,15 +102,7 @@ assert_covers() {
     exit 1
   fi
 
-  # Membership by loop rather than comm(1) with process substitution: the
-  # cozytest.sh harness rejects <(...) with a syntax error, which exits
-  # non-zero and would read as a genuine failure.
-  missing=
-  for version in $served; do
-    if ! echo "$named" | grep -qx "$version"; then
-      missing="$missing $version"
-    fi
-  done
+  missing=$(uncovered "$served" "$named")
 
   if [ -n "$missing" ]; then
     echo "$policy_name does not name every served version of $crd_name" >&2
@@ -110,4 +121,74 @@ assert_covers() {
 @test "HTTPRoute hostname policy names every served httproutes version" {
   assert_covers httproutes.gateway.networking.k8s.io \
     cozystack-route-hostname-policy httproutes
+}
+
+# The two cases above only ever see a tree that is already correct, so on their
+# own they cannot tell a working comparison from one that stopped comparing.
+# These drive it with synthetic input, the way hack/bats-no-exit-trap.bats and
+# hack/md-no-hardwrap.bats feed their checkers a broken sample and require a
+# complaint.
+#
+# Both layers need their own fixture. Driving uncovered() alone leaves
+# assert_covers unprotected -- emptying it to a no-op keeps every other case in
+# this file green, because the live-tree cases are the only callers and the
+# tree they read is correct. So the cases below feed assert_covers itself, in a
+# subshell with the two readers redefined.
+#
+# Each requires the complaint it expects, not merely a non-zero exit. A renamed
+# helper exits 127 and an unbound variable under `set -u` exits 1, and either
+# would read as a successful rejection if only the status were checked -- red
+# for the wrong reason is the same false comfort as no fixture at all.
+assert_covers_rejects() {
+  expected=$1
+  rc=0
+  out=$(
+    served_versions() { printf '%s\n' "$FIXTURE_SERVED"; }
+    policy_versions() { printf '%s\n' "$FIXTURE_NAMED"; }
+    assert_covers fixture.crd fixture-policy fixtureroutes 2>&1
+  ) || rc=$?
+  [ "$rc" != "0" ]
+  case "$out" in
+    *"$expected"*) ;;
+    *) echo "rejected, but not for the expected reason" >&2
+       echo "wanted: $expected" >&2
+       echo "got:    $out" >&2
+       exit 1 ;;
+  esac
+}
+
+@test "assert_covers rejects a policy that omits a served version" {
+  FIXTURE_SERVED='v1
+v1alpha2'
+  FIXTURE_NAMED='v1alpha2'
+  export FIXTURE_SERVED FIXTURE_NAMED
+  assert_covers_rejects "does not name every served version"
+}
+
+@test "assert_covers rejects an empty served set rather than passing vacuously" {
+  FIXTURE_SERVED=''
+  FIXTURE_NAMED='v1'
+  export FIXTURE_SERVED FIXTURE_NAMED
+  assert_covers_rejects "no served versions found"
+}
+
+@test "assert_covers rejects an empty named set rather than passing vacuously" {
+  FIXTURE_SERVED='v1'
+  FIXTURE_NAMED=''
+  export FIXTURE_SERVED FIXTURE_NAMED
+  assert_covers_rejects "no apiVersions found"
+}
+
+@test "the coverage check names a served version the policy omits" {
+  missing=$(uncovered 'v1
+v1alpha2
+v1alpha3' 'v1alpha2')
+  [ "$missing" = " v1 v1alpha3" ]
+}
+
+@test "the coverage check stays silent when every served version is named" {
+  missing=$(uncovered 'v1
+v1beta1' 'v1
+v1beta1')
+  [ -z "$missing" ]
 }

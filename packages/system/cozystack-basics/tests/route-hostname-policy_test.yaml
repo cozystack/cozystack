@@ -106,6 +106,10 @@ tests:
           value: ["httproutes"]
       - documentIndex: 2
         equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["gateway.networking.k8s.io"]
+      - documentIndex: 2
+        equal:
           path: spec.matchConstraints.resourceRules[0].resources
           value: ["tlsroutes"]
       # Every version the vendored bundle serves for each kind. Naming fewer
