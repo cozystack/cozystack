@@ -337,7 +337,36 @@ jobs:
       packages: read
       checks: write
     needs: ["build", "resolve_assets"]
-    if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
+    # Regular PRs enter through `build`. A `release`-labelled promote PR enters
+    # through `resolve_assets` only when it also carries `full-e2e`.
+    #
+    # Without the second term a promote PR ran the full suite by default: the
+    # label makes `resolve_assets` run, it finds the draft release promote-rc
+    # created, and `always() && resolve_assets == 'success'` let this job in --
+    # then `Select E2E tests` saw the digest rewrite under packages/core/ and
+    # escalated to every bats file. Two to three hours, on a PR whose entire
+    # content is a tag-string rewrite over container digests that are bit-for-bit
+    # the ones e2e-tag.yaml already ran the full suite against, and which
+    # promote-rc.yaml refuses to promote without that green evidence. It also
+    # contradicted docs/release.md, which says E2E does not run on the promote PR
+    # by default.
+    #
+    # Same shape as main's release arm. One caveat this branch does not share
+    # with main: `on.pull_request.types` here has no `labeled`, so adding
+    # `full-e2e` to an already-open promote PR starts no run by itself -- it takes
+    # effect on the next push to the branch. Re-running the workflow does not
+    # help, because the stored event payload's label list is the one from `opened`.
+    # The button that always works is e2e-tag.yaml's workflow_dispatch: it takes
+    # the tag and runs this same full suite against the published tree.
+    if: |
+      always()
+      && (
+        needs.build.result == 'success'
+        || (
+          needs.resolve_assets.result == 'success'
+          && contains(github.event.pull_request.labels.*.name, 'full-e2e')
+        )
+      )
 
     steps:
       - name: Generate GitHub App token
