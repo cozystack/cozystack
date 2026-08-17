@@ -722,7 +722,7 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 		if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete stale wildcard Certificate %s: %w", stale.Name, err)
 		}
-		logger.V(1).Info("deleted stale wildcard Certificate after switch to HTTP-01", "name", stale.Name)
+		logger.V(1).Info("deleted stale wildcard Certificate after switch away from DNS-01", "name", stale.Name)
 		return nil
 	}
 	childApexes, err := r.collectInheritingChildApexes(ctx, tgw)

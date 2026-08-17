@@ -39,6 +39,33 @@ tests:
           path: stringData["values.yaml"]
           pattern: '(?m)^\s*gateway-edge-classes:\s*"cloudflare-tunnel,some-other-tunnel"'
 
+  - it: normalises a padded default class before it reaches either reader
+    set:
+      gateway:
+        className: "  cloudflare-tunnel  "
+        edgeTerminatedClasses:
+          - cloudflare-tunnel
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-class-name:\s*"cloudflare-tunnel"'
+
+  - it: refuses a whitespace-only default rather than resolving it quietly
+    set:
+      gateway:
+        className: "   "
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gateway.className is only whitespace. Leave it unset to use the bundled cilium class, or name a real GatewayClass — resolving a blank value silently would decide TLS termination for every tenant that did not choose.'
+
+  - it: rejects a non-string default class by name
+    set:
+      gateway:
+        className: 123
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gateway.className must be a GatewayClass name, got 123'
+
   - it: carries the classes a tenant may select
     set:
       gateway:

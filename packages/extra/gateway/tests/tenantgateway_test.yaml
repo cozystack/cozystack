@@ -459,6 +459,88 @@ tests:
           path: spec.certMode
           value: edge
 
+  - it: a padded platform default class still matches the edge list and renders trimmed
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: "  cloudflare-tunnel  "
+        gateway-edge-classes: cloudflare-tunnel
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cloudflare-tunnel
+      - equal:
+          path: spec.certMode
+          value: edge
+
+  - it: a padded tenant-selected class passes the allowlist and renders trimmed
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-edge-classes: cloudflare-tunnel
+        gateway-tenant-classes: cloudflare-tunnel
+      _namespace:
+        host: alice.example.org
+      gatewayClassName: "  cloudflare-tunnel  "
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cloudflare-tunnel
+      - equal:
+          path: spec.certMode
+          value: edge
+
+  - it: an unset platform default falls back to the bundled class
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cilium
+
+  - it: a whitespace-only platform default is refused rather than resolved
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: "   "
+      _namespace:
+        host: example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: 'packages/extra/gateway: _cluster.gateway-class-name is only whitespace. The platform writes this from gateway.className; leave that unset for the bundled cilium class rather than blank.'
+
+  - it: a whitespace-only tenant class is refused rather than silently defaulted
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+      _namespace:
+        host: alice.example.org
+      gatewayClassName: "   "
+    asserts:
+      - failedTemplate:
+          errorMessage: 'packages/extra/gateway: gatewayClass is only whitespace. Leave tenant.spec.gatewayClass unset to take the platform default, or name a class the operator lists in gateway.tenantSelectableClasses.'
+
   - it: an edge class wins over wildcard-secret-name
     set:
       _cluster:

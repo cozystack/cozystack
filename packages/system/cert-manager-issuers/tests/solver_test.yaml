@@ -219,6 +219,22 @@ tests:
         notExists:
           path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].sectionName
 
+  - it: a padded edge-terminated publishing class still drops the pin
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        gateway-enabled: "true"
+        gateway-class-name: "  cloudflare-tunnel  "
+        gateway-edge-classes: cloudflare-tunnel
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].sectionName
+      - documentIndex: 1
+        notExists:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].sectionName
+
   - it: a publishing class that is not edge-terminated keeps the pin
     set:
       _cluster:

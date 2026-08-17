@@ -7,7 +7,7 @@
   pin is the class THAT Gateway runs on: the platform default, since a
   tenant's own class choice does not ride this channel.
 */}}
-{{- $publishingClass := (index .Values._cluster "gateway-class-name") | default "cilium" }}
+{{- $publishingClass := (index .Values._cluster "gateway-class-name") | default "" | trim | default "cilium" }}
 {{- $edgeClasses := list }}
 {{- range splitList "," ((index .Values._cluster "gateway-edge-classes") | default "") }}
   {{- $c := . | trim }}
