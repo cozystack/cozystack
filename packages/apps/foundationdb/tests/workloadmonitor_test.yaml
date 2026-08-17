@@ -1,0 +1,45 @@
+suite: FoundationDB WorkloadMonitor renders unconditionally
+
+# WorkloadMonitor is the billing/metering meta-resource for this workload.
+# It must never be gated behind the tenant-facing monitoring.enabled flag —
+# that would let a tenant disable their own metering.
+
+templates:
+  - templates/workloadmonitor.yaml
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+
+tests:
+  - it: renders when monitoring.enabled is true
+    release:
+      name: test-fdb
+      namespace: tenant-test
+    set:
+      monitoring:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: WorkloadMonitor
+      - equal:
+          path: metadata.name
+          value: test-fdb
+
+  - it: still renders when monitoring.enabled is false
+    release:
+      name: test-fdb
+      namespace: tenant-test
+    set:
+      monitoring:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: WorkloadMonitor
+      - equal:
+          path: metadata.name
+          value: test-fdb
