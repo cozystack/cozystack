@@ -151,8 +151,12 @@ func main() {
 		"Default container memory limit applied through a LimitRange in every system namespace. "+
 			"Keeps system components out of the Talos userspace OOM handler's victim set, which only "+
 			"considers cgroups with no memory.max. Should stay above the largest memory request in any "+
-			"system namespace, since a defaulted limit below a container's own request fails admission; "+
-			"a namespace holding such a container is skipped and logged rather than broken. "+
+			"system namespace, since a defaulted limit below a container's own request fails admission. "+
+			"Where a namespace does hold such a container, that namespace's ceiling is raised to clear "+
+			"the request rather than the LimitRange being withheld - a loose memory.max still takes the "+
+			"pod out of the victim set where no memory.max does not - and it drops back to this value on "+
+			"its own once the request is gone. Grep the operator log for \"raising the default container "+
+			"memory limit\" to see which namespace, workload and container caused it. "+
 			"Empty or 0 disables the LimitRange and removes any previously created one.")
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", "32Mi",
 		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+

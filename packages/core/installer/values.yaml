@@ -54,11 +54,18 @@ cozystackOperator:
   # A ceiling, not a reservation: pick it well above real usage. It should stay above
   # the largest memory request in any system namespace, because a defaulted limit
   # below a container's own request is rejected at admission. Setting it too low
-  # costs protection rather than availability: before applying, the operator scans
-  # the namespace for a container that requests more than this and declares no limit
-  # of its own, and where it finds one it skips that namespace — retracting any
-  # LimitRange it applied earlier — and logs the pod, container, request and limit.
-  # Watch for this on clusters running VPA, which can raise a request on its own.
+  # costs precision rather than availability: before applying, the operator scans
+  # each system namespace for a container that requests more than this and declares
+  # no limit of its own, and where it finds one it raises that namespace's ceiling to
+  # the request instead, logging the namespace, workload, container and both limits.
+  # A raised namespace still gets memory.max on its pod cgroups, which is the whole
+  # point — withholding the LimitRange would leave it with none — and it drops back to
+  # this value on its own once the oversized request is gone. Grep the operator log
+  # for "raising the default container memory limit" to find them.
+  #
+  # A container that declares its own memory limit is never touched, so a component
+  # that has to sit above this ceiling states a limit in its own chart rather than
+  # relying on the knob; packages/system/linstor does exactly that for its JVM.
   #
   # Set to 0 to disable, which also removes the LimitRanges the operator previously
   # created.
