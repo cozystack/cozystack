@@ -1010,13 +1010,22 @@ func memoryDefaultInForce(lr *corev1.LimitRange) bool {
 
 // deleteSystemDefaultsLimitRange removes the LimitRange this reconciler maintains,
 // treating an already-absent one as success.
+//
+// The cached Get in front of the Delete is what makes the disabled state quiet. Disabled is
+// a steady state, not a one-off: with the limit set to 0 this runs for every system
+// namespace on every Package reconcile, and issuing the Delete unconditionally meant a
+// write attempt and a swallowed 404 per namespace per reconcile, forever, all of it in the
+// audit log. Nearly every one of those reconciles finds nothing to delete.
 func (r *PackageReconciler) deleteSystemDefaultsLimitRange(ctx context.Context, nsName string) error {
-	stale := &corev1.LimitRange{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      SystemDefaultsLimitRangeName,
-			Namespace: nsName,
-		},
+	stale := &corev1.LimitRange{}
+	err := r.Get(ctx, types.NamespacedName{Name: SystemDefaultsLimitRangeName, Namespace: nsName}, stale)
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("failed to read the system defaults LimitRange in namespace %s: %w", nsName, err)
 	}
+
 	if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}

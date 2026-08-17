@@ -345,7 +345,14 @@ func TestReconcileSystemDefaultsLimitRangeDisabledRemovesStale(t *testing.T) {
 			Namespace: "cozy-metallb",
 		},
 	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).Build()
+	var deletes int
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				deletes++
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
 
 	// Zero limit means the knob is disabled; a LimitRange from an earlier
 	// configuration must be removed so the setting is reversible.
@@ -362,10 +369,20 @@ func TestReconcileSystemDefaultsLimitRangeDisabledRemovesStale(t *testing.T) {
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("LimitRange still present after disable (err = %v)", err)
 	}
+	if deletes != 1 {
+		t.Fatalf("%d deletes to remove one LimitRange, want 1", deletes)
+	}
 
-	// Reconciling again with nothing to delete must stay a no-op, not surface NotFound.
+	// Disabled is a steady state: this runs for every system namespace on every
+	// Package reconcile. Reconciling again with nothing to delete must stay a no-op
+	// and must not issue a DELETE whose 404 is then swallowed — that is one write
+	// attempt per namespace per reconcile, forever, and all of it in the audit log.
 	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-metallb"); err != nil {
 		t.Fatalf("reconcile on absent LimitRange: %v", err)
+	}
+	if deletes != 1 {
+		t.Errorf("%d deletes after reconciling an already-empty namespace, want the original 1; "+
+			"the disabled path must read before it writes", deletes)
 	}
 }
 
