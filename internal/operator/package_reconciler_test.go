@@ -339,12 +339,10 @@ func TestReconcileSystemDefaultsLimitRangeDisabledRemovesStale(t *testing.T) {
 		t.Fatalf("add corev1 to scheme: %v", err)
 	}
 
-	existing := &corev1.LimitRange{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      SystemDefaultsLimitRangeName,
-			Namespace: "cozy-metallb",
-		},
-	}
+	// Built through the same constructor the operator applies with, so the object
+	// carries the managed-by label the disabled path keys on.
+	existing := (&PackageReconciler{}).systemDefaultsLimitRange("cozy-metallb", resource.MustParse("4Gi"))
+
 	var deletes int
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).
 		WithInterceptorFuncs(interceptor.Funcs{
@@ -383,6 +381,50 @@ func TestReconcileSystemDefaultsLimitRangeDisabledRemovesStale(t *testing.T) {
 	if deletes != 1 {
 		t.Errorf("%d deletes after reconciling an already-empty namespace, want the original 1; "+
 			"the disabled path must read before it writes", deletes)
+	}
+}
+
+// The name is not reserved. Nothing stops an administrator creating a LimitRange called
+// cozystack-system-defaults by hand, and deleting by name alone would have turning the knob
+// off silently remove policy this operator never wrote. The managed-by label is what
+// separates the two, and it is also the answer if the name is ever taken over by another
+// component.
+func TestReconcileSystemDefaultsLimitRangeDisabledLeavesAForeignObjectAlone(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add corev1 to scheme: %v", err)
+	}
+
+	foreign := &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SystemDefaultsLimitRangeName,
+			Namespace: "cozy-metallb",
+			Labels:    map[string]string{"app.kubernetes.io/managed-by": "some-admin"},
+		},
+		Spec: corev1.LimitRangeSpec{
+			Limits: []corev1.LimitRangeItem{{
+				Type:    corev1.LimitTypeContainer,
+				Default: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Mi")},
+			}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreign).Build()
+
+	r := &PackageReconciler{Client: cl, Scheme: scheme}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-metallb"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := &corev1.LimitRange{}
+	if err := cl.Get(t.Context(), types.NamespacedName{
+		Name:      SystemDefaultsLimitRangeName,
+		Namespace: "cozy-metallb",
+	}, got); err != nil {
+		t.Fatalf("a LimitRange this operator did not create was deleted when the knob was disabled: %v", err)
+	}
+	if len(got.Spec.Limits) != 1 || got.Spec.Limits[0].Default.Memory().Cmp(resource.MustParse("1Mi")) != 0 {
+		t.Errorf("foreign LimitRange spec = %+v, want it untouched", got.Spec.Limits)
 	}
 }
 
