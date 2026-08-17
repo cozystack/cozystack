@@ -5,8 +5,15 @@ suite: LinstorCluster controller resources and liveness hardening
 # into the generated linstor-controller Deployment as a strategic merge patch
 # (containers merged by name, struct fields merged field-by-field), so:
 #   - resources.requests guarantee the JVM gets scheduled CPU/memory so it can
-#     answer GET /health under node CPU contention (no limits: avoid throttling
-#     / OOM-killing the JVM);
+#     answer GET /health under node CPU contention, and CPU stays unlimited to
+#     avoid throttling it;
+#   - resources.limits.memory is stated on purpose and has to stay above the
+#     -Xmx8G baked into the image (build.gradle, jvmControllerOpts), which the
+#     JVM honours without ever reading its cgroup. It is pinned here because two
+#     separate things would silently break it: lowering it below 8G hands the
+#     kernel a process that will grow past it, and removing it hands the
+#     container to the system-namespace LimitRange cozystack-operator maintains,
+#     whose 4Gi default is half that heap ceiling;
 #   - the livenessProbe override carries ONLY the timing fields (timeoutSeconds,
 #     failureThreshold) relaxed from the operator defaults (1s / 3) so a JVM GC
 #     pause or CPU contention does not trip a liveness kill. The httpGet target
@@ -17,7 +24,7 @@ templates:
   - templates/cluster.yaml
 
 tests:
-  - it: "linstor-controller container carries CPU and memory requests (no limits)"
+  - it: "linstor-controller container carries CPU and memory requests, and a memory limit above the baked-in -Xmx8G"
     asserts:
       - isKind:
           of: LinstorCluster
@@ -30,8 +37,13 @@ tests:
       - equal:
           path: spec.controller.podTemplate.spec.containers[0].resources.requests.memory
           value: 700Mi
+      - equal:
+          path: spec.controller.podTemplate.spec.containers[0].resources.limits.memory
+          value: 10Gi
+      # CPU stays unlimited: the memory ceiling is what the JVM forces, throttling
+      # the controller's event loop is not.
       - notExists:
-          path: spec.controller.podTemplate.spec.containers[0].resources.limits
+          path: spec.controller.podTemplate.spec.containers[0].resources.limits.cpu
 
   - it: "linstor-controller liveness probe relaxes timing but leaves httpGet to the operator"
     asserts:
