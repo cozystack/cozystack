@@ -968,13 +968,12 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		// object in the cluster: a cached ceiling would freeze at its high-water mark and
 		// nothing would ever lower it again.
 		desired = r.systemDefaultsLimitRange(nsName, blocker.request)
-		logger.Info("raising the default container memory limit for this namespace to clear an existing request; "+
+		logger.Info("raising the default container memory limit for this namespace to the request below, to clear it; "+
 			"the namespace keeps a memory.max ceiling instead of none, and drops back to the configured limit once the request is gone",
 			"namespace", nsName,
 			"workload", blocker.workload,
 			"container", blocker.container,
 			"request", blocker.request.String(),
-			"raisedLimit", blocker.request.String(),
 			"configuredLimit", r.SystemNamespaceMemoryLimit.String())
 	}
 
