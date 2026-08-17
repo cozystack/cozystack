@@ -131,7 +131,7 @@ Full documentation lives at <https://cf.k8s.lex.la> (built from the `docs/` tree
 ```yaml
 gatewayClassConfig:
   create: true
-  tunnelID: "your-tunnel-id"
+  tunnelID: "550e8400-e29b-41d4-a716-446655440000"
   cloudflareCredentialsSecretRef:
     name: cloudflare-credentials  # Secret with key "api-token"
 

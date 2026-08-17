@@ -2,11 +2,19 @@ annotations:
   artifacthub.io/category: networking
   artifacthub.io/changes: |-
     - kind: fixed
-      description: 'deps: stop Renovate merging shadowed cloudflared/quic-go bumps (#613)'
+      description: 'controller: skip Gateway status writes that change nothing (#648)'
     - kind: fixed
-      description: 'helm: ship the shared config API secured by default (#603)'
+      description: 'controller: status hygiene for route parents, GatewayClassConfig, and the config-error path (#647)'
     - kind: fixed
-      description: 'proxy: retry the tunnel bootstrap dial instead of exiting (#607)'
+      description: 'tracing: align the resource schema with OpenTelemetry SDK 1.45 (#645)'
+    - kind: fixed
+      description: 'controller: keep foreign per-listener status conditions across reconciles (#642)'
+    - kind: fixed
+      description: 'tunnel: release the connection observer between bootstrap attempts (#628)'
+    - kind: changed
+      description: 'guides: add Knative Serving guide and refresh spec audit for v1.6.1 (#627)'
+    - kind: fixed
+      description: 'controller: snapshot-ordered config versions and stable listener conditions (#626)'
   artifacthub.io/license: BSD-3-Clause
   artifacthub.io/links: |
     - name: Chart Repository
@@ -17,7 +25,7 @@ annotations:
     fingerprint: keyless
     url: https://github.com/lexfrei/cloudflare-tunnel-gateway-controller/.github/workflows/release.yaml@refs/heads/master
 apiVersion: v2
-appVersion: 3.4.0
+appVersion: 3.4.1
 description: Kubernetes Gateway API controller for Cloudflare Tunnel
 home: https://github.com/lexfrei/cloudflare-tunnel-gateway-controller/
 icon: https://avatars.githubusercontent.com/u/314135
@@ -38,4 +46,4 @@ name: cloudflare-tunnel-gateway-controller
 sources:
 - https://github.com/lexfrei/cloudflare-tunnel-gateway-controller/
 type: application
-version: 3.4.0
+version: 3.4.1
