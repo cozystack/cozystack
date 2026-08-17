@@ -193,17 +193,14 @@ func hostnameSuffix(hostname string) string {
 // realistic chart load. The first-label prefix is kept for
 // human readability when reading Gateway.spec.listeners.
 //
-// No truncation is needed and none should be added. Listener.name is a
-// SectionName, capped at 253 characters, not at the 63 of a DNS label:
-// gateway-api v1.4.1 — the version go.mod pins — declares MaxLength=253 on
-// the type, and the CRD this repo ships (packages/system/gateway-api-crds,
-// bundle v1.5.1) carries maxLength: 253 on spec.listeners[].name in both
-// v1 and v1beta1. The longest name any of the
-// three builders below can produce is a 12-character prefix plus a DNS
-// label (≤63) plus a dash and 8 hex, so ≤84. A reviewer periodically
-// reads the 63 of a DNS label as the cap here and asks for truncation;
-// truncating would shorten names that are valid today, and renaming a
-// listener on a live Gateway is a delete plus a create.
+// Do not truncate. Listener.name is a SectionName, capped at 253, not at
+// the 63 of a DNS label: gateway-api v1.4.1 declares MaxLength=253 on the
+// type, and the CRD bundle this repo ships carries maxLength: 253 on
+// spec.listeners[].name. The longest name the builders here produce is a
+// 12-character prefix plus a DNS label (≤63) plus a dash and 8 hex, so
+// ≤84 — already inside the cap. Truncating would shorten names that are
+// valid today, and renaming a listener on a live Gateway is a delete plus
+// a create.
 func perListenerName(hostname string) string {
 	return "https-" + hostnameFirstLabel(hostname) + "-" + hostnameSuffix(hostname)
 }

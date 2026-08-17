@@ -12,8 +12,28 @@
   then the platform default (_cluster.gateway-class-name), then the chart
   default for a platform that predates the key.
 */}}
-{{- $defaultClass := (index .Values._cluster "gateway-class-name") | default "cilium" }}
-{{- $className := .Values.gatewayClassName | default $defaultClass }}
+{{- /* Trimmed on both sides of every later comparison: the class lists
+       below arrive comma-joined and trim their own entries, so an
+       untrimmed scalar here would fail `has` against its own padded
+       self and match neither the edge list nor the allowlist that is
+       supposed to always contain the default.
+
+       Unset falls back; whitespace-only refuses. Unset means the choice
+       was not made, and falling back is its documented behaviour.
+       Whitespace means a choice was made and is garbage, in the field
+       that decides where TLS terminates — resolving it quietly would put
+       a tenant meant for an edge terminator on the bundled class and
+       publish it directly instead. */}}
+{{- $rawDefaultClass := (index .Values._cluster "gateway-class-name") | default "" }}
+{{- $rawClassName := .Values.gatewayClassName | default "" }}
+{{- if and (ne $rawDefaultClass "") (eq (trim $rawDefaultClass) "") }}
+  {{- fail "packages/extra/gateway: _cluster.gateway-class-name is only whitespace. The platform writes this from gateway.className; leave that unset for the bundled cilium class rather than blank." }}
+{{- end }}
+{{- if and (ne $rawClassName "") (eq (trim $rawClassName) "") }}
+  {{- fail "packages/extra/gateway: gatewayClass is only whitespace. Leave tenant.spec.gatewayClass unset to take the platform default, or name a class the operator lists in gateway.tenantSelectableClasses." }}
+{{- end }}
+{{- $defaultClass := $rawDefaultClass | trim | default "cilium" }}
+{{- $className := $rawClassName | trim | default $defaultClass }}
 {{- $edgeClasses := list }}
 {{- range splitList "," ((index .Values._cluster "gateway-edge-classes") | default "") }}
   {{- $c := . | trim }}
