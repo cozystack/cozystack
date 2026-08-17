@@ -73,6 +73,27 @@ size: 10Gi
 storageClass: ""
 
 ## @param {bool} external - Enable external access from outside the cluster.
+##   The LoadBalancer Services are published to external-dns as
+##   <release>.<tenant-host> and <release>-dashboards.<tenant-host>. Releases created
+##   before this naming was introduced were published under the in-cluster domain
+##   instead, which does not resolve outside the cluster. Re-applying publishes the
+##   new name but does NOT withdraw the old record: external-dns runs upsert-only, so
+##   it never issues a delete. The stale entry keeps pointing at the LoadBalancer
+##   until it is removed from the zone by hand.
+##   ONLY chart-managed TLS covers those names. With tls.enabled true (or auto-on on
+##   OpenSearch 2.0.0 and later) each service gets its own certificate carrying its
+##   own external name — they are issued separately, not as one covering both. With TLS
+##   operator-managed — tls.enabled false, or the fallback below 2.0.0 — the operator
+##   issues a certificate for in-cluster names only, so an external client reaching
+##   the published name cannot verify it and must skip verification or supply its own
+##   certificate out of band.
+##   Changing this on a release that already runs chart-managed TLS reissues the
+##   certificate with a different set of names, and the pods do not pick that up on
+##   their own — see the manual step described under tls.
+##   On a platform with no root host the tenant host is empty. External access still
+##   works by LoadBalancer address: no external-dns record is published and the
+##   certificate carries in-cluster names only, since there is no external name to
+##   put in either.
 external: false
 
 ## @enum {string} TopologySpreadPolicy - Pod distribution policy across nodes/zones.
@@ -90,6 +111,54 @@ topologySpreadPolicy: "soft"
 
 ## @param {Version} version - OpenSearch major version to deploy.
 version: v2
+
+##
+## @section TLS configuration
+##
+
+## @typedef {struct} TLS - HTTP-layer TLS configuration for OpenSearch and Dashboards.
+## @field {*bool} enabled - Tri-state TLS switch. When unset, TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.
+##   NOTE: Transport mTLS between nodes is always active and is managed by the opster
+##   operator (tls.transport.generate: true). Setting enabled: false here does NOT
+##   disable transport mTLS — the OpenSearch security plugin requires it unconditionally.
+##   When chart-managed HTTP TLS is enabled, the chart's cert-manager HTTP CA
+##   (<release>-http-ca) is passed to the operator via spec.security.tls.http.caSecret, so
+##   the operator signs the admin certificate with it and anchors the HTTP listener trust on
+##   it. The securityadmin job then verifies the HTTP server certificate and applies the
+##   security configuration (users, roles, audit policies) from the <release>-security-config
+##   Secret. Transport mTLS stays operator-managed and independent.
+##   REQUIRES OpenSearch 2.0.0 or later (version v2 or v3). Below that the operator
+##   signs the admin certificate with the transport CA rather than this one, so
+##   securityadmin cannot authenticate. Setting enabled: true on such a version
+##   fails the release; leaving it unset falls back to operator-managed HTTP TLS
+##   instead, so an external release on an older version keeps working.
+##   The certificate is issued by a per-release private CA, so clients must trust it
+##   explicitly. The platform publishes that trust anchor as the key-free Secret
+##   <release>.tenant-ca, holding ca.crt alone; the private key never leaves the
+##   namespace. Neither service picks up a reissued certificate on its own, so ANY
+##   change to one needs a manual step, not just a deliberate rotation: changing
+##   external, the tenant host or the cluster domain makes cert-manager reissue with
+##   the new names while the pods keep serving the old material, with no error
+##   anywhere. Those three reissue BOTH certificates, so complete it on both sides —
+##   delete <release>-http-server and restart the OpenSearch pods, and, when
+##   Dashboards is enabled, delete <release>-dashboards-server and restart the
+##   Dashboards deployment separately. Doing only the first leaves Dashboards serving
+##   a certificate that no longer matches its own name. Do not delete <release>-http-ca
+##   to do this: that mints a new CA, and until everything restarts the old one is
+##   still what is trusted.
+##   UPGRADE NOTE: an existing external release with this switch unset is on
+##   operator-managed TLS today and moves to chart-managed TLS the first time it is
+##   reconciled after this becomes available. That rolls the cluster and re-anchors it
+##   on a new CA, so anything pinned to the operator's CA must be repointed at
+##   <release>.tenant-ca. Set enabled: false beforehand to stay as you are.
+##   Turning this off again on a release that had it on also needs a manual cleanup:
+##   cert-manager keeps its Secrets after the certificates are removed, so the tenant
+##   keeps receiving the old CA while the endpoint has moved to an operator-issued
+##   certificate. Delete <release>-http-ca, <release>-http-server and, if Dashboards
+##   was enabled, <release>-dashboards-server to complete it.
+
+## @param {TLS} tls - HTTP-layer TLS configuration.
+tls: {}
 
 ##
 ## @section Image configuration

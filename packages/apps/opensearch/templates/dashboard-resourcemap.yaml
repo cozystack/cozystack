@@ -21,6 +21,14 @@ rules:
   - secrets
   resourceNames:
   - {{ .Release.Name }}-credentials
+  # The key-free trust anchor the CA-extraction controller publishes. Listing it in
+  # the ApplicationDefinition only labels it for the tenant-resource registry; direct
+  # read still needs a grant here. Both entries are required and neither substitutes
+  # for the other: without the grant a tenant cannot read the Secret, and without the
+  # registry entry the projection is not surfaced as a tenant resource at all.
+  # ONLY the projection: <release>-http-ca, -http-server and -dashboards-server all
+  # hold a private key and must never appear in this list.
+  - {{ .Release.Name }}.tenant-ca
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io

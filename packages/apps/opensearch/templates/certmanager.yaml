@@ -1,0 +1,251 @@
+{{- /*
+NOTE: Transport mTLS is always operator-managed (spec.security.tls.transport.generate: true
+with perNode: true). This file covers HTTP layer (port 9200) and Dashboards HTTPS only.
+Setting tls.enabled: false does NOT disable transport mTLS — the operator enforces it
+regardless, as it is required by the OpenSearch security plugin.
+
+Design: ONE leaf Certificate PER SERVICE — the HTTP API (port 9200) and Dashboards
+(port 5601) each get their own, from a shared CA Issuer. They are deliberately not
+combined: a single leaf covering both would hand the Dashboards pod a private key
+valid for the API names. The Dashboards leaf renders last and only when Dashboards is
+enabled, so the chain is 4 resources without it and 5 with it.
+
+IMPORTANT: The CA secret is named {{ .Release.Name }}-http-ca (NOT {{ .Release.Name }}-ca).
+The opensearch-operator hardcodes <clusterName>-ca as the name of its own internal transport
+CA secret (see ReadOrGenerateCaCert in
+https://github.com/opensearch-project/opensearch-k8s-operator/blob/main/opensearch-operator/pkg/reconcilers/util/util.go).
+Using the same name would cause the operator to read our cert-manager CA and fail with
+"tls: failed to find any PEM data in key input" because it expects ca.key but the
+cert-manager secret stores the private key under tls.key.
+
+securityadmin trust: the securityadmin job connects to the HTTP endpoint (port 9200 for
+OpenSearch >= 2.0) and validates the server certificate against the admin certificate's
+ca.crt, authenticating with that same admin certificate. To make both anchor on this CA,
+the CR passes {{ .Release.Name }}-http-ca to spec.security.tls.http.caSecret: the operator
+then signs the admin certificate with this CA and sets the HTTP listener trust anchor to
+it (pemtrustedcas). The operator reads the cert-manager secret's tls.crt/tls.key as the
+CA via the cert-manager.io/issuer-kind annotation. As a result securityadmin verifies the
+server certificate, is accepted as admin, and the security config (users/roles) applies.
+
+NAME-LENGTH GUARD: see opensearch.validateReleaseName in _names.tpl, which owns the
+limits table and is invoked below. Keeping a second copy of those numbers here is how
+the two drifted apart before.
+*/}}
+{{- $tlsEnabled := (include "opensearch.tls.enabled" .) | eq "true" -}}
+{{- if $tlsEnabled }}
+{{- include "opensearch.validateReleaseName" . -}}
+{{- /*
+The OpenSearch >= 2.0.0 floor for chart-managed HTTP TLS is enforced in
+opensearch.tls.enabled, which fails on an explicit request and degrades an
+auto-on one, so reaching this point already implies a supported version.
+*/}}
+{{- /*
+_cluster is defaulted before the read because `index` on an absent map is a hard
+render error, not a nil result — the `| default` below never runs. The platform
+always injects it, so the failure only shows up rendering the chart on its own.
+*/}}
+{{- $clusterDomain := (index (.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
+---
+# Self-signed bootstrap Issuer — used only to sign the HTTP CA Certificate below.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-http-selfsigned
+spec:
+  selfSigned: {}
+---
+# HTTP-layer CA Certificate. rotationPolicy: Never keeps the CA stable so existing
+# client trust bundles remain valid across cert-manager renewals.
+# Named http-ca (not ca) to avoid colliding with the operator's own transport CA secret
+# which is always named <clusterName>-ca by the opensearch-operator.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-http-ca
+spec:
+  secretName: {{ .Release.Name }}-http-ca
+  # Publish this CA to the tenant. The CA-extraction controller lifts ca.crt alone
+  # into the key-free <release>.tenant-ca Secret, so a tenant can verify the HTTPS
+  # endpoint without gaining access to the CA private key stored here under tls.key.
+  # The release label is required on this leg: cert-manager issues the Secret, so it
+  # carries neither an OwnerReference nor Helm metadata to attribute it by.
+  #
+  # TURNING TLS OFF DOES NOT WITHDRAW THIS ANCHOR. Helm removes the Certificate, but
+  # cert-manager leaves the Secret (enableCertificateOwnerRef=false), so it keeps
+  # matching the publish label and the controller keeps projecting it — while the
+  # endpoint has gone back to an operator-issued certificate under a different CA.
+  # Tenants are then handed an anchor that no longer verifies the server. Nothing the
+  # chart renders can prevent this: the label leg withdraws on the source Secret
+  # disappearing, and Helm does not own that Secret. Until the controller gains a
+  # withdrawal signal for a removed Certificate, disabling chart-managed TLS on a
+  # release that had it means deleting <release>-http-ca and <release>-http-server by
+  # hand. Verification fails closed in the meantime; no key is exposed.
+  secretTemplate:
+    labels:
+      internal.cozystack.io/publish-ca-cert: "true"
+      internal.cozystack.io/publish-ca-cert-release: {{ .Release.Name | quote }}
+  duration: 87600h  # 10 years
+  isCA: true
+  commonName: {{ .Release.Name }}-http-ca
+  # No key encipherment: RFC 5480 section 3 forbids it for ECDSA keys, which do no
+  # key transport. Both certificates here are ECDSA P-256.
+  usages:
+    - signing
+    - cert sign
+  privateKey:
+    rotationPolicy: Never
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Release.Name }}-http-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+# CA Issuer — used to sign the leaf server certificate.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-http-ca
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-http-ca
+---
+# Leaf TLS Certificate for the OpenSearch HTTP API (port 9200), passed to
+# spec.security.tls.http.secret.name. Dashboards gets its OWN certificate below.
+#
+# ONE CERTIFICATE PER SERVICE, not one covering both. The operator issues separately
+# (<clusterName>-http-cert and <clusterName>-dashboards-cert), and collapsing them
+# into a single combined-SAN leaf would hand the Dashboards pod a private key valid
+# for the OpenSearch API names — including the external hostname. Dashboards is the
+# far more exposed of the two, so a compromise there would let it impersonate the
+# API endpoint for the whole certificate lifetime, which is ten years here. Keeping
+# them apart costs one more Certificate and preserves the operator's isolation.
+#
+# NAMED -http-server, NOT -http-cert, for the same reason the CA above is named
+# -http-ca: the operator reserves <clusterName>-http-cert for the HTTP certificate
+# it generates itself (nodeSecretName in handleHttp), alongside -ca,
+# -transport-cert, -admin-cert and -dashboards-cert. Reusing the reserved name
+# breaks the moment TLS is turned off again: cert-manager keeps its Secret when
+# the Certificate goes away (the platform ships enableCertificateOwnerRef=false),
+# the operator then finds a Secret already sitting at the name it was about to
+# generate, skips generation, and mounts the stale cert-manager one — while
+# signing the admin certificate with its own transport CA. securityadmin cannot
+# authenticate against that, and the security config silently stops applying.
+# Staying outside the operator's namespace of names avoids the collision entirely.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-http-server
+spec:
+  secretName: {{ .Release.Name }}-http-server
+  # LIFETIME MATCHES THE CA, AND THERE IS NO renewBefore, because a reissue cannot
+  # reach the running pods. The reason that does not depend on any operator version:
+  # OpenSearch reads its certificates once at startup, the pinned operator's CRD has
+  # no enableHotReload, and nothing restarts the pods when the Secret changes. So a
+  # one-year leaf expired in place — cert-manager reissued into the Secret while the
+  # pods kept serving the old certificate until it ran out, taking HTTPS on 9200 down
+  # and breaking securityadmin on a timer. Matching the CA's lifetime removes that fuse.
+  #
+  # At operator 2.8.0 (the pinned version) the mount shape compounds it: passing
+  # http.caSecret — which securityadmin needs — moves handleHttp off mountFolder onto
+  # three mount() calls carrying SubPath: filename, and the kubelet never refreshes a
+  # subPath-mounted file at all. Upstream main has since moved every http branch back
+  # to mountFolder, so DO NOT treat that half as durable across a `make update` bump.
+  # The startup-read reason above is what keeps the conclusion correct either way.
+  # (Dropping renewBefore does not disable reissue — cert-manager still defaults to
+  # duration/3 — it only stops promising a 30-day cycle nothing can honour.)
+  # Rotating this certificate is a deliberate act: delete the Secret named below,
+  # then restart the OpenSearch pods so the new material is actually mounted.
+  duration: 87600h  # 10 years, matching the CA above
+  isCA: false
+  usages:
+    - server auth
+    - signing
+  # MUST COVER EVERY SHAPE THE OPERATOR'S OWN HTTP CERTIFICATE COVERED. Turning
+  # chart-managed TLS on replaces the operator-issued certificate, so any name
+  # missing here stops verifying for a client that was using it. The operator issues
+  # for <name>, the service name, <name>-discovery and the <name>.<ns>[.svc[.domain]]
+  # ladder. The two-label form is load-bearing: with ndots:5 and the default search
+  # list, <name>.<ns> is what a client inside another namespace actually resolves and
+  # therefore what its TLS verification runs against.
+  #
+  # The fully-qualified rung differs deliberately. The operator builds it from its
+  # own DNS_BASE, which the platform leaves at the upstream default cluster.local,
+  # while this uses the cluster domain the platform actually runs on. So the FQDN
+  # here is the name that resolves, not the one the operator would have emitted —
+  # a fix, not a gap. Anything relying on the operator's cluster.local FQDN never
+  # resolved in the first place.
+  dnsNames:
+    {{- $ns := .Release.Namespace }}
+    {{- $name := .Release.Name }}
+    # OpenSearch HTTP API service (operator-created ClusterIP)
+    - {{ $name }}
+    - {{ $name }}.{{ $ns }}
+    - {{ $name }}.{{ $ns }}.svc
+    - {{ $name }}.{{ $ns }}.svc.{{ $clusterDomain }}
+    # Headless discovery service the operator issues for as well
+    - {{ $name }}-discovery
+    {{- $extHost := (.Values._namespace | default dict).host | default "" }}
+    {{- if and (.Values.external | default false) $extHost }}
+    # External LoadBalancer DNS name (used by external-dns)
+    - {{ printf "%s.%s" $name $extHost }}
+    {{- end }}
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Release.Name }}-http-ca
+    kind: Issuer
+    group: cert-manager.io
+{{- if .Values.dashboards.enabled }}
+---
+# Leaf TLS Certificate for Dashboards (port 5601), passed to
+# spec.dashboards.tls.secret.name. Deliberately a separate key from the API
+# certificate above — see the note there. Same CA, so a client that trusts the
+# published anchor verifies both, and the names mirror what the operator's own
+# Dashboards certificate covered.
+#
+# Rendered last and only when Dashboards is enabled, so the document order of the
+# four resources above does not depend on this value.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-dashboards-server
+spec:
+  secretName: {{ .Release.Name }}-dashboards-server
+  # Same lifetime as the API certificate, for a DIFFERENT reason — the subPath
+  # argument above does not apply here. The operator mounts an externally provided
+  # Dashboards certificate as a whole secret volume with no SubPath, so the kubelet
+  # does refresh those files. What does not happen is Dashboards noticing: it reads
+  # server.ssl.certificate and server.ssl.key once at startup, and the operator adds
+  # no checksum annotation for a provided secret, so nothing restarts the Deployment
+  # when the material changes. A shorter life would still expire rather than rotate.
+  duration: 87600h  # 10 years, matching the CA
+  isCA: false
+  usages:
+    - server auth
+    - signing
+  dnsNames:
+    {{- $ns := .Release.Namespace }}
+    {{- $name := .Release.Name }}
+    # Dashboards service (operator-created ClusterIP)
+    - {{ $name }}-dashboards
+    - {{ $name }}-dashboards.{{ $ns }}
+    - {{ $name }}-dashboards.{{ $ns }}.svc
+    - {{ $name }}-dashboards.{{ $ns }}.svc.{{ $clusterDomain }}
+    {{- $extHost := (.Values._namespace | default dict).host | default "" }}
+    {{- if and (.Values.external | default false) $extHost }}
+    # External LoadBalancer DNS name (used by external-dns)
+    - {{ printf "%s-dashboards.%s" $name $extHost }}
+    {{- end }}
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Release.Name }}-http-ca
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}
+{{- end }}
