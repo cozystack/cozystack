@@ -3,12 +3,12 @@
   "type": "object",
   "properties": {
     "gatewayClassName": {
-      "description": "GatewayClass to attach the tenant Gateway to. Must exist cluster-wide. Default matches the Cilium-managed class.",
+      "description": "GatewayClass for this tenant's Gateway, set from `tenant.spec.gatewayClass`. Empty means the platform default (`_cluster.gateway-class-name`, itself defaulting to the bundled `cilium` class). Whether the class terminates TLS itself or at its provider's edge comes from the platform's `gateway.edgeTerminatedClasses`, so the two cannot get out of step.",
       "type": "string",
-      "default": "cilium"
+      "default": ""
     },
     "tlsPassthroughServices": {
-      "description": "Names (from publishing.exposedServices) whose traffic is TLS-passthrough rather than TLS-terminate. For each such service a dedicated HTTPS listener with tls.mode=Passthrough is rendered on the Gateway, and the service is expected to attach a TLSRoute instead of an HTTPRoute.",
+      "description": "Names (from publishing.exposedServices) whose traffic is TLS-passthrough rather than TLS-terminate. For each such service a dedicated HTTPS listener with tls.mode=Passthrough is rendered on the Gateway, and the service is expected to attach a TLSRoute instead of an HTTPRoute. Ignored when this tenant's Gateway is on a class the platform lists in `gateway.edgeTerminatedClasses`: an HTTP-only edge cannot carry a TLS listener, so those services are not published through the tenant Gateway at all.",
       "type": "array",
       "default": [
         "api",
