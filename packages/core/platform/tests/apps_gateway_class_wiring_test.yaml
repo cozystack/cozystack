@@ -66,6 +66,26 @@ tests:
       - failedTemplate:
           errorMessage: 'gateway.className must be a GatewayClass name, got 123'
 
+  # 0 and false are the falsy non-strings. A `default ""` placed ahead of
+  # the kind check would turn both into the empty string and resolve them
+  # to the bundled class, so these two pin the ORDER of the guard, not
+  # just its presence.
+  - it: rejects a zero default class rather than treating it as unset
+    set:
+      gateway:
+        className: 0
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gateway.className must be a GatewayClass name, got 0'
+
+  - it: rejects a boolean default class rather than treating it as unset
+    set:
+      gateway:
+        className: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gateway.className must be a GatewayClass name, got false'
+
   - it: carries the classes a tenant may select
     set:
       gateway:

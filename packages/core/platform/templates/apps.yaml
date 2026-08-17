@@ -138,14 +138,22 @@ stringData:
              where TLS terminates. Resolving it quietly would publish a
              tenant directly, with a real certificate on a real address,
              that the operator meant to put behind an edge terminator. */}}
-      {{- $rawClassName := .Values.gateway.className | default "" }}
+      {{- /* Read before normalising, and check the kind first. `default`
+             fires on any falsy value, so a `default ""` ahead of these
+             checks would launder 0 and false into the empty string and
+             resolve them to the bundled class — the guard would then
+             cover the loudest bad input and miss the two quietest. The
+             order of a guard's steps is part of the guard. */}}
+      {{- $rawClassName := .Values.gateway.className }}
+      {{- if not (kindIs "invalid" $rawClassName) }}
       {{- if not (kindIs "string" $rawClassName) }}
       {{- fail (printf "gateway.className must be a GatewayClass name, got %v" $rawClassName) }}
       {{- end }}
       {{- if and (ne $rawClassName "") (eq (trim $rawClassName) "") }}
       {{- fail "gateway.className is only whitespace. Leave it unset to use the bundled cilium class, or name a real GatewayClass — resolving a blank value silently would decide TLS termination for every tenant that did not choose." }}
       {{- end }}
-      gateway-class-name: {{ $rawClassName | trim | default "cilium" | quote }}
+      {{- end }}
+      gateway-class-name: {{ $rawClassName | default "" | trim | default "cilium" | quote }}
       {{- /*
         A non-string entry is rejected here rather than travelling as
         something the join below would render unreadably. Note what is NOT
