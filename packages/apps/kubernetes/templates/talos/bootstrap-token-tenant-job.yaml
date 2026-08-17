@@ -8,10 +8,21 @@
   kube-system, which the management cluster can only reach via the
   Kamaji-issued admin kubeconfig stored as <release>-admin-kubeconfig.
 
-  The Job runs as a Helm post-install/post-upgrade hook so it executes
-  after the KamajiControlPlane has reconciled and the admin kubeconfig
-  Secret exists. It is idempotent (kubectl apply) and re-runs harmlessly
-  on every upgrade.
+  Why not a Helm post-install/post-upgrade hook (the earlier shape):
+  post-* hooks execute only after Helm's wait phase resolves. On the
+  tenant `kubernetes` release the wait blocks on MachineDeployment Ready,
+  which blocks on nodes registering, which blocks on kubelet CSR
+  authentication, which needs the bootstrap-token this Job produces —
+  a hard deadlock on every fresh install and on every HR reconcile that
+  finds MD in a non-Ready state. pre-* hooks are not usable either: they
+  fire before non-hook templates apply, so <release>-admin-kubeconfig
+  (materialised by Kamaji after KamajiControlPlane is applied) is not
+  yet available. The workable shape is a regular resource in the chart:
+  it lands together with the KamajiControlPlane and the talos-secrets,
+  its Pod stays pending until Kamaji publishes the admin kubeconfig
+  Secret (backoffLimit covers the retry window), then runs and completes
+  before MachineDeployment can converge. Helm's wait treats the Job as
+  another resource to reach terminal state and does not gate it on MD.
 */}}
 ---
 apiVersion: v1
@@ -21,10 +32,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kubernetes.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "0"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 ---
 apiVersion: batch/v1
 kind: Job
@@ -33,10 +40,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kubernetes.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   # backoffLimit + restartPolicy: OnFailure gives the Job up to 11 attempts at
   # the tenant apiserver with exponential backoff (capped at 6 min between

@@ -362,6 +362,21 @@ tests:
           path: metadata.name
           value: test-k8s-bootstrap-token-tenant
         documentIndex: 1
+      # Main-phase, not a hook: NONE of the bootstrap-token resources may
+      # carry helm.sh/hook. The Job must run at t0 alongside the tenant
+      # KamajiControlPlane so that the bootstrap-token-<id> Secret lands
+      # in the tenant kube-system before MachineDeployment starts
+      # scaling. post-install/post-upgrade hooks would gate this on
+      # Helm's wait phase, which itself waits on MachineDeployment
+      # Ready, which waits on nodes to register, which waits on the
+      # very token this Job produces — a deadlock. Pin the absence on
+      # both documents (0 SA, 1 Job).
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 0
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 1
 
   - it: talos-pki emits two cert-manager Certificates and two Issuers
     templates:
