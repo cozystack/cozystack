@@ -311,6 +311,35 @@ jobs:
       # not exists" step was gated on `is_stable && release_exists==false` —
       # unreachable now that a hand-pushed stable tag is rejected above.
 
+  # Mandatory only for vX.Y.Z-rc.N tags. Alpha/beta tags deliberately skip this
+  # job and use e2e-tag.yaml's manual dispatch when validation is wanted.
+  #
+  # Deliberately not gated on release_exists: validating an already-published rc
+  # again is an idempotent re-tag-run check, while prepare-release still provides
+  # the ordering guarantee for a fresh rc. Its "Publish rc release" and "Create
+  # release branch" steps finish before this reusable workflow can start.
+  rc-e2e:
+    name: E2E Release Candidate
+    needs: prepare-release
+    if: needs.prepare-release.result == 'success' && contains(github.ref_name, '-rc.')
+    # A caller's permissions are the ceiling for every job in the called
+    # workflow, and GitHub validates that ceiling STATICALLY, when it creates the
+    # run — before this job's `if:` is evaluated, let alone before a step runs.
+    # e2e-tag.yaml's e2e job declares `checks: write` for its
+    # workflow_dispatch-only breakpoint, so even though workflow_call can never
+    # take that branch, omitting the grant here fails the whole tags.yaml run with
+    # "requesting 'checks: write', but is only allowed 'checks: none'". Not just
+    # rc cuts: the `if:` cannot gate a startup failure, so EVERY tag push — rc and
+    # stable, including the one finalize pushes to publish a release — would build
+    # nothing at all. hack/promote-gate-contract.bats pins the pair, because no CI
+    # lane exercises this file (it runs only on tag pushes).
+    permissions:
+      contents: read
+      checks: write
+    uses: ./.github/workflows/e2e-tag.yaml
+    with:
+      tag: ${{ github.ref_name }}
+
   generate-changelog:
     name: Generate Changelog
     # git + node + copilot CLI only — no docker, no repo toolchain: GitHub-hosted.
