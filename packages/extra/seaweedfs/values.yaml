@@ -92,12 +92,14 @@ db:
 ## @field {int} [replicas] - Number of master replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @field {int} [volumeSizeLimitMB] - Maximum size of a single logical volume in MB. The master stops assigning writes to a volume past this size, so the slot budget of a data disk is roughly disk-size / this value. The 1000 MB default suits small test PVCs; production stores measured in TB typically want 4000-30000 (upstream seaweedfs defaults to 30000).
 
 ## @param {Master} [master] - Master service configuration.
 master:
   replicas: 3
   resources: {}
   resourcesPreset: "t1.small"
+  volumeSizeLimitMB: 1000
 
 ## @typedef {struct} Filer - Filer service configuration.
 ## @field {int} [replicas] - Number of filer replicas.

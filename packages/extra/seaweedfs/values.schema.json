@@ -236,6 +236,11 @@
             "xlarge",
             "2xlarge"
           ]
+        },
+        "volumeSizeLimitMB": {
+          "type": "integer",
+          "description": "Maximum size of a single logical volume in MB. The master stops assigning writes to a volume past this size, so the slot budget of a data disk is roughly disk-size / this value. The 1000 MB default suits small test PVCs; production stores measured in TB typically want 4000-30000 (upstream seaweedfs defaults to 30000).",
+          "default": 1000
         }
       }
     },
@@ -612,7 +617,7 @@
                 "type": "string"
               },
               "nodeSelector": {
-                "description": "YAML nodeSelector for this zone (default: topology.kubernetes.io/zone: \u003czoneName\u003e).",
+                "description": "YAML nodeSelector for this zone (default: topology.kubernetes.io/zone: <zoneName>).",
                 "type": "string"
               },
               "pools": {

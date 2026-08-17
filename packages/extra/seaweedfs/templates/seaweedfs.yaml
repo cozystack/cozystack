@@ -234,6 +234,7 @@ spec:
         defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
         {{- end }}
         replicas: {{ .Values.master.replicas }}
+        volumeSizeLimitMB: {{ .Values.master.volumeSizeLimitMB }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.master.resourcesPreset .Values.master.resources $) | nindent 10 }}
       volume:
         {{ if eq .Values.topology "MultiZone" }}

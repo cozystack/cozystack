@@ -29,6 +29,7 @@
 | `master.resources.cpu`                            | Number of CPU cores allocated.                                                                                | `quantity`          | `""`       |
 | `master.resources.memory`                         | Amount of memory allocated.                                                                                   | `quantity`          | `""`       |
 | `master.resourcesPreset`                          | Default sizing preset used when `resources` is omitted.                                                       | `string`            | `t1.small` |
+| `master.volumeSizeLimitMB`                        | Maximum size of a single logical volume in MB; slot budget of a disk is roughly disk-size / this value.       | `int`               | `1000`     |
 | `filer`                                           | Filer service configuration.                                                                                  | `object`            | `{}`       |
 | `filer.replicas`                                  | Number of filer replicas.                                                                                     | `int`               | `2`        |
 | `filer.resources`                                 | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.      | `object`            | `{}`       |
