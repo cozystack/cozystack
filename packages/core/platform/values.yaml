@@ -33,6 +33,37 @@ migrations:
   # Reset it to false once the upgrade is through, or the next platform upgrade
   # that adds an etcd migration will skip its snapshot too.
   etcdAdoptSkipBackup: false
+# Upgrade preflight health gate. Runs as a pre-upgrade hook BEFORE the schema
+# migrations and refuses to start an upgrade on an unhealthy cluster, so a
+# broken storage/node state is surfaced up front instead of mid-rollout. It
+# reuses migrations.image. See templates/preflight-hook.yaml.
+preflight:
+  # Master toggle. When false the pre-upgrade gate is not rendered at all.
+  enabled: true
+  # Proceed past FAILING checks anyway. Leave false. Set true ONLY when the
+  # degraded state is expected and you accept the risk (e.g. a deliberately
+  # diskless/tie-breaker LINSTOR layout, or an in-progress resync): the gate
+  # then downgrades failures to warnings and logs the override for the audit
+  # trail. Prefer fixing what a check reports, or skipping that single check
+  # via skipChecks, over blanket-overriding every check.
+  override: false
+  # Skip individual checks by id (e.g. [linstor, nodes-ready]) instead of
+  # overriding the whole gate. Empty runs every check.
+  skipChecks: []
+  # Checks whose FAILURES are downgraded to non-blocking warnings: the check
+  # still runs and reports, it just does not block the upgrade. Use this for a
+  # check whose blocking behaviour is not yet trusted enough to hard-block an
+  # existing customer's upgrade.
+  #
+  # linstor is advisory by default. Its parsing of live `linstor -m` output
+  # relies on LINBIT REST API fields (connection_status/disk_state): the field
+  # NAMES are confirmed on a live healthy controller, but the FAULTY-state
+  # detection (the denylist of bad disk_states) has not yet been exercised
+  # against a genuinely degraded cluster. Until that e2e evidence exists (see
+  # cozystack-pr-test), a wrong assumption there must warn, never hard-block a
+  # healthy upgrade. Once e2e confirms the faulty-state path, a follow-up
+  # removes linstor from this default and lets it gate.
+  advisoryChecks: [linstor]
 # Bundle deployment configuration
 bundles:
   system:
