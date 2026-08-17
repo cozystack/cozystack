@@ -144,10 +144,12 @@ filer:
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
 ## @field {map[string]Zone} [zones] - A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
 ## @field {map[string]StoragePool} [pools] - A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.
+## @field {int} [maxVolumes] - Maximum number of logical volumes per data directory (the volume server's -max). 0 lets the server auto-compute from free disk space, which also RESERVES free space for every existing sub-limit volume to grow to volumeSizeLimitMB; once that reservation exceeds free disk, the computed headroom is zero and every placement-shaped operation (replica repair via volume.fix.replication, the first volume of a new bucket) fails even though existing writable volumes still absorb traffic. Set an explicit count on long-lived stores; -minFreeSpacePercent remains the actual disk guard.
 
 ## @param {Volume} [volume] - Volume service configuration.
 volume:
   replicas: 2
+  maxVolumes: 0
   size: 10Gi
   storageClass: ""
   diskType: ""

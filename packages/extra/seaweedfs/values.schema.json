@@ -499,6 +499,11 @@
           "type": "integer",
           "default": 2
         },
+        "maxVolumes": {
+          "type": "integer",
+          "description": "Maximum number of logical volumes per data directory (the volume server's -max). 0 auto-computes from free disk, which reserves space for every existing sub-limit volume to grow to volumeSizeLimitMB \u2014 once that reservation exceeds free disk, placement-shaped operations (replica repair, a new bucket's first volume) fail. Set an explicit count on long-lived stores; -minFreeSpacePercent remains the disk guard.",
+          "default": 0
+        },
         "resources": {
           "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
           "type": "object",

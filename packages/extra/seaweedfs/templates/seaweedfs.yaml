@@ -249,7 +249,7 @@ spec:
           {{- with .Values.volume.storageClass }}
           storageClass: {{ . }}
           {{- end }}
-          maxVolumes: 0
+          maxVolumes: {{ .Values.volume.maxVolumes }}
         {{- if .Values.volume.diskType }}
         extraArgs:
         - "-disk={{ .Values.volume.diskType }}"
@@ -268,7 +268,7 @@ spec:
             {{- with ($pool.storageClass | default $.Values.volume.storageClass) }}
             storageClass: "{{ . }}"
             {{- end }}
-            maxVolumes: 0
+            maxVolumes: {{ $.Values.volume.maxVolumes }}
           extraArgs:
           - "-disk={{ $pool.diskType }}"
         {{- end }}
@@ -284,7 +284,7 @@ spec:
             {{- with ($zone.storageClass | default $.Values.volume.storageClass) }}
             storageClass: "{{ . }}"
             {{- end }}
-            maxVolumes: 0
+            maxVolumes: {{ $.Values.volume.maxVolumes }}
           nodeSelector: |
             {{- with $zone.nodeSelector }}
 {{ . | indent 12 }}
@@ -309,7 +309,7 @@ spec:
             {{- with ($pool.storageClass | default $zone.storageClass | default $.Values.volume.storageClass) }}
             storageClass: "{{ . }}"
             {{- end }}
-            maxVolumes: 0
+            maxVolumes: {{ $.Values.volume.maxVolumes }}
           nodeSelector: |
             {{- with $zone.nodeSelector }}
 {{ . | indent 12 }}
