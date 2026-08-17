@@ -35,6 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -986,9 +987,29 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		return nil
 	}
 
-	desired.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("LimitRange"))
+	return r.Apply(ctx, systemDefaultsLimitRangeApplyConfiguration(desired),
+		client.FieldOwner(packageControllerFieldOwner), client.ForceOwnership)
+}
 
-	return r.Patch(ctx, desired, client.Apply, client.FieldOwner(packageControllerFieldOwner), client.ForceOwnership)
+// systemDefaultsLimitRangeApplyConfiguration restates the LimitRange as the apply
+// configuration Client.Apply takes.
+//
+// The typed object stays the source of truth because it is what the spec comparison above
+// and the tests read; this is the last step before the wire. Every field the reconciler
+// sets is copied here, so a field added to systemDefaultsLimitRange and not to this
+// function would be applied as absent rather than failing to compile — the two are short
+// and adjacent for that reason.
+func systemDefaultsLimitRangeApplyConfiguration(lr *corev1.LimitRange) *corev1ac.LimitRangeApplyConfiguration {
+	items := make([]*corev1ac.LimitRangeItemApplyConfiguration, 0, len(lr.Spec.Limits))
+	for _, item := range lr.Spec.Limits {
+		items = append(items, corev1ac.LimitRangeItem().
+			WithType(item.Type).
+			WithDefault(item.Default).
+			WithDefaultRequest(item.DefaultRequest))
+	}
+	return corev1ac.LimitRange(lr.Name, lr.Namespace).
+		WithLabels(lr.Labels).
+		WithSpec(corev1ac.LimitRangeSpec().WithLimits(items...))
 }
 
 // memoryDefaultInForce reports whether lr already defaults a container memory limit in its
@@ -1349,8 +1370,10 @@ func (r *PackageReconciler) resolvePrivilegedNamespaces(ctx context.Context, nam
 
 // createOrUpdateNamespace creates or updates a namespace using server-side apply.
 func (r *PackageReconciler) createOrUpdateNamespace(ctx context.Context, namespace *corev1.Namespace) error {
-	namespace.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Namespace"))
-	return r.Patch(ctx, namespace, client.Apply, client.FieldOwner(packageControllerFieldOwner), client.ForceOwnership)
+	desired := corev1ac.Namespace(namespace.Name).
+		WithLabels(namespace.Labels).
+		WithAnnotations(namespace.Annotations)
+	return r.Apply(ctx, desired, client.FieldOwner(packageControllerFieldOwner), client.ForceOwnership)
 }
 
 // cleanupOrphanedHelmReleases removes HelmReleases that are no longer needed
