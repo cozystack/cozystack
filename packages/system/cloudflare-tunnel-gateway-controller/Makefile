@@ -9,8 +9,8 @@ include ../../../hack/package.mk
 #   crane digest ghcr.io/lexfrei/charts/cloudflare-tunnel-gateway-controller:<tag>
 #   crane digest ghcr.io/lexfrei/cloudflare-tunnel-gateway-controller:<tag>
 #   crane digest ghcr.io/lexfrei/cloudflare-tunnel-gateway-controller-proxy:<tag>
-CHART_VERSION ?= 3.4.0
-CHART_DIGEST ?= sha256:56cb2411b7639640f23cbc4ce8ad2f4822deaca6c31f9221651ffcb435511b6a
+CHART_VERSION ?= 3.4.1
+CHART_DIGEST ?= sha256:398a47876d172b86ecf3059586bb226f4af7701cdd0f17d2330f7f5182bcf642
 
 test:
 	helm unittest .
