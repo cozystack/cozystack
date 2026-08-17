@@ -8,19 +8,24 @@ Cozystack integrates and ships many upstream cloud native components. If you bel
 
 ## Supported Versions
 
-As of March 17, 2026, the Cozystack project maintains multiple release lines. Security fixes are prioritized for the latest stable release line and, when needed, backported to other supported lines.
+The Cozystack project maintains three release lines at a time: **the latest stable minor and the two minors preceding it.** That is a rolling rule rather than a list of version numbers, so it does not go stale between releases — read it against the GitHub Releases page to see which concrete lines it currently names:
+
+<https://github.com/cozystack/cozystack/releases>
+
+Note that the rule is keyed to release lines, not to the existence of a `release-X.Y` branch. Release branches are never deleted, so every line back to the earliest still has one, and branch existence says nothing about whether a line is maintained.
 
 | Version line | Status | Notes |
 | --- | --- | --- |
-| `v1.1.x` | Supported | Current stable release line. |
-| `v1.0.x` | Supported | Previous stable release line; receives security and important maintenance fixes. |
-| `v0.41.x` | Limited support | Legacy pre-v1 line during the v0 to v1 transition; critical security and upgrade-blocking fixes may be backported at maintainer discretion. |
-| `< v0.41` | Not supported | Please upgrade to a supported release line before requesting a security fix. |
+| Latest stable minor | Supported | Current stable release line. Security fixes land here first, and patch releases are cut from it. |
+| The two minors preceding the latest | Supported | Receive security and important maintenance fixes, backported from the current line. |
+| Older `1.x` minors | Limited support | Critical and upgrade-blocking fixes may be backported at maintainer discretion. Adopters are encouraged to move to a supported line. |
+| `v0.41.x` | End of life | The final pre-v1 line. It received patch releases through March 2026 during the v0 to v1 transition and no longer does; no further fixes are planned. |
+| Everything before `v0.41` | Not supported | Long superseded. Upgrade to a `1.x` line. |
 | `alpha`, `beta`, `rc` releases | Not supported | Pre-release builds are for testing and evaluation only. |
 
-Supported versions may change over time as new release lines are cut. The authoritative source for current releases is the GitHub Releases page:
+Being in a supported row does not mean a line receives every fix. **The project does not have a documented rule for choosing which supported lines a given fix is backported to** — that decision is taken per fix by the maintainers, weighing severity against the risk and effort of the backport. This is stated rather than dressed up as a policy because no such policy exists; adopters who need a specific fix on a specific line should ask.
 
-<https://github.com/cozystack/cozystack/releases>
+Reporting a vulnerability against a line with limited support or at end of life is still welcome. We will confirm whether the issue also affects a supported line and fix it there; whether the fix is additionally backported to the older line is a per-fix maintainer decision on the same basis.
 
 ## Reporting a Vulnerability
 
@@ -98,17 +103,23 @@ Because Cozystack is an integration-heavy platform, some vulnerabilities may req
 
 ### Automated security analysis
 
-Two scanners run continuously against this repository:
+Four automated controls run continuously against this repository and the artifacts built from it:
 
 - **CodeQL** (static analysis). Runs on every pull request to `main`, on push to `main`, and on a weekly schedule. The Go database is built with CodeQL's `manual` build mode — each first-party module is compiled explicitly, so the analysis does not depend on the project `Makefile` (which fetches upstream tags) and stays reproducible. On a pull request CodeQL reports only alerts that are *new relative to `main`* and annotates them on the changed lines. New findings are expected to be resolved before merge — either by fixing the code, or, for a false positive or accepted risk, by dismissing the alert in the **Security → Code scanning** tab with a recorded reason (`False positive`, `Won't fix`, or `Used in tests`).
 - **OpenSSF Scorecard** (supply-chain posture). Runs weekly and on branch-protection changes, and publishes results to the public Scorecard API at <https://scorecard.dev/viewer/?uri=github.com/cozystack/cozystack>. Scorecard results are intentionally **not** uploaded to GitHub code scanning: it posts one alert per check, which would bury CodeQL's first-party findings. The scorecard.dev badge is the canonical view.
 
-CodeQL is intended to run as a required pull-request check, so that a newly introduced alert at error severity blocks merge until it is fixed or dismissed.
+- **zizmor** (GitHub Actions static analysis). Audits the workflow definitions themselves for findings such as unpinned action references or over-broad `permissions`. It runs in two places: as a hook inside the `pre-commit` check, which **is** a required status check and therefore blocks merge, and as a standalone workflow triggered only by changes under `.github/workflows/` or to `.github/zizmor.yml`, which is not itself a required check. As with Scorecard, the SARIF is intentionally not uploaded to code scanning — the signal is the failing check.
+- **Trivy** (dependency and container-image CVE scanning). An organization-wide pipeline scans every non-fork, non-archived repository in the `cozystack` organization: Go modules, Dockerfile base images and the container images referenced by the packaged charts, against NVD, vendor advisories and the GitHub Advisory Database. CRITICAL findings are scanned every 6 hours; HIGH, MEDIUM and LOW are collected into a weekly report. Findings are filtered for noise (dev and build-only dependencies, unfixed-upstream findings older than a year, already-triaged CVEs) and every remaining new finding becomes a tracked issue with a severity label and a triage checklist. Triage targets are tighter than the reported-vulnerability targets above: CRITICAL within 1 business day against a 7-day fix target, HIGH within 3 business days / 30 days, MEDIUM within 10 business days / 90 days, LOW within 30 days best-effort. Confirmed findings ship as a pinned-component bump in the next release, or as a patch release on a maintained line when severity warrants it. **These are targets and the project is not currently meeting them** — there is a backlog on both the triage and the remediation side, and the rotating role that owns those clocks is currently unfilled. Per-finding detail and triage state are kept private until fixed, because they describe unfixed exposure in released artifacts. Aggregate reporting **is** public: monthly reports and a full backlog reconciliation are published under [`docs/security/reports/`](docs/security/reports/). Publishing the pipeline's own policy documents and scanning scripts, which hold no finding data, is outstanding.
+
+Dependency updates are additionally automated by **Renovate** ([`.github/renovate.json`](.github/renovate.json)), which raises pull requests for Go modules, Dockerfile base images, GitHub Actions and a small number of regex-pinned references. The `helm-values` manager is disabled repo-wide, so the curated component images that make up the shipped platform are bumped by maintainers when preparing a release rather than by a bot.
+
+CodeQL is intended to run as a required pull-request check, so that a newly introduced alert at error severity blocks merge until it is fixed or dismissed. It is **not** currently among the required status checks on `main` — those are `pre-commit` and `E2E Tests` — so today a new error-severity alert is expected to be resolved before merge by review convention rather than enforced by branch protection.
 
 ## Security Fixes and Announcements
 
 Security fixes are published in normal release artifacts whenever possible. Users should monitor:
 
+- monthly security reports and the backlog reconciliation: [`docs/security/reports/`](docs/security/reports/)
 - GitHub Releases: <https://github.com/cozystack/cozystack/releases>
 - project changelogs in this repository
 - the Cozystack website and documentation: <https://cozystack.io>
@@ -117,7 +128,7 @@ Security fixes are published in normal release artifacts whenever possible. User
 
 The following are generally out of scope for private security reporting unless there is a clear Cozystack-specific impact:
 
-- vulnerabilities in unsupported or end-of-life Cozystack versions
+- vulnerabilities that reproduce only on an end-of-life or unsupported version and not on any maintained line — such reports are still accepted and triaged, but the fix will normally be delivered on a maintained line rather than backported
 - issues that require access already equivalent to cluster-admin, node root, or direct infrastructure administrator privileges, unless they bypass an expected Cozystack security boundary
 - vulnerabilities that exist only in an upstream dependency and are not introduced or materially worsened by Cozystack packaging, configuration, or defaults
 - requests for security best-practice advice without a concrete vulnerability
