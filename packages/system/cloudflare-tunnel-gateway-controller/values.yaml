@@ -39,10 +39,10 @@ cloudflare-tunnel-gateway-controller:
   # them (the chart itself is vendored, nothing fetches it at runtime).
   # Bump tag+digest together with CHART_VERSION/CHART_DIGEST in the Makefile.
   image:
-    tag: 3.4.0@sha256:1f99e86cef2938eb34fdc957b71f61f0dce6f19050a613ecb2cb12f4611989e4
+    tag: 3.4.1@sha256:9cf29efc3bf707b0429d44bb6150d392bc8409757046bce39f7f40f5bb0898bf
   proxy:
     image:
-      tag: 3.4.0@sha256:7b6a772faa89df17782511d4837ab53bcad85b50a3532f2b5af1d63f18b5c701
+      tag: 3.4.1@sha256:cbf03dc444dfd1d71b002e0f0feda95f1a38bed9eb5893f2a08950eb65d0a9db
     tunnelTokenSecretRef:
       name: cloudflare-tunnel-credentials
   gatewayClassConfig:
