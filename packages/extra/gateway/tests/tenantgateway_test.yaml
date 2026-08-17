@@ -699,4 +699,3 @@ tests:
           value: edge
       - notExists:
           path: spec.tlsPassthroughServices
-

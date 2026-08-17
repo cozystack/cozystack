@@ -17,7 +17,7 @@ gateway:
 ```
 
 - `className` — the class every tenant Gateway uses unless the tenant names another one. Defaults to the Cilium class the platform ships.
-- `tenantSelectableClasses` — the additional class names a tenant may name for itself. Empty (the default) means tenants cannot choose at all.
+- `tenantSelectableClasses` — the additional class names a tenant may name for itself. Empty (the default) means a tenant cannot name anything but the platform default.
 - `edgeTerminatedClasses` — the class names whose provider terminates TLS upstream of the Gateway. Membership in this list is the only thing that puts a tenant into edge mode.
 
 All three reach the per-tenant gateway chart through the platform values channel, as `_cluster.gateway-class-name`, `_cluster.gateway-tenant-classes` and `_cluster.gateway-edge-classes`. The two lists are joined with commas on the way, so a name containing a comma is rejected at platform render time rather than silently split into two names.

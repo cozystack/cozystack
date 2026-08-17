@@ -7,7 +7,16 @@
   pin is the class THAT Gateway runs on: the platform default, since a
   tenant's own class choice does not ride this channel.
 */}}
-{{- $publishingClass := (index .Values._cluster "gateway-class-name") | default "" | trim | default "cilium" }}
+{{- /* Same handling as the two other readers of this key: unset falls back
+       to the bundled class, whitespace-only refuses. This reader decides
+       whether the solver keeps its sectionName pin, so a blank value
+       resolving quietly here would aim every HTTP-01 challenge in the
+       cluster at the wrong listener shape. */}}
+{{- $rawPublishingClass := (index .Values._cluster "gateway-class-name") | default "" }}
+{{- if and (ne $rawPublishingClass "") (eq (trim $rawPublishingClass) "") }}
+  {{- fail "packages/system/cert-manager-issuers: _cluster.gateway-class-name is only whitespace. The platform writes this from gateway.className; leave that unset for the bundled cilium class rather than blank." }}
+{{- end }}
+{{- $publishingClass := $rawPublishingClass | trim | default "cilium" }}
 {{- $edgeClasses := list }}
 {{- range splitList "," ((index .Values._cluster "gateway-edge-classes") | default "") }}
   {{- $c := . | trim }}
