@@ -432,6 +432,33 @@ kind: KubeadmConfigTemplate
 metadata:
   name: {{ $.Release.Name }}-{{ $groupName }}
   namespace: {{ $.Release.Namespace }}
+  annotations:
+    {{- /* 1.6 drops this object from the chart entirely — workers move to
+           TalosConfigTemplate. On that upgrade Helm sees it in the previous
+           release manifest and absent from the new one and deletes it, while the
+           kubeadm-backed MachineSet is still mid-rollover with its
+           bootstrap.configRef pointing here: controller-manager floods with
+           reconcile errors and workers can hang pending with nothing to bootstrap
+           from. Being born with keep means the object is already protected no
+           matter which migration path a cluster takes to 1.6 — platform migration
+           45 pins the templates that already exist, and this covers every one
+           created after that migration has run.
+
+           Safe on the uninstall path, which is the only thing keep changes here:
+           CAPI stamps an ownerReference to the Cluster on this object (verified on
+           a live v1.5 stand, alongside MachineDeployment and
+           KubevirtMachineTemplate), and the Cluster itself is Helm-managed with no
+           keep. So `helm uninstall` deletes the Cluster and Kubernetes garbage
+           collection reclaims this template through that ownerReference. keep only
+           suppresses Helm's own delete; it has no bearing on owner-driven GC.
+
+           The name is deterministic — <release>-<nodeGroup>, not content-hashed
+           like KubevirtMachineTemplate above — so keep cannot accumulate a copy
+           per upgrade. The one residue is a removed nodeGroup, whose template
+           Helm no longer prunes; it is inert (nothing references it), it is
+           re-adopted in place if that nodeGroup comes back, and GC reclaims it
+           with the Cluster. */}}
+    helm.sh/resource-policy: keep
 spec:
   template:
     spec:
