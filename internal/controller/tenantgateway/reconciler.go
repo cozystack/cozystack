@@ -705,9 +705,11 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 	logger := log.FromContext(ctx)
 
 	if tgw.Spec.CertMode != gatewayv1alpha1.CertModeDNS01 {
-		// HTTP-01 mode: wildcard cert must not exist. Delete any
-		// stale wildcard cert left over from a previous DNS-01
-		// reconcile so a mode toggle doesn't leak Certificates.
+		// Only DNS-01 mints a wildcard Certificate, so in every other
+		// mode that object must not exist — existingSecret references
+		// an operator-supplied Secret without one. Delete a stale
+		// Certificate left over from a previous DNS-01 reconcile so a
+		// mode toggle doesn't leak them.
 		stale := &cmv1.Certificate{}
 		err := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: gatewayCertificateName(tgw)}, stale)
 		if apierrors.IsNotFound(err) {
