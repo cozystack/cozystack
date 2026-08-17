@@ -14,6 +14,20 @@
 {{- /* The proxy needs its ServiceAccount token only for Vault Kubernetes auth. */}}
 {{- $vaultAuth := (($kms.vault | default dict).auth | default "token") }}
 {{- $k8sAuth := and (eq $backend "vault-transit") (eq $vaultAuth "kubernetes") }}
+{{- /*
+  CA the proxy trusts for the Vault connection: either seeded by the operator
+  (caSecretName) or rendered here from an inline PEM (caBundle). It is exposed
+  as SSL_CERT_FILE, which only redirects the system trust store — the database
+  connection verifies against its own CA pool and is unaffected.
+*/}}
+{{- $vaultTLS := ($kms.vault | default dict) }}
+{{- if and $vaultTLS.caBundle $vaultTLS.caSecretName }}
+{{- fail "encryption.kms.vault.caBundle and caSecretName are mutually exclusive — set one" }}
+{{- end }}
+{{- $vaultCASecret := $vaultTLS.caSecretName }}
+{{- if and (eq $backend "vault-transit") $vaultTLS.caBundle }}
+{{- $vaultCASecret = "keycloak-kms-proxy-vault-ca" }}
+{{- end }}
 {{- $replicas := .Values.encryption.replicas | default 1 | int }}
 {{- if and (gt $replicas 1) (not .Values.encryption.deksetSecretName) }}
 {{- fail "encryption.replicas > 1 requires encryption.deksetSecretName (a shared wrapped DEK set); otherwise replicas would encrypt deterministic columns under different keys" }}
@@ -37,6 +51,18 @@ metadata:
     app: keycloak-kms-proxy
 data:
   kek: {{ $kek | quote }}
+---
+{{- end }}
+{{- if and (eq $backend "vault-transit") $vaultTLS.caBundle }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-kms-proxy-vault-ca
+  labels:
+    app: keycloak-kms-proxy
+type: Opaque
+data:
+  ca.crt: {{ $vaultTLS.caBundle | b64enc }}
 ---
 {{- end }}
 apiVersion: v1
@@ -143,6 +169,12 @@ spec:
               value: {{ required "encryption.kms.vault.keyName is required when kms.backend=vault-transit" $vault.keyName | quote }}
             - name: KKP_VAULT_MOUNT
               value: {{ $vault.mount | default "transit" | quote }}
+            {{- with $vaultCASecret }}
+            # Go reads SSL_CERT_FILE in place of the system CA bundle. Only the
+            # Vault client consults it; the database TLS uses an explicit pool.
+            - name: SSL_CERT_FILE
+              value: /etc/kkp/vault-ca/ca.crt
+            {{- end }}
             {{- if eq $auth "approle" }}
             {{- $appRole := $vault.appRole | default dict }}
             {{- $secretName := required "encryption.kms.vault.appRole.secretName is required when vault.auth=approle" $appRole.secretName }}
@@ -202,17 +234,31 @@ spec:
             tcpSocket:
               port: postgres
             periodSeconds: 15
-          {{- if .Values.encryption.deksetSecretName }}
+          {{- if or .Values.encryption.deksetSecretName $vaultCASecret }}
           volumeMounts:
+            {{- if .Values.encryption.deksetSecretName }}
             - name: dekset
               mountPath: /etc/kkp/dekset
               readOnly: true
+            {{- end }}
+            {{- with $vaultCASecret }}
+            - name: vault-ca
+              mountPath: /etc/kkp/vault-ca
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if .Values.encryption.deksetSecretName }}
+      {{- if or .Values.encryption.deksetSecretName $vaultCASecret }}
       volumes:
+        {{- if .Values.encryption.deksetSecretName }}
         - name: dekset
           secret:
             secretName: {{ .Values.encryption.deksetSecretName }}
+        {{- end }}
+        {{- with $vaultCASecret }}
+        - name: vault-ca
+          secret:
+            secretName: {{ . }}
+        {{- end }}
       {{- end }}
 ---
 apiVersion: v1
