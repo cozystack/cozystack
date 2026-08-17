@@ -12,12 +12,25 @@ concurrency:
   group: tags-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so each job restates every scope it needs.
+permissions:
+  contents: read
+
 jobs:
   prepare-release:
     name: Prepare Release
-    runs-on: [self-hosted]
+    # Ephemeral pool, not the dedicated self-hosted runner (#2937 decommission).
+    # Serial `make build` + `make assets` is CPU-bound, so use the large shape —
+    # same as the main cache warmer (build-main.yaml).
+    runs-on: oracle-vm-24cpu-96gb-x86-64
+    timeout-minutes: 120
     outputs:
-      skip: ${{ steps.check_release.outputs.skip }}
+      # A release (draft or published) already exists for this tag, so the
+      # build/draft/branch/PR steps are no-ops. Downstream jobs that still need
+      # to run on an existing release (changelog, website docs) must NOT gate on
+      # this — it means "skip the rebuild", not "skip everything".
+      release_exists: ${{ steps.check_release.outputs.release_exists }}
     permissions:
       contents: write
       packages: write
@@ -27,37 +40,48 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
           owner: cozystack
 
-      # Check if a non-draft release with this tag already exists
+      # Skip the build when a release (draft OR published) already exists for
+      # this tag:
+      #   - re-runs of the same rc/nightly tag become idempotent no-ops;
+      #   - a stable tag prepared by the promote flow must NOT be rebuilt here.
+      #     promote-rc.yaml creates the draft vX.Y.Z from the already-built,
+      #     already-tested rc artifacts; promotion ships those exact bits, never
+      #     a fresh build. When finalize pushes the stable tag, this guard sees
+      #     the draft and skips straight to changelog/website.
       - name: Check if release already exists
         id: check_release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
-            const releases = await github.rest.repos.listReleases({
+            // Paginate: a promote-created stable draft (or an accreting backlog
+            // of rc releases) can sit past the default first 30, and a missed
+            // draft here would wrongly rebuild instead of no-op.
+            const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
-              repo:  context.repo.repo
+              repo:  context.repo.repo,
+              per_page: 100
             });
-            const exists = releases.data.some(r => r.tag_name === tag && !r.draft);
-            core.setOutput('skip', exists);
-            console.log(exists ? `Release ${tag} already published` : `No published release ${tag}`);
+            const exists = releases.some(r => r.tag_name === tag);
+            core.setOutput('release_exists', exists);
+            console.log(exists ? `Release ${tag} already exists (draft or published)` : `No release ${tag} yet`);
 
       # If a published release already exists, skip the rest of the workflow
       - name: Skip if release already exists
-        if: steps.check_release.outputs.skip == 'true'
+        if: steps.check_release.outputs.release_exists == 'true'
         run: echo "Release already exists, skipping workflow."
 
       # Parse tag meta-data (rc?, maintenance line, etc.)
       - name: Parse tag
-        if: steps.check_release.outputs.skip == 'false'
+        if: steps.check_release.outputs.release_exists == 'false'
         id: tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const ref = context.ref.replace('refs/tags/', '');           // e.g. v0.31.5-rc.1
@@ -72,18 +96,32 @@ jobs:
             core.setOutput('tag',     ref);                              // v0.31.5-rc.1
             core.setOutput('version', version);                          // 0.31.5-rc.1
             core.setOutput('is_rc',   isRc);                             // true
+            core.setOutput('is_stable', !isRc);                          // true only for a plain vX.Y.Z
             core.setOutput('line',    `${maj}.${min}`);                  // 0.31
+
+      # A stable vX.Y.Z tag must never build here. Stable tags are cut by
+      # finalize (pull-requests-release.yaml) at a promote PR's merge commit, by
+      # which point a draft release already exists (release_exists=true) and the
+      # build/draft/branch steps below are skipped. So a stable tag with NO
+      # pre-existing draft is a hand-push down the legacy full-rebuild path:
+      # fail fast rather than rebuild with release semantics, move :latest, and
+      # open a rogue release PR — silently violating the promotion invariant.
+      - name: Reject hand-pushed stable tags
+        if: steps.check_release.outputs.release_exists == 'false' && steps.tag.outputs.is_stable == 'true'
+        run: |
+          echo "::error::Stable tag ${GITHUB_REF#refs/tags/} has no pre-existing draft release. Stable tags are finalized by the promote flow at the merge commit — cut a pre-release (vX.Y.Z-rc.N) with the 'Cut Pre-release Tag' workflow and promote it; do not push vX.Y.Z by hand."
+          exit 1
 
       # Detect base branch (main or release-X.Y) the tag was pushed from
       - name: Get base branch
-        if: steps.check_release.outputs.skip == 'false'
+        if: steps.check_release.outputs.release_exists == 'false'
         id: get_base
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const baseRef = context.payload.base_ref;
             if (!baseRef) {
-              core.setFailed(`❌ base_ref is empty. Push the tag via 'git push origin HEAD:refs/tags/<tag>'.`);
+              core.setFailed(`❌ base_ref is empty — the tag was not pushed at a branch tip. Cut pre-release tags with the 'Cut Pre-release Tag' workflow (workflow_dispatch), which pushes the tag correctly.`);
               return;
             }
             const branch = baseRef.replace('refs/heads/', '');
@@ -96,15 +134,23 @@ jobs:
 
       # Checkout & login once
       - name: Checkout code
-        if: steps.check_release.outputs.skip == 'false'
-        uses: actions/checkout@v4
+        if: steps.check_release.outputs.release_exists == 'false'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           fetch-tags:  true
 
+      # Ephemeral runners lack the flux CLI the installer's image-packages step
+      # shells out to; install if absent (idempotent).
+      - name: Set up build toolchain
+        if: steps.check_release.outputs.release_exists == 'false'
+        run: |
+          command -v flux >/dev/null \
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+
       - name: Login to GHCR
-        if: steps.check_release.outputs.skip == 'false'
-        uses: docker/login-action@v3
+        if: steps.check_release.outputs.release_exists == 'false'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
@@ -112,21 +158,49 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
+      # Read-only access to the shared mode=max build cache that build-main.yaml
+      # writes to OCIR. Release builds push images to GHCR but warm-start from
+      # that cache — without it every tag build on an ephemeral runner is 100%
+      # cold (the persistent runner used to warm-start from local buildkit state).
+      - name: Login to OCIR (build cache)
+        if: steps.check_release.outputs.release_exists == 'false'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
       # Build project artifacts
       - name: Build
-        if: steps.check_release.outputs.skip == 'false'
+        if: steps.check_release.outputs.release_exists == 'false'
         run: make build
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
-          # Release semantics: push the release tag as :IMAGE_TAG (vX.Y.Z),
-          # the component versions as :<component-ver>, and move :latest.
+          # Cache manifests are registry-portable (oci-mediatypes=true) — read
+          # them from OCIR while pushing images to GHCR. A missing :buildcache
+          # ref 404s harmlessly into a cold build.
+          #
+          # The BRANCH-SCOPED cache namespace, not main's: build-main.yaml on this
+          # branch ("Build cache (release-1.5)") writes
+          # iad.ocir.io/idyksih5sir9/cozystack-cache-release-1.5, and main's refs
+          # carry main's sources — reading those here would mostly miss and drop
+          # every release build back to fully cold. Must stay in sync with
+          # CACHE_REGISTRY in build-main.yaml and pull-requests.yaml.
+          CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack-cache-release-1.5
+          # Push the release tag as :IMAGE_TAG (vX.Y.Z-rc.N) and the component
+          # versions as :<component-ver>. Deliberately NO PUBLISH_FLOATING: this
+          # job only ever runs for a prerelease (a stable tag is rejected or
+          # skips), so moving :latest here would point it at the newest rc — and
+          # an rc on an old line would drag it backwards. :latest belongs to
+          # promotion, which moves it only for the newest stable (finalize).
           IMAGE_TAG: ${{ github.ref_name }}
           PUBLISH_VERSIONED: '1'
-          PUBLISH_FLOATING: '1'
 
       # Commit built artifacts
       - name: Commit release artifacts
-        if: steps.check_release.outputs.skip == 'false'
+        if: steps.check_release.outputs.release_exists == 'false'
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -137,36 +211,31 @@ jobs:
           git add .
           git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" -s || echo "No changes to commit"
 
-      # Tag the api/apps/v1alpha1 submodule for pkg.go.dev
-      - name: Tag API submodule
-        if: steps.check_release.outputs.skip == 'false'
-        env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          VTAG="${{ steps.tag.outputs.tag }}"
-          SUBTAG="api/apps/v1alpha1/${VTAG}"
-          git config user.name  "cozystack-ci[bot]"
-          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
-          TARGET="$(git rev-parse "${VTAG}^{}")"
-          git tag -f "${SUBTAG}" "$TARGET"
-          git push -f origin "refs/tags/${SUBTAG}"
+      # NB: the api/apps/v1alpha1/vX.Y.Z Go-module tag is NOT cut here. Under the
+      # promote flow this job only ever runs for an rc (a stable tag always finds
+      # its draft and skips, and a stable tag WITHOUT a draft is rejected above),
+      # and an rc must never get an immutable Go-module tag. The stable submodule
+      # tag is cut by pull-requests-release.yaml finalize, at the stable tag's
+      # merge commit (#2677 goal 3).
 
       # Create or reuse draft release
       - name: Create / reuse draft release
-        if: steps.check_release.outputs.skip == 'false'
+        if: steps.check_release.outputs.release_exists == 'false'
         id: release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const tag      = '${{ steps.tag.outputs.tag }}';
             const isRc     = ${{ steps.tag.outputs.is_rc }};
-            const releases = await github.rest.repos.listReleases({
+            // Paginate: the default page is 30, and promote-created stable drafts
+            // plus accreting rc releases can push an in-flight draft off it.
+            const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
-              repo:  context.repo.repo
+              repo:  context.repo.repo,
+              per_page: 100
             });
 
-            let rel = releases.data.find(r => r.tag_name === tag);
+            let rel = releases.find(r => r.tag_name === tag);
             if (!rel) {
               rel = await github.rest.repos.createRelease({
                 owner: context.repo.owner,
@@ -185,16 +254,47 @@ jobs:
 
       # Build + upload assets (optional)
       - name: Build & upload assets
-        if: steps.check_release.outputs.skip == 'false'
+        if: steps.check_release.outputs.release_exists == 'false'
         run: |
           make assets
           make upload_assets VERSION=${{ steps.tag.outputs.tag }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Create release-X.Y.Z branch and push (force-update)
+      # Publish the rc release once its assets are uploaded. The draft above is
+      # created draft; a stable draft stays draft for finalize to publish, but an
+      # rc has no later publish step — and the whole point of an rc is to be
+      # publicly visible so the community can download nocloud-amd64.raw.xz and
+      # validate it. rc tags are write-once, so there is nothing to protect with
+      # draft status. prerelease:true keeps it off the "Latest release" pointer.
+      - name: Publish rc release
+        if: steps.check_release.outputs.release_exists == 'false' && steps.tag.outputs.is_rc == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const tag = '${{ steps.tag.outputs.tag }}';
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100
+            });
+            const rel = releases.find(r => r.tag_name === tag);
+            if (!rel) { core.setFailed(`rc release ${tag} not found to publish`); return; }
+            if (!rel.draft) { console.log(`${tag} already published`); return; }
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner, repo: context.repo.repo,
+              release_id: rel.id, draft: false, prerelease: true, make_latest: 'false'
+            });
+            console.log(`Published rc release ${tag} (prerelease)`);
+
+      # Create the release-X.Y.Z staging branch (holds the digest-bake commit for
+      # this version's release PR).
+      #
+      # Compare-before-force: this is a mutable staging branch, not an immutable
+      # artifact — a re-run produces a fresh, non-reproducible bake commit. Skip
+      # the push when nothing changed; force-update (and log it) only when the
+      # branch genuinely moves. Unlike the tags above, force here is legitimate.
       - name: Create release branch
-        if: steps.check_release.outputs.skip == 'false'
+        if: steps.check_release.outputs.release_exists == 'false'
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -202,61 +302,96 @@ jobs:
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           BRANCH="release-${GITHUB_REF#refs/tags/v}"
-          git branch -f "$BRANCH"
-          git push -f origin "$BRANCH"
+          LOCAL="$(git rev-parse HEAD)"
+          REMOTE="$(git ls-remote --heads origin "$BRANCH" | awk '{print $1}')"
+          if [ -z "$REMOTE" ]; then
+            git push origin "HEAD:refs/heads/${BRANCH}"
+            echo "✅ Created staging branch ${BRANCH} at ${LOCAL}."
+          elif [ "$REMOTE" = "$LOCAL" ]; then
+            echo "✅ ${BRANCH} already at ${LOCAL}; nothing to do."
+          else
+            echo "::notice::Force-updating staging branch ${BRANCH}: ${REMOTE} -> ${LOCAL}."
+            git push -f origin "HEAD:refs/heads/${BRANCH}"
+          fi
 
-      # Create pull request into original base branch (if absent)
-      - name: Create pull request if not exists
-        if: steps.check_release.outputs.skip == 'false'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const version = context.ref.replace('refs/tags/v', '');
-            const base    = '${{ steps.get_base.outputs.branch }}';
-            const head    = `release-${version}`;
+      # NB: no release PR is opened here. rc tags never get one, and the stable
+      # promote PR is opened by promote-rc.yaml. The old "Create pull request if
+      # not exists" step was gated on `is_stable && release_exists==false` —
+      # unreachable now that a hand-pushed stable tag is rejected above.
 
-            const prs = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              head:  `${context.repo.owner}:${head}`,
-              base
-            });
-            if (prs.data.length === 0) {
-              const pr = await github.rest.pulls.create({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                head,
-                base,
-                title: `chore(release): cut v${version}`,
-                body:  `This PR prepares the release \`v${version}\`.`,
-                draft: false
-              });
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                issue_number: pr.data.number,
-                labels: ['release']
-              });
-              console.log(`Created PR #${pr.data.number}`);
-            } else {
-              console.log(`PR already exists from ${head} to ${base}`);
-            }
+  # Mandatory only for vX.Y.Z-rc.N tags. Alpha/beta tags deliberately skip this
+  # job and use e2e-tag.yaml's manual dispatch when validation is wanted.
+  #
+  # Deliberately not gated on release_exists: validating an already-published rc
+  # again is an idempotent re-tag-run check, while prepare-release still provides
+  # the ordering guarantee for a fresh rc. Its "Publish rc release" and "Create
+  # release branch" steps finish before this reusable workflow can start.
+  rc-e2e:
+    name: E2E Release Candidate
+    needs: prepare-release
+    if: needs.prepare-release.result == 'success' && contains(github.ref_name, '-rc.')
+    # A caller's permissions are the ceiling for every job in the called
+    # workflow, and GitHub validates that ceiling STATICALLY, when it creates the
+    # run — before this job's `if:` is evaluated, let alone before a step runs.
+    # e2e-tag.yaml's e2e job declares `checks: write` for its
+    # workflow_dispatch-only breakpoint, so even though workflow_call can never
+    # take that branch, omitting the grant here fails the whole tags.yaml run with
+    # "requesting 'checks: write', but is only allowed 'checks: none'". Not just
+    # rc cuts: the `if:` cannot gate a startup failure, so EVERY tag push — rc and
+    # stable, including the one finalize pushes to publish a release — would build
+    # nothing at all. hack/promote-gate-contract.bats pins the pair, because no CI
+    # lane exercises this file (it runs only on tag pushes).
+    permissions:
+      contents: read
+      checks: write
+    uses: ./.github/workflows/e2e-tag.yaml
+    with:
+      tag: ${{ github.ref_name }}
 
+  # BACKSTOP, and since the rc freeze also the normal route a published changelog
+  # takes to main. It is authored by promote-rc.yaml, which commits it onto the
+  # release-X.Y.Z branch so it rides the promote PR and is on the base branch the
+  # moment finalize publishes the release. That is the whole point of
+  # generating it there: at the time THIS job runs the stable tag has already been
+  # pushed by finalize, which means the release is already public — too late for a
+  # changelog PR to be of any use to a reader.
+  #
+  # What the freeze changed: promote-rc.yaml bases its promote PR on release-X.Y
+  # whenever that branch exists, and cutting vX.Y.0-rc.1 now creates it. So EVERY
+  # release, minor and patch alike, merges its changelog onto the maintenance line
+  # and none of them reach main on the way. Porting the reviewed file here is the
+  # normal path — it used to be the corner case, back when only a patch release
+  # targeted a line.
+  #
+  # The two paths that remain:
+  #   1. the file is at the tag but not on main (the usual state): port it
+  #      verbatim, no AI;
+  #   2. changelog generation failed during promotion (it is non-blocking there)
+  #      and the promote PR merged without one: nothing at the tag either, so the
+  #      AI runs.
+  # Either way this opens the changelog PR against main after the fact. The
+  # self-skip on `exists` survives, but it now means the file reached main some
+  # other way — a hand-commit, or an earlier run of this job.
   generate-changelog:
-    name: Generate Changelog
-    runs-on: [self-hosted]
+    name: Generate Changelog (backstop)
+    # git + node + copilot CLI only — no docker, no repo toolchain: GitHub-hosted.
+    runs-on: ubuntu-latest
     needs: [prepare-release]
     permissions:
       contents: write
       pull-requests: write
-    if: needs.prepare-release.result == 'success'
-    # Non-blocking: failure here must not prevent update-website-docs from running.
+    # Stable tags only. A prerelease tag has a '-' in ref_name (vX.Y.Z-rc.N);
+    # firing on every rc would open a changelog-vX.Y.Z-rc.N PR that never merges
+    # (no docs/changelogs/v*-rc*.md is a real file). Cumulative rc notes are
+    # finalized at the stable release, so the changelog is generated then.
+    if: needs.prepare-release.result == 'success' && !contains(github.ref_name, '-')
+    # Non-blocking: this is a best-effort backfill of an already-published
+    # release, never a gate on one.
     continue-on-error: true
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -268,7 +403,7 @@ jobs:
       # regardless of whether the agent follows the prompt's instructions.
       - name: Generate read-only GitHub App token
         id: app-token-read
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -279,7 +414,7 @@ jobs:
 
       - name: Parse tag
         id: tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const ref = context.ref.replace('refs/tags/', '');
@@ -300,18 +435,29 @@ jobs:
       # contents. The Create changelog branch step below resets the file
       # onto a fresh branch from origin/main for the PR.
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ steps.tag.outputs.tag }}
           fetch-depth: 0
           fetch-tags: true
           token: ${{ steps.app-token.outputs.token }}
 
-      # Check whether the changelog already exists on origin/main.
-      # The previous step checked out the tag commit, which never has the
-      # changelog (the changelog PR merges to main AFTER the tag is cut).
-      # Looking at origin/main is what the gate is supposed to do — skip
-      # generation on workflow reruns when the changelog has already merged.
+      # Two independent questions, and the answers select between three paths.
+      #
+      # `exists` — is the changelog already on origin/main? Then this whole job
+      # is a no-op. Since the freeze that is the EXCEPTION: the promote PR merges
+      # into release-X.Y, so the file it carried never touched main, and this is
+      # true only if something else put it there.
+      #
+      # `at_tag` — is it present in THIS checkout (the tag commit)? Under the
+      # promote flow it normally is, because the promote PR carried it onto
+      # release-X.Y and the stable tag sits on that merge commit. Since the freeze
+      # that PR always targets the line, so this is the usual state on arrival:
+      # `exists` false, `at_tag` true, a reviewed and already-published changelog
+      # sitting right here — port it rather than regenerate.
+      #
+      # Only when both are false is there genuinely no changelog to publish, and
+      # only then does the AI run.
       - name: Check if changelog already exists
         id: check_changelog
         env:
@@ -326,19 +472,36 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "Changelog file $CHANGELOG_FILE does not exist on origin/main"
           fi
+          # Is the changelog present at the TAG (this checkout)? Under the promote
+          # flow it normally is: promote-rc.yaml commits it onto release-X.Y.Z and
+          # it reaches the tag via the merge commit. That PR targets the maintenance
+          # line for every release since the freeze, so the file lands on
+          # release-X.Y and never reaches main — `exists` above is false even though
+          # a reviewed, already-PUBLISHED changelog exists right here.
+          #
+          # Regenerating in that case would spend a second AI run and, once the
+          # backstop PR merged, update-releasenotes.yaml would overwrite the
+          # published release body with text nobody approved. Port the reviewed
+          # file verbatim instead; the AI is only for the genuinely-absent case.
+          if [ -s "$CHANGELOG_FILE" ]; then
+            echo "at_tag=true" >> $GITHUB_OUTPUT
+            echo "Changelog present at the tag — will port it to main verbatim, no regeneration."
+          else
+            echo "at_tag=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Setup Node.js
-        if: steps.check_changelog.outputs.exists == 'false'
-        uses: actions/setup-node@v4
+        if: steps.check_changelog.outputs.exists == 'false' && steps.check_changelog.outputs.at_tag == 'false'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
       - name: Install GitHub Copilot CLI
-        if: steps.check_changelog.outputs.exists == 'false'
+        if: steps.check_changelog.outputs.exists == 'false' && steps.check_changelog.outputs.at_tag == 'false'
         run: npm i -g @github/copilot
 
       - name: Generate changelog using AI
-        if: steps.check_changelog.outputs.exists == 'false'
+        if: steps.check_changelog.outputs.exists == 'false' && steps.check_changelog.outputs.at_tag == 'false'
         timeout-minutes: 30
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
@@ -360,12 +523,19 @@ jobs:
           CHANGELOG_FILE="docs/changelogs/v${VERSION}.md"
           CHANGELOG_BRANCH="changelog-v${VERSION}"
 
+          # Two ways the file can be here: ported verbatim from the tag commit
+          # (at_tag=true — the reviewed, already-published changelog reaching main
+          # for the first time), or freshly generated above. Either is valid.
           if [ ! -f "$CHANGELOG_FILE" ]; then
-            echo "::error::Changelog file $CHANGELOG_FILE was not produced by the Generate changelog using AI step"
+            echo "::error::Changelog file $CHANGELOG_FILE is absent — it was neither present at the tag nor produced by the Generate changelog using AI step"
             exit 1
           fi
-          if [ ! -s "$CHANGELOG_FILE" ]; then
-            echo "::error::Changelog file $CHANGELOG_FILE is empty"
+          # Same validator promote-rc uses: a ported file came from the tag and a
+          # generated one from a step allowed to fail, so neither has been checked
+          # here. update-releasenotes.yaml will push whatever this PR merges into
+          # the published release body, so a fragment must not get that far.
+          if ! REASON="$(hack/validate-changelog.sh "$CHANGELOG_FILE" "${VERSION}" 2>&1)"; then
+            echo "::error::Changelog file $CHANGELOG_FILE is not usable: ${REASON}"
             exit 1
           fi
 
@@ -395,7 +565,7 @@ jobs:
 
       - name: Create PR for changelog
         if: steps.check_changelog.outputs.exists == 'false'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -448,19 +618,38 @@ jobs:
               console.log(`Created PR #${pr.data.number} for changelog`);
             }
 
+
+  # BACKSTOP ONLY. The cozystack/website "update managed apps reference" PR is now
+  # normally opened earlier, at PROMOTE time, by promote-rc.yaml::website-docs —
+  # which fetches README content from the release-X.Y.Z staging branch (via the
+  # website Makefile's FETCH_REF) so the docs are reviewable alongside the promote
+  # PR while the stable tag is still unborn. This tag-time job stays as the
+  # backstop for the degraded paths (promote's website-docs failed or ran against
+  # a pre-FETCH_REF website): it fires on the stable tag push, force-pushes the
+  # SAME update-docs-vX.Y.Z branch, and no-ops into "No changes to commit" when
+  # promote already did the work. Behaviour is deliberately unchanged — at tag time
+  # the stable tag exists, so its BRANCH=RELEASE_TAG fetch resolves.
   update-website-docs:
     name: Update Website Docs
-    runs-on: [self-hosted]
+    # bash + git + yq + gh against the website repo — no docker: GitHub-hosted.
+    runs-on: ubuntu-latest
     needs: [generate-changelog, prepare-release]
     # generate-changelog is non-blocking — run as long as prepare-release succeeded.
-    # `always()` is needed so this job runs even if generate-changelog failed/skipped.
-    if: always() && needs.prepare-release.result == 'success' && needs.prepare-release.outputs.skip != 'true'
+    # `!cancelled()` lets this job run if generate-changelog failed/skipped,
+    # while still stopping it when the workflow is cancelled.
+    # Not gated on release_exists: a promoted stable tag already has a draft
+    # release (so prepare-release skips the rebuild), but its website docs still
+    # need publishing. Gating on release_exists here skipped docs for every
+    # promoted stable.
+    # Stable tags only — a prerelease (ref_name contains '-') would otherwise open
+    # an "update managed apps for vX.Y.Z-rc.N" website PR on every rc.
+    if: ${{ !cancelled() && needs.prepare-release.result == 'success' && !contains(github.ref_name, '-') }}
     permissions:
       contents: read
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -468,7 +657,7 @@ jobs:
 
       - name: Parse tag
         id: tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const ref = context.ref.replace('refs/tags/', '');
@@ -482,7 +671,7 @@ jobs:
             core.setOutput('version', version);  // 0.22.0
 
       - name: Checkout website repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: cozystack/website
           token: ${{ steps.app-token.outputs.token }}
