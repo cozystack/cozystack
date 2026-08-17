@@ -3,6 +3,9 @@ NAMESPACE=cozy-system
 
 include ../../../hack/common-envs.mk
 
+test:
+	helm unittest .
+
 pre-checks:
 	../../../hack/pre-checks.sh
 
