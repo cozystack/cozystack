@@ -94,6 +94,50 @@ EOF
   chmod +x "$t/bin/yq" "$t/bin/skopeo" "$t/bin/sha256sum"
 }
 
+# _make_ref_tree <dir> <ref>... — build a throwaway package tree under <dir>
+# whose only refs are the ones given, one images/*.tag file each, so a test can
+# drive the destination-tag composition with ref shapes the committed tree does
+# not contain. Run promote-retag.sh with <dir> as its CWD to pick it up:
+# collect_image_refs is rooted at the relative path "packages", while the script
+# sources hack/lib/image-refs.sh from its own $0.
+#
+# images/*.tag is the deliberate choice of storage shape. It is what
+# ubuntu-container-disk actually uses, and it is the only shape whose collected
+# ref still carries the source :tag — every yq shape in hack/lib/image-refs.sh
+# rebuilds the ref as "<repo>@<digest>" and drops the tag — so it is the shape
+# from which a prefix can be recovered at all.
+_make_ref_tree() {
+  t="$1"; shift
+  n=0
+  mkdir -p "$t/packages/apps/fake/images"
+  for r in "$@"; do
+    n=$((n + 1))
+    printf '%s\n' "$r" >"$t/packages/apps/fake/images/ref-$n.tag"
+  done
+}
+
+# _plan_destinations <plan-file> <out-file> — the destination ref of every copy
+# in a --dry-run plan, one per line, sorted. The destination is the last field of
+# a "DRY-RUN skopeo copy --multi-arch all docker://<src> docker://<dst>" line.
+_plan_destinations() {
+  awk '/^DRY-RUN skopeo copy /{print $NF}' "$1" | sed 's|^docker://||' | sort >"$2"
+}
+
+# _refute_duplicate_destinations <dst-file> — fail, loudly, if any destination
+# ref appears twice. Two copies aimed at one tag mean the second trips the
+# write-once guard mid-finalize, after the stable git tag and the GitHub release
+# are already public. Written as an explicit non-empty test rather than
+# `! uniq -d ... | grep -q .`: a `!`-negated pipeline is exempt from errexit, so
+# that form cannot fail the test.
+_refute_duplicate_destinations() {
+  dup="$(uniq -d <"$1")"
+  if [ -n "$dup" ]; then
+    echo "duplicate destination refs in the promotion plan:" >&2
+    printf '%s\n' "$dup" >&2
+    return 1
+  fi
+}
+
 @test "dry-run over the real tree retags only cozystack-owned refs" {
   tmp=$(mktemp -d)
 
@@ -385,5 +429,207 @@ EOF
   grep -q 'cannot be treated as unpublished' "$tmp/err"
   grep -q '429' "$tmp/err"
   ! grep -q '^copy ' "$tmp/skopeo.log"
+  rm -rf "$tmp"
+}
+
+@test "the destination tag keeps a source tag's prefix and nothing else" {
+  root=$(pwd -P)
+  tmp=$(mktemp -d)
+  reg=ghcr.io/cozystack/cozystack
+  d1=1111111111111111111111111111111111111111111111111111111111111111
+  d2=2222222222222222222222222222222222222222222222222222222222222222
+  d3=3333333333333333333333333333333333333333333333333333333333333333
+  d4=4444444444444444444444444444444444444444444444444444444444444444
+  d5=5555555555555555555555555555555555555555555555555555555555555555
+
+  # One ref per source-tag shape a promoted tree carries, or plausibly will. The
+  # version component is the part promotion replaces; whatever precedes it says
+  # WHICH image in the repository the ref is, and has to survive the retag.
+  _make_ref_tree "$tmp" \
+    "$reg/plain:v1.5.2@sha256:$d1" \
+    "$reg/prefixed:v1.30-v1.5.2@sha256:$d2" \
+    "$reg/floating:latest@sha256:$d3" \
+    "$reg/prerelease:v1.6.0-rc.1@sha256:$d4"
+
+  # ...plus a ref with no tag at all, the form every yq shape in
+  # hack/lib/image-refs.sh emits. Nothing to preserve, and nothing to invent.
+  mkdir -p "$tmp/packages/system/fake-values"
+  cat >"$tmp/packages/system/fake-values/values.yaml" <<EOF
+image:
+  repository: $reg/tagless
+  digest: sha256:$d5
+EOF
+
+  rc=0
+  ( cd "$tmp" && env -u REGISTRY "$root/hack/promote-retag.sh" v1.5.4 --dry-run ) \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc" >&2
+    echo "--- script stderr ---" >&2; cat "$tmp/err" >&2
+    echo "--- script stdout ---" >&2; cat "$tmp/out" >&2
+    return "$rc"
+  fi
+
+  _plan_destinations "$tmp/out" "$tmp/dst"
+
+  # v1.30- is a prefix: the tail of the tag parses as a version, so the head
+  # cannot be one.
+  [ "$(grep -cFx "$reg/prefixed:v1.30-v1.5.4" "$tmp/dst")" -eq 1 ]
+  # A version-only tag has no prefix. This is the regression guard that matters
+  # most — all but six of the branch's refs are this shape.
+  [ "$(grep -cFx "$reg/plain:v1.5.4" "$tmp/dst")" -eq 1 ]
+  # "latest" is not a version, so it is not a prefix either: a tag that does not
+  # END in a version contributes nothing and is replaced whole. Reading it as a
+  # prefix would invent floating:latest-v1.5.4, a tag nothing references.
+  [ "$(grep -cFx "$reg/floating:v1.5.4" "$tmp/dst")" -eq 1 ]
+  # v1.6.0-rc.1 is ONE version, not "v1.6.0-" + "rc.1". Splitting on the last
+  # hyphen instead would emit prerelease:v1.6.0-v1.5.4 and mis-tag every ref in a
+  # real promotion, because an rc version string is exactly what the promoted
+  # tree's refs carry.
+  [ "$(grep -cFx "$reg/prerelease:v1.5.4" "$tmp/dst")" -eq 1 ]
+  # A ref that reached the script tagless gets the bare stable tag.
+  [ "$(grep -cFx "$reg/tagless:v1.5.4" "$tmp/dst")" -eq 1 ]
+
+  [ "$(awk 'END{print NR}' "$tmp/dst")" -eq 5 ]
+  _refute_duplicate_destinations "$tmp/dst"
+  rm -rf "$tmp"
+}
+
+@test "several prefixed refs in one repository get distinct destinations" {
+  root=$(pwd -P)
+  tmp=$(mktemp -d)
+  reg=ghcr.io/cozystack/cozystack
+
+  # The 1.5-line ubuntu-container-disk refs, verbatim: one image per Kubernetes
+  # minor, six distinct digests sharing one repository and told apart only by the
+  # tag prefix. Composing the destination tag from the release version alone aims
+  # all six at ubuntu-container-disk:v1.5.4 — the sort-first one is written and
+  # the next trips the write-once guard, inside finalize, after the stable git tag
+  # and the GitHub release are already public.
+  _make_ref_tree "$tmp" \
+    "$reg/ubuntu-container-disk:v1.30-v1.5.2@sha256:dc2e4794e75b861bf087e93037a2522fec398ffd8ac2b69591c4b0a50260f431" \
+    "$reg/ubuntu-container-disk:v1.31-v1.5.2@sha256:4e3479b4f469581d87574c72246995d1df6262be42e60022084aca658ead8755" \
+    "$reg/ubuntu-container-disk:v1.32-v1.5.2@sha256:79df2a0da2b1c13eee44f32793e4ca726bf4987935cecc34d204898d58cbbce1" \
+    "$reg/ubuntu-container-disk:v1.33-v1.5.2@sha256:200d41bfb8108d43e1e938df47175dd4dbaae23d48e6d1c20ae6c6432213eeee" \
+    "$reg/ubuntu-container-disk:v1.34-v1.5.2@sha256:21c0112abe14caba7a001b542d587ec1dab477e5f0fe65dba4383cac331c206c" \
+    "$reg/ubuntu-container-disk:v1.35-v1.5.2@sha256:f90a024f2e2b4ef1b3ea653f5f47699218114e41bbd9b7c46e7c0ed00558aebb"
+
+  rc=0
+  ( cd "$tmp" && env -u REGISTRY "$root/hack/promote-retag.sh" v1.5.4 --dry-run ) \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc" >&2
+    echo "--- script stderr ---" >&2; cat "$tmp/err" >&2
+    return "$rc"
+  fi
+
+  _plan_destinations "$tmp/out" "$tmp/dst"
+  _refute_duplicate_destinations "$tmp/dst"
+  [ "$(awk 'END{print NR}' "$tmp/dst")" -eq 6 ]
+  for minor in v1.30 v1.31 v1.32 v1.33 v1.34 v1.35; do
+    [ "$(grep -cFx "$reg/ubuntu-container-disk:${minor}-v1.5.4" "$tmp/dst")" -eq 1 ]
+  done
+  rm -rf "$tmp"
+}
+
+@test "MOVE_LATEST keeps the prefix so each prefix gets its own floating tag" {
+  root=$(pwd -P)
+  tmp=$(mktemp -d)
+  reg=ghcr.io/cozystack/cozystack
+  d1=1111111111111111111111111111111111111111111111111111111111111111
+  d2=2222222222222222222222222222222222222222222222222222222222222222
+
+  # :latest is prefixed for the same reason the stable tag is. Without it, both
+  # refs below copy to disk:latest and the tag ends up pointing at whichever
+  # digest the sort happened to put last — a floating tag that names one
+  # Kubernetes minor's disk and reads as if it named all of them.
+  _make_ref_tree "$tmp" \
+    "$reg/disk:v1.30-v1.5.2@sha256:$d1" \
+    "$reg/disk:v1.31-v1.5.2@sha256:$d2"
+
+  rc=0
+  ( cd "$tmp" && env -u REGISTRY MOVE_LATEST=1 \
+      "$root/hack/promote-retag.sh" v1.5.4 --dry-run ) \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc" >&2
+    echo "--- script stderr ---" >&2; cat "$tmp/err" >&2
+    return "$rc"
+  fi
+
+  _plan_destinations "$tmp/out" "$tmp/dst"
+  _refute_duplicate_destinations "$tmp/dst"
+  [ "$(awk 'END{print NR}' "$tmp/dst")" -eq 4 ]
+  [ "$(grep -cFx "$reg/disk:v1.30-latest" "$tmp/dst")" -eq 1 ]
+  [ "$(grep -cFx "$reg/disk:v1.31-latest" "$tmp/dst")" -eq 1 ]
+  # The unprefixed floating tag is left alone: it belongs to no minor.
+  [ "$(grep -cFx "$reg/disk:latest" "$tmp/dst")" -eq 0 ]
+  rm -rf "$tmp"
+}
+
+@test "two digests behind one prefixed destination still trip the write-once guard" {
+  root=$(pwd -P)
+  tmp=$(mktemp -d)
+  _make_registry_mocks "$tmp"
+  reg=example.com/cozystack
+
+  # Preserving the prefix must not become a way around the write-once guard. Two
+  # digests that still land on the SAME destination tag have to be refused, not
+  # silently overwritten — and same-repo/same-prefix is that case routed through
+  # the new composition rather than the old path.
+  published='{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555"},"layers":[]}'
+  first="sha256:$(printf '%s' "$published" | sha256sum | cut -d' ' -f1)"
+  # All-f is the largest hex digest, so the ref carrying $first is the one the
+  # sorted plan copies first and the one the post-copy verify then matches. That
+  # keeps the failure the write-once refusal rather than a verify mismatch.
+  second=sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+  _make_ref_tree "$tmp" \
+    "$reg/disk:v1.30-v1.5.2@$first" \
+    "$reg/disk:v1.30-v1.5.2@$second"
+
+  rc=0
+  ( cd "$tmp" && env REGISTRY="$reg" MOCK_REF="" MOCK_MANIFEST="$published" \
+      MOCK_MISSING_ONCE=1 MOCK_STATE="$tmp/state" MOCK_SKOPEO_LOG="$tmp/skopeo.log" \
+      PATH="$tmp/bin:/usr/bin:/bin" "$root/hack/promote-retag.sh" v1.5.4 ) \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  # The message names the PREFIXED destination, which is also what proves the
+  # composition reached the guard.
+  grep -q "disk:v1.30-v1.5.4 already exists at '${first}'; refusing to move it to '${second}'" "$tmp/err"
+  # Exactly one copy: the first ref's, before the refusal. Counted rather than
+  # negated, so the assertion can actually fail.
+  [ "$(grep -c '^copy --multi-arch all ' "$tmp/skopeo.log")" -eq 1 ]
+  rm -rf "$tmp"
+}
+
+@test "the real tree's promotion plan has no duplicate destination" {
+  tmp=$(mktemp -d)
+
+  # The check that would have caught the ubuntu-container-disk collision before a
+  # release reached finalize. A duplicate destination in the plan is a promotion
+  # that fails halfway through the irreversible step, so it is worth pinning
+  # against the committed tree permanently rather than against fixtures alone.
+  rc=0
+  env -u REGISTRY hack/promote-retag.sh v1.5.4 --dry-run \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc" >&2
+    echo "--- script stderr ---" >&2; cat "$tmp/err" >&2
+    return "$rc"
+  fi
+
+  _plan_destinations "$tmp/out" "$tmp/dst"
+  _refute_duplicate_destinations "$tmp/dst"
+
+  # And the per-Kubernetes-minor disks each get their own destination: one per
+  # images/ubuntu-container-disk-*.tag file in the tree, derived from the tree so
+  # adding or dropping a minor does not need this number edited. Branches that
+  # ship no such image (main, release-1.6) assert 0 == 0 and stay green.
+  minors=$(find packages/apps/kubernetes/images -name 'ubuntu-container-disk-*.tag' \
+             2>/dev/null | awk 'END{print NR}')
+  [ "$(grep -c '^ghcr\.io/cozystack/cozystack/ubuntu-container-disk:' "$tmp/dst")" \
+    -eq "$minors" ]
   rm -rf "$tmp"
 }
