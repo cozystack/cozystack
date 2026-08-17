@@ -193,29 +193,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	parseQuantity := func(flagName, raw string) resource.Quantity {
-		if raw == "" {
-			return resource.Quantity{}
-		}
-		q, err := resource.ParseQuantity(raw)
-		if err != nil {
-			setupLog.Error(err, "invalid quantity flag", "flag", flagName, "value", raw)
-			os.Exit(1)
-		}
-		if q.Sign() < 0 {
-			setupLog.Error(fmt.Errorf("%s must not be negative", flagName), "invalid value", "value", raw)
-			os.Exit(1)
-		}
-		return q
-	}
-	systemNSMemoryLimit := parseQuantity("--system-namespace-memory-limit", systemNamespaceMemoryLimit)
-	systemNSMemoryRequest := parseQuantity("--system-namespace-memory-request", systemNamespaceMemoryRequest)
-	// A LimitRange whose defaultRequest exceeds its default is rejected by the API server,
-	// which would wedge namespace reconciliation for every system package. A request of 0
-	// passes this check deliberately; see the flag's help text for what it trades away.
-	if !systemNSMemoryLimit.IsZero() && systemNSMemoryRequest.Cmp(systemNSMemoryLimit) > 0 {
-		setupLog.Error(fmt.Errorf("--system-namespace-memory-request must not exceed --system-namespace-memory-limit"),
-			"invalid value", "request", systemNamespaceMemoryRequest, "limit", systemNamespaceMemoryLimit)
+	systemNSMemoryLimit, systemNSMemoryRequest, err := parseSystemNamespaceMemory(systemNamespaceMemoryLimit, systemNamespaceMemoryRequest)
+	if err != nil {
+		setupLog.Error(err, "invalid system namespace memory flags",
+			"limit", systemNamespaceMemoryLimit, "request", systemNamespaceMemoryRequest)
 		os.Exit(1)
 	}
 
@@ -497,6 +478,51 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	}
 
 	return nil
+}
+
+// parseSystemNamespaceMemory turns the --system-namespace-memory-limit and
+// --system-namespace-memory-request flag values into the quantities the Package reconciler
+// takes, rejecting the combinations that would fail later and further away.
+//
+// Empty is how both flags are disabled and parses to the zero quantity; for the limit that
+// means "no LimitRange, and remove any this operator created", which is the documented
+// off switch. A negative quantity parses fine as a Quantity and is meaningless as memory,
+// so it is caught here rather than being written into a LimitRange the API server rejects.
+//
+// The pair check is the one that matters most. A LimitRange whose defaultRequest exceeds
+// its default is rejected by the API server, and because the reconciler applies one per
+// system namespace on every Package reconcile, a bad pair would wedge namespace
+// reconciliation for every system package with an error nothing connects back to a flag.
+// A request of 0 against a non-zero limit passes deliberately: it is the supported way to
+// take the memory.max without reserving anything at schedule time, not a broken value.
+// Both zero is the disabled case and never reaches the comparison.
+func parseSystemNamespaceMemory(rawLimit, rawRequest string) (limit, request resource.Quantity, err error) {
+	parse := func(flagName, raw string) (resource.Quantity, error) {
+		if raw == "" {
+			return resource.Quantity{}, nil
+		}
+		q, err := resource.ParseQuantity(raw)
+		if err != nil {
+			return resource.Quantity{}, fmt.Errorf("%s: %w", flagName, err)
+		}
+		if q.Sign() < 0 {
+			return resource.Quantity{}, fmt.Errorf("%s must not be negative, got %s", flagName, raw)
+		}
+		return q, nil
+	}
+
+	if limit, err = parse("--system-namespace-memory-limit", rawLimit); err != nil {
+		return resource.Quantity{}, resource.Quantity{}, err
+	}
+	if request, err = parse("--system-namespace-memory-request", rawRequest); err != nil {
+		return resource.Quantity{}, resource.Quantity{}, err
+	}
+	if !limit.IsZero() && request.Cmp(limit) > 0 {
+		return resource.Quantity{}, resource.Quantity{}, fmt.Errorf(
+			"--system-namespace-memory-request (%s) must not exceed --system-namespace-memory-limit (%s)",
+			request.String(), limit.String())
+	}
+	return limit, request, nil
 }
 
 // parsePlatformSourceURL parses the source URL and returns the source type and repository URL.
