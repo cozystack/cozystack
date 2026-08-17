@@ -105,13 +105,13 @@ logsStorages:
 ## @field {string} url - Configuration uri for Slack alerts.
 ## @field {[]string} [disabledSeverity] - List of severities without alerts (e.g. ["informational","warning"]).
 
-## @typedef {struct} EmailAlerts - Email alert configuration. When enabled, alerts with severity `critical` or `major` carrying the label `notify_email="true"` are sent by email in addition to Alerta.
+## @typedef {struct} EmailAlerts - Email alert configuration. When enabled, alerts with severity `critical` or `major` carrying the label `notify_email="true"` are sent by email in addition to Alerta. The label is matched as a string, so a rule must carry `notify_email: "true"` rather than a bare YAML boolean.
 ## @field {string} to - Recipient address(es), separated by commas.
 ## @field {string} from - Sender address.
 ## @field {string} smarthost - SMTP server address with port (e.g. "smtp.example.com:465"). Port 465 uses implicit TLS, other ports use STARTTLS.
 ## @field {string} [authUsername] - Username for SMTP LOGIN/PLAIN authentication.
-## @field {string} [secretName] - Name of an existing Secret in the release namespace holding the SMTP password under the `password` key. Required when authUsername is set.
-## @field {string} [repeatInterval] - Minimum time before a still-firing alert is emailed again.
+## @field {string} [secretName] - Name of an existing Secret in the release namespace holding the SMTP password under the `password` key. Required when authUsername is set. The Secret is mounted into Alertmanager, so a name that does not exist blocks the whole Alertmanager rollout, not only email delivery.
+## @field {string} [repeatInterval] - Minimum time before a still-firing alert is emailed again. Duration such as `30s`, `5m` or `12h`; anything else fails the render. Empty keeps the 12h default.
 ## @field {string} [subject] - Custom Subject header as an Alertmanager notification template. Empty uses the built-in default.
 ## @field {string} [bodyHtml] - Custom HTML body as an Alertmanager notification template. Empty uses the built-in default.
 
@@ -151,7 +151,7 @@ alerta:
       smarthost: ""
       authUsername: ""
       secretName: ""
-      repeatInterval: 12h
+      repeatInterval: ""
       subject: ""
       bodyHtml: ""
 ##
