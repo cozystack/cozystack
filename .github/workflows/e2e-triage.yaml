@@ -1,0 +1,55 @@
+name: E2E Flake Triage
+
+# Tell a deterministic E2E regression apart from an intermittent flake.
+#
+# A chainsaw case that fails on attempt 1 and passes on a re-run leaves the
+# `main` run green, so a case that has actually regressed reads as "just a
+# flake" and nobody bisects it (this is how cozystack/cozystack#3229 sat red on
+# `main` for three consecutive nightlies while being treated as noise). After
+# each Nightly, hack/flake-triage.sh reads the failure set of EVERY attempt of
+# the last few `main` runs (so retry-to-green cannot hide a first-attempt
+# failure) and, for any case that failed on `TRIAGE_REGRESSION_STREAK`
+# consecutive non-infra runs, opens or updates a tracking issue. Intermittent
+# flakes are logged, not paged; a whole-cluster outage run (most cases failing
+# together) is excluded from the streak rather than counted.
+
+on:
+  workflow_run:
+    workflows: ["Nightly"]
+    types: [completed]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: e2e-triage
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    name: Classify E2E regressions vs flakes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # For the workflow_run trigger only act on main; workflow_dispatch (no
+    # workflow_run payload) always runs.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.head_branch == 'main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Triage recent main E2E runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Defaults live in the script; pin them here so a change is reviewable
+          # in one place and the workflow documents the policy it enforces.
+          TRIAGE_REPO: ${{ github.repository }}
+          TRIAGE_WORKFLOWS: Nightly
+          TRIAGE_WINDOW: "5"
+          TRIAGE_REGRESSION_STREAK: "3"
+          TRIAGE_INFRA_FAIL_RATIO: "50"
+        run: hack/flake-triage.sh triage
