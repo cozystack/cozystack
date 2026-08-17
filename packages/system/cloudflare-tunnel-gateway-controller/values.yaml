@@ -1,3 +1,5 @@
+# Operator guide: docs/cloudflare-tunnel-gateway.md
+#
 # Cloudflare Tunnel Gateway API controller: publishes HTTPRoutes/GRPCRoutes
 # through a Cloudflare Tunnel instead of a public LoadBalancer. Opt-in
 # (bundles.enabledPackages), and needs two operator-supplied inputs before
@@ -13,14 +15,15 @@
 #      (the Package exists only after enabling, so the first install always
 #      fails this way); setting it changes the values and the install retries.
 #
-# A tenant Gateway moves onto it with extra/gateway values
-# `gatewayClassName: cloudflare-tunnel` plus `tlsPassthroughServices: []`.
-# The tunnel carries HTTP only: a TLS-passthrough listener is marked
-# UnsupportedProtocol and keeps the TenantGateway from ever becoming Ready,
-# and the TLS-passthrough services are simply not published through that
-# Gateway. Cloudflare Universal SSL covers
-# one label below the zone apex, so `<svc>.<tenant>.<zone>` hostnames need
-# Advanced Certificate Manager or a zone per tenant apex.
+# A Gateway joins the class with `gatewayClassName: cloudflare-tunnel`.
+# Moving a tenant publishing Gateway onto it is not a drop-in: emptying
+# extra/gateway's `tlsPassthroughServices` clears the TLS-passthrough
+# listeners the tunnel cannot carry, but the remaining port-443 listeners
+# are still rendered mode: Terminate with cert-manager certificateRefs,
+# and the port-443 allowedRoutes.kinds stay HTTPRoute + TLSRoute, so a
+# GRPCRoute cannot attach. Cloudflare Universal SSL covers one label below
+# the zone apex, so `<svc>.<tenant>.<zone>` hostnames need Advanced
+# Certificate Manager or a zone per tenant apex.
 #
 # Every Gateway of the class shares one tunnel, so the proxy routes by
 # hostname alone across all tenants. cozystack-basics' route-hostname policy
