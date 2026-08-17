@@ -1026,6 +1026,16 @@ func (r *PackageReconciler) deleteSystemDefaultsLimitRange(ctx context.Context, 
 		return fmt.Errorf("failed to read the system defaults LimitRange in namespace %s: %w", nsName, err)
 	}
 
+	// Deleting by name alone would take an administrator's own object with it. The name
+	// is not reserved: nothing stops somebody creating a cozystack-system-defaults
+	// LimitRange by hand, and turning the knob off would then silently remove policy the
+	// operator never wrote. Only objects carrying this reconciler's managed-by label are
+	// its to delete; anything else is left where it is, which is also the right answer if
+	// the name is ever taken over by another component.
+	if stale.Labels["app.kubernetes.io/managed-by"] != packageControllerFieldOwner {
+		return nil
+	}
+
 	if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
@@ -1261,6 +1271,10 @@ func (r *PackageReconciler) systemDefaultsLimitRange(nsName string, defaultLimit
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      SystemDefaultsLimitRangeName,
 			Namespace: nsName,
+			// Stamped so the disabled path can tell this object apart from an
+			// administrator's own LimitRange that happens to carry the same name;
+			// see deleteSystemDefaultsLimitRange.
+			Labels: map[string]string{"app.kubernetes.io/managed-by": packageControllerFieldOwner},
 		},
 		Spec: corev1.LimitRangeSpec{
 			Limits: []corev1.LimitRangeItem{{
