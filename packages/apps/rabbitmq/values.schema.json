@@ -127,6 +127,12 @@
       "type": "boolean",
       "default": false
     },
+    "affinity": {
+      "description": "Pod affinity applied to RabbitMQ pods (standard Kubernetes corev1.Affinity). Use podAntiAffinity with topologyKey `kubernetes.io/hostname` to spread RabbitMQ pods across nodes.",
+      "type": "object",
+      "default": {},
+      "x-kubernetes-preserve-unknown-fields": true
+    },
     "version": {
       "description": "RabbitMQ major.minor version to deploy",
       "type": "string",
