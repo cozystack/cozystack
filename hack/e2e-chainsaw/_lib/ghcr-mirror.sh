@@ -8,7 +8,9 @@
 # egress is flaky/rate-limited from the CI runner and the pull times out with a TLS
 # handshake timeout, so the kubelet service never starts and no tenant node joins.
 # Diagnosed in cozystack/cozystack#3548 (in-guest Talos dmesg), tracked by #3513.
-# Same flaky-public-egress class the talos-image-cache (#3231) fixed for the OS image.
+# Same flaky-public-egress class the OS-image path hit (#3231), which is now off
+# public egress entirely: workers CDI-clone a golden Talos image seeded in
+# cozy-public rather than importing the raw image over HTTP per worker.
 # One variant of that flake, not the whole of it: #3513 also records failures that
 # lose the budget before Talos ever reaches the kubelet pull, and those this cannot
 # touch.
@@ -23,11 +25,11 @@
 # make CI worse, the committed path is only as safe as the assumptions listed
 # there.
 #
-# talos-image-cache.sh gates the equivalent decision on a byte-level 206 from a Pod
-# carrying the consumer's own label, which is what turns that assumption into a
-# measurement. Doing the same here is the hardening follow-up, and it is also what
-# would let the suite assert the mirror served the pull rather than the worker
-# quietly falling back.
+# Gating the equivalent decision on a byte-level response from a Pod carrying the
+# consumer's own label is what would turn that assumption into a measurement --
+# the shape the retired Talos image-cache helper used. Doing the same here is the
+# hardening follow-up, and it is also what would let the suite assert the mirror
+# served the pull rather than the worker quietly falling back.
 
 GHCR_MIRROR_SVC_URL="${GHCR_MIRROR_SVC_URL:-http://ghcr-mirror.kube-system.svc}"
 _GHCR_MIRROR_DECISION_FILE="${_GHCR_MIRROR_DECISION_FILE:-/tmp/e2e-ghcr-mirror-endpoint}"
@@ -71,8 +73,7 @@ ghcr_warm_tags() {
 
 # ghcr_warm_job_manifest <image> <tag>...: print the warm-up Job, or fail.
 #
-# Pure string builder, kept separate so it can be unit-tested, same reason
-# talos-image-cache.sh keeps its probe overrides out of the caller.
+# Pure string builder, kept separate so it can be unit-tested.
 #
 # The Job asks the mirror for each tag's index, every manifest the index lists, and
 # every blob those manifests reference, discarding the bytes. distribution's proxy
@@ -554,7 +555,7 @@ resolve_ghcr_mirror_endpoint() {
 # (hack/ghcr-mirror_test.bats exercises this without run-kubernetes.sh) falls back
 # to the block's own 20s/5s defaults. The bound lives here rather than in a call to
 # cozy_diag_read because that function is defined in run-kubernetes.sh and this file
-# is sourced on its own, the same reason talos-image-cache.sh carries its own copy.
+# is sourced on its own.
 _ghcr_mirror_bounded_read() {
   local label="$1"
   shift

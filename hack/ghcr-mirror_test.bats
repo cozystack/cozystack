@@ -3,7 +3,7 @@
 # Unit tests for the in-sandbox ghcr.io pull-through mirror (cozystack/cozystack#3513).
 #
 # hack/e2e-ghcr-mirror.yaml bundles Service + Deployment + CiliumClusterwideNetworkPolicy
-# but they apply in two phases, exactly like the talos-image-cache manifest:
+# but they apply in two phases:
 # hack/e2e-install-cozystack.bats applies everything EXCEPT the Cilium policy (its CRD
 # does not exist before Cozystack is installed), and hack/e2e-chainsaw/_lib/ghcr-mirror.sh
 # applies ONLY that policy later once Cilium is up. These tests pin that split, the
@@ -430,21 +430,32 @@ timeout() {
     rm -rf "$work"
 }
 
-@test "the install-time apply is not gated behind the Talos image cache's precondition" {
+@test "the install-time apply is not folded into a block that can return early" {
     f=hack/e2e-install-cozystack.bats
-    # The Talos image cache's install step reads talos.schematicID/version out of
-    # packages/apps/kubernetes/values.yaml and returns early when either is absent,
-    # because its manifest carries placeholders for them. This manifest carries no
-    # placeholders and needs neither value, so sharing that @test block would let a
-    # values.yaml restructure silently stop deploying the mirror while the log
-    # blamed the Talos factory. Each mirror gets its own block.
+    # This manifest substitutes no placeholders and reads nothing out of
+    # packages/apps/kubernetes/values.yaml, so it must not be applied from a @test
+    # block that returns early on a value it does not need. The Talos image cache
+    # used to be exactly that neighbour -- it read talos.schematicID/version and
+    # returned early when either was absent -- and sharing its block would have let
+    # a values.yaml restructure silently stop deploying this mirror while the log
+    # blamed the Talos factory. That cache is gone, but the hazard is structural
+    # rather than about that one neighbour, so what is pinned is the shape: the
+    # block that applies this manifest reaches the apply unconditionally.
     ghcr=$(awk '/^@test /{n=$0} /e2e-ghcr-mirror\.yaml/ && n {print n}' "$f" | head -1)
-    talos=$(awk '/^@test /{n=$0} /e2e-talos-image-cache\.yaml/ && n {print n}' "$f" | head -1)
     [ -n "$ghcr" ] || { echo "no @test in $f applies hack/e2e-ghcr-mirror.yaml" >&2; exit 1; }
-    [ -n "$talos" ] || { echo "no @test in $f applies hack/e2e-talos-image-cache.yaml" >&2; exit 1; }
-    [ "$ghcr" != "$talos" ] || {
-        echo "both mirrors are applied from one @test block, so its early return skips this one too:" >&2
+    # Body of that block, up to the closing brace on its own line.
+    body=$(awk -v want="$ghcr" '
+        $0 == want {inb=1; next}
+        inb && /^}$/ {exit}
+        inb {print}
+    ' "$f")
+    printf '%s\n' "$body" | grep -qE '^[[:space:]]*(return|exit)\b' && {
+        echo "the @test applying hack/e2e-ghcr-mirror.yaml can return before the apply:" >&2
         echo "  $ghcr" >&2
+        exit 1
+    }
+    printf '%s\n' "$body" | grep -q 'e2e-ghcr-mirror.yaml' || {
+        echo "could not read the body of the @test that applies the manifest" >&2
         exit 1
     }
 }

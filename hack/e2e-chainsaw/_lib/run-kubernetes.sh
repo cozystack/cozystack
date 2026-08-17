@@ -3451,7 +3451,7 @@ cozy_diag_phase_start() {
   # an unchecked list sitting beside a checked one, drifting from it at whatever
   # rate collectors are added.
   command -v timeout >/dev/null 2>&1 || \
-    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, worker block IO counter, sandbox node CPU time, sandbox kernel KVM counters, runner kernel CPU time, sandbox QEMU per-thread CPU time, worker per-thread CPU time, ghcr-mirror and talos-image-cache captures -- keep collecting instead, unbounded" >&2
+    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, worker block IO counter, sandbox node CPU time, sandbox kernel KVM counters, runner kernel CPU time, sandbox QEMU per-thread CPU time, worker per-thread CPU time and ghcr-mirror captures -- keep collecting instead, unbounded" >&2
   # Re-checked here, not only at assignment: a value set after this file is sourced
   # -- which is how a test sets it -- would otherwise reach the arithmetic below
   # unvalidated, and that is the one failure that costs the whole block.
@@ -4440,10 +4440,10 @@ EOF
 
   # Backend 1
   #
-  # nginx is pinned by digest. The tenant workers reach no registry mirror --
-  # hack/e2e-talos-image-cache.yaml serves the Talos worker OS disk image over
-  # HTTP and is not one, and nothing else in the tree mirrors container images
-  # for a tenant -- so this is pulled from Docker Hub on every run either way.
+  # nginx is pinned by digest. The one registry mirror the tenant workers reach
+  # is the in-sandbox ghcr.io pull-through (hack/e2e-ghcr-mirror.yaml), and
+  # nothing in the tree mirrors Docker Hub for a tenant -- so this is pulled from
+  # Docker Hub on every run either way.
   # The digest does not remove that pull, it fixes what the pull returns: a
   # floating `nginx:alpine` silently changes size and layer count under the
   # readiness budget below, and supplies whatever content the tag points at on
