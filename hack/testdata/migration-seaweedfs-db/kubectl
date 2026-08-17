@@ -1,8 +1,9 @@
 #!/bin/sh
 # Fake kubectl for hack/migration-seaweedfs-db-adopt.bats. It serves only the
-# calls lib/seaweedfs-db-adopt.sh makes; behaviour is driven by FAKE_* env and
-# every invocation is appended to $FAKE_CMDLOG so the test can assert on which
-# namespaces were acted on and with which annotations.
+# calls the two halves of migration 45 make — lib/seaweedfs-db-adopt.sh and
+# lib/kubeadm-keep-pin.sh; behaviour is driven by FAKE_* env and every invocation
+# is appended to $FAKE_CMDLOG so the test can assert on which objects were acted
+# on and with which annotations.
 #
 #   FAKE_CMDLOG    file to append a one-line record of each call to
 #   FAKE_CLUSTERS  newline list of "<ns> <release-name> <resource-policy>" — one
@@ -12,6 +13,24 @@
 #   FAKE_LIST_FAIL      non-empty => the -A fleet scan exits 1 with this as stderr
 #   FAKE_GET_FAIL       non-empty => the per-namespace get exits 1 with this stderr
 #   FAKE_ANNOTATE_FAIL  non-empty => `annotate` exits 1 (a failed hand-over)
+#
+# For the keep-pin half:
+#
+#   FAKE_KCTS  newline list of "<ns> <name> <resource-policy> <managed-by>" — one
+#              per KubeadmConfigTemplate. "-" models the annotation/label being
+#              ABSENT; managed-by is "Helm" for a chart-rendered object.
+#   FAKE_KCS   the same, for KubeadmConfig. A CAPI-spawned child is modelled with
+#              managed-by "-": it is owned by its Machine, Helm never prunes it,
+#              and the pin must leave it alone.
+#   FAKE_KUBEADM_LIST_FAIL         non-empty => the fleet scan for either kubeadm
+#                                  kind exits 1 with this as stderr
+#   FAKE_KUBEADM_ANNOTATE_FAIL     non-empty => `annotate` on a kubeadm object
+#                                  exits 1 with this as stderr
+#   FAKE_KUBEADM_ANNOTATE_FAIL_NS  restrict the above to one namespace, so a
+#                                  partial failure can be told apart from a total
+#                                  one — that is what proves the pin keeps going
+#                                  and reports every failure at the end rather
+#                                  than aborting on the first.
 #
 # The failure knobs exist because the point of the helper is that a kubectl error
 # must ABORT the migration rather than let it stamp the version and never run
@@ -37,6 +56,24 @@ field() {
       break
     fi
   done
+}
+
+# kubeadm_rows <args> -- echo the row list for whichever kubeadm kind <args> names.
+# "kubeadmconfigs" is not a substring of "kubeadmconfigtemplates", so the two
+# patterns cannot both match; templates is tried first regardless.
+kubeadm_rows() {
+  case "$1" in
+    *kubeadmconfigtemplates*) printf '%s\n' "${FAKE_KCTS:-}" ;;
+    *kubeadmconfigs*)         printf '%s\n' "${FAKE_KCS:-}" ;;
+  esac
+}
+
+# kubeadm_short <args> -- singular kind name for the PIN log line.
+kubeadm_short() {
+  case "$1" in
+    *kubeadmconfigtemplates*) printf 'kubeadmconfigtemplate' ;;
+    *kubeadmconfigs*)         printf 'kubeadmconfig' ;;
+  esac
 }
 
 case "$args" in
@@ -93,6 +130,73 @@ case "$args" in
       esac
     done
     log "ANNOTATE $ns release-name=${rel:-<unset>} resource-policy=${keep:-<unset>}"
+    exit 0
+    ;;
+
+  # --- kubeadm bootstrap objects: migration 45's keep-pin half --------------
+  # Fleet scan for one kubeadm kind.
+  #
+  # THE LABEL SELECTOR IS MODELLED, NOT IGNORED. The pin selects on
+  # app.kubernetes.io/managed-by=Helm, which Helm injects as a LABEL into every
+  # resource it applies. meta.helm.sh/release-name is an ANNOTATION and can never
+  # be a selector: passing it matches nothing, the pin silently applies to nothing,
+  # and the run looks clean. A fake that answered every selector identically could
+  # not tell that apart from a working pin, so a row is returned only when the
+  # selector actually names its managed-by value.
+  *"get kubeadmconfig"*" --all-namespaces"*)
+    if [ -n "${FAKE_KUBEADM_LIST_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_KUBEADM_LIST_FAIL" >&2
+      exit 1
+    fi
+    sel=$(arg_after --selector "$@")
+    kubeadm_rows "$args" | while read -r ns name policy mgr; do
+      [ -n "${ns:-}" ] || continue
+      # NO --selector LISTS EVERYTHING, exactly as kubectl does. Modelling an
+      # absent selector as "matches nothing" would be backwards and would hide the
+      # over-pinning bug: dropping the selector would then read as a quiet no-op
+      # instead of as the pin stamping keep on Machine-owned objects whose
+      # lifecycle belongs to CAPI.
+      if [ -n "$sel" ]; then
+        [ "app.kubernetes.io/managed-by=${mgr:--}" = "$sel" ] || continue
+      fi
+      printf '%s/%s\n' "$ns" "$name"
+    done
+    exit 0
+    ;;
+
+  # Per-object read of helm.sh/resource-policy, which is what makes the pin skip
+  # an already-pinned object without a write.
+  *"get kubeadmconfig"*)
+    ns=$(arg_after --namespace "$@")
+    name=$(arg_after "$ns" "$@")
+    kubeadm_rows "$args" | while read -r n nm policy mgr; do
+      if [ "$n" = "$ns" ] && [ "$nm" = "$name" ]; then
+        [ "${policy:--}" = "-" ] || printf '%s' "$policy"
+        break
+      fi
+    done
+    exit 0
+    ;;
+
+  # The pin itself. Logged as PIN rather than ANNOTATE on purpose: the SeaweedFS
+  # assertions above count ANNOTATE lines, and reusing the verb would make them
+  # pass or fail for the other half's reasons.
+  *"annotate kubeadmconfig"*)
+    ns=$(arg_after --namespace "$@")
+    name=$(arg_after "$ns" "$@")
+    if [ -n "${FAKE_KUBEADM_ANNOTATE_FAIL:-}" ] &&
+       { [ -z "${FAKE_KUBEADM_ANNOTATE_FAIL_NS:-}" ] ||
+         [ "$ns" = "${FAKE_KUBEADM_ANNOTATE_FAIL_NS:-}" ]; }; then
+      printf '%s\n' "$FAKE_KUBEADM_ANNOTATE_FAIL" >&2
+      exit 1
+    fi
+    keep=""
+    for a in "$@"; do
+      case "$a" in
+        helm.sh/resource-policy=*) keep="${a#helm.sh/resource-policy=}" ;;
+      esac
+    done
+    log "PIN $(kubeadm_short "$args") $ns/$name resource-policy=${keep:-<unset>}"
     exit 0
     ;;
 esac
