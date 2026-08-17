@@ -13,13 +13,18 @@
   any apex (they back platform services like dashboard, harbor,
   bucket).
 
-  Two pairs of resources are rendered:
-   - VAP + Binding for HTTPRoute (gateway.networking.k8s.io/v1)
-   - VAP + Binding for TLSRoute (gateway.networking.k8s.io/v1alpha2)
+  Two pairs of resources are rendered: a VAP + Binding for HTTPRoute, and
+  a VAP + Binding for TLSRoute. Which API versions each one matches is
+  stated once, in the rule itself, rather than restated here.
 
-  TLSRoute stays at v1alpha2 in Gateway API v1.4–v1.5; its promotion
-  to v1 is tracked upstream and we will follow the rename when it
-  lands.
+  Both rules name every version the vendored bundle serves for their
+  resource. A shorter list would still work today, because
+  matchConstraints.matchPolicy defaults to Equivalent and the apiserver
+  converts a request into whichever version the rule does name — but
+  that only holds while a named version stays served, and a rule left
+  selecting nothing is not caught by failurePolicy: Fail, because
+  nothing failed. The lists are pinned to the bundle by
+  hack/route-hostname-policy-version-coverage.bats.
 */}}
 {{- /*
   CEL safety note: has() only works on field access expressions, not
@@ -91,7 +96,7 @@ spec:
   matchConstraints:
     resourceRules:
     - apiGroups: ["gateway.networking.k8s.io"]
-      apiVersions: ["v1alpha2"]
+      apiVersions: ["v1", "v1alpha2", "v1alpha3"]
       operations: ["CREATE", "UPDATE"]
       resources: ["tlsroutes"]
   matchConditions:

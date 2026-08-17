@@ -94,7 +94,7 @@ tests:
           path: spec.validationActions
           value: [Deny]
 
-  - it: targets gateway.networking.k8s.io v1 HTTPRoute and v1alpha2 TLSRoute
+  - it: targets every served HTTPRoute and TLSRoute version in gateway.networking.k8s.io
     asserts:
       - documentIndex: 0
         equal:
@@ -108,10 +108,20 @@ tests:
         equal:
           path: spec.matchConstraints.resourceRules[0].resources
           value: ["tlsroutes"]
+      # Every version the vendored bundle serves for each kind. Naming fewer
+      # than that leaves the unnamed ones riding on matchPolicy: Equivalent,
+      # which stops rescuing them the moment the last named version is
+      # dropped upstream. hack/route-hostname-policy-version-coverage.bats
+      # is what pins these lists to the bundle; the two assertions below pin
+      # the exact values so a change here is deliberate.
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiVersions
+          value: ["v1", "v1beta1"]
       - documentIndex: 2
         equal:
           path: spec.matchConstraints.resourceRules[0].apiVersions
-          value: ["v1alpha2"]
+          value: ["v1", "v1alpha2", "v1alpha3"]
 
   - it: failurePolicy is Fail so admission errors deny instead of allow
     asserts:
@@ -125,11 +135,10 @@ tests:
           value: Fail
 
   - it: CEL is fail-closed when namespace has no host label (returns false, not true)
-    # Regression guard: an earlier draft used `... ? true : (...)` which
+    # Regression guard: an earlier form used `... ? true : (...)`, which
     # silently allowed routes in any tenant-* namespace where the layer-5
-    # label was missing or scrubbed. Fixing this is the whole point of the
-    # round-6 hardening pass — pin the false branch in the CEL string so
-    # nobody flips it back without an explicit test failure.
+    # label was missing or scrubbed. Pin the false branch in the CEL string
+    # so nobody flips it back without an explicit test failure.
     asserts:
       - documentIndex: 0
         matchRegex:
