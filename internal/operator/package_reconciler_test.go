@@ -801,14 +801,12 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.
 func TestReconcileSystemDefaultsLimitRangeRaisesCeilingForWorkloadWithNoPods(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
-	existing := &corev1.LimitRange{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      SystemDefaultsLimitRangeName,
-			Namespace: "cozy-monitoring",
-		},
-	}
+	// No LimitRange yet: this is the first application in the namespace, which is where
+	// a scaled-to-zero workload is genuinely invisible to a pod-only scan. Seeding a
+	// spec-less LimitRange instead would leave the case resting on that fixture rather
+	// than on the workload having no pods.
 	cl := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(existing, systemDeployment("vmalert", 0, "8Gi", "")).Build()
+		WithObjects(systemDeployment("vmalert", 0, "8Gi", "")).Build()
 
 	r := &PackageReconciler{
 		Client:                       cl,
