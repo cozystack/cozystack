@@ -359,12 +359,12 @@
                   "default": ""
                 },
                 "repeatInterval": {
-                  "description": "Minimum time before a still-firing alert is emailed again.",
+                  "description": "Minimum time before a still-firing alert is emailed again. Duration such as `30s`, `5m` or `12h`; anything else fails the render. Empty keeps the 12h default.",
                   "type": "string",
-                  "default": "12h"
+                  "default": ""
                 },
                 "secretName": {
-                  "description": "Name of an existing Secret in the release namespace holding the SMTP password under the `password` key. Required when authUsername is set.",
+                  "description": "Name of an existing Secret in the release namespace holding the SMTP password under the `password` key. Required when authUsername is set. The Secret is mounted into Alertmanager, so a name that does not exist blocks the whole Alertmanager rollout, not only email delivery.",
                   "type": "string",
                   "default": ""
                 },

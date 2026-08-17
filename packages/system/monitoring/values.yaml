@@ -71,7 +71,7 @@ alerta:
       smarthost: ""
       authUsername: ""
       secretName: ""
-      repeatInterval: 12h
+      repeatInterval: ""
       subject: ""
       bodyHtml: ""
 grafana:
