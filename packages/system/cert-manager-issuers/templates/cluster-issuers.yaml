@@ -2,10 +2,34 @@
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $provider := (index .Values._cluster "dns01-provider") | default "cloudflare" }}
+{{- /*
+  The solver points at the publishing tenant's Gateway, so what decides the
+  pin is the class THAT Gateway runs on: the platform default, since a
+  tenant's own class choice does not ride this channel.
+*/}}
+{{- $publishingClass := (index .Values._cluster "gateway-class-name") | default "cilium" }}
+{{- $edgeClasses := list }}
+{{- range splitList "," ((index .Values._cluster "gateway-edge-classes") | default "") }}
+  {{- $c := . | trim }}
+  {{- if $c }}
+    {{- $edgeClasses = append $edgeClasses $c }}
+  {{- end }}
+{{- end }}
+{{- $gatewayTLSTermination := ternary "edge" "gateway" (has $publishingClass $edgeClasses) }}
 
 {{- define "cert-manager-issuers.httpSolver" -}}
 {{- $gatewayEnabled := index . "gatewayEnabled" -}}
 {{- $exposeIngress := index . "exposeIngress" -}}
+{{- $gatewayAtEdge := eq (index . "gatewayTLSTermination") "edge" -}}
+{{- /*
+  The sectionName pin below is dropped when the publishing Gateway sits on
+  an edge-terminated class: such a Gateway has no listener named "http" (the
+  TenantGateway controller renders the apex and its wildcards as
+  hostname-pinned HTTP listeners and nothing else), so a pinned challenge
+  route would match no listener and the certificate would never issue.
+  Without the pin the route attaches by hostname, which those listeners
+  serve.
+*/}}
 {{- if eq $gatewayEnabled "true" }}
 http01:
   gatewayHTTPRoute:
@@ -14,7 +38,9 @@ http01:
       kind: Gateway
       name: cozystack
       namespace: {{ $exposeIngress }}
+      {{- if not $gatewayAtEdge }}
       sectionName: http
+      {{- end }}
 {{- else }}
 http01:
   ingress:
@@ -99,7 +125,7 @@ spec:
     - {{- if eq $solver "dns01" }}
         {{- include "cert-manager-issuers.dns01Solver" (dict "provider" $provider "values" .Values) | nindent 8 }}
       {{- else }}
-        {{- include "cert-manager-issuers.httpSolver" (dict "gatewayEnabled" $gatewayEnabled "exposeIngress" $exposeIngress) | nindent 8 }}
+        {{- include "cert-manager-issuers.httpSolver" (dict "gatewayEnabled" $gatewayEnabled "exposeIngress" $exposeIngress "gatewayTLSTermination" $gatewayTLSTermination) | nindent 8 }}
       {{- end }}
 
 ---
@@ -119,7 +145,7 @@ spec:
     - {{- if eq $solver "dns01" }}
         {{- include "cert-manager-issuers.dns01Solver" (dict "provider" $provider "values" .Values) | nindent 8 }}
       {{- else }}
-        {{- include "cert-manager-issuers.httpSolver" (dict "gatewayEnabled" $gatewayEnabled "exposeIngress" $exposeIngress) | nindent 8 }}
+        {{- include "cert-manager-issuers.httpSolver" (dict "gatewayEnabled" $gatewayEnabled "exposeIngress" $exposeIngress "gatewayTLSTermination" $gatewayTLSTermination) | nindent 8 }}
       {{- end }}
 
 ---

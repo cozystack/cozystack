@@ -50,6 +50,14 @@ spec:
       retryInterval: 30s
     remediation:
       retries: -1
+  {{- /* A tenant-selected class overrides the platform default. Rendered
+         only when set, so a tenant that does not choose one leaves the
+         gateway chart reading _cluster.gateway-class-name, and the key
+         does not appear in the release values at all. */}}
+  {{- with .Values.gatewayClass }}
+  values:
+    gatewayClassName: {{ . | quote }}
+  {{- end }}
   valuesFrom:
   - kind: Secret
     name: cozystack-values
