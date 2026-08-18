@@ -1,5 +1,5 @@
 backupStrategyController:
-  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.6.1@sha256:7cb5af7bd8fae2ef5d6e58d1eb6eb7d9579bff8df228ac3d936c6e14ae5e063f"
+  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.6.2-rc.1@sha256:390caeb8cabf80dfe9bcd9f38b4ed97f0e71c22af36496fb744cdc50bb9501fc"
   # chBackupClientImage is the image rendered into the Altinity strategy
   # Pod: it drives clickhouse-backup's HTTP API via curl + jq.
   #
@@ -35,7 +35,7 @@ backupStrategyController:
   # retag both to the same stable tag, and the write-once guard in
   # hack/promote-retag.sh fails the release. hack/image-pin-consistency.bats
   # asserts no repository is pinned at more than one digest.
-  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.1@sha256:a34e7156a52dc55b27662917e5f9d5bbea671188d8db233296d0a98c800dc6c6"
+  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.2-rc.1@sha256:a34e7156a52dc55b27662917e5f9d5bbea671188d8db233296d0a98c800dc6c6"
   replicas: 2
   debug: false
   metrics:
