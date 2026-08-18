@@ -66,6 +66,24 @@
 | `tracingStorages[i].retentionDiskUsageBytes` | Optional disk-usage cap as a byte quantity (e.g. "8GB"); bounds disk in addition to the age-based retentionPeriod.                                                                                              | `string`   | `""`         |
 
 
+### Traces collector configuration
+
+| Name                                         | Description                                                                                                                           | Type       | Value   |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------- |
+| `tracingCollector`                           | OpenTelemetry Collector for trace ingestion.                                                                                          | `object`   | `{}`    |
+| `tracingCollector.enabled`                   | Deploy the OTLP collector. When disabled, applications must send OTLP straight to the traces backend (no central sampling/redaction). | `bool`     | `true`  |
+| `tracingCollector.replicas`                  | Number of collector replicas. Head sampling is trace-id-deterministic, so replicas>1 are safe and remove the single-ingest-path SPOF. | `int`      | `1`     |
+| `tracingCollector.samplingPercentage`        | Head-sampling percentage applied at the collector before export.                                                                      | `int`      | `10`    |
+| `tracingCollector.redactAttributes`          | Span attribute keys to drop before export (the PII/secret control point, e.g. db.statement).                                          | `[]string` | `[]`    |
+| `tracingCollector.resources`                 | Resource configuration for the collector.                                                                                             | `object`   | `{}`    |
+| `tracingCollector.resources.requests`        | Resource requests.                                                                                                                    | `object`   | `{}`    |
+| `tracingCollector.resources.requests.cpu`    | CPU request.                                                                                                                          | `quantity` | `100m`  |
+| `tracingCollector.resources.requests.memory` | Memory request.                                                                                                                       | `quantity` | `256Mi` |
+| `tracingCollector.resources.limits`          | Resource limits.                                                                                                                      | `object`   | `{}`    |
+| `tracingCollector.resources.limits.cpu`      | CPU limit.                                                                                                                            | `quantity` | `1`     |
+| `tracingCollector.resources.limits.memory`   | Memory limit.                                                                                                                         | `quantity` | `1Gi`   |
+
+
 ### Alerta configuration
 
 | Name                                      | Description                                                           | Type       | Value   |

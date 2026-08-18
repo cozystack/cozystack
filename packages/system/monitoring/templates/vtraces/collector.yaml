@@ -1,0 +1,164 @@
+{{- /*
+  Per-tenant OpenTelemetry Collector — the app-facing OTLP ingest gateway for
+  traces (design-proposals/distributed-tracing, phase 2). It lives in the tenant
+  namespace (like a per-tenant vmagent), so app -> collector traffic is
+  intra-namespace and never crosses the tenant boundary. It applies head
+  sampling and optional attribute redaction, then exports over OTLP/HTTP to the
+  tracingStorages backend. No OpenTelemetry operator exists in the platform, so
+  this is a plain Deployment + ConfigMap + Service (the fluent-bit pattern).
+
+  Trust boundary: the collector is the place where sampling/redaction (and, in
+  the shared-central topology, tenant-header injection) are enforced, but its
+  OTLP receiver is unauthenticated and the Service is a plain ClusterIP — actual
+  tenant isolation is provided by the tenant NetworkPolicies, not by this
+  manifest alone.
+
+  Off by default: tracingStorages is empty out of the box, so the collector
+  renders only once a backend is configured (or, in a later PR, central mode) —
+  there is no producer/backend to wire otherwise. Gating on a non-empty
+  tracingStorages, rather than failing on empty, keeps "no backend" a clean
+  off-state (an app's OTLP exporter simply finds no collector Service and
+  retries harmlessly) instead of aborting the whole monitoring release.
+
+  Single backend: the exporter targets tracingStorages[0]. A collector fronting
+  more than one backend is rejected below rather than silently writing to only
+  the first, so this index is safe (the render is gated on a non-empty list).
+*/ -}}
+{{- define "monitoring.tracingCollectorConfig" -}}
+{{- $c := .Values.tracingCollector -}}
+{{- $backend := index .Values.tracingStorages 0 -}}
+{{- $mode := $backend.mode | default "cluster" -}}
+{{- $endpoint := ternary (printf "http://vtsingle-%s.%s.svc:10428/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (printf "http://vtinsert-%s.%s.svc:10481/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (eq $mode "single") -}}
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  probabilistic_sampler:
+    sampling_percentage: {{ $c.samplingPercentage }}
+  batch: {}
+{{- if $c.redactAttributes }}
+  attributes/redact:
+    actions:
+{{- range $c.redactAttributes }}
+      - key: {{ . }}
+        action: delete
+{{- end }}
+{{- end }}
+exporters:
+  # vtinsert (cluster) / VTSingle accept OTLP/HTTP natively; gRPC would require
+  # -otlpGRPCListenAddr on the backend, so export over HTTP.
+  otlphttp/victoriatraces:
+    traces_endpoint: {{ $endpoint }}
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, probabilistic_sampler, {{ if $c.redactAttributes }}attributes/redact, {{ end }}batch]
+      exporters: [otlphttp/victoriatraces]
+{{- end -}}
+{{- if and .Values.tracingCollector.enabled (not (empty .Values.tracingStorages)) }}
+{{- if gt (len .Values.tracingStorages) 1 }}
+{{- fail "monitoring: tracingCollector fronts a single traces backend, but tracingStorages has more than one entry — the collector would export to the first and leave the rest empty. Reduce tracingStorages to one entry or set tracingCollector.enabled=false (apps then send OTLP straight to each backend)." }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-traces
+  labels:
+    app.kubernetes.io/name: otel-traces
+    apps.cozystack.io/application.name: {{ .Release.Name }}
+data:
+  config.yaml: |
+{{ include "monitoring.tracingCollectorConfig" . | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-traces
+  labels:
+    app.kubernetes.io/name: otel-traces
+    apps.cozystack.io/application.name: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.tracingCollector.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-traces
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-traces
+      annotations:
+        checksum/config: {{ include "monitoring.tracingCollectorConfig" . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: otel-collector
+          image: {{ include "cozy-lib.image" (list .Values.tracingCollector.image $) }}
+          args:
+            - --config=/etc/otel-traces/config.yaml
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+          resources: {{ .Values.tracingCollector.resources | toYaml | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel-traces
+      volumes:
+        - name: config
+          configMap:
+            name: otel-traces
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-traces
+  labels:
+    app.kubernetes.io/name: otel-traces
+    apps.cozystack.io/application.name: {{ .Release.Name }}
+spec:
+  selector:
+    app.kubernetes.io/name: otel-traces
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+{{- end }}
