@@ -8,9 +8,24 @@ release:
 
 # The per-tenant OpenTelemetry Collector is the app-facing OTLP gateway and
 # trust boundary: it receives OTLP, head-samples, optionally redacts, and
-# exports over OTLP/HTTP to the tracingStorages backend. It renders in the
-# tenant namespace only when tracingCollector.enabled is true.
+# exports over OTLP/HTTP to the tracingStorages backend. tracingStorages is
+# empty by default (tracing off), so the collector renders only when a backend
+# is configured AND tracingCollector.enabled is true. These cases configure a
+# backend at the suite level; the off-states override it.
+set:
+  tracingStorages:
+    - name: generic
+      mode: cluster
+      retentionPeriod: "14d"
+      storage: 10Gi
 tests:
+  - it: renders nothing by default when tracingStorages is empty (tracing off)
+    set:
+      tracingStorages: []
+    asserts:
+      - hasDocuments:
+          count: 0
+
   - it: renders exactly the ConfigMap, Deployment and Service when enabled
     asserts:
       - hasDocuments:

@@ -13,9 +13,16 @@
   tenant isolation is provided by the tenant NetworkPolicies, not by this
   manifest alone.
 
+  Off by default: tracingStorages is empty out of the box, so the collector
+  renders only once a backend is configured (or, in a later PR, central mode) —
+  there is no producer/backend to wire otherwise. Gating on a non-empty
+  tracingStorages, rather than failing on empty, keeps "no backend" a clean
+  off-state (an app's OTLP exporter simply finds no collector Service and
+  retries harmlessly) instead of aborting the whole monitoring release.
+
   Single backend: the exporter targets tracingStorages[0]. A collector fronting
   more than one backend is rejected below rather than silently writing to only
-  the first, so this index is safe.
+  the first, so this index is safe (the render is gated on a non-empty list).
 */ -}}
 {{- define "monitoring.tracingCollectorConfig" -}}
 {{- $c := .Values.tracingCollector -}}
@@ -61,7 +68,7 @@ service:
       processors: [memory_limiter, probabilistic_sampler, {{ if $c.redactAttributes }}attributes/redact, {{ end }}batch]
       exporters: [otlphttp/victoriatraces]
 {{- end -}}
-{{- if .Values.tracingCollector.enabled }}
+{{- if and .Values.tracingCollector.enabled (not (empty .Values.tracingStorages)) }}
 {{- if gt (len .Values.tracingStorages) 1 }}
 {{- fail "monitoring: tracingCollector fronts a single traces backend, but tracingStorages has more than one entry — the collector would export to the first and leave the rest empty. Reduce tracingStorages to one entry or set tracingCollector.enabled=false (apps then send OTLP straight to each backend)." }}
 {{- end }}
