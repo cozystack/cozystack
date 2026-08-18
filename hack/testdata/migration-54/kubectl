@@ -12,6 +12,10 @@
 #   FAKE_WARN_STDERR when set, every successful get prints a deprecation
 #                 warning to stderr first, the way real kubectl does -- data
 #                 captured with 2>&1 would be contaminated by it
+#   FAKE_APPLIED_CM path to write the body of any applied ConfigMap that is NOT
+#                 the cozystack-version stamp (migration 54's
+#                 cozystack-migration-54-unadopted record), so a test can assert
+#                 which pools it lists
 # Absence honors --ignore-not-found the way real kubectl does: with the flag a
 # missing object is SUCCESS with empty output; without it, "Error from server
 # (NotFound)" on stderr and exit 1.
@@ -82,7 +86,12 @@ case "$verb" in
     absent "${res} \"${name}\"" ;;      # default: absent
   apply)
     payload=$(cat)
-    if printf '%s' "$payload" | grep -q 'HelmRelease'; then
+    # Discriminate on the manifest's OWN kind, not on the word appearing anywhere
+    # in it: migration 54's diagnostic ConfigMap names "HelmRelease" in its note
+    # text, and a bare substring match sent it down the child-HR branch, where it
+    # was rejected as an HR with an empty metadata.name. The child HR arrives as
+    # compact JSON from `jq -cn`; both ConfigMaps arrive as YAML heredocs.
+    if printf '%s' "$payload" | grep -q '"kind":"HelmRelease"'; then
       # Reject an RFC-1123-invalid metadata.name the way the real apiserver would,
       # so the migration's name-validity guard is exercised: without it the script
       # would reach this apply and exit non-zero, deadlocking the upgrade.
@@ -92,8 +101,23 @@ case "$verb" in
         exit 1
       fi
       printf '%s' "$payload" > "$FAKE_CHILD_HR"; log "APPLY-HR"
-    elif printf '%s' "$payload" | grep -q 'ConfigMap'; then
-      log "STAMP"
+    elif printf '%s' "$payload" | grep -qx 'kind: ConfigMap'; then
+      # Two ConfigMaps reach this branch: the cozystack-version stamp, and
+      # migration 54's cozystack-migration-54-unadopted diagnostic record of the
+      # pools it pinned but did not adopt. Discriminate on metadata.name so the
+      # record cannot masquerade as a version stamp -- every suite here gates on
+      # the bare STAMP token -- and write the record's body to FAKE_APPLIED_CM so
+      # a test can assert WHICH pools it carries, not merely that an apply
+      # happened.
+      cmname=$(printf '%s' "$payload" | sed -n 's/^  name: *//p' | head -n1)
+      if [ "$cmname" = "cozystack-version" ]; then
+        log "STAMP"
+      else
+        if [ -n "${FAKE_APPLIED_CM:-}" ]; then
+          printf '%s' "$payload" > "$FAKE_APPLIED_CM"
+        fi
+        log "APPLY-CM $cmname"
+      fi
     else
       log "APPLY-OTHER"
     fi
