@@ -103,6 +103,7 @@ jobs:
               'tcp-balancer':        'area/networking',
               'securitygroups':      'area/networking',
               'cozy-proxy':          'area/networking',
+              'site-router':         'area/networking',
 
               // area/platform
               'platform':            'area/platform',
