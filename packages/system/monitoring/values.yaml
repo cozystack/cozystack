@@ -46,12 +46,7 @@ logsStorages:
   storage: 10Gi
   storageClassName: ""
 
-tracingStorages:
-- name: generic
-  mode: cluster
-  retentionPeriod: "14d"
-  storage: 10Gi
-  storageClassName: ""
+tracingStorages: []
 alerta:
   storage: 10Gi
   storageClassName: ""
