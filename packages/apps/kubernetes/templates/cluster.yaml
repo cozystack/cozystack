@@ -360,6 +360,46 @@ metadata:
 {{-   fail "controlPlane.apiServer.extraVolumes: volume name \"authentication-config\" is reserved by the chart for OIDC AuthenticationConfiguration when spec.oidc.mode is not None — rename your volume." }}
 {{- end }}
 {{- /*
+  Aggregation-layer UID plumbing, rendered alongside --authentication-config.
+  Rationale, tradeoffs and the migration story live in docs/oidc-tenant.md;
+  what follows is only what you must not break when editing this code.
+
+  An aggregated apiserver sees the caller's UID only when the tenant
+  kube-apiserver publishes `requestheader-uid-headers` into the
+  extension-apiserver-authentication ConfigMap. X-Remote-Uid is enforced
+  upstream: the apiserver refuses to start when the list omits it.
+
+  Version shape, per staging/src/k8s.io/apiserver/pkg/features/kube_features.go:
+    v1.31   flag does not exist; an unknown flag is fatal, so render nothing.
+    v1.32   flag exists, RemoteRequestHeaderUID is alpha and off, and
+            Validate() rejects the flag while the gate is off — both lines
+            are required.
+    v1.33+  gate is beta and on by default, never LockToDefault, so render
+            the flag alone. Deny-list, not allow-list: a new enum entry
+            falls through to here untouched.
+
+  Kamaji — pinned at 26.3.6-edge, see packages/system/kamaji/images/kamaji —
+  collapses apiServer.extraArgs into a map keyed by flag name, so duplicate
+  flags cannot coexist and the LAST entry wins. Both guards below depend on
+  that: they judge the last entry of each flag, and the chart yields to a
+  user entry rather than emitting a second copy. A Kamaji bump that drops
+  the collapse invalidates them.
+
+  Ownership is resolved after the arg loop, not inside it, because the last
+  entry of each flag and the interaction between them are only known once
+  every arg has been seen.
+*/}}
+{{- $uidHeaderUnsupported := eq .Values.version "v1.31" }}
+{{- $uidGateRequired := eq .Values.version "v1.32" }}
+{{- $userOwnsUidHeader := false }}
+{{- $userOwnsUidGate := false }}
+{{- $uidHeaderArgSeen := "" }}
+{{- $uidHeaderConforms := false }}
+{{- $gateArgSeen := "" }}
+{{- $uidGateSetting := "" }}
+{{- $allBetaSetting := "" }}
+{{- $allAlphaSetting := "" }}
+{{- /*
   Legacy `--oidc-*` flags in the user-supplied extraArgs are mutually
   exclusive with `--authentication-config`. The kube-apiserver refuses
   to boot when both are set (`--authentication-config cannot be used with
@@ -379,6 +419,90 @@ metadata:
 {{-     end }}
 {{-     if hasPrefix "--authentication-config" $arg }}
 {{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart already injects --authentication-config= for OIDC. Drop your explicit flag and let spec.oidc.mode: CustomConfig own the AuthenticationConfiguration (customConfig.config or customConfig.secretRef.name), or leave spec.oidc.mode: None and keep managing the flag yourself." $arg $.Values.oidc.mode) }}
+{{-     end }}
+{{-     if and (hasPrefix "--requestheader-uid-headers" $arg) (not $uidHeaderUnsupported) }}
+{{- /*
+  Match whole ELEMENTS and do NOT trim them: upstream caseInsensitiveHas
+  compares each entry exactly, and pflag's CSV reader keeps surrounding
+  spaces, so "X-Remote-Uid-Extra" and "X-Remote-Uid " both fail there.
+  Being more permissive than upstream is the forbidden direction — it
+  would skip the chart's flag for a list the apiserver rejects.
+*/}}
+{{-       $uidHeaders := list }}
+{{-       range $h := splitList "," (trimPrefix "--requestheader-uid-headers=" $arg) }}
+{{-         $uidHeaders = append $uidHeaders (lower $h) }}
+{{-       end }}
+{{-       $uidHeaderArgSeen = $arg }}
+{{-       $uidHeaderConforms = has "x-remote-uid" $uidHeaders }}
+{{-     end }}
+{{-     if and (hasPrefix "--feature-gates" $arg) (not $uidHeaderUnsupported) }}
+{{- /*
+  Validate() rejects the header flag whenever the gate is off, on EVERY
+  version, so v1.32 must opt in and v1.33+ must not opt out. A blanket
+  AllAlpha/AllBeta counts: setUnsetAlphaGates/setUnsetBetaGates apply it
+  to every gate with no explicit entry. An explicit entry therefore wins
+  in either map-iteration order — the blanket callbacks skip a key already
+  in the enabled map, a named entry always writes.
+*/}}
+{{- /*
+  Parse as featureGate.Set() does: TrimSpace name and value separately,
+  then resolve the value with strconv.ParseBool, which also accepts 0/f/F
+  and 1/t/T. Raw "name=value" text comparison would miss those spellings.
+  A value ParseBool cannot read is left unresolved — the apiserver rejects
+  it on its own terms.
+*/}}
+{{-       $gateValues := dict }}
+{{-       range $g := splitList "," (trimPrefix "--feature-gates=" $arg) }}
+{{-         $kv := splitList "=" $g }}
+{{-         if eq (len $kv) 2 }}
+{{-           $gname := lower (trim (index $kv 0)) }}
+{{-           $gval := lower (trim (index $kv 1)) }}
+{{-           if has $gval (list "true" "t" "1") }}
+{{-             $gateValues = set $gateValues $gname "true" }}
+{{-           else if has $gval (list "false" "f" "0") }}
+{{-             $gateValues = set $gateValues $gname "false" }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{-       $gateArgSeen = $arg }}
+{{-       $uidGateSetting = dig "remoterequestheaderuid" "" $gateValues }}
+{{-       $allBetaSetting = dig "allbeta" "" $gateValues }}
+{{-       $allAlphaSetting = dig "allalpha" "" $gateValues }}
+{{-     end }}
+{{-   end }}
+{{-   if ne $uidHeaderArgSeen "" }}
+{{-     if $uidHeaderConforms }}
+{{-       $userOwnsUidHeader = true }}
+{{-     else }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart injects --requestheader-uid-headers=X-Remote-Uid so the authenticated user UID survives the aggregation layer, and the kube-apiserver rejects a uid-headers list that omits X-Remote-Uid. Add X-Remote-Uid to your entry, or drop the entry and let the chart render the flag." $uidHeaderArgSeen $.Values.oidc.mode) }}
+{{-     end }}
+{{-   end }}
+{{- /*
+  RemoteRequestHeaderUID is alpha on v1.32, so AllAlpha=true genuinely
+  enables it; an explicit entry still beats the blanket, hence the extra
+  clause per branch.
+*/}}
+{{-   if ne $gateArgSeen "" }}
+{{-     if $uidGateRequired }}
+{{-       if or (eq $uidGateSetting "true") (and (eq $allAlphaSetting "true") (ne $uidGateSetting "false")) }}
+{{-         $userOwnsUidGate = true }}
+{{-       else if $userOwnsUidHeader }}
+{{-         fail (printf "controlPlane.apiServer.extraArgs sets --requestheader-uid-headers while %q leaves RemoteRequestHeaderUID off, and spec.oidc.mode is %q on Kubernetes %s — the kube-apiserver rejects your header flag while the gate is disabled, so the control plane would refuse to start. Merge RemoteRequestHeaderUID=true into your --feature-gates entry." $gateArgSeen $.Values.oidc.mode $.Values.version) }}
+{{-       else }}
+{{-         fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q on Kubernetes %s — --requestheader-uid-headers is rejected there unless RemoteRequestHeaderUID is enabled, and the tenant control plane keeps only one --feature-gates entry, so the chart cannot add its own alongside yours. Merge RemoteRequestHeaderUID=true into your entry." $gateArgSeen $.Values.oidc.mode $.Values.version) }}
+{{-       end }}
+{{-     else if eq $uidGateSetting "false" }}
+{{- /*
+  Two remedies: turning OIDC off removes the chart's header flag, but not
+  an operator's own one, which would stay behind with the gate off.
+*/}}
+{{-       if $userOwnsUidHeader }}
+{{-         fail (printf "controlPlane.apiServer.extraArgs contains %q alongside your own --requestheader-uid-headers, while spec.oidc.mode is %q on Kubernetes %s — the kube-apiserver rejects that flag while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop RemoteRequestHeaderUID=false from your entry (it defaults to enabled on this version), or drop your --requestheader-uid-headers flag." $gateArgSeen $.Values.oidc.mode $.Values.version) }}
+{{-       else }}
+{{-         fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q on Kubernetes %s — the tenant apiserver runs with --requestheader-uid-headers=X-Remote-Uid, which it rejects while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop RemoteRequestHeaderUID=false from your entry (it defaults to enabled on this version), or set spec.oidc.mode: None if you do not want OIDC." $gateArgSeen $.Values.oidc.mode $.Values.version) }}
+{{-       end }}
+{{-     else if and (eq $allBetaSetting "false") (ne $uidGateSetting "true") }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q on Kubernetes %s — AllBeta=false turns off RemoteRequestHeaderUID, which the kube-apiserver requires before it accepts the --requestheader-uid-headers flag the tenant apiserver runs with, so the control plane would refuse to start. Add RemoteRequestHeaderUID=true explicitly to your entry — an explicit entry overrides AllBeta." $gateArgSeen $.Values.oidc.mode $.Values.version) }}
 {{-     end }}
 {{-   end }}
 {{- end }}
@@ -403,6 +527,12 @@ spec:
       {{- end }}
       {{- if $oidcEnabled }}
       - --authentication-config=/etc/kubernetes/authentication-config/config.yaml
+      {{- if and (not $uidHeaderUnsupported) (not $userOwnsUidHeader) }}
+      - --requestheader-uid-headers=X-Remote-Uid
+      {{- end }}
+      {{- if and $uidGateRequired (not $userOwnsUidGate) }}
+      - --feature-gates=RemoteRequestHeaderUID=true
+      {{- end }}
       {{- end }}
       {{- if not (or .Values.controlPlane.apiServer.extraArgs $oidcEnabled) }} []{{ end }}
     extraVolumeMounts:
