@@ -23,7 +23,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/cozystack/cozystack/internal/siterouter/denyset"
 	"github.com/cozystack/cozystack/internal/vyos"
 	"github.com/cozystack/cozystack/internal/vyos/render"
 )
@@ -532,20 +531,12 @@ func (r *SiteRouterReconciler) resolveInputs(ctx context.Context, inst *instance
 	vals := inst.values
 	remoteCIDRs := stringSlice(vals[remoteCIDRsValueKey])
 
-	// Tenant-reachable cluster networks constrain each tunnel-ingress source-accept
-	// so a decrypted packet with a valid remote source but a non-tenant / world
-	// destination is dropped (render.renderTunnelIngressFilter). Sourced from the
-	// same cluster-network snapshot the deny-set validation reads. Discovery
-	// failures stop reconciliation, so the constraint is never silently dropped.
-	nets := inst.clusterNetworks
-	if nets.PodCIDR == "" {
-		var err error
-		nets, err = r.clusterNetworks(ctx)
-		if err != nil {
-			return render.Inputs{}, err
-		}
-	}
-	tenantCIDRs, err := r.tenantNetworkCIDRs(ctx, inst, nets)
+	// This tenant's own reachable addresses constrain each tunnel-ingress
+	// source-accept so a decrypted packet with a valid remote source but a
+	// non-tenant / world destination is dropped (render.renderTunnelIngressFilter).
+	// Enumeration failures stop reconciliation, so the constraint is never
+	// silently dropped.
+	tenantCIDRs, err := r.tenantNetworkCIDRs(ctx, inst)
 	if err != nil {
 		return render.Inputs{}, err
 	}
@@ -659,13 +650,97 @@ func configuredBGPPeers(in render.Inputs) []string {
 func validASN(n int64) bool { return n >= 1 && n <= 4294967295 }
 
 // tenantNetworkCIDRs returns the destinations a decrypted tunnel packet may
-// reach: the pod CIDR plus only ClusterIPs owned by Services in this tenant
-// namespace. Using the whole cluster service CIDR would expose any platform
-// ClusterIP that the tenant baseline happens to permit.
-func (r *SiteRouterReconciler) tenantNetworkCIDRs(ctx context.Context, inst *instance, nets denyset.ClusterNetworks) ([]string, error) {
+// reach: one /32 per Pod IP and per Service ClusterIP owned by THIS tenant
+// namespace. It admits neither the whole cluster pod CIDR nor the whole cluster
+// service CIDR — either would let a remote peer reach every other tenant's
+// workloads on the flat pod network (and any platform ClusterIP the tenant
+// baseline happens to permit). Cilium is not the backstop for that: the tenant
+// baseline (packages/apps/tenant/templates/networkpolicy.yaml) admits ingress
+// fromEntities [world, cluster] on an empty endpoint selector, and the deny-set
+// forces every remoteCIDR to be non-cluster, so the decrypted packet's preserved
+// source always lands as identity `world`, which that baseline permits. Scoping
+// the destination set is therefore the control: a pod IP outside this namespace
+// matches no accept and falls through to the guest's default drop.
+//
+// Enumerating live pods instead of a stable CIDR has two accepted costs.
+// Reachability now lags pod creation: a pod that appears between two reconciles
+// is not a permitted tunnel destination until the next successful push, so a
+// tenant that scales up sees the new replica become reachable from the remote
+// site up to one runtimePollInterval later rather than immediately. That
+// self-heals without help — the rendered ops feed the config hash
+// (pushVyOSConfig), so a new pod moves the hash and the push stops being
+// suppressed — and it is strictly narrower than a lag the design already has,
+// since the kube-ovn return route is applied at pod creation and a pre-existing
+// pod needs a restart regardless (what reasonPendingRoutes reports). The other
+// cost is push cadence: the config hash now moves whenever tenant pods churn, so
+// a namespace running rolling deployments re-pushes to the guest management API
+// on roughly every reconcile, where one stable CIDR only re-pushed on a spec
+// change. A push is a single authenticated REST call and the cadence is bounded
+// by the poll interval, so that is accepted; the Succeeded/Failed filter below
+// takes the Job / CronJob class of churn out of it.
+//
+// The Pod List goes through the UNCACHED reader for the same reason
+// surfacePendingRoutePods does: the controller's Pod cache is label-scoped to
+// SiteRouter gateway pods (CacheByObject), so a cached List would return none of
+// the tenant's workloads and the tunnel would silently reach nothing.
+//
+// On any path that reaches a push the set is non-empty: the chart's tunnel
+// Service is a LoadBalancer, so the apiserver always allocates it a ClusterIP,
+// and pushVyOSConfig renders no tunnel until that Service carries an ingress IP.
+// That invariant is load-bearing — render.renderTunnelIngressFilter degrades an
+// EMPTY destination set to a source-only accept, which is the world-egress hole
+// the destination constraint exists to close, so a future filter here must not
+// be able to empty the set (TestTenantNetworkCIDRs_NeverEmptyAtPushTime).
+func (r *SiteRouterReconciler) tenantNetworkCIDRs(ctx context.Context, inst *instance) ([]string, error) {
 	set := map[string]struct{}{}
-	if nets.PodCIDR != "" {
-		set[nets.PodCIDR] = struct{}{}
+	pods := &corev1.PodList{}
+	if err := r.reader().List(ctx, pods, client.InNamespace(inst.namespace)); err != nil {
+		return nil, fmt.Errorf("list pods in namespace %s for tunnel destination filter: %w", inst.namespace, err)
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		// A gateway pod (this or a co-tenant site-router) is the tunnel's own
+		// endpoint, not a workload the remote site routes to. Traffic the gateway
+		// addresses to itself never reaches the forward chain this set feeds, so
+		// admitting it would widen the set with rules that cannot match.
+		if p.Labels[appKindLabelKey] == siteRouterKind {
+			continue
+		}
+		// A pod on its way out releases its IP back to the kube-ovn pool, which can
+		// hand it to a pod in ANOTHER namespace — keeping it would re-create the
+		// cross-tenant reach this function exists to remove. Its live flows are
+		// already covered by the rule set's established/related accept.
+		if p.DeletionTimestamp != nil {
+			continue
+		}
+		// A completed Job / CronJob pod serves no traffic and its IP is on its way
+		// back to the pool. Skipping it also bounds how often the destination set —
+		// and with it the config hash — churns on a namespace running CronJobs.
+		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		// A hostNetwork pod reports the NODE address as its pod IP. The threat model
+		// forbids tunnel traffic reaching node addresses (denyset rejects a
+		// remoteCIDR overlapping one for the same reason), so such a pod must never
+		// put its node into the accept set — tenant namespaces carry no Pod Security
+		// admission label that would prevent one being created.
+		if p.Spec.HostNetwork {
+			continue
+		}
+		podIPs := make([]string, 0, len(p.Status.PodIPs))
+		for _, ip := range p.Status.PodIPs {
+			podIPs = append(podIPs, ip.IP)
+		}
+		if len(podIPs) == 0 && p.Status.PodIP != "" {
+			podIPs = []string{p.Status.PodIP}
+		}
+		for _, raw := range podIPs {
+			addr, err := netip.ParseAddr(raw)
+			if err != nil || !addr.Is4() {
+				continue
+			}
+			set[netip.PrefixFrom(addr, addr.BitLen()).String()] = struct{}{}
+		}
 	}
 	services := &corev1.ServiceList{}
 	if err := r.reader().List(ctx, services, client.InNamespace(inst.namespace)); err != nil {
