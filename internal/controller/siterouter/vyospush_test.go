@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -918,5 +919,193 @@ func TestReconcile_ResolveInputsMapping(t *testing.T) {
 	}
 	if !opsHave(ops, "protocols/bgp/neighbor/203.0.113.1/remote-as", "65000") {
 		t.Errorf("expected BGP neighbor remote-as mapped, ops: %+v", ops)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// tenantNetworkCIDRs — the tunnel-ingress destination set
+// -----------------------------------------------------------------------------
+
+// workloadPod builds an ordinary tenant pod: it carries none of the SiteRouter
+// lineage labels, so the destination enumeration sees it as a workload rather
+// than the tunnel's own gateway endpoint.
+func workloadPod(namespace, name, podIP string, phase corev1.PodPhase) *corev1.Pod {
+	p := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Status:     corev1.PodStatus{Phase: phase, PodIP: podIP},
+	}
+	if podIP != "" {
+		p.Status.PodIPs = []corev1.PodIP{{IP: podIP}}
+	}
+	return p
+}
+
+// destinationSet resolves the tunnel-ingress destination set for an instance in
+// namespace, returning it as a lookup set plus the raw slice for error messages.
+func destinationSet(t *testing.T, r *SiteRouterReconciler, namespace string) (map[string]bool, []string) {
+	t.Helper()
+	got, err := r.tenantNetworkCIDRs(context.Background(), &instance{name: "demo", namespace: namespace})
+	if err != nil {
+		t.Fatalf("tenantNetworkCIDRs: %v", err)
+	}
+	set := make(map[string]bool, len(got))
+	for _, cidr := range got {
+		set[cidr] = true
+	}
+	return set, got
+}
+
+// prefixCovers reports whether cidr contains ip, failing the test if either is
+// unparseable. It is what makes the cross-tenant assertion below immune to a
+// partial revert: any prefix that COVERS the foreign pod IP permits it, whether
+// or not it is spelled as that IP.
+func prefixCovers(t *testing.T, cidr, ip string) bool {
+	t.Helper()
+	p, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		t.Fatalf("destination %q is not a valid prefix: %v", cidr, err)
+	}
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		t.Fatalf("parse %q: %v", ip, err)
+	}
+	return p.Contains(a)
+}
+
+// TestTenantNetworkCIDRs_ScopedToOwnNamespacePods is the producer-side test the
+// destination-scoping fix needs: what a decrypted tunnel packet may reach is
+// this namespace's own pod IPs and Service ClusterIPs, never the cluster pod
+// CIDR. It deliberately does NOT live in internal/vyos/render — those tests set
+// TenantNetworkCIDRs themselves and then assert the render honours it, so they
+// pass identically with the whole pod CIDR in the field. The defect was entirely
+// on the producer side.
+//
+// The cross-tenant assertion is the one that strikes the threat: under the old
+// `set[nets.PodCIDR]` seed the foreign tenant's pod IP was permitted by
+// containment (10.244.2.20 ∈ 10.244.0.0/16), which is precisely why that seed
+// was a defect, so a revert turns this red for the right reason. What it does
+// not prove is that cross-tenant delivery is denied on the wire — that stays the
+// negative-security e2e's job. The claim here is narrower and exact: the gateway
+// no longer permits a foreign-tenant destination.
+func TestTenantNetworkCIDRs_ScopedToOwnNamespacePods(t *testing.T) {
+	// A terminating pod. The fake client refuses a deletionTimestamp with no
+	// finalizer, which is also what a real terminating pod looks like.
+	deleting := metav1.Now()
+	terminating := workloadPod("tenant-test", "tenant-workload-terminating", "10.244.1.11", corev1.PodRunning)
+	terminating.DeletionTimestamp = &deleting
+	terminating.Finalizers = []string{"example.com/test-hold"}
+
+	// A hostNetwork pod reports the NODE address as its pod IP.
+	hostNet := workloadPod("tenant-test", "tenant-workload-hostnet", "192.168.100.10", corev1.PodRunning)
+	hostNet.Spec.HostNetwork = true
+
+	objs := []client.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-other"}},
+		// This tenant's workload: a permitted destination.
+		workloadPod("tenant-test", "tenant-workload", "10.244.1.10", corev1.PodRunning),
+		// No IP yet — must contribute no rule rather than an empty one.
+		workloadPod("tenant-test", "tenant-workload-pending", "", corev1.PodPending),
+		// Excluded: the gateway pod itself, a terminating pod (its IP returns to the
+		// kube-ovn pool and may be reissued in another namespace), a completed Job
+		// pod, and a hostNetwork pod (whose pod IP is a node address).
+		gwPod("virt-launcher-"+releasePrefix+"demo-abcde", "demo", "10.244.0.5"),
+		terminating,
+		workloadPod("tenant-test", "tenant-workload-completed", "10.244.1.12", corev1.PodSucceeded),
+		hostNet,
+		// Another tenant's workload: never a permitted destination.
+		workloadPod("tenant-other", "other-workload", "10.244.2.20", corev1.PodRunning),
+		// Same-namespace Service ClusterIP handling is unchanged by the fix.
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "tenant-api", Namespace: "tenant-test"},
+			Spec:       corev1.ServiceSpec{ClusterIP: "10.96.42.10", ClusterIPs: []string{"10.96.42.10"}},
+		},
+	}
+	r, _ := newVyOSReconciler(t, &fakeVyOS{}, objs...)
+
+	set, got := destinationSet(t, r, "tenant-test")
+
+	if !set["10.244.1.10/32"] {
+		t.Errorf("this tenant's own pod IP must be a permitted destination as a /32, got %v", got)
+	}
+	if set["10.244.2.20/32"] {
+		t.Errorf("a pod in another tenant's namespace must never be a permitted destination, got %v", got)
+	}
+	for _, cidr := range got {
+		if prefixCovers(t, cidr, "10.244.2.20") {
+			t.Errorf("destination %s covers another tenant's pod IP 10.244.2.20, got %v", cidr, got)
+		}
+	}
+	if set["10.244.0.0/16"] {
+		t.Errorf("the whole cluster pod CIDR must not be a permitted destination, got %v", got)
+	}
+	for _, excluded := range []struct{ what, cidr string }{
+		{"the gateway pod's own IP", "10.244.0.5/32"},
+		{"a terminating pod", "10.244.1.11/32"},
+		{"a completed Job pod", "10.244.1.12/32"},
+		{"a hostNetwork pod's node address", "192.168.100.10/32"},
+	} {
+		if set[excluded.cidr] {
+			t.Errorf("%s must not be a permitted destination (%s), got %v", excluded.what, excluded.cidr, got)
+		}
+	}
+	if !set["10.96.42.10/32"] {
+		t.Errorf("a same-namespace Service ClusterIP must stay a permitted destination, got %v", got)
+	}
+}
+
+// TestTenantNetworkCIDRs_UsesUncachedReader pins, for the destination set, the
+// property TestSurfacePendingRoutePods_UsesUncachedReader pins for pending-route
+// surfacing: the tenant-pod List must go through the uncached APIReader. The
+// controller's Pod cache is label-scoped to SiteRouter gateway pods
+// (CacheByObject), so a cached List returns none of the tenant's workloads —
+// and here that regression fails CLOSED and quiet: the destination set would
+// hold Service ClusterIPs only and the tunnel would reach no pod at all. The
+// cached client is seeded WITHOUT the workload pod and the uncached reader WITH
+// it, so its /32 appears only if the uncached reader is used.
+func TestTenantNetworkCIDRs_UsesUncachedReader(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("add client-go scheme: %v", err)
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+	workload := workloadPod("tenant-test", "tenant-workload", "10.244.1.10", corev1.PodRunning)
+
+	cached := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns.DeepCopy()).Build()
+	uncached := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns.DeepCopy(), workload).Build()
+	r := &SiteRouterReconciler{Client: cached, APIReader: uncached, Scheme: scheme, Recorder: record.NewFakeRecorder(16)}
+
+	set, got := destinationSet(t, r, "tenant-test")
+	if !set["10.244.1.10/32"] {
+		t.Errorf("the tenant-pod List must go through the uncached APIReader (the Pod cache is label-scoped to gateway pods), got %v", got)
+	}
+}
+
+// TestTenantNetworkCIDRs_NeverEmptyAtPushTime pins the invariant the render
+// leans on: renderTunnelIngressFilter degrades an EMPTY destination set to a
+// source-only accept, which is the world-egress hole the destination constraint
+// exists to close. A namespace whose only pod is the gateway still resolves a
+// non-empty set, because the chart's tunnel Service is a LoadBalancer and the
+// apiserver always allocates it a ClusterIP — and no tunnel is pushed before
+// that Service carries an ingress IP. A filter added here must not be able to
+// empty the set.
+func TestTenantNetworkCIDRs_NeverEmptyAtPushTime(t *testing.T) {
+	tunnelSvc := tunnelService("demo", "198.51.100.200")
+	tunnelSvc.Spec.ClusterIP = "10.96.0.77"
+	tunnelSvc.Spec.ClusterIPs = []string{"10.96.0.77"}
+
+	objs := []client.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}},
+		gwPod("virt-launcher-"+releasePrefix+"demo-abcde", "demo", "10.244.0.5"),
+		tunnelSvc,
+	}
+	r, _ := newVyOSReconciler(t, &fakeVyOS{}, objs...)
+
+	set, got := destinationSet(t, r, "tenant-test")
+	if len(got) == 0 {
+		t.Fatalf("an empty destination set makes the render fall back to a source-only accept (unintended world egress); got %v", got)
+	}
+	if !set["10.96.0.77/32"] {
+		t.Errorf("the tunnel LoadBalancer Service ClusterIP must be a permitted destination, got %v", got)
 	}
 }

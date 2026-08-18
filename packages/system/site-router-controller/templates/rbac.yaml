@@ -11,8 +11,12 @@ rules:
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["helmreleases"]
   verbs: ["get", "list", "watch", "patch"]
-# Discover the gateway VM's virt-launcher pod (via lineage labels) and, in T07,
-# relax ovn.kubernetes.io/port_security on it with a single-key merge patch.
+# Discover the gateway VM's virt-launcher pod (via lineage labels) and verify
+# ovn.kubernetes.io/port_security on it (T07 also patches it with a single-key
+# merge patch during cleanup). `list` additionally serves the two per-namespace
+# tenant-pod enumerations: the pending-route surfacing and the tunnel-ingress
+# destination set, which admits one /32 per tenant pod IP instead of the whole
+# cluster pod CIDR.
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "list", "watch", "patch"]
