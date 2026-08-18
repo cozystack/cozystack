@@ -1,0 +1,100 @@
+suite: VPA for the VictoriaTraces backend components
+templates:
+  - templates/vpa.yaml
+
+# Every metrics/logs component gets a VerticalPodAutoscaler so it is right-sized;
+# the trace components must too, or they sit at the operator's static defaults
+# forever with no way to size them (tracingStorages has no resource knobs). VPAs
+# use updateMode: Initial like the rest of this file (no eviction — see the file
+# header), which is also required for VTSingle's plain RWO PVC. Trace VPAs render
+# per tracingStorages entry, so an empty (off) list renders none.
+release:
+  name: monitoring
+  namespace: tenant-root
+
+tests:
+  - it: renders a VPA per cluster component (vtinsert/vtselect Deployment, vtstorage StatefulSet)
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: vpa-vtinsert-generic
+        equal:
+          path: spec.targetRef.kind
+          value: Deployment
+      - documentSelector:
+          path: metadata.name
+          value: vpa-vtinsert-generic
+        equal:
+          path: spec.targetRef.name
+          value: vtinsert-generic
+      - documentSelector:
+          path: metadata.name
+          value: vpa-vtinsert-generic
+        equal:
+          path: spec.resourcePolicy.containerPolicies[0].containerName
+          value: vtinsert
+      - documentSelector:
+          path: metadata.name
+          value: vpa-vtselect-generic
+        equal:
+          path: spec.targetRef.kind
+          value: Deployment
+      - documentSelector:
+          path: metadata.name
+          value: vpa-vtstorage-generic
+        equal:
+          path: spec.targetRef.kind
+          value: StatefulSet
+      - documentSelector:
+          path: metadata.name
+          value: vpa-vtstorage-generic
+        equal:
+          path: spec.resourcePolicy.containerPolicies[0].containerName
+          value: vtstorage
+
+  - it: renders a single VTSingle VPA (Deployment) in single mode, updateMode Initial
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: vpa-vtsingle-generic
+        equal:
+          path: spec.targetRef.kind
+          value: Deployment
+      - documentSelector:
+          path: metadata.name
+          value: vpa-vtsingle-generic
+        equal:
+          path: spec.updatePolicy.updateMode
+          value: Initial
+      - documentSelector:
+          path: metadata.name
+          value: vpa-vtsingle-generic
+        equal:
+          path: spec.resourcePolicy.containerPolicies[0].containerName
+          value: vtsingle
+      # No per-component cluster VPA in single mode.
+      - containsDocument:
+          apiVersion: autoscaling.k8s.io/v1
+          kind: VerticalPodAutoscaler
+          name: vpa-vtstorage-generic
+        not: true
+
+  - it: renders no trace VPA when tracingStorages is empty (tracing off)
+    asserts:
+      - containsDocument:
+          apiVersion: autoscaling.k8s.io/v1
+          kind: VerticalPodAutoscaler
+          name: vpa-vtinsert-generic
+        not: true
