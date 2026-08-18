@@ -118,6 +118,40 @@ backupStorage:
   # rendering. Tenants are projected lazily during BackupJob reconcile.
   systemNamespaces:
     - cozy-velero
+  # reconcileDefaultObjects enables the controller's DefaultObjectsGate.
+  #
+  # The Strategy CRs and the Velero BSL below are Helm-templated behind a
+  # `lookup` of the BucketClaim THIS chart creates, because the S3 bucket
+  # name is assigned by the COSI driver (bucket-<claim-UID>) and cannot be
+  # computed at render time. On a fresh install the lookup is empty and those
+  # templates render nothing — and helm-controller does not re-render a
+  # release whose chart and values did not change (drift detection is off on
+  # operator-generated HelmReleases), so the skip is PERMANENT. Clusters have
+  # run for months with only the BackupClass present and no Strategy CRs at
+  # all; recovery needed a hand-stamped reconcile.fluxcd.io/forceAt +
+  # requestedAt, because a plain reconcile request does not re-render.
+  #
+  # The systemSecretName Secret above sits one release earlier in the same
+  # trap: packages/system/bucket/templates/user-credentials.yaml renders it
+  # behind a `lookup` of the COSI Secret, and skips it just as permanently.
+  # Without it the projector has no source at all, so nothing downstream can
+  # resolve — and neither can this gate, which reads the bucket name from it.
+  #
+  # With this enabled the controller repairs both, in order: while the
+  # credentials Secret is missing it forces the bucket's <bucket>-system
+  # release; once the bucket name resolves it checks that every object
+  # cozy-default routes to exists and forces THIS release when any is
+  # missing. Both are throttled, independently, and a no-op in the steady
+  # state. A suspended release is skipped rather than re-stamped forever. The
+  # gate does NOT create the objects itself: their bodies are values-driven
+  # and Helm stays their single owner.
+  #
+  # Turn this off only if you manage the default Strategy CRs out of band and
+  # accept that a missed install-time render is never repaired. Watch
+  # cozystack_backup_default_objects_missing (paired with
+  # cozystack_backup_default_objects_check_errors_total, which marks the
+  # gauge stale) if you do.
+  reconcileDefaultObjects: true
 # velero — BSL rendering. The cozy-default BackupStorageLocation is
 # created in cozy-velero by templates/velero-bsl.yaml so endpoint/bucket/
 # region come from the same backupStorage block used by Strategy CRs and
@@ -129,12 +163,17 @@ backupStorage:
 # Velero CRDs are guaranteed to exist by the time this chart installs.
 # The BSL template additionally gates itself on a populated BucketClaim
 # status via the bucketName helper, so on a bootstrap install the BSL
-# materialises only after the platform Bucket reconciles. Setting this
+# materialises only after the platform Bucket reconciles AND the
+# DefaultObjectsGate has forced a real Helm upgrade (an interval reconcile
+# alone does not re-render). Setting this
 # to false is an explicit opt-out for clusters that disable VM backups
-# entirely and want to avoid the cluster-default BSL — in that case the
-# cozy-default-velero-vminstance / -vmdisk strategy CRs still ship but
-# their `storageLocation: cozy-default` reference will not resolve, so
-# VM BackupJobs against cozy-default will fail.
+# entirely and want to avoid the cluster-default BSL. In that case the
+# cozy-default-velero-vminstance / -vmdisk Strategy CRs are gated off the
+# same flag and are NOT rendered either, so the DefaultObjectsGate does
+# not expect them (it would otherwise force a Helm upgrade forever against
+# a render that can never produce them). VM BackupJobs against cozy-default
+# still fail, because the BackupClass keeps routing VMInstance / VMDisk to
+# those absent strategies.
 velero:
   bslEnabled: true
   namespace: cozy-velero
