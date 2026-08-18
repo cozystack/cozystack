@@ -1,0 +1,80 @@
+suite: vm-instance static IP address on secondary interfaces
+
+# kube-ovn pins an address on a secondary interface through a PER-NETWORK annotation key,
+# `<nad>.<namespace>.ovn.kubernetes.io/ip_address`. The key is built from the same two
+# expressions the chart already uses to compose the multus reference `<namespace>/<nad>`,
+# so a network named here and a network attached below can never disagree. A key kube-ovn
+# does not recognise is ignored silently — no admission error — which is why the exact
+# form is asserted rather than described.
+#
+# `instanceType` is left empty and `resources` supplied instead: the guards at the top of
+# vm.yaml resolve instance types through `lookup`, which no live cluster backs here.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+set:
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 2
+    sockets: 1
+    memory: 4Gi
+  _cluster:
+    scheduling: {}
+tests:
+  - it: pins the requested address through the per-network annotation
+    set:
+      networks:
+        - name: subnet-a
+          ipAddress: 10.77.7.5
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+          value: "10.77.7.5"
+
+  - it: omits the annotation when no address is requested
+    set:
+      networks:
+        - name: subnet-a
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+
+  - it: annotates only the interfaces that ask for an address
+    set:
+      networks:
+        - name: subnet-a
+          ipAddress: 10.77.7.5
+        - name: subnet-b
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+          value: "10.77.7.5"
+      - notExists:
+          path: spec.template.metadata.annotations["subnet-b.tenant-test.ovn.kubernetes.io/ip_address"]
+
+  # `subnets` is the deprecated alias of `networks` and shares its type, so it gains the
+  # field too. It resolves to the same variable, and this pins that it keeps doing so.
+  - it: honours the address through the deprecated subnets alias
+    set:
+      subnets:
+        - name: subnet-a
+          ipAddress: 10.77.7.9
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+          value: "10.77.7.9"

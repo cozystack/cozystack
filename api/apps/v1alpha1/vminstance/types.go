@@ -80,6 +80,8 @@ type GPU struct {
 }
 
 type Network struct {
+	// Static IPv4 address for this interface. Empty lets kube-ovn IPAM allocate one. The address must belong to the subnet CIDR; kube-ovn rejects one outside it.
+	IpAddress string `json:"ipAddress,omitempty"`
 	// Network attachment name.
 	Name string `json:"name,omitempty"`
 }
