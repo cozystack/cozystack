@@ -97,6 +97,22 @@ tests:
         documentSelector:
           path: kind
           value: ObjectStore
+      # The barman-cloud sidecar's S3 request checksum is pinned to when_required
+      # (non-AWS S3 gateways reject the botocore default flexible checksum).
+      - equal:
+          path: spec.instanceSidecarConfiguration.env[0].name
+          value: AWS_REQUEST_CHECKSUM_CALCULATION
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: ObjectStore
+      - equal:
+          path: spec.instanceSidecarConfiguration.env[0].value
+          value: when_required
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: ObjectStore
       - hasDocuments:
           count: 1
         template: templates/backup-secret.yaml
@@ -200,6 +216,21 @@ tests:
           value: pg-test-recovery
       - notExists:
           path: spec.configuration.serverName
+        template: templates/db.yaml
+        documentSelector:
+          path: metadata.name
+          value: pg-test-recovery
+      # The non-AWS S3 request-checksum pin is applied to the recovery ObjectStore too.
+      - equal:
+          path: spec.instanceSidecarConfiguration.env[0].name
+          value: AWS_REQUEST_CHECKSUM_CALCULATION
+        template: templates/db.yaml
+        documentSelector:
+          path: metadata.name
+          value: pg-test-recovery
+      - equal:
+          path: spec.instanceSidecarConfiguration.env[0].value
+          value: when_required
         template: templates/db.yaml
         documentSelector:
           path: metadata.name

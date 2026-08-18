@@ -208,6 +208,23 @@ type ObjectStoreSpec struct {
 	// RetentionPolicy is a barman retention expression validated by the plugin
 	// CRD against ^[1-9][0-9]*[dwm]$ (e.g. "30d").
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`
+	// InstanceSidecarConfiguration passes settings to the barman-cloud sidecar
+	// that the plugin injects into the CNPG pods. Only the fields we set are
+	// modelled (see the upstream ObjectStore CRD for the full type).
+	InstanceSidecarConfiguration *InstanceSidecarConfiguration `json:"instanceSidecarConfiguration,omitempty"`
+}
+
+// InstanceSidecarConfiguration is a minimal mirror of the barman-cloud
+// ObjectStore's spec.instanceSidecarConfiguration (only spec.env).
+type InstanceSidecarConfiguration struct {
+	Env []EnvVar `json:"env,omitempty"`
+}
+
+// EnvVar is a minimal corev1.EnvVar (name/value only) — enough to pass a
+// literal environment variable to the barman-cloud sidecar.
+type EnvVar struct {
+	Name  string `json:"name"`
+	Value string `json:"value,omitempty"`
 }
 
 type BackupStatus struct {

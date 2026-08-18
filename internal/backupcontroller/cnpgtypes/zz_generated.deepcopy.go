@@ -239,6 +239,27 @@ func (in *ObjectStoreList) DeepCopyObject() runtime.Object {
 func (in *ObjectStoreSpec) DeepCopyInto(out *ObjectStoreSpec) {
 	*out = *in
 	in.Configuration.DeepCopyInto(&out.Configuration)
+	if in.InstanceSidecarConfiguration != nil {
+		out.InstanceSidecarConfiguration = new(InstanceSidecarConfiguration)
+		in.InstanceSidecarConfiguration.DeepCopyInto(out.InstanceSidecarConfiguration)
+	}
+}
+
+func (in *InstanceSidecarConfiguration) DeepCopyInto(out *InstanceSidecarConfiguration) {
+	*out = *in
+	if in.Env != nil {
+		out.Env = make([]EnvVar, len(in.Env))
+		copy(out.Env, in.Env)
+	}
+}
+
+func (in *InstanceSidecarConfiguration) DeepCopy() *InstanceSidecarConfiguration {
+	if in == nil {
+		return nil
+	}
+	out := new(InstanceSidecarConfiguration)
+	in.DeepCopyInto(out)
+	return out
 }
 
 func (in *Backup) DeepCopy() *Backup {
