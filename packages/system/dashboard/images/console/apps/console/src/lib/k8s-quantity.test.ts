@@ -101,6 +101,11 @@ describe("humanizeBytes", () => {
     expect(humanizeBytes(1023)).toBe("1023B")
   })
 
+  it("formats kilobytes as Ki without decimals", () => {
+    expect(humanizeBytes(1024)).toBe("1Ki")
+    expect(humanizeBytes(512 * 1024)).toBe("512Ki")
+  })
+
   it("formats megabytes as Mi without decimals", () => {
     expect(humanizeBytes(1024 ** 2)).toBe("1Mi")
   })

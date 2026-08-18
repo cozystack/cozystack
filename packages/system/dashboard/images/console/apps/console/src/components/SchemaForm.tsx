@@ -4,6 +4,7 @@ import validator from "@rjsf/validator-ajv8"
 import { getDefaultFormState } from "@rjsf/utils"
 import type { RJSFSchema, UiSchema, TemplatesType } from "@rjsf/utils"
 import { keysOrderToUiSchema, sanitizeSchema } from "../lib/keys-order.ts"
+import { focusFirstError } from "../lib/focus-first-error.ts"
 import { addSensitiveStringWidgets } from "../lib/sensitive-fields.ts"
 import {
   IMMUTABLE_HELP_TEXT,
@@ -345,6 +346,7 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
         onChange={(e) => onChange(e.formData)}
         liveValidate={false}
         showErrorList={false}
+        focusOnFirstError={focusFirstError}
       >
         {children}
       </Form>
