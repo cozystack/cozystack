@@ -377,11 +377,21 @@
       "type": "object",
       "default": {},
       "required": [
+        "backend",
         "enabled",
         "replicas",
         "samplingPercentage"
       ],
       "properties": {
+        "backend": {
+          "description": "Export target. \"local\": the tenant's own tracingStorages backend in this namespace. \"central\": the shared VictoriaTraces in tenant-root (shared-central topology) — no local backend is deployed, spans are stamped with the tenant name, and the cross-boundary hop uses the collector-scoped Cilium egress rule.",
+          "type": "string",
+          "default": "local",
+          "enum": [
+            "local",
+            "central"
+          ]
+        },
         "enabled": {
           "description": "Deploy the OTLP collector. When disabled, applications must send OTLP straight to the traces backend (no central sampling/redaction).",
           "type": "boolean",

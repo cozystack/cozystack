@@ -1,0 +1,26 @@
+suite: shared-central traces egress reaches tenant-root at any depth
+# Regression guard: the shared backend is a fixed location (tenant-root, via the
+# vtinsert-generic ExternalName), so the collector egress must target tenant-root
+# regardless of how deep the tenant is. An earlier version derived the target
+# from the namespace ancestry and silently dropped traces for tenants below the
+# direct children of tenant-root. This renders a deeper tenant and pins the
+# target to tenant-root.
+templates:
+  - templates/networkpolicy-traces-central.yaml
+release:
+  name: tenant-deep
+  namespace: tenant-ktj
+set:
+  tracingCentral: true
+tests:
+  - it: targets tenant-root even for a tenant nested below a non-root parent
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-deep-egress-traces-central
+    asserts:
+      - equal:
+          path: spec.egress[0].toEndpoints[0].matchLabels["k8s:app.kubernetes.io/name"]
+          value: vtinsert
+      - equal:
+          path: spec.egress[0].toEndpoints[0].matchLabels["k8s:io.kubernetes.pod.namespace"]
+          value: tenant-root

@@ -14,21 +14,39 @@
   manifest alone.
 
   Off by default: tracingStorages is empty out of the box, so the collector
-  renders only once a backend is configured (or, in a later PR, central mode) —
-  there is no producer/backend to wire otherwise. Gating on a non-empty
-  tracingStorages, rather than failing on empty, keeps "no backend" a clean
-  off-state (an app's OTLP exporter simply finds no collector Service and
-  retries harmlessly) instead of aborting the whole monitoring release.
+  renders only once a backend is configured (local) or central mode is selected
+  — there is no producer/backend to wire otherwise. Gating on that, rather than
+  failing on empty, keeps "no backend" a clean off-state (an app's OTLP exporter
+  simply finds no collector Service and retries harmlessly) instead of aborting
+  the whole monitoring release.
 
-  Single backend: the exporter targets tracingStorages[0]. A collector fronting
-  more than one backend is rejected below rather than silently writing to only
-  the first, so this index is safe (the render is gated on a non-empty list).
+  Backend topology (`tracingCollector.backend`):
+    - local (default): the exporter targets the tenant's own tracingStorages[0]
+      in this namespace. A collector fronting more than one local backend is
+      rejected below rather than silently writing to only the first.
+    - central (shared-central topology): the exporter targets the shared
+      VictoriaTraces backend in tenant-root via the vtinsert-generic ExternalName
+      alias in cozy-monitoring, and a resource processor stamps the tenant name
+      (this namespace) so spans of every tenant are distinguishable in the one
+      account-0 store. The cross-boundary hop is allowed by the tenant's
+      collector-scoped Cilium egress rule. Both write- and read-side isolation
+      on the shared account-0 store are weak (the `tenant` attribute is a label,
+      not an enforced boundary, and egress is selected by pod label); a real
+      boundary needs an authenticating proxy (vmauth) deriving the tenant from
+      identity — deferred future work per the design. Use the default per-tenant
+      backend for hard isolation.
 */ -}}
 {{- define "monitoring.tracingCollectorConfig" -}}
 {{- $c := .Values.tracingCollector -}}
+{{- $central := eq ($c.backend | default "local") "central" -}}
+{{- $endpoint := "" -}}
+{{- if $central -}}
+{{- $endpoint = "http://vtinsert-generic.cozy-monitoring.svc:10481/insert/opentelemetry/v1/traces" -}}
+{{- else -}}
 {{- $backend := index .Values.tracingStorages 0 -}}
 {{- $mode := $backend.mode | default "cluster" -}}
-{{- $endpoint := ternary (printf "http://vtsingle-%s.%s.svc:10428/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (printf "http://vtinsert-%s.%s.svc:10481/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (eq $mode "single") -}}
+{{- $endpoint = ternary (printf "http://vtsingle-%s.%s.svc:10428/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (printf "http://vtinsert-%s.%s.svc:10481/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (eq $mode "single") -}}
+{{- end -}}
 receivers:
   otlp:
     protocols:
@@ -44,6 +62,16 @@ processors:
   probabilistic_sampler:
     sampling_percentage: {{ $c.samplingPercentage }}
   batch: {}
+{{- if $central }}
+  # Shared-central topology: stamp the tenant (this namespace) so spans from
+  # every tenant remain distinguishable in the single account-0 store. Sourced
+  # from the collector's own namespace, not from tenant-controlled input.
+  resource/tenant:
+    attributes:
+      - key: tenant
+        value: {{ .Release.Namespace }}
+        action: upsert
+{{- end }}
 {{- if $c.redactAttributes }}
   attributes/redact:
     actions:
@@ -65,11 +93,11 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, probabilistic_sampler, {{ if $c.redactAttributes }}attributes/redact, {{ end }}batch]
+      processors: [memory_limiter, {{ if $central }}resource/tenant, {{ end }}probabilistic_sampler, {{ if $c.redactAttributes }}attributes/redact, {{ end }}batch]
       exporters: [otlphttp/victoriatraces]
 {{- end -}}
-{{- if and .Values.tracingCollector.enabled (not (empty .Values.tracingStorages)) }}
-{{- if gt (len .Values.tracingStorages) 1 }}
+{{- if and .Values.tracingCollector.enabled (or (eq (.Values.tracingCollector.backend | default "local") "central") (not (empty .Values.tracingStorages))) }}
+{{- if and (ne (.Values.tracingCollector.backend | default "local") "central") (gt (len .Values.tracingStorages) 1) }}
 {{- fail "monitoring: tracingCollector fronts a single traces backend, but tracingStorages has more than one entry — the collector would export to the first and leave the rest empty. Reduce tracingStorages to one entry or set tracingCollector.enabled=false (apps then send OTLP straight to each backend)." }}
 {{- end }}
 ---

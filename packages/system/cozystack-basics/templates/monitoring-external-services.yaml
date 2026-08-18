@@ -51,4 +51,13 @@ metadata:
 spec:
   type: ExternalName
   externalName: vminsert-longterm.tenant-root.svc.cluster.local
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vtinsert-generic
+  namespace: cozy-monitoring
+spec:
+  type: ExternalName
+  externalName: vtinsert-generic.tenant-root.svc.cluster.local
 {{- end }}

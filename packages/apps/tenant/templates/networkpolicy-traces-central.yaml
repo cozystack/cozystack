@@ -1,0 +1,35 @@
+{{- if and (ne (include "tenant.name" .) "tenant-root") .Values.tracingCentral }}
+# Shared-central tracing (opt-in via .Values.tracingCentral): allow ONLY the
+# per-tenant OTLP collector pods to reach the shared VictoriaTraces insert
+# (vtinsert) in tenant-root — the fixed location the vtinsert-generic
+# ExternalName in cozy-monitoring points at, for tenants at any depth. Egress is
+# endpoint-scoped to app.kubernetes.io/name=otel-traces, so no other tenant
+# workload gains this cross-boundary hop. Gated on tracingCentral so the
+# capability exists only for tenants that opted into the shared backend; the
+# operator sets it alongside the monitoring chart's tracingCollector.backend=central.
+#
+# Known limitation of the account-0 shared model: selection is by pod label, so
+# a tenant able to create pods could label one otel-traces, obtain this egress,
+# and write spans with an arbitrary `tenant` resource attribute into the shared
+# store. Real write- and read-side isolation on a shared backend needs an
+# authenticating proxy (vmauth) that derives the tenant from identity — deferred
+# future work per the design. Use the default per-tenant backend for hard
+# isolation.
+#
+# Kept in its own template file (one document, no empty guarded blocks) so the
+# opt-in/off-by-default contract is reliably assertable in helm-unittest.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "tenant.name" . }}-egress-traces-central
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": "{{ include "tenant.name" . }}"
+      "k8s:app.kubernetes.io/name": "otel-traces"
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        "k8s:app.kubernetes.io/name": "vtinsert"
+        "k8s:io.kubernetes.pod.namespace": tenant-root
+{{- end }}

@@ -1,3 +1,7 @@
+{{- /* Shared-central topology has no local backend to read, so no local
+       datasource is provisioned; reads go through the central stack (with
+       vmauth read-isolation as deferred future work per the design). */}}
+{{- if ne (.Values.tracingCollector.backend | default "local") "central" }}
 {{- range .Values.tracingStorages }}
 ---
 apiVersion: grafana.integreatly.org/v1beta1
@@ -28,4 +32,5 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
+{{- end }}
 {{- end }}

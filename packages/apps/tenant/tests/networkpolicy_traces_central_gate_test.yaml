@@ -1,0 +1,19 @@
+suite: shared-central traces egress is off by default
+# Security control: the cross-boundary egress to the shared account-0 store must
+# NOT exist unless the tenant explicitly opted into central mode. If it rendered
+# by default, every non-root tenant would silently gain write access to the
+# shared backend (the over-grant this gate fixes). The opted-in positive path is
+# covered by networkpolicy_traces_central_test.yaml.
+templates:
+  - templates/networkpolicy-traces-central.yaml
+release:
+  name: tenant-ktj
+  namespace: tenant-root
+tests:
+  - it: does not render the egress rule by default (tracingCentral unset)
+    asserts:
+      - containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-ktj-egress-traces-central
+        not: true
