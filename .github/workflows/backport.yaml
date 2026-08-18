@@ -277,13 +277,33 @@ jobs:
         if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # 4. Create the back‑port pull request
+      # 4. Mint the cozystack-ci App token.
+      #
+      # Not interchangeable with GITHUB_TOKEN. This repository sets
+      # actions/permissions/fork-pr-contributor-approval to
+      # "all_external_contributors", and github-actions[bot] is external under
+      # that policy, so every run triggered by a PR it authors lands in
+      # action_required and waits for a maintainer to click "Approve and run
+      # workflows" — even though the branch is same-repo. Backports then sit
+      # silently ungated; nine were parked that way on 2026-08-18. An
+      # org-installed App is not an external contributor, so nothing extra
+      # gates its PRs.
+      - name: Generate GitHub App token
+        id: app-token
+        if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
+      # 5. Create the back‑port pull request
       - name: Create back‑port PR
         id: backport
         if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
         uses: korthout/backport-action@0193454f0c5947491d348f33a275c119f30eb736 # v3.2.1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
           label_pattern: '' # don't read labels for targets
           target_branches: ${{ steps.target.outputs.branch }}
           merge_commits: skip
