@@ -1,10 +1,10 @@
 package main
 
 import (
-	"crypto/tls"
 	"flag"
 	"log"
 	"net/http"
+	"time"
 )
 
 var (
@@ -28,17 +28,19 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mutate-pods", HandleMutatePods)
 
-	tlsCert, err := tls.LoadX509KeyPair(tlsCertFile, tlsKeyFile)
+	tlsConfig, err := newReloadingTLSConfig(tlsCertFile, tlsKeyFile)
 	if err != nil {
 		log.Fatalf("Failed to load key pair: %v", err)
 	}
 
 	server := &http.Server{
-		Addr: ":8443",
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{tlsCert},
-		},
-		Handler: mux,
+		Addr:              ":8443",
+		TLSConfig:         tlsConfig,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	log.Printf("Starting webhook server on %s", server.Addr)
