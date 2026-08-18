@@ -214,18 +214,20 @@ type Inputs struct {
 	// drops everything else arriving on TunnelDevice.
 	RemoteCIDRs []string
 
-	// TenantNetworkCIDRs is the set of tenant-reachable cluster networks a
-	// decrypted tunnel packet is allowed to be destined for — the cluster pod
-	// (+ service) CIDR(s) the controller reads from the cozy-system/cozystack
-	// ConfigMap. Each TUNNEL-INGRESS source-accept is additionally constrained to
-	// a destination in this set, so a packet with a valid remote source but a
-	// WORLD / non-tenant destination is NOT accepted: a jumped-chain accept is a
-	// terminal verdict, so a source-only accept would forward a valid-source
-	// packet to ANY destination, bypassing renderForwardFilter's §3 default-drop
-	// and turning the gateway into unintended internet egress. Empty leaves the
-	// source-accepts unconstrained — the controller always resolves it in
-	// production (from clusterNetworks, which falls back to the platform
-	// defaults); only the render's own unit tests omit it.
+	// TenantNetworkCIDRs is the set of destinations a decrypted tunnel packet is
+	// allowed to be addressed to — one /32 per Pod IP and Service ClusterIP the
+	// controller enumerates in the instance's OWN namespace, never a cluster-wide
+	// pod or service CIDR (which would put every other tenant's workloads inside
+	// the accept set). Each TUNNEL-INGRESS source-accept is additionally
+	// constrained to a destination in this set, so a packet with a valid remote
+	// source but a WORLD / non-tenant destination is NOT accepted: a jumped-chain
+	// accept is a terminal verdict, so a source-only accept would forward a
+	// valid-source packet to ANY destination, bypassing renderForwardFilter's §3
+	// default-drop and turning the gateway into unintended internet egress. Empty
+	// leaves the source-accepts unconstrained, which is that fail-open shape — the
+	// controller never resolves an empty set on a path that pushes (the tunnel
+	// LoadBalancer Service's ClusterIP is always in it); only the render's own unit
+	// tests omit it.
 	TenantNetworkCIDRs []string
 }
 
@@ -670,8 +672,9 @@ func renderTunnelIngressFilter(in Inputs) []vyos.Operation {
 	// the world — would be forwarded, bypassing renderForwardFilter's §3
 	// default-drop and making the gateway unintended internet egress. A decrypted
 	// packet to a non-tenant destination matches no accept and falls through to the
-	// default-action drop. When TenantNetworkCIDRs is empty (render unit tests
-	// only — the controller always resolves it) the accept stays source-only.
+	// default-action drop. When TenantNetworkCIDRs is empty the accept stays
+	// source-only — render unit tests only, since the controller never resolves an
+	// empty set on a path that pushes (see Inputs.TenantNetworkCIDRs).
 	rule := 10
 	for _, cidr := range in.RemoteCIDRs {
 		if len(in.TenantNetworkCIDRs) == 0 {
