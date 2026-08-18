@@ -9,11 +9,11 @@
 // VirtualMachine, its boot DataVolume, the tunnel LoadBalancer Service and the
 // PSK / api-key Secrets — while this controller mediates the pieces the chart
 // cannot: it validates the tunnel's remote CIDRs against the cluster networks,
-// programs the kube-ovn return routes, relaxes the gateway pod's port security
-// once the guest source filter is up, pushes the VyOS configuration over the
-// management API, and surfaces status. All of those steps are laid out here as
-// ordered stubs; the logic lands in T06 (VyOS push), T07 (kube-ovn mediation)
-// and T09 (status).
+// programs the kube-ovn return routes, verifies the chart-baked port-security
+// relaxation once the guest source filter is confirmed up, pushes the VyOS
+// configuration over the management API, and surfaces status. Reconcile runs
+// those steps in that dependency order; each one is implemented in the file its
+// name suggests (cnimediation.go, vyospush.go, status.go).
 //
 // Discovery mirrors internal/securitygroupcontroller: the instance's inputs are
 // read from the HelmRelease spec.values (authoritative, per decision D7) and the
@@ -118,11 +118,11 @@ const (
 // lineage labels, so scoping by them cannot hide an instance the controller must
 // later reconcile.
 //
-// NOTE for T06/T07: the mediation steps will additionally read per-instance
-// Secrets (PSK, api-key), the tunnel LoadBalancer Service, the tenant Namespace
-// and the cozy-system/cozystack ConfigMap. Those types are intentionally NOT
-// cached here — reading them through the cache would spin up cluster-wide
-// informers for every Secret/Service/Namespace. Read them with the uncached
+// The mediation steps additionally read per-instance Secrets (PSK, api-key), the
+// tunnel LoadBalancer Service, the tenant Namespace, its pods and the
+// cozy-system/cozystack ConfigMap. Those types are intentionally NOT cached here
+// — reading them through the cache would spin up cluster-wide informers for
+// every Secret/Service/Namespace. Read them with the uncached
 // APIReader (mgr.GetAPIReader) or add narrowly label-scoped ByObject entries
 // once the chart guarantees a selectable label on them.
 func CacheByObject() map[client.Object]cache.ByObject {
@@ -234,11 +234,10 @@ type instance struct {
 // chart-authored role in packages/system/site-router-controller/templates/rbac.yaml
 // — there is no config/rbac generated from them. Only HelmReleases and Pods carry
 // list/watch: they are the two kinds in CacheByObject, and Pods are additionally
-// listed directly per namespace (surfacePendingRoutePods and
-// tenantNetworkCIDRs). Everything else is read one object at
-// a time through the uncached reader, so granting list there would add no
-// capability the controller uses while widening what a compromise could read — on
-// Secrets a cluster-wide list returns contents.
+// listed per namespace by surfacePendingRoutePods and tenantNetworkCIDRs.
+// Everything else is read one object at a time through the uncached reader, so
+// granting list there would add no capability the controller uses while widening
+// what a compromise could read — on Secrets a cluster-wide list returns contents.
 //
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
@@ -248,11 +247,14 @@ type instance struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch
 
-// Reconcile discovers a single SiteRouter instance and, in later tasks, brings
-// its kube-ovn mediation, VyOS configuration and status to the desired state.
-// The scaffold performs no mediation: it establishes the cleanup finalizer,
-// discovers the gateway pod, logs what it found, and returns. Every mediation
-// step below is a no-op stub filled in by T06/T07/T09.
+// Reconcile discovers a single SiteRouter instance and brings its kube-ovn
+// mediation, VyOS configuration and status to the desired state. It establishes
+// the cleanup finalizer, decodes the authoritative spec.values, discovers the
+// gateway pod, then runs the mediation pipeline in dependency order: deny-set
+// validation, namespace route programming, the VyOS config push, the guest
+// source-filter confirmation, the port-security verification, the runtime poll
+// and the status projection. A soft failure anywhere in it becomes a paced
+// requeue through classify; a deny-set violation stays hard.
 func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -406,12 +408,12 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 	return ctrl.Result{}, nil
 }
 
-// --- Reconcile step stubs -------------------------------------------------
+// --- Reconcile steps ------------------------------------------------------
 //
-// Each method below is a placeholder returning nil. They exist so the reconcile
-// pipeline compiles and its ordering is fixed now; the owning task fills in the
-// body. Adding inputs a step needs should go on the instance struct, not the
-// method signature, so these signatures stay stable across T06/T07/T09.
+// Each method below is one step of the pipeline Reconcile runs, in the order it
+// runs them. They all take (ctx, inst) and return error: an input a step needs
+// goes on the instance struct rather than into the signature, so adding one does
+// not reshape the pipeline.
 
 // validateRemoteCIDRs rejects an instance whose tunnel remoteCIDRs overlap the
 // cluster pod/service/join/node/link-local/LB-pool networks (the deny-set). The
