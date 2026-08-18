@@ -44,8 +44,9 @@ tests:
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
 
   # The traces backend (VTCluster/VTSingle from tracingStorages) is gated the
-  # same way and by the same operator status contract, closing the same
-  # "Ready with no store" hole (#3181) for traces. Pin both entries so a
+  # same way and by the same operator status contract. tracingStorages is empty
+  # by default, so these exprs are usually inert (no CR to match); when a backend
+  # is configured they gate readiness on it. Pin both entries so a
   # dropped/reordered block or a typo'd CEL expression fails a test rather than
   # silently regressing the gate.
   - it: gates readiness on the VTCluster status.updateStatus

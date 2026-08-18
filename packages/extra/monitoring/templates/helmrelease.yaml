@@ -51,8 +51,13 @@ spec:
   #
   # The traces backend (VTCluster / VTSingle) uses the same operator and the
   # same status.updateStatus contract as VLCluster, so it is gated identically.
-  # tracingStorages is likewise render-rejected when empty (templates/vtraces/
-  # vtraces.yaml), so the "Ready with no trace store" hole cannot be reached.
+  # Unlike logs, tracingStorages is EMPTY by default (tracing off), so usually
+  # no VTCluster/VTSingle renders and these exprs are inert — Flux evaluates
+  # them only against CRs present in the release inventory. That "Ready with no
+  # trace store" state is intentional and harmless: nothing produces spans until
+  # the trace collector ships, so no data is dropped (there is no fail-on-empty
+  # guard on tracingStorages, and none is needed yet — contrast the logs #3181
+  # guard, which fires because fluent-bit ships logs unconditionally).
   healthCheckExprs:
     - apiVersion: operator.victoriametrics.com/v1
       kind: VLCluster
