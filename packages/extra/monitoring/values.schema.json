@@ -324,17 +324,9 @@
       }
     },
     "tracingStorages": {
-      "description": "Configuration of traces storage instances.",
+      "description": "Configuration of traces storage instances. Empty by default (tracing off): nothing writes spans until the trace collector ships, so no backend is provisioned. Add an entry to enable a VictoriaTraces backend.",
       "type": "array",
-      "default": [
-        {
-          "mode": "cluster",
-          "name": "generic",
-          "retentionPeriod": "14d",
-          "storage": "10Gi",
-          "storageClassName": "replicated"
-        }
-      ],
+      "default": [],
       "items": {
         "type": "object",
         "required": [

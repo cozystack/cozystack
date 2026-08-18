@@ -108,13 +108,8 @@ logsStorages:
 ## @field {string} storageClassName="replicated" - StorageClass used to store the data.
 ## @field {string} [retentionDiskUsageBytes] - Optional disk-usage cap as a byte quantity (e.g. "8GB"); bounds disk in addition to the age-based retentionPeriod.
 
-## @param {[]TracingStorage} tracingStorages - Configuration of traces storage instances.
-tracingStorages:
-- name: generic
-  mode: cluster
-  retentionPeriod: "14d"
-  storage: 10Gi
-  storageClassName: replicated
+## @param {[]TracingStorage} tracingStorages - Configuration of traces storage instances. Empty by default (tracing off): nothing writes spans until the trace collector ships, so no backend is provisioned. Add an entry to enable a VictoriaTraces backend.
+tracingStorages: []
 
 ##
 ## @section Alerta configuration

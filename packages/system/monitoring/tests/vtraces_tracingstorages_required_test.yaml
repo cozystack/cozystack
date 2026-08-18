@@ -1,24 +1,43 @@
-suite: VictoriaTraces rendering requires a non-empty tracingStorages
+suite: VictoriaTraces backend renders per tracingStorages entry (off by default)
 templates:
   - templates/vtraces/vtraces.yaml
   - templates/vtraces/grafana-datasource.yaml
 
 # tracingStorages drives the VTCluster/VTSingle backend(s) for distributed
-# tracing. An empty list renders no backend, so the monitoring-system
-# HelmRelease readiness gate has nothing to match and OTLP producers silently
-# drop spans to a backend that never exists (same failure class as logs
-# issue #3181). The template rejects that outright rather than documenting it,
-# so the misconfiguration is loud. These cases pin the valid defaults, the
-# cluster/single split, the datasource, and the rejected empty configuration.
+# tracing. It is EMPTY by default, so tracing is off out of the box and nothing
+# is provisioned — nothing produces spans until the trace collector ships, so an
+# absent backend drops no data (unlike logsStorages, which is why there is no
+# fail-on-empty guard here yet). These cases pin the off-by-default state, the
+# cluster/single split, the datasource, and the rejected invalid mode.
 
 release:
   name: monitoring
   namespace: tenant-root
 
 tests:
-  - it: renders a VTCluster for the default (cluster-mode) tracingStorages
+  - it: renders nothing by default (tracing off, empty tracingStorages)
     templates:
       - templates/vtraces/vtraces.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no datasource by default (tracing off)
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a VTCluster for a cluster-mode entry
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
     asserts:
       - containsDocument:
           apiVersion: operator.victoriametrics.com/v1
@@ -60,6 +79,12 @@ tests:
   - it: sets the retention period on the VTCluster storage component
     templates:
       - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
     documentSelector:
       path: metadata.name
       value: generic
@@ -101,6 +126,12 @@ tests:
   - it: renders a Jaeger-typed Grafana datasource at vtselect:10471 for cluster mode
     templates:
       - templates/vtraces/grafana-datasource.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
     asserts:
       - containsDocument:
           apiVersion: grafana.integreatly.org/v1beta1
@@ -126,15 +157,6 @@ tests:
       - equal:
           path: spec.datasource.url
           value: http://vtsingle-generic.tenant-root.svc:10428/select/jaeger
-
-  - it: fails the render when tracingStorages is empty
-    templates:
-      - templates/vtraces/vtraces.yaml
-    set:
-      tracingStorages: []
-    asserts:
-      - failedTemplate:
-          errorMessage: "monitoring: tracingStorages must define at least one entry; an empty list renders no VictoriaTraces backend and OTLP producers silently drop spans"
 
   - it: fails the render when mode is neither cluster nor single
     templates:

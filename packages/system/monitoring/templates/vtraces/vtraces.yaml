@@ -1,14 +1,14 @@
 {{- /*
-  Reject an empty tracingStorages outright, mirroring the logsStorages guard
-  (issue #3181). With no entry no VTCluster/VTSingle is rendered, the
-  monitoring-system HelmRelease readiness gate (which keys on the traces CR) has
-  nothing to match, and OTLP producers ship spans to a backend that never
-  exists — silently dropping traces. Fail the render instead so the
-  misconfiguration is loud, not silent.
+  tracingStorages is empty by default, so tracing is off out of the box and no
+  VTCluster/VTSingle is provisioned. Unlike logsStorages, an absent backend
+  drops no data here: nothing produces spans until the trace collector ships (a
+  later PR), so there is no loud-failure guard yet. The collector PR re-adds a
+  fail-on-empty guard — at that point an enabled producer with no backend really
+  would drop spans, exactly as the logsStorages #3181 guard prevents for logs.
+  The readiness-gate healthCheckExprs on VTCluster/VTSingle stay unconditional:
+  Flux evaluates them only against CRs present in the release inventory, so with
+  nothing rendered they are inert.
 */ -}}
-{{- if not .Values.tracingStorages }}
-{{- fail "monitoring: tracingStorages must define at least one entry; an empty list renders no VictoriaTraces backend and OTLP producers silently drop spans" }}
-{{- end }}
 {{- range .Values.tracingStorages }}
 {{- $mode := .mode | default "cluster" }}
 {{- if and (ne $mode "cluster") (ne $mode "single") }}

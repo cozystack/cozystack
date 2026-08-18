@@ -51,6 +51,12 @@ tests:
   - it: stamps the cleanup label on the VTCluster storage claim template
     templates:
       - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
     documentSelector:
       path: metadata.name
       value: generic
