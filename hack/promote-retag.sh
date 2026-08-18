@@ -28,6 +28,16 @@
 #
 # The repo/tag split (ref_repo below) strips the :tag from the last path
 # component only, so registry hosts that carry a :port are preserved.
+#
+# A source tag is not always just the version. Some images are one-per-something
+# within a single repository — ubuntu-container-disk is one per Kubernetes minor,
+# six digests under one repo tagged v1.30-vX.Y.Z … v1.35-vX.Y.Z — and there the
+# part before the version is the only thing telling them apart. Composing the
+# destination from the release version alone aimed all six at
+# ubuntu-container-disk:vX.Y.Z: the first was written and the second hit the
+# write-once guard, mid-finalize, after the stable git tag and the GitHub release
+# were already public. ref_tag_prefix below carries that part through, so the
+# destination is <prefix><stable> and each source keeps its own tag.
 set -eu
 
 STABLE="${1:?usage: promote-retag.sh <stable-version> [--dry-run]}"
@@ -82,6 +92,67 @@ ref_repo() {
 }
 ref_digest() { printf '%s' "${1##*@}"; }               # sha256:...
 
+# ref_tag <ref> — the :tag of a "<repo>[:<tag>]@<digest>" ref, or nothing when it
+# carries none. Splits on the LAST path component exactly as ref_repo does, so
+# the two always agree on where the repo ends and the tag begins.
+#
+# Only refs collected from an images/*.tag file or a textually scraped extra
+# file still carry a tag by the time they reach here; every yq shape in
+# hack/lib/image-refs.sh rebuilds the ref as "<repo>@<digest>" and drops it. That
+# is fine for the images that need a prefix today (ubuntu-container-disk is a
+# .tag file) but it does bound this fix: a prefixed image vendored through one of
+# the yq shapes would arrive tagless and get the bare stable tag. Widening the
+# library's output is a change to every consumer of it and is not attempted here.
+ref_tag() {
+  r="${1%@*}"            # strip @digest
+  img="${r##*/}"         # last path component (may carry :tag)
+  case "$img" in
+    *:*) printf '%s' "${img#*:}" ;;
+  esac
+}
+
+# _is_version <string> — true when <string> is a whole cozystack version: a
+# three-component core with an optional prerelease/build suffix. v1.5.4 and
+# v1.6.0-rc.1 are versions; v1.30, latest and rc.1 are not.
+_is_version() {
+  printf '%s\n' "$1" | grep -qE '^v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z][0-9A-Za-z.-]*)?$'
+}
+
+# ref_tag_prefix <tag> — the leading "<something>-" of a source tag that
+# qualifies WHICH image in a repository the ref is, as opposed to which version
+# of it. Empty when the tag is version-only, or when no split yields a version.
+#
+# The rule: split at each "-" left to right and stop at the first split whose
+# REMAINDER is a whole version; everything consumed so far is the prefix.
+# Anchoring on the remainder rather than on the head is what keeps a plain
+# prerelease intact — v1.6.0-rc.1 leaves "rc.1", which is not a version, so the
+# tag has no prefix and is replaced whole. A last-hyphen split would instead read
+# it as "v1.6.0-" + "rc.1" and mis-tag every ref in a real promotion, since an rc
+# version string is exactly what a promoted tree's refs carry. Conversely
+# v1.30-v1.5.2 leaves "v1.5.2", a version, so "v1.30-" is a prefix.
+#
+# When nothing matches — "latest", "dev", a git-describe like v1.5.2-3-gabc1234 —
+# the prefix is empty and the whole tag is replaced, which is what this script did
+# for every ref before prefixes were handled. The fallback is deliberately the
+# old behaviour: an unrecognized tag shape cannot start mis-mapping, it can only
+# keep doing what it already did.
+ref_tag_prefix() {
+  _t="$1"
+  _p=""
+  while :; do
+    case "$_t" in
+      *-*) ;;
+      *) return 0 ;;     # no split left to try; no prefix
+    esac
+    _p="${_p}${_t%%-*}-"
+    _t="${_t#*-}"
+    if _is_version "$_t"; then
+      printf '%s' "$_p"
+      return 0
+    fi
+  done
+}
+
 # manifest_digest <ref> — the digest of <ref>'s raw manifest, or empty output if
 # the tag is PROVEN not to exist. Anything else is indeterminate and returns
 # non-zero, which under `set -e` aborts the promotion before it writes.
@@ -134,9 +205,16 @@ copy() {
   skopeo copy --multi-arch all "docker://$_src" "docker://$_dst"
 }
 
-# Normalize every collected ref to the canonical "<repo>@<digest>" form (drops
-# the cosmetic :tag from shape 1) so the dedup is on the real identity — the
-# same image vendored in two shapes is retagged once, not twice.
+# Normalize every collected ref to the canonical "<repo>@<digest>|<prefix>" form
+# so the dedup is on the real identity — the same image vendored in two shapes is
+# retagged once, not twice. The cosmetic version part of the source :tag is
+# dropped; only the prefix that identifies which image in the repo this is
+# survives, because that is the part the destination tag has to reproduce.
+#
+# "|" is the field separator because no registry host, repository path, tag or
+# digest may contain one, so both halves are recoverable with a plain parameter
+# expansion, and an absent prefix is an unambiguous empty trailing field rather
+# than a missing one.
 refs=""
 for raw in $(collect_refs); do
   [ -n "$raw" ] || continue
@@ -159,17 +237,22 @@ for raw in $(collect_refs); do
     "${REGISTRY}/"*) ;;
     *) continue ;;
   esac
-  refs="${refs}${_repo}@$(ref_digest "$raw")
+  refs="${refs}${_repo}@$(ref_digest "$raw")|$(ref_tag_prefix "$(ref_tag "$raw")")
 "
 done
 refs="$(printf '%s' "$refs" | sort -u)"
 [ -n "$refs" ] || { echo "No cozystack-owned digest-pinned image refs found under ${REGISTRY}/ — is this the rc's baked tree?" >&2; exit 1; }
 
-echo "$refs" | while IFS= read -r ref; do
-  [ -n "$ref" ] || continue
+echo "$refs" | while IFS= read -r record; do
+  [ -n "$record" ] || continue
+  ref="${record%|*}"
+  prefix="${record##*|}"
   repo="${ref%@*}"
   digest="${ref##*@}"
-  echo "▸ ${repo}  ${digest}"
+  # <prefix><stable> is the destination tag throughout: the stable tag, the
+  # write-once probe, the post-copy verify and :latest must all name the same one.
+  stable_tag="${prefix}${STABLE}"
+  echo "▸ ${repo}:${stable_tag}  ${digest}"
   # The stable tag is write-once at the image level: resolve the destination's
   # raw manifest digest before copying. No-op if it already points at this rc
   # digest (idempotent re-run), fail if it points elsewhere (a partial run or
@@ -177,25 +260,29 @@ echo "$refs" | while IFS= read -r ref; do
   # bytes. :latest is intentionally mutable and (re)pointed below only when
   # MOVE_LATEST=1.
   if [ "$DRY_RUN" -eq 0 ]; then
-    cur="$(manifest_digest "${repo}:${STABLE}")"
+    cur="$(manifest_digest "${repo}:${stable_tag}")"
     if [ -n "$cur" ] && [ "$cur" != "$digest" ]; then
-      echo "::error::${repo}:${STABLE} already exists at '${cur}'; refusing to move it to '${digest}' (stable image tags are write-once)" >&2
+      echo "::error::${repo}:${stable_tag} already exists at '${cur}'; refusing to move it to '${digest}' (stable image tags are write-once)" >&2
       exit 1
     fi
     if [ "$cur" = "$digest" ]; then
-      echo "  = ${repo}:${STABLE} already at ${digest}; skipping stable copy"
+      echo "  = ${repo}:${stable_tag} already at ${digest}; skipping stable copy"
     else
-      copy "$ref" "${repo}:${STABLE}"
+      copy "$ref" "${repo}:${stable_tag}"
     fi
   else
-    copy "$ref" "${repo}:${STABLE}"
+    copy "$ref" "${repo}:${stable_tag}"
   fi
-  [ "$MOVE_LATEST" = "1" ] && copy "$ref" "${repo}:latest"
+  # The floating tag is prefixed for the same reason the stable one is: without
+  # it, every per-Kubernetes-minor disk copies to <repo>:latest and the tag ends
+  # up on whichever digest the sort put last — a floating tag that names one
+  # minor's image while reading as if it named the repository's.
+  [ "$MOVE_LATEST" = "1" ] && copy "$ref" "${repo}:${prefix}latest"
   # Verify the stable tag now resolves to the exact rc digest (skip in dry-run).
   if [ "$DRY_RUN" -eq 0 ]; then
-    got="$(manifest_digest "${repo}:${STABLE}")"
+    got="$(manifest_digest "${repo}:${stable_tag}")"
     if [ "$got" != "$digest" ]; then
-      echo "::error::${repo}:${STABLE} resolved to '${got}', expected '${digest}'" >&2
+      echo "::error::${repo}:${stable_tag} resolved to '${got}', expected '${digest}'" >&2
       exit 1
     fi
   fi
