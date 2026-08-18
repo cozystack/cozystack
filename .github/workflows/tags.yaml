@@ -311,6 +311,35 @@ jobs:
       # not exists" step was gated on `is_stable && release_exists==false` —
       # unreachable now that a hand-pushed stable tag is rejected above.
 
+  # Mandatory only for vX.Y.Z-rc.N tags. Alpha/beta tags deliberately skip this
+  # job and use e2e-tag.yaml's manual dispatch when validation is wanted.
+  #
+  # Deliberately not gated on release_exists: validating an already-published rc
+  # again is an idempotent re-tag-run check, while prepare-release still provides
+  # the ordering guarantee for a fresh rc. Its "Publish rc release" and "Create
+  # release branch" steps finish before this reusable workflow can start.
+  rc-e2e:
+    name: E2E Release Candidate
+    needs: prepare-release
+    if: needs.prepare-release.result == 'success' && contains(github.ref_name, '-rc.')
+    # A caller's permissions are the ceiling for every job in the called
+    # workflow, and GitHub validates that ceiling STATICALLY, when it creates the
+    # run — before this job's `if:` is evaluated, let alone before a step runs.
+    # e2e-tag.yaml's e2e job declares `checks: write` for its
+    # workflow_dispatch-only breakpoint, so even though workflow_call can never
+    # take that branch, omitting the grant here fails the whole tags.yaml run with
+    # "requesting 'checks: write', but is only allowed 'checks: none'". Not just
+    # rc cuts: the `if:` cannot gate a startup failure, so EVERY tag push — rc and
+    # stable, including the one finalize pushes to publish a release — would build
+    # nothing at all. hack/promote-gate-contract.bats pins the pair, because no CI
+    # lane exercises this file (it runs only on tag pushes).
+    permissions:
+      contents: read
+      checks: write
+    uses: ./.github/workflows/e2e-tag.yaml
+    with:
+      tag: ${{ github.ref_name }}
+
   generate-changelog:
     name: Generate Changelog
     # git + node + copilot CLI only — no docker, no repo toolchain: GitHub-hosted.
@@ -380,11 +409,22 @@ jobs:
           fetch-tags: true
           token: ${{ steps.app-token.outputs.token }}
 
-      # Check whether the changelog already exists on origin/main.
-      # The previous step checked out the tag commit, which never has the
-      # changelog (the changelog PR merges to main AFTER the tag is cut).
-      # Looking at origin/main is what the gate is supposed to do — skip
-      # generation on workflow reruns when the changelog has already merged.
+      # Two independent questions, and the answers select between three paths.
+      #
+      # `exists` — is the changelog already on origin/main? Then this whole job
+      # is a no-op. On a maintenance line that is the EXCEPTION: the promote PR
+      # merges into release-1.6, so the file it carried never touched main, and
+      # this is true only if something else put it there.
+      #
+      # `at_tag` — is it present in THIS checkout (the tag commit)? Under the
+      # promote flow it normally is, because the promote PR carried it onto
+      # release-1.6 and the stable tag sits on that merge commit. So this is the
+      # usual state on arrival: `exists` false, `at_tag` true, a reviewed and
+      # already-published changelog sitting right here — port it rather than
+      # regenerate.
+      #
+      # Only when both are false is there genuinely no changelog to publish, and
+      # only then does the AI run.
       - name: Check if changelog already exists
         id: check_changelog
         env:
@@ -399,19 +439,36 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "Changelog file $CHANGELOG_FILE does not exist on origin/main"
           fi
+          # Is the changelog present at the TAG (this checkout)? Under the promote
+          # flow it normally is: promote-rc.yaml commits it onto release-X.Y.Z and
+          # it reaches the tag via the merge commit. That PR targets the maintenance
+          # line, so the file lands on release-1.6 and never reaches main —
+          # `exists` above is false even though a reviewed, already-PUBLISHED
+          # changelog exists right here.
+          #
+          # Regenerating in that case would spend a second AI run and, once the
+          # backstop PR merged, update-releasenotes.yaml would overwrite the
+          # published release body with text nobody approved. Port the reviewed
+          # file verbatim instead; the AI is only for the genuinely-absent case.
+          if [ -s "$CHANGELOG_FILE" ]; then
+            echo "at_tag=true" >> $GITHUB_OUTPUT
+            echo "Changelog present at the tag — will port it to main verbatim, no regeneration."
+          else
+            echo "at_tag=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Setup Node.js
-        if: steps.check_changelog.outputs.exists == 'false'
+        if: steps.check_changelog.outputs.exists == 'false' && steps.check_changelog.outputs.at_tag == 'false'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
       - name: Install GitHub Copilot CLI
-        if: steps.check_changelog.outputs.exists == 'false'
+        if: steps.check_changelog.outputs.exists == 'false' && steps.check_changelog.outputs.at_tag == 'false'
         run: npm i -g @github/copilot
 
       - name: Generate changelog using AI
-        if: steps.check_changelog.outputs.exists == 'false'
+        if: steps.check_changelog.outputs.exists == 'false' && steps.check_changelog.outputs.at_tag == 'false'
         timeout-minutes: 30
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
@@ -433,12 +490,19 @@ jobs:
           CHANGELOG_FILE="docs/changelogs/v${VERSION}.md"
           CHANGELOG_BRANCH="changelog-v${VERSION}"
 
+          # Two ways the file can be here: ported verbatim from the tag commit
+          # (at_tag=true — the reviewed, already-published changelog reaching main
+          # for the first time), or freshly generated above. Either is valid.
           if [ ! -f "$CHANGELOG_FILE" ]; then
-            echo "::error::Changelog file $CHANGELOG_FILE was not produced by the Generate changelog using AI step"
+            echo "::error::Changelog file $CHANGELOG_FILE is absent — it was neither present at the tag nor produced by the Generate changelog using AI step"
             exit 1
           fi
-          if [ ! -s "$CHANGELOG_FILE" ]; then
-            echo "::error::Changelog file $CHANGELOG_FILE is empty"
+          # A ported file came from the tag and a generated one from a step allowed
+          # to fail, so neither has been checked here. update-releasenotes.yaml
+          # will push whatever this PR merges into the published release body, so a
+          # fragment must not get that far.
+          if ! REASON="$(hack/validate-changelog.sh "$CHANGELOG_FILE" "${VERSION}" 2>&1)"; then
+            echo "::error::Changelog file $CHANGELOG_FILE is not usable: ${REASON}"
             exit 1
           fi
 
