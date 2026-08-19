@@ -365,3 +365,108 @@ EOF
   [ "$rc" -ne 0 ]
   grep -q 'promotion changed the container repository/digest set' "$tmp/err"
 }
+
+# Shape 3 — `repository:` on one key, `tag: <tag>@sha256:<digest>` on another —
+# is the shape hack/lib/image-refs.sh itself calls the dominant one, and the one
+# no fixture above builds. The collector emits TWO entries for such a map: the
+# correctly joined repository@digest, plus shape 1's recursive scrape of the
+# bare `tag` scalar, which names no repository at all. Promotion rewrites
+# exactly that scalar, so normalization keeping it — treating the tag as the
+# repository — makes every clean promotion look as though it moved container
+# bytes. The single-string ref in _make_verify_fixture cannot reach that path:
+# it carries a registry host, so it normalizes through the other branch and its
+# own rc-to-stable rewrite passes either way. That is why the suite looked
+# covered while the dominant shape went untested.
+_write_split_map() {
+  cat > "$1" <<EOF
+linstorCSI:
+  image:
+    repository: ghcr.io/cozystack/cozystack/linstor-csi
+    tag: $2@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+EOF
+}
+
+# Same repository and the same digest on every side. ONLY the tag string moves,
+# which is exactly and only what promotion is meant to change.
+_add_split_map_package() {
+  t="$1"
+  mkdir -p "$t/release/system/linstor" "$t/artifact/system/linstor" \
+    "$t/rc-artifact/system/linstor"
+  _write_split_map "$t/release/system/linstor/values.yaml" v9.9.9
+  _write_split_map "$t/artifact/system/linstor/values.yaml" v9.9.9
+  _write_split_map "$t/rc-artifact/system/linstor/values.yaml" v9.9.9-rc.3
+}
+
+@test "accepts a split-map tag rewritten from rc to stable" {
+  tmp="$(_test_workspace)/fixture"
+  _make_verify_fixture "$tmp"
+  _add_split_map_package "$tmp"
+
+  rc=0
+  MOCK_ARTIFACT="$tmp/artifact" MOCK_RC_ARTIFACT="$tmp/rc-artifact" MOCK_FLUX_LOG="$tmp/flux.log" \
+    VERIFY_PACKAGES_WORKDIR="$tmp/work" \
+    PATH="$tmp/bin:$PATH" \
+    hack/verify-promoted-packages.sh 9.9.9 "$tmp/release" \
+    > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "verification exited $rc" >&2
+    cat "$tmp/err" >&2
+    return "$rc"
+  fi
+
+  grep -q "stable tags, identical package tree, and the rc artifact's container digests" "$tmp/out"
+}
+
+# The property a blunter fix would break. packages/system/kuberture/values.yaml
+# carries an `image:` map with a `tag:` and no `repository:` — shape 2 wants a
+# `digest` key and shape 3 a `repository` key, so shape 1's scrape of the bare
+# tag scalar is the ONLY rule that ever sees that image's digest. Discarding
+# host-less refs rather than comparing them on their digest would silently stop
+# proving it unchanged, which is a hole in the same guard being repaired here.
+# Asserted from the rejecting direction, because that is the direction able to
+# go red: the digest moves and nothing else does, so the digest-set comparison
+# is the only leg that can fire — artifact and release tree stay byte-identical,
+# no rc string appears in the candidate, and the installer values match.
+_write_repository_less_map() {
+  cat > "$1" <<EOF
+kuberture:
+  image:
+    tag: 0.1.1@sha256:$2
+EOF
+}
+
+_add_repository_less_package() {
+  t="$1"
+  mkdir -p "$t/release/system/kuberture" "$t/artifact/system/kuberture" \
+    "$t/rc-artifact/system/kuberture"
+  _repoless_stable=1111111111111111111111111111111111111111111111111111111111111111
+  _repoless_rc=2222222222222222222222222222222222222222222222222222222222222222
+  _write_repository_less_map "$t/release/system/kuberture/values.yaml" "$_repoless_stable"
+  _write_repository_less_map "$t/artifact/system/kuberture/values.yaml" "$_repoless_stable"
+  _write_repository_less_map "$t/rc-artifact/system/kuberture/values.yaml" "$_repoless_rc"
+}
+
+@test "rejects a changed digest carried only by a repository-less image map" {
+  tmp="$(_test_workspace)/fixture"
+  _make_verify_fixture "$tmp"
+  _add_repository_less_package "$tmp"
+
+  rc=0
+  MOCK_ARTIFACT="$tmp/artifact" MOCK_RC_ARTIFACT="$tmp/rc-artifact" MOCK_FLUX_LOG="$tmp/flux.log" \
+    VERIFY_PACKAGES_WORKDIR="$tmp/work" \
+    PATH="$tmp/bin:$PATH" \
+    hack/verify-promoted-packages.sh 9.9.9 "$tmp/release" \
+    > "$tmp/out" 2> "$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  grep -q 'promotion changed the container repository/digest set' "$tmp/err"
+  # The rejection has to come from the digest set and not from a neighbouring leg
+  # rejecting a tree this test never perturbed, or it would still pass with the
+  # digest dropped from the comparison entirely. Counted rather than negated with
+  # `!`, which suppresses errexit and would pass regardless.
+  for _other in 'contain different files' 'differs from release tree' \
+    'still carries rc image references' 'installer values differ'; do
+    count="$(grep -c "$_other" "$tmp/err" || true)"
+    [ "${count:-0}" -eq 0 ]
+  done
+}
