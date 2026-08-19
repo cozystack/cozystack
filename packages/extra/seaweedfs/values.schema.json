@@ -238,9 +238,11 @@
           ]
         },
         "volumeSizeLimitMB": {
-          "type": "integer",
           "description": "Maximum size of a single logical volume in MB. The master stops assigning writes to a volume past this size, so the slot budget of a data disk is roughly disk-size / this value. The 1000 MB default suits small test PVCs; production stores measured in TB typically want 4000-30000 (upstream seaweedfs defaults to 30000).",
-          "default": 1000
+          "type": "integer",
+          "default": 1000,
+          "maximum": 30000,
+          "minimum": 1
         }
       }
     },
@@ -371,6 +373,12 @@
           "type": "string",
           "default": ""
         },
+        "maxVolumes": {
+          "description": "Maximum number of logical volumes per data directory (the volume server's -max). 0 lets the server auto-compute from free disk space, which also RESERVES free space for every existing sub-limit volume to grow to volumeSizeLimitMB; once that reservation exceeds free disk, the computed headroom is zero and every placement-shaped operation (replica repair via volume.fix.replication, the first volume of a new bucket) fails even though existing writable volumes still absorb traffic. Set an explicit count on long-lived stores; -minFreeSpacePercent remains the actual disk guard.",
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
         "pools": {
           "description": "A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.",
           "type": "object",
@@ -499,11 +507,6 @@
           "type": "integer",
           "default": 2
         },
-        "maxVolumes": {
-          "type": "integer",
-          "description": "Maximum number of logical volumes per data directory (the volume server's -max). 0 auto-computes from free disk, which reserves space for every existing sub-limit volume to grow to volumeSizeLimitMB \u2014 once that reservation exceeds free disk, placement-shaped operations (replica repair, a new bucket's first volume) fail. Set an explicit count on long-lived stores; -minFreeSpacePercent remains the disk guard.",
-          "default": 0
-        },
         "resources": {
           "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
           "type": "object",
@@ -622,7 +625,7 @@
                 "type": "string"
               },
               "nodeSelector": {
-                "description": "YAML nodeSelector for this zone (default: topology.kubernetes.io/zone: <zoneName>).",
+                "description": "YAML nodeSelector for this zone (default: topology.kubernetes.io/zone: \u003czoneName\u003e).",
                 "type": "string"
               },
               "pools": {
