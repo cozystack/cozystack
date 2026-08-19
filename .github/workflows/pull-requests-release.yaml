@@ -14,7 +14,11 @@ concurrency:
 jobs:
   finalize:
     name: Finalize Release
-    runs-on: [self-hosted]
+    # Was [self-hosted], the decommissioned cozy-runner-1 (#2937), which nothing
+    # answers -- this job would sit in Queued and never publish the release. It
+    # is git plus GitHub API calls only, so the small ephemeral shape is ample;
+    # it is also the one both live branches use for this job.
+    runs-on: [oracle-vm-4cpu-16gb-x86-64]
     permissions:
       contents: write
 
