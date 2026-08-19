@@ -10,6 +10,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -660,7 +661,10 @@ func TestQueryAllBucketMetrics(t *testing.T) {
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL, []string{"bucket-aaa", "bucket-bbb"})
+	metrics, err := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL, []string{"bucket-aaa", "bucket-bbb"})
+	if err != nil {
+		t.Fatalf("queryAllBucketMetrics returned error: %v", err)
+	}
 
 	bm, ok := metrics["bucket-aaa"]
 	if !ok {
@@ -692,7 +696,10 @@ func TestQueryAllBucketMetricsEmpty(t *testing.T) {
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL, []string{"bucket-aaa", "bucket-bbb"})
+	metrics, err := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL, []string{"bucket-aaa", "bucket-bbb"})
+	if err != nil {
+		t.Fatalf("queryAllBucketMetrics returned error: %v", err)
+	}
 	if len(metrics) != 0 {
 		t.Errorf("expected empty metrics, got %d", len(metrics))
 	}
@@ -705,21 +712,84 @@ func TestQueryAllBucketMetricsServerError(t *testing.T) {
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL, []string{"bucket-aaa", "bucket-bbb"})
-	if len(metrics) != 0 {
-		t.Errorf("expected empty metrics on error, got %d", len(metrics))
+	_, err := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL, []string{"bucket-aaa", "bucket-bbb"})
+	if err == nil {
+		t.Error("expected error on server failure, got nil")
 	}
 }
 
 func TestQueryAllBucketMetricsNoURL(t *testing.T) {
 	reconciler := &WorkloadMonitorReconciler{}
-	metrics := reconciler.queryAllBucketMetrics(context.TODO(), "", nil)
+	metrics, err := reconciler.queryAllBucketMetrics(context.TODO(), "", nil)
+	if err != nil {
+		t.Fatalf("queryAllBucketMetrics returned error: %v", err)
+	}
 	if len(metrics) != 0 {
 		t.Errorf("expected empty metrics when URL is empty, got %d", len(metrics))
 	}
 }
 
-func TestResolvePrometheusURL(t *testing.T) {
+func TestQueryAllBucketMetricsPathPrefixAndUserinfo(t *testing.T) {
+	var gotPath, gotUser, gotPass string
+	var gotOK bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotUser, gotPass, gotOK = r.BasicAuth()
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+	}))
+	defer srv.Close()
+
+	reconciler := &WorkloadMonitorReconciler{}
+	// Trailing slash on the base URL must not produce a double slash before
+	// /api/v1/query, and userinfo must arrive as basic auth.
+	baseURL := strings.Replace(srv.URL, "http://", "http://billing:hunter2@", 1) + "/path/to/prometheus/"
+	if _, err := reconciler.queryAllBucketMetrics(context.TODO(), baseURL, []string{"bucket-aaa"}); err != nil {
+		t.Fatalf("queryAllBucketMetrics returned error: %v", err)
+	}
+
+	if gotPath != "/path/to/prometheus/api/v1/query" {
+		t.Errorf("expected path prefix preserved, got %q", gotPath)
+	}
+	if !gotOK || gotUser != "billing" || gotPass != "hunter2" {
+		t.Errorf("expected basic auth billing/hunter2 from userinfo, got %q/%q ok=%v", gotUser, gotPass, gotOK)
+	}
+}
+
+func TestParseMetricsEndpointURL(t *testing.T) {
+	valid := map[string]string{
+		"https://vm.example.com":                       "https://vm.example.com",
+		"https://vm.example.com/":                      "https://vm.example.com",
+		"https://vm.example.com:8427/vm/prometheus":    "https://vm.example.com:8427/vm/prometheus",
+		"https://user:pass@vm.example.com/prometheus":  "https://user:pass@vm.example.com/prometheus",
+		"http://vm.example.com/select/0/prometheus///": "http://vm.example.com/select/0/prometheus",
+	}
+	for raw, want := range valid {
+		got, err := ParseMetricsEndpointURL(raw)
+		if err != nil {
+			t.Errorf("ParseMetricsEndpointURL(%q) returned error: %v", raw, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("ParseMetricsEndpointURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"vm.example.com/prometheus",
+		"ftp://vm.example.com",
+		"https://",
+		"https://vm.example.com/prometheus?query=up",
+		"https://vm.example.com/prometheus#frag",
+	}
+	for _, raw := range invalid {
+		if got, err := ParseMetricsEndpointURL(raw); err == nil {
+			t.Errorf("ParseMetricsEndpointURL(%q) = %q, want error", raw, got)
+		}
+	}
+}
+
+func TestResolvePrometheusURLFromLabel(t *testing.T) {
 	s := newTestScheme()
 
 	ns := &corev1.Namespace{
@@ -737,7 +807,10 @@ func TestResolvePrometheusURL(t *testing.T) {
 		Build()
 
 	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
-	url := reconciler.resolvePrometheusURL(context.TODO(), "tenant-demo")
+	url, err := reconciler.resolvePrometheusURL(context.TODO(), "tenant-demo")
+	if err != nil {
+		t.Fatalf("resolvePrometheusURL returned error: %v", err)
+	}
 
 	expected := "http://vmselect-shortterm.tenant-root.svc:8481/select/0/prometheus"
 	if url != expected {
@@ -760,10 +833,45 @@ func TestResolvePrometheusURLNoLabel(t *testing.T) {
 		Build()
 
 	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
-	url := reconciler.resolvePrometheusURL(context.TODO(), "tenant-demo")
+	url, err := reconciler.resolvePrometheusURL(context.TODO(), "tenant-demo")
+	if err != nil {
+		t.Fatalf("resolvePrometheusURL returned error: %v", err)
+	}
 
 	if url != "" {
 		t.Errorf("expected empty URL when no monitoring label, got %q", url)
+	}
+}
+
+func TestResolvePrometheusURLEndpointOverrideWinsOverLabel(t *testing.T) {
+	s := newTestScheme()
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-demo",
+			Labels: map[string]string{
+				"namespace.cozystack.io/monitoring": "tenant-root",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(ns).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{
+		Client:                   fakeClient,
+		Scheme:                   s,
+		SeaweedfsMetricsEndpoint: "https://vm.example.com/path/to/prometheus",
+	}
+	url, err := reconciler.resolvePrometheusURL(context.TODO(), "tenant-demo")
+	if err != nil {
+		t.Fatalf("resolvePrometheusURL returned error: %v", err)
+	}
+
+	if url != "https://vm.example.com/path/to/prometheus" {
+		t.Errorf("expected the endpoint override to win over label discovery, got %q", url)
 	}
 }
 
@@ -844,5 +952,217 @@ func TestReconcileBucketClaimRequeuesWhenBucketsExist(t *testing.T) {
 	}
 	if len(workload.Status.Resources) != 0 {
 		t.Errorf("expected empty resources without monitoring, got %v", workload.Status.Resources)
+	}
+}
+
+// newBucketFixture returns a plain namespace, a bucket WorkloadMonitor, and a
+// ready BucketClaim named my-bucket whose SeaweedFS bucket is cosi-abc123.
+func newBucketFixture() (*corev1.Namespace, *cozyv1alpha1.WorkloadMonitor, *cosiv1alpha1.BucketClaim) {
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-demo",
+		},
+	}
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-bucket",
+			Namespace: "tenant-demo",
+		},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Kind: "bucket",
+			Type: "s3",
+			Selector: map[string]string{
+				"app.kubernetes.io/instance": "my-bucket",
+			},
+		},
+	}
+	bc := &cosiv1alpha1.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-bucket",
+			Namespace: "tenant-demo",
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": "my-bucket",
+			},
+		},
+		Spec: cosiv1alpha1.BucketClaimSpec{
+			BucketClassName: "seaweedfs",
+			Protocols:       []cosiv1alpha1.Protocol{cosiv1alpha1.ProtocolS3},
+		},
+		Status: cosiv1alpha1.BucketClaimStatus{
+			BucketReady: true,
+			BucketName:  "cosi-abc123",
+		},
+	}
+	return ns, monitor, bc
+}
+
+func TestReconcileBucketMetricsFromEndpointOverride(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/vm/select/0/prometheus/api/v1/query" {
+			t.Errorf("unexpected query path %q", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[
+			{"metric":{"__name__":"SeaweedFS_s3_bucket_size_bytes","bucket":"cosi-abc123"},"value":[1713000000,"4096"]}
+		]}}`)
+	}))
+	defer srv.Close()
+
+	s := newTestScheme()
+	ns, monitor, bc := newBucketFixture()
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(ns, monitor, bc).
+		WithStatusSubresource(monitor).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{
+		Client:                   fakeClient,
+		Scheme:                   s,
+		SeaweedfsMetricsEndpoint: srv.URL + "/vm/select/0/prometheus",
+	}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{
+		Name:      "my-bucket",
+		Namespace: "tenant-demo",
+	}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	workload := &cozyv1alpha1.Workload{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{
+		Name:      "bucket-my-bucket",
+		Namespace: "tenant-demo",
+	}, workload); err != nil {
+		t.Fatalf("Failed to get Workload: %v", err)
+	}
+
+	q, ok := workload.Status.Resources["s3-storage-bytes"]
+	if !ok {
+		t.Fatal("expected s3-storage-bytes from the overridden endpoint")
+	}
+	if q.Value() != 4096 {
+		t.Errorf("expected s3-storage-bytes=4096, got %d", q.Value())
+	}
+}
+
+func TestReconcileRetainsLastKnownSizesOnQueryFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	s := newTestScheme()
+	ns, monitor, bc := newBucketFixture()
+
+	// A Workload from a previous successful reconcile already carries sizes.
+	workload := &cozyv1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "bucket-my-bucket",
+			Namespace: "tenant-demo",
+		},
+		Status: cozyv1alpha1.WorkloadStatus{
+			Kind: "bucket",
+			Type: "s3",
+			Resources: map[string]resource.Quantity{
+				"s3-storage-bytes":          *resource.NewQuantity(4096, resource.BinarySI),
+				"s3-physical-storage-bytes": *resource.NewQuantity(8192, resource.BinarySI),
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(ns, monitor, bc, workload).
+		WithStatusSubresource(monitor).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{
+		Client:                   fakeClient,
+		Scheme:                   s,
+		SeaweedfsMetricsEndpoint: srv.URL,
+	}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{
+		Name:      "my-bucket",
+		Namespace: "tenant-demo",
+	}}
+
+	// The failure must be loud: the reconcile returns an error instead of
+	// pretending the buckets are empty.
+	if _, err := reconciler.Reconcile(context.TODO(), req); err == nil {
+		t.Error("expected Reconcile to return an error when the metrics endpoint fails")
+	}
+
+	updated := &cozyv1alpha1.Workload{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{
+		Name:      "bucket-my-bucket",
+		Namespace: "tenant-demo",
+	}, updated); err != nil {
+		t.Fatalf("Failed to get Workload: %v", err)
+	}
+
+	q, ok := updated.Status.Resources["s3-storage-bytes"]
+	if !ok || q.Value() != 4096 {
+		t.Errorf("expected last known s3-storage-bytes=4096 retained, got %v (present=%v)", q.Value(), ok)
+	}
+	qp, ok := updated.Status.Resources["s3-physical-storage-bytes"]
+	if !ok || qp.Value() != 8192 {
+		t.Errorf("expected last known s3-physical-storage-bytes=8192 retained, got %v (present=%v)", qp.Value(), ok)
+	}
+}
+
+func TestReconcileRetainsLastKnownSizesWhenBucketMissingFromResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+	}))
+	defer srv.Close()
+
+	s := newTestScheme()
+	ns, monitor, bc := newBucketFixture()
+
+	workload := &cozyv1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "bucket-my-bucket",
+			Namespace: "tenant-demo",
+		},
+		Status: cozyv1alpha1.WorkloadStatus{
+			Kind: "bucket",
+			Type: "s3",
+			Resources: map[string]resource.Quantity{
+				"s3-storage-bytes": *resource.NewQuantity(4096, resource.BinarySI),
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(ns, monitor, bc, workload).
+		WithStatusSubresource(monitor).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{
+		Client:                   fakeClient,
+		Scheme:                   s,
+		SeaweedfsMetricsEndpoint: srv.URL,
+	}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{
+		Name:      "my-bucket",
+		Namespace: "tenant-demo",
+	}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	updated := &cozyv1alpha1.Workload{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{
+		Name:      "bucket-my-bucket",
+		Namespace: "tenant-demo",
+	}, updated); err != nil {
+		t.Fatalf("Failed to get Workload: %v", err)
+	}
+
+	q, ok := updated.Status.Resources["s3-storage-bytes"]
+	if !ok || q.Value() != 4096 {
+		t.Errorf("expected last known s3-storage-bytes=4096 retained when series is absent, got %v (present=%v)", q.Value(), ok)
 	}
 }

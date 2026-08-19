@@ -77,6 +77,7 @@ func main() {
 	var disableTelemetry bool
 	var telemetryEndpoint string
 	var telemetryInterval string
+	var seaweedfsMetricsEndpoint string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -94,6 +95,10 @@ func main() {
 		"Endpoint for sending telemetry data")
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
+	flag.StringVar(&seaweedfsMetricsEndpoint, "seaweedfs-metrics-endpoint", "",
+		"Base URL of a Prometheus-compatible query API to fetch SeaweedFS bucket size metrics from, e.g. https://vm.example.com/path/to/prometheus (/api/v1/query is appended). "+
+			"Overrides discovery via the namespace.cozystack.io/monitoring label; use when SeaweedFS and the monitoring stack that scrapes it run in a separate cluster. "+
+			"Basic auth may be embedded as userinfo (https://user:pass@host/...). Empty keeps label-based discovery.")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -105,6 +110,16 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "invalid telemetry interval")
 		os.Exit(1)
+	}
+
+	// Validate and normalize the SeaweedFS metrics endpoint override; the sizes
+	// it serves feed billing, so a malformed URL must fail startup, not queries.
+	if seaweedfsMetricsEndpoint != "" {
+		seaweedfsMetricsEndpoint, err = controller.ParseMetricsEndpointURL(seaweedfsMetricsEndpoint)
+		if err != nil {
+			setupLog.Error(err, "invalid --seaweedfs-metrics-endpoint")
+			os.Exit(1)
+		}
 	}
 
 	// Configure telemetry
@@ -187,8 +202,10 @@ func main() {
 	}
 
 	if err = (&controller.WorkloadMonitorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:                   mgr.GetClient(),
+		Scheme:                   mgr.GetScheme(),
+		Recorder:                 mgr.GetEventRecorderFor("workloadmonitor-controller"),
+		SeaweedfsMetricsEndpoint: seaweedfsMetricsEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkloadMonitor")
 		os.Exit(1)

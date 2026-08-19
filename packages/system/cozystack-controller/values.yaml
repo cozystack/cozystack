@@ -2,3 +2,8 @@ cozystackController:
   image: ghcr.io/cozystack/cozystack/cozystack-controller:v1.5.2@sha256:464c9cda4dba5e83e17f26acf386cafaf3688be7c24e267692c97a3acb018a15
   debug: false
   disableTelemetry: false
+  # Base URL of a Prometheus-compatible query API to fetch SeaweedFS bucket
+  # size metrics from, for deployments where SeaweedFS and the monitoring
+  # stack that scrapes it run in a separate cluster. Empty keeps discovery
+  # via the namespace.cozystack.io/monitoring label.
+  seaweedfsMetricsEndpoint: ""
