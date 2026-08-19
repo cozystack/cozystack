@@ -6,6 +6,13 @@ release:
   name: cozystack-basics
   namespace: cozy-system
 
+# The template now gates on the ValidatingAdmissionPolicy API (GA since
+# Kubernetes 1.30); helm-unittest's default capability set omits it, so every
+# rendering test declares it, exactly as the platform deletion-protection suite.
+capabilities:
+  apiVersions:
+    - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+
 tests:
   - it: renders ValidatingAdmissionPolicy + Binding for HTTPRoute and TLSRoute (Layer 7)
     # Layer 7 (route-hostname VAP) is the only VAP rendered by THIS

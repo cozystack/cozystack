@@ -1,0 +1,23 @@
+suite: cozystack-basics hostname VAP policies are gated on the ValidatingAdmissionPolicy API
+templates:
+  - templates/route-hostname-policy.yaml
+  - templates/gateway-hostname-policy.yaml
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+# Neither template reads a value that could independently suppress it, so the
+# only reason either renders nothing here is the missing ValidatingAdmissionPolicy
+# API declared below. helm-unittest's per-test capabilities merge rather than
+# replace the suite's, so the absent case is a separate suite pinned at suite
+# level (mirrors the platform notes gate suite).
+capabilities:
+  apiVersions: []
+tests:
+  - it: neither hostname VAP policy renders when the API is unavailable
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/route-hostname-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/gateway-hostname-policy.yaml

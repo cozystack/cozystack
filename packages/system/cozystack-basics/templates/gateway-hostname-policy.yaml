@@ -1,3 +1,5 @@
+{{- /* Render only where the ValidatingAdmissionPolicy API is served (GA since Kubernetes 1.30; the management cluster requires 1.33+). Same guard as packages/core/platform/templates/deletion-protection.yaml. */}}
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -154,3 +156,4 @@ metadata:
 spec:
   policyName: cozystack-namespace-host-label-policy
   validationActions: [Deny]
+{{- end }}

@@ -36,6 +36,8 @@
   finished labelling yet — in which case the caller should retry.
 */}}
 {{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (!has(object.spec.hostnames) || object.spec.hostnames.all(h, h == namespaceObject.metadata.labels["namespace.cozystack.io/host"] || h.endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"])))` -}}
+{{- /* Render only where the ValidatingAdmissionPolicy API is served (GA since Kubernetes 1.30; the management cluster requires 1.33+). Same guard as packages/core/platform/templates/deletion-protection.yaml. */}}
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -104,3 +106,4 @@ metadata:
 spec:
   policyName: cozystack-route-hostname-policy-tls
   validationActions: [Deny]
+{{- end }}
