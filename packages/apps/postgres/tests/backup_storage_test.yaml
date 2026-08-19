@@ -35,6 +35,18 @@ tests:
         documentSelector:
           path: kind
           value: Cluster
+      # The platform flow's barmanObjectStore is SSA-patched onto the live
+      # Cluster later, but it runs barman-cloud in these same instance pods,
+      # so the non-AWS S3 request-checksum pin has to be on the Cluster now.
+      - contains:
+          path: spec.env
+          content:
+            name: AWS_REQUEST_CHECKSUM_CALCULATION
+            value: when_required
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
       - hasDocuments:
           count: 0
         template: templates/backup-secret.yaml
@@ -56,6 +68,18 @@ tests:
       - equal:
           path: spec.backup.barmanObjectStore.s3Credentials.accessKeyId.name
           value: pg-test-s3-creds
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      # Non-AWS S3 gateways (Ceph RGW, the platform's own SeaweedFS) reject
+      # botocore's default flexible request checksum, so barman-cloud's boto3
+      # is pinned to when_required via the instance pods' environment.
+      - contains:
+          path: spec.env
+          content:
+            name: AWS_REQUEST_CHECKSUM_CALCULATION
+            value: when_required
         template: templates/db.yaml
         documentSelector:
           path: kind
@@ -112,3 +136,50 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "postgres: bootstrap.enabled=true requires S3 credentials: set backup.s3AccessKey+backup.s3SecretKey, backup.s3CredentialsSecret.name, or backup.useSystemBucket=true (with a backups.cozystack.io/RestoreJob)."
+
+  - it: "bootstrap recovery with backup disabled: request-checksum pin still rendered"
+    # externalClusters[].barmanObjectStore drives recovery through the same
+    # barman-cloud client, so the pin must not hang off backup.enabled alone.
+    # This is also the RestoreJob flow: the CNPG driver patches the Postgres
+    # app's bootstrap.enabled and lets this chart re-render.
+    set:
+      backup:
+        enabled: false
+        useSystemBucket: false
+        s3AccessKey: AKIAEXAMPLE
+        s3SecretKey: s3cr3t
+      bootstrap:
+        enabled: true
+        oldName: old
+    asserts:
+      - exists:
+          path: spec.externalClusters
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      - contains:
+          path: spec.env
+          content:
+            name: AWS_REQUEST_CHECKSUM_CALCULATION
+            value: when_required
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+
+  - it: "no backup and no bootstrap: no AWS_* env injected into instance pods"
+    # A release with no S3 configured never invokes barman-cloud, so it gets
+    # no spec.env at all - the pin is scoped, not unconditional.
+    set:
+      backup:
+        enabled: false
+      bootstrap:
+        enabled: false
+    asserts:
+      - notExists:
+          path: spec.env
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster

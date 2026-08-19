@@ -189,6 +189,44 @@ spec:
             key: {{ $credSecretKey }}
   {{- end }}
 
+  {{/*
+    Every S3 path on this chart runs `barman-cloud-*` inside the instance
+    pod, and barman-cloud uploads through boto3:
+      - the chart-rendered spec.backup.barmanObjectStore above (legacy flow);
+      - the same field SSA-patched onto the live Cluster by the CNPG backup
+        driver in the platform useSystemBucket=true flow;
+      - externalClusters[].barmanObjectStore above, used by
+        bootstrap.recovery and by the RestoreJob flow (which sets
+        bootstrap.enabled on the Postgres app and lets this chart re-render).
+
+    Since botocore ~1.36 (early 2025) the default RequestChecksumCalculation
+    is when_supported, so a flexible checksum (and the matching
+    x-amz-content-sha256 handling) rides on every PutObject. AWS S3 accepts
+    it, but non-AWS S3-compatible backends - Ceph RADOS Gateway, the
+    platform's own SeaweedFS system bucket, some MinIO / Cloudflare R2
+    builds - reject it with "InvalidArgument: x-amz-content-sha256 must be
+    UNSIGNED-PAYLOAD, ...", which fails every backup and WAL-archive upload.
+    when_required computes a checksum only when the operation mandates one;
+    AWS S3 accepts that on a plain PutObject too, so it is a safe default
+    everywhere.
+
+    spec.env lands in the instance pods, so the barman-cloud subprocess the
+    instance manager execs inherits it - one setting covers all of the paths
+    above. It stays Helm-owned: the backup driver's SSA patch carries only
+    spec.backup (applyClusterBarmanObjectStore in
+    internal/backupcontroller/cnpgstrategy_controller.go), so the two field
+    managers do not contend.
+
+    Gated on backup/bootstrap being enabled rather than set unconditionally:
+    a Postgres release with no S3 configured never invokes barman-cloud, and
+    injecting an AWS_* variable into its instance pods would be noise.
+  */}}
+  {{- if or .Values.backup.enabled .Values.bootstrap.enabled }}
+  env:
+    - name: AWS_REQUEST_CHECKSUM_CALCULATION
+      value: when_required
+  {{- end }}
+
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
 
   imageName: ghcr.io/cloudnative-pg/postgresql:{{ include "postgres.versionMap" $ | trimPrefix "v" }}
