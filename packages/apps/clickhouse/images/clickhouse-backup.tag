@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/clickhouse-backup:v1.5.2@sha256:8efef62d59fb82d39544823f81a797c2b9ac130a50241fee48e701161ce2670d
+ghcr.io/cozystack/cozystack/clickhouse-backup:v1.5.4@sha256:1714da5dc14b58866d1e21bed8934d385bfe4c9873c8840b3b4be4a1abfe5f5d
