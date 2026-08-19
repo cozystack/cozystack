@@ -27,8 +27,17 @@ spec:
     spec:
       serviceAccountName: kube-rbac-proxy
       hostNetwork: true
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: ""
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
       containers:
       - name: kube-rbac-proxy
         image: quay.io/brancz/kube-rbac-proxy:v0.22.0

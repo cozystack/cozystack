@@ -1,0 +1,28 @@
+suite: isp-full-generic no longer stamps a dead cozystackAPI.nodeSelector override
+
+# cozystack-api's own Deployment (packages/system/cozystack-api/templates/deployment.yaml)
+# never reads .Values.cozystackAPI.nodeSelector — it schedules onto control-plane
+# nodes via a soft nodeAffinity preference plus a blanket toleration instead. The
+# isp-full-generic branch of this bundle set cozystackAPI.nodeSelector anyway, an
+# override with no consumer. Worse, being an equality match on
+# node-role.kubernetes.io/control-plane=true it would have been wrong on
+# kubeadm/Talos/OpenShift (empty label value) had anything ever read it. Assert the
+# dead override is gone rather than merely inert.
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: emits no components block for cozystack-api on isp-full-generic
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - notExists:
+          path: spec.components.cozystack-api
