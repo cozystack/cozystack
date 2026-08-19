@@ -865,11 +865,25 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// (cilium#45559). In practice only TLSRoute attaches to a Passthrough
 	// listener, but listing HTTPRoute here is harmless — Gateway API
 	// rejects any HTTPRoute that references a Passthrough sectionName.
-	// NOTE: on Cilium 1.19.x each tls-<svc> listener will surface
+	// NOTE: each tls-<svc> listener surfaces
 	// ResolvedRefs=False/InvalidRouteKinds on the raw Gateway object
 	// (cosmetic — Accepted, Programmed, traffic, and TenantGateway
-	// readiness are all unaffected); removable once Cilium 1.20 /
-	// cilium#45693 ships.
+	// readiness are all unaffected). It is self-inflicted: Cilium emits it
+	// from the supportedKinds length check in operator/pkg/gateway-api/
+	// gateway_reconcile.go (len(supportedKinds) != len(AllowedRoutes.Kinds)),
+	// which fires because port443Kinds puts two kinds on a listener whose
+	// protocol supports one. That check is byte-identical in v1.19.5 and
+	// v1.19.6, so the noise does not clear on its own.
+	// Whether port443Kinds is still needed at all is a separate question,
+	// and this bump reopens it: cilium#45693 ("fix allowedRoute namespace
+	// and kind restrictions on multi-listener") is backported to 1.19 and
+	// present in v1.19.6, where CheckGatewayRouteKindAllowed now filters
+	// listeners by sectionName and port instead of scanning every listener
+	// last-one-wins — the collapse this workaround exists to defeat.
+	// Dropping it is its own change: it needs a cluster check, and the
+	// two-kind set is pinned by TestReconcile_Port443ListenersShareKinds.
+	// Tracked in cozystack#3087, whose "once Cilium >=1.20" premise the
+	// 1.19 backport has already overtaken.
 	// The corresponding TLSRoute templates (cozystack-api, vm-exportproxy,
 	// cdi-uploadproxy) attach to these listeners by sectionName.
 	for _, svc := range tgw.Spec.TLSPassthroughServices {
