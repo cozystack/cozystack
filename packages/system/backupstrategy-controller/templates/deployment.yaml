@@ -50,6 +50,25 @@ spec:
           value: {{ .Values.backupStorage.forcePathStyle | quote }}
         - name: BACKUP_STORAGE_SYSTEM_NAMESPACES
           value: {{ .Values.backupStorage.systemNamespaces | join "," | quote }}
+        {{- if .Values.backupStorage.reconcileDefaultObjects }}
+        # DefaultObjectsGate: the Strategy CRs and the Velero BSL are gated
+        # on a `lookup` of the BucketClaim this same chart creates, so a
+        # fresh install renders them empty — permanently, because
+        # helm-controller does not re-render an unchanged, successful
+        # release. The gate detects the missing objects once the bucket name
+        # is resolvable and forces exactly one real Helm upgrade on THIS
+        # release, which is the only thing that re-runs the lookups.
+        - name: BACKUP_DEFAULT_OBJECTS_BACKUPCLASS
+          value: cozy-default
+        - name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAME
+          value: {{ .Release.Name | quote }}
+        - name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAMESPACE
+          value: {{ .Release.Namespace | quote }}
+        {{- if .Values.velero.bslEnabled }}
+        - name: BACKUP_DEFAULT_OBJECTS_VELERO_NAMESPACE
+          value: {{ .Values.velero.namespace | quote }}
+        {{- end }}
+        {{- end }}
         ports:
         {{- if .Values.backupStrategyController.metrics.enabled }}
         - name: metrics
