@@ -13,7 +13,7 @@ migrations:
   # targetVersion in-tree by design; run-migrations.sh refuses to advance past a
   # migration file missing from the image (exit 1), so a stale pin fails loudly
   # rather than silently skipping the SeaweedFS database hand-over.
-  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.5.2@sha256:5d601b0709c578945f2e04d655b77d29008c94666a4350e67960c9f6bf9d2bde
+  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.5.4@sha256:24510ca1f3b789d6cab6cca3810283db490930d78ed35d31a740b17f33106986
   targetVersion: 46
 # Bundle deployment configuration
 bundles:
