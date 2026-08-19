@@ -111,11 +111,24 @@
     [ "$output" = "redis" ]
 }
 
-@test "release-e2e workflow change triggers full suite" {
+@test "e2e-tag workflow change triggers full suite" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
-    echo ".github/workflows/release-e2e.yaml" > "$tmp/diff"
+    echo ".github/workflows/e2e-tag.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+}
+
+@test "hack/lib helper triggers full suite" {
+    # hack/lib/*.sh does not match the hack/[^/]+\.sh$ term (it carries a
+    # slash), so without an explicit hack/lib/ term a change to the shared
+    # image-reference enumeration falls through to the "silently ignored"
+    # branch and selects nothing at all.
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/lib/image-refs.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$(echo "$output" | wc -w)" -gt 5 ]
 }

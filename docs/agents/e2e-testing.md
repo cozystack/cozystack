@@ -1,6 +1,6 @@
 # E2E Testing Conventions
 
-Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-apps/`, `hack/e2e-*.bats`, `hack/*.sh` test helpers, the E2E CI workflows (`.github/workflows/pull-requests.yaml`, `.github/workflows/release-e2e.yaml`), or `packages/core/testing/`.
+Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-apps/`, `hack/e2e-*.bats`, `hack/*.sh` test helpers, the E2E CI workflows (`.github/workflows/pull-requests.yaml`, `.github/workflows/e2e-tag.yaml`), or `packages/core/testing/`.
 
 ## The core principle
 
@@ -59,7 +59,7 @@ A parent HelmRelease that hit its wait timeout, uninstalled, and reinstalled is 
 
 - Conservative escalation: edits to `packages/library/`, `packages/core/`, `api/`, `cmd/`, `internal/`, shared `hack/*.sh|*.bats` helpers, the `Makefile`, or the E2E workflows escalate to the **full suite**. A per-app bats edit selects **only** that app.
 - The `full-e2e` PR label forces the whole suite.
-- Companion: `.github/workflows/release-e2e.yaml` runs the **full** suite on every release tag, closing the coverage gap TIA opens on PRs.
+- Companion: `.github/workflows/e2e-tag.yaml` runs the **full** suite for a published release tag, closing the coverage gap TIA opens on PRs. It is called by `tags.yaml`'s `rc-e2e` job for every `vX.Y.Z-rc.N` cut, and is dispatchable by hand for any published tag. It replaced `release-e2e.yaml`, which fired on the same tag surface as `tags.yaml` and duplicated its whole build.
 
 When adding a new app package, confirm `select-e2e.sh` maps it correctly (it has a unit test, `hack/select-e2e_test.bats`).
 

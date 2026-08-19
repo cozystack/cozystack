@@ -5,10 +5,17 @@ backupStrategyController:
   # platform-migrations (already pre-built and digested by release CI in
   # packages/core/platform/values.yaml) because it bundles curl + jq +
   # ca-certificates — avoids shipping a one-binary tiny image whose tag
-  # would have to be re-digested on every release. Bumping the
-  # platform-migrations version requires updating BOTH this value and
-  # packages/core/platform/values.yaml so they remain in lockstep.
-  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.4.0-rc.2@sha256:17390197a9b11d76a8dd1b24c6d1512adb7d3226b28b5bcba8551b14b1ec4be0"
+  # would have to be re-digested on every release.
+  #
+  # DO NOT hand-edit: packages/core/platform/Makefile stamps this key with
+  # the same ref it writes to .migrations.image there, so the two stay in
+  # lockstep by construction. They previously did not — this key had no
+  # producer at all and froze at v1.4.0-rc.2 while the other advanced to
+  # v1.5.2. Two digests under one repository means a promotion tries to
+  # retag both to the same stable tag, and the write-once guard in
+  # hack/promote-retag.sh fails the release. hack/image-pin-consistency.bats
+  # asserts the two agree.
+  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.5.2@sha256:5d601b0709c578945f2e04d655b77d29008c94666a4350e67960c9f6bf9d2bde"
   replicas: 2
   debug: false
   metrics:

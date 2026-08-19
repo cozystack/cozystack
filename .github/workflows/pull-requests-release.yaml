@@ -3,29 +3,59 @@ name: "Releasing PR"
 on:
   pull_request:
     types: [closed]
-    paths-ignore:
-      - 'docs/**/*'
+    # No paths filter. A `paths-ignore: docs/**/*` used to live here as an
+    # optimization, but the promote PR now carries docs/changelogs/vX.Y.Z.md —
+    # and `Prepare stable branch` explicitly tolerates producing no tag-string
+    # changes ("digests already stable"). That combination can yield a docs-only
+    # promote PR, which the filter would drop: no finalize run, so no tag, no
+    # release, and no error anywhere. Filtering is left entirely to the `if:`
+    # gate below (merged + `release` label + release-bot author), which is what
+    # actually decides whether this workflow should do anything. The cost is a
+    # skipped job on unrelated closed PRs.
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
 concurrency:
   group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so each job restates every scope it needs.
+permissions:
+  contents: read
+
 jobs:
   finalize:
     name: Finalize Release
-    runs-on: [self-hosted]
+    # Runs skopeo + helm against GHCR (the promotion's registry side effects),
+    # so it needs an ephemeral VM runner with those tools, not the self-hosted
+    # pool.
+    runs-on: [oracle-vm-4cpu-16gb-x86-64]
     permissions:
       contents: write
+      packages: write
 
+    # Finalize now both cuts the write-once tags AND performs the promotion's
+    # registry side effects (retag rc->stable, move :latest, publish the stable
+    # chart), so restrict who can trigger it: the PR must be merged, carry the
+    # `release` label, AND be authored by the release bot (promote-rc.yaml opens
+    # it as cozystack-ci[bot]). Merge rights already gate this; asserting the
+    # author additionally closes the "name a branch release-X.Y.Z, get the label
+    # applied, merge it" hole.
     if: |
       github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'release')
+      contains(github.event.pull_request.labels.*.name, 'release') &&
+      github.event.pull_request.user.login == 'cozystack-ci[bot]'
+
+    env:
+      # The registry promotion writes to: component images and the cozy-installer
+      # chart. GHCR — the release registry tags.yaml builds rc images into — NOT
+      # the OCIR CI registry. Must match hack/promote-retag.sh's default.
+      REGISTRY: ghcr.io/cozystack/cozystack
 
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -34,7 +64,7 @@ jobs:
       # Extract tag from branch name  (branch = release-X.Y.Z*)
       - name: Extract tag from branch name
         id: get_tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const branch = context.payload.pull_request.head.ref;
@@ -49,23 +79,166 @@ jobs:
 
       # Checkout repo & create / push annotated tag
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          # Do NOT persist GITHUB_TOKEN as http.extraheader. Every tag/branch push
+          # below re-injects the app token via `git remote set-url`, but a persisted
+          # extraheader silently wins over the URL credential — so those pushes
+          # would authenticate as GITHUB_TOKEN, and a GITHUB_TOKEN push creates no
+          # workflow run (GitHub anti-recursion). That is exactly why v1.6.0's
+          # stable tag triggered no tags.yaml run (the generate-changelog and
+          # update-website-docs backstops never fired). With this false, the set-url
+          # app token authenticates, matching how promote-rc.yaml already pushes.
+          persist-credentials: false
 
-      - name: Create tag on merge commit
+      # Use the trusted pre-merge base version of the verifier, while its root
+      # argument remains the merged packages tree checked out above. This keeps
+      # the final guard independent of the release PR's executable contents.
+      - name: Checkout release tooling from base
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .release-tooling
+          sparse-checkout: hack
+          persist-credentials: false
+
+      # Resolve and verify the candidate before creating any write-once stable
+      # git or registry name. The candidate was serialized at promote time from
+      # the tag-rewritten tree; this guard pulls it by the committed digest and
+      # proves it still matches the merge commit (apart from its impossible
+      # self-reference) and still pins the rc-tested container digests.
+      #
+      # flux and yq are version-pinned: they are what this job verifies the
+      # candidate with and what stamps the stable chart, so `latest/download`
+      # would make an irreversible step depend on whatever mikefarah shipped
+      # this morning. The version tracks
+      # packages/core/testing/images/e2e-sandbox/Dockerfile. yq is additionally
+      # pinned by content — it stamps the chart's platformVersion, and this step
+      # is the last one before write-once names exist. The Flux installer is not,
+      # because it checksums the binary it fetches and the mutable part is its
+      # own bootstrap script. promote-rc.yaml's copy carries the full reasoning.
+      - name: Set up promotion toolchain (flux, skopeo, yq, helm)
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          FLUX_VERSION: "2.8.6"
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+        run: |
+          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
+          command -v skopeo >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+          command -v helm >/dev/null \
+            || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          # Not installed here, only required: `flux pull artifact` reads its
+          # registry credentials from ~/.docker/config.json, which is why the
+          # login step below runs `docker login` as well as skopeo's and helm's.
+          # This job's runner class is not one of the docker-using build ones, so
+          # say what is missing here rather than letting the login step fail with
+          # a bare "command not found" in the middle of the release path.
+          command -v docker >/dev/null \
+            || { echo "::error::docker is required on this runner: flux reads registry credentials from ~/.docker/config.json"; exit 1; }
+
+      - name: Login to registry (GHCR)
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | helm registry login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+
+      - name: Verify stable packages candidate
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          TAG: ${{ steps.get_tag.outputs.tag }}
+        run: .release-tooling/hack/verify-promoted-packages.sh "${TAG#v}"
+
+      # Create the release tag at the merge commit — write-once.
+      #
+      # The tag is attached to the PR merge commit, which did not exist before
+      # this release PR opened, so there is never a prior SHA to overwrite: a
+      # force is impossible by construction. The guard makes that explicit and
+      # makes re-runs idempotent. A pre-existing tag at a different commit means
+      # something pushed the tag out-of-band — fail loudly rather than move it.
+      - name: Create tag on merge commit (write-once)
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ steps.get_tag.outputs.tag }}
+          SHA: ${{ github.sha }}
         run: |
           git config user.name  "cozystack-ci[bot]"
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
-          git tag -f ${{ steps.get_tag.outputs.tag }} ${{ github.sha }}
-          git push -f origin ${{ steps.get_tag.outputs.tag }}
+          EXISTING="$(git ls-remote --tags origin "refs/tags/${TAG}" | awk '{print $1}')"
+          if [ -z "$EXISTING" ]; then
+            git tag "${TAG}" "${SHA}"
+            git push origin "refs/tags/${TAG}"
+            echo "✅ Created ${TAG} at ${SHA}."
+          elif [ "$EXISTING" = "${SHA}" ]; then
+            echo "✅ ${TAG} already at ${SHA}; nothing to do."
+          else
+            echo "::error::${TAG} already exists at ${EXISTING}; refusing to force-move it to ${SHA} (tags are write-once)."
+            exit 1
+          fi
+
+      # Tag the api/apps/v1alpha1 submodule for pkg.go.dev — stable releases only.
+      #
+      # Moved here from tags.yaml: under the promote flow the stable draft already
+      # exists when the stable tag is pushed, so tags.yaml's prepare-release body
+      # (which used to cut this) is skipped and the Go-module tag was never
+      # created for a promoted stable. Finalize is where the stable tag is born,
+      # so it is where the matching submodule tag must be cut, at the same commit.
+      # Write-once: api/apps/v1alpha1/* tags feed the Go module proxy and
+      # pkg.go.dev, where a moved tag poisons caches irreversibly — create when
+      # absent, no-op if it already points here, fail loudly if it points
+      # elsewhere. Skipped for a prerelease tag (an rc/beta/alpha Go-module tag
+      # would permanently pollute the proxy — #2677 goal 3); rc promotions never
+      # open a release PR so never reach finalize, but the guard is kept explicit.
+      - name: Tag API submodule (write-once)
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          VTAG: ${{ steps.get_tag.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          SUBTAG="api/apps/v1alpha1/${VTAG}"
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
+          # The submodule tag points at the same commit as the stable tag created
+          # above — github.sha, the merge commit. Resolve from SHA directly (not
+          # from the vX.Y.Z tag) so an idempotent re-run, where the stable tag
+          # already existed and no local tag was created, still finds the target.
+          EXISTING="$(git ls-remote --tags origin "refs/tags/${SUBTAG}" | awk '{print $1}')"
+          if [ -z "$EXISTING" ]; then
+            git tag "${SUBTAG}" "${SHA}"
+            git push origin "refs/tags/${SUBTAG}"
+            echo "✅ Created ${SUBTAG} at ${SHA}."
+          elif [ "$EXISTING" = "${SHA}" ]; then
+            echo "✅ ${SUBTAG} already at ${SHA}; nothing to do."
+          else
+            echo "::error::${SUBTAG} already exists at ${EXISTING}; refusing to force-move it to ${SHA} (tags are write-once)."
+            exit 1
+          fi
 
       # Ensure maintenance branch release-X.Y
       - name: Ensure maintenance branch release-X.Y
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -94,14 +267,30 @@ jobs:
                 branch
               });
            
-              await github.rest.git.updateRef({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: `heads/${branch}`,
-                sha: commitSha,
-                force: true
-              });
-              console.log(`🔁 Force-updated '${branch}' to ${commitSha}`);
+              // Fast-forward only — the maintenance branch is never rewound.
+              // force:false makes GitHub reject (422) a non-fast-forward update;
+              // we warn and leave the branch for a maintainer to resolve rather
+              // than clobber history.
+              try {
+                await github.rest.git.updateRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `heads/${branch}`,
+                  sha: commitSha,
+                  force: false
+                });
+                console.log(`✅ Fast-forwarded '${branch}' to ${commitSha}`);
+              } catch (ffErr) {
+                // Only a non-fast-forward rejection (422) is the expected,
+                // recoverable case. Auth/API/malformed-ref errors must not be
+                // swallowed — they'd silently leave the maintenance branch stale.
+                if (ffErr.status === 422) {
+                  console.log(`::warning::Could not fast-forward '${branch}' to ${commitSha} (not a descendant); leaving as-is — resolve manually. (${ffErr.message})`);
+                } else {
+                  core.setFailed(`Unexpected error updating '${branch}': ${ffErr.message}`);
+                  throw ffErr;
+                }
+              }
             } catch (err) {
               if (err.status === 404) {
                 await github.rest.git.createRef({
@@ -120,7 +309,8 @@ jobs:
 
       # Publish draft release and ensure correct latest flag
       - name: Publish draft release
-        uses: actions/github-script@v7
+        id: publish
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -202,12 +392,53 @@ jobs:
             const isOutdated = maxRelease && compareSemver(currentSemver, maxRelease.semver) < 0;
             const makeLatest = (isRc || isOutdated) ? 'false' : 'true';
 
+            // The image retag step below reuses this exact decision to gate
+            // whether :latest moves — the release's `latest` and the images'
+            // :latest must agree (a patch on an old line moves neither).
+            core.setOutput('make_latest', makeLatest);
+
             if (isRc) {
               console.log(`🏷️  ${tag} is a prerelease, make_latest: false`);
             } else if (isOutdated) {
               console.log(`🏷️  ${tag} < ${maxRelease.tag} (max semver), make_latest: false`);
             } else {
               console.log(`🏷️  ${tag} is the highest version, make_latest: true`);
+            }
+
+            // Release body comes from the changelog that merged with THIS PR
+            // (promote-rc.yaml commits it onto the release-X.Y.Z branch), read
+            // from the merge commit already checked out here.
+            //
+            // Deliberately not left to update-releasenotes.yaml: that workflow
+            // triggers on pushes to main touching docs/changelogs/v*.md, and it
+            // only watches main. Since the rc freeze every promote PR targets
+            // release-X.Y, so no such push exists at promote time and it would
+            // sync no release at all — that used to be the patch-release corner
+            // case and is now every release. Back when the promote PR did merge
+            // into main it was worse than useless: it raced this job on that very
+            // push, and if it won it found no published release yet, skipped, and
+            // never fired again, leaving the release body permanently empty.
+            // Reading the file here is both race-free and branch-agnostic;
+            // update-releasenotes.yaml remains for later maintainer edits and
+            // manual re-syncs.
+            const fs = require('fs');
+            const changelogPath = `docs/changelogs/${tag}.md`;
+            let body;
+            if (fs.existsSync(changelogPath)) {
+              const raw = fs.readFileSync(changelogPath, 'utf8');
+              // Last line of defence before the body becomes public and
+              // immutable-by-convention. promote-rc.yaml validates the changelog
+              // structurally, but it can also arrive by hand-commit, and an
+              // empty or whitespace-only file here would blank the release notes
+              // more thoroughly than publishing the draft's body would.
+              if (raw.trim().length === 0) {
+                console.log(`::warning::${changelogPath} is empty or whitespace-only — refusing to use it as the release body for ${tag}. Publishing with the draft's existing body instead.`);
+              } else {
+                body = raw;
+                console.log(`📝 Release body from ${changelogPath} (${body.length} bytes)`);
+              }
+            } else {
+              console.log(`::warning::${changelogPath} not found in the merge commit — publishing ${tag} with the draft's existing body. Add the changelog and re-run 'Update Release Notes' to backfill it.`);
             }
 
             // Publish the release
@@ -217,7 +448,8 @@ jobs:
               release_id: draft.id,
               draft: false,
               prerelease: isRc,
-              make_latest: makeLatest
+              make_latest: makeLatest,
+              ...(body ? { body } : {})
             });
             console.log(`🚀 Published release ${tag}`);
 
@@ -232,3 +464,63 @@ jobs:
               });
               console.log(`✅ Restored ${maxRelease.tag} as latest release`);
             }
+
+      # ── Transactional promotion: consumer-visible registry side effects run
+      #    HERE, after the candidate guard passed and the promote PR merged.
+      #    promote-rc.yaml published only a temporary `promotion-*` packages
+      #    candidate, so an abandoned promotion leaves no stable-named bytes.
+      #
+      #    The checked-out merge commit is the promoted stable tree: the rc's
+      #    digests with the tag string rewritten to stable and the verified
+      #    candidate pinned. skopeo retags those digests to the stable image tag;
+      #    helm packages+pushes the stable chart.
+
+      # Retag every rc image/digest plus the verified packages candidate to the
+      # stable tag. No container rebuild — bit-for-bit
+      # the e2e-tested rc. :latest moves only when this stable is the newest
+      # published version, gated by the SAME make_latest decision the release got.
+      - name: Retag rc images to stable
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          STABLE_TAG:  ${{ steps.get_tag.outputs.tag }}
+          MOVE_LATEST: ${{ steps.publish.outputs.make_latest == 'true' && '1' || '0' }}
+        run: ./hack/promote-retag.sh "${STABLE_TAG}"
+
+      # Publish the stable cozy-installer OCI chart — the documented install path
+      # (`helm upgrade --install cozystack oci://…/cozy-installer --version X.Y.Z`).
+      # The retag above covers component images + the cozystack-packages artifact,
+      # but the chart is a separate OCI artifact referenced in no values.yaml, so
+      # the stable install 404s (manifest unknown) unless it is published here.
+      # No container rebuild: the chart is packaged from the merged stable tree,
+      # which pins the retagged images + artifact by digest; only the chart's
+      # version and its platformVersion default are stamped.
+      - name: Publish stable cozy-installer chart
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          TAG:         ${{ steps.get_tag.outputs.tag }}
+          MAKE_LATEST: ${{ steps.publish.outputs.make_latest }}
+        run: |
+          set -eu
+          STABLE_VERSION="${TAG#v}"
+          # Bake the correct platform version into the chart's DEFAULT values so
+          # the primary `helm --install --version X.Y.Z` path reports the stable
+          # version in telemetry — the operator image itself still carries the rc
+          # version baked at build time, and this env override is what corrects
+          # it. Done on the working tree only (never committed): committing it
+          # would leak platformVersion=vX.Y.Z onto main/the release line when the
+          # promote PR merges, mis-stamping the next rc built from that branch.
+          export STABLE_VERSION
+          yq -i '.cozystackOperator.platformVersion = "v" + strenv(STABLE_VERSION)' \
+            packages/core/installer/values.yaml
+          PKG="$(helm package packages/core/installer \
+            --version "${STABLE_VERSION}" --app-version "${STABLE_VERSION}" | awk '{print $NF}')"
+          helm push "$PKG" "oci://${REGISTRY}"
+          rm -f "$PKG"
+          # cozy-installer:latest tracks the newest stable, matching the image
+          # :latest and the release's `latest` flag — never moved by a patch on
+          # an older line.
+          if [ "${MAKE_LATEST}" = "true" ]; then
+            skopeo copy --multi-arch all \
+              "docker://${REGISTRY}/cozy-installer:${STABLE_VERSION}" \
+              "docker://${REGISTRY}/cozy-installer:latest"
+          fi

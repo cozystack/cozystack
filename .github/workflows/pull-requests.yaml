@@ -202,6 +202,130 @@ jobs:
             }
             core.setOutput('disk_id',     diskId);
 
+  # Promotion publishes the rewritten packages artifact before opening its PR.
+  # Verify GitHub's prospective merge tree here, so a `packages/` edit pushed to
+  # this PR fails before it can merge.
+  #
+  # Checking the MERGE tree rather than the head is what makes base drift
+  # visible when this job runs — but nothing re-runs it when the base moves:
+  # GitHub does not fire `pull_request` on the base branch advancing, it only
+  # recomputes refs/pull/N/merge. So a `packages/` change landing on the base
+  # after this went green is never re-verified here, and the PR stays mergeable
+  # on the stale result. Finalize repeats the check against the real merge
+  # commit before creating the write-once stable tag, which is where that case
+  # is actually caught — loudly, and before any stable name exists.
+  #
+  # This job is the first of the five files promote-rc.yaml's `parse` preflight
+  # requires on a promote PR's base branch; without it a `Promote RC` dispatch
+  # for this line refuses to start.
+  #
+  # DELIBERATELY NOT KEYED ON THE `release` LABEL, which is what main's copy
+  # does. `gh pr create --label release` is two API calls: the PR is created,
+  # then labelled. On PR #3550 those were 09:35:31Z and 09:35:32Z. main can key
+  # on the label because its `on.pull_request.types` carries `labeled`, so the
+  # label event itself starts a run; this branch's trigger set does not, and
+  # backporting `labeled` here would drag in main's concurrency-group split and
+  # its `plan` guard complement. Keyed on the label without that trigger, this
+  # job would depend on GitHub happening to serialize the `opened` payload after
+  # the labelling call — a one-second race. It has in fact been winning that
+  # race on this branch (PR #3161: opened 01:58:36Z, labelled 01:58:37Z, and the
+  # `opened` run created at 01:58:40Z did execute the label-gated `Resolve
+  # assets`), which is worse than losing it: a guard that works by racing looks
+  # green until the day it does not, and the day it does not is a release day.
+  # It would also satisfy promote-rc.yaml's five-file preflight while verifying
+  # nothing.
+  #
+  # Author plus head-branch shape is decided at PR creation and cannot race.
+  # Checked against this branch's own history — every `release`-labelled PR the
+  # bot has opened, back to v1.0.7 — the pairing is exact: a `release-*` head
+  # from `cozystack-ci[bot]` is always a release PR, and the bot's only other
+  # `release`-labelled head shape is `changelog-v*` (e.g. #2971), which
+  # `startsWith` excludes. The three prerelease exclusions cover a shape that
+  # existed under the old flow (#2794 `release-1.5.0-rc.1`, #2924
+  # `release-1.5.0-rc.3`, #2831 `release-1.5.0-alpha.2`, all opened by the
+  # tags.yaml step this port removes): `${HEAD_BRANCH#release-}` must be X.Y.Z,
+  # so such a PR could only ever produce a red check.
+  #
+  # hack/promote-gate-contract.bats pins the shape so it cannot drift back to a
+  # label key on a later backport.
+  verify-release-candidate:
+    name: Verify release packages candidate
+    runs-on: ubuntu-latest
+    # Without a ceiling the job inherits the 6-hour default, and a stalled
+    # `flux pull artifact` would hold the check pending for all of it.
+    timeout-minutes: 30
+    if: |
+      github.event.pull_request.user.login == 'cozystack-ci[bot]'
+      && startsWith(github.head_ref, 'release-')
+      && !contains(github.head_ref, '-rc.')
+      && !contains(github.head_ref, '-alpha.')
+      && !contains(github.head_ref, '-beta.')
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      # The default pull_request checkout is GitHub's prospective merge commit,
+      # not just the head branch. That makes base-branch package drift visible.
+      - name: Checkout prospective merge
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      # Execute the verifier from the trusted base SHA. An older rc-derived head
+      # may not contain it, and a PR must not be able to weaken its own guard.
+      - name: Checkout release tooling from base
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .release-tooling
+          sparse-checkout: hack
+          persist-credentials: false
+
+      # Both tools are version-pinned. This job decides whether a stable release
+      # may be created, so what it runs has to be a fixed input: `latest/download`
+      # resolves to whatever mikefarah shipped this morning, and a yq that changed
+      # how it emits or compares a value turns a release gate into a moving one.
+      # The version tracks packages/core/testing/images/e2e-sandbox/Dockerfile.
+      # yq is additionally pinned by content; the Flux installer is not, because
+      # it checksums the binary it fetches and the mutable part is its own
+      # bootstrap script.
+      - name: Set up promotion toolchain (flux, yq)
+        env:
+          FLUX_VERSION: "2.8.6"
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+        run: |
+          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
+
+      - name: Login to registry (GHCR)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Verify stable packages candidate
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          STABLE_VERSION="${HEAD_BRANCH#release-}"
+          .release-tooling/hack/verify-promoted-packages.sh "$STABLE_VERSION"
 
   e2e:
     name: "E2E Tests"
@@ -213,7 +337,36 @@ jobs:
       packages: read
       checks: write
     needs: ["build", "resolve_assets"]
-    if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
+    # Regular PRs enter through `build`. A `release`-labelled promote PR enters
+    # through `resolve_assets` only when it also carries `full-e2e`.
+    #
+    # Without the second term a promote PR ran the full suite by default: the
+    # label makes `resolve_assets` run, it finds the draft release promote-rc
+    # created, and `always() && resolve_assets == 'success'` let this job in --
+    # then `Select E2E tests` saw the digest rewrite under packages/core/ and
+    # escalated to every bats file. Two to three hours, on a PR whose entire
+    # content is a tag-string rewrite over container digests that are bit-for-bit
+    # the ones e2e-tag.yaml already ran the full suite against, and which
+    # promote-rc.yaml refuses to promote without that green evidence. It also
+    # contradicted docs/release.md, which says E2E does not run on the promote PR
+    # by default.
+    #
+    # Same shape as main's release arm. One caveat this branch does not share
+    # with main: `on.pull_request.types` here has no `labeled`, so adding
+    # `full-e2e` to an already-open promote PR starts no run by itself -- it takes
+    # effect on the next push to the branch. Re-running the workflow does not
+    # help, because the stored event payload's label list is the one from `opened`.
+    # The button that always works is e2e-tag.yaml's workflow_dispatch: it takes
+    # the tag and runs this same full suite against the published tree.
+    if: |
+      always()
+      && (
+        needs.build.result == 'success'
+        || (
+          needs.resolve_assets.result == 'success'
+          && contains(github.event.pull_request.labels.*.name, 'full-e2e')
+        )
+      )
 
     steps:
       - name: Generate GitHub App token
