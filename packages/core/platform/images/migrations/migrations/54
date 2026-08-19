@@ -85,6 +85,24 @@ CHILD_CHART_REF_NAME="cozystack-kubernetes-nodes-application-kubevirt-kubernetes
 # cluster that relied on the default keeps its (ingress-nginx-roled) md0 pool.
 DEFAULT_MD0='{"minReplicas":0,"maxReplicas":10,"instanceType":"u1.medium","diskSize":"20Gi","storageClass":"","roles":["ingress-nginx"],"resources":{},"gpus":[],"kubelet":{}}'
 
+# Durable record of the pools this migration pinned but deliberately did NOT
+# adopt (the hostile stored shapes below: an over-long child release name, an
+# RFC-1123-invalid nodeGroups key, a non-object group value or nodeGroups map, a
+# non-scalar scalar field). Every per-pool WARNING reaches only this hook Job's
+# log, and the Job carries
+# helm.sh/hook-delete-policy: before-hook-creation, so the next platform upgrade
+# deletes the one place it was ever written -- leaving a pinned-but-unadopted
+# pool with no trace at all. A file, not a shell counter: pin_pool_objects is
+# only ever reached from inside the per-cluster and per-group pipeline subshells,
+# whose variables die with them, while the emit point at the end of this script
+# sits outside both `done`s.
+#
+# Scope: whole pools, keyed on pin_pool_objects. adopt_one's foreign-owner
+# refusal is deliberately NOT in here -- it pins one OBJECT while the rest of
+# the pool still adopts, so the pool is not unadopted and listing it would
+# mislead. That case stays a log-only warning.
+SKIPPED_FILE=$(mktemp)
+
 # adopt_one <resource> <object-name> <namespace> <new-release> <expected-old-release>
 adopt_one() {
   res=$1; obj=$2; ns=$3; new_rel=$4; old_rel=$5
@@ -207,6 +225,12 @@ list_kmts() {
 # objects are absent (a pool that never rendered under a bad name).
 pin_pool_objects() {
   cluster=$1; group=$2; ns=$3
+  # Record the pool BEFORE the invalid-name early return below: a group key that
+  # cannot even name an object (a slash, a space) has nothing to pin, but it is
+  # precisely the stored shape an operator must be told about, so it belongs in
+  # the record too. Hooked here only -- pin_cluster_pools delegates to this
+  # function, so instrumenting both would double-count.
+  printf '%s/%s\n' "$cluster" "$group" >> "$SKIPPED_FILE"
   base="kubernetes-${cluster}-${group}"
   # The pool's objects only ever existed under this composed name, and the
   # apiserver only accepts DNS-1123 subdomain names -- so a composed name that
@@ -367,6 +391,18 @@ kubectl get helmrelease --all-namespaces \
         continue
       fi
 
+      # Scope of this check: the PER-GROUP half of child_values only. The
+      # cluster-level fallbacks are NOT type-checked -- storageClass and
+      # nodeHealthCheck.maxUnhealthy / nodeStartupTimeout, which fire only when
+      # the per-group key is absent, and the version/talos pick, which is
+      # unconditional and so reaches EVERY pool. A non-scalar stored there is
+      # copied through, the child HelmRelease lands, and it fails KubernetesNodes
+      # schema validation naming the offending field in its own status. That is
+      # the deliberate trade: a sixth skip branch here would convert a legible
+      # child-HR failure into "pinned, unmanaged, warning in a Job log the next
+      # upgrade deletes", and since migration 54 stamps unconditionally the
+      # silent outcome would be once-only. Loud there beats silent here.
+      #
       # Fields the value-mapping jq below copies verbatim into the child HR must
       # be scalars. The nodeGroups map value was never fully schema-constrained
       # (unconstrained NodeGroup subfields, reachable by kubectl/dashboard edit),
@@ -491,6 +527,40 @@ kubectl get helmrelease --all-namespaces \
       fi
     done
   done
+
+# Persist the pinned-but-unadopted pools where an operator can still read them
+# once this Job is gone (see SKIPPED_FILE above). Deliberately NOT labelled
+# platform.cozystack.io/no-delete: this is a record of what happened, not
+# platform state, so an operator who has acted on it may delete it. And
+# deliberately non-fatal: under set -euo pipefail a failed apply would exit
+# before the stamp and re-run the whole adoption for every tenant over a
+# bookkeeping write, so warn instead -- the same list is already above in this
+# log, and adding an abort path that did not exist before would be a worse
+# trade than losing the record.
+if [ -s "$SKIPPED_FILE" ]; then
+  echo "recording $(grep -c . "$SKIPPED_FILE") pinned-but-unadopted pool(s) in ConfigMap cozystack-migration-54-unadopted"
+  unadopted_cm=$(cat <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-migration-54-unadopted
+  namespace: ${NAMESPACE:-cozy-system}
+data:
+  migration: "54"
+  note: |
+    Worker pools migration 54 pinned with helm.sh/resource-policy=keep but did
+    NOT adopt into a kubernetes-nodes HelmRelease. They keep running, unmanaged,
+    until the stored shape is fixed and the pool is recreated. Migration 54 has
+    already stamped version 55 and does not re-run on its own; the per-pool
+    reason was logged by the migration Job that wrote this ConfigMap.
+  pools: |
+$(sed 's/^/    /' "$SKIPPED_FILE")
+EOF
+)
+  printf '%s\n' "$unadopted_cm" | kubectl apply --filename - ||
+    echo "  WARNING: recording the unadopted-pool ConfigMap failed; the pools are pinned, but only this Job's log lists them" >&2
+fi
+rm -f "$SKIPPED_FILE"
 
 # Stamp version via the shared helper so the no-delete label is preserved.
 stamp_cozystack_version 55

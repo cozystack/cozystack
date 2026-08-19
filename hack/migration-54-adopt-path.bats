@@ -479,3 +479,45 @@ JSON
   ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
+
+@test "a pinned-but-unadopted pool is recorded in the cozystack-migration-54-unadopted ConfigMap" {
+  prep
+  # Every skip branch warns and moves on, but the warning only ever reaches this
+  # hook Job's log -- and the Job carries
+  # helm.sh/hook-delete-policy: before-hook-creation, so the next platform
+  # upgrade deletes the one place it was written. A pool left
+  # pinned-but-unadopted would then be invisible: prune-proof, unmanaged, and
+  # named nowhere an operator can look months later. Migration 54 must leave a
+  # durable record. Driven through the 53-char overflow branch, the cleanest
+  # skip: cluster 'production-eu-central-analytics01' + pool 'md0' composes a
+  # 54-char child release name.
+  cat > "$FAKE_HR_LIST" <<'JSON'
+{"items":[{"metadata":{"namespace":"tenant-test","name":"kubernetes-production-eu-central-analytics01"},"spec":{"values":{"nodeGroups":{"md0":{"minReplicas":1}}}}}]}
+JSON
+  export FAKE_APPLIED_CM="$WORK/applied-cm"
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  [ "$rc" -eq 0 ]
+  grep -qiE "exceeds Helm's 53-char limit" "$WORK/out"
+  # The record was applied under its OWN name, so it is not the version stamp
+  # wearing a different hat (the fake discriminates on metadata.name).
+  grep -qF -- "APPLY-CM cozystack-migration-54-unadopted" "$FAKE_CMDLOG"
+  [ -s "$FAKE_APPLIED_CM" ]
+  cat "$FAKE_APPLIED_CM"
+  # It parses as YAML -- a mis-indented block scalar would be rejected by the
+  # real apiserver, which the fake apply cannot catch -- and .data.pools carries
+  # exactly the one pool that was pinned but not adopted, no more.
+  yq . "$FAKE_APPLIED_CM" >/dev/null
+  [ "$(yq -r '.metadata.name' "$FAKE_APPLIED_CM")" = "cozystack-migration-54-unadopted" ]
+  [ "$(yq -r '.data.pools' "$FAKE_APPLIED_CM" | grep -c .)" -eq 1 ]
+  yq -r '.data.pools' "$FAKE_APPLIED_CM" | grep -qFx 'production-eu-central-analytics01/md0'
+  # It is a diagnostic record, not platform state: no no-delete label, so an
+  # operator who has acted on it may delete it.
+  [ "$(yq -r '.metadata.labels."platform.cozystack.io/no-delete" // "ABSENT"' "$FAKE_APPLIED_CM")" = "ABSENT" ]
+  # The run still reaches the version stamp, so the record is not the by-product
+  # of an aborted migration.
+  grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  unset FAKE_APPLIED_CM
+  rm -rf "$WORK"
+}
