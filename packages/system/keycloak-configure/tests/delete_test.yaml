@@ -1,0 +1,58 @@
+suite: flux teardown job patches the HelmRelease in the release namespace
+
+# The pre-delete teardown Job clears the HelmRelease finalizers as its last
+# step. Its RBAC (Role + RoleBinding, resourceNames: [.Release.Name]) is created
+# in .Release.Namespace, so the kubectl patch MUST target that same namespace and
+# release name. A hardcoded namespace that differs from the install namespace
+# makes the ServiceAccount Forbidden to patch the HelmRelease, the Job retries
+# forever, and the Helm release wedges in "uninstalling".
+release:
+  name: keycloak-configure
+  namespace: cozy-keycloak
+tests:
+  - it: teardown patches the HelmRelease using the release name and namespace
+    template: templates/delete.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      _cluster:
+        root-host: example.com
+        kube-root-ca: ""
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl patch hr keycloak-configure -n cozy-keycloak
+
+  - it: teardown never targets a namespace other than the release namespace
+    template: templates/delete.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      _cluster:
+        root-host: example.com
+        kube-root-ca: ""
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: patch hr \S+ -n cozy-system
+
+  # Prove the patch is parameterized on .Release.Name / .Release.Namespace
+  # rather than matching the default install namespace by coincidence.
+  - it: teardown tracks a non-default release name and namespace
+    template: templates/delete.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    release:
+      name: custom-release
+      namespace: custom-ns
+    set:
+      _cluster:
+        root-host: example.com
+        kube-root-ca: ""
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl patch hr custom-release -n custom-ns
