@@ -1,7 +1,20 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for the SeaweedFS db-split hand-over shared by platform migrations
-# 43 (original) and 45 (repair) — lib/seaweedfs-db-adopt.sh.
+# Unit tests for the platform migrations in slots 43 and 45 — driven end-to-end
+# against a fake kubectl, so what is under test is the migration scripts rather
+# than their helpers in isolation.
+#
+# Slot 45 does TWO independent jobs on release-1.5, and both are covered here
+# because they run in one script and share one version stamp:
+#
+#   1. lib/seaweedfs-db-adopt.sh — the SeaweedFS db-split hand-over, shared with
+#      migration 43. Sections 1-3 below.
+#   2. lib/kubeadm-keep-pin.sh — the helm.sh/resource-policy=keep pin on the CAPI
+#      kubeadm bootstrap objects, which is 1.6's own migration 45 folded into this
+#      slot because a v1.5.4 cluster is stamped 46 and its later 1.6 upgrade runs
+#      `seq 46 53`, skipping 1.6's slot 45 entirely. Section 4 below.
+#
+# --- 1-3: the SeaweedFS hand-over ---
 #
 # The 1.5.0 split (PR #2601) moved Cluster/seaweedfs-db out of the <name>-system
 # release into a new <name>-db release. The hand-over must, before <name>-system
@@ -97,6 +110,11 @@ run_migration() {
     -e FAKE_LIST_FAIL="${FAKE_LIST_FAIL-}" \
     -e FAKE_GET_FAIL="${FAKE_GET_FAIL-}" \
     -e FAKE_ANNOTATE_FAIL="${FAKE_ANNOTATE_FAIL-}" \
+    -e FAKE_KCTS="${FAKE_KCTS-}" \
+    -e FAKE_KCS="${FAKE_KCS-}" \
+    -e FAKE_KUBEADM_LIST_FAIL="${FAKE_KUBEADM_LIST_FAIL-}" \
+    -e FAKE_KUBEADM_ANNOTATE_FAIL="${FAKE_KUBEADM_ANNOTATE_FAIL-}" \
+    -e FAKE_KUBEADM_ANNOTATE_FAIL_NS="${FAKE_KUBEADM_ANNOTATE_FAIL_NS-}" \
     "$ALPINE" "/migrations/$1" || _run_migration_rc=$?
   return "$_run_migration_rc"
 }
@@ -116,7 +134,11 @@ prep() {
   : > "$FAKE_CMDLOG"
   export NAMESPACE=cozy-system
   export FAKE_CLUSTERS=""
+  export FAKE_KCTS=""
+  export FAKE_KCS=""
   unset FAKE_LIST_FAIL FAKE_GET_FAIL FAKE_ANNOTATE_FAIL || true
+  unset FAKE_KUBEADM_LIST_FAIL FAKE_KUBEADM_ANNOTATE_FAIL \
+        FAKE_KUBEADM_ANNOTATE_FAIL_NS || true
 }
 
 # --- 1. instance name -------------------------------------------------------
@@ -217,7 +239,7 @@ tenant-named foo-db keep"
   run_migration 45 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  [ "$(grep -c 'ANNOTATE' "$FAKE_CMDLOG")" -eq 0 ]
   grep -qF -- "STAMP 46" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -231,7 +253,7 @@ tenant-named foo-db keep"
   run_migration 45 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  [ "$(grep -c 'ANNOTATE' "$FAKE_CMDLOG")" -eq 0 ]
   grep -qF -- "carries no meta.helm.sh/release-name" "$WORK/out"
   rm -rf "$WORK"
 }
@@ -243,7 +265,7 @@ tenant-named foo-db keep"
   run_migration 45 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  [ "$(grep -c 'ANNOTATE' "$FAKE_CMDLOG")" -eq 0 ]
   grep -qF -- "owned by unrelated release" "$WORK/out"
   rm -rf "$WORK"
 }
@@ -258,7 +280,7 @@ tenant-named foo-db keep"
   run_migration 45 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  [ "$(grep -c 'ANNOTATE' "$FAKE_CMDLOG")" -eq 0 ]
   grep -qF -- "no instance name" "$WORK/out"
   rm -rf "$WORK"
 }
@@ -275,7 +297,7 @@ tenant-named foo-db keep"
   # Must propagate: the Job retries rather than advancing the version.
   [ "$rc" -ne 0 ]
   grep -qF -- "refusing to stamp past an unverified fleet" "$WORK/out"
-  ! grep -q 'STAMP' "$FAKE_CMDLOG"
+  [ "$(grep -c 'STAMP' "$FAKE_CMDLOG")" -eq 0 ]
   rm -rf "$WORK"
 }
 
@@ -288,7 +310,7 @@ tenant-named foo-db keep"
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -ne 0 ]
   grep -qF -- "cannot read the Helm owner" "$WORK/out"
-  ! grep -q 'STAMP' "$FAKE_CMDLOG"
+  [ "$(grep -c 'STAMP' "$FAKE_CMDLOG")" -eq 0 ]
   rm -rf "$WORK"
 }
 
@@ -300,7 +322,7 @@ tenant-named foo-db keep"
   run_migration 45 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -ne 0 ]
-  ! grep -q 'STAMP' "$FAKE_CMDLOG"
+  [ "$(grep -c 'STAMP' "$FAKE_CMDLOG")" -eq 0 ]
   rm -rf "$WORK"
 }
 
@@ -315,7 +337,7 @@ tenant-named foo-db keep"
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
   grep -qF -- "resource type is not served" "$WORK/out"
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  [ "$(grep -c 'ANNOTATE' "$FAKE_CMDLOG")" -eq 0 ]
   grep -qF -- "STAMP 46" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -327,7 +349,261 @@ tenant-named foo-db keep"
   run_migration 45 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  [ "$(grep -c 'ANNOTATE' "$FAKE_CMDLOG")" -eq 0 ]
   grep -qF -- "STAMP 46" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+# --- 4. kubeadm bootstrap keep-pin -----------------------------------------
+#
+# THE THREAT. 1.6 drops KubeadmConfigTemplate from the tenant `kubernetes` chart
+# (workers move to TalosConfigTemplate), so its upgrade sees the resource in the
+# previous release manifest and absent from the new one and deletes it — while the
+# kubeadm-backed MachineSet is still around mid-rollover with its
+# bootstrap.configRef pointing at it. 1.6 guards that with its own migration 45.
+# A v1.5.4 cluster is stamped 46 and runs `seq 46 53`, so it never executes that
+# slot; the pin has to already be on the objects, which is what this half of
+# release-1.5's slot 45 does.
+#
+# So the property under test is the ANNOTATION LANDING ON THE OBJECT, not a
+# function being callable. Every assertion below reads the PIN records the fake
+# kubectl wrote, and the fake models the label selector rather than ignoring it:
+# selecting on meta.helm.sh/release-name (an annotation, and therefore never a
+# valid selector) returns no rows, so the classic silent-no-op shape of this bug
+# fails these tests instead of passing them.
+#
+# PIN, not ANNOTATE, is the fake's verb for this half — the SeaweedFS assertions
+# above count ANNOTATE lines, and a shared verb would couple the two halves'
+# tests to each other.
+#
+# "DID NOT HAPPEN" IS ASSERTED AS `[ "$(grep -c ...)" -eq 0 ]`, NEVER `! grep -q`.
+# POSIX and bash both exempt a !-negated pipeline from errexit — "the -e setting
+# shall be ignored ... if the command's return value is being inverted with !" —
+# so `! grep -q X file` cannot fail a cozytest test no matter what the file
+# contains. It reads like an assertion and is a no-op. Measured, not assumed: with
+# the two halves of slot 45 deliberately swapped, a `! grep -q 'PIN '` test stayed
+# green while the cmdlog plainly contained the PIN line. The counting form puts the
+# result in `[`, whose non-zero status does trip errexit.
+
+@test "pins an unannotated Helm-managed KubeadmConfigTemplate, and stamps 46" {
+  prep
+  export FAKE_KCTS="tenant-root kubernetes-md0 - Helm"
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  grep -qF -- "PIN kubeadmconfigtemplate tenant-root/kubernetes-md0 resource-policy=keep" "$FAKE_CMDLOG"
+  grep -qF -- "STAMP 46" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "pins every Helm-managed KubeadmConfigTemplate, each in its own namespace" {
+  prep
+  export FAKE_KCTS="tenant-root kubernetes-md0 - Helm
+tenant-root kubernetes-gpu-md1 - Helm
+tenant-a other-cluster-md0 - Helm"
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  grep -qF -- "PIN kubeadmconfigtemplate tenant-root/kubernetes-md0 resource-policy=keep" "$FAKE_CMDLOG"
+  grep -qF -- "PIN kubeadmconfigtemplate tenant-root/kubernetes-gpu-md1 resource-policy=keep" "$FAKE_CMDLOG"
+  grep -qF -- "PIN kubeadmconfigtemplate tenant-a/other-cluster-md0 resource-policy=keep" "$FAKE_CMDLOG"
+  [ "$(grep -c 'PIN ' "$FAKE_CMDLOG")" -eq 3 ]
+  rm -rf "$WORK"
+}
+
+# Re-running must not write. The pin reads helm.sh/resource-policy first and skips
+# on "keep", so an already-pinned fleet produces no annotate call at all — an
+# unconditional `kubectl annotate --overwrite` would still be correct on the
+# cluster but would make "no-op" unobservable, and this is the assertion that
+# keeps it observable.
+@test "idempotent: an already-pinned KubeadmConfigTemplate is skipped without a write" {
+  prep
+  export FAKE_KCTS="tenant-root kubernetes-md0 keep Helm"
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  [ "$(grep -c 'PIN ' "$FAKE_CMDLOG")" -eq 0 ]
+  grep -qF -- "already carries helm.sh/resource-policy=keep" "$WORK/out"
+  grep -qF -- "already-pinned=1" "$WORK/out"
+  grep -qF -- "STAMP 46" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+# A cluster with no tenant Kubernetes clusters at all. Zero matching objects is a
+# clean run, not a failure: the CRDs are served (CAPI is installed platform-wide)
+# and the selector simply matches nothing.
+@test "zero Helm-managed kubeadm objects is success, not failure" {
+  prep
+  export FAKE_KCTS=""
+  export FAKE_KCS=""
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  [ "$(grep -c 'PIN ' "$FAKE_CMDLOG")" -eq 0 ]
+  grep -qF -- "pinned=0 already-pinned=0 failures=0" "$WORK/out"
+  grep -qF -- "STAMP 46" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+# The KubeadmConfig children CAPI spawns from the template are owned by their
+# Machine, not by Helm: no app.kubernetes.io/managed-by label, so Helm never
+# prunes them and the pin must not touch them. Pinning one would leave keep on an
+# object whose lifecycle belongs to CAPI. Verified against a live v1.5 stand,
+# where the spawned KubeadmConfig carries no managed-by at all.
+@test "leaves a CAPI-spawned KubeadmConfig alone: it is not Helm-managed" {
+  prep
+  export FAKE_KCS="tenant-root kubernetes-md0-lw46d-z2wqn - -"
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  [ "$(grep -c 'PIN ' "$FAKE_CMDLOG")" -eq 0 ]
+  grep -qF -- "STAMP 46" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+# The fail-open that IS load-bearing, mirroring the CNPG case above: a cluster
+# without the CAPI bootstrap provider has nothing to pin and must not be blocked
+# from upgrading.
+@test "a cluster with no kubeadm bootstrap provider stamps cleanly without pinning" {
+  prep
+  export FAKE_KUBEADM_LIST_FAIL="error: the server doesn't have a resource type \"kubeadmconfigtemplates\" in group \"bootstrap.cluster.x-k8s.io\""
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  grep -qF -- "is not served on this cluster" "$WORK/out"
+  [ "$(grep -c 'PIN ' "$FAKE_CMDLOG")" -eq 0 ]
+  grep -qF -- "STAMP 46" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "a failing kubeadm fleet scan aborts instead of stamping past it" {
+  prep
+  export FAKE_KCTS="tenant-root kubernetes-md0 - Helm"
+  export FAKE_KUBEADM_LIST_FAIL="Error from server (Timeout): the server was unable to return a response in the time allotted"
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  # Must propagate: the Job retries rather than advancing the version, because
+  # nothing later will pin what this pass could not see.
+  [ "$rc" -ne 0 ]
+  grep -qF -- "refusing to stamp past an unverified fleet" "$WORK/out"
+  [ "$(grep -c 'STAMP' "$FAKE_CMDLOG")" -eq 0 ]
+  rm -rf "$WORK"
+}
+
+# The one per-object failure that is NOT a failure: an app deleted concurrently
+# with this hook takes its KubeadmConfigTemplate away between the fleet scan and
+# the annotate. Helm cannot prune what no longer exists, so nothing is at risk, and
+# failing the pre-upgrade hook over it would block the platform upgrade on an
+# object nobody needs. "not found" is accepted HERE and deliberately not for the
+# fleet scan, where a list never answers NotFound and accepting it would let a real
+# failure read as an empty fleet.
+@test "an object that disappears between the scan and the pin is skipped, not fatal" {
+  prep
+  export FAKE_KCTS="tenant-doomed kubernetes-md0 - Helm"
+  export FAKE_KUBEADM_ANNOTATE_FAIL="Error from server (NotFound): kubeadmconfigtemplates.bootstrap.cluster.x-k8s.io \"kubernetes-md0\" not found"
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  grep -qF -- "disappeared between the scan and the pin" "$WORK/out"
+  grep -qF -- "pinned=0 already-pinned=1 failures=0" "$WORK/out"
+  grep -qF -- "STAMP 46" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "a failed pin aborts rather than stamping a half-pinned fleet" {
+  prep
+  export FAKE_KCTS="tenant-root kubernetes-md0 - Helm"
+  export FAKE_KUBEADM_ANNOTATE_FAIL="Error from server (Conflict): the object has been modified"
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -ne 0 ]
+  grep -qF -- "could not be pinned" "$WORK/out"
+  [ "$(grep -c 'STAMP' "$FAKE_CMDLOG")" -eq 0 ]
+  rm -rf "$WORK"
+}
+
+# Aggregation, and the reason it is worth having: one unpinnable object must not
+# stop the others from being pinned, because the version is not stamped either way
+# and the next attempt starts from the same place. The failing namespace is listed
+# FIRST so a loop that aborted on the first failure would leave tenant-b unpinned
+# and fail this test.
+@test "a partial pin failure still pins the rest, then aborts without stamping" {
+  prep
+  export FAKE_KCTS="tenant-a broken-md0 - Helm
+tenant-b healthy-md0 - Helm"
+  export FAKE_KUBEADM_ANNOTATE_FAIL="Error from server (Forbidden): kubeadmconfigtemplates.bootstrap.cluster.x-k8s.io is forbidden"
+  export FAKE_KUBEADM_ANNOTATE_FAIL_NS="tenant-a"
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -ne 0 ]
+  grep -qF -- "PIN kubeadmconfigtemplate tenant-b/healthy-md0 resource-policy=keep" "$FAKE_CMDLOG"
+  [ "$(grep -cF -- "tenant-a/broken-md0 resource-policy=keep" "$FAKE_CMDLOG")" -eq 0 ]
+  grep -qF -- "pinned=1 already-pinned=0 failures=1" "$WORK/out"
+  [ "$(grep -c 'STAMP' "$FAKE_CMDLOG")" -eq 0 ]
+  rm -rf "$WORK"
+}
+
+# --- 5. the two halves, in one slot ----------------------------------------
+
+@test "runs both halves in one pass: SeaweedFS hand-over first, then the pin" {
+  prep
+  export FAKE_CLUSTERS="tenant-named foo-system -"
+  export FAKE_KCTS="tenant-root kubernetes-md0 - Helm"
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  grep -qF -- "ANNOTATE tenant-named release-name=foo-db resource-policy=keep" "$FAKE_CMDLOG"
+  grep -qF -- "PIN kubeadmconfigtemplate tenant-root/kubernetes-md0 resource-policy=keep" "$FAKE_CMDLOG"
+  grep -qF -- "STAMP 46" "$FAKE_CMDLOG"
+  # Order is deliberate, not incidental: a missed hand-over loses a tenant's filer
+  # metadata, a missed pin gives a recoverable broken worker rollover. On a pass
+  # where only one half gets to run, it must be the irreversible one.
+  sw_line=$(grep -n 'ANNOTATE tenant-named' "$FAKE_CMDLOG" | head -1 | cut -d: -f1)
+  pin_line=$(grep -n 'PIN kubeadmconfigtemplate' "$FAKE_CMDLOG" | head -1 | cut -d: -f1)
+  [ "$sw_line" -lt "$pin_line" ]
+  rm -rf "$WORK"
+}
+
+# The other side of that order: the SeaweedFS half failing must abort before the
+# pin is attempted at all, and must not stamp.
+@test "a SeaweedFS failure aborts before the pin half runs" {
+  prep
+  export FAKE_CLUSTERS="tenant-named foo-system -"
+  export FAKE_KCTS="tenant-root kubernetes-md0 - Helm"
+  export FAKE_LIST_FAIL="Error from server (Timeout): the server was unable to return a response in the time allotted"
+  rc=0
+  run_migration 45 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -ne 0 ]
+  [ "$(grep -c 'PIN ' "$FAKE_CMDLOG")" -eq 0 ]
+  [ "$(grep -c 'STAMP' "$FAKE_CMDLOG")" -eq 0 ]
+  rm -rf "$WORK"
+}
+
+# Migration 43 sources ONLY lib/seaweedfs-db-adopt.sh. The pin must not leak into
+# it: a cluster running 43 is mid-upgrade to 44 and 1.6's slot 45 will still run
+# for it, and the two libs must stay independently sourceable (neither may call
+# the other's private helpers).
+@test "migration 43 does not pin: the keep-pin belongs to slot 45 alone" {
+  prep
+  export FAKE_CLUSTERS="tenant-root seaweedfs-system -"
+  export FAKE_KCTS="tenant-root kubernetes-md0 - Helm"
+  rc=0
+  run_migration 43 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  [ "$(grep -c 'PIN ' "$FAKE_CMDLOG")" -eq 0 ]
+  grep -qF -- "STAMP 44" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }

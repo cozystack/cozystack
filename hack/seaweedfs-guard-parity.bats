@@ -37,6 +37,16 @@ detection_block() {
   sed -n '/\$renamedVol := include/,/\$systemGen := or/p' "$1"
 }
 
+# strip_tpl_comments <file> -- the file with every {{/* ... */}} block removed, so
+# an assertion can be made about the template LOGIC without the prose around it
+# matching. Every comment opener in both files starts its own line, so dropping
+# whole lines cannot take code with it. Written as a single awk program: cozytest.sh
+# rewrites any bare `}` in column 0 into `return 0` + `}`, which would corrupt a
+# multi-line awk body.
+strip_tpl_comments() {
+  awk '/\{\{-? *\/\*/{c=1} !c{print} /\*\/ *-?\}\}/{c=0}' "$1"
+}
+
 @test "both charts detect naming generations with byte-identical logic" {
   a=$(mktemp); b=$(mktemp)
   detection_block "$SYS"   > "$a"
@@ -103,11 +113,26 @@ detection_block() {
   # old classification pointed at deletes the claim Step 2 just re-bound.
   # readyReplicas is likewise only a snapshot, not proof a duplicate never
   # served. Neither may come back as a discriminator.
+  #
+  # Counted rather than written as `! grep -qF ...`: POSIX and bash both exempt a
+  # !-negated pipeline from errexit — "the -e setting shall be ignored ... if the
+  # command's return value is being inverted with !" — so the negated form runs,
+  # returns 1, and the test carries on reporting success no matter what the file
+  # contains. These four assertions were the entire body of this test, so it
+  # asserted nothing at all. Putting the count inside `[` gives it a status errexit
+  # acts on.
+  #
+  # Matched against the TEMPLATE LOGIC ONLY, with {{/* */}} comment blocks stripped.
+  # All four names legitimately appear in the prose of both files — in the passages
+  # that explain why they were rejected as discriminators — so grepping the raw file
+  # would fail on the very documentation that records the decision this test exists
+  # to enforce. What must not come back is a live reference.
   for f in "$SYS" "$EXTRA"; do
-    ! grep -qF -- 'creationTimestamp' "$f"
-    ! grep -qF -- 'readyReplicas' "$f"
-    ! grep -qF -- '$systemOldest' "$f"
-    ! grep -qF -- '$legacyOldest' "$f"
+    logic=$(strip_tpl_comments "$f")
+    [ "$(printf '%s\n' "$logic" | grep -cF -- 'creationTimestamp')" -eq 0 ]
+    [ "$(printf '%s\n' "$logic" | grep -cF -- 'readyReplicas')" -eq 0 ]
+    [ "$(printf '%s\n' "$logic" | grep -cF -- '$systemOldest')" -eq 0 ]
+    [ "$(printf '%s\n' "$logic" | grep -cF -- '$legacyOldest')" -eq 0 ]
   done
 }
 

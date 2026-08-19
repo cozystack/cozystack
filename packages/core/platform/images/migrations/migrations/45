@@ -1,7 +1,26 @@
 #!/bin/sh
 # Migration 45 --> 46
-# Repair the 1.5.0 db-split hand-over for SeaweedFS instances whose name is not
-# the default `seaweedfs`.
+# This slot does TWO independent jobs. Both are protective, both are idempotent,
+# and neither may be reached by way of the other failing.
+#
+#   1. Repair the 1.5.0 db-split hand-over for SeaweedFS instances whose name is
+#      not the default `seaweedfs` (the original contents of this slot, below).
+#   2. Pin the CAPI kubeadm bootstrap objects with helm.sh/resource-policy=keep,
+#      which is 1.6's OWN migration 45 folded in here — see
+#      lib/kubeadm-keep-pin.sh for why it has to be, and ORDER below for why it
+#      runs second.
+#
+# ORDER. The SeaweedFS repair runs first and the keep-pin second, because the two
+# failure modes are not equally bad: a missed SeaweedFS hand-over loses a tenant's
+# filer metadata, hence all of its S3, while a missed keep-pin gives a noisy
+# broken tenant-Kubernetes worker rollover that is recoverable by hand. Both halves
+# fail closed ahead of the version stamp at the bottom and the Job retries the
+# whole slot, so a half-completed attempt is safe either way — but on an attempt
+# where only one half gets to run, it should be the one whose failure is
+# irreversible. Running the pin first would mean a pin failure stops the SeaweedFS
+# repair from being attempted at all on that pass, which is strictly worse.
+#
+# --- 1. SeaweedFS db-split repair -------------------------------------------
 #
 # Migration 43 performs the hand-over of Cluster/seaweedfs-db from the
 # <name>-system release to the <name>-db release introduced by the split (PR
@@ -42,8 +61,15 @@ set -euo pipefail
 
 # shellcheck source=lib/seaweedfs-db-adopt.sh
 . "$(dirname "$0")/lib/seaweedfs-db-adopt.sh"
+# shellcheck source=lib/kubeadm-keep-pin.sh
+. "$(dirname "$0")/lib/kubeadm-keep-pin.sh"
 
+# Called bare, so a non-zero return trips errexit and aborts before the stamp
+# below. Both helpers report their own reason on stderr first.
 adopt_seaweedfs_db_clusters
+
+# --- 2. kubeadm bootstrap keep-pin ------------------------------------------
+pin_kubeadm_bootstrap_objects
 
 # Stamp version.
 # Mirror migration 42's labeled manifest. A label-less apply by the same field
