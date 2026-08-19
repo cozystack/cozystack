@@ -461,7 +461,13 @@ spec:
        the TalosConfigTemplate with a KamajiControlPlane ownerReference for
        natural GC. The MachineDeployment below references the TCT name; CAPI's
        Machine controller blocks on its absence and unblocks the moment the Job
-       applies it. */}}
+       applies it.
+
+       The name it references carries a hash of the rendered machine config,
+       computed here from the same named template the Job renders into its
+       heredoc, because TalosConfigTemplate.spec is immutable and can only ever
+       be created, never updated — see _talosconfigtemplate.tpl. */}}
+{{- $talosConfigTemplateName := printf "%s-%s-%s" $clusterName $groupName (include "kubernetes.talosConfigTemplateHash" (dict "root" $ "group" $group)) }}
 ---
 {{- $context := deepCopy $ }}
 {{- $_ := set $context "group" $group }}
@@ -553,7 +559,7 @@ spec:
         configRef:
           apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
           kind: TalosConfigTemplate
-          name: {{ $clusterName }}-{{ $groupName }}
+          name: {{ $talosConfigTemplateName }}
           namespace: {{ $.Release.Namespace }}
       clusterName: {{ $clusterName }}
       infrastructureRef:

@@ -61,6 +61,10 @@ tests:
       - notExists:
           path: spec.replicas
 
+  # The TalosConfigTemplate spec is immutable, so the object can only ever be
+  # created, never updated: the name carries a content hash of the machine config
+  # it holds (cozystack/cozystack#3515). The Job in talos-reconcile-job.yaml
+  # applies it under the same name — see the TCT_NAME assertion below.
   - it: points the MachineDeployment bootstrap at the pool TalosConfigTemplate
     documentSelector:
       path: kind
@@ -68,7 +72,10 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.bootstrap.configRef.name
-          value: kubernetes-myk8s-md0
+          value: kubernetes-myk8s-md0-ffdbe1
+      - matchRegex:
+          path: spec.template.spec.bootstrap.configRef.name
+          pattern: ^kubernetes-myk8s-md0-[0-9a-f]{6}$
       - equal:
           path: spec.template.spec.bootstrap.configRef.kind
           value: TalosConfigTemplate
