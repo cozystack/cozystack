@@ -9,6 +9,8 @@ kube-state-metrics:
   # number of objects in the cluster, and --metric-labels-allowlist below widens
   # every pod and deployment series further, so a cluster larger than the one
   # measured will land well above the peak seen here.
+  # 2Gi is 6.7x that peak, so scaling linearly with object count it stays a
+  # ceiling rather than a bound up to roughly 2100 pods and 170k series.
   #
   # A memory limit is what sets memory.max on the pod cgroup, and the Talos
   # userspace OOM handler only ever selects cgroups that lack one, so running
