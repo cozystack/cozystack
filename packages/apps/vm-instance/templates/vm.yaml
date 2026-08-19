@@ -46,6 +46,7 @@ spec:
     spec:
       domain:
         {{- $domainRes := include "virtual-machine.domainResources" . | fromJson -}}
+        {{- $fw := .Values.firmware | default dict }}
         {{- with $domainRes.cpu }}
         cpu: {{- . | toYaml | nindent 10 }}
         {{- end }}
@@ -54,6 +55,20 @@ spec:
         {{- end }}
         firmware:
           uuid: {{ include "virtual-machine.stableUuid" . }}
+          {{- if eq (toString $fw.bootloader) "uefi" }}
+          bootloader:
+            efi:
+              secureBoot: {{ $fw.secureBoot | default false }}
+              persistent: {{ $fw.efiPersistent | default false }}
+          {{- else if eq (toString $fw.bootloader) "bios" }}
+          bootloader:
+            bios: {}
+          {{- end }}
+        {{- if and (eq (toString $fw.bootloader) "uefi") ($fw.secureBoot | default false) }}
+        features:
+          smm:
+            enabled: true
+        {{- end }}
         devices:
           {{- if .Values.gpus }}
           gpus:
