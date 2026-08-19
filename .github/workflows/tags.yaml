@@ -15,7 +15,7 @@ concurrency:
 jobs:
   prepare-release:
     name: Prepare Release
-    runs-on: [self-hosted]
+    runs-on: oracle-vm-24cpu-96gb-x86-64
     outputs:
       skip: ${{ steps.check_release.outputs.skip }}
     permissions:
@@ -101,6 +101,14 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags:  true
+
+      # Ephemeral runners lack the flux CLI the installer's image-packages step
+      # shells out to; install if absent (idempotent).
+      - name: Set up build toolchain
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          command -v flux >/dev/null \
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
 
       - name: Login to GHCR
         if: steps.check_release.outputs.skip == 'false'
@@ -245,7 +253,7 @@ jobs:
 
   generate-changelog:
     name: Generate Changelog
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     needs: [prepare-release]
     permissions:
       contents: write
@@ -450,7 +458,7 @@ jobs:
 
   update-website-docs:
     name: Update Website Docs
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     needs: [generate-changelog, prepare-release]
     # generate-changelog is non-blocking — run as long as prepare-release succeeded.
     # `always()` is needed so this job runs even if generate-changelog failed/skipped.
