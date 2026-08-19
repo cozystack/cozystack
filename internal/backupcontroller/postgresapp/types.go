@@ -78,8 +78,12 @@ type Bootstrap struct {
 }
 
 type Backup struct {
-	DestinationPath     string              `json:"destinationPath,omitempty"`
-	EndpointURL         string              `json:"endpointURL,omitempty"`
+	DestinationPath string `json:"destinationPath,omitempty"`
+	EndpointURL     string `json:"endpointURL,omitempty"`
+	// Omits `omitempty` on purpose: restore must overwrite a server-side
+	// `true` with false, but a JSON merge patch drops omitempty zero-values,
+	// so the false has to be serialised to win (#3327).
+	UseSystemBucket     bool                `json:"useSystemBucket"`
 	S3AccessKey         string              `json:"s3AccessKey,omitempty"`
 	S3SecretKey         string              `json:"s3SecretKey,omitempty"`
 	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`

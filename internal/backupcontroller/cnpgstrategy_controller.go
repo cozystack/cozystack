@@ -1102,6 +1102,12 @@ func buildPostgresAppRestorePatch(
 
 	patched.Spec.Backup.DestinationPath = sourceDestinationPath
 	patched.Spec.Backup.EndpointURL = sourceEndpointURL
+	// Clear useSystemBucket: an app created with backup.useSystemBucket=true
+	// keeps that flag server-side, which combined with the explicit
+	// coordinates written above trips the chart's `bootstrap.enabled +
+	// useSystemBucket` render guard, so bootstrap.recovery never renders and
+	// the restore can't converge (#3327).
+	patched.Spec.Backup.UseSystemBucket = false
 	// Switching to s3CredentialsSecret means inline keys must not survive
 	// on the CR .spec; otherwise tenants who switch credential modes leave
 	// cleartext keys behind in etcd and audit logs.

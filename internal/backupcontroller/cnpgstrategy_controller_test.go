@@ -548,6 +548,44 @@ func TestBuildPostgresAppRestorePatch_NoSecretRefIsSkipped(t *testing.T) {
 	}
 }
 
+// TestBuildPostgresAppRestorePatch_ClearsUseSystemBucket locks in the fix for
+// issue #3327. A target app created with the platform-recommended
+// backup.useSystemBucket=true cannot be restored in place: the driver writes
+// explicit backup coordinates and flips bootstrap.enabled=true, but if the
+// server-side useSystemBucket=true survives, the chart fails the render on its
+// `bootstrap.enabled + useSystemBucket` guard and the HelmRelease never
+// re-renders bootstrap.recovery, so the restore can never converge.
+//
+// The patch must (1) set the field to false on the struct AND (2) actually
+// carry that false into the JSON merge patch. Point (2) is the subtle half:
+// with `omitempty` the false zero-value is dropped from the marshalled patch,
+// the server's true is left untouched, and the bug reappears. Asserting on the
+// raw merge-patch bytes guards that specific regression.
+func TestBuildPostgresAppRestorePatch_ClearsUseSystemBucket(t *testing.T) {
+	app := newPostgresApp("pg", "tenant")
+	app.Spec.Backup.UseSystemBucket = true
+
+	creds := &strategyv1alpha1.S3CredentialsTemplate{
+		SecretRef: corev1.LocalObjectReference{Name: "creds"},
+	}
+	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "https://s3", "", creds, nil, nil, nil)
+
+	if patched.Spec.Backup.UseSystemBucket {
+		t.Errorf("spec.backup.useSystemBucket must be cleared on restore; got true")
+	}
+
+	// The merge patch computed against the original (useSystemBucket=true) app
+	// must serialise the false so it overwrites the server value. If it does
+	// not appear here, the server keeps true and the chart guard wedges.
+	data, err := client.MergeFrom(app).Data(patched)
+	if err != nil {
+		t.Fatalf("computing merge patch: %v", err)
+	}
+	if !strings.Contains(string(data), `"useSystemBucket":false`) {
+		t.Errorf("merge patch must overwrite useSystemBucket with false; patch was: %s", data)
+	}
+}
+
 // TestCNPGPurgeNeeded locks in the dual-guard against re-purging the
 // freshly-recovered Cluster on a status-update failure. The controller used
 // to rely solely on a Status condition: if the post-purge Status().Update
