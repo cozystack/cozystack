@@ -30,7 +30,7 @@
         ],
         "properties": {
           "diskSize": {
-            "description": "System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.",
+            "description": "System disk size for the worker VM. Carries the Talos OS image, kubelet state, containerd image cache, and any local-path PVCs. How the OS image reaches the disk follows this node group's `image`: the default and `image.factory` stream the Image Factory raw artifact in over HTTP, while `image.builtin` makes the disk a storage-layer CDI clone of a shared golden image, with no HTTP fetch. A `builtin` group must keep diskSize at or above the golden's storage size (6Gi in the shipped worker image catalog), because a CDI clone target cannot be smaller than its source — the chart rejects a smaller value at render time rather than letting the clone stall. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk.",
             "default": "20Gi",
             "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
             "anyOf": [
@@ -57,6 +57,44 @@
                   "type": "string",
                   "x-cozystack-options": {
                     "source": "gpu"
+                  }
+                }
+              }
+            }
+          },
+          "image": {
+            "description": "Worker OS image source for this node group. Default (omitted): import over HTTP from the cluster-wide talos.* Image Factory. Set `image.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing group re-images that group.",
+            "type": "object",
+            "properties": {
+              "builtin": {
+                "description": "Clone a golden image from the worker image catalog.",
+                "type": "object",
+                "properties": {
+                  "schematicID": {
+                    "description": "Talos schematic ID of the golden to clone. Defaults to the cluster-wide talos.schematicID.",
+                    "type": "string"
+                  },
+                  "version": {
+                    "description": "Talos version of the golden to clone. Defaults to the cluster-wide talos.version.",
+                    "type": "string"
+                  }
+                }
+              },
+              "factory": {
+                "description": "Import from an Image Factory / mirror (default).",
+                "type": "object",
+                "properties": {
+                  "imageFactoryURL": {
+                    "description": "Base URL of the Image Factory serving the boot raw image. Defaults to the cluster-wide talos.imageFactoryURL. No trailing slash. NOTE: this redirects only the worker boot-disk import; the in-guest upgrade installer image is always sourced from the cluster-wide talos.installerRepository, so an air-gapped node group must also have talos.installerRepository pointed at a reachable registry.",
+                    "type": "string"
+                  },
+                  "schematicID": {
+                    "description": "Talos schematic ID. Defaults to the cluster-wide talos.schematicID.",
+                    "type": "string"
+                  },
+                  "version": {
+                    "description": "Talos version. Defaults to the cluster-wide talos.version.",
+                    "type": "string"
                   }
                 }
               }
@@ -977,12 +1015,12 @@
       ],
       "properties": {
         "imageFactoryURL": {
-          "description": "Base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.",
+          "description": "Cluster-wide default base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Applies only to node groups that import over HTTP — the default and `image.factory`, which overrides it per group via `nodeGroups.\u003cname\u003e.image.factory.imageFactoryURL`. A group on `image.builtin` clones a golden image from the worker image catalog and does not use this field at all. Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.",
           "type": "string",
           "default": "https://factory.talos.dev"
         },
         "installerRepository": {
-          "description": "OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `\u003cinstallerRepository\u003e/\u003cschematicID\u003e:\u003cversion\u003e`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.",
+          "description": "OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved per node group as `\u003cinstallerRepository\u003e/\u003cschematicID\u003e:\u003cversion\u003e` against that group's own schematic and version — whatever `nodeGroups.\u003cname\u003e.image` pins, falling back to the cluster-wide `talos.schematicID` and `talos.version` — so the installer matches the OS the group actually booted. The prefix itself is cluster-wide with no per-group override, so an air-gapped node group needs it pointed at a reachable registry as well. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.",
           "type": "string",
           "default": "factory.talos.dev/installer"
         },
@@ -998,7 +1036,7 @@
           "default": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
         },
         "version": {
-          "description": "Talos release used for worker OS image and installer. Must satisfy the chart's Talos\u003c-\u003eKubernetes support matrix against the chosen `version`.",
+          "description": "Cluster-wide default Talos release for the worker OS image and the in-guest installer. Each node group can pin its own release via `nodeGroups.\u003cname\u003e.image.builtin.version` or `nodeGroups.\u003cname\u003e.image.factory.version`; a group that omits it inherits this value. Must satisfy the chart's Talos\u003c-\u003eKubernetes support matrix against the chosen `version` — the matrix is evaluated against this cluster-wide value only, so a per-group override is not checked against it.",
           "type": "string",
           "default": "v1.13.6"
         }

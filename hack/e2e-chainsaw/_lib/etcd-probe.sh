@@ -26,12 +26,12 @@
 #
 # The recovery is that the container's stdout is not actually gone: kubelet
 # wrote it to the Pod's log. So a lost stream is re-read rather than believed.
-# hack/e2e-chainsaw/_lib/talos-image-cache.sh solves the same race inline for
-# the image-cache probe (root cause from the same class of bug); that inline
-# copy is what identified this call site as still carrying the race. This is
-# the extracted, unit-tested form — see hack/etcd-probe_test.bats. It is not
-# yet shared: talos-image-cache.sh still carries its own copy, and folding it
-# onto this helper would need a name that is not etcd-specific.
+# The pattern was first written inline in the Talos image-cache probe, and that
+# inline copy is what identified this call site as carrying the same race; the
+# image-cache probe has since been removed, so this extracted, unit-tested form
+# — see hack/etcd-probe_test.bats — is the only copy left. Renaming it to
+# something that is not etcd-specific is worth doing when a second caller
+# appears, not before.
 #
 # Three conditions make the re-read safe rather than a way to mask real
 # failures. The marker encodes the outcome, so a `code=503` recovered from the

@@ -89,10 +89,114 @@ spec:
       {{- end }}
       runStrategy: Always
       dataVolumeTemplates:
+      {{- /* Each node group selects its worker OS image source via .group.image
+             (the WorkerImage union in values.yaml); every field defaults to the
+             cluster-wide talos.*:
+               * image omitted / image.factory — import the raw image over HTTP from
+                 the Talos Image Factory (or a mirror): one download per worker.
+               * image.builtin — CDI storage-layer clone of a golden image in the
+                 opt-in worker image catalog (packages/system/kubernetes-worker-image)
+                 in cozy-public, named talos-worker-<schematicID>-<version>. A clone
+                 is a CSI copy, so N workers no longer each stream the OS image across
+                 the pod network — the source of the kubernetes-* e2e node-join flake
+                 (cozystack/cozystack#3231) and a per-worker Factory dependency.
+
+             The disk-system source is derived purely from .group.image, so it is
+             deterministic across re-renders: with image omitted a group renders
+             byte-identically to the pre-feature chart (its workers do not roll on
+             upgrade), and there is no cluster-state-driven flip to guard against.
+             Because the source is content-hashed into the KubevirtMachineTemplate
+             name (see the KMT block below), intentionally changing .group.image on an
+             existing group reimages that group — expected, like editing any
+             workload's image. lookup() is empty under `helm template`, so a builtin
+             group's golden must be mocked in unit tests. */}}
+      {{- /* Use hasKey, not truthiness: builtin/factory may be present but empty
+             ({} means "clone / import with the cluster talos.* defaults"), and Go
+             templates treat an empty map as false. */}}
+      {{- $img := .group.image | default dict }}
+      {{- if and (hasKey $img "builtin") (hasKey $img "factory") }}{{- fail (printf "nodeGroup %q: set only one of image.builtin or image.factory" .groupName) }}{{- end }}
+      {{- $reqSchematicID := $.Values.talos.schematicID }}
+      {{- $reqVersion := $.Values.talos.version }}
+      {{- $reqFactoryURL := $.Values.talos.imageFactoryURL }}
+      {{- $useClone := false }}
+      {{- if hasKey $img "builtin" }}
+      {{-   $builtin := $img.builtin | default dict }}
+      {{-   $useClone = true }}
+      {{-   $reqSchematicID = $builtin.schematicID | default $.Values.talos.schematicID }}
+      {{-   $reqVersion = $builtin.version | default $.Values.talos.version }}
+      {{- else if hasKey $img "factory" }}
+      {{-   $factory := $img.factory | default dict }}
+      {{-   $reqSchematicID = $factory.schematicID | default $.Values.talos.schematicID }}
+      {{-   $reqVersion = $factory.version | default $.Values.talos.version }}
+      {{-   $reqFactoryURL = $factory.imageFactoryURL | default $.Values.talos.imageFactoryURL }}
+      {{- end }}
+      {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($reqFactoryURL | trimSuffix "/") $reqSchematicID $reqVersion }}
+      {{- $goldenName := printf "talos-worker-%s-%s" $reqSchematicID $reqVersion }}
+      {{- /* A builtin group whose golden is absent, failed to import, or on a
+             StorageClass the worker disk cannot CSI-clone from fails loudly here
+             rather than degrading silently. And because a CDI clone target must be
+             at least as large as its source, a worker diskSize below the golden's
+             storage would fail the clone at runtime — reject it at render when the
+             golden's size is known (lookup is empty under `helm template`, so all
+             of these guards are no-ops there). */}}
+      {{- if $useClone }}
+      {{-   $goldenDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $goldenName }}
+      {{-   if not $goldenDV }}
+      {{-     fail (printf "nodeGroup %q: image.builtin requested golden DataVolume %q not found in cozy-public — enable the cozystack.kubernetes-worker-image catalog via bundles.enabledPackages with a matching (schematicID, version) entry, or switch this group to image.factory." .groupName $goldenName) }}
+      {{-   end }}
+      {{- /* Fail only on the golden's terminal failure phase, not on "not yet
+             Succeeded". A golden mid-import is transient: CDI holds the worker
+             DataVolume until the source is populated, which is the correct
+             behaviour and recovers unattended. Hard-failing the render there would
+             abort the ENTIRE Kubernetes HelmRelease — every resource, not just this
+             disk — for every tenant pinned to that golden, blocking unrelated scale
+             and addon operations for the length of an import. Only Failed, which
+             never recovers without operator action, justifies that blast radius.
+             Falling back to the HTTP import is deliberately not an option either: it
+             would make disk-system's source depend on cluster state, so the source —
+             and with it the content-hashed KubevirtMachineTemplate name — would flip
+             once the golden went Ready and roll every worker in the group. */}}
+      {{-   $goldenPhase := dig "status" "phase" "" $goldenDV | toString }}
+      {{-   if eq $goldenPhase "Failed" }}
+      {{-     fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public failed to import (phase Failed) — cloning it would block this group's workers indefinitely. Check the importer pod in cozy-public, then delete the DataVolume to retry the import." .groupName $goldenName) }}
+      {{-   end }}
+      {{- /* CDI takes the storage-layer CSI-clone path only when source and target
+             share a StorageClass; across classes it silently falls back to a
+             host-assisted copy over the pod network — exactly the per-worker
+             network transfer image.builtin exists to avoid (#3231). Reject the
+             case we can prove. Either side empty means "cluster default", which is
+             not resolvable at render time, so skip rather than guess. This rules
+             out the guaranteed-host-assisted case, not every one: a matching
+             StorageClass still leaves the strategy to the CDI StorageProfile,
+             which the worker DataVolume inherits. */}}
+      {{-   $workerSC := .group.storageClass | default $.Values.storageClass | toString }}
+      {{-   $goldenSC := dig "spec" "storage" "storageClassName" "" $goldenDV | toString }}
+      {{-   if and $workerSC $goldenSC (ne $workerSC $goldenSC) }}
+      {{-     fail (printf "nodeGroup %q: storageClass %q differs from golden image %q storageClass %q — CDI cannot CSI-clone across StorageClasses and would fall back to a host-assisted copy over the pod network. Set the kubernetes-worker-image catalog entry's storageClass to %q, or point this group at %q, or switch this group to image.factory." .groupName $workerSC $goldenName $goldenSC $workerSC $goldenSC) }}
+      {{-   end }}
+      {{-   $goldenStorage := dig "spec" "storage" "resources" "requests" "storage" "" $goldenDV }}
+      {{-   if $goldenStorage }}
+      {{-     $workerDisk := .group.diskSize | default "20Gi" | toString }}
+      {{-     $workerBytes := include "cozy-lib.resources.toFloat" $workerDisk | float64 }}
+      {{-     $goldenBytes := include "cozy-lib.resources.toFloat" ($goldenStorage | toString) | float64 }}
+      {{-     if lt $workerBytes $goldenBytes }}
+      {{-       fail (printf "nodeGroup %q: diskSize %s is smaller than golden image %q storage %s — a CDI clone target must be at least the source size. Raise diskSize to %s or larger." .groupName $workerDisk $goldenName ($goldenStorage | toString) ($goldenStorage | toString)) }}
+      {{-     end }}
+      {{-   end }}
+      {{- end }}
       - metadata:
           name: disk-system
+          {{- /* usePopulator=false stays ONLY on the HTTP/import path: it preserves
+                 the legacy import behaviour and keeps an image-omitted DV — hence the
+                 KMT hash — byte-identical to the pre-feature render, so those workers
+                 never roll on upgrade. The clone path omits it so CDI's populator
+                 performs a storage-layer CSI clone of the golden (verified on dev10:
+                 temp PVC CSI-cloned + resized, no host-assisted upload pod) instead
+                 of a slower pod-network copy. */}}
+          {{- if not $useClone }}
           annotations:
             cdi.kubevirt.io/storage.usePopulator: "false"
+          {{- end }}
         spec:
           {{- /* Use the openstack/configdrive Talos image: KubeVirt CAPK
                 injects bootstrap data via cloudInitConfigDrive (OpenStack
@@ -100,8 +204,14 @@ spec:
                 is the one that reads it. The nocloud-amd64 image silently
                 ignores configdrive and never applies the machineconfig. */}}
           source:
+          {{- if $useClone }}
+            pvc:
+              namespace: cozy-public
+              name: {{ $goldenName }}
+          {{- else }}
             http:
-              url: {{ $.Values.talos.imageFactoryURL | trimSuffix "/" }}/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
+              url: {{ $httpURL }}
+          {{- end }}
           {{- if hasKey .group "ephemeralStorage" }}
           {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system." .groupName) }}
           {{- end }}

@@ -36,7 +36,6 @@ spec:
         #     its first reading, one wait passes, each takes its second)
         #   guest Talos capture
         #   ghcr-mirror state, access log and warm-up Job
-        #   talos-image-cache diagnosis
         # The three bracket pairs -- the sandbox kernel KVM counters, the runner
         # kernel CPU time and the sandbox QEMU thread time -- sit outside this
         # order on purpose: each is ungated, one bounded read a side, taken

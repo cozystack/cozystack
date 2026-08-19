@@ -7,7 +7,8 @@
 # starts, the worker never registers, and the `kubernetes-*` e2e tests fail with
 # zero tenant nodes inside the 18-minute node-join budget. Diagnosed in
 # cozystack/cozystack#3548 (in-guest Talos dmesg) and tracked by #3513. This is the
-# same flaky-public-egress class as the Talos OS image (#3231 / hack/e2e-talos-image-cache.yaml).
+# same flaky-public-egress class as the Talos OS image (#3231), which no longer
+# crosses public egress: workers CDI-clone a golden image seeded in cozy-public.
 #
 # This addresses ONE variant of #3513, and the issue stays open past it. The same
 # thread records failures that issue no apid CSR at all inside the whole budget --
@@ -166,9 +167,9 @@ spec:
 # Service -- so a worker's containerd resolves ghcr-mirror.kube-system.svc yet its
 # TCP connect to the ClusterIP is silently dropped. This adds one tightly-scoped
 # allow: worker VM (virt-launcher) Pods in tenant-test may egress to the mirror Pod.
-# Mirrors the e2e-talos-image-cache-importer-egress policy pattern, but selects the
-# worker VM identity (kubevirt.io: virt-launcher) that actually performs the
-# kubelet-image pull, not the CDI importer.
+# Follows the importer-egress policy pattern the retired Talos image-cache manifest
+# used, but selects the worker VM identity (kubevirt.io: virt-launcher) that actually
+# performs the kubelet-image pull, not the CDI importer.
 #
 # The helper commits the mirror endpoint once the API accepts this object, which is
 # not the same as the flow being allowed: if the selector misses the identity the
