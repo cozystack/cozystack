@@ -102,6 +102,14 @@ jobs:
           fetch-depth: 0
           fetch-tags:  true
 
+      # Ephemeral runners lack the flux CLI the installer's image-packages step
+      # shells out to; install if absent (idempotent).
+      - name: Set up build toolchain
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          command -v flux >/dev/null \
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+
       - name: Login to GHCR
         if: steps.check_release.outputs.skip == 'false'
         uses: docker/login-action@v3
