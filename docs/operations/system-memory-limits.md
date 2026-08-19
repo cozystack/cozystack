@@ -84,11 +84,12 @@ A LimitRange only mutates at admission. Existing pods keep running without limit
 Confirm a pod cgroup actually carries `memory.max`, which is the property that matters rather than the QoS class. Talos runs kubelet with the `cgroupfs` driver on a unified cgroup v2 hierarchy, so a pod cgroup is a directory named for the pod UID, dashes and all:
 
 ```bash
+POD_UID=$(kubectl get pod <pod> -n <ns> -o jsonpath='{.metadata.uid}')
+NODE=$(kubectl get pod <pod> -n <ns> -o jsonpath='{.spec.nodeName}')
+NODE_IP=$(kubectl get node "$NODE" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
 (
   set -eu
-  POD_UID=$(kubectl get pod <pod> -n <ns> -o jsonpath='{.metadata.uid}')
-  NODE=$(kubectl get pod <pod> -n <ns> -o jsonpath='{.spec.nodeName}')
-  NODE_IP=$(kubectl get node "$NODE" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+  [ -n "$POD_UID" ] && [ -n "$NODE_IP" ] || { echo "could not resolve the pod UID or the node address" >&2; exit 1; }
   case $(kubectl get pod <pod> -n <ns> -o jsonpath='{.status.qosClass}') in
     Guaranteed) QOS_DIR= ;;
     Burstable)  QOS_DIR=burstable/ ;;
@@ -99,7 +100,7 @@ Confirm a pod cgroup actually carries `memory.max`, which is the property that m
 )
 ```
 
-A byte count rather than the literal `max` means the pod is out of the victim set. Note that `talosctl -n` takes a machine address rather than a Kubernetes node name, which is why the address is looked up instead of being reused from `nodeName`.
+A byte count rather than the literal `max` means the pod is out of the victim set. Note that `talosctl -n` takes a machine address rather than a Kubernetes node name, which is why the address is looked up instead of being reused from `nodeName`. The three lookups sit outside the subshell so that `NODE` and `NODE_IP` are still set for the two commands further down, while `set -eu` and the `exit` stay inside it and so cannot take an interactive shell down with them. They are guarded explicitly rather than left to `set -e`, because `kubectl get -o jsonpath` exits zero and prints nothing when the field it asks for is absent, which is the ordinary state of a pod that has not been scheduled yet.
 
 The `case` is there because the QoS segment of that path is not uniform. BestEffort and Burstable pods live under `kubepods/besteffort/` and `kubepods/burstable/`, but there is no `guaranteed` directory: kubelet creates QoS-level cgroups for those two classes only, so a Guaranteed pod sits directly at `kubepods/pod<uid>`. Reading `.status.qosClass` picks the right one of the three rather than assuming Burstable, and a class that cannot be read stops the command instead of sending it to a path that does not exist. To see the layout for yourself, list the pod directories two levels down:
 
