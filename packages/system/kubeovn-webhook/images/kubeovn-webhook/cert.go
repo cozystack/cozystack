@@ -22,8 +22,16 @@ import "crypto/tls"
 //     LoadX509KeyPair therefore cannot observe a partial renewal.
 //   - The per-handshake cost (a few KB of file I/O plus a PEM/key parse) is
 //     negligible next to the asymmetric crypto the handshake already performs.
-//   - The webhook configures no mTLS (no ClientCAs), so GetCertificate's
-//     limitation of not refreshing client CA pools does not apply.
+//   - GetCertificate refreshes the serving key pair only. It does not refresh
+//     tls.Config.ClientCAs, which the handshake reads directly. When
+//     --client-ca-file is set, main reads that bundle once at startup and the
+//     pool stays fixed for the process lifetime: rotating the API server's
+//     client CA then requires restarting these pods, or the webhook keeps
+//     validating against the retired CA and rejects the API server. With
+//     failurePolicy: Fail that stops pod creation cluster-wide, so reloading
+//     the pool has to land together with the mount that makes enforcement
+//     reachable at all -- neither is usable without the other, and today
+//     --client-ca-file has no supported in-pod path to point at.
 //
 // If the mounted files genuinely become unreadable (Secret deleted, permissions
 // broken: an operator error, not a normal renewal) the handshake fails loudly
