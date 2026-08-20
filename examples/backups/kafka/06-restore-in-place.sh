@@ -19,7 +19,11 @@ log_substep "Deleting topic '${TOPIC}' to simulate data loss..."
 kafka_run "$KAFKA_NAME" '
     "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --delete --topic "$TOPIC" || true
     for _ in $(seq 1 60); do
-        if ! "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --list | grep -qx "$TOPIC"; then
+        # Capture --list on its own so a transient broker error does not read
+        # as empty output and false-positive "deleted"; the pod snippet runs
+        # under set -eu without pipefail, so the pipe would otherwise mask it.
+        list=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --list) || { sleep 2; continue; }
+        if ! printf "%s\n" "$list" | grep -qx "$TOPIC"; then
             echo "topic $TOPIC deleted"; exit 0
         fi
         sleep 2
