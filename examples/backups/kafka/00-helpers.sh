@@ -31,7 +31,7 @@ export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-kafka-restore-to-copy}"
 # operator's Kafka image if it differs:
 #   kubectl -n cozy-kafka-operator get deploy strimzi-cluster-operator \
 #     -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' | grep KAFKA_IMAGES
-export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:0.45.0-kafka-3.8.0}"
+export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.8.0}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
 
 log_info()    { echo -e "${BLUE}i${NC} $*" >&2; }

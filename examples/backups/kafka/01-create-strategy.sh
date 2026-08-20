@@ -216,7 +216,7 @@ spec:
                   parts=0
                   while read -r mt mp mb me; do
                     [ "\${mt}" = "\${t}" ] || continue
-                    [ "\${mp}" -ge "\${parts}" ] && parts=\$((mp + 1))
+                    if [ "\${mp}" -ge "\${parts}" ]; then parts=\$((mp + 1)); fi
                   done < "\${WORK}/manifest.txt"
                   "\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --create --if-not-exists \
                     --topic "\${t}" --partitions "\${parts}" --replication-factor "\${REPLICATION_FACTOR}"
