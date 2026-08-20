@@ -15,12 +15,16 @@
 # HelmRelease; the suite targets the projection so it does not depend on that
 # translation layer being present.)
 #
-# chartRef points at OCIRepository/site-router-chart, a Flux source that serves
-# the packages/apps/site-router chart. The empirical validation provisions that
-# source (a chart pushed to an ephemeral OCI registry); in CI the site-router
-# ExternalArtifact from the platform bundle takes its place. The suite therefore
-# assumes a chart source named `site-router-chart` in the test namespace, the
-# same way it assumes the tenant-test namespace exists.
+# chartRef points at the ExternalArtifact the platform already installs for this
+# app in cozy-system, which is the same source every real SiteRouter release
+# resolves (packages/system/site-router-rd/cozyrds/site-router.yaml names it
+# verbatim). It serves the packages/apps/site-router chart; spec.values below
+# stays the authoritative input, because an ExternalArtifact supplies the chart
+# and not the values -- packages/extra/external-dns consumes its own the same
+# way. Nothing in this suite has to provision a source: the e2e install runs
+# variant isp-full, whose naas bundle carries site-router-application, so the
+# artifact is present before the suite starts. It is named rather than
+# discovered, so a rename in the cozyrd is a rename here too.
 #
 # peer.address is a placeholder: A is the IPsec responder ("the remote peer dials
 # in", per the schema), and B's pod-network address is only known at runtime, so
@@ -37,8 +41,9 @@ metadata:
 spec:
   interval: 5m
   chartRef:
-    kind: OCIRepository
-    name: site-router-chart
+    kind: ExternalArtifact
+    name: cozystack-site-router-application-default-site-router
+    namespace: cozy-system
   values:
     tunnel:
       type: ipsec
