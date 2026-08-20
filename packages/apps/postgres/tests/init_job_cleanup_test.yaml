@@ -1,13 +1,17 @@
-suite: init-job is garbage-collected after completion
+suite: init-job is a main-phase reconciler, garbage-collected after completion
 
-# Locks in cozystack/cozystack#3055: the post-install/post-upgrade init Job
-# is a one-shot reconciler of users/databases/roles. Without a TTL it lingers
-# in the namespace forever after the Postgres CR is deleted (its hook-delete-policy
-# is 'before-hook-creation' only, which never fires on uninstall). A native
-# ttlSecondsAfterFinished lets the Kubernetes TTL controller GC the Job and its
-# Pod ~1 hour after it completes, regardless of Helm hook lifecycle — without
-# touching the hook-timeout semantics the recovery flow depends on. 1h leaves a
+# Locks in cozystack/cozystack#3055: the init Job is a one-shot reconciler of
+# users/databases/roles. Without a TTL it lingers in the namespace forever after
+# the Postgres CR is deleted. A native ttlSecondsAfterFinished lets the Kubernetes
+# TTL controller GC the Job and its Pod ~1 hour after it completes. 1h leaves a
 # debugging window for a failed init Job before it is collected.
+#
+# Locks in cozystack/cozystack#3921: the Job is a main-phase resource (no
+# helm.sh/hook), so it also runs while the release is UpgradeFailed, and it waits
+# for the CNPG-managed superuser Secret in an init container behind an optional
+# volume instead of racing the operator with a FailedMount at t0. Because the Job
+# template is immutable and the HelmRelease is applied without Force, the name
+# carries a content-hash suffix so a changed spec produces a new Job.
 
 # Both templates are loaded so the Job's checksum/config annotation can resolve
 # its `include ".../init-script.yaml"`. Each test then pins assertions to a
@@ -36,11 +40,58 @@ tests:
       - isKind:
           of: Job
       - equal:
-          path: metadata.name
-          value: pg-test-init-job
-      - equal:
           path: spec.ttlSecondsAfterFinished
           value: 3600
+
+  - it: "init-job is a main-phase resource, not a Helm hook"
+    template: templates/init-job.yaml
+    asserts:
+      # Main-phase, not a hook: the Job must not carry any helm.sh/hook
+      # annotation, otherwise it stops reconciling on an UpgradeFailed release.
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+      # Immutable Job carries a 6-char content-hash suffix (see pinned cases below).
+      - matchRegex:
+          path: metadata.name
+          pattern: ^pg-test-init-job-[0-9a-f]{6}$
+
+  - it: "init-job waits for the superuser Secret behind an optional volume"
+    template: templates/init-job.yaml
+    asserts:
+      # The wait-for-superuser init container gates the Pod so it blocks in the
+      # init phase until CNPG publishes the Secret, instead of a FailedMount at t0.
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: wait-for-superuser
+      # The superuser volume is the first volume and must be optional so kubelet
+      # does not FailedMount while the Secret is still absent.
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: secret
+      - equal:
+          path: spec.template.spec.volumes[0].secret.optional
+          value: true
+
+  - it: "init-job name is derived from the rendered spec"
+    template: templates/init-job.yaml
+    asserts:
+      # Pinned exactly (not by regex) so a hash drift is caught, not masked.
+      - equal:
+          path: metadata.name
+          value: pg-test-init-job-04a639
+
+  - it: "init-job name rotates when the rendered spec changes"
+    template: templates/init-job.yaml
+    set:
+      users:
+        app:
+          password: secret
+        reader:
+          password: secret
+    asserts:
+      - equal:
+          path: metadata.name
+          value: pg-test-init-job-560a99
 
   - it: "init-job is skipped entirely under bootstrap recovery"
     template: templates/init-job.yaml
