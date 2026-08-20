@@ -48,6 +48,7 @@ rules:
   - tenantmodules
   - tenantsecrets
   - options
+  - taps
   verbs: ["get", "list", "watch"]
 ---
 # == view cluster role ==
@@ -135,6 +136,7 @@ rules:
   - core.cozystack.io
   resources:
   - options
+  - taps
   verbs: ["get", "list", "watch"]
 ---
 # == use cluster role ==

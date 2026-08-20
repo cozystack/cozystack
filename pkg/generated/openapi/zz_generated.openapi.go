@@ -43,6 +43,11 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		corev1alpha1.OptionItem{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_OptionItem(ref),
 		corev1alpha1.OptionList{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_OptionList(ref),
 		corev1alpha1.OptionSpec{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_OptionSpec(ref),
+		corev1alpha1.Tap{}.OpenAPIModelName():                     schema_pkg_apis_core_v1alpha1_Tap(ref),
+		corev1alpha1.TapList{}.OpenAPIModelName():                 schema_pkg_apis_core_v1alpha1_TapList(ref),
+		corev1alpha1.TapPackage{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_TapPackage(ref),
+		corev1alpha1.TapSource{}.OpenAPIModelName():               schema_pkg_apis_core_v1alpha1_TapSource(ref),
+		corev1alpha1.TapSpec{}.OpenAPIModelName():                 schema_pkg_apis_core_v1alpha1_TapSpec(ref),
 		corev1alpha1.TenantModule{}.OpenAPIModelName():            schema_pkg_apis_core_v1alpha1_TenantModule(ref),
 		corev1alpha1.TenantModuleList{}.OpenAPIModelName():        schema_pkg_apis_core_v1alpha1_TenantModuleList(ref),
 		corev1alpha1.TenantModuleStatus{}.OpenAPIModelName():      schema_pkg_apis_core_v1alpha1_TenantModuleStatus(ref),
@@ -450,6 +455,256 @@ func schema_pkg_apis_core_v1alpha1_OptionSpec(ref common.ReferenceCallback) comm
 		},
 		Dependencies: []string{
 			corev1alpha1.OptionItem{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_Tap(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Tap represents one connected External-Apps repository (a PackageSource) and the packages it exposes.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(corev1alpha1.TapSpec{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			corev1alpha1.TapSpec{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_TapList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "TapList is a list of Taps.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(corev1alpha1.Tap{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			corev1alpha1.Tap{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_TapPackage(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "TapPackage is one package exposed by a tap.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name is the ApplicationDefinition name.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is the application kind users create (spec.application.kind).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"component": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Component is the PackageSource component this package maps to.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"description": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Description, Category, Tags, Icon are dashboard catalog metadata.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"category": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"tags": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"icon": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"privileged": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Privileged is true when the backing component declares install.privileged.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"name"},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_TapSource(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "TapSource identifies the Flux source backing a tap. It carries no credential.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is the Flux source kind (OCIRepository or GitRepository).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name is the Flux source name in cozy-system.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_TapSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "TapSpec is the computed state of a tap.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"source": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Source is where the tap's artifact comes from (no credentials).",
+							Default:     map[string]interface{}{},
+							Ref:         ref(corev1alpha1.TapSource{}.OpenAPIModelName()),
+						},
+					},
+					"community": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Community is true for community-tapped sources (community.* names), false for official platform sources.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"ready": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Ready reflects the PackageSource's Ready condition.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"message": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Message is the PackageSource's Ready condition message, if any.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"packages": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Packages are the packages this tap exposes, derived from the ApplicationDefinitions attributable to the PackageSource.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(corev1alpha1.TapPackage{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			corev1alpha1.TapPackage{}.OpenAPIModelName(), corev1alpha1.TapSource{}.OpenAPIModelName()},
 	}
 }
 

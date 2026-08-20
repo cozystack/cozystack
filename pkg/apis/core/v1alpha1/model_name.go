@@ -98,3 +98,23 @@ func (in TenantSecret) OpenAPIModelName() string {
 func (in TenantSecretList) OpenAPIModelName() string {
 	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.TenantSecretList"
 }
+
+func (in Tap) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.Tap"
+}
+
+func (in TapList) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.TapList"
+}
+
+func (in TapSpec) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.TapSpec"
+}
+
+func (in TapSource) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.TapSource"
+}
+
+func (in TapPackage) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.TapPackage"
+}
