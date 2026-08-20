@@ -17,7 +17,7 @@ kubectl -n "$NAMESPACE" delete secret "${KAFKA_NAME}-backup-s3" --ignore-not-fou
 kubectl -n "$NAMESPACE" delete kafka.apps.cozystack.io "$KAFKA_RESTORE_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete kafka.apps.cozystack.io "$KAFKA_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete bucket "$BUCKET_NAME" --ignore-not-found
-rm -f "$SCRIPT_DIR/.bucket-info.env"
+rm -f "$SCRIPT_DIR/.bucket-info.env" "$SCRIPT_DIR/.source-dump.txt"
 kubectl delete backupclass "$BACKUPCLASS_NAME" --ignore-not-found
 kubectl delete job.strategy.backups.cozystack.io "$STRATEGY_NAME" --ignore-not-found
 
