@@ -1,5 +1,4 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 1 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Guards the contract that makes a release publish WITH its changelog.
 #
 # The release body is no longer written by hand or synced after the fact: it is
@@ -71,6 +70,14 @@
 #     needs a change in that repo first, and nothing here would catch its absence.
 #   * Whether the release body ACTUALLY lands. That is one API call at publish
 #     time, on a path no unit test reaches.
+#
+# The one test here that needs a scratch directory removes it on the last line of
+# its body, never from a `trap ... EXIT`. A handler installed inside an @test body
+# replaces the one the bats binary keeps its bookkeeping in, and a test that then
+# FAILS prints no TAP line at all — the run only reports having executed fewer
+# tests than it planned, which reads as a green suite. Both runners set -e, so on
+# failure the cleanup is unreachable and the fixtures survive for inspection. See
+# hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
@@ -396,8 +403,6 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
 #     validator could degenerate to `exit 0` and tests 9 and 10 would still pass.
 @test "the changelog validator rejects unusable output" {
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
 
   printf '   \n\n  \n' > "$tmp/whitespace.md"
   ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/whitespace.md" 1.6.0 >/dev/null 2>&1 || {
@@ -427,6 +432,7 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     echo "Validator accepted v1.5.1's changelog as v1.6.0's release body." >&2
     exit 1
   }
+  rm -rf "$tmp"
 }
 
 # 12. The workflow must actually call the script. Keeping the predicates in a
