@@ -7,6 +7,13 @@ bareNamespace: false
 cozystackOperator:
   # Deployment variant: talos, generic, hosted
   variant: talos
+  # Stop the operator sending cluster telemetry (nodes, storage, packages) to
+  # https://telemetry.cozystack.io. This covers the OPERATOR only. The second
+  # collector, cozystack-controller, reports application counts and is
+  # configured through the platform Package — set telemetry.disabled there as
+  # well, or the opt-out is partial. Declared here rather than left implicit
+  # because the documented opt-out is a `--set` against this key.
+  disableTelemetry: false
   image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.5.4@sha256:cf69537ff3a0fd1a4fc81ea3d7022fb0da31fdff6f2e4113c73a33a0e0b65f06
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
   platformSourceRef: 'digest=sha256:7d1f77973c35d4a37a37eb2c563317e22b86c6fed7d757fa4d136386812827bd'
