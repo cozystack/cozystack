@@ -123,9 +123,11 @@ wait_hr_ready "postgres-${PG_SRC_NAME}" 360
 wait_for_field clusters.postgresql.cnpg.io "$PG_SRC_CLUSTER" \
     '{.status.phase}' 'Cluster in healthy state' "$NAMESPACE" 360
 # The 'demo' database and 'app' user are created by the chart's init Job, not
-# by cluster readiness — wait for it before writing into demo.
-wait_for_field jobs.batch "postgres-${PG_SRC_NAME}-init-job" \
-    '{.status.succeeded}' 1 "$NAMESPACE" 180
+# by cluster readiness — wait for it before writing into demo. The Job name
+# carries a content-hash suffix, so it is matched by its stable labels.
+wait_for_job_succeeded_by_label \
+    "app.kubernetes.io/instance=postgres-${PG_SRC_NAME},app.kubernetes.io/component=init-job" \
+    "$NAMESPACE" 180
 
 print_header "Step 05c: Write a sentinel row so the backup has something to prove"
 SENTINEL_TOKEN="e2e-$(date +%s)-$$"

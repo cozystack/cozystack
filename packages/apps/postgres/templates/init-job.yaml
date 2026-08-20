@@ -125,6 +125,12 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ $jobName }}-{{ $jobHash }}
+  # Stable selector labels: the name carries a content hash, so consumers
+  # (E2E asserts, the backup example) must find this Job by label, not by name.
+  labels:
+    app.kubernetes.io/name: postgres.apps.cozystack.io
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: init-job
 spec:
 {{ $jobSpec | indent 2 }}
 {{- end }}

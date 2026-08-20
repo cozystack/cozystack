@@ -54,6 +54,14 @@ tests:
       - matchRegex:
           path: metadata.name
           pattern: ^pg-test-init-job-[0-9a-f]{6}$
+      # Stable selector labels: because the name is hashed, consumers (E2E
+      # asserts, the backup example) find the Job by these labels, not by name.
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: init-job
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: pg-test
 
   - it: "init-job waits for the superuser Secret behind an optional volume"
     template: templates/init-job.yaml
