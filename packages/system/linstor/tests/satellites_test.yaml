@@ -6,27 +6,64 @@ suite: satellite pod resource limits
 # pressure. A tenant workload thrashing against its own limit would get the
 # satellite killed, taking DRBD connections on that node down with it.
 #
-# Every container in the pod needs a limit for the pod cgroup to get memory.max,
-# so the plunger sidecars are pinned alongside the satellite itself — one
-# limit-free sidecar is enough to put the whole pod back in the victim set.
+# The satellite is the exception and this suite pins it as one: it is the same JVM
+# as linstor-controller, which cluster_test.yaml pins as deliberately limit-free,
+# so it carries a request and no limit. That it is the same JVM is not an inference
+# — images/piraeus-server/Dockerfile installs default-jre-headless and starts this
+# container with `startSatellite`, the same distribution the controller runs with
+# `startController` — and it matters because the sizing this replaced was chosen on
+# the premise that the satellite is a Go binary with a bounded working set. The
+# 368Mi peak behind the request grows with DRBD resource count and was measured on
+# three nodes.
 #
-# Note this is the opposite call from linstor-controller, which cluster_test.yaml
-# pins as deliberately limit-free (a JVM that must not be OOM-killed mid-operation).
+# The heap is not sized from the limit. linstor-server's build.gradle bakes
+# `-Xms32M -Xmx2G -XX:+CrashOnOutOfMemoryError` into the Satellite start script it
+# generates (jvmSatelliteOpts, handed to defaultJvmOpts; the controller gets -Xmx8G
+# by the same route), and an explicit -Xmx means the JVM never reads memory.max to
+# size its heap — container awareness only chooses a default maximum when -Xmx is
+# absent. Makefile's LINSTOR_VERSION pins which linstor-server that is, and
+# images/piraeus-server/Dockerfile is what checks it out and builds it.
+#
+# So a limit here caps RSS and nothing else, and the 2Gi limit this replaced was the
+# wrong number for that job: 2Gi is exactly -Xmx2G, leaving nothing for metaspace,
+# thread stacks, code cache, GC structures and direct buffers. A satellite growing
+# into its own heap ceiling would be OOM-killed by the kernel before the JVM got
+# there — and getting there is meant to be a deliberate, diagnosable crash
+# (-XX:+CrashOnOutOfMemoryError), not a silent kill.
+#
+# The exemption moves the ceiling, it does not remove it, and the distinction is
+# what makes it safe. With the LimitRange the operator maintains in every system
+# namespace (#3494, which must merge with or before this) admission defaults this
+# container to --system-namespace-memory-limit, 4Gi by default, which clears the 2G
+# heap with room left over for non-heap, set once as an operator-facing knob instead
+# of guessed per chart. Without that LimitRange, or with the knob cleared, the
+# container really is limit-free and the pod stays in the OOM handler's victim set —
+# which is what it does today, so this is not a regression, just not yet the fix.
+#
+# What a fitted per-chart limit would need is therefore not an explicit heap share,
+# which already exists, but a peak measured on a high-resource-count cluster: that
+# is what says how much non-heap to add on top of the 2G ceiling.
+#
+# The plunger limits below therefore do real work, but not the work of taking the pod
+# out of the victim set: they bound a runaway sidecar at 128Mi rather than at whatever
+# the pod's defaulted ceiling is.
 
 templates:
   - templates/satellites-cozy.yaml
   - templates/satellites-plunger.yaml
 
 tests:
-  - it: satellite declares a memory limit and request
+  - it: satellite declares a memory request and deliberately no limit
     template: templates/satellites-cozy.yaml
     asserts:
       - equal:
-          path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].resources.limits.memory
-          value: 2Gi
-      - equal:
           path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].resources.requests.memory
           value: 128Mi
+      - equal:
+          path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].resources.requests.cpu
+          value: 100m
+      - notExists:
+          path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].resources.limits
 
   - it: plunger sidecars declare memory limits
     template: templates/satellites-plunger.yaml
