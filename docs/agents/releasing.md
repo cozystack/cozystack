@@ -27,3 +27,5 @@ The release process is promotion-based — a stable release is a renamed release
 
 All detailed steps, workflows, and failure modes are documented in `docs/release.md`.
 
+For a patch release, or any rc cut from a `release-X.Y` branch, verify the backport state of that branch before tagging: `go run ./cmd/backport-audit release-X.Y` exits non-zero while anything labeled `backport` / `backport-previous` for the line has not landed on it, and prints the URLs. See [`cmd/backport-audit/README.md`](../../cmd/backport-audit/README.md) and [Cherry-pick triage before a patch](../release.md#cherry-pick-triage-before-a-patch). Do not report a branch as ready to cut on the strength of `gh pr list --search "is:merged label:backport"` — that lists what was labeled, not what arrived.
+
