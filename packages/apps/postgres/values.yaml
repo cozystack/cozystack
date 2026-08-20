@@ -147,6 +147,8 @@ quorum:
 ## @typedef {struct} User - User configuration.
 ## @field {string} [password] - Password for the user.
 ## @field {bool} [replication] - Whether the user has replication privileges.
+## @field {bool} [createRole] - Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer.
+## @field {bool} [bypassRls] - Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role.
 
 ## @param {map[string]User} users - Users configuration map.
 users: {}
@@ -160,6 +162,10 @@ users: {}
 ##     password: qwerty123
 ##   debezium:
 ##     replication: true
+##   migrator:
+##     password: qwerty123
+##     createRole: true
+##     bypassRls: true
 
 ##
 ## @section Databases configuration

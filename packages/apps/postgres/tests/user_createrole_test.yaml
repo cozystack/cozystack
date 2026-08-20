@@ -1,0 +1,179 @@
+suite: per-user CREATEROLE attribute
+
+# users.<name>.createRole grants the CREATEROLE role attribute to a managed login
+# user, so a tenant can create and manage its own roles without the postgres
+# superuser. Role attributes are not inherited through role membership, so the
+# attribute cannot be carried by the generated <db>_admin group role and has to be
+# set on the login user itself.
+#
+# The attribute is reconciled on every run of the init script: flipping createRole
+# back to false emits NOCREATEROLE and revokes it.
+#
+# The guard on PostgreSQL 16 is a security boundary, not a cosmetic check. Before
+# PostgreSQL 16, CREATEROLE allowed granting membership in any non-superuser role,
+# so a user holding it could grant itself pg_execute_server_program and reach
+# command execution on the instance. PostgreSQL 16 restricted CREATEROLE to roles
+# the grantee administers, which is what makes the attribute safe to expose.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: "user is NOCREATEROLE by default"
+    set:
+      users:
+        app:
+          password: secret
+    documentIndex: 1
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOREPLICATION NOCREATEROLE NOBYPASSRLS;'
+
+  - it: "createRole=true emits CREATEROLE"
+    set:
+      version: v18
+      users:
+        app:
+          password: secret
+          createRole: true
+    documentIndex: 1
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOREPLICATION CREATEROLE NOBYPASSRLS;'
+
+  - it: "createRole=false emits NOCREATEROLE so the attribute is revoked"
+    set:
+      version: v18
+      users:
+        app:
+          password: secret
+          createRole: false
+    documentIndex: 1
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOCREATEROLE NOBYPASSRLS;'
+
+  - it: "createRole composes with replication"
+    set:
+      version: v18
+      users:
+        app:
+          password: secret
+          replication: true
+          createRole: true
+    documentIndex: 1
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'ALTER ROLE "app" WITH PASSWORD .* REPLICATION CREATEROLE NOBYPASSRLS;'
+
+  - it: "createRole on PostgreSQL 15 fails fast"
+    set:
+      version: v15
+      users:
+        app:
+          password: secret
+          createRole: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "SECURITY: users.app.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
+
+  - it: "createRole on PostgreSQL 13 fails fast"
+    set:
+      version: v13
+      users:
+        app:
+          password: secret
+          createRole: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "SECURITY: users.app.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
+
+  - it: "PostgreSQL 15 renders fine as long as createRole is not requested"
+    set:
+      version: v15
+      users:
+        app:
+          password: secret
+    documentIndex: 1
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOCREATEROLE NOBYPASSRLS;'
+
+  - it: "bypassRls=true emits BYPASSRLS"
+    set:
+      version: v18
+      users:
+        app:
+          password: secret
+          bypassRls: true
+    documentIndex: 1
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOCREATEROLE BYPASSRLS;'
+
+  - it: "bypassRls composes with createRole, which is what provisioning a privileged service role needs"
+    set:
+      version: v18
+      users:
+        app:
+          password: secret
+          createRole: true
+          bypassRls: true
+    documentIndex: 1
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'ALTER ROLE "app" WITH PASSWORD .* CREATEROLE BYPASSRLS;'
+
+  - it: "bypassRls is allowed on PostgreSQL 15, it carries no escalation path of its own"
+    set:
+      version: v15
+      users:
+        app:
+          password: secret
+          bypassRls: true
+    documentIndex: 1
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOCREATEROLE BYPASSRLS;'
+
+  - it: "createRole sets createrole_self_grant so the attribute is usable"
+    set:
+      version: v18
+      users:
+        app:
+          password: secret
+          createRole: true
+    documentIndex: 1
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "ALTER ROLE \"app\" SET createrole_self_grant = 'set, inherit';"
+
+  - it: "withdrawing createRole resets createrole_self_grant"
+    set:
+      version: v18
+      users:
+        app:
+          password: secret
+          createRole: false
+    documentIndex: 1
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'ALTER ROLE "app" RESET createrole_self_grant;'

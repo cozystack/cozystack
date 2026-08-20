@@ -174,6 +174,10 @@ type TLS struct {
 }
 
 type User struct {
+	// Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role.
+	BypassRls bool `json:"bypassRls,omitempty"`
+	// Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer.
+	CreateRole bool `json:"createRole,omitempty"`
 	// Password for the user.
 	Password string `json:"password,omitempty"`
 	// Whether the user has replication privileges.
