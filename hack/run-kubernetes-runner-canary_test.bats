@@ -1570,7 +1570,9 @@ STUB
   # lexically, so a pattern naming both would be counted here as an installed
   # trap this file would then have to declare as debt.
   armed_sig=EXIT
-  armed_line=$(grep -n "^  trap '_tenant_snapshot_on_fail' ${armed_sig}" "$lib" | head -n 1 | cut -d: -f1)
+  # Anchored on the handler the tenant CR apply installs, which is the point this
+  # bound is about; the snapshot half of the failure path is reached through it.
+  armed_line=$(grep -n "^  trap '_tenant_failure_on_exit' ${armed_sig}" "$lib" | head -n 1 | cut -d: -f1)
   red=$(awk -v w="$wait_line" 'NR < w && /cozy_capture_runner_canary 2/ { line = NR } END { if (line) print line }' "$lib")
   pairs_first=''
   pairs_green=''
@@ -1645,7 +1647,7 @@ STUB
   # bracket the whole test instead, and the sentence would be false about the
   # artifact it is printed into.
   if [ "$first" -le "$armed_line" ]; then
-    echo "the canary sample before the wait (line $first) is taken at or before the tenant snapshot trap is armed (line $armed_line), so it describes the run before the cluster it is meant to characterise exists" >&2
+    echo "the canary sample before the wait (line $first) is taken at or before the tenant failure handler is armed (line $armed_line), so it describes the run before the cluster it is meant to characterise exists" >&2
     return 1
   fi
 }
