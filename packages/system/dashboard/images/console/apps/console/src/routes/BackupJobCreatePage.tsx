@@ -8,12 +8,20 @@ import { useApplicationDefinitions } from "../lib/app-definitions.ts"
 import { useCRDSchema } from "../lib/use-crd-schema.ts"
 import { SchemaForm, type SchemaFormHandle } from "../components/SchemaForm.tsx"
 import { enrichSchemaWithEnums } from "../lib/backup-utils.ts"
+import type { ApplicationInstance } from "@cozystack/types"
+
+/** The subset of the CRD-driven form data this page reads back. */
+interface BackupJobFormData {
+  applicationRef?: { apiGroup?: string; kind?: string; name?: string }
+  planRef?: { name?: string }
+  backupClassName?: string
+}
 
 export function BackupJobCreatePage() {
   const navigate = useNavigate()
   const { tenantNamespace } = useTenantContext()
   const { data: appDefs } = useApplicationDefinitions()
-  const [formData, setFormData] = useState<any>({})
+  const [formData, setFormData] = useState<BackupJobFormData>({})
   const [name, setName] = useState("")
   const schemaFormRef = useRef<SchemaFormHandle>(null)
 
@@ -42,7 +50,7 @@ export function BackupJobCreatePage() {
     [appDefs, selectedKind]
   )
 
-  const { data: instancesData } = useK8sList<any>({
+  const { data: instancesData } = useK8sList<ApplicationInstance>({
     apiGroup: "apps.cozystack.io",
     apiVersion: "v1alpha1",
     plural: selectedAppDef?.spec?.application.plural ?? "",
@@ -66,7 +74,7 @@ export function BackupJobCreatePage() {
       console.error("Failed to parse BackupJob schema:", e)
       return null
     }
-    const instances = instancesData?.items.map((inst: any) => inst.metadata.name) ?? []
+    const instances = instancesData?.items.map((inst) => inst.metadata.name) ?? []
 
     const enumMap: Record<string, string[]> = {}
     // applicationRef.name depends on the selected kind, so it cannot be served
@@ -195,7 +203,7 @@ export function BackupJobCreatePage() {
                 ref={schemaFormRef}
                 openAPISchema={schema}
                 formData={formData}
-                onChange={setFormData}
+                onChange={(data) => setFormData(data as BackupJobFormData)}
               >
                 <div className="hidden" />
               </SchemaForm>

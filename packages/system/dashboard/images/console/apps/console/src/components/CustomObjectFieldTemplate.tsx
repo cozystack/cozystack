@@ -6,31 +6,56 @@ import type {
   FormContextType,
 } from "@rjsf/utils"
 
-function isSimpleField(schema: any): boolean {
-  if (!schema) return true
-  const type = schema.type
+/** Structural view of the JSON-schema nodes this template inspects. */
+interface FieldSchemaNode {
+  type?: string
+  items?: { type?: string }
+  anyOf?: unknown
+  oneOf?: unknown
+  allOf?: unknown
+  "x-kubernetes-int-or-string"?: unknown
+  properties?: Record<string, unknown>
+}
+
+function isSimpleField(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object") return true
+  const node = schema as FieldSchemaNode
+  const type = node.type
   if (type === "object") return false
   if (type === "array") {
-    const itemType = schema.items?.type
+    const itemType = node.items?.type
     return itemType === "integer" || itemType === "string" || itemType === "number"
   }
-  if (schema.anyOf || schema.oneOf || schema.allOf) {
-    if (schema["x-kubernetes-int-or-string"]) return true
+  if (node.anyOf || node.oneOf || node.allOf) {
+    if (node["x-kubernetes-int-or-string"]) return true
     return false
   }
   return true
 }
 
+/** Read the addon `enabled` flag off form data of an unknown shape. */
+function isAddonEnabled(formData: unknown): boolean {
+  return (
+    typeof formData === "object" &&
+    formData !== null &&
+    (formData as { enabled?: unknown }).enabled === true
+  )
+}
+
 function groupByComplexity(
   properties: ObjectFieldTemplatePropertyType[],
-  parentSchema: any,
+  parentSchema: unknown,
 ) {
   type Group = { simple: boolean; items: ObjectFieldTemplatePropertyType[] }
   const groups: Group[] = []
   let current: Group | null = null
+  const parentProperties =
+    parentSchema && typeof parentSchema === "object"
+      ? (parentSchema as FieldSchemaNode).properties
+      : undefined
 
   for (const prop of properties) {
-    const fieldSchema = parentSchema?.properties?.[prop.name]
+    const fieldSchema = parentProperties?.[prop.name]
     const simple = isSimpleField(fieldSchema)
     if (!current || current.simple !== simple) {
       current = { simple, items: [] }
@@ -42,9 +67,9 @@ function groupByComplexity(
 }
 
 export function CustomObjectFieldTemplate<
-  T = any,
+  T = unknown,
   S extends StrictRJSFSchema = RJSFSchema,
-  F extends FormContextType = any,
+  F extends FormContextType = FormContextType,
 >(props: ObjectFieldTemplateProps<T, S, F>) {
   const { formData } = props
 
@@ -54,7 +79,7 @@ export function CustomObjectFieldTemplate<
   const isAddon = hasEnabledField && hasOtherFields
 
   if (isAddon) {
-    const isEnabled = (formData as any)?.enabled === true
+    const isEnabled = isAddonEnabled(formData)
     const enabledProp = props.properties.find((p) => p.name === "enabled")
     const otherProps = props.properties.filter((p) => p.name !== "enabled")
     const groups = groupByComplexity(otherProps, props.schema)

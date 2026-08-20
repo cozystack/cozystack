@@ -6,7 +6,7 @@ import {
   type K8sResource,
 } from "@cozystack/k8s-client"
 import { Section, Spinner } from "@cozystack/ui"
-import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
+import type { ApplicationDefinition, ApplicationInstance, Tenant } from "@cozystack/types"
 import { appInstanceLabel } from "../../lib/labels.ts"
 import { formatAge } from "../../lib/status.ts"
 import { TENANT_NAMESPACE_PREFIX } from "../../lib/constants.ts"
@@ -185,7 +185,7 @@ export function SecretsTab({
 }) {
   const appKind = ad.spec?.application.kind
   const ns = appKind === "Tenant"
-    ? (instance.status as any)?.namespace ?? instance.metadata.namespace ?? ""
+    ? (instance as Tenant).status?.namespace ?? instance.metadata.namespace ?? ""
     : instance.metadata.namespace ?? ""
 
   // Use TenantSecrets API for all applications in tenant namespaces

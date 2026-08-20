@@ -19,6 +19,15 @@ interface PVC {
   metadata: { name: string; namespace: string }
 }
 
+/** Structural view of the mutually-exclusive `source` sub-schemas we render. */
+interface SourceOptionSchema {
+  type?: string
+  title?: string
+  description?: string
+  required?: string[]
+  properties?: Record<string, SourceOptionSchema>
+}
+
 function useVMDiskOptions(tenantNamespace: string | null | undefined) {
   const { data, isLoading } = useK8sList<VMDisk>({
     apiGroup: APPS_GROUP,
@@ -44,7 +53,7 @@ function useImageOptions() {
 
 export function SourceField(props: FieldProps) {
   const { schema, formData, onChange, name, required, idSchema } = props
-  const properties = (schema as any).properties || {}
+  const properties = (schema.properties || {}) as Record<string, SourceOptionSchema>
   const options = Object.keys(properties)
   const { tenantNamespace } = useTenantContext()
   const { disks, isLoading: disksLoading } = useVMDiskOptions(tenantNamespace)
@@ -77,7 +86,7 @@ export function SourceField(props: FieldProps) {
   }
 
   const renderFieldInput = (option: string) => {
-    const prop = properties[option] as any
+    const prop = properties[option]
     if (!prop || typeof prop !== "object") return null
 
     // If it's an empty object marker (like upload: {}), show confirmation message
@@ -103,7 +112,7 @@ export function SourceField(props: FieldProps) {
     const subProps = prop.properties || {}
     return (
       <div className="ml-6 mt-2 space-y-2">
-        {Object.entries(subProps).map(([key, subProp]: [string, any]) => {
+        {Object.entries(subProps).map(([key, subProp]) => {
           const currentValue = (formData?.[option] as Record<string, string>)?.[key] || ""
           const handleChange = (val: string) => {
             onChange({
@@ -190,7 +199,7 @@ export function SourceField(props: FieldProps) {
 
       <div className="space-y-2">
         {options.map((option: string) => {
-          const prop = properties[option] as any
+          const prop = properties[option]
           const optionDescription =
             typeof prop === "object" && prop ? prop.description : undefined
           const isSelected = selected === option
