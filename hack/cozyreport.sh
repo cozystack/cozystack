@@ -23,6 +23,14 @@
 #   COZY_REPORT_PREFER_NS    namespace prefix collected first, so the pod cap is
 #                            not spent on unrelated platform namespaces (default
 #                            `tenant-`; empty disables the ordering).
+#   COZY_RUNNER_IDENTITY_FILE  the record hack/e2e-runner-identity.sh left on the
+#                            runner VM, carried into this container with the tree
+#                            (default `_out/runner-identity.txt`, which is where
+#                            packages/core/testing/Makefile writes it and, inside
+#                            the container, sits under /workspace). Copied into
+#                            the report rather than re-read here: it describes the
+#                            machine a layer above this container, whose metadata
+#                            service this container has no guaranteed route to.
 # A malformed value in any numeric knob falls back to its default and says so in
 # the report.
 #
@@ -86,7 +94,7 @@
 #                         grows with the storage nodes.
 #                                                          (5 + n) x 35 = 175 + 35n
 #   EVERY OTHER READ    = literally the rest of the file -- the listings, the
-#                         gates, the four host commands, and every per-object walk
+#                         gates, the sandbox-host commands, and every per-object walk
 #                         EXCEPT the four capped ones above. Written as "the rest"
 #                         so that a read added later is inside this term without
 #                         anyone having to notice. Each
@@ -173,8 +181,10 @@ fi
 # expiring. It is not literally unique -- `timeout` passes a command's own exit
 # status through, so a command that itself exits 124 is indistinguishable -- but
 # every command handed to this wrapper is a kubectl `get`, `logs` or `describe`, a
-# talosctl `dmesg` or `logs`, or one of the four host commands the sandbox-host
-# section reads, and none of those returns 124. talosctl and the host commands are
+# talosctl `dmesg` or `logs`, or one of the host commands the sandbox-host
+# section reads, and none of those returns 124. Described rather than counted,
+# because a number here is a second thing to keep in step with a list that
+# grows. talosctl and the host commands are
 # named because this file only started routing them through the bounded reader; a
 # cobra CLI exits 0 or 1 and `df`/`free`/`ps` exit 0, 1 or 2, so the conclusion is
 # unchanged -- but an enumeration that stops listing what reaches it stops being
@@ -1555,6 +1565,49 @@ cozyreport_collect_broken_pods() {
   return 0
 }
 
+# cozyreport_collect_runner_identity <dir>: the runner VM's own identity, read on
+# that machine by hack/e2e-runner-identity.sh before this container existed and
+# carried in with the tree.
+#
+# Copied rather than re-read: it describes the machine a layer above this
+# container, whose link-local metadata service this container has no guaranteed
+# route to, so an attempt from in here would answer "unreachable" about a machine
+# that is fine.
+#
+# One filename either way, holding either the record or the reason there is none.
+# A marker file beside an absent one would carry the same words and be found by
+# nobody, because the absence is where a reader stops.
+#
+# A function rather than four lines in the module below, so both arms are
+# reachable from the unit suite. The module itself needs a cluster, and this is the
+# one part of it whose behaviour is decided entirely by a local file.
+cozyreport_collect_runner_identity() {
+  _cri_dir=$1
+  _cri_file=${COZY_RUNNER_IDENTITY_FILE:-_out/runner-identity.txt}
+  # `-s` rather than `-f`: a write cut off by a full disk leaves the file there and
+  # empty, and copying that through would put a zero-byte runner-identity.txt in
+  # the report -- holding neither the record nor a reason, which is the one outcome
+  # the promise below rules out.
+  if [ -s "$_cri_file" ]; then
+    # Through the same bounded reader as the host commands in the module below,
+    # for the uniformity rather than for the risk: it is a local file of a few
+    # hundred bytes, and the reader is what gives it the same TRUNCATED and
+    # READ-WARNINGS treatment as its neighbours.
+    cozyreport_read_object "$_cri_dir/runner-identity.txt" cat "$_cri_file"
+    return 0
+  fi
+  # Three causes, not one. The capture that writes this record is taken on the
+  # runner VM before this container exists (hack/e2e-runner-identity.sh, from
+  # packages/core/testing/Makefile) and it never fails the run, so a missing file
+  # says the step did not run, OR that it ran and could not write -- in which case
+  # the record is in that step's own log and only the artifact copy is missing.
+  # Naming one of them would be this collector asserting a cause it did not
+  # observe, in a file whose whole premise is that its notes can be believed.
+  printf '%s\n' "# [cozyreport] no runner identity record at $_cri_file (absent, or present and empty), so this report says nothing about the machine the sandbox ran on. Three things produce this: the capture step did not run, a sandbox was created by hand, or the capture ran and could not write its file -- and in that last case the record is in the log of the step that took it, which exits 0 either way. It is NOT a statement that the runner was an ordinary one: an unidentified runner and an unremarkable one leave the same absence here." \
+    > "$_cri_dir/runner-identity.txt" || true
+  return 0
+}
+
 # Let a focused BATS test, or hack/cozyreport-summary.sh, source the helpers
 # above without running the full cluster report. Nothing below this point runs
 # for such a caller.
@@ -2030,6 +2083,11 @@ mkdir -p $DIR
 cozyreport_read_object "$DIR/df.txt" df -h
 cozyreport_read_object "$DIR/free.txt" free -m
 cozyreport_read_object "$DIR/ps.txt" ps auxww
+# Which machine this container is running on. Everything else in this directory
+# describes that same host, but describes it as it is now; this says which host it
+# is -- which shape, which region, which processor -- and that is the one fact the
+# run cannot recover afterwards, because the runner is ephemeral.
+cozyreport_collect_runner_identity "$DIR"
 # A pipeline, so the bare wrapper rather than the reader: the reader owns the
 # redirect and `dmesg | tail` needs its own. dash has no pipefail, so the status
 # belongs to `tail` and a cut-off dmesg leaves no marker -- said here rather than

@@ -92,6 +92,45 @@ assert_full_suite() {
     fi
 }
 
+@test "cozystack-basics does not narrow to a suite that lands downstream of it" {
+    # The other install-ordering hub. Its edges exist so a namespace or a
+    # platform-wide policy is in place first, and it reaches no suite today, so
+    # it escalates. The hazard is what happens when a suite DOES land downstream:
+    # the walk would carry cozystack-basics into it and the platform's
+    # namespace-and-policy package would run that one suite instead of
+    # everything. Seeded here rather than waited for, by giving an app that owns
+    # a real suite an edge onto the hub — the shape #3426 produces for real,
+    # where enabling the site-router suite takes cozystack-basics from the full
+    # run to `site-router` alone.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    yq -i '.spec.variants[0].dependsOn += ["cozystack.cozystack-basics"]' \
+        "$tmp/sources/redis-application.yaml"
+    # Premise: the seeded edge is the thing under test, so a redis change must
+    # still select redis. Without it the assertion below passes on an empty
+    # graph.
+    echo "packages/apps/redis/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    echo "$output" | grep -wq redis
+    echo "packages/system/cozystack-basics/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_full_suite "$output"
+    rm -rf "$tmp"
+}
+
+@test "a CDI change selects the suite that exercises a VMDisk" {
+    # kubevirt-cdi reaches vm-disk-application and nothing else runnable, so
+    # until vm-disk-application mapped to a suite every CDI change ran all of
+    # them. The vminstance suite creates a VMDisk and asserts the DataVolume
+    # behind it, so it is the suite that covers CDI.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/kubevirt-cdi/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "vminstance" ]
+    rm -rf "$tmp"
+}
+
 @test "a CNI change selects every suite the graph can reach" {
     # Named for what it measures rather than for the full suite it once claimed.
     # `packages/system/cilium` is owned by cozystack.networking and resolves
@@ -132,8 +171,18 @@ assert_full_suite() {
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/library/cozy-lib/templates/_helpers.tpl" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
     assert_full_suite "$output"
+    # full_suite_pattern is the commonest escalation cause by a wide margin, so a
+    # full run with nothing on stderr leaves the usual answer to "why did
+    # everything run" out of the log entirely. Matched on the path and the rule
+    # name rather than on the word "escalating", which every other reason line
+    # here also prints.
+    if ! grep -q "select-e2e:.*cozy-lib.*full_suite_pattern" "$tmp/err"; then
+        echo "a full_suite_pattern match must name the path that caused it; stderr was:" >&2
+        cat "$tmp/err" >&2
+        exit 1
+    fi
 }
 
 @test "docs-only diff selects nothing" {
@@ -173,8 +222,13 @@ assert_full_suite() {
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-chainsaw/_lib/run-kubernetes.sh" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
     assert_full_suite "$output"
+    if ! grep -q "select-e2e:.*run-kubernetes.sh.*shared by every Chainsaw suite" "$tmp/err"; then
+        echo "a shared-Chainsaw escalation must name the file that caused it; stderr was:" >&2
+        cat "$tmp/err" >&2
+        exit 1
+    fi
 }
 
 @test "chainsaw config change triggers full suite" {
@@ -287,8 +341,20 @@ assert_full_suite() {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "brand-new-top-level/thing.conf" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
     assert_full_suite "$output"
+    # The reason line is asserted as well as the selection, and this branch is
+    # the one that most needs it: it is #3392's own guard, the escalation whose
+    # cause is hardest to work out from the outside (the answer is "a path nobody
+    # has classified", which the selection cannot express), and the only action it
+    # asks for is to go and classify the path it names. Deleting this echo used to
+    # leave the whole file green while the word "unclassified" appeared in seven
+    # comments here, so the branch read as covered without being pinned.
+    if ! grep -q "select-e2e:.*unclassified path.*thing\.conf" "$tmp/err"; then
+        echo "an unclassified path must be named on stderr; stderr was:" >&2
+        cat "$tmp/err" >&2
+        exit 1
+    fi
     rm -rf "$tmp"
 }
 
@@ -372,6 +438,195 @@ assert_full_suite() {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     printf '%s\n' hack/e2e-chainsaw/backup/chainsaw-test.yaml.disabled \
+        packages/apps/postgres/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres" ]
+    rm -rf "$tmp"
+}
+
+@test "a top-level unit bats file selects nothing" {
+    # All 60 non-e2e hack/*.bats files used to escalate to the full suite. The
+    # root Makefile is the authority on which of them the e2e sandbox runs:
+    # BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
+    # keeps exactly these for the unit lane, and packages/core/testing's recipes
+    # execute only the three it filters out. So the sandbox never runs one of
+    # these, and no Chainsaw suite can regress from an edit to one.
+    #
+    # Not a green gate with nothing behind it: `make unit-tests` DOES run them,
+    # gated on pull-requests.yaml's `code` output, which is computed there as
+    # "any path outside docs/" and never from this script.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    # Premise, read off the Makefile rather than assumed: the unit set is the
+    # hack/*.bats files whose names do not start with e2e-, and the file under
+    # test has to be in it.
+    grep -Fq 'BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))' Makefile
+    printf '%s\n' hack/select-e2e_test.bats hack/md-no-hardwrap.bats > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+    # The e2e-prefixed ones are the sandbox's own harness and must still
+    # escalate; the narrowing lives one alternative away from them in
+    # full_suite_pattern, so pin both sides of the prefix.
+    for f in hack/e2e-install-cozystack.bats hack/e2e-prepare-cluster.bats hack/e2e-test-openapi.bats; do
+        echo "$f" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>/dev/null)
+        assert_full_suite "$output"
+    done
+    # And an inert unit bats file beside a real app path must not mask it.
+    printf '%s\n' hack/select-e2e_test.bats packages/apps/postgres/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres" ]
+    rm -rf "$tmp"
+}
+
+@test "every hack/*.bats file lands on the lane its name says" {
+    # The rule above is a claim about 63 files, asserted on two of them. This
+    # pins the claim itself: for every hack/*.bats in the tree, the selector's
+    # verdict must agree with the Makefile's split -- e2e-prefixed escalates,
+    # everything else selects nothing. A file added with a name that fits neither
+    # lane's expectation shows up here rather than on the next PR that touches it.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    full=$(full_suite_list)
+    for f in hack/*.bats; do
+        echo "$f" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>/dev/null)
+        case "$f" in
+            hack/e2e-*) want="$full" ;;
+            *)          want="" ;;
+        esac
+        assert_selection "wrong lane for $f" "$output" "$want"
+    done
+    rm -rf "$tmp"
+}
+
+@test "a per-app e2e bats file selects that app's suite" {
+    # hack/e2e-apps/<name>.bats is the pre-Chainsaw per-app BATS suite, named
+    # after the app exactly as a Chainsaw suite directory is. Those paths matched
+    # no rule at all and escalated as unclassified -- 5 of the last 150 merged
+    # pull requests, all of them the migration deleting one of these files.
+    #
+    # Mapped rather than marked inert: what is left here is wired to nothing
+    # today, and inert would bake that in and go quietly wrong the day a lane
+    # runs them again. This asserts the mapping on a name that IS a suite, so it
+    # measures the rule rather than the orphan status of the files that happen to
+    # remain.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/e2e-apps/postgres.bats" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres" ]
+    # Alongside a real app path it must union, not replace -- the cheap way to
+    # pass the line above is a rule that returns early.
+    printf '%s\n' hack/e2e-apps/postgres.bats packages/apps/redis/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres redis" ]
+    rm -rf "$tmp"
+}
+
+@test "a per-app e2e bats file naming no suite escalates on its own account" {
+    # The other half of the mapping, and the half that has to be decided HERE
+    # rather than by the final intersection. Deferring it made the verdict depend
+    # on the rest of the diff: alone the selection emptied and the backstop
+    # escalated, but beside any path that contributed a suite the escalation
+    # disappeared and the run narrowed to that suite with nothing on stderr --
+    # the merge-before-escalate shape #3330 removed from the graph walk.
+    #
+    # So both diffs are asserted, and the mixed one is the regression pin: the
+    # isolated case passes with the escalation deferred and cannot see the bug.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    # Premise: the name must really be absent from the suite list, or this
+    # measures the matched branch.
+    if full_suite_list | tr ' ' '\n' | grep -Fxq no-such-app; then
+        echo "premise broken: no-such-app is a real suite" >&2
+        exit 1
+    fi
+    echo "hack/e2e-apps/no-such-app.bats" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_full_suite "$output"
+    if ! grep -q "select-e2e:.*no-such-app.*names no runnable suite" "$tmp/err"; then
+        echo "an unmatched e2e-apps basename must name itself; stderr was:" >&2
+        cat "$tmp/err" >&2
+        exit 1
+    fi
+    printf '%s\n' hack/e2e-apps/no-such-app.bats packages/apps/redis/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_selection "an unmatched per-app bats file was swallowed by another path's suite" \
+        "$output" "$(full_suite_list)"
+    if ! grep -q "select-e2e:.*no-such-app.*names no runnable suite" "$tmp/err"; then
+        echo "the escalation must still be named in a mixed diff; stderr was:" >&2
+        cat "$tmp/err" >&2
+        exit 1
+    fi
+    rm -rf "$tmp"
+}
+
+@test "a nested path under e2e-apps escalates instead of being read as a suite" {
+    # POSIX case matches `/` with `*`, so the hack/e2e-apps/ arm sees nested paths
+    # too. With an unanchored capture the sed turned
+    # hack/e2e-apps/fixtures/postgres.bats into the "suite" fixtures/postgres --
+    # a name no suite carries, so the outcome was right by accident while the
+    # reason line printed a path where a suite name belongs.
+    #
+    # Nothing nested exists there today, which is exactly why the rule has to
+    # state what it does with one instead of letting it fall out of a regex.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    [ ! -d hack/e2e-apps/fixtures ]
+    for f in hack/e2e-apps/fixtures/postgres.bats hack/e2e-apps/helpers.sh; do
+        echo "$f" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+        assert_full_suite "$output"
+        if ! grep -q "select-e2e:.*shared material" "$tmp/err"; then
+            echo "a non-per-app path under e2e-apps must escalate as shared material; stderr was:" >&2
+            cat "$tmp/err" >&2
+            exit 1
+        fi
+        # The capture must never leak a path fragment into the suite name.
+        if grep -q "fixtures/postgres'" "$tmp/err"; then
+            echo "the reason line named a path where a suite name belongs; stderr was:" >&2
+            cat "$tmp/err" >&2
+            exit 1
+        fi
+    done
+    rm -rf "$tmp"
+}
+
+@test "helm-unittest fixtures and the enumerated gitattributes select nothing" {
+    # packages/tests/ is a helm-unittest fixture chart: changing a test OF
+    # cozy-lib does not change cozy-lib, no PackageSource lists these paths as a
+    # component, and nothing installs them. The .gitattributes named here hold
+    # nothing but linguist-generated markers, which reach no build, chart or test.
+    # Both classes fell through as unclassified and bought a full run -- 6 of the
+    # last 150 merged pull requests between them.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf '%s\n' packages/tests/cozy-lib-tests/tests/quota_test.yaml \
+        packages/tests/cozy-lib-tests/templates/tests/quota.yaml \
+        packages/system/.gitattributes \
+        packages/system/backup-controller/definitions/.gitattributes \
+        packages/system/backupstrategy-controller/definitions/.gitattributes > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+    # The .gitattributes rule is an ENUMERATION and must stay one. The
+    # justification is what those files contain, and the filename does not carry
+    # it -- .gitattributes can also set filter, eol, working-tree-encoding and
+    # export-subst, each of which changes what lands in the working tree and so
+    # what gets built. A by-name rule would make such a file inert in silence, so
+    # pin that a path not on the list is still classified by its own rule: at the
+    # repo root that is the unclassified fall-through.
+    echo ".gitattributes" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    assert_full_suite "$output"
+    # The library itself is a different question and must still escalate: these
+    # fixtures test cozy-lib, so an inert rule reaching the library would be the
+    # dangerous over-reach here.
+    echo "packages/library/cozy-lib/templates/_quota.tpl" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    assert_full_suite "$output"
+    # And an inert fixture beside a real app path must not mask the selection.
+    printf '%s\n' packages/tests/cozy-lib-tests/tests/quota_test.yaml \
         packages/apps/postgres/values.yaml > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "postgres" ]
@@ -612,6 +867,29 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "an etcd-operator change selects the etcd suite, not the whole run" {
+    # cozystack.etcd-operator reached no runnable suite, so every change to the
+    # operator ran all 21 -- 5 of the last 150 merged pull requests. The suite
+    # exists and the app genuinely needs the operator (extra/etcd renders kind:
+    # EtcdCluster from etcd-operator.cozystack.io/v1alpha2), so what was missing
+    # was the dependsOn edge that makes the app reachable from it. Both operator
+    # components are asserted: the reverse walk starts from whichever
+    # PackageSource owns the changed path, and the CRDs sit in the same source.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    # Guard the premise: without the edge this passes for the wrong reason,
+    # because the full suite contains "etcd" too.
+    grep -q 'cozystack\.etcd-operator' "$tmp/sources/etcd-application.yaml"
+    for path in packages/system/etcd-operator/values.yaml \
+        packages/system/etcd-operator-crds/templates/etcd-clusters.yaml; do
+        echo "$path" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+        assert_selection "an etcd-operator change must select only the etcd suite" \
+            "$output" "etcd"
+    done
+    rm -rf "$tmp"
+}
+
 @test "every suite round-trips between the two mapping tables" {
     # select-install.sh maps a suite to the PackageSource that installs it, and
     # select-e2e.sh must map that source back to the suite. A suite that does
@@ -651,8 +929,58 @@ assert_full_suite() {
     # test would be measuring the ordinary per-suite rule.
     [ ! -d hack/e2e-chainsaw/_fixtures ]
     echo "hack/e2e-chainsaw/_fixtures/tenant.yaml" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
     assert_full_suite "$output"
+    # The backstop is the last branch that could reach the full suite without
+    # saying so. It names the directly-selected names it could not resolve, which
+    # for this diff is the directory the per-suite rule derived.
+    if ! grep -q "select-e2e:.*no runnable suite is named by.*_fixtures" "$tmp/err"; then
+        echo "the backstop must name what it could not resolve; stderr was:" >&2
+        cat "$tmp/err" >&2
+        exit 1
+    fi
+    # Several unresolved directories, with one of them repeated: every distinct
+    # name must appear, exactly once, in one line. The list used to be built by
+    # `tr | sort -u | grep -v | paste`, whose exit status is paste's, so a failure
+    # anywhere earlier in it would have gone unseen under set -e and printed a
+    # partial name or none at all -- the same last-command blindness this script
+    # fixes for the suite list and the yq indexes. The escalation is already
+    # decided by then, so the only casualty is the reason line, which is exactly
+    # what these asserts exist to defend.
+    [ ! -d hack/e2e-chainsaw/_zz ]
+    printf '%s\n' hack/e2e-chainsaw/_fixtures/a.yaml \
+        hack/e2e-chainsaw/_fixtures/b.yaml \
+        hack/e2e-chainsaw/_zz/c.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_full_suite "$output"
+    line=$(grep 'no runnable suite is named by' "$tmp/err")
+    assert_selection "the backstop must name every unresolved directory once" \
+        "$line" "select-e2e: no runnable suite is named by '_fixtures _zz' — escalating to the full suite"
+    rm -rf "$tmp"
+}
+
+@test "a packages/ path with no graph entry escalates and says which" {
+    # The fourth branch that used to escalate in silence: a path under
+    # packages/(apps|system|extra)/<name>/ that no PackageSource lists as a
+    # component path. That is how a new package looks before its source lands, so
+    # the line has to name the package dir rather than the rule — the reader's
+    # next step is to add it to the graph.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    # Premise: no source may claim this path, or the graph lookup succeeds and
+    # the test measures the ordinary component rule instead.
+    if grep -rq 'path: system/zz-not-a-package' "$tmp/sources"; then
+        echo "premise broken: system/zz-not-a-package is in the graph" >&2
+        exit 1
+    fi
+    echo "packages/system/zz-not-a-package/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_full_suite "$output"
+    if ! grep -q "select-e2e:.*system/zz-not-a-package.*component path" "$tmp/err"; then
+        echo "an unowned packages/ path must name itself; stderr was:" >&2
+        cat "$tmp/err" >&2
+        exit 1
+    fi
     rm -rf "$tmp"
 }
 

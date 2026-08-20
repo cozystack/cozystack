@@ -32,12 +32,29 @@ spec:
         # so that a budget running out drops the collectors that cost minutes rather
         # than the reads that discriminate between failure modes:
         #   node-join diagnostics reads
-        #   worker CPU throttling counters
         #   worker network counters
-        #   serial-console family (~5m50s at worst, ~3m30s at the pool's minimum)
+        #   worker block IO counters
+        #   serial-console family (~6m25s at worst, ~4m05s at the pool's minimum)
+        #   worker CPU usage and throttling counters, two samples
+        #   sandbox node CPU time, two samples
+        #   worker per-thread CPU time inside virt-launcher, two samples
+        #     (those alternate rather than run to completion in turn: each takes
+        #     its first reading, one wait passes, each takes its second)
         #   guest Talos capture
         #   ghcr-mirror state, access log and warm-up Job
         #   talos-image-cache diagnosis
+        # The four collectors that bracket the node-join wait -- the sandbox
+        # kernel KVM counters, the runner kernel CPU time, the sandbox QEMU
+        # thread time and the runner fixed-work canary -- sit outside this order
+        # on purpose: each is ungated and taken before the wait and right after
+        # it on both paths, and their cost arms live in the budget guard rather
+        # than in this list. Three of the four are reads: the KVM counters and
+        # the runner kernel CPU time are one bounded read a side, and the QEMU
+        # thread time is a bounded probe walk plus a bounded read of each
+        # sandbox pid file. The canary is two arms of fixed work under a ceiling
+        # of its own apiece, and it is the one of the four that costs a core
+        # rather than a read, which is why it runs outside the brackets of the
+        # other three rather than among them.
         # and then, after the phase rather than inside it, the in-process tenant
         # crust-gather snapshot.
         #
@@ -46,7 +63,9 @@ spec:
         # phase rather than this ceiling raised. None of it is a worst case and none is
         # claimed: several of those collectors carry no wall-clock bound at all, and
         # the bringup's own waits already exceed this op on ceilings before a single
-        # diagnostic runs. Those residuals are tracked in cozystack/cozystack#3666.
+        # diagnostic runs, and the pre-wait halves of the four readings above spend
+        # inside that bringup rather than inside this phase. Those residuals are
+        # tracked in cozystack/cozystack#3666.
         timeout: 50m
         # Co-locate the tenant crust-gather snapshot (captured by
         # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as

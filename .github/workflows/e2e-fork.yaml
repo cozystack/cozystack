@@ -35,9 +35,9 @@ on:
 #
 # A triggering run that concluded `cancelled` or `skipped` gets a group of its
 # OWN, keyed by that run's id. Such a run built nothing — labelling an open fork
-# PR produces one, because `plan` in pull-requests.yaml discards every label
-# other than full-e2e and every job skips — and `resolve` recognises it and
-# posts no status at all. In the shared group it would still cancel the live
+# PR produces one, because `plan` in pull-requests.yaml discards every label a
+# fork run could not publish for and every job skips — and `resolve` recognises
+# it and posts no status at all. In the shared group it would still cancel the live
 # privileged run that DOES own the status for that head SHA, and the pair
 # "cancel the owner, then post nothing" leaves the SHA at "Expected" with
 # nothing left to flip it: the run that replaced the owner is the very one that
@@ -142,8 +142,16 @@ jobs:
             }
 
             // Discarded label event: pull-requests.yaml triggers on `labeled` but
-            // its `plan` guard discards every label other than full-e2e, so such a
-            // run skips every job and builds nothing. Post NOTHING and stop —
+            // its `plan` guard discards every label a fork run could not publish
+            // for, so such a run skips every job and builds nothing. That guard
+            // admits full-e2e, and admits `release` for SAME-REPO PRs only —
+            // deliberately, for this check. A `release`-labelled run reaches
+            // `plan` but has `build`/`finalize` gated off by its own label, so it
+            // succeeds having produced no pr-patch, and this lane would take it
+            // for a real run and fail closed below on the missing artifact. The
+            // same shape still reaches here from a PUSH to a fork PR somebody
+            // mislabelled `release`; that predates promotion using the label and
+            // is not fixed here. Post NOTHING and stop —
             // deciding here would overwrite an already-green status with red (via
             // the CONCLUSION check or the missing-pr-patch check below) every time
             // anyone labels an open fork PR. Fail-closed: statuses are per-SHA and
@@ -184,18 +192,34 @@ jobs:
               return;
             }
 
-            // Resolve the PR number for this commit (workflow_run.pull_requests
-            // is empty for forks). Only OPEN PRs count — never fall back to a
-            // closed/merged association, which a fork could point at a stale
-            // commit to smuggle a green through.
-            // Paginated, like every other lookup in this script: the check
-            // below counts open associations, so reading only the first page
-            // would miss the second PR in exactly the case it exists to catch.
-            const assoc = await github.paginate(
-              github.rest.repos.listPullRequestsAssociatedWithCommit,
-              { owner, repo, commit_sha: HEAD_SHA, per_page: 100 },
+            // Resolve the PR number for this commit. Neither obvious lookup
+            // works for a fork: `workflow_run.pull_requests` is empty for a
+            // cross-repository run, and the association endpoint this used to
+            // call, `listPullRequestsAssociatedWithCommit`, returns nothing
+            // either — a fork PR head reaches the base repo only as
+            // `refs/pull/<n>/head`, and that association index does not walk
+            // `refs/pull/*`. It resolves same-repo heads fine, which is exactly
+            // why the hole stayed invisible: every fork PR fail-closed right
+            // here on `found 0` and no fork run ever reached publish or e2e,
+            // while same-repo PRs get "E2E Tests" from pull-requests.yaml and
+            // never enter this workflow at all.
+            //
+            // So enumerate the base repo's OPEN pull requests and match on the
+            // head SHA. Same trust properties as the call it replaces — plain
+            // base-repo API data, nothing the fork can forge — and asking for
+            // `state: 'open'` at the source keeps the old rule that a closed or
+            // merged PR never counts, so a fork cannot point a stale commit at
+            // a green.
+            // Paginated, like every other lookup in this script. Here it is
+            // load-bearing twice over: the PR being looked for is frequently
+            // not on the first page at all, and the check below counts matches,
+            // so a single page would also miss the second PR in exactly the
+            // case that count exists to catch.
+            const openPrs = await github.paginate(
+              github.rest.pulls.list,
+              { owner, repo, state: 'open', per_page: 100 },
             );
-            // Exactly one PR AT this head, not the first association. A single
+            // Exactly one PR AT this head, not the first match. A single
             // branch may have several open PRs against different base branches,
             // and every decision below is taken from whichever PR this picks:
             // the merge-ref checkout, the docs-only verdict, the TIA file list,
@@ -205,16 +229,15 @@ jobs:
             // code. The HEAD^2 == head_sha assert downstream cannot catch that:
             // it holds for every PR sitting on the commit.
             //
-            // The head_sha filter is what keeps the guard as narrow as its
-            // reason. This endpoint returns PRs ASSOCIATED with the commit,
-            // which per the API docs means any open PR whose branch contains
-            // it, not only those pointing at it. Without the filter, stacking
-            // one branch on another and opening both PRs counts as two, and
-            // the lower PR fails closed on a state its author cannot clear by
+            // Matching head.sha, rather than any notion of reachability, is
+            // what keeps the guard as narrow as its reason. Stack one branch on
+            // another and open both PRs, and the lower PR's head is merely
+            // CONTAINED in the upper branch; counting that as two would fail
+            // the lower PR closed on a state its author cannot clear by
             // pushing. That is the same unfixable red this workflow refuses to
             // inflict elsewhere. Two PRs genuinely at the same head still fail
             // closed, which is the case the guard exists for.
-            const open = assoc.filter(p => p.state === 'open' && p.head && p.head.sha === HEAD_SHA);
+            const open = openPrs.filter(p => p.head && p.head.sha === HEAD_SHA);
             if (open.length !== 1) {
               await decide('failure', `expected exactly one open PR for ${HEAD_SHA}, found ${open.length}`);
               return;

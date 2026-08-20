@@ -80,6 +80,10 @@ export function BackupCreatePage() {
       return
     }
 
+    // Run RJSF validation before the page-level checks so schema-required
+    // fields render inline errors instead of being masked by the alerts below.
+    if (schemaFormRef.current && !schemaFormRef.current.validate()) return
+
     if (!formData.applicationRef?.kind || !formData.applicationRef?.name) {
       alert("Application reference is required")
       return
@@ -94,10 +98,6 @@ export function BackupCreatePage() {
       alert("Taken at timestamp is required")
       return
     }
-
-    // The submit button lives outside RJSF and bypasses its validation, so
-    // trigger it explicitly; an invalid spec renders errors inline and aborts.
-    if (schemaFormRef.current && !schemaFormRef.current.validate()) return
 
     const resource = {
       apiVersion: "backups.cozystack.io/v1alpha1",

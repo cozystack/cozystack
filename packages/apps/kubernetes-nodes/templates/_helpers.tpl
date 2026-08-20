@@ -105,3 +105,26 @@ it reconciles.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+Validates and returns a duration destined for a consumer that does not reject
+a bad value: the cluster-autoscaler parses its annotation with
+time.ParseDuration and silently falls back to its built-in default on a value
+it cannot parse, and the CAPI webhook does not validate unhealthyConditions
+timeouts at all, so a zero or negative one applies and remediates a Machine the
+moment its condition flips. The values schema types these fields as strings and
+stops there, which lets "30" and "-5m" reach the template. The accepted shape
+is narrower than Go's duration grammar on purpose, because that grammar also
+admits a value large enough to overflow the parser -- the silent fallback again
+-- and a fraction small enough to round to zero. The first segment must be
+positive; later segments may be zero, so the canonical rendering of a duration
+("20m0s", "1h0m0s" -- what metav1.Duration serializes to) round-trips. Every
+string this admits parses to a positive duration.
+*/ -}}
+{{- define "kubernetes.positiveDuration" -}}
+{{- $value := toString .value -}}
+{{- if not (regexMatch "^[1-9][0-9]{0,4}[smh]([0-9]{1,5}[smh]){0,2}$" $value) -}}
+{{-   fail (printf "%s must be a whole number of s, m or h (e.g. 30m, 1h30m), got %q" .field $value) -}}
+{{- end -}}
+{{- $value -}}
+{{- end -}}

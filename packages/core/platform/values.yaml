@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 54
+  targetVersion: 56
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -420,6 +420,19 @@ publishing:
         tsigAlgorithm: HMACSHA256
         secretName: ""
         secretKey: tsig-secret-key
+# Telemetry reported by platform components.
+#
+# Two components report: cozystack-operator (cluster facts — nodes, storage,
+# packages) and cozystack-controller (application counts). This key covers the
+# CONTROLLER, which the platform deploys. The operator is deployed by the
+# cozy-installer chart and is switched off separately, with
+# cozystackOperator.disableTelemetry=true — a full opt-out needs both, because
+# the two components are installed by two different charts.
+#
+# What is collected, and why, is documented at
+# https://cozystack.io/docs/operations/configuration/telemetry/
+telemetry:
+  disabled: false
 # Authentication configuration
 authentication:
   oidc:

@@ -151,6 +151,18 @@
 {{- $apiValues := dict "cozystackAPI" (dict "nodeSelector" $genericNodeSelector) -}}
 {{- $_ := set $cozystackEngineComponents "cozystack-api" (dict "values" $apiValues) -}}
 {{- end -}}
+{{- /* Telemetry is collected by TWO components: cozystack-operator (cluster
+       facts) and cozystack-controller (application counts). The operator is
+       switched off at install time via cozystackOperator.disableTelemetry on
+       the cozy-installer chart, which cannot reach a package deployed by the
+       platform. Threading it here gives the controller half of the opt-out a
+       platform-level key, so `telemetry.disabled: true` plus the installer
+       flag silences both. Without this, an operator who followed the
+       documented opt-out kept sending cozy_application_count. */ -}}
+{{- if .Values.telemetry.disabled -}}
+{{- $controllerValues := dict "cozystackController" (dict "disableTelemetry" true) -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" $controllerValues) -}}
+{{- end -}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.keycloak" $) }}

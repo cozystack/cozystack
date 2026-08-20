@@ -5,16 +5,16 @@ env:
   REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
 on:
   pull_request:
-    # `labeled` makes the promote PR's manual full-e2e opt-in actionable after
-    # the bot opens it. The plan/resolve guards below discard every other label
-    # event before it can launch build or E2E work.
+    # `labeled` makes the promote PR's release-candidate verification and manual
+    # full-e2e opt-in actionable after the bot opens it. The plan/resolve guards
+    # below discard every other label event before it can launch work.
     types: [opened, synchronize, reopened, labeled]
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
 #
 # A `labeled` event that `plan` discards gets its OWN group, so labelling an
 # open PR cannot cancel a live opened/synchronize run. Any label other than
-# full-e2e makes `plan` skip, and `e2e-report` skips with it, so without the
+# full-e2e/release makes `plan` skip, and `e2e-report` skips with it, so without the
 # split the pair "cancel the real run, then skip" left the head SHA with no
 # "E2E Tests" status at all — and an unposted required status stays "Expected",
 # blocking the merge until someone pushes again or re-runs the cancelled run.
@@ -24,18 +24,31 @@ on:
 # default GITHUB_TOKEN, which by design triggers no further workflow runs.)
 #
 # The condition is the exact complement of `plan`'s guard, so only a run that
-# will publish NOTHING is moved aside. A `labeled` run carrying full-e2e does
-# publish, so it stays in the main group and supersedes the head run the way a
-# push does. That keeps exactly one publisher of the `E2E Tests` context alive
-# per head SHA, which the status depends on: two live publishers are latest-wins
+# will publish NOTHING is moved aside. A `labeled` run carrying full-e2e or
+# release does publish, so it stays in the main group and supersedes the head
+# run the way a push does. That keeps exactly one publisher of the `E2E Tests`
+# context alive per head SHA, which the status depends on: two live publishers are latest-wins
 # per context, and the full suite is the superset, so a full-e2e run that fails
 # early — a build flake, a suite failing at minute twenty — would finish before
 # the narrower head run it was meant to widen, and that run's later green would
 # erase the failure. Cancelling also means opting into the full suite costs one
 # suite rather than two, and a second label landing afterwards cannot cancel the
 # full-e2e run, because it is no longer in the same group as it.
+#
+# `release` publishes on the SAME-REPO lane only, hence the fork term. A promote
+# PR is opened same-repo by the release bot, so the label on a fork PR is always
+# a mislabel — and on that lane it would be a destructive one. e2e-fork.yaml's
+# `resolve` decides "this run built nothing, so it is not a verdict" by asking
+# whether `Plan build` skipped; a fork run that gets past `plan` then fails
+# closed on the pr-patch artifact its own `release` label gated off, posting red
+# on a suite that was never going to run, with no `unlabeled` trigger to undo
+# it. Excluding forks keeps the label as inert on that lane as it was before
+# promotion started using it. The term appears in both this key and `plan`'s
+# guard because the two must stay exact complements: NOT(A OR B OR (C AND NOT
+# F)) is (NOT A) AND (NOT B) AND (NOT C OR F), and for a same-repo PR F is false
+# and both sides reduce to exactly what they were.
 concurrency:
-  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-e2e') && '-label' || '' }}
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-e2e' && (github.event.label.name != 'release' || github.event.pull_request.head.repo.fork)) && '-label' || '' }}
   cancel-in-progress: true
 
 # Top-level token defaults to read-only. A job-level block replaces this one
@@ -52,7 +65,9 @@ jobs:
   plan:
     name: Plan build
     runs-on: ubuntu-latest
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e'
+    # Exact complement of the concurrency key above; see the reasoning there,
+    # including why `release` is admitted for same-repo PRs only.
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork)
     permissions:
       contents: read
       # For the opening `E2E Tests` status below; e2e-report writes the terminal
@@ -192,6 +207,97 @@ jobs:
           else
             echo "any=true" >> "$GITHUB_OUTPUT"
           fi
+
+  # Promotion publishes the rewritten packages artifact before opening its PR.
+  # Verify GitHub's prospective merge tree here, so a `packages/` edit pushed to
+  # this PR fails the required E2E Tests status before it can merge.
+  #
+  # Checking the MERGE tree rather than the head is what makes base drift
+  # visible when this job runs — but nothing re-runs it when the base moves:
+  # GitHub does not fire `pull_request` on the base branch advancing, it only
+  # recomputes refs/pull/N/merge. So a `packages/` change landing on the base
+  # after this went green is never re-verified here, and the PR stays mergeable
+  # on the stale result. Finalize repeats the check against the real merge
+  # commit before creating the write-once stable tag, which is where that case
+  # is actually caught — loudly, and before any stable name exists.
+  verify-release-candidate:
+    name: Verify release packages candidate
+    runs-on: ubuntu-latest
+    # Matching `checks` and `finalize`. Without a ceiling the job inherits the
+    # 6-hour default, and a stalled `flux pull artifact` would hold the required
+    # `E2E Tests` status pending for all of it, since e2e-report needs this job.
+    timeout-minutes: 30
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'release')
+      && github.event.pull_request.user.login == 'cozystack-ci[bot]'
+      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || github.event.label.name == 'release')
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      # The default pull_request checkout is GitHub's prospective merge commit,
+      # not just the head branch. That makes base-branch package drift visible.
+      - name: Checkout prospective merge
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      # Execute the verifier from the trusted base SHA. An older rc-derived head
+      # may not contain it, and a PR must not be able to weaken its own guard.
+      - name: Checkout release tooling from base
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .release-tooling
+          sparse-checkout: hack
+          persist-credentials: false
+
+      # Both tools are version-pinned. This job decides whether a stable release
+      # may be created, so what it runs has to be a fixed input: `latest/download`
+      # resolves to whatever mikefarah shipped this morning, and a yq that changed
+      # how it emits or compares a value turns a release gate into a moving one.
+      # The version tracks packages/core/testing/images/e2e-sandbox/Dockerfile.
+      # yq is additionally pinned by content; the Flux installer is not, because
+      # it checksums the binary it fetches and the mutable part is its own
+      # bootstrap script. promote-rc.yaml's copy of this step carries the full
+      # reasoning for both.
+      - name: Set up promotion toolchain (flux, yq)
+        env:
+          FLUX_VERSION: "2.8.6"
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+        run: |
+          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
+
+      - name: Login to registry (GHCR)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Verify stable packages candidate
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          STABLE_VERSION="${HEAD_BRANCH#release-}"
+          .release-tooling/hack/verify-promoted-packages.sh "$STABLE_VERSION"
 
   # Helm-unittest + Go controller tests. Decoupled from the image build and from
   # e2e so they give fast, independent signal; they gate the PR as their own
@@ -725,9 +831,20 @@ jobs:
   resolve_assets:
     name: "Resolve assets"
     runs-on: ubuntu-latest
+    # In lockstep with `plan`, fork term included: this job is on `e2e`'s
+    # release arm, so a label event `plan` runs for and this job skips for
+    # leaves `e2e` with both arms false while `e2e-report` still runs. On a
+    # promote PR already carrying full-e2e that reaches the final `else` — the
+    # "e2e not repeated" branch is bypassed by full-e2e — and posts `E2E Tests`
+    # = failure over a green one, unclearable without a push because
+    # `unlabeled` is not a trigger. The fork term keeps a `release` label on a
+    # fork PR as inert as it was before promotion used the label: without it
+    # this job runs there and fails resolving a draft release for a branch that
+    # is not `release-X.Y.Z`. It short-circuits on `action != 'labeled'`, so the
+    # pre-existing behaviour on a push to such a PR is unchanged.
     if: |
       contains(github.event.pull_request.labels.*.name, 'release')
-      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e')
+      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork))
     outputs:
       disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
@@ -823,7 +940,7 @@ jobs:
       contents: read
       packages: read
       checks: write
-    needs: ["finalize", "build-talos", "resolve_assets"]
+    needs: ["finalize", "build-talos", "resolve_assets", "verify-release-candidate"]
     # Regular PRs still enter through finalize. A release-labelled promote PR
     # enters through resolve_assets only when a maintainer explicitly adds
     # full-e2e; without that label the immutable rc's already-green suite is not
@@ -840,6 +957,7 @@ jobs:
         needs.finalize.result == 'success'
         || (
           needs.resolve_assets.result == 'success'
+          && needs.verify-release-candidate.result == 'success'
           && contains(github.event.pull_request.labels.*.name, 'release')
           && contains(github.event.pull_request.labels.*.name, 'full-e2e')
         )
@@ -1192,13 +1310,13 @@ jobs:
   # see docs/agents/e2e-testing.md §10.
   #
   # The `labeled` guard must stay in lockstep with `plan`'s: this job runs if and
-  # only if `plan` runs. `labeled` events other than full-e2e are discarded there,
-  # so without the same guard this job would run with plan *skipped*, read
+  # only if `plan` runs. `labeled` events other than full-e2e/release are
+  # discarded there, so without the same guard this job would run with plan *skipped*, read
   # PLAN_RESULT != 'success', and post "E2E Tests" = failure — clobbering an
   # already-green required status every time anyone labels an open PR.
   e2e-report:
     name: "Report E2E status"
-    needs: ["plan", "e2e"]
+    needs: ["plan", "e2e", "verify-release-candidate"]
     # !cancelled() rather than always(). A cancelled run no longer owns the
     # status for its head SHA, because something superseded it and that
     # something is now responsible. Posting from here would stamp a red on a
@@ -1211,7 +1329,7 @@ jobs:
     # reaches it from a label the workflow discards: those run in their own
     # concurrency group (see the key at the top of this file) precisely so they
     # cannot cancel a live run.
-    if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e') }}
+    if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || github.event.label.name == 'release') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1223,17 +1341,21 @@ jobs:
           PLAN_RESULT: ${{ needs.plan.result }}
           CODE: ${{ needs.plan.outputs.code }}
           E2E_RESULT: ${{ needs.e2e.result }}
+          CANDIDATE_RESULT: ${{ needs.verify-release-candidate.result }}
           IS_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'release') }}
           IS_FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const { PLAN_RESULT, CODE, E2E_RESULT, IS_RELEASE, IS_FULL_E2E, HEAD_SHA, RUN_URL } = process.env;
+            const { PLAN_RESULT, CODE, E2E_RESULT, CANDIDATE_RESULT, IS_RELEASE, IS_FULL_E2E, HEAD_SHA, RUN_URL } = process.env;
             let state, description;
             if (PLAN_RESULT !== 'success') {
               state = 'failure';
               description = `plan job did not succeed (result: ${PLAN_RESULT})`;
+            } else if (IS_RELEASE === 'true' && CANDIDATE_RESULT !== 'success') {
+              state = 'failure';
+              description = `release packages candidate did not verify (result: ${CANDIDATE_RESULT})`;
             } else if (CODE !== 'true') {
               state = 'success';
               description = 'docs-only PR — e2e not required';

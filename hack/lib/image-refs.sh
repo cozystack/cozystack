@@ -1,17 +1,20 @@
 # shellcheck shell=sh
 # Shared enumeration of where cozystack vendors its image references.
 #
-# Sourced by hack/promote-retag.sh, hack/nightly-mirror.sh and
-# hack/promote-rewrite-tags.sh. It exists because those three call sites each
-# grew their own idea of where a ref can live, and drifted: promote-retag and
-# nightly-mirror scanned only the depth-2 values.yaml, while the promote
-# workflow's tag rewrite scanned those plus packages/apps/kubernetes/images/
-# *.tag alone. Every ref stored in any OTHER images/*.tag file was therefore
-# invisible to all three — never retagged to the stable version in the
-# registry, never mirrored to GHCR for a nightly, and left carrying the rc
-# version string in a promoted release tree. See docs/agents/image-refs.md for
-# the contract this file implements; a new storage location must be added here
-# and nowhere else.
+# Sourced by hack/promote-rewrite-tags.sh, hack/promote-retag.sh,
+# hack/nightly-mirror.sh and hack/verify-promoted-packages.sh. It exists because
+# the first three call sites each grew their own idea of where a ref can live,
+# and drifted: promote-retag and nightly-mirror scanned only the depth-2
+# values.yaml, while the promote workflow's tag rewrite scanned those plus
+# packages/apps/kubernetes/images/*.tag alone. Every ref stored in any OTHER
+# images/*.tag file was therefore invisible to all three — never retagged to
+# the stable version in the registry, never mirrored to GHCR for a nightly, and
+# left carrying the rc version string in a promoted release tree. The verifier
+# is a later consumer that has only ever read this enumeration: it compares the
+# stable candidate's refs against the rc artifact's to prove promotion moved no
+# container bytes, so a shape it could not see would be a proof that passed over
+# the images it skipped. See docs/agents/image-refs.md for the contract this
+# file implements; a new storage location must be added here and nowhere else.
 #
 # Three storage shapes exist, and all are first-class:
 #

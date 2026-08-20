@@ -41,6 +41,20 @@
 # the inert list" and it is the one to preserve: an empty selection is a
 # decision some rule reached, never a path nothing looked at.
 #
+# Every branch that escalates names its cause on stderr, and that is a contract
+# rather than a courtesy: the answer "run everything" is the same 21 suite names
+# whichever rule produced it, so without a reason line the only way to learn why
+# a pull request ran the whole suite is to re-derive the selection by hand. Four
+# of them were silent before this rule, full_suite_pattern — the commonest cause
+# by a wide margin — among them, which made the usual answer the one the log
+# never had. A test asserts each line, because a reason that regresses to silence
+# changes no selection and so is invisible to every other test here. Deliberately
+# stated without a count: the number of escalating branches moves whenever a rule
+# is added, and a comment carrying a stale one reads as authoritative.
+#
+# The lines go to stderr, never stdout. stdout is the suite list and both lanes
+# parse it, so a reason line there would be read as a suite name.
+#
 # One caveat worth knowing before trusting that: inert_config_pattern makes
 # .github/ inert as a whole directory, and the e2e workflows are exempted by
 # NAME in full_suite_pattern, which is checked first. So a workflow added under
@@ -64,7 +78,17 @@ SOURCES_DIR="${2:-packages/core/platform/sources}"
 #     the root Makefile, hack/*.mk (the tag/push/output flags of every image),
 #     hack/buildkitd.toml (the builder every image is built with), and hack/lib/
 #     (sourced by the hack/*.sh scripts that already escalate);
-#   - the e2e harness itself: hack/*.sh, hack/*.bats and hack/e2e-*.yaml;
+#   - the e2e harness itself: hack/*.sh, hack/e2e-*.bats and hack/e2e-*.yaml.
+#     The bats half is prefix-matched rather than taking every hack/*.bats,
+#     because the root Makefile splits those two sets by exactly that prefix —
+#     `BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))`
+#     — so the 60 files it keeps are the unit lane and the e2e sandbox runs none
+#     of them. The three it filters out are the ones packages/core/testing's
+#     recipes execute inside the sandbox, and they stay here. Narrowing this
+#     cannot leave a bats-only pull request untested: `make unit-tests` is gated
+#     on the `code` output, which pull-requests.yaml computes as "any path
+#     outside docs/" and never from this script, so those 60 files run on their
+#     own lane whatever the selection here is;
 #   - the workflows that RUN the suite — enumerated rather than matched by
 #     prefix, so an unrelated workflow does not burn a full run. Keep this list
 #     in step with `rg -l test-chainsaw .github/workflows/`.
@@ -82,7 +106,7 @@ SOURCES_DIR="${2:-packages/core/platform/sources}"
 #     alternative leaves them inert, which reads as an oversight rather than a
 #     decision. Reopen the trade if the full suite's flake rate makes the
 #     generic coverage cost more than it returns.
-full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|tools/|hack/lib/|hack/[^/]+\.sh$|hack/[^/]+\.bats$|hack/[^/]+\.mk$|hack/buildkitd\.toml$|hack/e2e-[^/]+\.ya?ml$|go\.(mod|sum)$|Makefile$|\.github/workflows/(pull-requests|e2e-fork|e2e-tag|nightly)\.yaml$)'
+full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|tools/|hack/lib/|hack/[^/]+\.sh$|hack/e2e-[^/]+\.bats$|hack/[^/]+\.mk$|hack/buildkitd\.toml$|hack/e2e-[^/]+\.ya?ml$|go\.(mod|sum)$|Makefile$|\.github/workflows/(pull-requests|e2e-fork|e2e-tag|nightly)\.yaml$)'
 
 # Paths with no bearing on what e2e exercises. Checked AFTER full_suite_pattern,
 # so a specific escalation wins over a broad directory here (.github/ is inert,
@@ -97,9 +121,44 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #   - .claude/ .gemini/  agent config, never shipped
 #   - img/            README assets
 #   - hack/testdata/  fixtures for the bats unit tests, not for e2e
+#   - hack/*.bats     the unit lane, minus the hack/e2e-*.bats escalated above.
+#                     The root Makefile draws the line at that prefix
+#                     (BATS_UNIT_FILES filters hack/e2e-%.bats out of
+#                     hack/*.bats), so these 60 files are never executed inside
+#                     the e2e sandbox and no Chainsaw suite can regress from one.
+#                     They are not untested by being inert here: `make
+#                     unit-tests` runs them, gated on pull-requests.yaml's `code`
+#                     output, which is "any path outside docs/" and is computed
+#                     in the workflow rather than from this script
+#   - packages/tests/ helm-unittest fixture charts. cozy-lib-tests exercises
+#                     library/cozy-lib from the outside; changing a test OF
+#                     cozy-lib does not change cozy-lib, no PackageSource lists
+#                     these paths as a component, and nothing installs them. A
+#                     change to the library itself still escalates through
+#                     packages/library/ in full_suite_pattern
 #   - boilerplate.go.txt / dcgm-default-counters.csv  codegen header; a CSV read
 #                     only by check-gpu-recording-rules.bats
-inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$)'
+#   - the three .gitattributes  ENUMERATED, not matched by name. Every
+#                     .gitattributes in this tree holds nothing but
+#                     `linguist-generated` markers — GitHub's language-stats and
+#                     diff-collapsing hint, which reaches no build, chart or test
+#                     — and these are the three whose classification the entry
+#                     changes; the two under api/ and internal/ are escalated by
+#                     full_suite_pattern first, so an entry for them would be
+#                     dead. The justification is about what these files CONTAIN,
+#                     and the file name does not carry it: .gitattributes can also
+#                     set `filter`, `eol`, `working-tree-encoding` and
+#                     `export-subst`, every one of which changes what lands in the
+#                     working tree and therefore what gets built, so a by-name
+#                     rule would silently make a live file inert. Same trade as
+#                     the workflow enumeration above, and the same upkeep: after
+#                     adding or moving one, re-check with
+#                     `git ls-files '*.gitattributes' '.gitattributes'` and
+#                     confirm the contents are still only linguist markers. A
+#                     .gitattributes NOT on this list is classified by whatever
+#                     rule its path falls under — the graph, or the unclassified
+#                     fall-through — both of which fail safe
+inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|packages/tests/|hack/[^/]+\.bats$|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$|packages/system/\.gitattributes$|packages/system/(backup-controller|backupstrategy-controller)/definitions/\.gitattributes$)'
 
 # All known Chainsaw suites: every dir under hack/e2e-chainsaw/ holding a
 # chainsaw-test.yaml (this excludes _lib/ and the top-level config files).
@@ -169,6 +228,13 @@ escalate_to_full_suite() {
 src_to_suites() {
   case "$1" in
     vm-instance-application) echo vminstance ;;
+    # The vminstance suite creates a VMDisk and asserts the DataVolume behind it
+    # (hack/e2e-chainsaw/vminstance/vmdisk.yaml, vmdisk-vmi.yaml), so it is the
+    # suite that covers this source and everything reaching it, kubevirt-cdi
+    # included. Without the entry the source maps to a `vm-disk` suite that does
+    # not exist, is dropped by intersect_suites(), and a CDI change reaches
+    # nothing runnable through it.
+    vm-disk-application) echo vminstance ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
     securitygroup-controller) echo securitygroup ;;
     *-application) echo "${1%-application}" ;;
@@ -195,8 +261,23 @@ build_owners_index() {
 # the engine reachable but stops it propagating selection downstream. A change to
 # the engine itself still triggers the full suite: its group reaches no suite, so
 # the per-path escalation below fires on it.
+#
+# cozystack.cozystack-basics is the second hub of that kind and is excluded for
+# the same reason. Every edge into it exists so a namespace or a platform-wide
+# policy is in place before the dependent installs — kubevirt-cdi says so in its
+# own source ("Depend on cozystack-basics so the target namespace exists
+# first") — which is install ordering, not behavior. It is also the hub where
+# treating the edge as behavioral does the most damage, and in the wrong
+# direction: cozystack-basics reaches no suite today, so it escalates, but it
+# sits upstream of kubevirt-cdi, so the FIRST suite that lands downstream of CDI
+# silently converts the platform's namespace-and-policy package from the full
+# run to that one suite. Reproduced on #3426, where enabling the site-router
+# suite takes cozystack-basics from 22 suites to `site-router` alone. Dropping
+# the reverse edges keeps the package reachable and stops it propagating
+# selection downstream, and a change to it still runs everything through the
+# per-path escalation.
 build_reverse_deps() {
-  yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "" and . != "cozystack.cozystack-engine") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
+  yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "" and . != "cozystack.cozystack-engine" and . != "cozystack.cozystack-basics") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
 }
 
 # Each index is one yq, and `OWNERS=$(build_owners_index | sort -u)` reports
@@ -249,6 +330,7 @@ while IFS= read -r file || [ -n "$file" ]; do
   #    escalate to the full run.
   case "$file" in
     hack/e2e-chainsaw/_lib/*|hack/e2e-chainsaw/.chainsaw.yaml)
+      echo "select-e2e: '$file' is shared by every Chainsaw suite — escalating to the full suite" >&2
       trigger_full=1
       continue ;;
     hack/e2e-chainsaw/*/*.disabled)
@@ -266,6 +348,46 @@ while IFS= read -r file || [ -n "$file" ]; do
       app=$(echo "$file" | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/.*,\1,p')
       selected_apps="$selected_apps $app"
       trigger_any=1
+      continue ;;
+    hack/e2e-apps/*)
+      # The pre-Chainsaw per-app BATS suites. One file per app, named after it,
+      # so the suite name comes off the basename exactly as the rule above takes
+      # it off the directory.
+      #
+      # Deliberately NOT marked inert, even though what remains here is wired to
+      # nothing after the Chainsaw migration: inert would bake that orphan status
+      # into the rule and go quietly wrong the day a lane runs these again. The
+      # mapping is correct either way — a file named after an app selects that
+      # app's suite whether or not anything currently executes it.
+      #
+      # The membership test is what makes this per-path, and it is not optional.
+      # Adding an unmatched name to selected_apps and letting the final
+      # intersection drop it leaves the verdict to the REST of the diff: alone it
+      # empties the selection and the backstop escalates, but beside any path that
+      # contributed a suite the escalation vanishes and the run narrows to that
+      # suite with nothing on stderr. That is the merge-before-escalate shape
+      # #3330 removed from the graph walk, and it applies here for the same
+      # reason — coverage is a property of the changed path.
+      #
+      # `[^/]+` rather than `.+`: POSIX case matches `/` with `*`, so this arm
+      # also sees nested paths, and an unanchored capture would turn
+      # hack/e2e-apps/fixtures/postgres.bats into the "suite" fixtures/postgres.
+      # Nothing nested exists here today; whatever appears would be shared
+      # material for these suites the way hack/e2e-chainsaw/_lib/ is for the
+      # Chainsaw ones, so it escalates for the same reason rather than being
+      # guessed at. A non-.bats file directly in the directory lands here too and
+      # is treated the same way.
+      app=$(echo "$file" | sed -nE 's,^hack/e2e-apps/([^/]+)\.bats$,\1,p')
+      if [ -z "$app" ]; then
+        echo "select-e2e: '$file' is not a per-app suite file (hack/e2e-apps/<name>.bats), so it is shared material for all of them — escalating to the full suite" >&2
+        trigger_full=1
+      elif echo "$all_apps" | grep -Fxq "$app"; then
+        selected_apps="$selected_apps $app"
+        trigger_any=1
+      else
+        echo "select-e2e: '$file' names no runnable suite ('$app') — escalating to the full suite" >&2
+        trigger_full=1
+      fi
       continue ;;
     examples/backups/*/*)
       # The etcd, postgres, mariadb and clickhouse backup round-trip tests
@@ -287,6 +409,7 @@ while IFS= read -r file || [ -n "$file" ]; do
 
   # 3. Full-suite trigger
   if echo "$file" | grep -qE "$full_suite_pattern"; then
+    echo "select-e2e: '$file' cannot be scoped to one suite (full_suite_pattern) — escalating to the full suite" >&2
     trigger_full=1
     continue
   fi
@@ -310,6 +433,7 @@ while IFS= read -r file || [ -n "$file" ]; do
       trigger_any=1
     else
       # Inside packages/ but no graph entry — be conservative.
+      echo "select-e2e: no PackageSource in $SOURCES_DIR lists '$rel' as a component path — escalating to the full suite" >&2
       trigger_full=1
     fi
     continue
@@ -405,12 +529,36 @@ done
 final_apps=$(intersect_suites "$group_suites $selected_apps")
 
 # Backstop. Every graph path above either escalates or contributes a suite that
-# exists, so what still reaches this is a per-suite edit naming a directory that
-# holds no chainsaw-test.yaml — shared material beside _lib/, or a suite nested
-# deeper than the depth-2 scan looks. Selecting nothing for those would skip
-# E2E outright, so failing towards the full suite is the only safe way to be
-# wrong here.
+# exists, and both rules that select a suite by name — the per-app BATS one and
+# the examples/backups/<app>/ one — membership-test it first, so what still
+# reaches this is a per-suite Chainsaw edit naming a directory that holds no
+# chainsaw-test.yaml: shared material beside _lib/, or a suite nested deeper than
+# the depth-2 scan looks. Selecting nothing for those would skip E2E outright, so
+# failing towards the full suite is the only safe way to be wrong here.
+#
+# group_suites is empty whenever this fires — every group either escalated above
+# or contributed a suite that exists — so the names worth naming are the
+# directly-selected ones, and printing them says which directory or file the
+# selector could not resolve.
+#
+# Deduplicated in the shell rather than through `tr | sort -u | grep -v | paste`,
+# which is the same blindness this file fixes twice above: a pipeline reports its
+# LAST command's status, so a failing tr or sort would be invisible under set -e
+# and the message would name a partial list or nothing at all. That is only a
+# cosmetic loss — the escalation itself is already decided — but the reason line
+# is a contract now, and a contract that degrades silently is the thing this
+# change set exists to remove. Unquoted expansion is the split, `case` is the
+# membership test, and neither can half-succeed; it is also the idiom
+# resolve_suites already uses.
 if [ -z "$final_apps" ]; then
+  unmatched=''
+  for a in $selected_apps; do
+    case " $unmatched " in
+      *" $a "*) ;;
+      *) unmatched="${unmatched:+$unmatched }$a" ;;
+    esac
+  done
+  echo "select-e2e: no runnable suite is named by '$unmatched' — escalating to the full suite" >&2
   escalate_to_full_suite
 fi
 

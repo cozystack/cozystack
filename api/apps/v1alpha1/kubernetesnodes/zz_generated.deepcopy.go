@@ -60,6 +60,8 @@ func (in *ConfigSpec) DeepCopyInto(out *ConfigSpec) {
 		copy(*out, *in)
 	}
 	in.Resources.DeepCopyInto(&out.Resources)
+	out.PodCpuLimit = in.PodCpuLimit.DeepCopy()
+	out.PodCpuRequest = in.PodCpuRequest.DeepCopy()
 	if in.Gpus != nil {
 		in, out := &in.Gpus, &out.Gpus
 		*out = make([]GPU, len(*in))

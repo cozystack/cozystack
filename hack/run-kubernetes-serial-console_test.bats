@@ -23,15 +23,43 @@ mktemp_fail=0
 kubectl_logs_output='mock console output'
 kubectl_logs_rc=0
 kubectl_logs_stderr=
+kubectl_timeline_rows='name=virt-launcher-worker-a-11111 phase=Running podStartTime=2026-08-15T14:35:26Z computeStartedAt=2026-08-15T14:35:47Z consoleStartedAt=2026-08-15T14:35:47Z'
+kubectl_timeline_rc=0
+kubectl_timeline_stderr=
 talosctl_calls=/dev/null
 timeout_calls=/dev/null
 timeout_fail_pod=
+date_now=
+
+date() {
+  # Same shape the node-join suite uses: a fixed clock so the passing path's
+  # remaining-time arithmetic is decided by the test rather than by when it ran.
+  if [ -n "${date_now}" ] && [ "${1:-}" = +%s ]; then
+    printf '%s\n' "${date_now}"
+    return 0
+  fi
+  command date "$@"
+}
 
 kubectl() {
   printf '%s\n' "$*" >>"${kubectl_calls}"
 
   if [ "${3:-}" = get ] && [ "${4:-}" = pods ]; then
     case "$*" in
+      *computeStartedAt*)
+        # Rows first, status after, so a cut-off read can be modelled as what it
+        # is: a prefix that arrived plus a non-zero status. Returning early on
+        # the status instead would make "failed" and "returned nothing" the same
+        # scenario, and the branch that tells them apart untestable.
+        #
+        # stderr is staged separately for the same reason every other arm here
+        # stages it: kubectl writes warnings beside a healthy read as well as
+        # errors beside a failed one, and which file those land in is decided by
+        # the status rather than by anything in the text.
+        [ -z "${kubectl_timeline_stderr}" ] || printf '%s\n' "${kubectl_timeline_stderr}" >&2
+        [ -z "${kubectl_timeline_rows}" ] || printf '%s\n' "${kubectl_timeline_rows}"
+        return "${kubectl_timeline_rc}"
+        ;;
       *initContainerStatuses*)
         [ -z "${kubectl_wedge_stderr}" ] || printf '%s\n' "${kubectl_wedge_stderr}" >&2
         [ "${kubectl_wedge_rc}" -eq 0 ] || return "${kubectl_wedge_rc}"
@@ -124,7 +152,7 @@ assert_file_lacks_pattern() {
 # put in them.
 run_capture() {
   local _rc=0
-  ( set +x; cozy_capture_tenant_serial_console ) || _rc=$?
+  ( set +x; cozy_capture_tenant_serial_console "${1:-capture staged by a unit test}" "${2:-6}" ) || _rc=$?
   return "${_rc}"
 }
 
@@ -690,7 +718,8 @@ run_capture() {
   COZY_REPORT_DIR="$tmp/report"
   COZY_SNAPSHOT_NAME=console-truncated
 
-  run_capture
+  out=$( ( set +x; cozy_capture_tenant_serial_console 'a unit test' 6 ) 2>/dev/null )
+  printf '%s\n' "$out" >"$tmp/out"
 
   # The read broke off mid-stream, so the file holds a prefix. Calling that
   # "no console output" is the same unestablished claim about silence the
@@ -699,6 +728,13 @@ run_capture() {
   assert_file_contains 'mock console output' "$f"
   assert_file_contains 'truncated' "$f"
   assert_file_lacks_pattern 'no console output' "$f"
+  # And the summary line the passing path reads must not undo that. It is fed
+  # by the same counter that gates the Pod-state read, which a cut-short console
+  # needs as much as an empty one -- so counting them together is right and
+  # naming them together is not. On the green path this line is the only thing
+  # anyone sees, and a partial baseline reported as no baseline sends the reader
+  # past evidence that is sitting in the artifact.
+  assert_file_contains 'of the 1 guest consoles read, 0 came back empty and 1 were cut short' "$tmp/out"
   rm -rf "$tmp"
 }
 
@@ -835,11 +871,11 @@ run_capture() {
   # number: it outlives the session and is trusted by the next reader.
   for f in hack/e2e-chainsaw/kubernetes-latest/chainsaw-test.yaml \
            hack/e2e-chainsaw/kubernetes-previous/chainsaw-test.yaml; do
-    grep -q '3m30s' "$f" || {
+    grep -q '4m05s' "$f" || {
       echo "expected $f to state the minReplicas-2 cost including the wedge and Pod-state reads" >&2
       return 1
     }
-    grep -q '5m50s' "$f" || {
+    grep -q '6m25s' "$f" || {
       echo "expected $f to state the worst-case cost including the wedge read" >&2
       return 1
     }
@@ -961,7 +997,7 @@ run_capture() {
   # recovered. Ahead of the functional assertions it would let a diagnostic
   # preempt the checks the suite exists for.
   gate=$(grep -n '^ *cozy_assert_guest_console_attached || attach_rc=$?$' "$lib" | head -n 1 | cut -d: -f1)
-  capture=$(grep -n '^ *cozy_capture_tenant_serial_console || true$' "$lib" | head -n 1 | cut -d: -f1)
+  capture=$(grep -n "^ *cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$gate" ]; then
     echo "expected the suite to verify guest-console-log attached on the passing path" >&2
     return 1
@@ -992,7 +1028,7 @@ run_capture() {
   # Ordering is the whole point: the talosctl capture needs an apid that the
   # failure class this collects never reached, so running it first spends the
   # failure path's budget on the collector that cannot answer.
-  console=$(grep -n '^ *cozy_capture_tenant_serial_console || true$' "$lib" | head -n 1 | cut -d: -f1)
+  console=$(grep -n "^ *cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n '^ *cozy_capture_tenant_talos "${test_name}" || true$' "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$console" ]; then
     echo "expected the node-join failure path to capture the guest serial console" >&2
@@ -1004,6 +1040,561 @@ run_capture() {
   fi
   if [ "$console" -ge "$talos" ]; then
     echo "serial console capture (line $console) must run before the talosctl capture (line $talos)" >&2
+    return 1
+  fi
+}
+
+@test "the passing path captures the console too, before the tenant is torn down" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # An instrument that only runs on the failure path answers in one direction.
+  # Every console this tree has ever captured came from a run that failed, so
+  # the boot stages a healthy worker goes through, and how long each takes, have
+  # no measured value to compare a failing run against -- and "slower than
+  # usual" is the claim the failure keeps resting on. The passing run is where
+  # that value comes from, and it exists only until the tenant is deleted.
+  gate=$(grep -n '^ *cozy_assert_guest_console_attached || attach_rc=$?$' "$lib" | head -n 1 | cut -d: -f1)
+  green=$(grep -n "^ *if ! cozy_capture_tenant_serial_console 'the suite passed" "$lib" | head -n 1 | cut -d: -f1)
+  teardown=$(grep -n '^ *kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false' "$lib" | tail -n 1 | cut -d: -f1)
+  for v in gate green teardown; do
+    eval "n=\$$v"
+    if [ -z "$n" ]; then
+      echo "expected to locate $v in $lib" >&2
+      return 1
+    fi
+  done
+  # After the attach check, because that check is what says there is a container
+  # to read; before the delete, because the Pod holding the stream goes with the
+  # tenant and nothing recovers it afterwards.
+  if [ "$green" -le "$gate" ] || [ "$green" -ge "$teardown" ]; then
+    echo "the passing-path capture (line $green) must sit between the attach check ($gate) and the teardown ($teardown)" >&2
+    return 1
+  fi
+}
+
+@test "the passing path asks for the pool minimum, not the pool" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # The failure path runs inside a phase whose budget is derived against the
+  # whole operation, so it can afford the pool at its maximum. The passing path
+  # has neither a phase nor a budget: it runs inside the same 50m operation the
+  # suite has already spent most of, and every read it issues is bounded
+  # individually but not as a group. A walk over the maximum pool could
+  # therefore turn a suite that proved everything it exists to prove into a red
+  # run for collecting a debugging aid slowly. Two workers booting is the same
+  # baseline as ten, so that is what it asks for.
+  green=$(grep -n "cozy_capture_tenant_serial_console 'the suite passed[^']*' 2;" "$lib" | head -n 1 | cut -d: -f1)
+  red=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed[^']*' 6 || true" "$lib" | head -n 1 | cut -d: -f1)
+  if [ -z "$green" ]; then
+    echo "expected the passing path to cap its console walk at the pool minimum" >&2
+    return 1
+  fi
+  if [ -z "$red" ]; then
+    echo "expected the failure path to keep covering the pool at its maximum" >&2
+    return 1
+  fi
+}
+
+@test "the walk covers exactly the number of Pods the caller asked for" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-a virt-launcher-b virt-launcher-c"
+  kubectl_logs_output=
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-cap-arg
+
+  out=$( ( set +x; cozy_capture_tenant_serial_console 'a unit test' 2 ) 2>/dev/null )
+  printf '%s\n' "$out" >"$tmp/out"
+
+  # The cap is the caller's, not a literal in the walk, or the passing path
+  # cannot be cheaper than the failure path and the argument above is decorative.
+  dir="$COZY_REPORT_DIR/snapshots/console-cap-arg/tenant-serial-console"
+  [ -f "$dir/virt-launcher-a.log" ]
+  [ -f "$dir/virt-launcher-b.log" ]
+  [ ! -f "$dir/virt-launcher-c.log" ]
+  assert_file_contains 'capture stopped after 2 Pods; 3 matched in total' \
+    "$dir/COLLECTION-TRUNCATED.txt"
+  # And the count on stdout is over the Pods actually read. The cap probe runs
+  # on the Pod past the cap, so the counter driving it is one higher than the
+  # walk; reported as the denominator it would name a number that is neither
+  # what was read nor what matched, and disagree with the truncation marker
+  # written beside it -- on the path where nobody opens that marker.
+  assert_file_contains 'of the 2 guest consoles read, 2 came back empty and 0 were cut short' "$tmp/out"
+  rm -rf "$tmp"
+}
+
+@test "a passing-path capture that failed is said out loud instead of failing the suite" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # Two failure modes, and this pins against both. Left bare, a non-zero return
+  # would fail a suite that proved everything it exists to prove, on a
+  # debugging aid. Silenced with `|| true`, a capture that collected nothing
+  # would leave a green run whose only trace of the gap is an artifact nobody
+  # opens on a green run.
+  green=$(grep -n "^ *if ! cozy_capture_tenant_serial_console 'the suite passed" "$lib" | head -n 1 | cut -d: -f1)
+  if [ -z "$green" ]; then
+    echo "expected the passing path to capture the console through a tested call" >&2
+    return 1
+  fi
+  # Bounded by the branch rather than by a line count: the warning is what the
+  # branch is for, and a fixed offset would break on a comment being added to it
+  # while a whole-file search would accept a warning belonging to something
+  # else.
+  warn=$(awk -v g="$green" '
+    NR <= g { next }
+    /^  fi$/ { exit }
+    /WARNING: the guest console capture/ { print NR; exit }
+  ' "$lib")
+  if [ -z "$warn" ]; then
+    echo "expected the failed passing-path capture to warn in the job log" >&2
+    return 1
+  fi
+}
+
+@test "the capture says which run produced it" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-context
+
+  run_capture 'the suite passed: captured after the last assertion'
+
+  # Both paths write the same directory, and the two readings mean opposite
+  # things: one is the failure being studied, the other is the baseline it is
+  # compared against. Which one a tarball holds is otherwise recoverable only
+  # from the run's verdict somewhere else entirely.
+  assert_file_contains 'the suite passed: captured after the last assertion' \
+    "$COZY_REPORT_DIR/snapshots/console-context/tenant-serial-console/CAPTURE-CONTEXT.txt"
+  rm -rf "$tmp"
+}
+
+@test "a walk that came back with empty consoles says so on stdout" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  kubectl_logs_output=
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-silent-count
+
+  out=$( ( set +x; cozy_capture_tenant_serial_console 'a unit test' 6 ) 2>/dev/null )
+  printf '%s\n' "$out" >"$tmp/out"
+
+  # The per-pod notes and POD-STATE.txt already record this in the report, and
+  # on the failure path that is enough because the report gets opened. The
+  # passing path is the one that does not: a baseline that came back empty
+  # there would otherwise be visible only to whoever downloads a green run's
+  # artifact. The count is not a failure and the capture still returns zero, so
+  # stdout is the only place the two callers share.
+  assert_file_contains 'of the 1 guest consoles read, 1 came back empty and 0 were cut short' "$tmp/out"
+  rm -rf "$tmp"
+}
+
+@test "a healthy walk says nothing about silent consoles" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-silent-none
+
+  out=$( ( set +x; cozy_capture_tenant_serial_console 'a unit test' 6 ) 2>/dev/null )
+  printf '%s\n' "$out" >"$tmp/out"
+
+  # The other half of the pair. A line printed on every run is a line nobody
+  # reads, and this one is meant to be read on the green path.
+  assert_file_lacks_pattern 'guest consoles read, ' "$tmp/out"
+  rm -rf "$tmp"
+}
+
+@test "the context is written even when there is nothing to capture" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names=
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-context-empty
+  rc=0
+
+  run_capture 'the suite passed: captured after the last assertion' || rc=$?
+
+  # The empty case is the one where the context matters most: a directory
+  # holding only a failure note is where a reader most needs to know which run
+  # left it, and the early return is the path most likely to skip writing it.
+  [ "$rc" -ne 0 ]
+  assert_file_contains 'the suite passed' \
+    "$COZY_REPORT_DIR/snapshots/console-context-empty/tenant-serial-console/CAPTURE-CONTEXT.txt"
+  rm -rf "$tmp"
+}
+
+@test "each console says when it was read, so its last kernel stamp has a wall clock to sit against" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-read-instant
+
+  run_capture
+
+  # A console log is stamped in guest seconds since the guest's own kernel
+  # started, and it ends wherever the guest had got to when the read ran. Those
+  # two facts alone cannot say whether a short log means a guest that started
+  # late or a guest that went quiet, because the instant of the read is not in
+  # the file. Without this line the only trace of it is the artifact's mtime,
+  # which is metadata rather than content: nothing in the report says it, and a
+  # reader has to know to go looking outside the file for it.
+  f="$COZY_REPORT_DIR/snapshots/console-read-instant/tenant-serial-console/virt-launcher-worker-a-11111.log"
+  assert_file_contains 'console read started at ' "$f"
+  assert_file_contains ' epoch seconds' "$f"
+  rm -rf "$tmp"
+}
+
+@test "the capture records when each guest started, beside the console it captured" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-timeline
+
+  run_capture
+
+  # The other end of the subtraction. With the read instant above and the
+  # compute container's start here, how long the guest had been alive when the
+  # console was read is one subtraction away, and comparing that against the
+  # last stamp in the log says which of the two happened: a guest that had not
+  # lived long enough to reach a milestone, or one that lived and stopped
+  # printing. Without it both look like the same short file.
+  f="$COZY_REPORT_DIR/snapshots/console-timeline/tenant-serial-console/CAPTURE-TIMELINE.txt"
+  assert_file_contains 'computeStartedAt=2026-08-15T14:35:47Z' "$f"
+  # The subtraction is spelled out rather than left to be reconstructed. This
+  # file is read by whoever opens a failed run's tarball months later, and the
+  # relation between a guest-relative kernel stamp and two absolute instants is
+  # exactly the step a reader gets wrong.
+  assert_file_contains 'epoch seconds' "$f"
+  rm -rf "$tmp"
+}
+
+@test "a start-time read that failed is named rather than left out" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  # Non-zero AND nothing written: the read that never got a row across, which is
+  # a different fact from the one cut off part way through and takes a different
+  # note. Both have to be staged explicitly or the mock decides which arm runs.
+  kubectl_timeline_rc=9
+  kubectl_timeline_rows=
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-timeline-failed
+
+  run_capture
+
+  # An absent file reads as a capture that had no reason to write one, which is
+  # the silence every collector here is built to refuse. The read failing is a
+  # statement about this machine's view of the cluster, not about when the
+  # guests started, and the file has to say which of those it is holding.
+  f="$COZY_REPORT_DIR/snapshots/console-timeline-failed/tenant-serial-console/CAPTURE-TIMELINE.txt"
+  assert_file_contains 'exit 9' "$f"
+  assert_file_lacks_pattern 'computeStartedAt=2026' "$f"
+  rm -rf "$tmp"
+}
+
+@test "a start-time read cut off part way is not reported as having observed nothing" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  kubectl_timeline_rc=124
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-timeline-cut
+
+  run_capture
+
+  # A read killed at its bound can leave rows behind and still report failure.
+  # Saying "when these guests started was not observed" under start times that
+  # are plainly sitting there makes the file contradict itself, and a reader who
+  # believes the note discards the rows -- which for a capture that exists to be
+  # subtracted is the whole value of the file.
+  f="$COZY_REPORT_DIR/snapshots/console-timeline-cut/tenant-serial-console/CAPTURE-TIMELINE.txt"
+  assert_file_contains 'computeStartedAt=2026-08-15T14:35:47Z' "$f"
+  assert_file_contains 'cut off (exit 124)' "$f"
+  assert_file_lacks_pattern 'was not observed, which is not the same' "$f"
+  rm -rf "$tmp"
+}
+
+@test "a start-time read that answered with nothing is not reported as a start time" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  kubectl_timeline_rows=
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-timeline-empty
+
+  run_capture
+
+  # The third outcome, and the one that looks most like success: the read
+  # answered, and answered with nothing. A zero-length file here would be read
+  # as a capture that ran and found the guests had no start times, which is not
+  # a state a Pod can be in -- the walk above just read consoles from these
+  # same Pods.
+  f="$COZY_REPORT_DIR/snapshots/console-timeline-empty/tenant-serial-console/CAPTURE-TIMELINE.txt"
+  assert_file_contains 'returned no rows' "$f"
+  rm -rf "$tmp"
+}
+
+@test "the start-time read is bounded like every other read in this capture" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-timeline-bound
+
+  run_capture
+
+  # This read runs on the same failure path as the rest, where the apiserver is
+  # the component least likely to answer. An unbounded one does not lose only
+  # itself: it holds the op until the op is killed, and the tenant snapshot
+  # queued behind it is lost rather than truncated.
+  assert_file_contains 'computeStartedAt' "$timeout_calls"
+  assert_file_contains 'request-timeout' "$kubectl_calls"
+  rm -rf "$tmp"
+}
+
+@test "a warning beside a healthy start-time read is not filed as an error" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  kubectl_timeline_stderr='Warning: v1 Pod is deprecated in this build'
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-timeline-warn
+
+  run_capture
+
+  # kubectl writes deprecation and partial-result warnings on stderr with a zero
+  # exit, so what a message means is decided by the status and not by the fact
+  # that something was written. Filed as an error, a healthy read sends the next
+  # reader after a failure that did not happen; folded into the rows, it sits
+  # inside the data the success probe reads.
+  dir="$COZY_REPORT_DIR/snapshots/console-timeline-warn/tenant-serial-console"
+  assert_file_contains 'v1 Pod is deprecated' "$dir/CAPTURE-TIMELINE-warnings.txt"
+  [ ! -f "$dir/CAPTURE-TIMELINE-error.log" ]
+  assert_file_lacks_pattern 'deprecated' "$dir/CAPTURE-TIMELINE.txt"
+  rm -rf "$tmp"
+}
+
+@test "the stderr of a start-time read that failed is kept as the diagnosis" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  kubectl_timeline_rc=1
+  kubectl_timeline_rows=
+  kubectl_timeline_stderr='error: the server could not find the requested resource'
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-timeline-err
+
+  run_capture
+
+  # The other direction: on a failed read that message IS the diagnosis, and
+  # dropping it leaves a note saying the read failed with nothing saying why.
+  # The note has to name the file, or the evidence sits in a directory the
+  # reader has no reason to open.
+  dir="$COZY_REPORT_DIR/snapshots/console-timeline-err/tenant-serial-console"
+  assert_file_contains 'could not find the requested resource' "$dir/CAPTURE-TIMELINE-error.log"
+  [ ! -f "$dir/CAPTURE-TIMELINE-warnings.txt" ]
+  assert_file_contains 'CAPTURE-TIMELINE-error.log' "$dir/CAPTURE-TIMELINE.txt"
+  rm -rf "$tmp"
+}
+
+@test "a start-time read that failed without a word does not point at a missing file" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  kubectl_timeline_rc=124
+  kubectl_timeline_rows=
+  kubectl_timeline_stderr=
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-timeline-silent
+
+  run_capture
+
+  # timeout kills the child without a word, so this read can fail having written
+  # to neither stream. Naming the error log unconditionally would then send the
+  # reader after a file that was never created, which is the same trap the
+  # per-Pod notes above are written to avoid.
+  dir="$COZY_REPORT_DIR/snapshots/console-timeline-silent/tenant-serial-console"
+  [ ! -f "$dir/CAPTURE-TIMELINE-error.log" ]
+  assert_file_contains 'gave no reason on either stream' "$dir/CAPTURE-TIMELINE.txt"
+  assert_file_lacks_pattern 'reason it gave is in' "$dir/CAPTURE-TIMELINE.txt"
+  rm -rf "$tmp"
+}
+
+@test "the console container's start is asked for in both status lists" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-worker-a-11111"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-timeline-lists
+
+  run_capture
+
+  # KubeVirt runs guest-console-log as an init container, so its runtime state
+  # lives under initContainerStatuses. Asking only containerStatuses returns
+  # empty for a container that started perfectly well, and an empty start time
+  # here is supposed to mean the container never ran -- the one reading this
+  # field exists to support. The attach check reads both spec lists for the
+  # same reason; a missing key costs an empty string, so naming both is free.
+  assert_file_contains 'initContainerStatuses[?(@.name=="guest-console-log")]' "$kubectl_calls"
+  assert_file_contains 'containerStatuses[?(@.name=="compute")]' "$kubectl_calls"
+  rm -rf "$tmp"
+}
+
+@test "a run near its operation ceiling declines the baseline instead of being killed collecting it" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  # The capture costs real wall clock and runs after everything the suite
+  # proves. Inside an operation with a fixed ceiling that makes it a way for a
+  # green run to end red, which is the one thing a passing-path collector may
+  # not do. Driven rather than grepped: the direction of the comparison IS the
+  # safety property, and an inverted one runs the capture on exactly the runs
+  # that cannot afford it while every structural check still passes.
+  date_now=1000000000
+  _COZY_RUN_STARTED_AT=$(( date_now - (COZY_OP_CEILING - COZY_GREEN_CAPTURE_RESERVE) - 1 ))
+  rc=0
+  ( set +x; cozy_green_capture_has_room 'the baseline' ) >"$tmp/out" 2>&1 || rc=$?
+
+  [ "$rc" -eq 1 ]
+  # And the decline is spoken. A collector that stops running silently leaves a
+  # green run that looks exactly like one where the baseline was collected and
+  # came back empty, which is the reading every note in this file exists to
+  # prevent.
+  assert_file_contains 'not collected' "$tmp/out"
+  assert_file_contains 'the baseline' "$tmp/out"
+  rm -rf "$tmp"
+}
+
+@test "a run with the operation's room to spare collects the baseline" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  # The other direction, and the one an inverted comparison breaks silently: a
+  # gate that declines a run with forty minutes left costs the baseline on every
+  # healthy run, and the only symptom is a diagnostic that stopped appearing.
+  date_now=1000000000
+  _COZY_RUN_STARTED_AT=$(( date_now - 60 ))
+  rc=0
+  ( set +x; cozy_green_capture_has_room 'the baseline' ) >"$tmp/out" 2>&1 || rc=$?
+
+  [ "$rc" -eq 0 ]
+  assert_file_lacks_pattern 'not collected' "$tmp/out"
+  rm -rf "$tmp"
+}
+
+@test "a run whose start was never stamped declines rather than dying on the arithmetic" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  # The stamp is set by run_kubernetes_test, which no unit test invokes, so
+  # nothing else here would notice it being deleted. Under the `set -eu` the
+  # chainsaw script runs with, an unbound name inside the arithmetic aborts the
+  # whole function -- ending a passing run red, which is the outcome this gate
+  # exists to prevent. Declared zero at file scope, it fails closed instead.
+  date_now=1000000000
+  rc=0
+  ( set -u; set +x; cozy_green_capture_has_room 'the baseline' ) >"$tmp/out" 2>&1 || rc=$?
+
+  [ "$rc" -eq 1 ]
+  assert_file_contains 'not collected' "$tmp/out"
+  rm -rf "$tmp"
+}
+
+@test "the passing path decides through the gate rather than around it" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # The behavioural tests above cover the predicate. Its wiring is what they
+  # cannot reach: run_kubernetes_test is not callable from a unit test, so the
+  # stamp it takes and the gate it calls are only assertable as source. Both
+  # halves fail the same silent way -- a correct predicate nothing calls
+  # protects nothing, and a predicate called without the stamp reads the whole
+  # epoch as elapsed and declines the baseline on every run forever.
+  stamp=$(grep -n '^  _COZY_RUN_STARTED_AT=\$(date +%s)$' "$lib" | head -n 1 | cut -d: -f1)
+  gate=$(grep -n 'cozy_green_capture_has_room ' "$lib" | tail -n 1 | cut -d: -f1)
+  green=$(grep -n "cozy_capture_tenant_serial_console 'the suite passed" "$lib" | head -n 1 | cut -d: -f1)
+  for v in stamp gate green; do
+    eval "n=\$$v"
+    if [ -z "$n" ]; then
+      echo "expected to locate $v in $lib" >&2
+      return 1
+    fi
+  done
+  # Inside the function whose elapsed time it measures, not at file scope: taken
+  # once when the library is sourced, it would time the sourcing rather than the
+  # run, and every suite after the first would read as already over its ceiling.
+  fn=$(grep -n '^run_kubernetes_test() {$' "$lib" | head -n 1 | cut -d: -f1)
+  if [ -z "$fn" ] || [ "$stamp" -le "$fn" ]; then
+    echo "the run's start stamp (line $stamp) must be taken inside run_kubernetes_test (line $fn)" >&2
+    return 1
+  fi
+  if [ "$stamp" -ge "$gate" ] || [ "$gate" -ge "$green" ]; then
+    echo "expected the stamp ($stamp) before the gate ($gate) before the capture ($green)" >&2
+    return 1
+  fi
+}
+
+@test "the operation ceiling the reserve is measured against is the one the suites give" {
+  lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # A reserve is only meaningful against the right ceiling. This number is a
+  # restatement of one that lives in the suite files, so it is read from both
+  # sides rather than trusted: a suite that raises or lowers its `timeout:`
+  # otherwise leaves the reserve protecting a ceiling that moved, and the
+  # decline either stops firing when it should or starts firing when it should
+  # not.
+  ceiling=$(grep -oE '^COZY_OP_CEILING=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
+  reserve=$(grep -oE '^COZY_GREEN_CAPTURE_RESERVE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
+  for v in ceiling reserve; do
+    eval "n=\$$v"
+    if [ -z "$n" ]; then
+      echo "expected to read $v from $lib; without it this guard reports success for having lost its input" >&2
+      return 1
+    fi
+  done
+  for f in hack/e2e-chainsaw/kubernetes-latest/chainsaw-test.yaml \
+           hack/e2e-chainsaw/kubernetes-previous/chainsaw-test.yaml; do
+    # The first `timeout:` in each file is the bringup op's, which is the one
+    # this whole helper runs inside; the teardown step below it has its own.
+    minutes=$(grep -oE '^ *timeout: [0-9]+m$' "$f" | head -n 1 | grep -oE '[0-9]+')
+    if [ -z "$minutes" ]; then
+      echo "expected to read the operation timeout from $f" >&2
+      return 1
+    fi
+    if [ "$((minutes * 60))" -ne "$ceiling" ]; then
+      echo "$f gives the operation ${minutes}m but the reserve is measured against ${ceiling}s" >&2
+      return 1
+    fi
+  done
+  # And the reserve has to leave room for the capture it is reserving for, or it
+  # protects nothing: the walk it admits would still run past the ceiling.
+  if [ "$reserve" -lt 210 ]; then
+    echo "the reserve ${reserve}s is under the 210s the capture can cost at this caller's cap" >&2
     return 1
   fi
 }

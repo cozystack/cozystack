@@ -56,11 +56,36 @@ code_lines() {
   [ "$rc" -le 1 ]
 }
 
+# Every job name in a workflow, so a per-job assertion covers the jobs that
+# exist rather than the ones whoever wrote the test remembered. Scoped to the
+# `jobs:` mapping: two-space bare keys also occur under `on:`, and one of those
+# would otherwise be treated as a job whose "block" runs to the first real one.
+job_names() {
+  awk '
+    /^jobs:$/ { inside = 1; next }
+    /^[a-zA-Z0-9_-]+:/ { inside = 0 }
+    inside && /^  [a-zA-Z0-9_-]+:$/ { sub(/:[[:space:]]*$/, ""); sub(/^  /, ""); print }
+  ' "$1"
+}
+
 # Conclusions the concurrency key routes into a per-run group.
 group_key_conclusions() {
   code_lines < "$FORK" \
     | grep '^  group: e2e-fork-' \
     | grep -o "workflow_run\.conclusion == '[a-z_]*'" \
+    | sed "s/.*'\\(.*\\)'/\\1/" \
+    | sort -u
+}
+
+# The label names one guard tests for, as a set. `!=` reads the concurrency
+# key, whose exclusions are the labels kept OUT of the `-label` group; `==`
+# reads a job guard, whose matches are the labels that job runs for. Those two
+# sets have to be identical, so they are extracted by one function rather than
+# counted separately: a count is satisfied by the wrong labels and needs raising
+# by hand every time a publishing label is added, which is how it stops being
+# the invariant and becomes a number.
+label_names() {
+  grep -o "github\.event\.label\.name $1 '[a-z0-9-]*'" \
     | sed "s/.*'\\(.*\\)'/\\1/" \
     | sort -u
 }
@@ -114,11 +139,31 @@ resolve_silent_conclusions() {
   count="$(printf '%s\n' "$line" | grep -o "github\.event\.action == 'labeled'" | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
 
-  # The group key must EXCLUDE the publishing label, not every label: a run that
-  # posts `E2E Tests` has to stay in the main group and supersede the head run,
-  # or both publish the same context and the later narrower green erases the
-  # earlier full-suite failure.
-  count="$(printf '%s\n' "$line" | grep -o "github\.event\.label\.name != '" | wc -l | tr -d ' ')"
+  # The group key must EXCLUDE the publishing labels, not every label: a run
+  # that posts `E2E Tests` has to stay in the main group and supersede the head
+  # run, or both publish the same context and the later narrower green erases
+  # the earlier full-suite failure. The pin is the SET, not its size — the key's
+  # condition is written as the exact complement of `plan`'s guard, so excluding
+  # a label `plan` skips for (or admitting one it runs for) is the drift that
+  # reintroduces the wedge, at any number of labels.
+  excluded="$(printf '%s\n' "$line" | label_names '!=')"
+  admitted="$(job_block plan "$PULL_REQUESTS" | code_lines | label_names '==')"
+  [ -n "$excluded" ]
+  [ -n "$admitted" ]
+  [ "$excluded" = "$admitted" ]
+
+  # One publishing label is same-repo only, so both halves carry a fork term as
+  # well — `release` on a fork PR is always a mislabel, and letting such a run
+  # into the main group makes e2e-fork.yaml post red on a suite that was never
+  # going to run. Complementary again: NOT(… OR (C AND NOT F)) keeps `OR F`.
+  # Dropping the term from one side alone is what re-opens the wedge this whole
+  # test is about, and neither side reads wrong on its own.
+  count="$(printf '%s\n' "$line" | grep -c 'github\.event\.pull_request\.head\.repo\.fork' || true)"
+  [ "${count:-0}" -eq 1 ]
+  # `plan`'s own guard, not its steps': one of those carries the same bare
+  # expression for an unrelated reason (see the opener assertion below).
+  count="$(job_block plan "$PULL_REQUESTS" | code_lines | grep '^    if:' \
+    | grep -c 'github\.event\.pull_request\.head\.repo\.fork' || true)"
   [ "${count:-0}" -eq 1 ]
 
   count="$(code_lines < "$PULL_REQUESTS" | grep -c '^  cancel-in-progress: true$' || true)"
@@ -158,9 +203,13 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 1 ]
 
   # …and same-repo only: a fork's pull_request token cannot write a status, so
-  # an unguarded call would 403 and fail this job on every fork PR. Scoped to
-  # `plan` because the same bare guard sits on steps in several other jobs.
-  count="$(printf '%s\n' "$plan_block" | grep -c 'head\.repo\.fork' || true)"
+  # an unguarded call would 403 and fail this job on every fork PR. Matched as
+  # the whole step guard, not on the identifier: the same bare guard sits on
+  # steps in several other jobs, and `plan`'s own `if:` now names the same
+  # expression too, so counting the identifier inside this block would be
+  # satisfied by that one with the step's guard deleted.
+  count="$(printf '%s\n' "$plan_block" \
+    | grep -cF 'if: ${{ !github.event.pull_request.head.repo.fork }}' || true)"
   [ "${count:-0}" -eq 1 ]
 
   block="$(job_block e2e-report "$PULL_REQUESTS" | code_lines)"
@@ -233,27 +282,45 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 1 ]
 }
 
-@test "same-repo gate: the publishing label is one name in every guard" {
-  # `plan`, `e2e-report` and the concurrency key each decide from the label name
-  # whether this run owns the status. Renaming it in one place and not the
-  # others splits the decision without changing a line that reads load-bearing.
-  names="$(code_lines < "$PULL_REQUESTS" \
-    | grep -o "github\.event\.label\.name [!=]= '[a-z0-9-]*'" \
-    | sed "s/.*'\\(.*\\)'/\\1/" \
-    | sort -u)"
+@test "same-repo gate: every publishing guard names the same label set" {
+  # `plan`, `verify-release-candidate`, `e2e-report` and the concurrency key
+  # each decide from the label name whether this run owns the status. Renaming
+  # a label in one of them, or teaching one about a label the others do not
+  # know, splits the decision without changing a line that reads load-bearing.
+  # `plan` is the reference: the key's condition is its exact complement, and
+  # the other two are required to run if and only if it does.
+  expected="$(job_block plan "$PULL_REQUESTS" | code_lines | label_names '==')"
+  [ -n "$expected" ]
 
-  [ -n "$names" ]
-  [ "$(printf '%s\n' "$names" | wc -l | tr -d ' ')" -eq 1 ]
-
-  # Agreement on the name is not the same as the guard being present. Deleting
-  # `e2e-report`'s copy outright leaves the remaining two agreeing with each
-  # other, so the check above stays green while a discarded label event starts
-  # publishing again and clobbers the verdict of the run that actually tested
-  # the SHA. Require it per job, not just consistent across the file.
-  for job in plan e2e-report; do
+  # Agreement among the guards that exist is not the same as the guard being
+  # present, and the two jobs fail in opposite directions. Deleting
+  # `e2e-report`'s copy leaves the rest agreeing with each other while a
+  # discarded label event starts publishing again and clobbers the verdict of
+  # the run that actually tested the SHA. Narrowing `verify-release-candidate`'s
+  # instead leaves it SKIPPED under an `e2e-report` that still runs, which reads
+  # the non-success candidate result and posts a red on a release PR nobody
+  # touched. Require the guard per job, not just consistency across the file.
+  for job in plan verify-release-candidate e2e-report; do
     block="$(job_block "$job" "$PULL_REQUESTS" | code_lines)"
     [ -n "$block" ]
-    count="$(printf '%s\n' "$block" | grep -c "github\.event\.label\.name == '" || true)"
-    [ "${count:-0}" -eq 1 ]
+    names="$(printf '%s\n' "$block" | label_names '==')"
+    [ -n "$names" ]
+    [ "$names" = "$expected" ]
   done
+
+  # …and every OTHER job that decides from a label name decides from the same
+  # set. Enumerated from the file rather than listed here, because the list is
+  # what went wrong: `release` was added to `plan`, `e2e-report` and the key,
+  # and `resolve_assets` — which sits on `e2e`'s release arm — was missed. A
+  # named-job loop cannot notice a job nobody thought to name. A job with NO
+  # label guard is not a violation: most of the file legitimately has none, and
+  # requiring one everywhere would pin an unrelated design decision.
+  for job in $(job_names "$PULL_REQUESTS"); do
+    names="$(job_block "$job" "$PULL_REQUESTS" | code_lines | label_names '==')"
+    [ -z "$names" ] || [ "$names" = "$expected" ]
+  done
+
+  # Nothing outside a job block may introduce a name none of them know.
+  all="$(code_lines < "$PULL_REQUESTS" | label_names '==')"
+  [ "$all" = "$expected" ]
 }

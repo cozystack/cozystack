@@ -55,7 +55,6 @@ spec:
         - --ignore-mirror-pods-utilization=true
         - --scale-down-unneeded-time=30s
         - --scan-interval=25s
-        - --force-delete-unregistered-nodes=true
         - --kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc
         - --clusterapi-cloud-config-authoritative
         - --node-group-auto-discovery=clusterapi:namespace={{ .Release.Namespace }},clusterName={{ .Release.Name }}

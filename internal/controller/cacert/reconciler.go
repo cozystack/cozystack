@@ -33,8 +33,8 @@ limitations under the License.
 // release. The sentinel is the reconcile unit, and its spec names the source
 // Secret and the key to lift. No tenant RBAC role grants any verb on
 // internal.cozystack.io, so a tenant cannot forge a sentinel to publish a CA of
-// their choosing; that RBAC boundary is the primary control here. A companion
-// ValidatingAdmissionPolicy pins writes to helm-controller as defence in depth.
+// their choosing. That RBAC boundary is the whole control: the group is out of
+// tenant reach, which is why the sentinel lives in it.
 //
 // # Why the owner is the sentinel, not the HelmRelease
 //

@@ -13,8 +13,19 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ .Values.harbor.fullnameOverride }}-redis
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+    # The freshworks-oss operator reconciles only RedisFailovers whose
+    # operator-group label matches its OPERATOR_GROUP_ID (see
+    # packages/system/redis-operator/values.yaml); without it Harbor's Redis is
+    # never provisioned and harbor-core CrashLoops. Keep both sides in sync.
+    redis-failover.freshworks.com/operator-group: cozystack
 spec:
   sentinel:
+    # Pin the engine. The freshworks-oss operator's compiled-in default moved
+    # 6.2.6→7.2.4 between forks, and an unpinned image would silently jump on
+    # upgrade — with no rollback path, since 7.x rewrites the on-disk format
+    # 6.2.6 refuses to load. Keep Harbor's Redis on the version it runs today;
+    # bump it as a deliberate, separate change.
+    image: redis:6.2.6-alpine
     replicas: 3
     resources:
       limits:
@@ -24,6 +35,9 @@ spec:
         cpu: 250m
         memory: 128Mi
   redis:
+    # Pin the engine (see the sentinel note above): an upgrade must not rewrite
+    # Harbor's dump.rdb into a 7.x format a platform rollback can no longer load.
+    image: redis:6.2.6-alpine
     replicas: {{ .Values.redis.replicas }}
     resources:
       limits:

@@ -91,12 +91,13 @@ git commit --signoff -m "docs(contributing): add installation guide"
 | api, cozystack-api | area/api |
 | build | area/build |
 | ci | area/ci |
+| cilium | area/cilium |
 | dashboard | area/dashboard |
 | postgres, mariadb, redis, etcd, kafka, clickhouse, postgres-operator, mariadb-operator | area/database |
 | extra | area/extra |
 | kubernetes | area/kubernetes |
 | monitoring, vlogs, vmstack, grafana, workloadmonitor | area/monitoring |
-| ingress, gateway, vpn, metallb, cilium, kube-ovn, cozy-proxy, ... | area/networking |
+| ingress, gateway, vpn, metallb, kube-ovn, cozy-proxy, ... | area/networking |
 | platform, bundle, flux, fluxcd, cluster-api, talos, installer, cozyctl, cozystack-engine, cozy-lib | area/platform |
 | backport, release | area/release |
 | seaweedfs, bucket, linstor, velero, harbor, backups | area/storage |

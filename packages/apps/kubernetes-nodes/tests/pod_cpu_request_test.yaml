@@ -1,0 +1,293 @@
+suite: worker pool pod CPU request
+
+# Mirror of the parent kubernetes chart's suite, on the pool-shaped values of
+# this chart. `podCpuRequest` is the only knob that sets
+# `domain.resources.requests.cpu` on a worker VM, and it is the other half of
+# `podCpuLimit`: KubeVirt copies a declared CPU limit into the request when the
+# VM declares none, so without this field the ceiling and the scheduler
+# reservation cannot be moved apart.
+
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+# Sizing is set per case rather than here, because helm-unittest merges a
+# case's `set` into these values and a case that needs an unsized pool cannot
+# take cpu/memory back out again.
+tests:
+  - it: renders both sides of the pair when the pool sets both
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 3
+      podCpuRequest: 200m
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "200m"
+      # The point of the pair: the ceiling moved and the reservation did not
+      # follow it.
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.cpu
+          value: "3"
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.ephemeral-storage
+          value: "2Gi"
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.ephemeral-storage
+          value: "53687091"
+
+  # Allowed, and it does not pull a limit in with it: KubeVirt keeps deriving
+  # the ceiling from the guest vCPU count, and only the scheduler weighting
+  # moves. The reverse -- a limit with no request -- is what moves both, which
+  # is why the pair is not symmetric.
+  - it: accepts a request on its own and renders no limit beside it
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuRequest: 1
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "1"
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.cpu
+
+  - it: accepts a fractional quantity
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 1500m
+      podCpuRequest: 100m
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "100m"
+
+  - it: leaves the request to KubeVirt when the pool sets none
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      # Absent, not empty: the KubevirtMachineTemplate is content-hash named, so
+      # a `cpu:` key rendered for a pool that asked for nothing would rename the
+      # template and roll every live worker VM of the pool on upgrade. The
+      # render-parity gate compares those bytes against the parent chart.
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.ephemeral-storage
+          value: "53687091"
+
+  # KubeVirt's instancetype applier reports domain.resources.requests.cpu as a
+  # conflict in the same check that reports the limit, so a VM carrying both is
+  # refused at admission with no Machine and no explanation on the CR.
+  - it: refuses the request on a pool still sized by its instancetype
+    set:
+      instanceType: u1.medium
+      podCpuRequest: 200m
+    asserts:
+      # Matched on the message, not on "some render error": a pool carrying half
+      # a size trips the neighbouring resources.cpu / resources.memory guard
+      # first, so a bare failedTemplate here would pass on the wrong error.
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuRequest cannot be combined with instanceType sizing'
+
+  # Rejected here rather than by API server validation on the worker's Pod,
+  # which is two objects away from the CR that named the values.
+  - it: refuses a request above its own limit
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 1500m
+      podCpuRequest: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuRequest \(2\) exceeds podCpuLimit \(1500m\)'
+
+  # Zero on its own means what it says: no limit is declared, so KubeVirt's
+  # defaulter does not fire, and the rendered zero survives to the container as
+  # a reservation of nothing. A block keyed on truthiness would drop it and
+  # render the pool's deliberate choice as though it had chosen nothing.
+  - it: renders a request of zero rather than treating it as unset
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuRequest: 0
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "0"
+
+  # The pair that reads as "reserve nothing under this ceiling" and does the
+  # opposite: KubeVirt's defaulter tests the request with IsZero, which an
+  # explicit zero satisfies exactly as an absent key does, so it overwrites the
+  # zero with the limit and the worker asks for its whole ceiling. Refused
+  # rather than documented, because nothing later reports it.
+  - it: refuses a request of zero beside a limit
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 3
+      podCpuRequest: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuRequest 0 beside a podCpuLimit does not reserve nothing'
+
+  # A zero limit on its own does not reach a Pod. It removes the ceiling, but
+  # KubeVirt keeps deriving a request from the vCPU count when the VM declares
+  # none -- the defaulter that would have copied the limit across does not fire
+  # precisely because the limit is zero -- and API server validation refuses a
+  # request above a limit that exists, zero being a limit that exists.
+  - it: refuses a zero limit with no request beside it
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuLimit 0 needs podCpuRequest 0 beside it'
+
+  # Both zero is the one shape a zero limit reaches a Pod in: no ceiling and no
+  # reservation, with nothing for the defaulter to copy and nothing for
+  # validation to refuse.
+  - it: accepts a zero request beside a zero limit
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 0
+      podCpuRequest: 0
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "0"
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.cpu
+          value: "0"
+
+  # The schema's quantity pattern admits a leading minus, so both fields have
+  # to refuse it here; the request-versus-limit comparison does not catch it,
+  # because a negative is below any ceiling.
+  - it: refuses a negative request
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 3
+      podCpuRequest: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuRequest \(-1\) must not be negative'
+
+  - it: refuses a negative limit
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuLimit \(-1\) must not be negative'
+
+  # A limit of zero is not the tightest ceiling but no ceiling at all -- the
+  # kubelet turns a zero CPU limit into no CFS quota. What refuses this pair is
+  # not the ceiling being small, it is the API server's rule that a request
+  # cannot exceed a limit that exists, zero included.
+  - it: sees a limit of zero when comparing the pair
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 0
+      podCpuRequest: 200m
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuRequest \(200m\) exceeds podCpuLimit \(0\)'
+
+  # Same guard, a unit the comparison used to be blind to: the chart library's
+  # quantity converter dropped the micro and nano suffixes, and a value it does
+  # not recognise converts to zero, which made the comparison read 0 against 0
+  # and wave the pair through.
+  - it: refuses a request above its own limit in the micro range
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 50u
+      podCpuRequest: 100u
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuRequest \(100u\) exceeds podCpuLimit \(50u\)'
+
+  - it: accepts a request equal to its limit
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 2
+      podCpuRequest: 2
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "2"
+
+  # The comparison is between quantities, not between the strings that spell
+  # them: "500m" sorts after "1" and would be refused by a lexical guard, while
+  # half a CPU under a ceiling of one is the ordinary case this field is for.
+  - it: accepts a milli request under an integer limit
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 1
+      podCpuRequest: 500m
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+          value: "500m"

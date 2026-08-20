@@ -21,11 +21,15 @@ kubectl_raw_rc=0
 kubectl_raw_stderr=
 # Two of the fixtures in this file claim to be wire shapes, and the rest do not.
 # This one and the uncapped test's single line are the two cAdvisor can actually
-# produce -- all five families for a capped container, the period alone for one
-# with no limit, the two sides of the same Quota != 0 gate. Every other fixture
+# produce -- every family for a capped container, the period alone for one
+# with no limit, the two sides of the same Quota != 0 gate. Usage sits outside
+# that gate and is published for any container at all, so it belongs in both
+# shapes; the uncapped fixture stages only the line its own assertion needs, as
+# the rest of this file does. Every other fixture
 # below stages only the lines its own assertion needs, so a missing sibling
 # series there means "not relevant here" rather than "absent on the wire".
-kubectl_raw_output='container_cpu_cfs_periods_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 51200
+kubectl_raw_output='container_cpu_usage_seconds_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 118.4
+container_cpu_cfs_periods_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 51200
 container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 4211
 container_cpu_cfs_throttled_seconds_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 12.5
 container_spec_cpu_quota{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 100000
@@ -142,7 +146,7 @@ assert_file_lacks_pattern() {
 # tracer. Call through this wrapper so the sinks hold what production writes.
 run_capture() {
   local _rc=0
-  ( set +x; cozy_capture_tenant_worker_cpu_throttle ) || _rc=$?
+  ( set +x; cozy_capture_tenant_worker_cpu_throttle 1 ) || _rc=$?
   return "${_rc}"
 }
 
@@ -155,7 +159,10 @@ run_capture() {
   # sentence sends the reader to the opposite conclusion about the one collector
   # whose behaviour differs, and a comment in the source does not reach them.
   lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  warn=$(grep -n 'timeout is not on PATH' "$lib" | head -n 1 | cut -d: -f1)
+  # Anchored on the phrase unique to the phase warning itself: the bracket-pair
+  # captures write their own [bounds] notes carrying "timeout is not on PATH",
+  # so the first match of that phrase is no longer this sentence.
+  warn=$(grep -n 'run UNBOUNDED' "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$warn" ]; then
     echo "expected the phase to still warn when timeout is missing" >&2
     return 1
@@ -231,7 +238,13 @@ run_capture() {
   # name has to come from the Pod. Reading a fixed node, or the wrong one,
   # returns a healthy stranger's counters.
   assert_file_contains 'get --raw /api/v1/nodes/srv1/proxy/metrics/cadvisor' "$kubectl_calls"
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  # And the node name comes from the field this caller asks the listing for.
+  # That projection is a parameter of the shared listing, and the other caller
+  # of it passes the Pod name instead; swapped, this capture would ask kubelets
+  # named after Pods and get nothing, with no error to say why. The mock answers
+  # any listing regardless of what was asked for, so nothing else here sees it.
+  assert_file_contains 'jsonpath={range .items[*]}{.spec.nodeName}{"\n"}{end}' "$kubectl_calls"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'container_cpu_cfs_throttled_periods_total' "$capture"
   # One assertion per alternative in the filter's regex, because a typo in an
   # alternative no test drives through drops that family silently while every
@@ -246,7 +259,7 @@ run_capture() {
   # inverted, and it fires on every healthy run rather than on the rare one.
   assert_file_lacks_pattern 'incomplete' "$capture"
   assert_file_lacks_pattern 'unknown' "$capture"
-  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle"
+  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1"
   [ ! -f "$dir/srv1.read-error.log" ]
   [ ! -f "$dir/READ-WARNINGS.txt" ]
   [ ! -f "$dir/COLLECTION-FAILED.txt" ]
@@ -255,6 +268,29 @@ run_capture() {
   # the stream to TMPDIR; this one only says the fallback leaves nothing behind
   # either, and it would go green on a run that never took the fallback.
   [ ! -f "$dir/srv1.stream.tmp" ]
+  rm -rf "$tmp"
+}
+
+@test "what the workers consumed is captured beside what they were denied" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_node_names="srv1"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=throttle-smoke
+
+  run_capture
+
+  # The throttled counters say the container met its ceiling. They cannot say
+  # how much CPU it got, and the two are different quantities: a guest held at a
+  # one-core ceiling and a guest scheduled onto a physical CPU for a tenth of
+  # that ceiling both report throttled periods, and the ratio alone does not
+  # separate them. The consumed seconds are what does, and cAdvisor publishes
+  # them on the same stream this capture already reads, so the answer costs a
+  # wider filter rather than another read.
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
+  assert_file_contains 'container_cpu_usage_seconds_total' "$capture"
   rm -rf "$tmp"
 }
 
@@ -285,7 +321,61 @@ run_capture() {
   # below exists for.
   assert_file_contains '--request-timeout=20s' "$kubectl_calls"
   assert_file_contains '[capture exit code: 0]' \
-    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
+  rm -rf "$tmp"
+}
+
+@test "the sample number decides which reading a file belongs to" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_node_names="srv1"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=throttle-smoke
+
+  ( set +x; cozy_capture_tenant_worker_cpu_throttle 2 )
+
+  # Every counter here is cumulative since the container started, so one reading
+  # is an average over an uptime and the pair is what gives a rate over the
+  # window the deadline covered. A second reading written over the first leaves
+  # one file and no interval -- collected, and unable to answer the question it
+  # was collected for.
+  assert_file_contains 'container_cpu_usage_seconds_total' \
+    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-2/srv1.txt"
+  [ ! -d "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1" ]
+  rm -rf "$tmp"
+}
+
+@test "each reading records when it was taken" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_node_names="srv1"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=throttle-smoke
+
+  run_capture
+
+  # The knob names how long the block WAITS between its two passes, which is not
+  # the interval a subject's two readings span: the other subject's pass falls
+  # between them, and on the run this collector exists for that pass is the slow
+  # part. A reader who divides by the advertised number is then wrong by
+  # whatever that pass cost, in the direction that understates a rate. The stamp
+  # is what makes the real interval readable off the pair.
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
+  assert_file_contains 'read attempted from' "$capture"
+  # Both ends, not one. A single stamp leaves the sampling instant somewhere
+  # inside a read whose duration is what goes wrong on the run this collector
+  # exists for, so the interval a reader divides by would be off by up to the
+  # read bound with nothing in the artifact saying so.
+  stamp=$(sed -n 's/.*read attempted from \([0-9][0-9]*\) to \([0-9][0-9]*\) epoch seconds.*/\1 \2/p' "$capture")
+  if [ -z "$stamp" ]; then
+    echo "expected a bare epoch stamp in $capture" >&2
+    cat "$capture" >&2
+    return 1
+  fi
   rm -rf "$tmp"
 }
 
@@ -383,7 +473,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains '[capture exit code: 0]' "$capture"
   assert_file_contains 'the kubelet answered' "$capture"
   assert_file_lacks_pattern 'the kubelet was not read' "$capture"
@@ -405,7 +495,7 @@ run_capture() {
   # One throttled worker answers the question, but only if the walk survives
   # the node that did not answer -- and the wedged one is as likely as not to
   # be first, since the node list is sorted.
-  dir="$COZY_REPORT_DIR/snapshots/throttle-partial/tenant-cpu-throttle"
+  dir="$COZY_REPORT_DIR/snapshots/throttle-partial/tenant-cpu-throttle/sample-1"
   assert_file_contains '[capture exit code: 124]' "$dir/srv1.txt"
   assert_file_contains '[capture exit code: 0]' "$dir/srv2.txt"
   rm -rf "$tmp"
@@ -428,7 +518,7 @@ run_capture() {
   # decided by the status rather than by something having been written. Filed
   # as a collection failure, a healthy listing reads as a collector that never
   # ran at all.
-  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle"
+  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1"
   assert_file_contains 'ComponentStatus is deprecated' "$dir/READ-WARNINGS.txt"
   [ ! -f "$dir/COLLECTION-FAILED.txt" ]
   assert_file_contains 'container_cpu_cfs_throttled_periods_total' "$dir/srv1.txt"
@@ -446,7 +536,7 @@ run_capture() {
 
   run_capture
 
-  [ ! -f "$COZY_REPORT_DIR/snapshots/throttle-uncapped/tenant-cpu-throttle/COLLECTION-TRUNCATED.txt" ]
+  [ ! -f "$COZY_REPORT_DIR/snapshots/throttle-uncapped/tenant-cpu-throttle/sample-1/COLLECTION-TRUNCATED.txt" ]
   rm -rf "$tmp"
 }
 
@@ -486,7 +576,7 @@ run_capture() {
   fn=$(awk '/^cozy_capture_tenant_worker_cpu_throttle\(\)/,/^}/' "$lib"
       awk '/^_cozy_capture_worker_cadvisor\(\)/,/^}/' "$lib"
       awk '/^_cozy_cadvisor_node_stream\(\)/,/^}/' "$lib"
-      awk '/^_cozy_cadvisor_worker_nodes\(\)/,/^}/' "$lib")
+      awk '/^_cozy_virt_launcher_listing\(\)/,/^}/' "$lib")
   case "$fn" in
     *'max_nodes=3'*) ;;
     *) echo "expected the collector to cap the walk at the 3 nodes the comments state" >&2; return 1 ;;
@@ -558,14 +648,25 @@ run_capture() {
   for f in hack/e2e-chainsaw/kubernetes-latest/chainsaw-test.yaml \
            hack/e2e-chainsaw/kubernetes-previous/chainsaw-test.yaml; do
     reads=$(grep -n 'node-join diagnostics reads' "$f" | head -n 1 | cut -d: -f1)
-    cgroup=$(grep -n 'worker CPU throttling counters' "$f" | head -n 1 | cut -d: -f1)
+    cgroup=$(grep -n 'worker CPU usage and throttling counters' "$f" | head -n 1 | cut -d: -f1)
     console=$(grep -n 'serial-console family' "$f" | head -n 1 | cut -d: -f1)
-    if [ -z "$reads" ] || [ -z "$cgroup" ] || [ -z "$console" ]; then
-      echo "expected $f to list the reads, the throttling capture and the console family" >&2
+    talos=$(grep -n 'guest Talos capture' "$f" | head -n 1 | cut -d: -f1)
+    if [ -z "$reads" ] || [ -z "$cgroup" ] || [ -z "$console" ] || [ -z "$talos" ]; then
+      echo "expected $f to list the reads, the counter capture, the console family and the guest Talos capture" >&2
       return 1
     fi
-    if [ "$cgroup" -le "$reads" ] || [ "$cgroup" -ge "$console" ]; then
-      echo "in $f the throttling capture must sit between the reads and the console family" >&2
+    # Below the console, not above it. This capture is read twice and can spend
+    # most of the phase budget, and admission gates only when a collector may
+    # start, so above the console it would bound what the console gets -- and
+    # the console is the only surface that survives a worker which never reached
+    # apid. Above the guest Talos capture, which needs the apid that failure
+    # never reached and is the more expensive of the two.
+    if [ "$cgroup" -le "$console" ] || [ "$cgroup" -ge "$talos" ]; then
+      echo "in $f the counter capture must sit between the console family and the guest Talos capture" >&2
+      return 1
+    fi
+    if [ "$console" -le "$reads" ]; then
+      echo "in $f the console family must sit after the node-join reads" >&2
       return 1
     fi
   done
@@ -576,36 +677,43 @@ run_capture() {
   # declined the cheaper reads around it -- which is the failure the phase
   # budget exists to prevent, reintroduced by the newest caller.
   lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  gate=$(grep -n "^ *if cozy_diag_phase_has_time '(d) tenant worker CPU throttling'; then$" \
+  gate=$(grep -n "^ *if cozy_diag_phase_has_time '(d) tenant worker CPU counters, sandbox node CPU time and worker per-thread CPU time'; then$" \
     "$lib" | head -n 1 | cut -d: -f1)
-  call=$(grep -n '^ *cozy_capture_tenant_worker_cpu_throttle || true$' "$lib" | head -n 1 | cut -d: -f1)
+  call=$(grep -n '^ *cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true$' "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$gate" ] || [ -z "$call" ]; then
     echo "expected the capture to sit behind a cozy_diag_phase_has_time gate" >&2
     return 1
   fi
-  # Adjacency, not just order: a gate anywhere above the call would satisfy a
-  # line comparison while guarding something else entirely.
-  if [ "$call" -ne $((gate + 2)) ]; then
-    echo "the gate (line $gate) must guard the capture (line $call) directly" >&2
+  # THIS gate, not just some gate above the call. A line comparison alone is
+  # satisfied by any earlier gate in the block, which would leave the capture
+  # guarded by a decision taken about something else. The call now sits inside
+  # the sampling loop rather than on the line after the gate, so adjacency is no
+  # longer the way to say it: what says it is that no other gate opens in
+  # between.
+  next=$(awk -v g="$gate" 'NR > g && /cozy_diag_phase_has_time/ { print NR; exit }' "$lib")
+  if [ -z "$next" ]; then
+    echo "expected another phase gate after line $gate, so this test could bound the section" >&2
+    return 1
+  fi
+  if [ "$call" -le "$gate" ] || [ "$call" -ge "$next" ]; then
+    echo "the capture (line $call) must sit between its gate ($gate) and the next one ($next)" >&2
     return 1
   fi
 }
 
-@test "the capture runs ahead of the collectors that cost more" {
+@test "the capture runs ahead of the collectors that cost more, and behind the one it could starve" {
   lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  call=$(grep -n '^ *cozy_capture_tenant_worker_cpu_throttle || true$' "$lib" | head -n 1 | cut -d: -f1)
+  call=$(grep -n '^ *cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true$' "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$call" ]; then
     echo "expected the failure path to call the throttling capture" >&2
     return 1
   fi
   # What runs last is what the budget declines, so position is what decides
-  # whether this collector is ever taken on a tight run. It is cheaper than
-  # every leg below and the only one whose question nothing else in this tree
-  # answers, so it precedes all of them. Stated without a count on purpose: the
-  # loop below is the enumeration, and a sentence that also counted would go
-  # stale the first time a leg is added to it.
-  for leg in 'cozy_capture_tenant_serial_console || true' \
-             'cozy_capture_tenant_talos "${test_name}" || true' \
+  # whether this collector is ever taken on a tight run. Its question has no
+  # other answer in this tree, so it precedes the legs below. Stated without a
+  # count on purpose: the loop below is the enumeration, and a sentence that
+  # also counted would go stale the first time a leg is added to it.
+  for leg in 'cozy_capture_tenant_talos "${test_name}" || true' \
              'ghcr_mirror_diagnose || true' \
              'talos_image_cache_diagnose || true'; do
     line=$(grep -n -F -x "    ${leg}" "$lib" | head -n 1 | cut -d: -f1)
@@ -618,6 +726,22 @@ run_capture() {
       return 1
     fi
   done
+  # And behind the console. Reading the counters twice costs the walk twice
+  # plus the interval, which is most of the phase budget at the read bound and
+  # the node cap, and admission gates only when a collector may START. Ahead of
+  # the console, a run that hits those bounds would leave the console never
+  # started rather than cut short -- and the console is the only capture that
+  # survives a worker which never reached apid, the shape this failure usually
+  # takes. Cost, not worth, is what puts it here.
+  console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
+  if [ -z "$console" ]; then
+    echo "expected the failure block to still capture the guest serial console" >&2
+    return 1
+  fi
+  if [ "$call" -le "$console" ]; then
+    echo "the throttling capture (line $call) must run after the console capture (line $console)" >&2
+    return 1
+  fi
 }
 
 @test "the ceiling is captured beside the counters" {
@@ -631,7 +755,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   # The throttled counters on their own say a container hit some ceiling, not
   # which one. Without the quota beside them the reader cannot tell a VM capped
   # at one core from one capped at eight, which is the whole question.
@@ -640,6 +764,52 @@ run_capture() {
   # 100000us of quota is one core against a 100000us period and a tenth of one
   # against a 1000000us period.
   assert_file_contains 'container_spec_cpu_period' "$capture"
+  rm -rf "$tmp"
+}
+
+@test "the capture tells the reader how to pair it with its sibling sample" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_node_names="srv1"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=throttle-smoke
+
+  run_capture
+
+  # The instruction lives with the subject that has a sibling rather than in the
+  # walk both subjects share, because the other caller of that walk takes one
+  # sample and would otherwise carry an instruction pointing at a directory that
+  # is never created.
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
+  assert_file_contains 'subtract this node file from its sibling under the other sample directory' "$capture"
+  rm -rf "$tmp"
+}
+
+@test "a read that did not finish is not told to pair with a sibling" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_node_names="srv1"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=throttle-smoke
+  # Series arrived and the read still failed, which is a stream cut off part way
+  # through.
+  kubectl_raw_rc=124
+
+  run_capture
+
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
+  assert_file_contains 'these counters are incomplete' "$capture"
+  # Telling a reader to subtract two files asserts that both hold a whole
+  # reading. This one is already marked incomplete, and a difference taken
+  # against it understates the counter by whatever the read did not return --
+  # in the direction that makes a starved worker look busier than it was. The
+  # sandbox capture withholds its column legend from a short read for the same
+  # reason, so the pair answers this the same way on both sides.
+  assert_file_lacks_pattern 'subtract this node file from its sibling' "$capture"
   rm -rf "$tmp"
 }
 
@@ -662,7 +832,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'container_spec_cpu_period' "$capture"
   assert_file_lacks_pattern 'unknown' "$capture"
   assert_file_lacks_pattern 'incomplete' "$capture"
@@ -696,7 +866,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_lacks_pattern 'running uncapped' "$capture"
   unset -f grep
   rm -rf "$tmp"
@@ -713,8 +883,8 @@ run_capture() {
 
   run_capture
 
-  # The default fixture is the capped shape: all five families, quota included.
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  # The default fixture is the capped shape: every family, quota included.
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'container_spec_cpu_quota' "$capture"
   assert_file_lacks_pattern 'running uncapped' "$capture"
   rm -rf "$tmp"
@@ -736,7 +906,7 @@ run_capture() {
   # had to be killed, by whatever did it. Naming every way a read comes up
   # short is this collector's whole argument,
   # so the one status that means "killed, not finished" cannot be the exception.
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'exit 137' "$capture"
   assert_file_lacks_pattern 'exit 124' "$capture"
   rm -rf "$tmp"
@@ -756,7 +926,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   # This is the failure this collector exists to prevent, inverted: an empty
   # file here reads as a container that never hit its ceiling, which is the
   # exact conclusion the capture was added to stop people reaching by default.
@@ -768,8 +938,14 @@ run_capture() {
   assert_file_contains 'the kubelet was not read' "$capture"
   # And that it points at the log rather than leaving the reader to find it.
   assert_file_contains 'see read-error.log' "$capture"
+  # The stamp claims only when the read was attempted. This arm has just said
+  # nothing was read, so a line asserting the counters were sampled inside the
+  # bracket contradicts the line above it -- the same two-lines-disagreeing
+  # failure the pairing note and the legend are both gated against.
+  assert_file_lacks_pattern 'counters were sampled' "$capture"
+  assert_file_contains 'read attempted from' "$capture"
   assert_file_contains 'error: unable to connect to the server' \
-    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.read-error.log"
+    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.read-error.log"
   rm -rf "$tmp"
 }
 
@@ -790,7 +966,7 @@ run_capture() {
 
   run_capture
 
-  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle"
+  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1"
   assert_file_contains 'the kubelet was not read' "$dir/srv1.txt"
   assert_file_contains 'nodes/proxy' "$dir/srv1.read-error.log"
   assert_file_contains 'Forbidden' "$dir/srv1.read-error.log"
@@ -815,7 +991,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'the kubelet was not read' "$capture"
   # The half that makes it a defect rather than a wording preference: the
   # artifact must not state the opposite of what happened.
@@ -824,7 +1000,7 @@ run_capture() {
   # after evidence that was never written.
   assert_file_lacks_pattern 'see read-error.log' "$capture"
   assert_file_contains 'without a word' "$capture"
-  [ ! -f "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.read-error.log" ]
+  [ ! -f "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.read-error.log" ]
   rm -rf "$tmp"
 }
 
@@ -846,7 +1022,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'incomplete' "$capture"
   assert_file_lacks_pattern 'see read-error.log' "$capture"
   rm -rf "$tmp"
@@ -869,7 +1045,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'could not be read back on this runner' "$capture"
   assert_file_lacks_pattern 'the kubelet answered' "$capture"
   assert_file_lacks_pattern 'the kubelet was not read' "$capture"
@@ -898,7 +1074,7 @@ run_capture() {
 
   run_capture
 
-  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle"
+  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1"
   assert_file_contains 'could not be read back on this runner' "$dir/srv1.txt"
   assert_file_contains 'see filter-error.log' "$dir/srv1.txt"
   assert_file_lacks_pattern 'the filter said nothing about why' "$dir/srv1.txt"
@@ -922,7 +1098,7 @@ run_capture() {
 
   run_capture
 
-  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle"
+  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1"
   assert_file_contains 'the filter said nothing about why' "$dir/srv1.txt"
   assert_file_lacks_pattern 'see filter-error.log' "$dir/srv1.txt"
   [ ! -f "$dir/srv1.filter-error.log" ]
@@ -946,7 +1122,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'could not be read back on this runner' "$capture"
   assert_file_lacks_pattern 'the kubelet answered' "$capture"
   assert_file_lacks_pattern 'the kubelet was not read' "$capture"
@@ -970,7 +1146,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'could not be read back on this runner' "$capture"
   assert_file_lacks_pattern 'the kubelet answered' "$capture"
   assert_file_lacks_pattern 'the kubelet was not read' "$capture"
@@ -1004,7 +1180,7 @@ run_capture() {
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'incomplete' "$capture"
   assert_file_contains 'see filter-error.log' "$capture"
   # The read itself was fine, so nothing here may blame it.
@@ -1031,7 +1207,7 @@ run_capture() {
 
   run_capture
 
-  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle"
+  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1"
   assert_file_contains 'incomplete' "$dir/srv1.txt"
   assert_file_contains 'the filter said nothing about why' "$dir/srv1.txt"
   assert_file_lacks_pattern 'see filter-error.log' "$dir/srv1.txt"
@@ -1059,7 +1235,7 @@ container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'unknown' "$capture"
   assert_file_contains 'none of them from a worker Pod' "$capture"
   assert_file_lacks_pattern 'reported no CPU series' "$capture"
@@ -1083,7 +1259,7 @@ container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   # Distinct from the kubelet that never answered: this one did, and an
   # artifact that blames the read would send an operator after RBAC and
   # networking when the actual finding is that no worker container was there.
@@ -1113,7 +1289,7 @@ container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-
   mkdir -p "$tmp/bin"
   # Everything the collector shells out to, minus `timeout` itself. Missing one
   # would fail this test for the wrong reason and read as the arm being broken.
-  for c in mkdir sort grep mv rm mktemp wc tr cat; do
+  for c in mkdir sort grep mv rm mktemp wc tr cat date; do
     for d in /bin /usr/bin /usr/local/bin /opt/homebrew/bin; do
       if [ -x "$d/$c" ]; then
         ln -sf "$d/$c" "$tmp/bin/$c"
@@ -1121,7 +1297,7 @@ container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-
       fi
     done
   done
-  for c in mkdir sort grep mv rm mktemp wc tr; do
+  for c in mkdir sort grep mv rm mktemp wc tr date; do
     if [ ! -x "$tmp/bin/$c" ]; then
       echo "FAIL: could not stage $c in the stripped PATH; the check below would be vacuous" >&2
       return 1
@@ -1155,7 +1331,7 @@ container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-
     COZY_REPORT_DIR='"$tmp"'/report
     COZY_SNAPSHOT_NAME=fallback
     PATH='"$tmp"'/bin
-    cozy_capture_tenant_worker_cpu_throttle
+    cozy_capture_tenant_worker_cpu_throttle 1
   ' 2>&1) || true
   printf '%s\n' "$out" >"$tmp/out"
 
@@ -1166,14 +1342,14 @@ container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-
   assert_file_contains '--request-timeout=20s' "$tmp/calls"
   # And produced counters rather than an "unknown" label.
   assert_file_contains 'container_cpu_cfs_throttled_periods_total' \
-    "$tmp/report/snapshots/fallback/tenant-cpu-throttle/srv1.txt"
+    "$tmp/report/snapshots/fallback/tenant-cpu-throttle/sample-1/srv1.txt"
   rm -rf "$tmp"
 }
 
 @test "a killed read is not written up as a grace period that never ran" {
   tmp=$(mktemp -d)
   mkdir -p "$tmp/bin"
-  for c in mkdir sort grep mv rm mktemp wc tr cat; do
+  for c in mkdir sort grep mv rm mktemp wc tr cat date; do
     for d in /bin /usr/bin /usr/local/bin /opt/homebrew/bin; do
       if [ -x "$d/$c" ]; then
         ln -sf "$d/$c" "$tmp/bin/$c"
@@ -1202,11 +1378,11 @@ container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-
     COZY_REPORT_DIR='"$tmp"'/report
     COZY_SNAPSHOT_NAME=killed
     PATH='"$tmp"'/bin
-    cozy_capture_tenant_worker_cpu_throttle
+    cozy_capture_tenant_worker_cpu_throttle 1
   ' 2>&1) || true
   printf '%s\n' "$out" >"$tmp/out"
 
-  capture="$tmp/report/snapshots/killed/tenant-cpu-throttle/srv1.txt"
+  capture="$tmp/report/snapshots/killed/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'exit 137' "$capture"
   assert_file_lacks_pattern 'grace period' "$capture"
   rm -rf "$tmp"
@@ -1232,7 +1408,7 @@ container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'virt-launcher-worker-a-11111' "$capture"
   assert_file_lacks_pattern 'kube-apiserver' "$capture"
   rm -rf "$tmp"
@@ -1257,7 +1433,7 @@ container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_contains 'virt-launcher-worker-a-11111' "$capture"
   assert_file_lacks_pattern 'tenant-other' "$capture"
   assert_file_lacks_pattern 'virt-launcher-elsewhere' "$capture"
@@ -1283,7 +1459,7 @@ recorded_container_spec_cpu_quota{namespace="tenant-test",pod="virt-launcher-wor
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   assert_file_lacks_pattern 'xcontainer' "$capture"
   assert_file_lacks_pattern 'recorded_container' "$capture"
   assert_file_contains 'the kubelet answered' "$capture"
@@ -1303,7 +1479,7 @@ recorded_container_spec_cpu_quota{namespace="tenant-test",pod="virt-launcher-wor
 
   run_capture
 
-  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/srv1.txt"
+  capture="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/srv1.txt"
   # `timeout` reports 124 on expiry and passes the command's own status through
   # otherwise, so a 124 here is either this collector's deadline or the read
   # exiting 124 by itself, and nothing separates them. The file states that
@@ -1328,13 +1504,13 @@ recorded_container_spec_cpu_quota{namespace="tenant-test",pod="virt-launcher-wor
   # This runs inside a failure path that already spends minutes on other
   # collectors under one chainsaw op timeout. A short listing otherwise reads
   # as a small cluster rather than a cut walk.
-  truncated="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/COLLECTION-TRUNCATED.txt"
+  truncated="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/COLLECTION-TRUNCATED.txt"
   assert_file_contains '6 carried a worker in total' "$truncated"
   # n4, not n6: the cap's VALUE is the claim, and the two chainsaw Test files
   # order the failure path on it. Asserting some later node is absent leaves a
   # larger cap green, which would silently overspend the budget.
-  [ -f "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/n3.txt" ]
-  [ ! -f "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/n4.txt" ]
+  [ -f "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/n3.txt" ]
+  [ ! -f "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/n4.txt" ]
   rm -rf "$tmp"
 }
 
@@ -1355,7 +1531,7 @@ recorded_container_spec_cpu_quota{namespace="tenant-test",pod="virt-launcher-wor
 
   run_capture
 
-  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle"
+  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1"
   capture="$dir/srv1.txt"
   assert_file_contains 'incomplete' "$capture"
   assert_file_contains 'see read-error.log' "$capture"
@@ -1378,7 +1554,7 @@ recorded_container_spec_cpu_quota{namespace="tenant-test",pod="virt-launcher-wor
   # An unscheduled virt-launcher has no node, so there is no kubelet to ask --
   # which is itself a finding about the failure, not a gap in the collector.
   assert_file_contains 'no virt-launcher Pod with a node assigned' \
-    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/COLLECTION-FAILED.txt"
+    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/COLLECTION-FAILED.txt"
   rm -rf "$tmp"
 }
 
@@ -1395,7 +1571,7 @@ recorded_container_spec_cpu_quota{namespace="tenant-test",pod="virt-launcher-wor
 
   run_capture
 
-  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle"
+  dir="$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1"
   # kubectl writes deprecation and partial-result warnings on stderr with a
   # zero exit, so the exit status decides the filename, not the fact that
   # something was written. Filed as an error, a healthy read would look failed.
@@ -1422,9 +1598,9 @@ recorded_container_spec_cpu_quota{namespace="tenant-test",pod="virt-launcher-wor
   # status it is judged on has to be kubectl's rather than that of whatever
   # post-processing follows it.
   assert_file_contains 'Unable to connect to the server' \
-    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/COLLECTION-FAILED.txt"
+    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/COLLECTION-FAILED.txt"
   assert_file_contains 'failed to list' \
-    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/COLLECTION-FAILED.txt"
+    "$COZY_REPORT_DIR/snapshots/throttle-smoke/tenant-cpu-throttle/sample-1/COLLECTION-FAILED.txt"
   rm -rf "$tmp"
 }
 
@@ -1440,7 +1616,7 @@ recorded_container_spec_cpu_quota{namespace="tenant-test",pod="virt-launcher-wor
     return 1
   fi
   tail=$(awk -v h="$head" 'NR > h && $0 == "}" { print NR; exit }' "$lib")
-  call=$(grep -n '^ *cozy_capture_tenant_worker_cpu_throttle || true$' "$lib" | head -n 1 | cut -d: -f1)
+  call=$(grep -n '^ *cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true$' "$lib" | head -n 1 | cut -d: -f1)
   if [ -z "$call" ] || [ -z "$tail" ]; then
     echo "expected the node-join failure path to capture worker CPU throttling" >&2
     return 1

@@ -97,7 +97,13 @@ EOF
 
 @test "Boot QEMU VMs" {
   for i in 1 2 3; do
+    # `debug-threads=on` names the vCPU threads (`CPU N/KVM`) so the QEMU
+    # thread capture on the node-join failure path can tell a vCPU from an IO
+    # thread; without it every thread reports the bare process name. QEMU only
+    # renames threads when the flag is passed, so the capture's legend and its
+    # fixtures are pinned to this line carrying it.
     qemu-system-x86_64 -machine type=pc,accel=kvm -cpu host -smp 8 -m 24576 \
+      -name guest=srv${i},debug-threads=on \
       -device virtio-net,netdev=net0,mac=52:54:00:12:34:5${i} \
       -netdev tap,id=net0,ifname=cozy-srv${i},script=no,downscript=no \
       -drive file=srv${i}/system.img,if=virtio,format=raw,cache=unsafe \

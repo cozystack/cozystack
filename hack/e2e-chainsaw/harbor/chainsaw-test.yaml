@@ -141,7 +141,7 @@ spec:
   - name: wait-helmrelease-ready
     try:
     # 10m, not the standard 5-6m: harbor-test readiness is gated by the inline
-    # RedisFailover, whose three sentinels only go Ready after the spotahome
+    # RedisFailover, whose three sentinels only go Ready after the freshworks-oss
     # redis-operator elects a master and rewrites their config. Normal
     # convergence is 2-3m, but on a CPU-committed runner the tail runs long
     # (steal-induced probe misses, documented in pull-requests.yaml). Matches

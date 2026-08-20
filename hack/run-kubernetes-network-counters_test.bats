@@ -187,6 +187,35 @@ run_capture() {
   return "${_rc}"
 }
 
+@test "the capture does not send a reader after a sibling sample it never takes" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  export COZY_REPORT_DIR="$tmp"
+  COZY_SNAPSHOT_NAME=kubernetes-latest
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_node_names="node-a"
+  kubectl_raw_output="$(worker_series "$worker_labels")"
+
+  run_capture
+
+  out="$tmp/snapshots/kubernetes-latest/tenant-network-counters/node-a.txt"
+  # This capture is read once. Its sibling under the same shared walk is read
+  # twice, and the walk is where a stamp would naturally be written for both --
+  # which is how a file could end up carrying, on consecutive lines, this
+  # capture's own note that no second reading exists and an instruction to
+  # subtract one. Two lines of the same artifact contradicting each other is the
+  # reading failure this tree is written against, and it costs a reader the time
+  # it takes to go looking for a directory that was never created.
+  assert_file_contains 'a second capture of the same stream is what turns them into one' "$out"
+  assert_file_lacks_pattern 'sibling' "$out"
+  assert_file_lacks_pattern 'other sample directory' "$out"
+  # The stamp itself stays: when the read happened is true of every caller, and
+  # it is what makes a rate computable at all if a second capture is ever added.
+  assert_file_contains 'read attempted from' "$out"
+  rm -rf "$tmp"
+}
+
 @test "a negative assertion fails when its own matcher cannot evaluate" {
   # The helper under every "must not appear" claim in this file. What rides on
   # it is the collector's contract stated negatively: that an unread kubelet was

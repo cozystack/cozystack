@@ -82,10 +82,6 @@
 /cmd/backup-controller/                      @androndo @lllamnyp @kvaps
 /cmd/backupstrategy-controller/              @androndo @lllamnyp @kvaps
 
-# --- Flux ---
-/packages/system/fluxcd/                     @kingdonb @kvaps @lllamnyp @myasnikovdaniil
-/packages/system/fluxcd-operator/            @kingdonb @kvaps @lllamnyp @myasnikovdaniil
-
 # --- GPU ---
 /packages/system/hami/                       @lexfrei @kvaps @lllamnyp
 /packages/system/gpu-operator/               @lexfrei @kvaps @lllamnyp

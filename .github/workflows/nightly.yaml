@@ -221,7 +221,12 @@ jobs:
   e2e:
     name: E2E (full suite)
     needs: [mirror, build-disk]
-    runs-on: oracle-vm-24cpu-96gb-x86-64
+    # Same sandbox as the other e2e lanes: three QEMU guests at `-smp 8` commit
+    # 24 vCPU for the whole run, so the runner class has to be strictly larger,
+    # leaving the host its own cycles for QEMU's emulation and IO threads,
+    # containerd and the runner agent. Enforced by
+    # hack/sandbox-runner-headroom.bats.
+    runs-on: oracle-vm-32cpu-128gb-x86-64
     timeout-minutes: 180
     permissions:
       contents: read

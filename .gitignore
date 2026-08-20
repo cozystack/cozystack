@@ -129,3 +129,24 @@ packages/core/platform/images/migrations/etcd-operator-crds/
 # (validator, agent instructions) is current even when the checked-out rc tag
 # predates it. Never committed.
 .release-tooling
+
+# Machine credentials and boot artifacts hack/e2e-prepare-cluster.bats writes
+# to the repository root when the e2e sandbox is brought up outside CI: the
+# Talos secrets bundle and rendered machine configs, the kubeconfigs, the boot
+# image and the per-VM directories. secrets.yaml holds the cluster's private
+# keys, and before this block nothing here matched any of them -- leaving
+# `git add -A` in a tree that once ran the bringup one keystroke from
+# committing a credentials bundle.
+/secrets.yaml
+/talosconfig
+/kubeconfig
+/tenantkubeconfig*
+/controlplane.yaml
+/worker.yaml
+/patch.yaml
+/patch-controlplane.yaml
+/nocloud-amd64.raw
+/nocloud-amd64.raw.xz
+/srv1/
+/srv2/
+/srv3/

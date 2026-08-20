@@ -67,7 +67,25 @@ delete: ## Remove sandbox from existing Kubernetes cluster.
 exec:  ## Opens an interactive shell in the sandbox container.
 	docker exec -ti "${SANDBOX_NAME}" bash
 
+# Which machine this run landed on, recorded before the container exists.
+#
+# Here rather than in a workflow step for two reasons. The metadata service
+# answers on a link-local address the container is not guaranteed to reach, so
+# the read has to happen on this side of `docker run`; and the record has to be
+# inside the tree the `docker cp` below carries in, or hack/cozyreport.sh cannot
+# fold it into the artifact from inside. Every workflow that runs the suite reaches
+# the sandbox through `make prepare-env`, so one call here covers each of them on
+# both the green and the red path, with no per-workflow step to keep in step. No
+# count of those workflows here on purpose: the count is what goes stale, and the
+# funnel is the property worth stating.
+#
+# Ahead of `docker run`, so a runner whose sandbox fails to start is still
+# identified. Never fatal: the script says why it could not read something and
+# exits 0. On a machine with no metadata service -- a laptop running this target
+# directly -- it costs the read's own ceiling once, against a target that then
+# boots three QEMU guests.
 apply: delete
+	COZY_RUNNER_IDENTITY_FILE="$(ROOT_DIR)_out/runner-identity.txt" $(ROOT_DIR)hack/e2e-runner-identity.sh
 	docker run \
 		-d --rm --name "${SANDBOX_NAME}" --privileged \
 		-e TALOSCONFIG=/workspace/talosconfig \

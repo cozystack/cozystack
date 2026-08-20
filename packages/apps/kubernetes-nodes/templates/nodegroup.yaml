@@ -42,6 +42,8 @@
       "gpus" .Values.gpus
       "kubelet" .Values.kubelet
       "logSerialConsole" .Values.logSerialConsole
+      "podCpuLimit" .Values.podCpuLimit
+      "podCpuRequest" .Values.podCpuRequest
 }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
@@ -166,7 +168,33 @@ spec:
             {{- end }}
             resources:
               {{/* 2Gi is enough: persistent DataVolumes are not counted as pod ephemeral storage */}}
-              {{- include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) | nindent 14 }}
+              {{- $podResources := include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) }}
+              {{- /* Either side of the pair, and only for a pool that asked
+                    for it. KubeVirt derives both from the guest vCPU count, and
+                    each key declared here displaces one derivation: the limit
+                    stops it deriving a ceiling, the request stops its VMI
+                    defaulter (setDefaultResourceRequests) copying that declared
+                    ceiling into the request. A pool declaring only the limit
+                    therefore moves both. The enclosing KubevirtMachineTemplate
+                    is content-hash named, so a pool that sets neither has to
+                    render the same bytes it did before these fields existed,
+                    down to the whitespace.
+
+                    Presence, not truth: zero is a quantity the schema accepts
+                    and a pool can mean it, so `with` would drop a deliberate
+                    choice as though nothing had been set. Which zeroes are
+                    coherent is settled by the guards further down, not here. */}}
+              {{- if not (kindIs "invalid" .group.podCpuLimit) }}
+              {{- $limited := $podResources | fromYaml }}
+              {{- $_ := set $limited.limits "cpu" (toString .group.podCpuLimit) }}
+              {{- $podResources = toYaml $limited }}
+              {{- end }}
+              {{- if not (kindIs "invalid" .group.podCpuRequest) }}
+              {{- $requested := $podResources | fromYaml }}
+              {{- $_ := set $requested.requests "cpu" (toString .group.podCpuRequest) }}
+              {{- $podResources = toYaml $requested }}
+              {{- end }}
+              {{- $podResources | nindent 14 }}
           evictionStrategy: External
           volumes:
           - name: system
@@ -190,6 +218,76 @@ spec:
 {{- $hasMem := and $group.resources $group.resources.memory }}
 {{- if and $group.instanceType (or (and $hasCpu (not $hasMem)) (and $hasMem (not $hasCpu))) }}
 {{-   fail (printf "nodeGroup %s: set both resources.cpu and resources.memory, or neither" $groupName) }}
+{{- end }}
+{{- /* Presence, not truth, for both fields below: zero is a quantity the
+       schema accepts, and a guard keyed on truthiness would wave through
+       exactly the value it exists to catch. */}}
+{{- $hasPodCpuLimit := not (kindIs "invalid" $group.podCpuLimit) }}
+{{- $hasPodCpuRequest := not (kindIs "invalid" $group.podCpuRequest) }}
+{{- /* Same conflict class, other field: podCpuLimit renders
+       domain.resources.limits.cpu, and a VM that carries an instancetype and
+       that key is refused by KubeVirt's instancetype applier, which reports it
+       as a conflict rather than resolving it. The pool has to be sized by
+       resources for the limit to be usable at all, since that is what drops
+       the instancetype from the VM. */}}
+{{- if and $hasPodCpuLimit $group.instanceType (not (and $hasCpu $hasMem)) }}
+{{-   fail (printf "nodeGroup %s: podCpuLimit cannot be combined with instanceType sizing, because KubeVirt rejects a VirtualMachine that references an instancetype and also sets domain.resources.limits.cpu. Set both resources.cpu and resources.memory, which drops the instancetype from the VM, or drop podCpuLimit." $groupName) }}
+{{- end }}
+{{- /* Other side of the pair, same conflict and the same check upstream: the
+       instancetype applier reports domain.resources.requests.cpu alongside the
+       limit rather than resolving either. */}}
+{{- if and $hasPodCpuRequest $group.instanceType (not (and $hasCpu $hasMem)) }}
+{{-   fail (printf "nodeGroup %s: podCpuRequest cannot be combined with instanceType sizing, because KubeVirt rejects a VirtualMachine that references an instancetype and also sets domain.resources.requests.cpu. Set both resources.cpu and resources.memory, which drops the instancetype from the VM, or drop podCpuRequest." $groupName) }}
+{{- end }}
+{{- /* The rest of the value domain, decided in one place rather than one edge
+       at a time. Both fields are quantities and the generated schema admits a
+       leading minus and a zero as readily as a sane value, so what each class
+       does has to be settled here:
+
+       negative -- never reaches a running Pod, the API server rejects the
+       quantity outright;
+
+       zero limit -- removes the ceiling rather than being the tightest one:
+       the kubelet turns a zero CPU limit into no CFS quota at all, and
+       declaring the key stops KubeVirt deriving one. But it only reaches a
+       Pod paired with a zero request, and that is not a style preference.
+       API server validation refuses a request above a limit that exists, and
+       zero is a limit that exists, while KubeVirt keeps deriving a request
+       from the vCPU count whenever the VM declares none -- the defaulter that
+       would have copied the limit across does not fire, because the limit is
+       itself zero. So a lone zero limit renders a Pod that is rejected on
+       creation, and is refused here instead;
+
+       zero request beside a non-zero limit -- looks like "reserve nothing
+       under this ceiling" and does the opposite. KubeVirt's defaulter tests
+       the request with IsZero, which an explicit zero satisfies exactly as an
+       absent key does, so it overwrites the zero with the limit and the worker
+       asks for the whole ceiling. That is the failure this pair exists to
+       avoid, so it is refused rather than documented;
+
+       zero request alone -- the defaulter does not fire without a limit, so it
+       survives and means what it says. Allowed.
+
+       Comparisons are on the converted numbers, not on the strings that spell
+       them: 1500m against 2 is not a string comparison. */}}
+{{- if and $hasPodCpuLimit (lt (include "cozy-lib.resources.toFloat" $group.podCpuLimit | float64) 0.0) }}
+{{-   fail (printf "nodeGroup %s: podCpuLimit (%v) must not be negative" $groupName $group.podCpuLimit) }}
+{{- end }}
+{{- if and $hasPodCpuRequest (lt (include "cozy-lib.resources.toFloat" $group.podCpuRequest | float64) 0.0) }}
+{{-   fail (printf "nodeGroup %s: podCpuRequest (%v) must not be negative" $groupName $group.podCpuRequest) }}
+{{- end }}
+{{- if and $hasPodCpuLimit (not $hasPodCpuRequest) (eq (include "cozy-lib.resources.toFloat" $group.podCpuLimit | float64) 0.0) }}
+{{-   fail (printf "nodeGroup %s: podCpuLimit 0 needs podCpuRequest 0 beside it. A zero limit removes the ceiling, but KubeVirt still derives a CPU request from the guest vCPU count when the VM declares none, and a request above a declared limit of zero is rejected when the worker's Pod is created." $groupName) }}
+{{- end }}
+{{- if and $hasPodCpuRequest $hasPodCpuLimit }}
+{{-   $requestF := include "cozy-lib.resources.toFloat" $group.podCpuRequest | float64 }}
+{{-   $limitF := include "cozy-lib.resources.toFloat" $group.podCpuLimit | float64 }}
+{{-   if and (eq $requestF 0.0) (ne $limitF 0.0) }}
+{{-     fail (printf "nodeGroup %s: podCpuRequest 0 beside a podCpuLimit does not reserve nothing. KubeVirt replaces a zero CPU request with the declared limit (%v), so the worker would ask the scheduler for its whole ceiling, which is what podCpuRequest exists to prevent. Give podCpuRequest a non-zero value, or drop it and accept the same outcome deliberately." $groupName $group.podCpuLimit) }}
+{{-   end }}
+{{-   if gt $requestF $limitF }}
+{{-     fail (printf "nodeGroup %s: podCpuRequest (%v) exceeds podCpuLimit (%v), and a container cannot request more CPU than its limit" $groupName $group.podCpuRequest $group.podCpuLimit) }}
+{{-   end }}
 {{- end }}
 {{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
 {{- $instanceType := dict }}
@@ -390,6 +488,7 @@ metadata:
   annotations:
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: "{{ $group.minReplicas }}"
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "{{ $group.maxReplicas }}"
+    cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime: {{ include "kubernetes.positiveDuration" (dict "field" "maxNodeProvisionTime" "value" $.Values.maxNodeProvisionTime) | quote }}
     {{- if $effectiveMemory }}
     {{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}
     {{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
@@ -496,10 +595,10 @@ spec:
   unhealthyConditions:
   - type: Ready
     status: Unknown
-    timeout: 30s
+    timeout: {{ include "kubernetes.positiveDuration" (dict "field" "readyUnknownTimeout" "value" $.Values.readyUnknownTimeout) | quote }}
   - type: Ready
     status: "False"
-    timeout: 300s
+    timeout: {{ include "kubernetes.positiveDuration" (dict "field" "readyFalseTimeout" "value" $.Values.readyFalseTimeout) | quote }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor

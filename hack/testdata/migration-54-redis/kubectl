@@ -1,0 +1,139 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-54-redis-adopt.bats. It serves only the calls
+# migration 54 (and lib/cozystack-version.sh) make; behaviour is driven by
+# FAKE_* env and every invocation is appended to $FAKE_CMDLOG so the test can
+# assert on which RedisFailovers were patched and with what payload, and which
+# version was stamped.
+#
+#   FAKE_CMDLOG          file to append a one-line record of each call to
+#   FAKE_CRD_ABSENT      non-empty => the CRD probe prints nothing at rc 0, i.e.
+#                        the spotahome RedisFailover CRD is genuinely absent
+#                        (nothing to adopt). Mutually exclusive with the next.
+#   FAKE_CRD_PROBE_FAIL  non-empty => the CRD probe itself FAILS (rc != 0). A
+#                        real apiserver error is NOT the same answer as "absent":
+#                        the migration must abort under set -euo pipefail rather
+#                        than stamp past an un-probed fleet.
+#   FAKE_RFS             newline list of "<ns> <name> <redis_img> <sentinel_img>"
+#                        — one per RedisFailover the -A fleet scan reports and the
+#                        per-CR read serves. A field of "-" (or empty) models an
+#                        UNSET image, so the migration's pin-where-empty branch is
+#                        exercised; any other value is a preset image that must be
+#                        left untouched.
+#   FAKE_LABEL_FAIL      non-empty => every `patch` exits 1 with this stderr. The
+#                        adoption label/pin is the whole point of the migration:
+#                        a failed patch must abort before stamping so the Job
+#                        retries rather than leaving the fleet invisible to the
+#                        new operator.
+#
+# Any call the migration makes that is not modelled below is drift between the
+# script and this fake and fails loudly, rather than letting the migration run
+# against a call the test never reasoned about.
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+
+# arg_after KEY -- echoes the token following KEY in the argument vector.
+arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
+
+# spec_image_obj VALUE -- a JSON object for a spec.<role> node. "-" or empty
+# models an unset image (empty object, so `.spec.<role>.image // ""` is ""); any
+# other value is a preset image the migration must not overwrite.
+spec_image_obj() {
+  case "${1:-}" in
+    ""|"-") printf '{}' ;;
+    *)      printf '{"image":"%s"}' "$1" ;;
+  esac
+}
+
+case "$args" in
+  # CRD probe: `get crd <fqdn> --ignore-not-found -o name`. Empty + rc 0 => the
+  # CRD is absent (nothing to adopt); a non-zero exit models a genuine apiserver
+  # error, which under the migration's set -euo pipefail must abort — the exact
+  # failure the --ignore-not-found form exists to keep distinct from "absent".
+  *"get crd redisfailovers.databases.spotahome.com"*)
+    if [ -n "${FAKE_CRD_PROBE_FAIL:-}" ]; then
+      printf 'fake kubectl: the server could not find the requested resource\n' >&2
+      exit 1
+    fi
+    if [ -n "${FAKE_CRD_ABSENT:-}" ]; then
+      exit 0
+    fi
+    printf 'customresourcedefinition.apiextensions.k8s.io/redisfailovers.databases.spotahome.com\n'
+    exit 0
+    ;;
+
+  # Fleet scan: every RedisFailover across all namespaces, as JSON. The
+  # migration pipes this through jq for "<ns> <name>", so only those two fields
+  # are consumed here; the per-CR read below serves the spec.
+  *"get redisfailovers.databases.spotahome.com"*"--all-namespaces"*)
+    printf '{"items":['
+    printf '%s\n' "${FAKE_RFS:-}" | {
+      sep=""
+      while read -r ns name ri si; do
+        [ -n "$ns" ] || continue
+        printf '%s{"metadata":{"namespace":"%s","name":"%s"}}' "$sep" "$ns" "$name"
+        sep=","
+      done
+    }
+    printf ']}\n'
+    exit 0
+    ;;
+
+  # Per-CR read: `-n <ns> get <fqdn> <name> -o json`. Serves the spec so the
+  # migration can decide, per role, whether the image is empty (pin) or preset
+  # (leave). Reads the same FAKE_RFS row the fleet scan reported.
+  *"get redisfailovers.databases.spotahome.com"*)
+    ns=$(arg_after -n "$@")
+    name=$(arg_after redisfailovers.databases.spotahome.com "$@")
+    out=$(printf '%s\n' "${FAKE_RFS:-}" | {
+      while read -r rns rname rri rsi; do
+        [ "$rns" = "$ns" ] && [ "$rname" = "$name" ] || continue
+        printf '{"metadata":{"namespace":"%s","name":"%s"},"spec":{"redis":%s,"sentinel":%s}}\n' \
+          "$rns" "$rname" "$(spec_image_obj "$rri")" "$(spec_image_obj "$rsi")"
+        break
+      done
+    })
+    # A read with no matching FAKE_RFS row is a test-harness typo, not a cluster
+    # state: serving empty at rc 0 would flow into the migration's pin-both
+    # branch as a misleading green. Fail loudly, like every unmodelled call.
+    if [ -z "$out" ]; then
+      printf 'fake kubectl: no RedisFailover %s/%s in FAKE_RFS\n' "$ns" "$name" >&2
+      exit 1
+    fi
+    printf '%s\n' "$out"
+    exit 0
+    ;;
+
+  # The adoption patch. --type=merge, carrying the operator-group label and, only
+  # where empty, the engine pin. Logged verbatim so the test can inspect the
+  # payload (label present on every CR; image pin present only where it should
+  # be). FAKE_LABEL_FAIL models a patch the apiserver rejects.
+  *"patch redisfailovers.databases.spotahome.com"*)
+    if [ -n "${FAKE_LABEL_FAIL:-}" ]; then
+      printf 'fake kubectl: admission webhook denied the patch\n' >&2
+      exit 1
+    fi
+    ns=$(arg_after -n "$@")
+    name=$(arg_after redisfailovers.databases.spotahome.com "$@")
+    patch=$(arg_after -p "$@")
+    log "PATCH $ns $name $patch"
+    exit 0
+    ;;
+
+  # Version stamp: kubectl apply --filename -. Record the number actually
+  # stamped; a wrong number would loop run-migrations.sh forever and a bare
+  # "STAMP" assertion would not notice.
+  *"apply --filename -"*)
+    manifest=$(cat)
+    v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+    log "STAMP ${v:-unknown}"
+    exit 0
+    ;;
+esac
+
+log "UNHANDLED $args"
+printf 'fake kubectl: unmodelled call: %s\n' "$args" >&2
+exit 1

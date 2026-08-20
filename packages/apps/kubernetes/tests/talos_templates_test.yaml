@@ -351,6 +351,8 @@ tests:
       - isKind:
           of: ServiceAccount
         documentIndex: 0
+      # The ServiceAccount name is stable (not hashed) — the Job references
+      # it by this name and only the immutable Job carries the hash suffix.
       - equal:
           path: metadata.name
           value: test-k8s-bootstrap-token-tenant
@@ -358,10 +360,78 @@ tests:
       - isKind:
           of: Job
         documentIndex: 1
+      # The immutable Job carries a 6-char content-hash suffix (see the
+      # dedicated content-hash cases below and the template header).
+      - matchRegex:
+          path: metadata.name
+          pattern: ^test-k8s-bootstrap-token-tenant-[0-9a-f]{6}$
+        documentIndex: 1
+      # The admin-kubeconfig volume must be optional and gated by the shared
+      # wait-for-kubeconfig init container, so the Pod waits in init (uncounted
+      # by backoffLimit) instead of FailedMount at t0.
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: wait-for-kubeconfig
+        documentIndex: 1
+      - equal:
+          path: spec.template.spec.volumes[0].secret.optional
+          value: true
+        documentIndex: 1
+      # Main-phase, not a hook: NONE of the bootstrap-token resources may
+      # carry helm.sh/hook. A post-install hook is not gated on
+      # MachineDeployment here (the release sets helm-install-disable-wait,
+      # so there is no main-resource wait in front of the hooks); the reason
+      # to leave the hook is that a post-UPGRADE hook never runs on a release
+      # whose upgrade keeps failing, so the token Secret never lands. Pin the
+      # absence on both documents (0 SA, 1 Job).
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 0
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 1
+
+  # The two cases below pin the bootstrap-token Job's content-hash contract:
+  # an image change rotates the immutable Job's name (so Helm creates a fresh
+  # Job instead of failing on an immutable-field patch), while an unchanged
+  # render keeps the same name (so Helm no-ops). The exact suffix is expected
+  # to change whenever the Job spec changes; that is the signal that the Job
+  # will roll, and the fixture is updated in lockstep.
+  - it: bootstrap-token Job name is derived from the rendered spec
+    templates:
+      - templates/talos/bootstrap-token-tenant-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
       - equal:
           path: metadata.name
-          value: test-k8s-bootstrap-token-tenant
-        documentIndex: 1
+          value: test-k8s-bootstrap-token-tenant-fc314f
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: bootstrap-token Job name rotates when images.kubectl changes
+    templates:
+      - templates/talos/bootstrap-token-tenant-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      images:
+        kubectl: example.com/kubectl:v9.9.9
+    asserts:
+      # A different exact hash from the default-image render above (fc314f),
+      # proving the hash tracks the rendered spec (the kubectl image is in it),
+      # so an image bump lands a fresh Job rather than an immutable-field patch.
+      # Pinned exactly (like the talos-reconcile sibling cases) rather than by
+      # regex, so a hash drift on either render is caught, not silently masked.
+      - equal:
+          path: metadata.name
+          value: test-k8s-bootstrap-token-tenant-dbf53d
+        documentSelector:
+          path: kind
+          value: Job
 
   - it: talos-pki emits two cert-manager Certificates and two Issuers
     templates:

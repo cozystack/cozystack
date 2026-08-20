@@ -12,7 +12,7 @@ update:
 	sed -i "/ARG VERSION/ s|=.*|=$${tag}|g" images/kamaji/Dockerfile
 	# Re-apply Cozystack-side patches over the freshly extracted chart so
 	# `make update` stays reproducible. Mirrors the pattern used by
-	# packages/system/fluxcd-operator and packages/system/ingress-nginx.
+	# packages/system/ingress-nginx.
 	patch --no-backup-if-mismatch -p1 < patches/1.diff
 
 image:

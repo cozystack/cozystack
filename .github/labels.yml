@@ -196,7 +196,11 @@
 
 - name: area/networking
   color: 'bfd4f2'
-  description: Issues or PRs related to networking (ingress, gateway, vpn, metallb, cilium, kube-ovn)
+  description: Issues or PRs related to networking (ingress, gateway, vpn, metallb, kube-ovn)
+
+- name: area/cilium
+  color: 'bfd4f2'
+  description: Issues or PRs related to Cilium (agent, operator, Gateway API, network policy, LB-IPAM)
 
 - name: area/platform
   color: 'bfd4f2'
