@@ -20,13 +20,13 @@
 # cozystack-packages artifact pushed from main already carries the stamped .tag,
 # and finalize's overlay copies it onto this tree.
 #
-# What is NOT covered is legibility when neither path fires — a main build that
-# has not run since this package landed, or an overlay that could not pull the
-# artifact and logged a no-op. The committed value is then the bare v0.0.0
-# placeholder, which no build path in this repo ever publishes, and the guard in
-# the bring-up step below only rejects an EMPTY ref, so the run fails as an
-# eight-minute VM-never-ready timeout rather than naming the cause. Rejecting a
-# ref that carries no @sha256: digest would fix that; it is not done here.
+# When neither path fires — a main build that has not run since this package
+# landed, or an overlay that could not pull the artifact and logged a no-op —
+# the committed value is the bare v0.0.0 placeholder, which no build path in this
+# repo ever publishes. Both ends reject that by name rather than timing out: the
+# bring-up step below refuses a ref that carries no @sha256: digest, and the
+# chart's site-router.applianceDiskUrl fails A's render the same way, instead of
+# the run dying as an eight-minute VM-never-ready timeout.
 #
 # To drive it by hand against a dev cluster:
 #     make test-chainsaw CHAINSAW_SUITES="site-router"
@@ -92,9 +92,26 @@ spec:
             content: |
               set -eu
               tag=../../../packages/apps/site-router/images/vyos-router-disk.tag
-              ref="$(tr -d '[:space:]' < "$tag")"
-              [ -n "$ref" ] || { echo "$tag is empty: the VyOS appliance image is not stamped, so B cannot boot"; exit 1; }
-              echo "remote-site-b booting appliance $ref"
+              stamp="$(tr -d '[:space:]' < "$tag")"
+              [ -n "$stamp" ] || { echo "$tag is empty: the VyOS appliance image is not stamped, so B cannot boot"; exit 1; }
+              case "$stamp" in
+                *@sha256:*) ;;
+                *) echo "$tag holds $stamp, which carries no @sha256: digest: the VyOS appliance image is not stamped, so B cannot boot. Expected <repo>:<tag>@sha256:<digest>, written by the build-vyos job or carried in from the base branch's cozystack-packages artifact."; exit 1 ;;
+              esac
+              # Drop the tag and keep the digest. CDI's docker:// transport cannot
+              # parse a reference carrying both ("Docker references with both a tag
+              # and digest are currently not supported") and the stamp carries
+              # both. This is the same normalisation the chart applies to A's boot
+              # disk in site-router.applianceDiskUrl; B must boot the SAME
+              # appliance, so the two ends have to agree. The `case` guard keeps a
+              # registry port (host:5000/repo, no tag) from being read as a tag.
+              repo="${stamp%@*}"
+              digest="${stamp##*@}"
+              case "${repo##*/}" in
+                *:*) repo="${repo%:*}" ;;
+              esac
+              ref="${repo}@${digest}"
+              echo "remote-site-b booting appliance $ref (stamped $stamp)"
               sed "s|__VYOS_DISK_REF__|${ref}|" remote-site-b.yaml \
                 | kubectl apply -n "$NAMESPACE" -f -
         - assert:

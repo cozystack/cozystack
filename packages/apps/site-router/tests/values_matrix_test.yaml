@@ -6,6 +6,28 @@ suite: site-router values matrix (render surface)
 # not rendered by the chart. These cases guard that the chart renders cleanly
 # across the whole values surface — bgp on/off, empty remoteCIDRs, the default
 # tunnel.type — so a template never references a missing value and errors.
+#
+# The suite-level list below is what limits rendering: a per-test `templates:`
+# only selects among the documents the SUITE rendered, so without this list every
+# case renders the whole chart. It names every template but templates/dv.yaml,
+# which cannot render while images/vyos-router-disk.tag holds the digest-less
+# v0.0.0 placeholder (site-router.applianceDiskUrl rejects it — see
+# tests/dv_test.yaml). Excluding it costs this suite nothing: the boot DataVolume
+# reads no tenant value at all, only .Files and .Release, so there is no values
+# surface there to sweep.
+#
+# TODO: once a release build has stamped a real digest into the .tag, drop the
+# exclusion — ideally by deleting the whole list, which restores the stronger
+# property that the ENTIRE chart renders across the values matrix.
+
+templates:
+  - templates/dashboard-resourcemap.yaml
+  - templates/networkpolicy.yaml
+  - templates/secret-cloudinit.yaml
+  - templates/secret-psk.yaml
+  - templates/service.yaml
+  - templates/vm.yaml
+  - templates/workloadmonitor.yaml
 
 release:
   name: site-router-test
