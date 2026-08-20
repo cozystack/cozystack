@@ -169,4 +169,14 @@
 {{include "cozystack.platform.package" (list "cozystack.virtualprivatecloud-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.vm-disk-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.vm-instance-application" "kubevirt" $) }}
+{{- /*
+  VMware import is opt-in: the Forklift operator ships a large manifest with its
+  own CRDs and broad RBAC, and the adoption controller holds cluster-wide create
+  on VMInstances. That surface is worth it for a cluster that is migrating off
+  vSphere and pure cost for every other iaas cluster, so it is not installed by
+  default -- add the packages below to bundles.enabledPackages to turn it on.
+*/ -}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.forklift" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.vm-adoption-controller" $) }}
+{{include "cozystack.platform.package.optional" (list "cozystack.vm-import-application" "kubevirt" $) }}
 {{- end }}

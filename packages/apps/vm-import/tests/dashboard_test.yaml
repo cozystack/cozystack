@@ -1,0 +1,48 @@
+suite: vm-import dashboard resource map
+release:
+  name: my-import
+  namespace: tenant-vmlab
+templates:
+  - templates/dashboard-resourcemap.yaml
+tests:
+  - it: binds the tenant users to the import resources
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        isKind:
+          of: Role
+      - documentIndex: 1
+        isKind:
+          of: RoleBinding
+      - documentIndex: 1
+        contains:
+          path: subjects
+          content:
+            kind: Group
+            name: tenant-vmlab-use
+            apiGroup: rbac.authorization.k8s.io
+
+  - it: covers the Host objects a migrationHosts import creates
+    set:
+      migrationHosts:
+        - id: host-10
+          ipAddress: 192.0.2.10
+          secretName: esxi-creds
+    asserts:
+      - documentIndex: 0
+        contains:
+          path: rules[0].resources
+          content: hosts
+      - documentIndex: 0
+        contains:
+          path: rules[0].resourceNames
+          content: my-import-host-10
+
+  - it: renders nothing for an admin-directed import in a privileged namespace
+    release:
+      name: my-import
+      namespace: cozy-vm-import
+    asserts:
+      - hasDocuments:
+          count: 0

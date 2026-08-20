@@ -1,0 +1,43 @@
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Provider
+metadata:
+  name: {{ .Release.Name }}-source
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: vsphere
+  url: {{ required "sourceUrl is required" .Values.sourceUrl | quote }}
+  secret:
+    name: {{ required "sourceSecretName is required" .Values.sourceSecretName }}
+    namespace: {{ .Release.Namespace }}
+  {{- /*
+    The VDDK image is platform configuration, never a tenant value: naming a
+    container image the cluster will run is not something a tenant may do, and
+    the image is built from the proprietary VMware SDK, which Cozystack cannot
+    ship or host. The operator sets it once — key `vddk-image` in the
+    `cozystack` ConfigMap in `cozy-system`, or `migration.vddkImage` in the
+    platform values — and it reaches every app over the existing `_cluster`
+    channel (packages/core/platform/templates/apps.yaml). Unset means the VMware
+    path is unavailable, and the release fails here, at order time, rather than
+    midway through a transfer.
+  */}}
+  {{- $vddkImage := "" }}
+  {{- if .Values._cluster }}
+  {{- $vddkImage = index .Values._cluster "vddk-image" | default "" }}
+  {{- end }}
+  {{- if not $vddkImage }}
+  {{- fail "VMware import requires the platform administrator to configure the VDDK image: set `vddk-image` in the cozystack ConfigMap (namespace cozy-system). See packages/apps/vm-import/docs/MIGRATION_GUIDE.md." }}
+  {{- end }}
+  settings:
+    vddkInitImage: {{ $vddkImage | quote }}
+---
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Provider
+metadata:
+  name: {{ .Release.Name }}-destination
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: openshift
+  url: ""
+  secret: {}

@@ -1,0 +1,42 @@
+{{- /* The RoleBinding grants this tenant's own users read access to the import
+       resources in the dashboard. An admin-directed import deployed in a
+       privileged namespace has no tenant subjects to bind, and cozy-lib rejects
+       a non-tenant- namespace as a tenant identifier, so skip the whole
+       resource map there rather than failing the render. */}}
+{{- if hasPrefix "tenant-" .Release.Namespace }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-dashboard-resources
+rules:
+- apiGroups:
+  - forklift.konveyor.io
+  resources:
+  - providers
+  - plans
+  - migrations
+  - networkmaps
+  - storagemaps
+  - hosts
+  resourceNames:
+  - {{ .Release.Name }}
+  - {{ .Release.Name }}-source
+  - {{ .Release.Name }}-destination
+  {{- /* host.yaml names each Host <release>-<id>. resourceNames takes no
+         patterns, so enumerate the ids the release actually declares. */}}
+  {{- range .Values.migrationHosts }}
+  - {{ $.Release.Name }}-{{ .id }}
+  {{- end }}
+  verbs: ["get", "list", "watch"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Release.Name }}-dashboard-resources
+subjects:
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "use" .Release.Namespace) }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-dashboard-resources
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

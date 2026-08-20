@@ -7,6 +7,20 @@
 {{- if and $cozystackCm $cozystackCm.data -}}
 {{- $rootHost = default $rootHost (index $cozystackCm.data "root-host") -}}
 {{- end -}}
+{{- /*
+  VDDK image for VMware imports. Only a reference travels this channel, never
+  any credential — the same rule as the wildcard Secret name below. The image is
+  built from the proprietary VMware SDK, so Cozystack neither ships nor mirrors
+  it: an operator who holds a VDDK licence builds it, pushes it somewhere the
+  cluster can pull from, and names it here. Empty is the normal state and means
+  the VMware import path is unavailable rather than broken — the vm-import chart
+  refuses to render instead of failing mid-transfer. Operator-set ConfigMap key
+  wins over the chart value, matching root-host above.
+*/ -}}
+{{- $vddkImage := .Values.migration.vddkImage | default "" -}}
+{{- if and $cozystackCm $cozystackCm.data -}}
+{{- $vddkImage = default $vddkImage (index $cozystackCm.data "vddk-image") -}}
+{{- end -}}
 ---
 apiVersion: v1
 kind: Secret
@@ -21,6 +35,7 @@ stringData:
     _cluster:
       root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}
+      vddk-image: {{ $vddkImage | quote }}
       solver: {{ .Values.publishing.certificates.solver | quote }}
       issuer-name: {{ .Values.publishing.certificates.issuerName | quote }}
       {{- /*

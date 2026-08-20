@@ -1,0 +1,57 @@
+suite: vm-import source provider
+templates:
+  - provider.yaml
+tests:
+  # The VDDK image is platform configuration delivered over the _cluster channel.
+  # A tenant can never name it, so the only two outcomes are "the operator
+  # configured it" and "this app cannot be ordered" — and the second has to be
+  # visible when the release is created, not after a transfer has already started.
+  - it: refuses to render when the platform has no VDDK image configured
+    set:
+      sourceUrl: https://vcenter.example.com/sdk
+      sourceSecretName: vc-creds
+    asserts:
+      - failedTemplate:
+          errorPattern: "VMware import requires the platform administrator to configure the VDDK image"
+
+  - it: refuses to render when the platform value is present but empty
+    set:
+      sourceUrl: https://vcenter.example.com/sdk
+      sourceSecretName: vc-creds
+      _cluster:
+        vddk-image: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "VMware import requires the platform administrator to configure the VDDK image"
+
+  - it: stamps the operator-configured image onto the source Provider
+    set:
+      sourceUrl: https://vcenter.example.com/sdk
+      sourceSecretName: vc-creds
+      _cluster:
+        vddk-image: registry.example.com/vddk:8.0.3
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.settings.vddkInitImage
+          value: registry.example.com/vddk:8.0.3
+      - documentIndex: 0
+        equal:
+          path: spec.type
+          value: vsphere
+
+  # The credentials Secret is always read from the release's own namespace: a
+  # tenant must not be able to point the platform at another tenant's Secret.
+  - it: pins the credentials Secret to the release namespace
+    set:
+      sourceUrl: https://vcenter.example.com/sdk
+      sourceSecretName: vc-creds
+      _cluster:
+        vddk-image: registry.example.com/vddk:8.0.3
+    release:
+      namespace: tenant-foo
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.secret.namespace
+          value: tenant-foo

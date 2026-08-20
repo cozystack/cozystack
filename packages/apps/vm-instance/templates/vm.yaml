@@ -65,9 +65,19 @@ spec:
           disks:
           {{- range $i, $disk := .Values.disks }}
           - name: disk-{{ $disk.name }}
-            {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace (printf "vm-disk-%s" $disk.name) }}
+            {{- $dvName := default (printf "vm-disk-%s" $disk.name) $disk.dvName }}
+            {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace $dvName }}
+            {{- $pvc := lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $dvName }}
+            {{- $meta := dict }}
             {{- if $dv }}
-            {{- $isOptical := and (hasKey $dv.metadata.annotations "vm-disk.cozystack.io/optical") (eq (index $dv.metadata.annotations "vm-disk.cozystack.io/optical") "true") }}
+            {{-   $meta = $dv.metadata }}
+            {{- else if $pvc }}
+            {{-   $meta = $pvc.metadata }}
+            {{- else }}
+            {{-   fail (printf "Specified disk not exists in cluster: %s" $dvName) }}
+            {{- end }}
+            {{- $anns := $meta.annotations | default dict }}
+            {{- $isOptical := eq (index $anns "vm-disk.cozystack.io/optical") "true" }}
             {{- $deviceKey := ternary "cdrom" "disk" $isOptical }}
             {{- if $disk.bus }}
             {{ $deviceKey }}:
@@ -76,9 +86,6 @@ spec:
             {{ $deviceKey }}: {}
             {{- end }}
             bootOrder: {{ add $i 1 }}
-            {{- else }}
-            {{-   fail (printf "Specified disk not exists in cluster: %s" .name) }}
-            {{- end }}
           {{- end }}
           {{- if or .Values.cloudInit .Values.sshKeys }}
           - name: cloudinitdisk
@@ -110,8 +117,14 @@ spec:
       volumes:
       {{- range .Values.disks }}
       - name: disk-{{ .name }}
+        {{- $dvName := default (printf "vm-disk-%s" .name) .dvName }}
+        {{- if lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace $dvName }}
         dataVolume:
-          name: vm-disk-{{ .name }}
+          name: {{ $dvName }}
+        {{- else }}
+        persistentVolumeClaim:
+          claimName: {{ $dvName }}
+        {{- end }}
       {{- end }}
       {{- if or .Values.cloudInit .Values.sshKeys }}
       - name: cloudinitdisk

@@ -1,0 +1,46 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vm-adoption-controller
+rules:
+# Watch VirtualMachines; delete the Forklift VM once it has been adopted
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines"]
+  verbs: ["get", "list", "watch", "update", "patch", "delete"]
+
+# Read Forklift Plans and Migrations
+- apiGroups: ["forklift.konveyor.io"]
+  resources: ["plans", "migrations"]
+  verbs: ["get", "list", "watch"]
+
+# Create VMInstances and VMDisks (imported disks become managed VMDisks). The
+# controller only ever gets and creates these; it never updates, patches or
+# deletes them (the sole Delete is on the Forklift VirtualMachine below), so
+# least privilege withholds those verbs.
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["vminstances", "vmdisks"]
+  verbs: ["get", "list", "watch", "create"]
+
+# Clone DataVolumes into the tenant (cross-namespace adoption)
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes"]
+  verbs: ["get", "list", "watch", "update", "patch", "create"]
+
+# Authorize CDI cross-namespace clone (source PVC lives in the conversion namespace)
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes/source"]
+  verbs: ["create"]
+
+# Read source PVCs to size the cross-namespace clone, and detach the imported
+# PVCs from the Forklift VM before it is deleted (Forklift owns them by that VM
+# with blockOwnerDeletion, so without this the migrated data is garbage-collected
+# along with the VM the adoption replaces)
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "update", "patch"]
+
+# Emit Events on imported VMs so adoption outcomes are visible via
+# `kubectl describe` / the dashboard, not only in the controller log
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]

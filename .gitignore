@@ -150,3 +150,7 @@ packages/core/platform/images/migrations/etcd-operator-crds/
 /srv1/
 /srv2/
 /srv3/
+
+# Personal French-language project summary for the vm-import work. Kept local
+# so it does not land in the PR alongside the tracked English docs.
+packages/apps/vm-import/docs/PROJECT_SUMMARY.fr.md

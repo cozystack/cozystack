@@ -1,0 +1,144 @@
+suite: vm-instance disk dvName override and DataVolume/PVC fallback
+
+# The disk-rendering block resolves each disk to a backing name:
+#   $dvName = disk.dvName | default "vm-disk-<disk.name>"
+# and then references it either as a dataVolume (when a DataVolume of that
+# name exists in the release namespace) or, failing that, as a bare
+# persistentVolumeClaim. Both branches are lookup-gated against the live
+# cluster, so every case seeds the cluster state with helm-unittest's
+# kubernetesProvider (the same mechanism used by hook_securitycontext_test.yaml).
+#
+# Rendering the whole VirtualMachine also trips the chart's instanceType /
+# instanceProfile existence lookups, so those are cleared and the VM is sized
+# by explicit resources instead — keeping each case focused on the disk logic
+# without needing to seed cluster-scoped instancetype objects. _cluster is the
+# private platform-injected value the nodeAffinity helper dereferences.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+set:
+  fullnameOverride: test-vm
+  _cluster: {}
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 2
+    sockets: 1
+    memory: 2Gi
+tests:
+  # dvName override, DataVolume path: the explicit dvName replaces the
+  # vm-disk-<name> convention, and the volume references that DataVolume.
+  - it: references the explicit dvName DataVolume when disk.dvName is set
+    set:
+      disks:
+        - name: system
+          dvName: imported-dv
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr:
+            group: "cdi.kubevirt.io"
+            version: "v1beta1"
+            resource: "datavolumes"
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: imported-dv
+            namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].dataVolume.name
+          value: imported-dv
+      - notExists:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim
+      # The device name still derives from disk.name, not dvName.
+      - equal:
+          path: spec.template.spec.domain.devices.disks[0].name
+          value: disk-system
+
+  # dvName unset, DataVolume path (regression guard): with no override the
+  # backing name stays vm-disk-<name> and the volume renders as a dataVolume.
+  - it: falls back to vm-disk-<name> DataVolume when disk.dvName is unset
+    set:
+      disks:
+        - name: system
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr:
+            group: "cdi.kubevirt.io"
+            version: "v1beta1"
+            resource: "datavolumes"
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: vm-disk-system
+            namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].dataVolume.name
+          value: vm-disk-system
+      - notExists:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim
+
+  # PVC-fallback branch: no DataVolume of the resolved name exists, only a
+  # PersistentVolumeClaim, so the volume references a bare persistentVolumeClaim.
+  - it: references a bare persistentVolumeClaim when no DataVolume of the resolved name exists
+    set:
+      disks:
+        - name: data
+    kubernetesProvider:
+      scheme:
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+      objects:
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: vm-disk-data
+            namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: vm-disk-data
+      - notExists:
+          path: spec.template.spec.volumes[0].dataVolume
+
+  # dvName override feeds the fallback lookup too: the explicit dvName is the
+  # name looked up, and when only a PVC of that name exists the volume
+  # references it as a persistentVolumeClaim.
+  - it: references the explicit dvName as a persistentVolumeClaim when only a PVC of that name exists
+    set:
+      disks:
+        - name: system
+          dvName: imported-pvc
+    kubernetesProvider:
+      scheme:
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+      objects:
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: imported-pvc
+            namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: imported-pvc
+      - notExists:
+          path: spec.template.spec.volumes[0].dataVolume

@@ -1,0 +1,63 @@
+suite: vm-import network mapping
+release:
+  name: my-import
+  namespace: tenant-vmlab
+templates:
+  - templates/networkmap.yaml
+tests:
+  - it: renders no NetworkMap when networkMap is empty
+    set:
+      networkMap: []
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: confines a foreign destinationNamespace to its own namespace on a tenant release
+    set:
+      networkMap:
+        - sourceId: network-1
+          destinationType: multus
+          destinationName: victim-nad
+          destinationNamespace: tenant-other
+    asserts:
+      - equal:
+          path: spec.map[0].destination.namespace
+          value: tenant-vmlab
+
+  - it: defaults destinationNamespace to the release namespace
+    set:
+      networkMap:
+        - sourceId: network-1
+          destinationType: multus
+          destinationName: my-nad
+    asserts:
+      - equal:
+          path: spec.map[0].destination.namespace
+          value: tenant-vmlab
+
+  - it: admin-directed import from a privileged namespace honors destinationNamespace
+    release:
+      name: my-import
+      namespace: cozy-vm-import
+    set:
+      networkMap:
+        - sourceId: network-1
+          destinationType: multus
+          destinationName: my-nad
+          destinationNamespace: tenant-a
+    asserts:
+      - equal:
+          path: spec.map[0].destination.namespace
+          value: tenant-a
+
+  - it: pod networks carry no namespace
+    set:
+      networkMap:
+        - sourceId: network-1
+          destinationType: pod
+    asserts:
+      - equal:
+          path: spec.map[0].destination.type
+          value: pod
+      - notExists:
+          path: spec.map[0].destination.namespace

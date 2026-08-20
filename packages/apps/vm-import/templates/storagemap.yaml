@@ -1,0 +1,23 @@
+{{- if .Values.storageMap }}
+apiVersion: forklift.konveyor.io/v1beta1
+kind: StorageMap
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  map:
+    {{- range .Values.storageMap }}
+    - source:
+        id: {{ .sourceId | quote }}
+      destination:
+        storageClass: {{ .storageClass | quote }}
+    {{- end }}
+  provider:
+    source:
+      name: {{ .Release.Name }}-source
+      namespace: {{ .Release.Namespace }}
+    destination:
+      name: {{ .Release.Name }}-destination
+      namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -1,0 +1,92 @@
+suite: VMware import is opt-in on the iaas bundle
+# The Forklift operator ships its own CRDs and broad RBAC, and the adoption
+# controller holds cluster-wide create on VMInstances. That surface is worth it
+# for a cluster migrating off vSphere and pure cost for every other iaas
+# cluster, so the packages are gated behind bundles.enabledPackages rather than
+# installed by default -- an existing iaas cluster must not pick them up merely
+# by upgrading.
+templates:
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: does not install Forklift or the adoption controller by default
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+    asserts:
+      # documentSelector fails the test outright when nothing matches, so this
+      # doubles as proof the bundle rendered -- without it the three absence
+      # assertions below would hold vacuously.
+      - equal:
+          path: kind
+          value: Package
+        documentSelector:
+          path: metadata.name
+          value: cozystack.vm-instance-application
+      # Absence cannot be asserted per-package here: a documentSelector that
+      # matches nothing fails the assertion rather than yielding a count of
+      # zero, and `containsDocument` + `not` passes as long as any one document
+      # differs. Pinning the total instead makes flipping any of the three back
+      # to an unconditional package.default show up as a count change.
+      - hasDocuments:
+          count: 14
+
+  - it: installs them once they are listed in enabledPackages
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.forklift
+          - cozystack.vm-adoption-controller
+          - cozystack.vm-import-application
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+        documentSelector:
+          path: metadata.name
+          value: cozystack.forklift
+      - equal:
+          path: kind
+          value: Package
+        documentSelector:
+          path: metadata.name
+          value: cozystack.vm-adoption-controller
+      - equal:
+          path: spec.variant
+          value: kubevirt
+        documentSelector:
+          path: metadata.name
+          value: cozystack.vm-import-application
+      # Exactly the three packages above are added, nothing else moves.
+      - hasDocuments:
+          count: 17
+
+  - it: keeps disabledPackages winning over enabledPackages
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.forklift
+        disabledPackages:
+          - cozystack.forklift
+    asserts:
+      # 14 is the count with nothing enabled; forklift being suppressed by
+      # disabledPackages is what keeps it there.
+      - hasDocuments:
+          count: 14

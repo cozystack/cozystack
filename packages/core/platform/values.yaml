@@ -3,6 +3,13 @@ sourceRef:
   name: cozystack-platform
   namespace: cozy-system
   path: /
+# Operator-supplied images that Cozystack cannot ship itself.
+migration:
+  # Reference to a VDDK (VMware Virtual Disk Development Kit) image, built by an
+  # operator who holds a VMware licence and pushed somewhere the cluster can pull
+  # from. Required for VMware imports and for nothing else; empty means that path
+  # is unavailable. The `vddk-image` key in the cozystack ConfigMap overrides this.
+  vddkImage: ""
 migrations:
   enabled: false
   # The image digest is NOT hand-edited alongside targetVersion. The release
