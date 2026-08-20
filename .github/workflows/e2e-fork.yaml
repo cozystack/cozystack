@@ -97,11 +97,13 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           HEAD_SHA:   ${{ github.event.workflow_run.head_sha }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           RUN_ID:     ${{ github.event.workflow_run.id }}
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         with:
           script: |
-            const { HEAD_SHA, RUN_ID, CONCLUSION } = process.env;
+            const { HEAD_SHA, HEAD_OWNER, HEAD_BRANCH, RUN_ID, CONCLUSION } = process.env;
             const { owner, repo } = context.repo;
             // Validate the SHA before it flows into a status target / image tag.
             if (!/^[0-9a-f]{40}$/.test(HEAD_SHA)) {
@@ -194,37 +196,43 @@ jobs:
 
             // Resolve the PR number for this commit (workflow_run.pull_requests
             // is empty for forks). Only OPEN PRs count — never fall back to a
-            // closed/merged association, which a fork could point at a stale
-            // commit to smuggle a green through.
-            // Paginated, like every other lookup in this script: the check
-            // below counts open associations, so reading only the first page
-            // would miss the second PR in exactly the case it exists to catch.
+            // closed/merged PR, which a fork could point at a stale commit to
+            // smuggle a green through.
+            //
+            // Resolve by the fork's head ref (owner:branch, both from the
+            // workflow_run event), NOT by commit association. listPullRequests-
+            // AssociatedWithCommit reads an index that lags minutes — longer for
+            // forks — behind a head force-push, so a freshly rebased fork PR reads
+            // back zero associations and this guard fails it closed on a state its
+            // author cannot clear by pushing again. pulls.list by head ref is
+            // answered from the live PR table, so it returns the PR the instant the
+            // push lands. Paginated, like every other lookup in this script: the
+            // check below counts open PRs, so reading only the first page would
+            // miss the second PR in exactly the case it exists to catch.
+            const headLabel = `${HEAD_OWNER}:${HEAD_BRANCH}`;
             const assoc = await github.paginate(
-              github.rest.repos.listPullRequestsAssociatedWithCommit,
-              { owner, repo, commit_sha: HEAD_SHA, per_page: 100 },
+              github.rest.pulls.list,
+              { owner, repo, state: 'open', head: headLabel, per_page: 100 },
             );
-            // Exactly one PR AT this head, not the first association. A single
-            // branch may have several open PRs against different base branches,
-            // and every decision below is taken from whichever PR this picks:
-            // the merge-ref checkout, the docs-only verdict, the TIA file list,
-            // while the status is written to the head SHA all of them share.
+            // Exactly one PR AT this head SHA, not merely on this branch. A single
+            // fork branch may have several open PRs against different base
+            // branches, and every decision below is taken from whichever PR this
+            // picks: the merge-ref checkout, the docs-only verdict, the TIA file
+            // list, while the status is written to the head SHA all of them share.
             // Taking the first would let a verdict computed for one PR satisfy
             // another, including a docs-only green for a PR whose own base sees
             // code. The HEAD^2 == head_sha assert downstream cannot catch that:
             // it holds for every PR sitting on the commit.
             //
-            // The head_sha filter is what keeps the guard as narrow as its
-            // reason. This endpoint returns PRs ASSOCIATED with the commit,
-            // which per the API docs means any open PR whose branch contains
-            // it, not only those pointing at it. Without the filter, stacking
-            // one branch on another and opening both PRs counts as two, and
-            // the lower PR fails closed on a state its author cannot clear by
-            // pushing. That is the same unfixable red this workflow refuses to
-            // inflict elsewhere. Two PRs genuinely at the same head still fail
-            // closed, which is the case the guard exists for.
-            const open = assoc.filter(p => p.state === 'open' && p.head && p.head.sha === HEAD_SHA);
+            // The head.sha filter is what keeps the guard as narrow as its reason.
+            // pulls.list returns every open PR opened from this head ref; a stale
+            // privileged run whose ref has since moved to a new SHA would otherwise
+            // satisfy the count against the wrong commit. With the filter, only a
+            // PR pointing AT the built SHA passes. Two PRs genuinely at the same
+            // head still fail closed, which is the case the guard exists for.
+            const open = assoc.filter(p => p.head && p.head.sha === HEAD_SHA);
             if (open.length !== 1) {
-              await decide('failure', `expected exactly one open PR for ${HEAD_SHA}, found ${open.length}`);
+              await decide('failure', `expected exactly one open PR at ${HEAD_SHA} for head ${headLabel}, found ${open.length}`);
               return;
             }
             const pr = open[0];
