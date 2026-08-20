@@ -156,6 +156,7 @@ kafka_run() {
     boot="$(kafka_bootstrap "$app")"
     kubectl -n "$NAMESPACE" run "kafka-cli-$RANDOM" \
         --image="$KAFKA_IMAGE" --restart=Never --rm -i --quiet \
+        --pod-running-timeout=5m \
         --command -- bash -c "set -eu
 BOOT=$(printf %q "$boot")
 BIN=$(printf %q "$KAFKA_BIN")
@@ -205,6 +206,28 @@ topic_message_count() {
         done
         echo "$total"
     ' 2>/dev/null | tr -d '[:space:]'
+}
+
+# Dump every record of the demo topic as "partition<TAB>key<TAB>value" lines,
+# partitions in ascending order and records in offset order within each
+# partition. Deterministic, so the same topic dumps byte-identically twice -
+# a source dump captured before backup and the restored dump can be diffed to
+# prove keys, values, partition placement and per-partition ordering survived
+# the round-trip, which a bare offset count cannot. Assumes begin offset 0
+# (every topic in this demo is freshly created); GNU sed renders "\t" as a tab.
+topic_dump() {
+    local app="$1"
+    kafka_run "$app" '
+        ends=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "$TOPIC" --time -1 2>/dev/null) || exit 0
+        [ -n "$ends" ] || exit 0
+        printf "%s\n" $ends | sort -t: -k2 -n | while IFS=: read -r t p end; do
+            [ "${end:-0}" -gt 0 ] || continue
+            "$BIN"/kafka-console-consumer.sh --bootstrap-server "$BOOT" --topic "$TOPIC" \
+                --partition "$p" --offset 0 --max-messages "$end" --timeout-ms 60000 \
+                --property print.key=true --property print.timestamp=false \
+                | sed "s/^/$p\t/"
+        done
+    ' 2>/dev/null
 }
 
 # Create the "<app>-backup-s3" Secret the Job strategy Pod consumes, from the

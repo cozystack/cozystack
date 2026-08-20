@@ -42,14 +42,26 @@ log_substep "Waiting for in-place RestoreJob to Succeed..."
 wait_for_field restorejob "$RESTOREJOB_INPLACE_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 600 Failed
 
 log_substep "Verifying topic records are restored..."
+[[ -f "$SCRIPT_DIR/.source-dump.txt" ]] || { log_error "missing $SCRIPT_DIR/.source-dump.txt; run 04-create-kafka.sh first"; exit 1; }
 count=$(topic_message_count "$KAFKA_NAME")
 # Guard the comparison: a failed offsets lookup returns an empty string, which
 # must not be mistaken for a successful restore of zero records.
 [[ "$count" =~ ^[0-9]+$ ]] || { log_error "non-numeric record count: '${count}' (topic missing?)"; exit 1; }
-if (( count < MESSAGE_COUNT )); then
-    log_error "Record count after in-place restore is ${count}; expected ${MESSAGE_COUNT}"
+# Exact count, not >=: restore replays unconditionally and appends into a
+# non-empty topic, so a double-replay (e.g. the strategy Job's backoffLimit
+# retry) lands 2x the records and must fail here, not pass.
+if (( count != MESSAGE_COUNT )); then
+    log_error "Record count after in-place restore is ${count}; expected exactly ${MESSAGE_COUNT}"
     exit 1
 fi
-log_success "In-place restore verified: ${count} record(s) in '${TOPIC}'."
+# Content, not just count: diff the restored topic against the source snapshot
+# from step 04. Byte-equality of the per-partition ordered dumps proves keys,
+# values, partition placement and ordering survived - the fidelity claims the
+# README makes.
+if ! diff -u "$SCRIPT_DIR/.source-dump.txt" <(topic_dump "$KAFKA_NAME"); then
+    log_error "Restored content does not match the source snapshot"
+    exit 1
+fi
+log_success "In-place restore verified: ${count} record(s) in '${TOPIC}', content matches source."
 
 echo -e "\n${GREEN}${BOLD}Next:${NC} ./07-restore-to-copy.sh"
