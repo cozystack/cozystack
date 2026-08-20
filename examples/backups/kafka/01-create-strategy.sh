@@ -10,9 +10,11 @@
 #            every partition file with kafka-console-producer
 #
 # The consistency model is a frozen-end-offset cut: kafka-get-offsets --time -1
-# is read ONCE per partition at backup start, and the consumer drains only up
-# to that offset, so everything produced during the backup is excluded and all
-# partitions are captured as of the same instant. This is a logical DATA
+# is read ONCE per partition, and the consumer drains only up to that offset,
+# so everything produced after the read is excluded. The reads happen per
+# topic (inside the topic loop), so the cut is atomic across a topic's own
+# partitions but NOT across topics - Kafka offers no cross-topic guarantee
+# regardless. This is a logical DATA
 # backup: topic configs, ACLs, SCRAM users, and consumer-group offsets are NOT
 # captured, and restore re-produces records so they receive fresh offsets.
 #
@@ -124,6 +126,10 @@ spec:
               # connection to the real port with --connect-to, so the signed,
               # sent and server-side Host all agree on the bare host. This is
               # also correct on curl >= 7.87, which drops the default port too.
+              # Demo-scope parse: handles the "scheme://host[:port]" that
+              # BucketInfo advertises. An IPv6 literal ([::1]:8333) or an
+              # endpoint carrying a path prefix would be mis-split - out of
+              # scope here.
               SCHEME="\${BASE%%://*}"
               HOSTPORT="\${BASE#*://}"; HOSTPORT="\${HOSTPORT%%/*}"
               HOST="\${HOSTPORT%%:*}"
@@ -151,8 +157,10 @@ spec:
 
               if [ "\${MODE}" = backup ]; then
                 # Resolve the topic list: explicit TOPICS (comma/space
-                # separated) or every non-internal topic (Kafka's own
-                # bookkeeping topics start with "_").
+                # separated) or every non-internal topic. Kafka's internal
+                # topics are double-underscore (__consumer_offsets,
+                # __transaction_state); single-underscore names such as
+                # _schemas are user data and must not be filtered.
                 if [ -n "\${TOPICS}" ]; then
                   TLIST=\$(printf '%s' "\${TOPICS}" | tr ', ' '  ')
                 else
@@ -164,7 +172,7 @@ spec:
                   # never a silently swallowed failure that would PUT an empty
                   # tarball and report success.
                   raw=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --list)
-                  TLIST=\$(printf '%s\n' "\${raw}" | grep -v '^_' || true)
+                  TLIST=\$(printf '%s\n' "\${raw}" | grep -v '^__' || true)
                 fi
                 echo "backing up topics [\${TLIST}] from \${BOOT}"
                 MANIFEST="\${WORK}/manifest.txt"
