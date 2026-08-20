@@ -58,14 +58,21 @@ log_substep "Waiting for to-copy RestoreJob to Succeed..."
 wait_for_field restorejob "$RESTOREJOB_TOCOPY_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 600 Failed
 
 log_substep "Verifying topic records exist on the copy..."
+[[ -f "$SCRIPT_DIR/.source-dump.txt" ]] || { log_error "missing $SCRIPT_DIR/.source-dump.txt; run 04-create-kafka.sh first"; exit 1; }
 count=$(topic_message_count "$KAFKA_RESTORE_NAME")
 # Same numeric guard as step 06: an empty result means the topic is missing,
 # not a successful restore of zero records.
 [[ "$count" =~ ^[0-9]+$ ]] || { log_error "non-numeric record count on copy: '${count}' (topic missing?)"; exit 1; }
-if (( count < MESSAGE_COUNT )); then
-    log_error "Record count on copy is ${count}; expected ${MESSAGE_COUNT}"
+# Exact count, not >=: see step 06 - a double-replay would inflate this.
+if (( count != MESSAGE_COUNT )); then
+    log_error "Record count on copy is ${count}; expected exactly ${MESSAGE_COUNT}"
     exit 1
 fi
-log_success "To-copy restore verified: ${count} record(s) in '${TOPIC}' on '${KAFKA_RESTORE_NAME}'."
+# Content, not just count: the copy must match the source snapshot byte-for-byte.
+if ! diff -u "$SCRIPT_DIR/.source-dump.txt" <(topic_dump "$KAFKA_RESTORE_NAME"); then
+    log_error "Restored content on copy does not match the source snapshot"
+    exit 1
+fi
+log_success "To-copy restore verified: ${count} record(s) in '${TOPIC}' on '${KAFKA_RESTORE_NAME}', content matches source."
 
 echo -e "\n${GREEN}${BOLD}Next:${NC} ./cleanup.sh"
