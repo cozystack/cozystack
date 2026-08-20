@@ -52,6 +52,7 @@ var tapCmdFlags struct {
 	secret       string
 	tag          string
 	kubeconfig   string
+	index        string
 	skipValidate bool
 }
 
@@ -207,7 +208,11 @@ one command.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		ref, err := parseOCIRef(args[0])
+		target, err := resolveTapTarget(args[0], defaultIndexRef(tapCmdFlags.index))
+		if err != nil {
+			return err
+		}
+		ref, err := parseOCIRef(target)
 		if err != nil {
 			return err
 		}
@@ -372,6 +377,7 @@ func init() {
 	tapCmd.Flags().StringVar(&tapCmdFlags.secret, "secret", "", "Name of a pull-credential Secret in cozy-system for a private repository")
 	tapCmd.Flags().StringVar(&tapCmdFlags.tag, "tag", "", "OCI tag to tap (overrides a tag in the reference; defaults to latest)")
 	tapCmd.Flags().StringVar(&tapCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
+	tapCmd.Flags().StringVar(&tapCmdFlags.index, "index", "", "Index location for resolving a short name (local dir or oci:// ref; defaults to COZYPKG_INDEX)")
 	tapCmd.Flags().BoolVar(&tapCmdFlags.skipValidate, "skip-validate", false, "Skip validating the artifact before tapping")
 	untapCmd.Flags().StringVar(&tapCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
 	untapCmd.Flags().BoolVar(&untapConfirmFlag, "yes", false, "Untap even if a Package from this source is still installed")

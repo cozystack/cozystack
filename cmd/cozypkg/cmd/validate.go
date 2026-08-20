@@ -17,6 +17,7 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -25,11 +26,16 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )
+
+// ociPullTimeout bounds a `flux pull artifact` so an unreachable registry
+// fails with a legible error instead of hanging indefinitely.
+const ociPullTimeout = 2 * time.Minute
 
 // Severity classifies a validation finding.
 type Severity string
@@ -470,7 +476,13 @@ func pullOCIArtifact(ref string) (string, func(), error) {
 		return "", func() {}, err
 	}
 	cleanup := func() { os.RemoveAll(dir) }
-	out, err := exec.Command("flux", "pull", "artifact", ref, "--output", dir).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), ociPullTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "flux", "pull", "artifact", ref, "--output", dir).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		cleanup()
+		return "", func() {}, fmt.Errorf("timed out after %s pulling artifact %q", ociPullTimeout, ref)
+	}
 	if err != nil {
 		cleanup()
 		return "", func() {}, fmt.Errorf("failed to pull artifact %q: %v\n%s", ref, err, strings.TrimSpace(string(out)))
