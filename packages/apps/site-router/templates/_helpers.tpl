@@ -88,6 +88,63 @@ the api-key Secret and the cloud-init seed never diverge on first install.
 {{- end -}}
 
 {{/*
+Build the CDI `source.registry.url` for the appliance boot disk from the stamped
+reference in images/vyos-router-disk.tag, passed in as a string.
+
+THE TAG IS DROPPED, THE DIGEST IS KEPT. CDI's docker:// transport cannot parse a
+reference that carries both, and rejects it outright:
+
+    Could not parse image: Docker references with both a tag and digest
+    are currently not supported
+
+which surfaces as a DataVolume stuck in ImportInProgress with printableStatus
+DataVolumeError and an importer that restarts forever — never as a bad
+reference. Nothing is lost by dropping the tag: the digest is what pins the
+appliance, and the tag only mirrors information the digest already carries.
+
+The stamp itself stays `<repo>:<tag>@sha256:<digest>` — that shape is what
+hack/lib/image-refs.sh greps for, and the promote, retag and mirror tooling all
+read it from there (docs/agents/image-refs.md), so normalising the stamp would
+desync them. This chart is the only consumer in the tree that feeds a stamped
+ref into a CDI `source.registry`, so the fix belongs here, at the point of
+consumption. Every other consumer keeps the full stamp: kubelet parses
+tag+digest happily, and the e2e bring-up of remote-site B applies the same
+drop-the-tag normalisation in shell (hack/e2e-chainsaw/site-router).
+
+A reference with no digest is REJECTED rather than passed through. The committed
+default is the digest-less `…/vyos-router-disk:v0.0.0` placeholder, which no
+build path in this repo ever publishes (see docs/image-lifecycle.md): rendering
+it produces a DataVolume that imports nothing for minutes and leaves the gateway
+on a VM that never boots, so the render is failed here instead, naming the cause
+and the remedy. Consequence worth knowing: while the placeholder is committed,
+the chart does not render in-tree at all — which is why tests/dv_test.yaml
+asserts the guard and hack/site-router-appliance-ref.bats asserts the rendered
+URL against a stamped reference.
+*/}}
+{{- define "site-router.applianceDiskUrl" -}}
+{{- $ref := . | trim -}}
+{{- if not $ref -}}
+{{-   fail "empty images/vyos-router-disk.tag: the VyOS appliance containerDisk has not been stamped by a build — install a Cozystack build whose CI stamped it, or stamp it locally with `make -C packages/system/vyos-router-image image`" -}}
+{{- end -}}
+{{- $parts := splitList "@" $ref -}}
+{{- if eq (len $parts) 1 -}}
+{{-   fail (printf "images/vyos-router-disk.tag holds %q, which carries no @sha256: digest: the VyOS appliance containerDisk has not been stamped by a build, and CDI cannot import an unpinned appliance — install a Cozystack build whose CI stamped it, or stamp it locally with `make -C packages/system/vyos-router-image image`" $ref) -}}
+{{- end -}}
+{{- $digest := index $parts 1 -}}
+{{- if or (ne (len $parts) 2) (not (regexMatch `^sha256:[0-9a-f]{64}$` $digest)) -}}
+{{-   fail (printf "images/vyos-router-disk.tag holds %q, which is not a digest-pinned image reference (<repo>[:<tag>]@sha256:<64 hex digits>) — re-stamp it with `make -C packages/system/vyos-router-image image` or install a Cozystack build whose CI stamped it" $ref) -}}
+{{- end -}}
+{{- /*
+  Strip a trailing tag from the repository. The tag is the last `:`-separated
+  component of the last path segment, so the pattern requires the run after the
+  `:` to be free of `/` — that is what keeps a registry port (`host:5000/repo`,
+  no tag) from being mistaken for one.
+*/ -}}
+{{- $repo := regexReplaceAll `:[^:/]+$` (index $parts 0) "" -}}
+{{- printf "docker://%s@%s" $repo $digest -}}
+{{- end -}}
+
+{{/*
 Fail-fast validation of the tenant-settable values that flow into VyOS `set`
 commands, so a value with an embedded quote/newline/space cannot terminate a
 command and inject arbitrary VyOS config (e.g. an attacker's own API key). Run
