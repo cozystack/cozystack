@@ -47,4 +47,11 @@ count=$(topic_message_count "$KAFKA_NAME")
 [[ "$count" == "$MESSAGE_COUNT" ]] || { log_error "expected ${MESSAGE_COUNT} messages in '${TOPIC}', got '${count}'"; exit 1; }
 log_success "Topic '${TOPIC}' holds ${count} record(s)."
 
+# Snapshot the source content so the restore steps can diff against it and
+# prove the records - not just their count - round-tripped. cleanup.sh removes
+# this file.
+topic_dump "$KAFKA_NAME" > "$SCRIPT_DIR/.source-dump.txt"
+dumped=$(wc -l < "$SCRIPT_DIR/.source-dump.txt" | tr -d '[:space:]')
+[[ "$dumped" == "$MESSAGE_COUNT" ]] || { log_error "source dump has ${dumped} records, expected ${MESSAGE_COUNT}"; exit 1; }
+
 echo -e "\n${GREEN}${BOLD}Next:${NC} ./05-create-backupjob.sh"
