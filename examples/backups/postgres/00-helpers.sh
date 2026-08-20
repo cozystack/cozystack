@@ -129,8 +129,30 @@ wait_hr_ready() {
         fi
         if [[ $elapsed -ge $timeout ]]; then
             log_error "Timeout waiting for HelmRelease/$name to become Ready:"
+            # Every condition, not just Ready, and the release history behind
+            # them. A failed install is retried on an interval, so by the time
+            # this fires the Ready message may already describe the retry in
+            # progress rather than the failure that caused it; the Released
+            # condition and the history entry keep the reason.
             kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' >&2 2>/dev/null || true
+                -o jsonpath='{range .status.conditions[*]}  {.type}={.status} ({.reason}): {.message}{"\n"}{end}' >&2 2>/dev/null || true
+            # `|| true` is load-bearing under the caller's set -e: a variable
+            # assignment takes the exit status of its command substitution, and
+            # this branch is reachable with the release ABSENT -- the existence
+            # check above gates only the ready/stalled reads, so a HelmRelease
+            # that never appeared falls straight through to here and `kubectl
+            # get` exits 1 on it. Without the guard the script dies at this
+            # line and neither the message below nor the return runs.
+            local hist
+            hist="$(kubectl -n "$NAMESPACE" get hr "$name" \
+                -o jsonpath='{range .status.history[*]}  history: {.status} {.chartVersion} {.lastDeployed}{"\n"}{end}' 2>/dev/null || true)"
+            # Empty here is one case, not two: kubectl defaults
+            # --allow-missing-template-keys to true, so a range over a missing
+            # .status.history prints nothing and exits 0 exactly as an existing
+            # release with no history yet does. The line names the emptiness
+            # rather than distinguishing causes, because a blank in a failure
+            # dump reads as a dump that broke.
+            if [[ -n "${hist//[[:space:]]/}" ]]; then printf '%s\n' "$hist" >&2; else echo "  history: (none recorded)" >&2; fi
             return 1
         fi
         sleep 5

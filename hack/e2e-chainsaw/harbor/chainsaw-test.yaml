@@ -140,14 +140,18 @@ spec:
 
   - name: wait-helmrelease-ready
     try:
-    # 10m, not the standard 5-6m: harbor-test readiness is gated by the inline
-    # RedisFailover, whose three sentinels only go Ready after the spotahome
-    # redis-operator elects a master and rewrites their config. Normal
-    # convergence is 2-3m, but on a CPU-committed runner the tail runs long
-    # (steal-induced probe misses, documented in pull-requests.yaml). Matches
-    # the harbor-test-system budget below and the justified-longer-wait
-    # allowance in docs/agents/e2e-testing.md. If this still times out, the
-    # catch block's redis-operator log shows which reconcile gate stalled.
+    # 10m because harbor-test readiness is gated by the inline RedisFailover,
+    # whose three sentinels only go Ready after the spotahome redis-operator
+    # elects a master and rewrites their config; normal convergence is 2-3m,
+    # but on a CPU-committed runner the tail runs long (steal-induced probe
+    # misses, documented in pull-requests.yaml). Not a model to copy: 10m is
+    # also exactly this release's install timeout, and at equal budgets the
+    # assert expires first, because its clock starts when the step runs while
+    # the install's starts later. The rule, and the scan that enumerates the
+    # non-conformers, live in docs/agents/e2e-testing.md rather than here; that
+    # section deliberately carries no list, because a list of them goes stale
+    # silently while the scan does not. If this still times out, the catch
+    # block's redis-operator log shows which reconcile gate stalled.
     - assert:
         timeout: 10m
         resource:
@@ -187,6 +191,14 @@ spec:
 
   - name: wait-system-and-deployments
     try:
+    # 10m against a 900s floor, so five minutes short rather than equal: this
+    # release is not generated from an ApplicationDefinition and carries no
+    # cozystack-api install timeout. It is rendered by the app chart itself,
+    # packages/apps/harbor/templates/harbor.yaml, which sets spec.timeout 15m.
+    # A failed install here therefore reports as a bare assert timeout while
+    # the release is still working. Not raised here: every wait under this
+    # floor needs the same repair, and the rule plus the scan that enumerates
+    # them live in docs/agents/e2e-testing.md.
     - assert:
         timeout: 10m
         resource:
