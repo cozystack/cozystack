@@ -55,9 +55,10 @@ E2E_CAPTURE_PREVLOGS_LIB=1
   [ "$(printf '%s\n' "$out" | grep -c .)" -eq 2 ]
   printf '%s\n' "$out" | grep -q '^tenant-test|mariadb-test-0|mariadb|container|3$'
   printf '%s\n' "$out" | grep -q '^tenant-test|mariadb-test-0|init-datadir|init|2$'
-  # `! cmd` is vacuous under cozytest's `set -e` (errexit is suppressed for a
-  # `!`-negated pipeline), so a filter regression that let these rows through
-  # would not fail the test. Assert the absence via `if cmd; then ...; false`.
+  # `! cmd` is vacuous under cozytest's `set -e` (errexit is suppressed for
+  # any command whose status is inverted with `!`), so a filter regression
+  # that let these rows through would not fail the test. Assert the absence
+  # via `if cmd; then ...; false`.
   if printf '%s\n' "$out" | grep -q 'mariadb-test-1'; then echo "FAIL: must drop the zero-restart replica"; false; fi
   if printf '%s\n' "$out" | grep -q 'cozy-system'; then echo "FAIL: must drop the zero-restart system pod"; false; fi
 }

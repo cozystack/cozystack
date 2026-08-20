@@ -142,6 +142,12 @@ Consequences to keep in mind when touching either workflow:
 
 **Security prerequisite (repo setting).** The split is only safe if fork runs require maintainer approval before they execute. The repository must keep **Settings → Actions → "Require approval for all outside collaborators"** enabled, so a fork's `pull_request` run — which produces the artifacts `e2e-fork.yaml` consumes — cannot run untrusted code (or feed the privileged run) without a maintainer's go-ahead.
 
+### 11. Never negate a BATS assertion with `!`
+
+An assertion spelled `! cmd` inside an `@test` body cannot fail, whichever runner executes it. POSIX exempts a command whose return value is inverted with `!` from `set -e`, so the failing status is dropped where it is produced. `hack/cozytest.sh` then appends `return 0` to every test function, so it never resurfaces as the test's own status. The `bats` binary looks stricter and mostly is not: its ERR trap carries the identical exemption, and `bash -c 'set -eE; trap "echo TRAP" ERR; ! true; echo REACHED'` prints `REACHED`, runs no trap, and exits zero. The one shape `bats` does catch is a negated assertion standing **last** in the body, where the inverted status is what the function returns — put any statement below it and `bats` passes the test too. This is the same family as the `EXIT`-trap ban in §3, and unlike that one it is not settled by preferring the stricter runner, because there is no stricter runner to prefer.
+
+The exemption is also wider than the "negated pipeline" phrasing found in older comments: a bare `! true`, a negated `[ … ]`, one inside a `for` body, and one following `;`, `&&` or `||` all pass. Write the absence so that it fails — `if cmd; then echo "FAIL: <what must not have happened>"; false; fi` — and let the `false` carry the verdict. `hack/bats-no-negated-assert.bats` enforces this across every `hack/**/*.bats`, subdirectories included. Inverted **conditions** (`if !`, `elif !`, `while !`, `until !`) are untouched, because `set -e` is not what decides a condition. `[ ! -f x ]` is untouched for a different reason and stays a normal, failing assertion: the `!` there is an operator of `test`, not negation of a command, so nothing exempts its status. The scan is lexical, with the limits that implies: a statement assembled at runtime is invisible to it, and the form is counted inside a heredoc or a fixture string where no command exists — which reports a file holding nothing rather than passing one that does, and is why that guard's own fixtures build the token from a separate `printf` argument.
+
 ## Chainsaw v0.2.15 gotchas
 
 The suite is pinned to Chainsaw **v0.2.15** (the latest release as of May 2026); none of the traps below are fixed upstream yet, so the workarounds stay until a bump is possible. Each one has already cost a debugging session — this is the "no one gets it right the first time" list, worth a read before writing a new assert.
@@ -165,6 +171,7 @@ The suite is pinned to Chainsaw **v0.2.15** (the latest release as of May 2026);
 6. Standard HR-Ready assert timeout is **5–6m**; longer waits (harbor 10m, NFS 10m, VM image pulls, platform-wide install 15m) are justified in-line.
 7. Failure path attaches scoped diagnostics via a `catch:` block, never a silent pass.
 8. If it touches parent-HR behavior, add the `status.history` remediation guard (`hack/e2e-chainsaw/_lib/remediation-guard.sh`).
+9. No BATS assertion begins with `!` — an inverted status is exempt from `set -e` and the assertion cannot fail; use `if cmd; then echo "FAIL: …"; false; fi`.
 
 ## In-flight direction (not yet the merged standard)
 
