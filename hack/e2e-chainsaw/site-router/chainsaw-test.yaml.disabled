@@ -248,7 +248,8 @@ spec:
         The reachability / MSS / negative-security scripts drive probes from B's
         guest and read A's firewall counters through this pod (see _probe-lib.sh).
         Created before establish-tunnel because that step also pushes B's IPsec
-        over B's mgmt API through it. Readiness gates on sshpass+curl+python3.
+        over B's mgmt API through it. Readiness gates on sshpass+curl, the two
+        tools the probes actually run inside the pod.
       try:
         - apply:
             file: probe-driver.yaml
