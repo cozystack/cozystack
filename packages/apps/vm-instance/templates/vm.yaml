@@ -41,6 +41,11 @@ spec:
         ovn.kubernetes.io/mac_address: {{ $ovnIP.spec.macAddress | quote }}
         ovn.kubernetes.io/ip_address: {{ $ovnIP.spec.ipAddress | quote }}
         {{- end }}
+        {{- range $net := $networks }}
+        {{- if $net.ipAddress }}
+        {{ printf "%s.%s.ovn.kubernetes.io/ip_address" $net.name $.Release.Namespace }}: {{ $net.ipAddress | quote }}
+        {{- end }}
+        {{- end }}
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}
     spec:

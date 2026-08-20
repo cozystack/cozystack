@@ -14,6 +14,7 @@
 ## @typedef {struct} Network - Network to attach the VM to.
 ## @field {string} [name] - Network attachment name.
 ## @x-cozystack-options {source: network}
+## @field {string} [ipAddress] - Static IPv4 address for this interface. Empty lets kube-ovn IPAM allocate one. The address must belong to the subnet CIDR; kube-ovn rejects one outside it.
 
 ## @typedef {struct} GPU - GPU device configuration.
 ## @field {string} name - The name of the GPU resource to attach.
