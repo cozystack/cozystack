@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -602,5 +603,119 @@ func TestGenerateGitRepository_WithSecret(t *testing.T) {
 	}
 	if obj.Spec.SecretRef.Name != "my-git-creds" {
 		t.Errorf("expected SecretRef.Name %q, got %q", "my-git-creds", obj.Spec.SecretRef.Name)
+	}
+}
+
+// The system namespace memory flags are the only ones on this binary whose bad values do
+// not surface here at all: a limit and a request that parse but contradict each other
+// produce a LimitRange the API server rejects, once per system namespace, on every Package
+// reconcile, with nothing in the error pointing back at a flag. Each branch below is a way
+// that has happened or could.
+func TestParseSystemNamespaceMemory(t *testing.T) {
+	tests := []struct {
+		name        string
+		rawLimit    string
+		rawRequest  string
+		wantErr     bool
+		wantLimit   string
+		wantRequest string
+	}{
+		{
+			// The shipped defaults, and the only case that has to keep working
+			// byte for byte.
+			name:        "defaults",
+			rawLimit:    "4Gi",
+			rawRequest:  "32Mi",
+			wantLimit:   "4Gi",
+			wantRequest: "32Mi",
+		},
+		{
+			// Empty is the documented off switch, not a missing value: the chart
+			// leaves both keys empty unless an operator sets them.
+			name:        "empty disables both",
+			rawLimit:    "",
+			rawRequest:  "",
+			wantLimit:   "0",
+			wantRequest: "0",
+		},
+		{
+			// An explicit 0 limit is the other way to disable, and it must not
+			// trip the pair check against a request that is still set.
+			name:        "zero limit disables and ignores the request",
+			rawLimit:    "0",
+			rawRequest:  "32Mi",
+			wantLimit:   "0",
+			wantRequest: "32Mi",
+		},
+		{
+			// Supported on purpose: the container still gets memory.max, the
+			// scheduler reserves nothing. See the flag help.
+			name:        "zero request against a real limit is accepted",
+			rawLimit:    "4Gi",
+			rawRequest:  "0",
+			wantLimit:   "4Gi",
+			wantRequest: "0",
+		},
+		{
+			name:     "malformed limit",
+			rawLimit: "4GB",
+			wantErr:  true,
+		},
+		{
+			name:       "malformed request",
+			rawLimit:   "4Gi",
+			rawRequest: "thirty-two",
+			wantErr:    true,
+		},
+		{
+			// Parses as a Quantity and is meaningless as memory.
+			name:     "negative limit",
+			rawLimit: "-1Gi",
+			wantErr:  true,
+		},
+		{
+			name:       "negative request",
+			rawLimit:   "4Gi",
+			rawRequest: "-32Mi",
+			wantErr:    true,
+		},
+		{
+			// The one the API server would otherwise reject per namespace, per
+			// reconcile, forever.
+			name:       "request above limit",
+			rawLimit:   "1Gi",
+			rawRequest: "2Gi",
+			wantErr:    true,
+		},
+		{
+			// Equal is the boundary and is legal: defaultRequest may equal default.
+			name:        "request equal to limit",
+			rawLimit:    "1Gi",
+			rawRequest:  "1Gi",
+			wantLimit:   "1Gi",
+			wantRequest: "1Gi",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			limit, request, err := parseSystemNamespaceMemory(tt.rawLimit, tt.rawRequest)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseSystemNamespaceMemory(%q, %q) = %s/%s, want an error",
+						tt.rawLimit, tt.rawRequest, limit.String(), request.String())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseSystemNamespaceMemory(%q, %q): %v", tt.rawLimit, tt.rawRequest, err)
+			}
+			if want := resource.MustParse(tt.wantLimit); limit.Cmp(want) != 0 {
+				t.Errorf("limit = %s, want %s", limit.String(), want.String())
+			}
+			if want := resource.MustParse(tt.wantRequest); request.Cmp(want) != 0 {
+				t.Errorf("request = %s, want %s", request.String(), want.String())
+			}
+		})
 	}
 }
