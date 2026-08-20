@@ -345,8 +345,8 @@ The matching Talos node image is `ghcr.io/cozystack/cozystack/cozystack-nocloud:
 
 | Label | Target branch |
 |-------|---------------|
-| `backport` | the newest existing `release-X.Y` branch |
-| `backport-previous` | the second-newest existing `release-X.Y` branch |
+| `kind/backport` | the newest existing `release-X.Y` branch |
+| `kind/backport-previous` | the second-newest existing `release-X.Y` branch |
 
 Resolution is dynamic at run time, and it reads the branches themselves: the job lists the repository's branches, keeps the ones matching `release-<major>.<minor>`, and sorts them numerically descending — so `release-1.10` ranks above `release-1.9`, which a lexicographic sort gets backwards. `backport` takes the first, `backport-previous` the second, so both name a branch that exists by construction; asking for `backport-previous` when only one line exists fails the job rather than inventing a target. Nothing is derived arithmetically — an earlier version computed the previous line as `Y-1`, which named a non-existent branch whenever a minor was skipped.
 
@@ -376,7 +376,7 @@ git push origin release-X.Y  # or push to a new branch and open a PR
 To find the bot's failed comments across a batch of PRs:
 
 ```bash
-for n in $(gh pr list --search "label:backport label:backport-previous merged:>=2026-01-01" --json number --jq '.[].number'); do
+for n in $(gh pr list --search "label:kind/backport label:kind/backport-previous merged:>=2026-01-01" --json number --jq '.[].number'); do
   echo "=== #$n ==="
   gh pr view $n --json comments --jq '.comments[] | select(.author.login == "github-actions" or (.author.login | contains("backport"))) | .body' | head -20
 done
@@ -388,8 +388,8 @@ A patch release includes bugfixes for code that shipped in the corresponding min
 
 ```bash
 # 1. Inventory PRs already labeled for backport (merged but not yet on release-X.Y)
-gh pr list --search "is:merged label:backport" --limit 100
-gh pr list --search "is:merged label:backport-previous" --limit 100
+gh pr list --search "is:merged label:kind/backport" --limit 100
+gh pr list --search "is:merged label:kind/backport-previous" --limit 100
 
 # 2. List commits on main since the release branch diverged that are NOT yet on release-X.Y
 git merge-base origin/main origin/release-X.Y

@@ -54,7 +54,7 @@ on:
 # surviving run rather than a hundred queued ones, and the feature only shipped
 # 2026-05-07, on a path that delivers fixes to release lines.
 concurrency:
-  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'backport' && github.event.label.name != 'backport-previous') && '-label' || '' }}
+  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'backport' && github.event.label.name != 'backport-previous' && github.event.label.name != 'kind/backport' && github.event.label.name != 'kind/backport-previous') && '-label' || '' }}
   # Stated positively, matching the group key above. `!= 'labeled'` is equivalent
   # only while `types:` holds exactly these two, and that form fails open: adding
   # `unlabeled` or `reopened` there would hand those events cancellation in the
@@ -95,8 +95,8 @@ jobs:
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
       (
-        (github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'backport') || contains(github.event.pull_request.labels.*.name, 'backport-previous'))) ||
-        (github.event.action == 'labeled' && (github.event.label.name == 'backport' || github.event.label.name == 'backport-previous'))
+        (github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'backport') || contains(github.event.pull_request.labels.*.name, 'backport-previous') || contains(github.event.pull_request.labels.*.name, 'kind/backport') || contains(github.event.pull_request.labels.*.name, 'kind/backport-previous'))) ||
+        (github.event.action == 'labeled' && (github.event.label.name == 'backport' || github.event.label.name == 'backport-previous' || github.event.label.name == 'kind/backport' || github.event.label.name == 'kind/backport-previous'))
       )
     # GitHub API calls only — no docker, no repo toolchain: GitHub-hosted.
     runs-on: ubuntu-latest
@@ -144,8 +144,15 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const labels = pr.labels.map(l => l.name);
-            const isBackport = labels.includes('backport');
-            const isBackportPrevious = labels.includes('backport-previous');
+            // TRANSITIONAL: both spellings are accepted so the rename can land
+            // in any order relative to the org-level dosubot, which still
+            // applies the legacy names and is today the dominant applier on
+            // real backports. Once dosubot's PR labelling is switched off and
+            // the in-repo labeler is the only applier, the legacy arms here,
+            // in the `if:` gate above and in the concurrency group can all be
+            // deleted in one pass.
+            const isBackport = labels.includes('kind/backport') || labels.includes('backport');
+            const isBackportPrevious = labels.includes('kind/backport-previous') || labels.includes('backport-previous');
             
             core.setOutput('backport', isBackport ? 'true' : 'false');
             core.setOutput('backport_previous', isBackportPrevious ? 'true' : 'false');
