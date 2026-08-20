@@ -583,6 +583,9 @@ tests:
             name: vault-ca
             secret:
               secretName: keycloak-kms-proxy-vault-ca
+              items:
+                - key: ca.crt
+                  path: ca.crt
         documentSelector:
           path: kind
           value: Deployment
@@ -600,16 +603,33 @@ tests:
         root-host: example.org
         cluster-domain: cozy.local
     template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
     asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSL_CERT_FILE
+            value: /etc/kkp/vault-ca/ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: vault-ca
+            mountPath: /etc/kkp/vault-ca
+            readOnly: true
+      # Only ca.crt is projected: a cert-manager TLS Secret would otherwise hand
+      # tls.key to the proxy, and a bundle under another key would fail the mount
+      # instead of looking like an unconfigured CA at runtime.
       - contains:
           path: spec.template.spec.volumes
           content:
             name: vault-ca
             secret:
               secretName: vault-ca
-        documentSelector:
-          path: kind
-          value: Deployment
+              items:
+                - key: ca.crt
+                  path: ca.crt
 
   - it: fails when both caBundle and caSecretName are set
     set:
@@ -650,3 +670,68 @@ tests:
           any: true
           content:
             name: SSL_CERT_FILE
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+
+  # The volume and mount are pod-level, outside the vault-transit env block, so
+  # an ungated caSecretName would have the static backend mount a Secret the
+  # chart never renders — the pod then never leaves ContainerCreating and takes
+  # all Keycloak DB traffic with it.
+  - it: ignores a pre-seeded Vault CA Secret under the static backend
+    set:
+      encryption.enabled: true
+      encryption.kms.vault.caSecretName: vault-ca
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: SSL_CERT_FILE
+
+  - it: ignores an inline Vault CA bundle under the static backend
+    set:
+      encryption.enabled: true
+      encryption.kms.vault.caBundle: PEM
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    asserts:
+      # KEK Secret, ServiceAccount, Deployment, Service — no CA Secret.
+      - hasDocuments:
+          count: 4
+      - notExists:
+          path: spec.template.spec.volumes
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  # Every vault.* key is inert under the static backend, the mutual-exclusion
+  # check included: rejecting a combination that cannot reach Vault anyway would
+  # break a render that is otherwise valid.
+  - it: does not enforce Vault CA mutual exclusion under the static backend
+    set:
+      encryption.enabled: true
+      encryption.kms.vault.caSecretName: vault-ca
+      encryption.kms.vault.caBundle: PEM
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    asserts:
+      - notFailedTemplate: {}
+      - hasDocuments:
+          count: 4
