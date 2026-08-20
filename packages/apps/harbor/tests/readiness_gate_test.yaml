@@ -1,0 +1,47 @@
+suite: harbor-system HelmRelease readiness gate
+templates:
+  - templates/harbor.yaml
+
+release:
+  name: harbor
+  namespace: tenant-root
+
+# Under helm-controller v1.5.0 the harbor-system HelmRelease flips Ready as soon
+# as helm applies the CNPG Cluster CR unless a health gate is set, so a database
+# still bootstrapping would look Ready (the empty-status race). A `poller`
+# waitStrategy plus a CNPG Cluster healthCheckExpr makes the release wait for the
+# database's own Ready condition (#2642). Harbor's core/registry/portal/jobservice
+# Deployments are assessed natively by kstatus; the bundled RedisFailover exposes
+# no status subresource and cannot be gated here.
+set:
+  _namespace:
+    host: example.org
+    ingress: nginx
+    gateway: ""
+    seaweedfs: seaweedfs
+  _cluster:
+    solver: http01
+
+tests:
+  - it: uses the poller waitStrategy so healthCheckExprs are evaluated
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.waitStrategy.name
+          value: poller
+
+  - it: gates readiness on the backing CNPG Cluster
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[0].apiVersion
+          value: postgresql.cnpg.io/v1
+      - equal:
+          path: spec.healthCheckExprs[0].kind
+          value: Cluster
+      - equal:
+          path: spec.healthCheckExprs[0].current
+          value: "has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')"
+      - equal:
+          path: spec.healthCheckExprs[0].inProgress
+          value: "has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'False' && e.reason == 'ClusterIsNotReady')"

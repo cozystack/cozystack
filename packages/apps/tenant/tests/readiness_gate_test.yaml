@@ -1,0 +1,55 @@
+suite: tenant child HelmRelease readiness gates (etcd + gateway)
+templates:
+  - templates/etcd.yaml
+  - templates/gateway.yaml
+
+release:
+  name: tenant-alice
+  namespace: tenant-alice
+
+# helm-controller v1.5.0 kstatus (#2642): the etcd and gateway tenant children
+# each wrap a chart that renders a custom resource (EtcdCluster / TenantGateway).
+# Without a health gate the child HelmRelease flips Ready as soon as helm applies
+# the CR, before the operator has stood the workload up (the empty-status race).
+# A `poller` waitStrategy plus a per-CR healthCheckExpr makes each child wait for
+# its CR's real readiness, which in turn gates the parent Tenant release.
+tests:
+  - it: etcd child gates on the EtcdCluster member count
+    template: templates/etcd.yaml
+    set:
+      etcd: true
+    asserts:
+      - equal:
+          path: spec.waitStrategy.name
+          value: poller
+      - equal:
+          path: spec.healthCheckExprs[0].apiVersion
+          value: etcd-operator.cozystack.io/v1alpha2
+      - equal:
+          path: spec.healthCheckExprs[0].kind
+          value: EtcdCluster
+      - equal:
+          path: spec.healthCheckExprs[0].current
+          value: "has(status.readyMembers) && status.readyMembers == spec.replicas"
+      - equal:
+          path: spec.healthCheckExprs[0].failed
+          value: "has(status.brokenMembers) && status.brokenMembers > 0"
+
+  - it: gateway child gates on the TenantGateway Ready condition
+    template: templates/gateway.yaml
+    set:
+      gateway: true
+      host: ""
+    asserts:
+      - equal:
+          path: spec.waitStrategy.name
+          value: poller
+      - equal:
+          path: spec.healthCheckExprs[0].apiVersion
+          value: gateway.cozystack.io/v1alpha1
+      - equal:
+          path: spec.healthCheckExprs[0].kind
+          value: TenantGateway
+      - equal:
+          path: spec.healthCheckExprs[0].current
+          value: "has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')"
