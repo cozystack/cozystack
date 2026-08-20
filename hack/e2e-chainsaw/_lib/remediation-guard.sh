@@ -22,6 +22,18 @@
 # "uninstalled", 1 otherwise. Empty input is treated as "no history yet,
 # no cycle observed".
 
+# The jsonpath a caller hands to kubectl to read those statuses, one per
+# line. It lives here rather than inline at the call site so that it is a
+# named assignment in a library that sources cleanly on its own, which is
+# what lets internal/fluxcontract source this file and run the resulting
+# value against the upstream Flux type: renaming a field upstream fails that
+# test instead of turning the read into a silent empty string. How this
+# assignment may be written is pinned there rather than restated here.
+# Locally that test runs under `make test-controllers` rather than
+# `make unit-tests`; in CI both are steps of one job.
+# shellcheck disable=SC2034  # used by callers that source this file
+HELMRELEASE_HISTORY_JSONPATH='{range .status.history[*]}{.status}{"\n"}{end}'
+
 helmrelease_has_remediation_cycle() {
     statuses="$1"
     if [ -z "${statuses}" ]; then
