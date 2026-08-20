@@ -99,6 +99,34 @@ wait_for_field() {
     done
 }
 
+# Wait until a Job matched by a label selector reports .status.succeeded >= 1.
+# The chart's init Job name carries a content-hash suffix (it is a main-phase
+# immutable Job), so it cannot be waited on by a fixed name — it is found by its
+# stable selector labels instead.
+wait_for_job_succeeded_by_label() {
+    local selector="$1"
+    local namespace="$2"
+    local timeout="${3:-300}"
+
+    log_substep "Waiting for Job matching '$selector' to succeed..."
+    local elapsed=0
+    while true; do
+        local succeeded
+        succeeded=$(kubectl -n "$namespace" get jobs -l "$selector" \
+            -o jsonpath='{.items[?(@.status.succeeded>=1)].metadata.name}' 2>/dev/null || true)
+        if [[ -n "$succeeded" ]]; then
+            log_success "Job $succeeded succeeded"
+            return 0
+        fi
+        if [[ $elapsed -ge $timeout ]]; then
+            log_error "Timeout waiting for Job matching '$selector'"
+            return 1
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+}
+
 # Wait for a HelmRelease to become Ready, with an existence backstop (the
 # apps controller creates the HR asynchronously, so a bare `kubectl wait`
 # right after `kubectl apply` races it) and a fail-fast on Stalled=True —
