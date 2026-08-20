@@ -69,23 +69,33 @@ _ssh_b() {
 # read a VyOS firewall counter (packets) from A over the management API.
 #   $1 = selector: "name TUNNEL-INGRESS" | "input filter" | "forward filter"
 #   $2 = rule id, or "default" for the default-action counter
+# The response is parsed with jq, not python3. Only the curl runs in the pod: the
+# `sh -c` string closes before the pipe, so whatever follows it runs in the
+# Chainsaw script shell, which is the e2e sandbox container — ubuntu:24.04 plus
+# the Dockerfile's apt list, which carries jq and no python3 at all. A python3
+# there resolves to nothing, so every counter read returned empty and the six
+# guest_counter_* guards the negative-security gate attributes drops with could
+# never be satisfied.
 _a_counter() {
   path=$(printf '%s' "$1" | sed 's/ /","/g')
   kubectl -n "$NAMESPACE" exec -i probe-driver -- sh -c \
     "curl -k -s --max-time 15 https://$(_a_pod_ip)/show \
       --form-string 'data={\"op\":\"show\",\"path\":[\"firewall\",\"ipv4\",\"$path\"]}' \
-      --form-string 'key=$(_a_token)'" 2>/dev/null | python3 -c '
-import sys,json
-rule=sys.argv[1]
-d=json.load(sys.stdin).get("data","")
-for l in d.splitlines():
-    f=l.split()
-    if not f: continue
-    if (rule=="default" and f[0]=="default") or (rule!="default" and f[0]==rule):
-        print(f[3] if len(f)>3 else "0"); break
-else:
-    print("0")
-' "$2" 2>/dev/null
+      --form-string 'key=$(_a_token)'" 2>/dev/null |
+    jq -r --arg rule "$2" '
+      # `show firewall` prints one row per rule -- Rule Action Protocol Packets
+      # Bytes [Conditions] -- so the packet count is the fourth field. First
+      # match wins; an absent row and a short row read as 0. An unparseable
+      # body yields NO output rather than a 0, which is what lets
+      # guest_counter_flat tell a missing reading from a flat one and fail on it.
+      [ (.data // "")
+        | split("\n")[]
+        | [ splits("[[:space:]]+") ]
+        | map(select(. != ""))
+        | select(length > 0 and .[0] == $rule)
+        | (.[3] // "0")
+      ] | (.[0] // "0")
+    ' 2>/dev/null
 }
 
 # probe_from_b <proto> <dst> <port>
