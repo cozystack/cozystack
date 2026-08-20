@@ -93,9 +93,11 @@ db:
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
 
+## @field {string} [garbageThreshold] - Vacuum trigger threshold as a fraction of dead bytes per volume (e.g. "0.10"). Empty string keeps the SeaweedFS binary default (0.3). Lower values reclaim space sooner at the cost of more frequent brief per-volume read-only windows during compaction.
 ## @param {Master} [master] - Master service configuration.
 master:
   replicas: 3
+  garbageThreshold: ""
   resources: {}
   resourcesPreset: "t1.small"
 
@@ -143,9 +145,12 @@ filer:
 ## @field {map[string]Zone} [zones] - A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
 ## @field {map[string]StoragePool} [pools] - A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.
 
+## @field {int} [compactionMBps] - Per-volume-server compaction throughput cap in MB/s. 0 keeps the chart default. Size against real churn: an undersized cap lets deleted bytes outrun reclaim under heavy write load.
+## @minimum 0
 ## @param {Volume} [volume] - Volume service configuration.
 volume:
   replicas: 2
+  compactionMBps: 0
   size: 10Gi
   storageClass: ""
   diskType: ""
