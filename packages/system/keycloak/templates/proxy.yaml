@@ -19,14 +19,22 @@
   (caSecretName) or rendered here from an inline PEM (caBundle). It is exposed
   as SSL_CERT_FILE, which only redirects the system trust store — the database
   connection verifies against its own CA pool and is unaffected.
+
+  Like every other vault.* key, both are inert unless the backend is
+  vault-transit: the volume and mount below sit at pod level, so keying them off
+  an ungated caSecretName would make a static-backend Deployment mount a Secret
+  the chart never creates and wedge the proxy in ContainerCreating.
 */}}
 {{- $vaultTLS := ($kms.vault | default dict) }}
+{{- $vaultCASecret := "" }}
+{{- if eq $backend "vault-transit" }}
 {{- if and $vaultTLS.caBundle $vaultTLS.caSecretName }}
 {{- fail "encryption.kms.vault.caBundle and caSecretName are mutually exclusive — set one" }}
 {{- end }}
-{{- $vaultCASecret := $vaultTLS.caSecretName }}
-{{- if and (eq $backend "vault-transit") $vaultTLS.caBundle }}
+{{- $vaultCASecret = $vaultTLS.caSecretName | default "" }}
+{{- if $vaultTLS.caBundle }}
 {{- $vaultCASecret = "keycloak-kms-proxy-vault-ca" }}
+{{- end }}
 {{- end }}
 {{- $replicas := .Values.encryption.replicas | default 1 | int }}
 {{- if and (gt $replicas 1) (not .Values.encryption.deksetSecretName) }}
@@ -258,6 +266,13 @@ spec:
         - name: vault-ca
           secret:
             secretName: {{ . }}
+            # Project ca.crt alone. A pre-seeded Secret is often a cert-manager
+            # TLS Secret, whose tls.key has no business inside the proxy; and a
+            # bundle stored under another key fails the mount here instead of
+            # surfacing later as an opaque "unknown authority" TLS error.
+            items:
+              - key: ca.crt
+                path: ca.crt
         {{- end }}
       {{- end }}
 ---

@@ -141,9 +141,10 @@ encryption:
         secretIdKey: secret-id  # key in secretName holding the secret id
       # CA to trust when Vault is served over HTTPS by a private CA — as an
       # inline PEM (the chart renders the Secret) or as a Secret seeded
-      # beforehand holding it under key ca.crt. The two are mutually
-      # exclusive. Only the Vault client is affected: the proxy verifies the
-      # database with its own CA pool, not the system trust store.
+      # beforehand holding it under key ca.crt (only that key is mounted). The
+      # two are mutually exclusive, and both are ignored unless
+      # kms.backend=vault-transit. Only the Vault client is affected: the proxy
+      # verifies the database with its own CA pool, not the system trust store.
       caBundle: ""
       caSecretName: ""
   resources:
