@@ -1,16 +1,23 @@
-# nodeGroups (and storageClass) intentionally omitted — this is a render-side
-# test that only asserts on the KamajiControlPlane + the tenant-supplied
-# issuer AuthenticationConfiguration Secret. With the schema default `{}`,
-# the chart helper emits the default `md0` group with `minReplicas: 0` —
+# nodeGroups (and storageClass) intentionally omitted — this test asserts on the
+# KamajiControlPlane and the tenant-supplied issuer AuthenticationConfiguration
+# Secret and needs no worker node for either. It does need a serving tenant
+# control plane, because its last step waits for the release to finish
+# installing; see the kubernetes-oidc-system suite header.
+#
+# With the schema default `{}`, the chart helper emits the default `md0` group
+# with `minReplicas: 0` —
 # exactly one MachineDeployment renders (API-surface completeness) but the
 # chart no longer manages `spec.replicas`, so CAPI's defaulting webhook seeds
-# it to 0 from the autoscaler min-size annotation. Result: zero
-# KubevirtMachines, zero worker DataVolumes, no DRBD churn between CI runs
-# (see #3231).
-# Unlike the bats original, no talos.imageFactoryURL block is injected here:
-# the helper emits it only when the in-sandbox Talos image cache is up, and
-# with zero worker replicas this render-side test instantiates no DataVolume
-# imports for it to redirect — the static fixture stays equivalent.
+# it to 0 from the autoscaler min-size annotation.
+#
+# 0 is the starting value, not the steady one: the chart's own
+# cluster-autoscaler scales md0 to 1 in response to the in-tenant addon Pods
+# having no node, so a worker Machine and its DataVolume-backed disk are
+# provisioned here too. The CI evidence for that, and why it is left alone, is
+# written out once in the kubernetes-oidc-system fixture beside this one, and
+# tracked in #3739; both suites behave identically here.
+# No talos.imageFactoryURL block is injected here, for the reason given in the
+# kubernetes-oidc-system manifest.
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
 metadata:

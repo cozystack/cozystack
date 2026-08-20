@@ -1,14 +1,62 @@
-# Chainsaw port of hack/e2e-apps/kubernetes-oidc-system.bats.
-#
-# Phase-1 OIDC System-mode e2e — render-side only. Pairs with the
+# Phase-1 OIDC System-mode e2e — the rendered control plane and the cozy-realm
+# Keycloak objects, with no worker bringup. Pairs with the
 # kubernetes-oidc-customconfig suite (BYO issuer path).
 #
-# Does NOT spin up a full Kamaji control plane: that path is covered by the
+# NOT "render-side only". The last step waits for the release to finish
+# installing, and one of the hook Jobs it waits on polls for the Kamaji-issued
+# admin kubeconfig and then writes ClusterRoleBindings inside the tenant. So a
+# serving tenant control plane is a precondition of this suite passing. What it
+# still does not do is wait for a worker node to join, which is the ~25 min part.
+#
+# Does NOT wait for worker nodes to join: that path is covered by the
 # kubernetes-latest/previous suites and would add another ~25 min bringup for
 # a feature whose end-to-end OIDC browser flow is explicitly out of scope
-# (see docs/oidc-tenant.md -> Phase 1). minReplicas: 0 means no worker VMs;
-# the suite runs in minutes. Accordingly the HR is only asserted to EXIST
-# (cozystack-api materialised it), never Ready.
+# (see docs/oidc-tenant.md -> Phase 1).
+#
+# The HR is asserted to EXIST first (cozystack-api materialised it) so the
+# render-side asserts below run as early as possible, and asserted Ready in the
+# last step. Ready here is affordable and is NOT the worker bringup: the
+# Kubernetes kind carries release.cozystack.io/helm-install-disable-wait
+# (packages/system/kubernetes-rd/cozyrds/kubernetes.yaml), so the install
+# action does not wait for the in-tenant addon HelmReleases to settle. What it
+# does still wait for is the chart's two blocking post-install hook Jobs,
+# <release>-bootstrap-token-tenant and <release>-oidc-bootstrap, the second of
+# which polls for the Kamaji-issued admin kubeconfig before it writes the
+# tenant ClusterRoleBindings and patches <release>-oidc-kubeconfig. On the CI
+# run that exposed this, run 31373204907, all four completed inside three minutes
+# of their CRs being applied. Four, because there are two blocking Jobs per suite:
+# in the `kubectl get events -n tenant-test` capture at 11:30:50 the `Completed`
+# events read 28m and 27m for <release>-bootstrap-token-tenant and
+# <release>-oidc-bootstrap in this suite, and 22m for both in the CustomConfig one,
+# against `CREATE | OK` at 11:01:49 and 11:06:07. That puts this suite's two Jobs
+# inside the first minute and the second, and the CustomConfig pair between the
+# second and third -- so the binding figure, the later Job of each pair, falls in
+# 61-121s here and 103-163s there. Stated as intervals rather than as an
+# adjective, because the truncation contributes a whole second of width on its
+# own: "under two minutes" is false of the 121s end by exactly that second.
+#
+# The number matters more than an adjective would: it is what separates "this test
+# waits for a control plane to start serving" from "this test waits out the ~25 min
+# worker bringup", and the next reader will assume the second otherwise.
+#
+# Half-open, and in whole seconds, because that is what the inputs support:
+# kubectl TRUNCATES those ages to the minute while the CREATE timestamps are
+# exact, so `27m` means an age in [27m, 28m) rather than one either side of
+# 27m30s. Anyone re-deriving these has to assume truncation, not rounding, or the
+# interval moves.
+#
+# Why the last step waits for it at all, rather than ending once the render
+# asserts pass: a Helm release cannot be uninstalled while its install action
+# is still running, so a test that ends here leaves the remainder of the
+# install to be paid by Chainsaw's cleanup phase, on top of the teardown
+# itself, against the single `cleanup` budget in ../.chainsaw.yaml. That is
+# what used to happen here -- the suite was reported red on a step
+# that tests nothing, seconds after every assertion had passed. Keeping the
+# wait inside `try` spends the same wall-clock against an assert with its own
+# timeout and its own diff on failure, and leaves cleanup paying for the
+# teardown alone. It also covers the OIDC payload the suite otherwise never
+# checked: <release>-oidc-bootstrap is the Job that applies the per-user
+# ClusterRoleBindings inside the tenant.
 #
 # What is exercised on a live cluster: the new spec.oidc.* fields are
 # admitted by the aggregated API; the HelmRelease renders the OIDC templates;
@@ -28,15 +76,87 @@ metadata:
   name: kubernetes-oidc-system
 spec:
   catch:
-  - events: {}
+  - events:
+      timeout: 1m
   - describe:
+      timeout: 30s
       apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       name: kubernetes-oidc-system
   - describe:
+      timeout: 30s
       apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
       kind: KamajiControlPlane
       name: kubernetes-oidc-system
+  # The last step's Ready wait fails when a blocking post-install hook Job does
+  # not succeed, and the reason lives in that Job's Pod rather than in the
+  # HelmRelease condition, which reports only that a hook failed. The
+  # crust-gather snapshot in ../.chainsaw.yaml archives those logs too, but this
+  # puts the decisive lines straight into the failed job's output instead of into
+  # an artifact someone has to fetch and serve.
+  #
+  # Three selectors, because the Pods that explain this failure carry three
+  # different sets of labels and no one selector spans them.
+  #
+  # <release>-oidc-bootstrap stamps the chart's selectorLabels on its Pod, so the
+  # instance label reaches it -- along with the chart's other management-side Pods
+  # (autoscaler, kccm, csi). <release>-bootstrap-token-tenant sets no pod labels at
+  # all, so its Job name is the only handle, and it is the Job whose ~15m retry
+  # budget dominates the wait. Two things remove that Job, and naming only one of
+  # them overstates the window: `hook-delete-policy: ...,hook-succeeded` has Helm
+  # delete it the moment it succeeds, and `ttlSecondsAfterFinished: 600` clears it
+  # ten minutes after it finishes either way. This catch runs only where the
+  # install failed, and there the success policy never fires, so the TTL is the
+  # bound and these logs are readable only on a failure caught inside it.
+  #
+  # The tenant control plane needs the third one, and it is the reason the first
+  # two are not enough: those Pods are Kamaji's, not the chart's, and Kamaji sets
+  # its pod-template labels wholesale (kamaji.clastix.io/name and
+  # kamaji.clastix.io/component), merging in only what podAdditionalMetadata
+  # carries -- and the chart sets exactly one label there, cluster.yaml's
+  # policy.cozystack.io/allow-to-etcd, not the instance label. So the merge hook
+  # does exist and is in use; what does not reach those Pods is the label the
+  # first two selectors match on. That matters here more than
+  # anywhere else: the Ready wait in the last step is only reached when the install
+  # does not finish, and the commonest reason is a tenant apiserver that never
+  # served -- exactly the Pods the instance selector misses. The handle used here
+  # is the one the rest of the repo already uses for them, in cluster.yaml's
+  # WorkloadMonitor selector and twice in _lib/run-kubernetes.sh.
+  - podLogs:
+      selector: app.kubernetes.io/instance=kubernetes-oidc-system
+      tail: 50
+      timeout: 30s
+  - podLogs:
+      selector: batch.kubernetes.io/job-name=kubernetes-oidc-system-bootstrap-token-tenant
+      tail: 50
+      timeout: 30s
+  - podLogs:
+      selector: kamaji.clastix.io/name=kubernetes-oidc-system
+      tail: 50
+      timeout: 30s
+  # A podLogs collector cannot report that its selector matched nothing: an empty
+  # capture and a selector gone stale look identical in the job output. All three
+  # selectors above are hand-written and none of them is pinned by an assert in
+  # this suite -- the last step pins a Job NAME, not the labels these select on --
+  # so nothing turns red when one goes stale.
+  #
+  # What the census does and does not close, so the next reader does not assume
+  # more: it prints one column, app.kubernetes.io/instance per Pod, so it answers
+  # the first selector directly and answers the other two only as "the namespace
+  # had these Pods at all". For the job-name and kamaji.clastix.io/name selectors
+  # it is a presence check, not a label check, and the label drift it would catch
+  # for them is none. That is still worth the three lines, because an empty
+  # capture with a populated namespace is the shape a stale selector makes.
+  # Same pairing and the same limitation harbor, openbao and qdrant carry at this
+  # call site. Budget and rationale live in the helper, which
+  # hack/pod-label-census_test.bats covers.
+  - script:
+      timeout: 2m
+      content: |
+        set -eu
+        cd ../../..
+        . hack/e2e-chainsaw/_lib/pod-label-census.sh
+        pod_label_census "$NAMESPACE"
   steps:
   - name: create-kubernetes-oidc-system
     try:
@@ -50,8 +170,11 @@ spec:
           kind: HelmRelease
           metadata:
             name: kubernetes-oidc-system
-    # …and the chart renders the KamajiControlPlane (no Ready wait — that
-    # would require the Kamaji bringup this suite deliberately avoids).
+    # …and the chart renders the KamajiControlPlane. No Ready wait on the KCP
+    # itself: what the last step needs is a serving tenant apiserver, which the
+    # oidc-bootstrap hook Job blocks on directly, so waiting on this object's own
+    # condition here would add a second gate on the same fact and delay the
+    # render asserts below it for nothing.
     - assert:
         timeout: 3m
         resource:
@@ -63,6 +186,11 @@ spec:
   - name: kamajicontrolplane-oidc-wiring
     try:
     - assert:
+        # Bounded for the reason this suite gives about its catch ops: an op with no
+        # `timeout:` inherits timeouts.assert, and inheriting is not the same as
+        # being free. This reads an object the previous step just created, so it
+        # resolves in one poll on any healthy run; 1m is a bound, not a wait.
+        timeout: 1m
         resource:
           apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
           kind: KamajiControlPlane
@@ -92,6 +220,10 @@ spec:
     # The issuer check is a regex (any keycloak.<host>), so it stays a script;
     # the per-cluster audience literal rides along.
     - script:
+        # Bounded like every other op in these suites: no `timeout:` means
+        # timeouts.exec, which is 5m of budget for a jq read of a Secret the
+        # assert above just proved present.
+        timeout: 30s
         content: |
           set -eu
           body=$(kubectl -n "$NAMESPACE" get secret kubernetes-oidc-system-oidc-authn-config \
@@ -121,3 +253,199 @@ spec:
             name: tenant-test-kubernetes-oidc-system-audience
           spec:
             (protocolMappers[0].protocolMapper): oidc-audience-mapper
+
+  # Last step on purpose: this is what keeps the remainder of the install out
+  # of Chainsaw's cleanup budget (see the header). Both blocking post-install
+  # hook Jobs have to succeed before helm-controller marks the release Ready,
+  # and until the install action returns the uninstall cannot start.
+  #
+  # Two asserts, because they answer different questions and only one of them
+  # can be asked directly. The oidc-bootstrap Job is the OIDC payload — it
+  # writes the per-user ClusterRoleBindings inside the tenant and patches
+  # <release>-oidc-kubeconfig — and it survives its own success
+  # (hook-delete-policy: before-hook-creation, no hook-succeeded), so it can be
+  # asserted by name. The other blocking hook Job, bootstrap-token-tenant,
+  # carries hook-succeeded and deletes itself, so it cannot be; the HelmRelease
+  # going Ready is what covers it, and is the direct statement that the install
+  # action returned.
+  #
+  # ONE wait, and the HelmRelease carries it. Where 20m comes from is derived
+  # below, between a floor this suite can miss and a ceiling above which no
+  # budget can observe anything.
+  #
+  # The Job assert follows it and is deliberately short, and the two facts have
+  # different reasons. ORDER is what keeps the step bounded: a release cannot be
+  # Ready until every blocking post-install hook Job has succeeded, so once the
+  # assert above returns this Job is already in its final state. Put the Job first
+  # with a real budget and a broken install is waited out twice -- once for a
+  # `succeeded` that never comes, then again by the Ready assert on a fresh
+  # budget. That is where a doubled worst case comes from.
+  #
+  # The SHORT budget is not what prevents that; the order is. 1m is here because
+  # an assert reading a settled object has no use for an install-sized budget, and
+  # carrying one would be dead weight that also makes a future reversal look
+  # affordable. Note what an equal budget in the right order does NOT cause: if
+  # Ready has returned, this assert completes immediately whatever number sits on
+  # it. The doubling comes from the order, not from the size.
+  #
+  # The ceiling is not spent on the happy path: in run 31373204907 both hook Jobs
+  # completed inside three minutes of the CR being applied, with each one's band
+  # and its derivation in the header. That 1-3 minutes is not new wall-clock: the
+  # suite used to spend it in `cleanup` instead, which is the whole point.
+  #
+  # The ceiling is only reached when the install genuinely will not finish, and
+  # then this fails with the HelmRelease's own
+  # conditions in the diff instead of `context deadline exceeded` from a cleanup
+  # step that tests nothing.
+  #
+  # 20m, and it is the first value that clears BOTH constraints rather than one.
+  # The arithmetic is written out so a future change to either bound can be
+  # checked against it instead of re-derived: a value that clears one constraint
+  # and misses the other still reads as derived.
+  #
+  # The path is always reached, not reached in the worst case: the release carries
+  # Install.Strategy RetryOnFailure with an interval and no retry cap
+  # (Install.Strategy in pkg/registry/apps/application/rest.go; interval defaults to 30s in
+  # pkg/cmd/server/start.go), so a failing install retries forever, the
+  # HelmRelease never reaches Ready, and this assert runs to its ceiling.
+  #
+  # FLOOR. The subject is the HelmRelease Ready condition, which is not reached
+  # until BOTH blocking post-install hook Jobs have finished, and Helm runs hooks
+  # serially. <release>-bootstrap-token-tenant dominates: it has no internal wait
+  # loop (its template says Job-level backoff handles the transient unreadiness
+  # window) and its <release>-admin-kubeconfig volume is NOT `optional`, unlike
+  # oidc-bootstrap's, so its Pod cannot start until Kamaji publishes that Secret
+  # and its success lags apiserver availability by kubelet mount retries plus
+  # container backoff. Its template puts the worst case at ~15m under
+  # backoffLimit: 10, and <release>-oidc-bootstrap runs on top of that. So any
+  # budget at or below 15m can red a release helm-controller is still legitimately
+  # installing -- the same false red this step exists to remove, relocated from
+  # cleanup into the wait.
+  #
+  # CEILING, and it is not the job cap: the kind's own
+  # release.cozystack.io/helm-install-timeout is 20m, on the same
+  # ApplicationDefinition as the disable-wait annotation. helm-controller abandons
+  # any install ATTEMPT that has not returned by then, so no single attempt can
+  # succeed later than 20m after it began, and a wait longer than that spends the
+  # difference watching one attempt that has already been given up on.
+  #
+  # Note the qualifier, because the retry fact below removes the stronger version
+  # of this claim: with RetryOnFailure and no cap, attempt N+1 starts ~30s after
+  # attempt N is abandoned, so a 25m wait genuinely could observe a success that a
+  # 20m wait misses -- on the second attempt. This budget is sized to ONE attempt,
+  # which is not the same as being aligned to one: the assert starts on the last
+  # step, minutes after the release was created, so its 20m window is offset from
+  # attempt 1's own and straddles the abandonment of attempt 1 and the opening of
+  # attempt 2. So it does spend some of its tail on a retry it does not intend to
+  # wait out; what the size buys is that it cannot spend a SECOND full attempt
+  # there. A release needing a second attempt is not a slow install, it is an
+  # install that already failed once, and the fixture should report that rather
+  # than sit through the retry. So the lever for a legitimately slower install is
+  # the annotation, not this number: raising the wait past 20m without raising
+  # helm-install-timeout buys only retry-watching time.
+  #
+  # The cheaper alternative, named so it is rejected on purpose rather than by
+  # omission: Chainsaw v0.2.15 takes per-test `spec.timeouts`, so
+  # `timeouts: {cleanup: 10m}` on these two Tests would have absorbed every
+  # teardown in the measured sample in two lines, and would not have moved the
+  # failure-path cost at all -- which is the one number this change makes worse.
+  # As a SUBSTITUTE it buys strictly less: the install tail stays billed to
+  # cleanup, the red stays a `context deadline exceeded` on a step that asserts
+  # nothing, and the OIDC payload stays unchecked. The trade taken here is a larger
+  # worst case on the failure path in exchange for a red that names an object, plus
+  # coverage of the Job that does the tenant-side work.
+  #
+  # But it is not only a substitute, and calling it one hides something: the two
+  # COMPOSE. This change removes the install remainder from the cleanup budget and
+  # deliberately leaves the teardown unbounded -- the teardown is the larger half,
+  # 137-197s of the 253.71s measured, and bounding it is the chart's job. A raised
+  # `timeouts.cleanup` would bound exactly that remaining half. So the honest
+  # statement is not "the alternative loses" but "the alternative addresses the
+  # residual this change documents", and anyone acting on that residual should
+  # reach for it rather than re-derive it from scratch.
+  #
+  # So the interval is (15m, 20m], with a floor this suite can legitimately reach
+  # and a ceiling above which the subject stops existing. 20m is the top of it,
+  # taken over 16m or 18m because the floor is itself a ~15m estimate from a
+  # template comment rather than a measurement, and the margin above an estimate
+  # should not be thinner than the estimate's own error.
+  #
+  # WHAT IT COSTS WHEN IT FIRES, stated separately because it does not determine
+  # the value and must not be mistaken for having done so. Every op in the catch
+  # block above is paid on this same path, and an op with no `timeout:` is not
+  # free: chainsaw resolves events, describe and podLogs alike through
+  # timeouts.exec (pkg/runner/operations/podlogs.go: `context.WithTimeout(ctx,
+  # tc.Timeouts().Exec)`), which ../.chainsaw.yaml sets to 5m. Seven unbounded ops
+  # would have cost 35m per firing, which is why all seven carry explicit budgets
+  # here. With those bounded, a failing run of this suite costs 20m of assert,
+  # 5m30s of per-suite catch (1m events + 2x30s describe + 3x30s podLogs + 2m
+  # census), ../.chainsaw.yaml's two global error.catch legs at 6m and 13m, and 5m
+  # of cleanup that still fails because the uninstall cannot start either way --
+  # 49m30s, against a job capped at 180 timeout-minutes whose worst observed
+  # length in the sample above was 138m (31317302815 127m, 31337303277 131m,
+  # 31373204907 138m). The events op is the one deliberately above the rest: it is
+  # the cheapest and most decisive collector, and a degraded apiserver is both the
+  # case that reaches this path and the case where listing them is slowest.
+  #
+  # Those numbers do not fit, and the honest statement is that they are not
+  # required to. 49m30s is every term at its ceiling at once, and ../.chainsaw.yaml
+  # says of its own two legs that they "only approach their ceilings on a genuinely
+  # degraded cluster". The 138m is a different kind of number -- an observed total
+  # from runs that crossed the cleanup budget, so it already carries a 300s overrun
+  # and whatever the global legs spent, and it carries nothing of the wait added
+  # here, which did not exist. Adding a worst case to it produces neither a bound
+  # nor a measurement -- and that disclaimer has to hold for every use of the sum,
+  # including a pessimistic one. So no claim here about
+  # whether the JOB crosses its cap: in a run where a suite fails, its own passing
+  # time is replaced rather than added to, and what the other suites cost that run
+  # is not knowable from this file.
+  #
+  # What is true without the arithmetic, and is the part worth acting on: this
+  # change makes a FAILING OIDC suite considerably more expensive than it was,
+  # because a failure in `try` runs catch handlers and a cleanup overrun did not.
+  # Within that cost the two global legs at 6m and 13m dominate the 20m wait added
+  # here -- a comparison of terms, needing no total -- which is why the reduction
+  # belongs to #3754 and not to this budget.
+  #
+  # Crossing 180 is worth avoiding rather than shrugging at: ../.chainsaw.yaml
+  # records, measured, that the cap ends the job `cancelled` with the grace window
+  # consumed by `Collect report`, so cozyreport.tgz AND the job log are lost. A
+  # step that exists to turn `context deadline exceeded` into a readable failure
+  # would have produced a run with nothing left to read, on exactly the path it was
+  # written for. What buys the risk down is that the reds this replaces were false
+  # -- the install was fine and cleanup was billed for it -- while a red that now
+  # costs 20m means the install genuinely did not finish, which is a defect someone
+  # has to read anyway.
+  #
+  # Why only this suite carries the full wait, and the byo suite a short one: the
+  # failure path above is already the largest thing either suite can contribute to
+  # the job, and giving the second suite 20m instead of 5m adds another 15m to it
+  # for a second copy of a wait whose subject is the same install path. Bounding
+  # how many suites pay it is the same shape of lever ../.chainsaw.yaml reaches for -- it says to bound
+  # the number of SNAPSHOTTED tests rather than shrink its own timeouts, which is
+  # a count of tests rather than a count of waits, so this is an analogy to that
+  # reasoning and not the instruction it gives,
+  # and bounding the collectors underneath it is #3754. The cost of the short wait
+  # is written down in that fixture rather than here, because that is where someone
+  # would otherwise "fix" the asymmetry.
+  - name: helmrelease-ready-before-teardown
+    try:
+    - assert:
+        timeout: 20m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: kubernetes-oidc-system
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: kubernetes-oidc-system-oidc-bootstrap
+          status:
+            succeeded: 1
