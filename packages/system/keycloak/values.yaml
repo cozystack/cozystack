@@ -140,13 +140,21 @@ encryption:
         roleIdKey: role-id      # key in secretName holding the role id
         secretIdKey: secret-id  # key in secretName holding the secret id
       # CA to trust when Vault is served over HTTPS by a private CA — as an
-      # inline PEM (the chart renders the Secret) or as a Secret seeded
-      # beforehand holding it under key ca.crt (only that key is mounted). The
-      # two are mutually exclusive, and both are ignored unless
-      # kms.backend=vault-transit. Only the Vault client is affected: the proxy
-      # verifies the database with its own CA pool, not the system trust store.
+      # inline PEM (the chart renders the Secret and rolls the pods when it
+      # changes) or as a Secret seeded beforehand. Exactly one key of that
+      # Secret is mounted; caSecretKey names it. Rotating a pre-seeded Secret
+      # needs a manual `kubectl rollout restart deploy/keycloak-kms-proxy`,
+      # because the chart cannot see its contents.
+      #
+      # The Vault leg then trusts this CA and nothing else — the public roots in
+      # the proxy image are excluded. The database leg is unaffected either way:
+      # it never consults the system trust store.
+      #
+      # caBundle and caSecretName are mutually exclusive, and both are ignored
+      # unless kms.backend=vault-transit.
       caBundle: ""
       caSecretName: ""
+      caSecretKey: ca.crt      # key of caSecretName holding the PEM bundle
   resources:
     requests:
       memory: 128Mi
