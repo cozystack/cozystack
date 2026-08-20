@@ -548,8 +548,14 @@ jobs:
   # digest-pinned KubeVirt containerDisk pushed to the registry, and stamps the
   # ref@digest into packages/apps/site-router/images/vyos-router-disk.tag.
   # That stamp is captured as a patch fragment so finalize bundles the real digest
-  # into the installer artifact (the deferred site-router e2e resolves it from
-  # there). vm-default-images is an opt-in bundle package, so a non-opted-in e2e is
+  # into the installer artifact, which is where the site-router e2e resolves it
+  # from. That suite runs in CI, and when this job is skipped the ref comes from
+  # the base branch instead: `make build` builds this package before
+  # packages/core/installer, so the cozystack-packages artifact carries the
+  # stamped .tag and finalize's overlay applies it. Only a base branch that has
+  # not been built since the package landed leaves the committed placeholder in
+  # place — see the note in hack/e2e-chainsaw/site-router/chainsaw-test.yaml.
+  # vm-default-images is an opt-in bundle package, so a non-opted-in e2e is
   # unaffected either way.
   #
   # Path-scoped (plan.outputs.vyos): this heavy, privileged build only runs when

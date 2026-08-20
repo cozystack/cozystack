@@ -4,15 +4,33 @@
 # GATE — the negative-security matrix (every forbidden flow dropped AND attributed
 # to the guard that dropped it).
 #
-# ── DEFERRED FROM CI ────────────────────────────────────────────────────────
-# This suite CANNOT run green in CI yet: the VyOS golden image is committed
-# DISABLED (T01) and the VyOS 1.5 firewall syntax is provisional (TODO(T13)). It
-# is therefore excluded from TIA selection AND from the full suite by an explicit
-# deferral in hack/select-e2e.sh, so the PR that adds it keeps CI green. It runs
-# only in the empirical validation, by hand:
+# ── RUNS IN CI ──────────────────────────────────────────────────────────────
+# The suite is enumerated like every other one (hack/select-e2e.sh finds a suite
+# by its chainsaw-test.yaml), so it runs on a site-router change and in every
+# full-suite escalation.
+#
+# The appliance it boots is stamped, not committed. Two paths supply the stamp
+# and between them they cover every run. On a PR that touches a vyos path the
+# build-vyos job publishes the golden image and writes the real ref@digest into
+# packages/apps/site-router/images/vyos-router-disk.tag through a patch fragment
+# the Finalize step merges before the E2E job reads it. On every other PR that
+# job is skipped (it is path-scoped on plan.outputs.vyos), and the ref instead
+# arrives from the base branch: the root `build:` recipe builds
+# packages/system/vyos-router-image before packages/core/installer, so the
+# cozystack-packages artifact pushed from main already carries the stamped .tag,
+# and finalize's overlay copies it onto this tree.
+#
+# What is NOT covered is legibility when neither path fires — a main build that
+# has not run since this package landed, or an overlay that could not pull the
+# artifact and logged a no-op. The committed value is then the bare v0.0.0
+# placeholder, which no build path in this repo ever publishes, and the guard in
+# the bring-up step below only rejects an EMPTY ref, so the run fails as an
+# eight-minute VM-never-ready timeout rather than naming the cause. Rejecting a
+# ref that carries no @sha256: digest would fix that; it is not done here.
+#
+# To drive it by hand against a dev cluster:
 #     make test-chainsaw CHAINSAW_SUITES="site-router"
-# with the golden image published (or supplied via an uncommitted image override)
-# and the live-only script seams (_probe-lib.sh) implemented.
+# which needs the golden image published, or supplied via an image override.
 #
 # ── ONE Test, not many ──────────────────────────────────────────────────────
 # The topology is expensive (two nested KubeVirt VMs + IPsec), so it is brought
@@ -412,9 +430,11 @@ spec:
         is live (D8). The pod name is generated, so this selects by the KubeVirt
         label and polls (a non-empty result AND value=false — never a vacuous
         empty-list pass).
-        TODO(T13): this depends on the guest source-filter confirm, which depends
-        on the provisional VyOS 1.5 firewall syntax pushing successfully. Live
-        validation must also cover the port_security live-toggle question the
+        This rides on the guest source-filter confirm, and through it on the
+        VyOS 1.5 firewall syntax pushing successfully — validated live against
+        the shipped image (packages/apps/site-router/docs/security-model.md),
+        so no longer provisional.
+        What is still open is the port_security live-toggle question the
         reconciler flags (D8): whether kube-ovn v1.15.10 reconciles the LSP
         port_security field from an annotation flip on an already-wired port.
       try:
@@ -506,8 +526,8 @@ spec:
         From B, reach the backend behind A through the tunnel; the backend's
         /clientip must report B's REAL remote source (192.0.2.x), proving routed
         mode preserves the source (no NAT). THE routed-mode contract.
-        TODO(T13): live — implement probe_from_b in _probe-lib.sh (drive B's
-        guest). Validate source preservation end to end against the live image.
+        The probe is driven from B's guest over SSH by probe_from_b_stdout
+        (_probe-lib.sh), so the source the backend reports is B's real one.
       try:
         - script:
             timeout: 5m
@@ -532,8 +552,8 @@ spec:
       description: >-
         A multi-MB transfer B → backend across the tunnel must complete without
         stalling — the TCP MSS clamp (overlay MTU − 40) preventing PMTU black-holes.
-        TODO(T13): live — implement the bulk transfer from B's guest; a stall
-        (hang until timeout) is the failure signal.
+        A stall — the transfer hanging until the step timeout rather than
+        erroring — is the failure signal.
       try:
         - script:
             timeout: 5m
@@ -558,10 +578,11 @@ spec:
         establishing the responsible guard, not merely absence of connectivity.
         The one allowed flow (declared remote source → intended same-tenant
         destination) must pass with source preserved.
-        TODO(T13): live — implement probe_from_b / hubble_dropped /
-        guest_counter_incremented in _probe-lib.sh against the live gateway,
-        Hubble, and the VyOS management API. The stubs fail loudly, so this GATE
-        can never pass vacuously.
+        The guards read the live gateway: guest counters over the VyOS
+        management API, Cilium drops from the datapath drop monitor
+        (_probe-lib.sh). Every helper fails loudly when its evidence is absent —
+        an unreadable counter is not a flat one — so this GATE cannot pass
+        vacuously.
       try:
         - script:
             timeout: 10m
