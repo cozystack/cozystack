@@ -42,6 +42,17 @@ spec:
               application:
                 description: Application configuration
                 properties:
+                  group:
+                    description: |-
+                      Group is the API group this application kind is served in. Empty means
+                      the default apps.cozystack.io. Any other value must match the group of
+                      a registered ApplicationGroupDefinition; an ApplicationDefinition
+                      referencing an unregistered group is not served (and logged) until the
+                      group is registered. Same shape constraint as
+                      ApplicationGroupDefinitionSpec.Group.
+                    maxLength: 253
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$
+                    type: string
                   kind:
                     description: Kind of the application, used for UI and API
                     type: string

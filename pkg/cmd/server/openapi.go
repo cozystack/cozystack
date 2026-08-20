@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
 	"github.com/cozystack/cozystack/pkg/config"
 	sampleopenapi "github.com/cozystack/cozystack/pkg/generated/openapi"
@@ -25,6 +26,16 @@ const (
 	baseStatusRef = apiPrefix + ".ApplicationStatus"
 	smp           = "application/strategic-merge-patch+json"
 )
+
+// KindSchema carries the published spec schema of an application kind along
+// with the API group the kind is served in. Kinds are unique across groups
+// (enforced at config-loading time), so schema refs remain keyed by kind
+// alone; the group only feeds the x-kubernetes-group-version-kind stamps and
+// the per-group-version OpenAPI v3 documents.
+type KindSchema struct {
+	Group  string
+	Schema string
+}
 
 // deepCopySchema clones *spec.Schema via JSON-marshal/unmarshal.
 func deepCopySchema(in *spec.Schema) *spec.Schema {
@@ -178,8 +189,9 @@ func patchSpec(target *spec.Schema, raw string) error {
 /*  DRY helpers                                                             */
 /* ────────────────────────────────────────────────────────────────────────── */
 
-// cloneKindSchemas: from base schemas, create new schemas for a specific kind.
-func cloneKindSchemas(kind string, base, baseStatus, baseList *spec.Schema, v3 bool) (obj, status, list *spec.Schema) {
+// cloneKindSchemas: from base schemas, create new schemas for a specific kind
+// served in the given API group.
+func cloneKindSchemas(kind, group string, base, baseStatus, baseList *spec.Schema, v3 bool) (obj, status, list *spec.Schema) {
 	obj = deepCopySchema(base)
 	status = deepCopySchema(baseStatus)
 	list = deepCopySchema(baseList)
@@ -193,7 +205,7 @@ func cloneKindSchemas(kind string, base, baseStatus, baseList *spec.Schema, v3 b
 	setGVK := func(s *spec.Schema, k string) {
 		s.Extensions = map[string]any{
 			"x-kubernetes-group-version-kind": []any{
-				map[string]any{"group": "apps.cozystack.io", "version": "v1alpha1", "kind": k},
+				map[string]any{"group": group, "version": "v1alpha1", "kind": k},
 			},
 		}
 	}
@@ -300,9 +312,32 @@ func rewriteRefForKind(old, kind string) string {
 // -----------------------------------------------------------------------------
 // OpenAPI **v3** post-processor
 // -----------------------------------------------------------------------------
+// docGroupV3 extracts the API group an OpenAPI v3 group-version document
+// describes from its paths ("/apis/<group>/<version>/..."). The v3
+// post-processor runs once per group-version document, and with
+// ApplicationGroupDefinitions there are several application group documents,
+// each of which must only receive the kinds of its own group.
+func docGroupV3(doc *spec3.OpenAPI) string {
+	if doc.Paths == nil {
+		return ""
+	}
+	for p := range doc.Paths.Paths {
+		rest, ok := strings.CutPrefix(p, "/apis/")
+		if !ok {
+			continue
+		}
+		if group, _, ok := strings.Cut(rest, "/"); ok {
+			return group
+		}
+	}
+	return ""
+}
+
 // BuildPostProcessV3 returns an OpenAPI v3 post-processor that clones base
-// Application schemas into per-kind schemas and rewrites $ref pointers.
-func BuildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*spec3.OpenAPI, error) {
+// Application schemas into per-kind schemas and rewrites $ref pointers. The
+// processor runs once per group-version document; only kinds served in that
+// document's group are cloned into it.
+func BuildPostProcessV3(kindSchemas map[string]KindSchema) func(*spec3.OpenAPI) (*spec3.OpenAPI, error) {
 	return func(doc *spec3.OpenAPI) (*spec3.OpenAPI, error) {
 
 		if doc.Components == nil {
@@ -317,16 +352,21 @@ func BuildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*sp
 		list, ok2 := doc.Components.Schemas[baseListRef]
 		stat, ok3 := doc.Components.Schemas[baseStatusRef]
 		if !(ok1 && ok2 && ok3) {
-			return doc, nil // not the apps GV — nothing to patch
+			return doc, nil // not an application GV — nothing to patch
 		}
 
-		// Clone base schemas for each kind
-		for kind, raw := range kindSchemas {
+		docGroup := docGroupV3(doc)
+
+		// Clone base schemas for each kind of this document's group
+		for kind, ks := range kindSchemas {
+			if ks.Group != docGroup {
+				continue
+			}
 			ref := apiPrefix + "." + kind
 			statusRef := ref + "Status"
 			listRef := ref + "List"
 
-			obj, status, l := cloneKindSchemas(kind, base, stat, list /*v3=*/, true)
+			obj, status, l := cloneKindSchemas(kind, ks.Group, base, stat, list /*v3=*/, true)
 			doc.Components.Schemas[ref] = obj
 			doc.Components.Schemas[statusRef] = status
 			doc.Components.Schemas[listRef] = l
@@ -336,7 +376,7 @@ func BuildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*sp
 			if container == nil {
 				container = obj
 			}
-			if err := patchSpec(container, raw); err != nil {
+			if err := patchSpec(container, ks.Schema); err != nil {
 				return nil, fmt.Errorf("kind %s: %w", kind, err)
 			}
 		}
@@ -422,18 +462,22 @@ func sanitizeForV2(s *spec.Schema) {
 	}
 }
 
-// KindSchemasFromConfig extracts the kind→OpenAPISchema mapping from a ResourceConfig.
-func KindSchemasFromConfig(rc *config.ResourceConfig) map[string]string {
-	m := make(map[string]string, len(rc.Resources))
+// KindSchemasFromConfig extracts the kind→{group, OpenAPISchema} mapping from
+// a ResourceConfig.
+func KindSchemasFromConfig(rc *config.ResourceConfig) map[string]KindSchema {
+	m := make(map[string]KindSchema, len(rc.Resources))
 	for _, r := range rc.Resources {
-		m[r.Application.Kind] = r.Application.OpenAPISchema
+		m[r.Application.Kind] = KindSchema{
+			Group:  appsv1alpha1.GroupOrDefault(r.Application.Group),
+			Schema: r.Application.OpenAPISchema,
+		}
 	}
 	return m
 }
 
 // ConfigureOpenAPI sets up OpenAPI v2 and v3 on a GenericAPIServer Config,
 // including the post-processors that clone Application schemas to per-kind schemas.
-func ConfigureOpenAPI(cfg *genericapiserver.Config, kindSchemas map[string]string, title, version string) {
+func ConfigureOpenAPI(cfg *genericapiserver.Config, kindSchemas map[string]KindSchema, title, version string) {
 	cfg.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(
 		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
 	)
@@ -453,25 +497,27 @@ func ConfigureOpenAPI(cfg *genericapiserver.Config, kindSchemas map[string]strin
 // OpenAPI **v2** (swagger) post-processor
 // -----------------------------------------------------------------------------
 // BuildPostProcessV2 returns a Swagger post-processor that clones base
-// Application schemas into per-kind schemas and rewrites $ref pointers.
-func BuildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spec.Swagger, error) {
+// Application schemas into per-kind schemas and rewrites $ref pointers. The
+// v2 document is a single merged swagger covering every group, so all kinds
+// are cloned here, each stamped with its own group.
+func BuildPostProcessV2(kindSchemas map[string]KindSchema) func(*spec.Swagger) (*spec.Swagger, error) {
 	return func(sw *spec.Swagger) (*spec.Swagger, error) {
 		defs := sw.Definitions
 		base, ok1 := defs[baseRef]
 		list, ok2 := defs[baseListRef]
 		stat, ok3 := defs[baseStatusRef]
 		if !(ok1 && ok2 && ok3) {
-			return sw, nil // not the apps GV — nothing to patch
+			return sw, nil // not an application GV — nothing to patch
 		}
 
-		for kind, raw := range kindSchemas {
+		for kind, ks := range kindSchemas {
 			ref := apiPrefix + "." + kind
 			statusRef := ref + "Status"
 			listRef := ref + "List"
 
-			obj, status, l := cloneKindSchemas(kind, &base, &stat, &list, false)
+			obj, status, l := cloneKindSchemas(kind, ks.Group, &base, &stat, &list, false)
 
-			if err := patchSpec(obj, raw); err != nil {
+			if err := patchSpec(obj, ks.Schema); err != nil {
 				return nil, fmt.Errorf("kind %s: %w", kind, err)
 			}
 

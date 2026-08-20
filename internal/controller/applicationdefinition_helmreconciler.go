@@ -66,7 +66,10 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleasesForAppDef(ctx co
 		return nil
 	}
 
-	applicationGroup := "apps.cozystack.io" // All applications use this group
+	// The group each application's HelmReleases are labeled with follows the
+	// ApplicationDefinition's selected API group (default apps.cozystack.io);
+	// see pkg/registry/apps/application NewREST.
+	applicationGroup := appDef.Spec.Application.EffectiveGroup()
 
 	// Build label selector for HelmReleases
 	// Only reconcile HelmReleases with apps.cozystack.io/application.* labels

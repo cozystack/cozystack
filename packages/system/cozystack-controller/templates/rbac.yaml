@@ -22,6 +22,13 @@ rules:
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["helmreleases"]
   verbs: ["get", "list", "watch", "patch", "update"]
+# ApplicationGroupDefinitionReconciler materializes an aggregation-layer
+# APIService (v1alpha1.<group>) per registered ApplicationGroupDefinition,
+# cloned from the helm-managed v1alpha1.apps.cozystack.io reference. Deletion
+# is left to ownerReference garbage collection, so no delete verb.
+- apiGroups: ["apiregistration.k8s.io"]
+  resources: ["apiservices"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
 # CACertReconciler reconciles TenantProjection sentinels a chart renders and
 # writes their Ready status. It never creates or deletes a sentinel; that is
 # the chart's (helm-controller's) job. No tenant role grants any verb on
