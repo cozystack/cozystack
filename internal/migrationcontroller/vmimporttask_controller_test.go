@@ -450,6 +450,116 @@ func TestMigrationProgressReadsTheTransferStep(t *testing.T) {
 	}
 }
 
+// TestMigrationProgressFallsBackWhenStepsAreUnnamed guards against pegging
+// progress at zero for a whole transfer. The pipeline step names are not part
+// of any contract, and a release that renames them would silently break a
+// name-only match — so an unrecognised pipeline still has to report something.
+func TestMigrationProgressFallsBackWhenStepsAreUnnamed(t *testing.T) {
+	m := newObject(migrationGVK)
+	if err := unstructured.SetNestedSlice(m.Object, []interface{}{
+		map[string]interface{}{
+			"id": "vm-1",
+			"pipeline": []interface{}{
+				map[string]interface{}{
+					"name":     "SomeFutureStepName",
+					"progress": map[string]interface{}{"completed": int64(4096), "total": int64(16384)},
+				},
+			},
+		},
+	}, "status", "vms"); err != nil {
+		t.Fatalf("set vms: %v", err)
+	}
+	_, progress, _ := migrationProgress(m)
+	if progress != 25 {
+		t.Errorf("progress = %d, want 25 from the unnamed step", progress)
+	}
+}
+
+// TestMigrationProgressAcceptsCompletedPhase asserts the phase the engine
+// settles on is treated as terminal. Waiting only on a completion timestamp
+// would leave a finished transfer stuck in Transferring.
+func TestMigrationProgressAcceptsCompletedPhase(t *testing.T) {
+	m := newObject(migrationGVK)
+	if err := unstructured.SetNestedSlice(m.Object, []interface{}{
+		map[string]interface{}{"id": "vm-1", "phase": "Completed"},
+	}, "status", "vms"); err != nil {
+		t.Fatalf("set vms: %v", err)
+	}
+	done, progress, failure := migrationProgress(m)
+	if !done {
+		t.Error("a Completed phase must count as done")
+	}
+	if progress != 100 || failure != "" {
+		t.Errorf("progress = %d, failure = %q", progress, failure)
+	}
+}
+
+// TestAdoptVolumeOrphansAClaimWithNoDataVolume is the populator path, which is
+// the path Forklift actually takes: the transferred disk arrives as a populated
+// claim with no DataVolume, carrying an ownerReference to the VirtualMachine
+// Forklift built. Anything that later deletes that VM takes the disk with it,
+// and garbage collection wins any race against a copy — so the reference has to
+// be cleared even though there is no DataVolume to trigger the cleanup.
+func TestAdoptVolumeOrphansAClaimWithNoDataVolume(t *testing.T) {
+	s := testScheme(t)
+	tk := task("import", "tenant-foo", "vcenter", "replicated")
+
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-1"},
+		Spec: corev1.PersistentVolumeSpec{
+			StorageClassName: "replicated",
+			Capacity:         corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("16Gi")},
+		},
+	}
+	blockOwnerDeletion := true
+	notController := false
+	populated := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			// Forklift's own naming: <plan>-vm-<id>-<random>.
+			Name:      "import-vm-1234-pdbdm",
+			Namespace: "tenant-foo",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion:         "kubevirt.io/v1",
+				Kind:               "VirtualMachine",
+				Name:               "test-vm",
+				UID:                "vm-uid",
+				Controller:         &notController,
+				BlockOwnerDeletion: &blockOwnerDeletion,
+			}},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			VolumeName: "pv-1",
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("16Gi")},
+			},
+		},
+	}
+	// Deliberately no DataVolume: that is what the populator path looks like.
+	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(pv, populated, tk).Build()
+	r := &VMImportTaskReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.adoptVolume(context.Background(), tk, "import-vm-1234-pdbdm", "web-01-disk-0"); err != nil {
+		t.Fatalf("adoptVolume on the populator path: %v", err)
+	}
+
+	adopted := &corev1.PersistentVolumeClaim{}
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Namespace: "tenant-foo", Name: "vm-disk-web-01-disk-0",
+	}, adopted); err != nil {
+		t.Fatalf("replacement claim was not created: %v", err)
+	}
+	if len(adopted.OwnerReferences) != 0 {
+		t.Error("the adopted claim carries an owner reference; deleting the Forklift VM would destroy the disk")
+	}
+	gotPV := &corev1.PersistentVolume{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "pv-1"}, gotPV); err != nil {
+		t.Fatalf("get pv: %v", err)
+	}
+	if gotPV.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		t.Error("the volume was not retained")
+	}
+}
+
 // TestMigrationProgressSurfacesForkliftErrors asserts a failed transfer carries
 // Forklift's own words rather than a paraphrase.
 func TestMigrationProgressSurfacesForkliftErrors(t *testing.T) {
