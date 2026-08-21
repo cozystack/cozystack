@@ -44,6 +44,10 @@ const (
 	// whose administrator has not supplied a VDDK image. The VMware path is
 	// unavailable rather than broken: see the platform's migration settings.
 	ReasonVDDKNotConfigured = "VDDKNotConfigured"
+	// ReasonForkliftNotInstalled means the migration engine's CRDs are absent.
+	// The controller ships independently of Forklift, so this is a normal state
+	// on a cluster that has enabled one package and not the other.
+	ReasonForkliftNotInstalled = "ForkliftNotInstalled"
 )
 
 // ProviderType names a source virtualization platform.
@@ -68,13 +72,20 @@ type ProviderCredentials struct {
 	// +kubebuilder:validation:MinLength=1
 	Password string `json:"password"`
 
-	// Thumbprint is the SHA-1 thumbprint of the endpoint's TLS certificate.
-	// Required for vSphere unless insecureSkipVerify is set.
+	// CACert is the PEM-encoded certificate authority that signed the
+	// endpoint's TLS certificate. Required unless insecureSkipVerify is set:
+	// the migration engine refuses a vSphere connection that can neither
+	// verify the endpoint nor was told not to.
+	//
+	// This is a CA certificate, not a fingerprint. A SHA-1 thumbprint is what
+	// the engine wants for a direct ESXi host connection, which v1 does not
+	// expose, and supplying one here does not satisfy the check.
 	// +optional
-	Thumbprint string `json:"thumbprint,omitempty"`
+	CACert string `json:"caCert,omitempty"`
 
 	// InsecureSkipVerify disables verification of the endpoint's TLS
-	// certificate. Intended for lab environments; prefer a thumbprint.
+	// certificate. Convenient in a lab and a bad idea anywhere else: the
+	// credentials above travel over that connection. Prefer caCert.
 	// +optional
 	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
 }
@@ -90,6 +101,7 @@ type VMImportSourceSpec struct {
 	URL string `json:"url"`
 
 	// Credentials is the account used to reach the provider.
+	// +kubebuilder:validation:XValidation:rule="has(self.caCert) || (has(self.insecureSkipVerify) && self.insecureSkipVerify)",message="either caCert must be set or insecureSkipVerify must be true: the migration engine will not open a vSphere connection it can neither verify nor was told to trust"
 	Credentials ProviderCredentials `json:"credentials"`
 }
 

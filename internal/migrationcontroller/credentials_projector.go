@@ -44,11 +44,13 @@ func projectCredentials(ctx context.Context, c client.Client, src *migrationv1al
 		"user":     []byte(src.Spec.Credentials.Username),
 		"password": []byte(src.Spec.Credentials.Password),
 	}
-	// Forklift reads these two keys only when they are non-empty: an empty
-	// thumbprint with insecureSkipVerify unset makes it fail the connection
-	// test, which is the correct outcome and is reported on the Source.
-	if src.Spec.Credentials.Thumbprint != "" {
-		desired["thumbprint"] = []byte(src.Spec.Credentials.Thumbprint)
+	// The engine's vSphere validation wants `user`, `password`, and then either
+	// a `cacert` or `insecureSkipVerify` parseable as a boolean. Without one of
+	// the latter two it marks the provider's secret invalid and never attempts
+	// a connection — a state that looks like a credentials problem and is not.
+	// Verified against the vendored engine's own validation on a live cluster.
+	if src.Spec.Credentials.CACert != "" {
+		desired["cacert"] = []byte(src.Spec.Credentials.CACert)
 	}
 	if src.Spec.Credentials.InsecureSkipVerify {
 		desired["insecureSkipVerify"] = []byte("true")
