@@ -119,15 +119,25 @@ assert_full_suite() {
 }
 
 @test "a CDI change selects the suite that exercises a VMDisk" {
-    # kubevirt-cdi reaches vm-disk-application and nothing else runnable, so
-    # until vm-disk-application mapped to a suite every CDI change ran all of
-    # them. The vminstance suite creates a VMDisk and asserts the DataVolume
-    # behind it, so it is the suite that covers CDI.
+    # kubevirt-cdi reached no runnable suite until vm-disk-application mapped to
+    # one, so every CDI change ran all of them. The vminstance suite creates a
+    # VMDisk and asserts the DataVolume behind it, so it is the suite that
+    # covers CDI, and this pins that it is selected.
+    #
+    # Membership, not equality: what the rule owes is that the VMDisk suite is
+    # IN the selection, and CDI legitimately reaches more than one suite —
+    # site-router's gateway boots from a CDI-provisioned DataVolume, so enabling
+    # that suite widens this to `site-router vminstance`. An exact set would
+    # read a correct widening as a regression. Dropping vminstance from the
+    # mapping still fails this, which is what it guards.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/kubevirt-cdi/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$output" = "vminstance" ]
+    if ! echo "$output" | grep -wq vminstance; then
+        echo "a CDI change must select the vminstance suite; got: $output" >&2
+        exit 1
+    fi
     rm -rf "$tmp"
 }
 
@@ -997,4 +1007,79 @@ assert_full_suite() {
     # onto the line the first sits on still moves the number.
     count=$(grep -v '^[[:space:]]*#' hack/select-e2e.sh | grep -o 'resolve_suites' | wc -l)
     [ "$count" -eq 2 ]
+}
+
+@test "a change to the site-router app selects its own suite" {
+    # The suite is live: it carries a chainsaw-test.yaml, so the selector sees it
+    # like any other and a change to the app it covers resolves to it and to
+    # nothing else. It must never be parked back by stripping the name from the
+    # selector output. Doing that leaves the walk still reaching the name, so any
+    # package whose only coverage runs through site-router (cozystack-basics and
+    # kubevirt-cdi both do, via kubevirt-cdi -> site-router-application) resolves
+    # to one suite, has it stripped, and selects NOTHING — a full-suite
+    # escalation silently turned into a skipped Chainsaw run and a green
+    # "E2E Tests" (#3392). Park it by renaming the file, the way
+    # hack/e2e-chainsaw/backup/ is parked, or not at all.
+    #
+    # These three clean up at the end of the body rather than from an EXIT trap:
+    # a test-level trap displaces the handler the bats binary installs, and a
+    # test that then fails prints no TAP line at all. Both runners set -e, so a
+    # failure leaves the temp dir behind for inspection, which is what you want
+    # from a failed test. See docs/agents/e2e-testing.md.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/apps/site-router/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "site-router" ]
+    rm -rf "$tmp"
+}
+
+@test "a change to kubevirt-cdi reaches the site-router suite" {
+    # CDI provisions the gateway's boot DataVolume, so it reaches
+    # site-router-application and a CDI change genuinely wants this suite.
+    #
+    # Membership, not equality. What must hold is that site-router is IN the
+    # selection: #3817 maps vm-disk-application onto vminstance, which gives CDI
+    # a second suite, and an exact-set assertion here would go red on that
+    # correct widening. Stripping the name from the output still fails this,
+    # which is the #3392 regression the guard exists for.
+    #
+    # cozystack-basics has the same shape today and is deliberately NOT pinned
+    # here. It is a propagation hub, its escalation is what the two escalation
+    # guards above own, and #3817 stops it propagating at all — so asserting a
+    # suite for it here would contradict those guards on the far side of that PR.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/kubevirt-cdi/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    if ! echo "$output" | grep -wq site-router; then
+        echo "kubevirt-cdi must reach the site-router suite; got: $output" >&2
+        exit 1
+    fi
+    rm -rf "$tmp"
+}
+
+@test "editing the site-router suite selects it" {
+    # A live suite is selected by an edit to its own directory, which is the
+    # ordinary per-suite rule and the thing parking it took away.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/e2e-chainsaw/site-router/chainsaw-test.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "site-router" ]
+    rm -rf "$tmp"
+}
+
+@test "the site-router suite is part of the full suite" {
+    # The full-suite escalation enumerates chainsaw-test.yaml, so a live suite
+    # joins every escalation without a second mechanism.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/cilium/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    if ! echo "$output" | grep -wq site-router; then
+        echo "site-router is live and must appear in the full suite; got: $output" >&2
+        exit 1
+    fi
+    rm -rf "$tmp"
 }

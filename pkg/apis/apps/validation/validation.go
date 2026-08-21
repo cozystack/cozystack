@@ -30,6 +30,15 @@ import (
 // config.Application.Kind.
 const TenantKind = "Tenant"
 
+// SiteRouterKind is the Application.Kind string that gates the SiteRouter-specific
+// deny-set admission check (remoteCIDRs must be disjoint from the cluster
+// networks). It must stay in sync with the `kind` field of the site-router
+// ApplicationDefinition (packages/system/site-router-rd) which is the upstream
+// source the aggregated API reads at startup via config.Application.Kind. The
+// admission check is a no-op for every other kind, so generic app-instance
+// admission is untouched (DECISIONS.md D9).
+const SiteRouterKind = "SiteRouter"
+
 // tenantNameRegex enforces alphanumeric-only tenant names that begin with a
 // lowercase letter. This is stricter than DNS-1035 because the tenant Helm
 // chart's tenant.name helper (packages/apps/tenant/templates/_helpers.tpl)

@@ -1,0 +1,58 @@
+suite: site-router boot DataVolume
+
+# T04/T11 — the boot disk is a CDI DataVolume importing the digest-pinned VyOS
+# appliance containerDisk built by packages/system/vyos-router-image, whose
+# reference this chart carries in images/vyos-router-disk.tag. The source is not
+# tenant-overridable because the guest firewall is the sole compensating control
+# for the relaxed OVN port.
+#
+# WHERE THE RENDER ASSERTIONS LIVE: not here, and not by choice. The committed
+# reference is the digest-less `…/vyos-router-disk:v0.0.0` placeholder — no build
+# path in this repo publishes it, only a release build stamps a real digest (see
+# docs/image-lifecycle.md) — and site-router.applianceDiskUrl now REFUSES to
+# render an appliance reference that carries no digest, so with the chart as
+# committed templates/dv.yaml produces no document at all. helm-unittest cannot
+# inject chart files, so it cannot supply a stamped reference; the rendered URL,
+# the storageClass, the 12Gi request and the registry-only source are therefore
+# asserted in hack/site-router-appliance-ref.bats, which copies the chart and
+# writes the .tag before rendering. What is left here is the guard itself, which
+# is exactly what the committed state can prove.
+#
+# TODO: once the first release build has stamped a real digest into the .tag,
+# move those assertions back into this suite — the render succeeds again then,
+# and this file becomes the digest-less negative case only.
+
+templates:
+  - templates/dv.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+
+tests:
+  # The defect class: CDI's docker:// transport refuses a reference carrying both
+  # a tag and a digest ("Docker references with both a tag and digest are
+  # currently not supported"), and an unstamped reference resolves nowhere at
+  # all. Both used to render happily and fail minutes later as an importer that
+  # restarts forever, so the render is failed at the point of consumption
+  # instead. This case pins the second half; the bats suite pins the first.
+  - it: refuses to render while the appliance reference carries no digest
+    asserts:
+      - failedTemplate:
+          errorPattern: 'images/vyos-router-disk\.tag holds "[^"]*", which carries no @sha256: digest'
+
+  # A guard that names neither the cause nor the fix costs an operator the same
+  # hour the stuck import used to. Assert both halves of the message, so a later
+  # reword cannot quietly reduce it to "invalid reference".
+  - it: names the unstamped appliance as the cause
+    asserts:
+      - failedTemplate:
+          errorPattern: 'the VyOS appliance containerDisk has not been stamped by a build'
+
+  - it: names the remedy the operator can act on
+    asserts:
+      - failedTemplate:
+          errorPattern: 'make -C packages/system/vyos-router-image image'

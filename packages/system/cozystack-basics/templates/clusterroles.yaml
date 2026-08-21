@@ -253,6 +253,7 @@ rules:
   - vmdisks
   - vminstances
   - vpns
+  - siterouters
   - infos
   - virtualprivateclouds
   verbs:
