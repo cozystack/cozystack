@@ -259,6 +259,60 @@ write_files:
     permissions: '0660'
     content: |
 {{ $cfg | indent 6 }}
+{{- if $ctx.Values.logSerialConsole }}
+{{- /*
+  Bring-up diagnostics, installed only when the operator asked for the serial
+  console — the emitter is useless without something capturing what it prints,
+  and the capture is much weaker without it, so the two share one switch.
+
+  Two more write_files entries and NOTHING ELSE: deliberately no addition to
+  config.boot above. That config was captured verbatim from VyOS `save` and a
+  hand-edit that mis-serialises one node makes the whole file unparseable, which
+  would leave the guest unconfigured and unreachable — a diagnostics change must
+  not be able to cause the outage it exists to explain. write_files entries are
+  independent of each other, so nothing here can affect the config seed.
+
+  cron, rather than a systemd unit or VyOS task-scheduler, for reasons the script
+  header records in full: cloud_final_modules is empty on this image so nothing
+  executable runs from cloud-init, and cron is the only starter that needs no
+  reload and does not depend on the config committing.
+*/}}
+{{- $diag := $ctx.Files.Get "files/guest-diag.sh" | trimSuffix "\n" }}
+{{- /*
+  Fail the render rather than ship an empty script. .Files.Get returns "" for a
+  path that is not in the PACKAGED chart, so a .helmignore that grows a /files
+  entry would install a cron job pointing at an empty file: the guest would boot,
+  cron would fire every minute, and the console would carry nothing but kernel
+  output — the exact silence this change exists to end, arrived at with every
+  render and test still green. Same fail-loud posture as
+  site-router.applianceDiskUrl and the managementCIDR fail-closed above.
+*/}}
+{{- if not $diag }}
+{{- fail "files/guest-diag.sh is empty or missing from the packaged chart, so logSerialConsole would install a cron job with no script; check .helmignore" }}
+{{- end }}
+  - path: /config/scripts/cozy-guest-diag.sh
+    owner: root:root
+    permissions: '0755'
+    content: |
+{{ $diag | indent 6 }}
+  - path: /etc/cron.d/cozy-guest-diag
+    owner: root:root
+    permissions: '0644'
+    content: |
+      # Managed by the cozystack site-router chart (values.logSerialConsole).
+      #
+      # The filename carries no dot ON PURPOSE: Debian cron silently ignores
+      # /etc/cron.d entries whose names contain anything other than letters,
+      # digits, underscore and hyphen, so `cozy-guest-diag.cron` would install
+      # cleanly and never run.
+      #
+      # PATH is set explicitly because cron's default is /usr/bin:/bin, and the
+      # things worth reading here — systemctl, ss, swanctl — live in sbin. Without
+      # this every one of those fields would report a bare "not found".
+      SHELL=/bin/sh
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      * * * * * root /config/scripts/cozy-guest-diag.sh
+{{- end }}
 {{- end -}}
 
 {{/*
