@@ -1,0 +1,251 @@
+name: E2E Experiment
+
+# The settings, in the run list. A series of these runs differs only in its
+# inputs, and every one of them would otherwise be called the same thing.
+run-name: "vcpu=${{ inputs.worker_vcpu }} limit=${{ inputs.pod_cpu_limit }} req=${{ inputs.pod_cpu_request }} halt=${{ inputs.halt_poll_ns }}"
+
+# One e2e run at worker and host settings given on dispatch, against a
+# Cozystack build that was published already.
+#
+# Measuring what the nested-virtualisation cost on these runners responds to
+# means applying the same product at several worker sizes and host settings.
+# Doing that with a branch per setting does not work: the suite selection is
+# computed from the pull request diff, so a branch per setting runs a different
+# set of suites per setting, and the settings would be compared across
+# different workloads. This lane moves the settings into dispatch inputs
+# instead, so every run in a series is the same tree and the same published
+# bits, and only the inputs differ.
+#
+# The product under test is pinned by `installer_version` and is not built
+# here. Point it at an immutable published version rather than a floating tag,
+# or a series spread over a few days compares settings against whatever landed
+# in between.
+#
+# Nothing here gates anything. It publishes no commit status, blocks no merge
+# and notifies nobody; its output is the report artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      installer_version:
+        description: 'Published version to install, e.g. 0.0.0-nightly.20260820.32324686063.1. Use an immutable one.'
+        required: true
+        type: string
+      worker_vcpu:
+        description: 'vCPUs per tenant worker.'
+        required: false
+        default: '1'
+        type: string
+      pod_cpu_limit:
+        description: "CPU ceiling of the worker's virt-launcher compute container."
+        required: false
+        default: '2'
+        type: string
+      pod_cpu_request:
+        description: "CPU request of the worker's virt-launcher compute container."
+        required: false
+        default: '100m'
+        type: string
+      halt_poll_ns:
+        description: 'KVM halt-polling window for the sandbox host kernel. Empty leaves it alone and records what it was.'
+        required: false
+        default: ''
+        type: string
+
+env:
+  DST_REGISTRY: ghcr.io/cozystack/cozystack
+
+# No concurrency group, deliberately: a series of these runs at once is one of
+# the conditions being measured, and a group would serialise or cancel exactly
+# the runs that are supposed to overlap.
+
+jobs:
+  e2e:
+    name: E2E (experiment)
+    # Three QEMU guests at `-smp 8` commit 24 vCPU for the whole run, so the
+    # class has to be strictly larger. Enforced by
+    # hack/sandbox-runner-headroom.bats.
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    # Sized the way the other lanes running this suite are;
+    # hack/node-join-soft-red_test.bats holds what the figure is sized against.
+    timeout-minutes: 215
+    permissions:
+      contents: read
+      packages: read
+    # The settings reach the suite through the sandbox container's environment,
+    # which packages/core/testing/Makefile forwards on `docker run`. Read here
+    # rather than interpolated into a `run:` body, which would put dispatch
+    # input straight into a shell.
+    env:
+      COZY_E2E_WORKER_VCPU: ${{ inputs.worker_vcpu }}
+      COZY_E2E_WORKER_POD_CPU_LIMIT: ${{ inputs.pod_cpu_limit }}
+      COZY_E2E_WORKER_POD_CPU_REQUEST: ${{ inputs.pod_cpu_request }}
+      COZY_E2E_HALT_POLL_NS: ${{ inputs.halt_poll_ns }}
+    steps:
+      - name: Checkout source commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Every value this step names is checked before anything uses one, and
+      # checked WHOLE. A line-oriented matcher accepts a value whose first line is
+      # clean and hands the rest to whatever consumes it; `case` compares the
+      # entire value, so a newline is caught by being outside the permitted set.
+      # halt_poll_ns is not among them: it is checked by the step that writes it,
+      # which is the only place that can also say whether the value stuck.
+      #
+      # The empty value passes on purpose for the sizing knobs, and not because
+      # an omitted input arrives that way -- those declare a default and arrive
+      # carrying it. Empty is what an operator clearing the field sends, and what
+      # a sandbox started by hand has; both mean leave the figure alone.
+      - name: Check and record the dispatched settings
+        env:
+          VERSION: ${{ inputs.installer_version }}
+        run: |
+          set -eu
+          for setting in \
+            "worker_vcpu=${COZY_E2E_WORKER_VCPU}" \
+            "pod_cpu_limit=${COZY_E2E_WORKER_POD_CPU_LIMIT}" \
+            "pod_cpu_request=${COZY_E2E_WORKER_POD_CPU_REQUEST}"; do
+            case "${setting#*=}" in
+              *[!A-Za-z0-9.]*)
+                echo "${setting%%=*} is not a Kubernetes quantity: ${setting#*=}" >&2
+                exit 1 ;;
+            esac
+          done
+          # A published version reaches a yq expression as well as two registry
+          # references, so anything outside a tag's shape is refused here.
+          case "${VERSION}" in
+            '' | *[!A-Za-z0-9._-]*)
+              echo "installer_version is not a published version tag: ${VERSION}" >&2
+              exit 1 ;;
+          esac
+          echo "worker_vcpu=${COZY_E2E_WORKER_VCPU}"
+          echo "pod_cpu_limit=${COZY_E2E_WORKER_POD_CPU_LIMIT}"
+          echo "pod_cpu_request=${COZY_E2E_WORKER_POD_CPU_REQUEST}"
+          echo "halt_poll_ns=${COZY_E2E_HALT_POLL_NS:-<unset, recorded only>}"
+          echo "installer_version=${VERSION}"
+
+      - name: Set up toolchain (flux, oras)
+        run: |
+          command -v flux >/dev/null || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          command -v oras >/dev/null || { curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin oras; }
+
+      - name: Login to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | oras login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+
+      # The published packages tree replaces the one in the checkout, so the
+      # product is the pinned build while the suite is this branch's. Pinned by
+      # tag and not by digest, because the tag is the input and resolving it to
+      # a digest here would only re-describe what the input already names.
+      - name: Stage the published install tree
+        env:
+          VERSION: ${{ inputs.installer_version }}
+        run: |
+          set -eu
+          rm -rf _rw && mkdir -p _rw
+          flux pull artifact "oci://${DST_REGISTRY}/cozystack-packages:${VERSION}" --output _rw
+          cp -r _rw/. packages/
+          # The artifact carries the whole packages tree, this repository's e2e
+          # harness included, so the copy above replaces the sandbox Makefile with
+          # the pinned build's copy of it. That Makefile is what forwards the
+          # dispatched settings into the container, and a build published before a
+          # setting existed does not forward it: the run would take the setting from
+          # the dispatch form, print it, and measure the default. Restore the
+          # harness, keep the product.
+          git checkout -- packages/core/testing/Makefile
+          yq -i ".cozystackOperator.platformSourceUrl = \"oci://${DST_REGISTRY}/cozystack-packages\"" packages/core/installer/values.yaml
+          yq -i ".cozystackOperator.platformSourceRef = \"tag=${VERSION}\"" packages/core/installer/values.yaml
+
+      - name: Fetch nocloud disk from GHCR
+        env:
+          VERSION: ${{ inputs.installer_version }}
+        run: |
+          set -eu
+          mkdir -p _out/assets
+          oras pull "${DST_REGISTRY}/cozystack-nocloud:${VERSION}" --output _out/assets
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_RUN_ID}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
+
+      - name: Prepare environment
+        run: |
+          attempt=0
+          until make SANDBOX_NAME="$SANDBOX_NAME" prepare-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then echo "Attempt $attempt failed, exiting..."; exit 1; fi
+            echo "Attempt $attempt failed, retrying..."
+          done
+
+      - name: Install Cozystack into sandbox
+        run: |
+          if ! make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" install-cozystack; then
+            echo "❌ Install failed (no retry — diagnostics below)"
+            echo "::group::HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      # One suite, fixed here rather than dispatched. A series compares settings
+      # against one workload, so the suite is a constant of the experiment; and
+      # the second Kubernetes suite runs after the first on the same host and
+      # inherits its pressure, which makes it a repeated measure rather than an
+      # independent one. Fixed also means no operator text reaches the shell
+      # recipe this value is interpolated into.
+      - name: Run E2E tests
+        run: |
+          if ! make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" test-chainsaw CHAINSAW_SUITES="kubernetes-latest"; then
+            echo "❌ Chainsaw E2E failed; the report artifact carries the captures"
+            exit 1
+          fi
+          echo "✅ E2E tests passed"
+
+      - name: Collect chainsaw report
+        if: always()
+        run: |
+          mkdir -p _out
+          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
+            _out/chainsaw-report.xml || true
+
+      - name: Upload chainsaw report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chainsaw-report
+          path: _out/chainsaw-report.xml
+          if-no-files-found: ignore
+
+      # A ceiling of its own for the reason the other lanes give it one: the
+      # collector writes its tarball on its last line, so a read that never
+      # returns spends the job budget and the upload below never runs.
+      - name: Collect report
+        id: collect_report
+        if: always()
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" collect-report || true
+
+      - name: Report collection overran its ceiling
+        if: always() && steps.collect_report.outcome == 'failure'
+        run: |
+          echo "::warning title=cozyreport::Collect report ended non-zero -- its timeout-minutes fired, or the step failed before the collector ran; cozyreport.tgz is missing or partial for this run"
+
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cozyreport
+          path: _out/cozyreport.tgz
+          if-no-files-found: warn
+
+      - name: Tear down sandbox
+        if: always()
+        run: make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete || true

@@ -11,7 +11,7 @@
 # configuration, and it is the entire basis for this check.
 #
 # Nothing enforced that pairing before this file: the guest demand lives in a
-# bats file and the runner classes live in four workflows, so raising `-smp`
+# bats file and the runner classes live in the workflows, so raising `-smp`
 # or adding a lane on a smaller runner drifted them apart silently. That is how
 # one lane came to sit on a 32-vCPU class while another ran the same sandbox on
 # a 24-vCPU one.

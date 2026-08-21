@@ -84,12 +84,25 @@ exec:  ## Opens an interactive shell in the sandbox container.
 # exits 0. On a machine with no metadata service -- a laptop running this target
 # directly -- it costs the read's own ceiling once, against a target that then
 # boots three QEMU guests.
+#
+# The COZY_E2E_ knobs below are forwarded in their valueless form, which passes
+# what the caller has and passes nothing when the caller has nothing. Both the
+# sandbox bringup and the Chainsaw run reach this container through `docker
+# exec`, which carries the environment the container was created with, so
+# setting them here is what puts them in front of both. Everything that reads
+# one defaults with `:-`, so an unset variable and one set to the empty string
+# are the same knob left alone -- an operator clearing a dispatch field and a
+# sandbox started by hand arrive here as the second and the first.
 apply: delete
 	COZY_RUNNER_IDENTITY_FILE="$(ROOT_DIR)_out/runner-identity.txt" $(ROOT_DIR)hack/e2e-runner-identity.sh
 	docker run \
 		-d --rm --name "${SANDBOX_NAME}" --privileged \
 		-e TALOSCONFIG=/workspace/talosconfig \
 		-e KUBECONFIG=/workspace/kubeconfig \
+		-e COZY_E2E_WORKER_VCPU \
+		-e COZY_E2E_WORKER_POD_CPU_LIMIT \
+		-e COZY_E2E_WORKER_POD_CPU_REQUEST \
+		-e COZY_E2E_HALT_POLL_NS \
 		"$$(yq .e2e.image values.yaml)" \
 		--timeout 30m
 	docker cp "${ROOT_DIR}/." "${SANDBOX_NAME}":/workspace

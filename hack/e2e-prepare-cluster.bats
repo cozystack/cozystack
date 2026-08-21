@@ -95,6 +95,13 @@ EOF
   done
 }
 
+# Ahead of the guests: the parameter is read per halt, so moving this below the
+# launch would apply it to some of their halts and not others, and the recording
+# beside the run would describe a window it did not cover.
+@test "Record, and if asked set, the runner kernel's KVM halt polling" {
+  hack/e2e-halt-poll.sh
+}
+
 @test "Boot QEMU VMs" {
   for i in 1 2 3; do
     # `debug-threads=on` names the vCPU threads (`CPU N/KVM`) so the QEMU

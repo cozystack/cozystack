@@ -4660,6 +4660,21 @@ YAML
   local talos_block
   talos_block=$(talos_spec_block)
 
+  # The worker node group below takes its CPU sizing from the environment, with
+  # the figures it carried before as the defaults, so that a run which sets none
+  # of them applies the manifest recorded in
+  # hack/testdata/run-kubernetes-fixture/. They are here because sizing a worker
+  # against the nested-virtualisation cost is a question about the machine
+  # rather than about the product, and answering it means applying the same
+  # commit at several sizes; a branch per size would change the diff, and the
+  # diff is what decides which suites run.
+  #
+  # `:-` and not `-`, because a workflow input left blank arrives as the empty
+  # string rather than as an unset variable, and `-` would render it as nothing.
+  #
+  # Memory stays a literal, deliberately: an instancetype carries CPU and
+  # memory together, and the reason this group is sized by `resources` at all is
+  # to move one of them without the other.
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
@@ -4744,12 +4759,12 @@ ${ouroboros_addon}
       # the scheduler for its whole ceiling and sit Pending on Insufficient cpu.
       # Its value is the one KubeVirt derived for these workers before, from the
       # vCPU count and the cluster CPU allocation ratio.
-      podCpuLimit: 2
-      podCpuRequest: 100m
+      podCpuLimit: ${COZY_E2E_WORKER_POD_CPU_LIMIT:-2}
+      podCpuRequest: ${COZY_E2E_WORKER_POD_CPU_REQUEST:-100m}
       # One vCPU at the memory the workers had before. Sized by resources
       # rather than by instanceType, which cannot carry the pod CPU pair above.
       resources:
-        cpu: 1
+        cpu: ${COZY_E2E_WORKER_VCPU:-1}
         memory: 4Gi
       roles:
       - ingress-nginx
