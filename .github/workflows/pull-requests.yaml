@@ -875,6 +875,16 @@ jobs:
       )
 
     steps:
+      # hack/sandbox-runner-headroom.bats requires this job's runner class to
+      # exceed the sandbox's 24 guest vCPU, reading the number straight out of
+      # the `oracle-vm-<n>cpu` label. Nothing verifies that the label is host
+      # vCPUs: the scale set asks OCI for `--shape-ocpus` / 2 (cncf/automation
+      # ci/cloudrunners/oci/main.go), so `32cpu` is a 16-OCPU instance, and the
+      # socket/core/thread and NUMA layout it arrives as is not in the label at
+      # all. One lscpu, before anything can perturb the host, settles both.
+      # `|| true` so a missing lscpu cannot cost a two-hour suite.
+      - name: Log host CPU topology
+        run: lscpu || true
       - name: Generate GitHub App token
         if: contains(github.event.pull_request.labels.*.name, 'release')
         id: app-token
