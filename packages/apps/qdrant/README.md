@@ -54,3 +54,17 @@ This setting is ignored if the corresponding `resources` value is set.
 Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases of their 1:1 instance-type equivalents.
 
 See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
+
+### tls
+
+With TLS on, the chart issues the server certificate from a self-signed CA it creates per release. The trust anchor for verifying that certificate is published as `qdrant-<name>.tenant-ca`, where `<name>` is the name of the `Qdrant` resource: an object holding `ca.crt` and nothing else, delivered to tenants through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant.
+
+```bash
+kubectl --context <ctx> --namespace <tenant> \
+  get tenantsecret qdrant-<name>.tenant-ca \
+  --output jsonpath='{.data.ca\.crt}' | base64 --decode
+```
+
+It is the only object that hands over the CA certificate without also handing over a private key, which is why it exists. The `qdrant-<name>-ca` Secret the chart creates stores the CA **private key** alongside the certificate — read access to it would let the holder issue certificates for anything, so it is never granted to a tenant.
+
+It is reached through `tenantsecrets` rather than by reading the Secret directly, and that is deliberate: `tenantsecrets` surfaces only objects the platform has vouched for (those the application's definition selects), whereas a direct grant on the name would convey whatever happens to occupy that name.

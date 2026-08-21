@@ -107,6 +107,72 @@ tests:
           value: false
         documentIndex: 3
 
+  ###################################################
+  # Key-bearing Secrets stay invisible to tenants   #
+  ###################################################
+
+  # Both Certificates below mint a private key. Neither may carry the labels
+  # the tenant read path selects on; only the controller-authored projection
+  # may.
+  #
+  # That path has two gates and this label is the second one. tenantsecrets
+  # serves Secrets labelled internal.cozystack.io/tenantresource=true, and the
+  # lineage webhook sets that by matching the Secret against the application
+  # definition's spec.secrets selectors, one of which is the tenant-ca label
+  # below. It only gets that far for a Secret whose owner it can resolve:
+  # pkg/lineage walks ownerReferences, then falls back to a
+  # helm.toolkit.fluxcd.io/name label, and returns no owner otherwise, in
+  # which case the webhook stamps nothing at all. A Secret cert-manager writes
+  # has neither while enableCertificateOwnerRef is false, which is how
+  # cert-manager ships here, so the label on its own is inert today.
+  #
+  # It stops being inert under --enable-certificate-owner-ref, which puts an
+  # ownerReference to the Certificate on the Secret, and the Certificate does
+  # carry the Flux label the walk needs. Same if a secretTemplate ever copies
+  # that label across. So the guard is not protecting against today's config;
+  # it is keeping a cluster flag from being what decides whether the CA
+  # private key is tenant-readable.
+  #
+  # Selected by the Secret each Certificate writes rather than by position: a
+  # documentIndex would follow the slot, so reordering this template would let
+  # a labelled key-bearing Certificate slide out from under the assertion and
+  # pass green.
+  - it: the key-bearing CA Secret is never marked tenant-readable
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    documentSelector:
+      path: spec.secretName
+      value: test-qdrant-ca
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
+
+  - it: the key-bearing leaf Secret is never marked tenant-readable
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    documentSelector:
+      path: spec.secretName
+      value: test-qdrant-tls
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
+
   - it: leaf cert has server auth and client auth EKU
     release:
       name: test-qdrant
