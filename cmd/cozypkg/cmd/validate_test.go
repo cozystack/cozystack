@@ -308,6 +308,14 @@ func TestSplitYAMLDocuments(t *testing.T) {
 	}
 }
 
+func TestVerifyCosignSignatureGuards(t *testing.T) {
+	// Errors regardless of whether cosign is installed: absent -> missing-binary
+	// error; present -> missing identity/issuer error. Either way, no silent pass.
+	if err := verifyCosignSignature("oci://ghcr.io/foo/bar:v1", "", ""); err == nil {
+		t.Fatal("expected an error when identity/issuer are missing or cosign is absent")
+	}
+}
+
 func TestArtifactRoot_FallsBackWhenNoPackagesDir(t *testing.T) {
 	root := t.TempDir()
 	if got := artifactRoot(root); got != root {

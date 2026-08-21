@@ -505,7 +505,35 @@ func printReport(r *Report, w io.Writer) {
 var validateCmdFlags struct {
 	helmLint         bool
 	requireSignature bool
+	certIdentity     string
+	certIssuer       string
 	knownSources     []string
+}
+
+// verifyCosignSignature verifies an OCI artifact's keyless cosign signature
+// against the expected certificate identity and OIDC issuer, shelling out to
+// the cosign binary. This is the trust anchor the index CI gate relies on: a
+// version bump must stay signed by the entry's recorded identity.
+func verifyCosignSignature(ref, identity, issuer string) error {
+	if _, err := exec.LookPath("cosign"); err != nil {
+		return fmt.Errorf("--require-signature needs the cosign binary in PATH: %w", err)
+	}
+	if identity == "" || issuer == "" {
+		return fmt.Errorf("--require-signature needs --certificate-identity and --certificate-oidc-issuer for keyless verification")
+	}
+	cosignRef := strings.TrimPrefix(ref, "oci://")
+	ctx, cancel := context.WithTimeout(context.Background(), ociPullTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "cosign", "verify", cosignRef,
+		"--certificate-identity", identity,
+		"--certificate-oidc-issuer", issuer).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("timed out verifying the signature of %q", ref)
+	}
+	if err != nil {
+		return fmt.Errorf("cosign verification failed for %q: %v\n%s", ref, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 var validateCmd = &cobra.Command{
@@ -527,14 +555,16 @@ runs "helm lint" on every component chart.`,
 		root := target
 
 		if isOCIRef(target) {
+			if validateCmdFlags.requireSignature {
+				if err := verifyCosignSignature(target, validateCmdFlags.certIdentity, validateCmdFlags.certIssuer); err != nil {
+					return err
+				}
+			}
 			dir, cleanup, err := pullOCIArtifact(target)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
-			if validateCmdFlags.requireSignature {
-				return fmt.Errorf("--require-signature is not implemented yet; cosign verification is planned for a later release")
-			}
 			root = dir
 		} else if validateCmdFlags.requireSignature {
 			return fmt.Errorf("--require-signature requires an oci:// reference, not a local path")
@@ -560,6 +590,8 @@ runs "helm lint" on every component chart.`,
 func init() {
 	rootCmd.AddCommand(validateCmd)
 	validateCmd.Flags().BoolVar(&validateCmdFlags.helmLint, "helm-lint", false, "Run 'helm lint' on every component chart (requires the helm binary)")
-	validateCmd.Flags().BoolVar(&validateCmdFlags.requireSignature, "require-signature", false, "Require a valid cosign signature on the OCI artifact (not yet implemented)")
+	validateCmd.Flags().BoolVar(&validateCmdFlags.requireSignature, "require-signature", false, "Require a valid keyless cosign signature on the OCI artifact (needs the cosign binary and an oci:// reference)")
+	validateCmd.Flags().StringVar(&validateCmdFlags.certIdentity, "certificate-identity", "", "Expected cosign certificate identity for --require-signature")
+	validateCmd.Flags().StringVar(&validateCmdFlags.certIssuer, "certificate-oidc-issuer", "", "Expected cosign certificate OIDC issuer for --require-signature")
 	validateCmd.Flags().StringArrayVar(&validateCmdFlags.knownSources, "known-source", nil, "PackageSource name that dependsOn entries may reference without being defined in the repository (can be repeated)")
 }
