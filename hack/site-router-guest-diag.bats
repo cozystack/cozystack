@@ -277,3 +277,102 @@ STUB
   }
   rm -rf "$TMP"
 }
+
+@test "remote-site-b is injected with the same emitter, byte for byte" {
+  TMP=$(mktemp -d)
+  # Mirrors the bring-up step's own pipeline. awk, not sed: the script contains
+  # `2>&1`, and sed would expand the `&` in a replacement to the whole match.
+  awk -v f="$DIAG_SRC" '
+    /__GUEST_DIAG_SCRIPT__/ {
+      match($0, /^ */); pad = substr($0, 1, RLENGTH)
+      while ((getline line < f) > 0) print pad line
+      close(f); next
+    }
+    { print }
+  ' "$SUITE_DIR/remote-site-b.yaml" \
+    | sed "s|__VYOS_DISK_REF__|$FIX_REF|" > "$TMP/b.yaml"
+  grep -q -e '__GUEST_DIAG_SCRIPT__' -e '__VYOS_DISK_REF__' "$TMP/b.yaml" && {
+    echo "a placeholder survived substitution, so B would run a placeholder as its diagnostic" >&2
+    rm -rf "$TMP"; exit 1
+  }
+  yq e 'select(.kind == "Secret") | .stringData.userdata' "$TMP/b.yaml" > "$TMP/ud.yaml"
+  yq e '.write_files[] | select(.path == "/config/scripts/cozy-guest-diag.sh") | .content' \
+    "$TMP/ud.yaml" > "$TMP/shipped"
+  # B and A must report in the same format: the last diagnosis was credible
+  # because the same symptom appeared on both ends through two different config
+  # paths, and that argument needs both to say things the same way.
+  strip_trailing_blanks "$DIAG_SRC" "$TMP/want"
+  strip_trailing_blanks "$TMP/shipped" "$TMP/got"
+  cmp -s "$TMP/want" "$TMP/got" || {
+    echo "B's injected emitter differs from the source; sed-style & expansion is the usual cause" >&2
+    diff "$TMP/want" "$TMP/got" >&2 || true
+    rm -rf "$TMP"; exit 1
+  }
+  # And B's console has to be captured, or the emitter prints into nothing.
+  lsc=$(yq e 'select(.kind == "VirtualMachine") | .spec.template.spec.domain.devices.logSerialConsole' "$TMP/b.yaml")
+  [ "$lsc" = "true" ] || {
+    echo "B does not log its serial console ($lsc), so its emitter output is discarded" >&2
+    rm -rf "$TMP"; exit 1
+  }
+  rm -rf "$TMP"
+}
+
+@test "the suite's catch writes both guest consoles into the uploaded report" {
+  TMP=$(mktemp -d)
+  yq e '.spec.catch[] | select(.description == "guest serial consoles on failure") | .script.content' \
+    "$SUITE_DIR/chainsaw-test.yaml" > "$TMP/catch.sh"
+  [ -s "$TMP/catch.sh" ] || {
+    echo "the suite has no guest-console catch, so a console that exists is never collected" >&2
+    rm -rf "$TMP"; exit 1
+  }
+  mkdir -p "$TMP/bin" "$TMP/report"
+  # A kubectl that answers exactly the two calls the collector makes, and refuses
+  # a logs read that does not name the guest-console-log container — so a
+  # collector that forgot the container fails this test rather than silently
+  # collecting virt-launcher's own log.
+  cat > "$TMP/bin/kubectl" <<'STUB'
+#!/bin/sh
+vm=""
+for a in "$@"; do
+  case "$a" in vm.kubevirt.io/name=*) vm="${a#vm.kubevirt.io/name=}" ;; esac
+done
+case " $* " in
+  *" get pod "*) echo "virt-launcher-$vm-xk4d9" ;;
+  *" logs "*)
+    case " $* " in
+      *" -c guest-console-log "*) ;;
+      *) echo "container not found" >&2; exit 1 ;;
+    esac
+    echo "[    0.000000] Linux version 6.x"
+    echo "[cozy-diag] t=42s p=900 nginx: activating"
+    echo "vyos login:"
+    ;;
+  *) exit 1 ;;
+esac
+STUB
+  chmod +x "$TMP/bin/kubectl"
+  PATH="$TMP/bin:$PATH" COZY_REPORT_DIR="$TMP/report" TEST_NAME=site-router \
+    sh "$TMP/catch.sh" > "$TMP/out" 2>&1 || {
+      echo "the catch script failed; diagnostics must never fail the catch" >&2
+      cat "$TMP/out" >&2; rm -rf "$TMP"; exit 1
+    }
+  # Collected as FILES under COZY_REPORT_DIR, which is the tree
+  # hack/cozyreport.sh folds into cozyreport.tgz. Echoing to the job log alone
+  # would be lost to a job-level timeout, and crust-gather's 180s budget has been
+  # seen truncating a cluster this size.
+  for vm in site-router-a remote-site-b; do
+    [ -s "$TMP/report/snapshots/site-router/guest-consoles/$vm.log" ] || {
+      echo "no collected console for $vm under COZY_REPORT_DIR" >&2
+      find "$TMP/report" >&2 || true
+      cat "$TMP/out" >&2
+      rm -rf "$TMP"; exit 1
+    }
+  done
+  # The [cozy-diag] timeline also has to reach the job log, which is the copy a
+  # reader sees without downloading an artifact.
+  grep -q '\[cozy-diag\] t=42s p=900 nginx: activating' "$TMP/out" || {
+    echo "the catch collected the console but did not surface the [cozy-diag] timeline" >&2
+    cat "$TMP/out" >&2; rm -rf "$TMP"; exit 1
+  }
+  rm -rf "$TMP"
+}
