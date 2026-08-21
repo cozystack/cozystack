@@ -8,7 +8,7 @@ export interface HeaderTab {
   id: string
   label: string
   to: string
-  /** Bold highlight (used for the primary "Marketplace" tab). */
+  /** Bold emphasis, for the primary tab the app treats as its entry point. */
   highlight?: boolean
   /** External target — skips client routing. */
   external?: boolean
@@ -27,8 +27,8 @@ interface HeaderProps {
 }
 
 const DEFAULT_TABS: HeaderTab[] = [
-  { id: "marketplace", label: "Marketplace", to: "/marketplace", highlight: true },
-  { id: "console", label: "Console", to: "/console" },
+  { id: "console", label: "Console", to: "/console", highlight: true },
+  { id: "marketplace", label: "Marketplace", to: "/marketplace" },
 ]
 
 export function Header({
