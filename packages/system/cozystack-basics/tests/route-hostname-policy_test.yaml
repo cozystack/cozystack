@@ -94,7 +94,71 @@ tests:
           path: spec.validationActions
           value: [Deny]
 
-  - it: targets gateway.networking.k8s.io v1 HTTPRoute and v1alpha2 TLSRoute
+  # A route that omits spec.hostnames does not match nothing: under Gateway API
+  # it inherits the hostnames of the listener it attaches to, which is the
+  # boundary this policy exists to hold. An earlier form of the expression
+  # opened with `!has(object.spec.hostnames) ||`, so that route satisfied the
+  # first operand and was admitted with no hostname examined at all. An empty
+  # list is the same shape reached a different way: has() is true on it, and
+  # all() over an empty list is vacuously true. Both operands are pinned here,
+  # and the old short-circuit is pinned absent, because either one alone is
+  # enough to admit the whole shape again.
+  #
+  # Addressed by documentSelector rather than documentIndex: the two policies
+  # rendered by this template share one CEL string, so an assertion tied to a
+  # position would slide onto the other policy if the documents were reordered
+  # and stay green either way. Each policy is named separately so a failure says
+  # which one lost the guard.
+  - it: HTTPRoute policy requires spec.hostnames to be present and non-empty
+    asserts:
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: httproutes
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'has\(object\.spec\.hostnames\)\s*&&\s*size\(object\.spec\.hostnames\)\s*>\s*0\s*&&'
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: httproutes
+        notMatchRegex:
+          path: spec.validations[0].expression
+          pattern: '!has\(object\.spec\.hostnames\)'
+
+  - it: TLSRoute policy requires spec.hostnames to be present and non-empty
+    asserts:
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: tlsroutes
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'has\(object\.spec\.hostnames\)\s*&&\s*size\(object\.spec\.hostnames\)\s*>\s*0\s*&&'
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: tlsroutes
+        notMatchRegex:
+          path: spec.validations[0].expression
+          pattern: '!has\(object\.spec\.hostnames\)'
+
+  # The denial a hostname-less route now gets has to name the reason. Without
+  # this the operator reads "hostnames must equal the label or be subdomains of
+  # it" against a route that declares no hostnames at all, and the message
+  # describes a rule the route does not visibly break.
+  - it: denial message names the missing-hostnames case for both route kinds
+    asserts:
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: httproutes
+        matchRegex:
+          path: spec.validations[0].messageExpression
+          pattern: 'HTTPRoute must declare spec\.hostnames'
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: tlsroutes
+        matchRegex:
+          path: spec.validations[0].messageExpression
+          pattern: 'TLSRoute must declare spec\.hostnames'
+
+  - it: targets gateway.networking.k8s.io v1/v1beta1 HTTPRoute and v1alpha2 TLSRoute
     asserts:
       - documentIndex: 0
         equal:
@@ -104,6 +168,15 @@ tests:
         equal:
           path: spec.matchConstraints.resourceRules[0].resources
           value: ["httproutes"]
+      # The HTTPRoute apiVersions were named in the test title but never
+      # asserted. They are load-bearing: packages/extra/gateway/README.md
+      # states which versions each rule names and explains that
+      # matchPolicy's Equivalent default is what extends them to the rest,
+      # so a silent edit here would make that documentation wrong.
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiVersions
+          value: ["v1", "v1beta1"]
       - documentIndex: 2
         equal:
           path: spec.matchConstraints.resourceRules[0].resources

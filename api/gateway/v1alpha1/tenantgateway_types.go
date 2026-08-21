@@ -145,7 +145,11 @@ type RFC2136DNS01 struct {
 // TenantGatewaySpec describes the desired state of a per-tenant Gateway.
 type TenantGatewaySpec struct {
 	// Apex is the tenant's apex hostname. The Gateway listeners are
-	// constrained to this apex and its subdomains.
+	// constrained to this apex and its subdomains, and the
+	// controller-owned http-to-https redirect route declares this apex
+	// and its wildcard as its hostnames, so an empty value renders a
+	// route the apiserver rejects on its hostname schema.
+	// +kubebuilder:validation:MinLength=1
 	// +required
 	Apex string `json:"apex"`
 

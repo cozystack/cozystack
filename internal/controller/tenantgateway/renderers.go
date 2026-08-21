@@ -76,10 +76,23 @@ func acmeServerForIssuer(name gatewayv1alpha1.IssuerName) (string, error) {
 	}
 }
 
-// acmeChallengeNamespace is the namespace cert-manager publishes
-// HTTP-01 challenge HTTPRoutes from. Hardcoded to the cozystack
-// platform default; if you ever move cert-manager out of cozy-cert-
-// manager, add a TenantGateway spec field to override this.
+// httpRedirectRouteName returns the name of the controller-owned
+// http→https redirect HTTPRoute for this TenantGateway. Shared by the
+// renderer and by collectHostnameClaims, which excludes exactly this
+// route from the hostname-claim set, so the two must agree on the name.
+func httpRedirectRouteName(tgw *gatewayv1alpha1.TenantGateway) string {
+	return tgw.Name + "-http-redirect"
+}
+
+// acmeChallengeNamespace is where cert-manager itself runs. Hardcoded to
+// the cozystack platform default; if you ever move cert-manager out of
+// cozy-cert-manager, add a TenantGateway spec field to override this.
+//
+// It is not where the HTTP-01 solver HTTPRoute appears: cert-manager
+// creates the Challenge, and with it the solver route, in the
+// Certificate's own namespace, which for these per-listener certs is the
+// tenant namespace. That namespace is already on the port-80 allow list
+// on its own account, so this entry is belt and braces.
 const acmeChallengeNamespace = "cozy-cert-manager"
 
 // buildAllowedRoutes computes the AllowedRoutes block applied to
@@ -118,20 +131,21 @@ func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRo
 }
 
 // buildHTTPListenerAllowedRoutes returns a strictly narrower
-// allowedRoutes for the port-80 listener: only the tenant namespace
-// (the controller-owned http→https redirect HTTPRoute lives there)
-// and the cert-manager challenge namespace (HTTP-01 ACME challenges
-// publish a transient HTTPRoute under /.well-known/acme-challenge/).
+// allowedRoutes for the port-80 listener: only the tenant namespace,
+// where both the controller-owned http→https redirect HTTPRoute and
+// cert-manager's transient HTTP-01 solver route under
+// /.well-known/acme-challenge/ live, plus the namespace cert-manager
+// itself runs in (see acmeChallengeNamespace).
 //
 // Why: app HTTPRoutes (harbor, keycloak, dashboard, bucket) attach
-// by hostname with no sectionName, so without this narrower filter
-// they would also bind to the HTTP listener — Gateway API
-// tie-breaks merged routes by creationTimestamp, so an app route
-// created before the controller's redirect would silently serve
-// plaintext on port 80 and leak credentials. Restricting the HTTP
-// listener's allowedRoutes namespaces excludes the cozy-* / tenant-*
-// namespaces apps live in, while keeping cert-manager's challenge
-// namespace open so ACME still completes.
+// by hostname with no sectionName, so any of them the filter admits
+// reaches the HTTP listener and can serve plaintext there. The filter
+// keeps out the ones published from elsewhere; an app in the Gateway's
+// own namespace is admitted and is not covered by this. Restricting the HTTP
+// listener's allowedRoutes namespaces keeps out routes from the other
+// cozy-* namespaces and from inheriting child tenants. The Gateway's
+// own namespace stays open, because the redirect and the ACME solver
+// route both live there, and so does acmeChallengeNamespace.
 func buildHTTPListenerAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRoutes {
 	values := []string{tgw.Namespace}
 	if acmeChallengeNamespace != tgw.Namespace {
@@ -442,19 +456,37 @@ func ptrKind(k string) *gatewayv1.Kind {
 	return &kk
 }
 
-// renderHTTPRedirect builds the HTTPRoute that catches every hostname
-// on the Gateway's HTTP listener and 301-redirects to HTTPS. Without
-// this, app-owned HTTPRoutes that attach to the Gateway by hostname
-// (no sectionName) silently serve plaintext on port 80 — the legacy
-// nginx Ingress flow had ssl-redirect: "true" enabled by default; the
-// new TenantGateway path replicates that contract here.
+// renderHTTPRedirect builds the HTTPRoute that catches the tenant apex
+// and its subdomains on the Gateway's HTTP listener and 301-redirects
+// them to HTTPS. Without this, app-owned HTTPRoutes that attach to the
+// Gateway by hostname (no sectionName) silently serve plaintext on port
+// 80 — the legacy nginx Ingress flow had ssl-redirect: "true" enabled by
+// default; the new TenantGateway path replicates that contract here.
 func (r *Reconciler) renderHTTPRedirect(tgw *gatewayv1alpha1.TenantGateway) (*gatewayv1.HTTPRoute, error) {
+	// Spec.Apex carries MinLength=1, so admission normally rejects an
+	// empty value before it reaches here. Check anyway: the CRD and this
+	// binary are rolled out separately, and against an older CRD an empty
+	// apex would render hostnames "" and "*.", both of which fail the
+	// HTTPRoute schema. That surfaces as an apiserver validation error
+	// naming the route rather than the field, which is a poor thing to
+	// hand an operator.
+	//
+	// This wins the race in HTTP-01 without tlsPassthroughServices: the
+	// listener set is built from route hostnames alone there, so however
+	// many routes are attached, reconcileGateway never reads the apex
+	// ahead of this point. DNS-01 and existingSecret render an apex
+	// listener, and any tlsPassthroughServices entry builds
+	// "<service>.<apex>", so in those the operator meets the equivalent
+	// schema error against the Gateway first.
+	if tgw.Spec.Apex == "" {
+		return nil, fmt.Errorf("spec.apex is empty on TenantGateway %s/%s: the http-to-https redirect route derives its hostnames from the apex and cannot be rendered without one", tgw.Namespace, tgw.Name)
+	}
 	section := gatewayv1.SectionName("http")
 	scheme := "https"
 	statusCode := 301
 	route := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      tgw.Name + "-http-redirect",
+			Name:      httpRedirectRouteName(tgw),
 			Namespace: tgw.Namespace,
 			Labels: map[string]string{
 				cozystackManagedByLabel:   cozystackManagedByValue,
@@ -462,6 +494,39 @@ func (r *Reconciler) renderHTTPRedirect(tgw *gatewayv1alpha1.TenantGateway) (*ga
 			},
 		},
 		Spec: gatewayv1.HTTPRouteSpec{
+			// The apex and its wildcard, rather than no hostnames at
+			// all. This route lives in a tenant-* namespace, where
+			// cozystack-route-hostname-policy requires spec.hostnames
+			// to be present, non-empty and inside the namespace apex;
+			// a hostname-less route is denied at admission and takes
+			// this whole reconcile down with it.
+			//
+			// Both entries are load-bearing. A wildcard hostname is a
+			// suffix match spanning any number of labels, so
+			// "*.<apex>" covers every subdomain at every depth, but it
+			// does not cover the bare "<apex>", hence the plain apex
+			// first.
+			//
+			// Naming them costs no coverage, and the other half of
+			// this change is why: the port-80 listener admits routes
+			// only from this namespace and cert-manager's, and the
+			// tightened cozystack-route-hostname-policy requires every
+			// route here to declare hostnames inside the apex. So any
+			// host published from this namespace is already one of
+			// these two.
+			//
+			// An inheriting child cannot widen that set either.
+			// cozystack-gateway-hostname-policy compares every listener
+			// against the host label of the Gateway's own namespace, so
+			// a child apex outside it never gets its listener: the
+			// Gateway write carrying it is refused at admission whole,
+			// in reconcileGateway and before this route is rendered. A
+			// child apex under this one passes that check, and the
+			// wildcard above already covers it.
+			Hostnames: []gatewayv1.Hostname{
+				gatewayv1.Hostname(tgw.Spec.Apex),
+				gatewayv1.Hostname("*." + tgw.Spec.Apex),
+			},
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
 				ParentRefs: []gatewayv1.ParentReference{
 					{

@@ -14,12 +14,33 @@
   bucket).
 
   Two pairs of resources are rendered:
-   - VAP + Binding for HTTPRoute (gateway.networking.k8s.io/v1)
-   - VAP + Binding for TLSRoute (gateway.networking.k8s.io/v1alpha2)
+   - VAP + Binding for HTTPRoute, rule naming v1 and v1beta1
+   - VAP + Binding for TLSRoute, rule naming v1alpha2
 
-  TLSRoute stays at v1alpha2 in Gateway API v1.4–v1.5; its promotion
-  to v1 is tracked upstream and we will follow the rename when it
-  lands.
+  A rule reaches versions it does not name, but only while one version
+  it does name is still served: matchConstraints.matchPolicy defaults
+  to Equivalent, and the apiserver converts a request into a listed
+  version before the policy sees it. Do not set matchPolicy: Exact
+  here. It reads like a tightening and is the opposite: the policy
+  would stop seeing every version the rule does not name.
+
+  That condition is load-bearing for TLSRoute, whose rule names only
+  v1alpha2. The bundle in packages/system/gateway-api-crds serves
+  tlsroutes at v1 (storage), v1alpha2 and v1alpha3, and marks both
+  alpha versions deprecated, so the single version this rule names is
+  the one scheduled to go away. A bundle that drops v1alpha2 leaves the
+  rule matching nothing: requests at v1 meet no policy at all, and
+  failurePolicy: Fail does not fire, because there is no failure —
+  only an absence of match. Give the TLSRoute rule v1 before taking a
+  bundle that drops v1alpha2.
+
+  What that would cost is narrower than it first reads, and narrow in
+  the direction that matters. The v1 and v1alpha3 schemas mark
+  spec.hostnames required with minItems: 1, so an empty or absent list
+  is still rejected without this policy — on v1alpha2, which has
+  neither, this policy is the only thing rejecting it. What no schema
+  replaces is the apex comparison: without a matching rule, a TLSRoute
+  naming someone else's apex is admitted.
 */}}
 {{- /*
   CEL safety note: has() only works on field access expressions, not
@@ -34,6 +55,17 @@
   open Layer 7 by itself. The only legitimate state where the
   label is absent is an in-flight namespace creation that hasn't
   finished labelling yet — in which case the caller should retry.
+
+  spec.hostnames must be present and non-empty, not waved through when
+  missing. A route that names no hostname does not match nothing: under
+  Gateway API it inherits the hostnames of every listener it attaches to.
+  `all()` over an empty list is vacuously true, so the empty list needs
+  the same treatment as the absent field.
+
+  Requiring the route to name its own hostnames is what makes them
+  comparable against the tenant apex at all — CEL has no cross-object
+  lookup, so a VAP cannot resolve the parent Gateway to learn what would
+  otherwise be inherited.
 */}}
 {{- /*
   Both operands of the hostname comparison are normalized with
@@ -42,7 +74,7 @@
   namespace.cozystack.io/host label value, which Kubernetes permits to
   carry uppercase.
 */}}
-{{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (!has(object.spec.hostnames) || object.spec.hostnames.all(h, h.lowerAscii() == namespaceObject.metadata.labels["namespace.cozystack.io/host"].lowerAscii() || h.lowerAscii().endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"].lowerAscii())))` -}}
+{{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (has(object.spec.hostnames) && size(object.spec.hostnames) > 0 && object.spec.hostnames.all(h, h.lowerAscii() == namespaceObject.metadata.labels["namespace.cozystack.io/host"].lowerAscii() || h.lowerAscii().endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"].lowerAscii())))` -}}
 {{- /* Render only where the ValidatingAdmissionPolicy API is served (GA since Kubernetes 1.30; the management cluster requires 1.33+). Same guard as packages/core/platform/templates/deletion-protection.yaml. */}}
 {{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
 ---
@@ -67,7 +99,7 @@ spec:
   - expression: >-
       {{ $celValidator }}
     messageExpression: >-
-      "HTTPRoute hostnames must equal the namespace's namespace.cozystack.io/host label or be subdomains of it (namespace " + object.metadata.namespace + ")"
+      "HTTPRoute must declare spec.hostnames, and each hostname must equal the namespace's namespace.cozystack.io/host label or be a subdomain of it (namespace " + object.metadata.namespace + ")"
     reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -101,7 +133,7 @@ spec:
   - expression: >-
       {{ $celValidator }}
     messageExpression: >-
-      "TLSRoute hostnames must equal the namespace's namespace.cozystack.io/host label or be subdomains of it (namespace " + object.metadata.namespace + ")"
+      "TLSRoute must declare spec.hostnames, and each hostname must equal the namespace's namespace.cozystack.io/host label or be a subdomain of it (namespace " + object.metadata.namespace + ")"
     reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
