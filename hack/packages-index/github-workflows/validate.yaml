@@ -43,7 +43,10 @@ jobs:
             "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
           sudo chmod +x /usr/local/bin/yq
 
-      - uses: sigstore/cosign-installer@v3
+      # Pin the verifier too: cosign is what the auto-merge decision rests on.
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        with:
+          cosign-release: v2.4.3
 
       - name: Validate changed entries
         id: gate

@@ -17,7 +17,14 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
 	"testing"
+
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 )
@@ -80,6 +87,29 @@ func TestTapPackageSourceName(t *testing.T) {
 	}
 	if got := tapPackageSourceName(ociRef{Repo: "solo"}, "x", true); got != "community.solo" {
 		t.Errorf("no org = %q", got)
+	}
+}
+
+func TestObjectExists(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := cozyv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourcev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	existing := &sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "cozy-system"}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).Build()
+
+	if !objectExists(context.Background(), cl, existing) {
+		t.Error("expected an existing object to be reported as existing (would be spared on rollback)")
+	}
+	absent := &sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{Name: "y", Namespace: "cozy-system"}}
+	if objectExists(context.Background(), cl, absent) {
+		t.Error("expected an absent object to be reported as not existing (eligible for rollback)")
 	}
 }
 

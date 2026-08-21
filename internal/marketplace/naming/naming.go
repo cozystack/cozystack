@@ -11,10 +11,13 @@ package naming
 import "strings"
 
 // ArtifactName reproduces the assembled-artifact name the PackageSource
-// reconciler emits per (packageSource, variant, component): the PackageSource
-// name with dots replaced by dashes, joined with the variant and component.
-// It must match the reconciler's own naming in
+// reconciler emits per (packageSource, variant, component). The reconciler
+// replaces dots with dashes in ALL THREE segments (Kubernetes object names
+// forbid dots), so this must too — a third-party variant or component name may
+// legitimately contain a dot. It must match the reconciler's own naming in
 // internal/operator/packagesource_reconciler.go.
 func ArtifactName(packageSourceName, variant, component string) string {
-	return strings.ReplaceAll(packageSourceName, ".", "-") + "-" + variant + "-" + component
+	return strings.ReplaceAll(packageSourceName, ".", "-") + "-" +
+		strings.ReplaceAll(variant, ".", "-") + "-" +
+		strings.ReplaceAll(component, ".", "-")
 }
