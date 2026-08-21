@@ -487,21 +487,6 @@ func isSecurityGroup(np *CiliumNetworkPolicy) bool {
 	return np.Labels != nil && np.Labels[sgLabelKey] == sgLabelValue
 }
 
-// createOptionsFromUpdate carries the caller's write intent (dry-run, field
-// manager, field validation) from an update request into the create it triggers
-// on the force-create path, so a dry-run apply cannot become a real write and
-// field-manager attribution is preserved.
-func createOptionsFromUpdate(opts *metav1.UpdateOptions) *metav1.CreateOptions {
-	if opts == nil {
-		return &metav1.CreateOptions{}
-	}
-	return &metav1.CreateOptions{
-		DryRun:          opts.DryRun,
-		FieldManager:    opts.FieldManager,
-		FieldValidation: opts.FieldValidation,
-	}
-}
-
 // -----------------------------------------------------------------------------
 // REST storage
 // -----------------------------------------------------------------------------
@@ -627,7 +612,7 @@ func (r *REST) Create(
 	}
 
 	np := securityGroupToPolicy(in, nil)
-	if err := r.c.Create(ctx, np, &client.CreateOptions{Raw: opts}); err != nil {
+	if err := r.c.Create(ctx, np, registry.ClientCreateOptions(opts)); err != nil {
 		return nil, err
 	}
 	return policyToSecurityGroup(np), nil
@@ -786,7 +771,7 @@ func (r *REST) Update(
 				return nil, false, err
 			}
 		}
-		err := r.c.Create(ctx, newNp, &client.CreateOptions{Raw: createOptionsFromUpdate(opts)})
+		err := r.c.Create(ctx, newNp, registry.ClientCreateOptionsFromUpdate(opts))
 		return policyToSecurityGroup(newNp), true, err
 	}
 
@@ -803,7 +788,7 @@ func (r *REST) Update(
 	if newNp.ResourceVersion == "" {
 		newNp.ResourceVersion = cur.ResourceVersion
 	}
-	err = r.c.Update(ctx, newNp, &client.UpdateOptions{Raw: opts})
+	err = r.c.Update(ctx, newNp, registry.ClientUpdateOptions(opts))
 	return policyToSecurityGroup(newNp), false, err
 }
 
@@ -845,7 +830,7 @@ func (r *REST) Delete(
 			return nil, false, err
 		}
 	}
-	if err = r.c.Delete(ctx, &CiliumNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts}); err != nil {
+	if err = r.c.Delete(ctx, &CiliumNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, registry.ClientDeleteOptions(opts)); err != nil {
 		return nil, false, err
 	}
 	// Report whether the delete completed synchronously, per the

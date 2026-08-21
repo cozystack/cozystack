@@ -259,7 +259,7 @@ func (r *REST) Create(
 	}
 
 	sec := tenantToSecret(in, nil)
-	err := r.c.Create(ctx, sec, &client.CreateOptions{Raw: opts})
+	err := r.c.Create(ctx, sec, registry.ClientCreateOptions(opts))
 	if err != nil {
 		return nil, err
 	}
@@ -401,12 +401,12 @@ func (r *REST) Update(
 		if !forceCreate {
 			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 		}
-		err := r.c.Create(ctx, newSec, &client.CreateOptions{Raw: &metav1.CreateOptions{}})
+		err := r.c.Create(ctx, newSec, registry.ClientCreateOptionsFromUpdate(opts))
 		return secretToTenant(newSec), true, err
 	}
 
 	newSec.ResourceVersion = cur.ResourceVersion
-	err = r.c.Update(ctx, newSec, &client.UpdateOptions{Raw: opts})
+	err = r.c.Update(ctx, newSec, registry.ClientUpdateOptions(opts))
 	return secretToTenant(newSec), false, err
 }
 
@@ -427,7 +427,7 @@ func (r *REST) Delete(
 	if current.Labels == nil || current.Labels[tsLabelKey] != tsLabelValue {
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
-	err = r.c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts})
+	err = r.c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, registry.ClientDeleteOptions(opts))
 	return nil, err == nil, err
 }
 
