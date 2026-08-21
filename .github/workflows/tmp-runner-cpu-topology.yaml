@@ -24,7 +24,7 @@ jobs:
   runner-cpu-topology:
     name: "Runner CPU topology"
     runs-on: oracle-vm-32cpu-128gb-x86-64
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       # No checkout: nothing here reads the repository. Every command is
       # guarded so a missing tool reports instead of failing the run.
@@ -153,4 +153,284 @@ jobs:
           echo
           echo "-- saturation --"
           arm "every thread busy"                 ${FIRSTS} ${SECONDS_}
+          echo "::endgroup::"
+
+      # Does it matter WHICH threads share a core, for work that is coupled?
+      #
+      # The arms above price independent work: 24 threads on 16 cores, each
+      # thread's own fixed loop. Guest vCPUs are not independent -- SMP
+      # bring-up, IPIs and lock handoffs all need several of them on a core at
+      # the same instant -- and no throughput number can see that. This asks it
+      # directly, and it is the claim the e2e pinning change rests on: that two
+      # vCPUs of ONE guest sharing a core is worse than two vCPUs of DIFFERENT
+      # guests sharing one, a distinction the runner's scheduler cannot draw
+      # because nothing above it says which threads belong together.
+      #
+      # If the two read alike, the pinning change is not worth an e2e run and
+      # this job has saved one. If same-group is materially worse, it is.
+      - name: Coupled-work placement
+        run: |
+          set -u
+          cat > /tmp/coupled.py <<'COUPLED_EOF'
+          #!/usr/bin/env python3
+          """Does it matter WHICH threads share a physical core?
+
+          Three groups of eight processes, all running at once: the shape the e2e sandbox
+          puts on a runner, where three QEMU guests commit eight vCPU threads each to
+          sixteen physical cores. Each round every process in a group does a fixed chunk
+          of work and then waits at its group's barrier, so a round completes only when
+          all eight have arrived and a process that is not on a core holds up the seven
+          that are. That is the shape of a guest's SMP bring-up, an IPI, or a lock
+          handoff. A throughput benchmark cannot see it, which is why the aggregate
+          figures from the scaling arms do not answer this.
+
+          Same 24 processes and the same 16 cores in every placement. The only thing that
+          changes is which processes share a core with which:
+
+            float   no affinity at all -- what the sandbox does today, and what the
+                    runner's scheduler decides for it
+            same    each group confined to four cores, both threads of each, so every
+                    sharing pair is SAME-GROUP: the case nothing above the scheduler can
+                    currently express
+            cross   each group given eight distinct cores, so a group never shares a core
+                    with itself and every sharing pair is CROSS-GROUP
+
+          If `same` and `cross` read alike, the distinction the e2e pinning change is
+          built on does not exist and that change is not worth a run. If `cross` is
+          materially faster, it does.
+
+          What this models and what it does not: a process waiting at a barrier is
+          blocked, not spinning, so its sibling gets the whole core. That is the
+          co-scheduling half of the claim -- progress requires everyone to be on a core
+          at the same time -- and not the spin-wait half, where a preempted lock holder
+          burns its sibling's cycles too. The spin-wait case can only be worse for
+          `same`, so this reads as a lower bound on the effect rather than an upper one.
+          """
+          import glob
+          import multiprocessing as mp
+          import os
+          import sys
+          import time
+
+          GROUPS = int(os.environ.get("CB_GROUPS", "3"))
+          PER = int(os.environ.get("CB_PER", "8"))
+          ROUNDS = int(os.environ.get("CB_ROUNDS", "200"))
+          WORK = int(os.environ.get("CB_WORK", "20000"))
+          REPEATS = int(os.environ.get("CB_REPEATS", "3"))
+
+
+          def read_cores():
+              """[[cpu, cpu], ...] -- one entry per physical core, in first-seen order."""
+              by_siblings, order = {}, []
+              paths = glob.glob("/sys/devices/system/cpu/cpu[0-9]*")
+              for d in sorted(paths, key=lambda p: int(p.rsplit("cpu", 1)[1])):
+                  cpu = int(d.rsplit("cpu", 1)[1])
+                  try:
+                      with open(d + "/topology/thread_siblings_list") as fh:
+                          sl = fh.read().strip()
+                  except OSError:
+                      continue
+                  if sl not in by_siblings:
+                      by_siblings[sl] = []
+                      order.append(sl)
+                  by_siblings[sl].append(cpu)
+              return [by_siblings[k] for k in order]
+
+
+          def placements(cores):
+              """{name: [[cpu per process] per group]}. None means no affinity.
+
+              `same` and `cross` are held to the SAME set of cores with the SAME
+              doubling, because otherwise the comparison measures core count rather than
+              pairing: a placement spread over sixteen cores beats one confined to twelve
+              whatever the pairing is. Both take the first GROUPS*PER/2 cores and put two
+              processes on every one of them. The only difference between them is whether
+              the two sharing a core belong to the same group.
+
+              `float` is not matched to either -- it has no affinity at all, so the
+              scheduler uses whatever it likes. It is the real-world reference point, not
+              the controlled comparison; the controlled comparison is same against cross.
+              """
+              need = (GROUPS * PER) // 2
+              out = {"float": [[None] * PER for _ in range(GROUPS)]}
+              if len(cores) < need or (GROUPS * PER) % 2 != 0 or GROUPS < 2:
+                  return out
+              if any(len(c) < 2 for c in cores[:need]):
+                  return out                      # no SMT here, so neither arm is meaningful
+              pool = cores[:need]
+
+              # same: consecutive blocks of PER/2 cores, both threads of each.
+              half = PER // 2
+              out["same"] = [
+                  [cpu for core in pool[g * half:(g + 1) * half] for cpu in core[:2]]
+                  for g in range(GROUPS)
+              ]
+
+              # cross: core c hands its first thread to group c mod GROUPS and its second
+              # to group (c+1) mod GROUPS. Every core therefore carries two groups, and a
+              # group lands on cores c = g and c = g-1 (mod GROUPS), which are distinct
+              # cores, so no group ever holds both threads of one.
+              cross = [[] for _ in range(GROUPS)]
+              for c, core in enumerate(pool):
+                  cross[c % GROUPS].append(core[0])
+                  cross[(c + 1) % GROUPS].append(core[1])
+              if all(len(g) == PER for g in cross):
+                  out["cross"] = cross
+              return out
+
+
+          def describe(name, groups, cpu_core):
+              """Print the sharing structure, so the run states what it actually did."""
+              occ = {}
+              for g, cpus in enumerate(groups):
+                  for cpu in cpus:
+                      if cpu is None:
+                          continue
+                      occ.setdefault(cpu_core[cpu], []).append(g)
+              if not occ:
+                  print(f"  {name:6}: no affinity set; placement is the scheduler's")
+                  return
+              doubled = [c for c, gs in occ.items() if len(gs) > 1]
+              same = [c for c in doubled if len(set(occ[c])) == 1]
+              print(f"  {name:6}: {len(occ)} cores used, {len(doubled)} carry two "
+                    f"processes, {len(same)} of those pairs are SAME-GROUP")
+
+
+          def worker(cpu, start, barrier, idx, out):
+              if cpu is not None:
+                  try:
+                      os.sched_setaffinity(0, {cpu})
+                  except OSError as exc:
+                      print(f"could not pin to cpu {cpu}: {exc}", file=sys.stderr)
+              start.wait()
+              t0 = time.perf_counter()
+              try:
+                  for _ in range(ROUNDS):
+                      s = 0
+                      for i in range(WORK):
+                          s = (s + i) % 1000003
+                      barrier.wait(timeout=120)
+              except Exception as exc:                       # a broken barrier, mostly
+                  print(f"worker {idx} stopped early: {exc}", file=sys.stderr)
+                  out[idx] = -1.0
+                  return
+              out[idx] = time.perf_counter() - t0
+
+
+          def run(groups):
+              start = mp.Barrier(GROUPS * PER)
+              bars = [mp.Barrier(PER) for _ in range(GROUPS)]
+              out = mp.Array("d", GROUPS * PER)
+              procs = []
+              for g, cpus in enumerate(groups):
+                  for k, cpu in enumerate(cpus):
+                      idx = g * PER + k
+                      p = mp.Process(target=worker, args=(cpu, start, bars[g], idx, out))
+                      p.start()
+                      procs.append(p)
+              for p in procs:
+                  p.join()
+              per_group = []
+              for g in range(GROUPS):
+                  vals = [out[g * PER + k] for k in range(PER)]
+                  per_group.append(max(vals) if min(vals) > 0 else -1.0)
+              return per_group
+
+
+          def main():
+              cores = read_cores()
+              cpu_core = {}
+              for ci, core in enumerate(cores):
+                  for cpu in core:
+                      cpu_core[cpu] = ci
+              print(f"{len(cores)} physical cores, {len(cpu_core)} logical CPUs")
+              print(f"{GROUPS} groups x {PER} processes, {ROUNDS} rounds of {WORK} "
+                    f"iterations, {REPEATS} repeats")
+
+              plans = placements(cores)
+              for name in ("float", "same", "cross"):
+                  if name not in plans:
+                      print(f"  {name}: NOT RUNNABLE on this topology; skipped")
+              print("placements:")
+              for name, groups in plans.items():
+                  describe(name, groups, cpu_core)
+              print()
+
+              def median(xs):
+                  ys = sorted(xs)
+                  n = len(ys)
+                  return ys[n // 2] if n % 2 else (ys[n // 2 - 1] + ys[n // 2]) / 2
+
+              results, ratios = {}, []
+              for rep in range(REPEATS):
+                  # Interleaved rather than one placement at a time: whatever else the
+                  # machine is doing drifts over a run, and a block design attributes that
+                  # drift to whichever placement happened to be running. Interleaving puts
+                  # the drift in every arm equally, and the paired ratio below removes
+                  # most of what is left.
+                  rep_med = {}
+                  for name in ("float", "same", "cross"):
+                      if name not in plans:
+                          continue
+                      per_group = run(plans[name])
+                      good = [r for r in per_group if r > 0]
+                      if not good:
+                          print(f"repeat {rep + 1}  {name:6}  produced no reading")
+                          continue
+                      results.setdefault(name, []).extend(good)
+                      rep_med[name] = median(good)
+                      shown = " ".join(f"{r:6.2f}" for r in per_group)
+                      print(f"repeat {rep + 1}  {name:6}  per-group seconds: {shown}")
+                  if "same" in rep_med and "cross" in rep_med and rep_med["cross"] > 0:
+                      r = rep_med["same"] / rep_med["cross"]
+                      ratios.append(r)
+                      print(f"repeat {rep + 1}  paired same/cross ratio: {r:5.3f}")
+              print()
+              print("summary -- seconds for the same fixed work, lower is better")
+              base = None
+              for name in ("float", "same", "cross"):
+                  vals = results.get(name)
+                  if not vals:
+                      continue
+                  med = median(vals)
+                  if base is None:
+                      base = med
+                  print(f"  {name:6}  n={len(vals):3}  min {min(vals):6.2f}  "
+                        f"median {med:6.2f}  max {max(vals):6.2f}  rel {med / base:5.3f}")
+
+              # The decisive figure, and the only one that is a controlled comparison:
+              # same and cross ran on identical cores with identical doubling, and each
+              # ratio pairs two measurements taken seconds apart, so the slow drift that
+              # dominates the spread above cancels. The median of the ratios is reported
+              # rather than the ratio of the medians -- one outlying repeat moves the
+              # second and not the first.
+              if ratios:
+                  print()
+                  med = median(ratios)
+                  print(f"paired same/cross ratios over {len(ratios)} repeats: "
+                        + " ".join(f"{r:.3f}" for r in ratios))
+                  print(f"median ratio {med:.3f}  ->  same-group pairing costs "
+                        f"{100 * (med - 1):+.1f}% against cross-group pairing")
+                  print()
+                  if all(r > 1.05 for r in ratios):
+                      print("VERDICT: every repeat put same-group pairing behind "
+                            "cross-group by more than 5%. The distinction is real at "
+                            "this layer, and the e2e pinning change has a subject.")
+                  elif all(0.95 <= r <= 1.05 for r in ratios):
+                      print("VERDICT: every repeat put the two within 5% of each other. "
+                            "Which threads share a core does not measurably matter for "
+                            "coupled work here, and the e2e pinning change is not worth "
+                            "a run on this evidence.")
+                  else:
+                      print("VERDICT: the repeats disagree. Nothing is concluded; raise "
+                            "CB_REPEATS or CB_ROUNDS and run again on a quiet machine.")
+
+
+          if __name__ == "__main__":
+              main()
+
+          COUPLED_EOF
+          echo "::group::coupled-work placement"
+          CB_GROUPS=3 CB_PER=8 CB_ROUNDS=400 CB_WORK=20000 CB_REPEATS=7 \
+            python3 /tmp/coupled.py
           echo "::endgroup::"
