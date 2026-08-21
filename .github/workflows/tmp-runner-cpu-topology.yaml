@@ -1,0 +1,46 @@
+# TEMPORARY, investigation only. Never merge this file.
+#
+# Nothing in this repository triggers on a push to a feature branch, so there
+# is otherwise no way to put a job on the e2e runner class without opening a
+# PR. A push event evaluates the workflow files at the pushed commit, so this
+# file, scoped to its own branch, runs on its own and starts nothing else.
+#
+# What it answers: `oracle-vm-32cpu-128gb-x86-64` is a 16-OCPU instance
+# (cncf/automation ci/cloudrunners/oci/main.go halves --shape-ocpus on x86),
+# and how those cores present as sockets, cores, threads and NUMA nodes is not
+# derivable from the label at all. hack/sandbox-runner-headroom.bats compares
+# the sandbox's 24 guest vCPU against that same label, so this decides whether
+# it is comparing like with like.
+name: TEMP runner CPU topology
+
+on:
+  push:
+    branches:
+      - ci/log-runner-cpu-topology
+
+permissions: {}
+
+jobs:
+  runner-cpu-topology:
+    name: "Runner CPU topology"
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    timeout-minutes: 5
+    steps:
+      # No checkout: nothing here reads the repository. Every command is
+      # guarded so a missing tool reports instead of failing the run.
+      - name: Report host CPU
+        run: |
+          echo "::group::lscpu"
+          lscpu || true
+          echo "::endgroup::"
+          echo "::group::per-CPU topology (CPU/CORE/SOCKET/NODE)"
+          lscpu -e || true
+          echo "::endgroup::"
+          echo "::group::nested virtualisation"
+          ls -l /dev/kvm || true
+          grep . /sys/module/kvm_amd/parameters/nested /sys/module/kvm_intel/parameters/nested || true
+          echo "::endgroup::"
+          echo "::group::memory and model"
+          free -g || true
+          grep -m1 'model name' /proc/cpuinfo || true
+          echo "::endgroup::"
