@@ -47,6 +47,7 @@ var (
 	gvrVMDisks      = schema.GroupVersionResource{Group: "apps.cozystack.io", Version: "v1alpha1", Resource: "vmdisks"}
 	gvrPlans        = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "plans"}
 	gvrBackups      = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "backups"}
+	gvrImportSource = schema.GroupVersionResource{Group: "migration.cozystack.io", Version: "v1alpha1", Resource: "vmimportsources"}
 	gvrAppDefs      = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "applicationdefinitions"}
 )
 
@@ -67,6 +68,11 @@ func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
 		"plan":            nameListNamespacedProvider(dyn, gvrPlans),
 		"backup":          nameListNamespacedProvider(dyn, gvrBackups),
 		"appkind":         appKindProvider(dyn),
+		// Source connections a VMImportTask can reference. Namespaced, so a
+		// tenant only ever sees their own — and a vCenter VM list deliberately
+		// is not offered here: providers run in the browser under the tenant's
+		// own Kubernetes identity and can only list Kubernetes objects.
+		"vmimportsource": nameListNamespacedProvider(dyn, gvrImportSource),
 	}
 }
 

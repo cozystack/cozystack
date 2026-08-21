@@ -4,6 +4,7 @@ import { graftOptionSources } from "./crd-option-sources.ts"
 interface SchemaNode {
   type?: string
   properties?: Record<string, SchemaNode>
+  items?: SchemaNode
   "x-cozystack-options"?: { source: string }
 }
 
@@ -123,6 +124,34 @@ describe("graftOptionSources", () => {
     // future shallow/partial clone that corrupts deep nodes can't slip through.
     expect(spec.properties?.backupClassName?.["x-cozystack-options"]).toBeUndefined()
     expect(spec.properties?.applicationRef?.properties?.kind?.["x-cozystack-options"]).toBeUndefined()
+  })
+
+  it("grafts a source onto a field inside a list (VMImportTask vms)", () => {
+    const spec: SchemaNode = {
+      type: "object",
+      properties: {
+        vms: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              instanceType: { type: "string" },
+            },
+          },
+        },
+      },
+    }
+
+    const out = graftOptionSources(spec, {
+      "options.cozystack.io/source.vms.instanceType": "instancetype",
+    }) as SchemaNode
+
+    expect(
+      out.properties?.vms?.items?.properties?.instanceType?.["x-cozystack-options"],
+    ).toEqual({ source: "instancetype" })
+    // The sibling inside the same item is left alone.
+    expect(out.properties?.vms?.items?.properties?.id?.["x-cozystack-options"]).toBeUndefined()
   })
 
   it("returns the schema unchanged when there are no annotations", () => {
