@@ -48,6 +48,9 @@ type ConfigSpec struct {
 	// Opaque seed mixed into the VM firmware UUID. Change it to force a first-boot cloud-init re-run; clear it to preserve an existing VM's UUID across re-renders.
 	// +kubebuilder:default:=""
 	CloudInitSeed string `json:"cloudInitSeed,omitempty"`
+	// Stream the gateway VM's guest serial console into a `guest-console-log` container beside virt-launcher, readable with `kubectl logs`. The only view of a router that stalls inside the guest before the VyOS management API answers, when the VMI reports Running and an address but nothing in the cluster can say how far the boot got. Off by default, and two costs are why. It overrides the platform's cluster-wide `disableSerialConsoleLog` (packages/system/kubevirt), which is set because that container has been seen holding virt-launcher in `PodInitializing` (kubevirt/kubevirt#15989) — that would take the gateway down rather than explain it, so check the virt-launcher Pod reaches Running after enabling it. And it is part of the VM's device list, so changing it on a live gateway restarts the VM and drops the tunnel with it: it buys visibility into the next boot, not the current one.
+	// +kubebuilder:default:=false
+	LogSerialConsole bool `json:"logSerialConsole"`
 }
 
 type BGP struct {

@@ -69,3 +69,14 @@ spec:
     resources:
       cpu: 2
       memory: 2Gi
+    # Guest-side diagnostics. Every gate up to and including the tunnel steps
+    # depends on the VyOS guest reaching userspace and answering on 443, and the
+    # cluster can see none of that: a VMI that reports Running with an address
+    # says only that qemu started. With this on, KubeVirt runs a
+    # guest-console-log container beside virt-launcher whose log crust-gather
+    # already collects, so a boot that stalls arrives in the artifact with VyOS's
+    # own output attached instead of leaving the failure unattributable. Off by
+    # default in the chart because it overrides the platform's cluster-wide
+    # disableSerialConsoleLog (see the value's own doc); on here because a failed
+    # e2e run that cannot say what the guest was doing costs a whole run.
+    logSerialConsole: true
