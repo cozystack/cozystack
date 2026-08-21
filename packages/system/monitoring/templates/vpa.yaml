@@ -186,3 +186,102 @@ spec:
           memory: 8Gi
           {{- end }}
 {{- end }}
+{{- /*
+  Trace components. tracingStorages has no resource knobs, so bounds are
+  hardcoded (no dead min/maxAllowed conditionals like the logs entries above).
+  Component kinds per victoria-metrics-operator: vtinsert/vtselect are
+  Deployments, vtstorage a StatefulSet, vtsingle a Deployment. tracingStorages
+  is empty by default, so this renders nothing until a backend is configured.
+*/ -}}
+{{- range .Values.tracingStorages }}
+{{- if eq (.mode | default "cluster") "single" }}
+---
+# VTSingle mounts a plain ReadWriteOnce PVC by claim name (not a volume claim
+# template), so an evicting VPA would deadlock on multi-attach — updateMode
+# Initial (file-wide) avoids that on top of the Cilium IP-reuse race.
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vtsingle-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vtsingle-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vtsingle
+        minAllowed:
+          cpu: 25m
+          memory: 128Mi
+        maxAllowed:
+          cpu: 4000m
+          memory: 8Gi
+{{- else }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vtinsert-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vtinsert-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vtinsert
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        maxAllowed:
+          cpu: 2000m
+          memory: 4Gi
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vtselect-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vtselect-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vtselect
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        maxAllowed:
+          cpu: 4000m
+          memory: 8Gi
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vtstorage-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: vtstorage-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vtstorage
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        maxAllowed:
+          cpu: 4000m
+          memory: 8Gi
+{{- end }}
+{{- end }}

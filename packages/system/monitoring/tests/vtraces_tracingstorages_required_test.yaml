@@ -1,0 +1,172 @@
+suite: VictoriaTraces backend renders per tracingStorages entry (off by default)
+templates:
+  - templates/vtraces/vtraces.yaml
+  - templates/vtraces/grafana-datasource.yaml
+
+# tracingStorages drives the VTCluster/VTSingle backend(s) for distributed
+# tracing. It is EMPTY by default, so tracing is off out of the box and nothing
+# is provisioned — nothing produces spans until the trace collector ships, so an
+# absent backend drops no data (unlike logsStorages, which is why there is no
+# fail-on-empty guard here yet). These cases pin the off-by-default state, the
+# cluster/single split, the datasource, and the rejected invalid mode.
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+tests:
+  - it: renders nothing by default (tracing off, empty tracingStorages)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no datasource by default (tracing off)
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a VTCluster for a cluster-mode entry
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTCluster
+          name: generic
+
+  - it: renders a VTSingle when mode is single
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTSingle
+          name: generic
+
+  - it: renders one traces backend per tracingStorages entry
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+        - name: audit
+          mode: single
+          retentionPeriod: "7d"
+          storage: 10Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: sets the retention period on the VTCluster storage component
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    documentSelector:
+      path: metadata.name
+      value: generic
+    asserts:
+      - equal:
+          path: spec.storage.retentionPeriod
+          value: "14d"
+
+  - it: renders an optional disk-usage cap only when set (cluster mode)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "8GB"
+    asserts:
+      - equal:
+          path: spec.storage.retentionMaxDiskSpaceUsageBytes
+          value: "8GB"
+
+  - it: renders the disk-usage cap at the top level for single mode
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "4GB"
+    asserts:
+      - equal:
+          path: spec.retentionMaxDiskSpaceUsageBytes
+          value: "4GB"
+
+  - it: renders a Jaeger-typed Grafana datasource at vtselect:10471 for cluster mode
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: grafana.integreatly.org/v1beta1
+          kind: GrafanaDatasource
+          name: vtraces-generic
+      - equal:
+          path: spec.datasource.type
+          value: jaeger
+      - equal:
+          path: spec.datasource.url
+          value: http://vtselect-generic.tenant-root.svc:10471/select/jaeger
+
+  - it: points the datasource at vtsingle:10428 for single mode
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - equal:
+          path: spec.datasource.url
+          value: http://vtsingle-generic.tenant-root.svc:10428/select/jaeger
+
+  - it: fails the render when mode is neither cluster nor single
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: singel
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: tracingStorages[generic].mode must be either "cluster" or "single"'

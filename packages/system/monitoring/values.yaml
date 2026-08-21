@@ -45,6 +45,8 @@ logsStorages:
   retentionPeriod: "1"
   storage: 10Gi
   storageClassName: ""
+
+tracingStorages: []
 alerta:
   storage: 10Gi
   storageClassName: ""
