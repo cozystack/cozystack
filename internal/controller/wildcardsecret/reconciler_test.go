@@ -18,6 +18,7 @@ package wildcardsecret
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -34,6 +35,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -41,6 +44,9 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	s := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(s); err != nil {
 		t.Fatalf("client-go scheme: %v", err)
+	}
+	if err := gatewayv1alpha1.AddToScheme(s); err != nil {
+		t.Fatalf("tenantgateway scheme: %v", err)
 	}
 	return s
 }
@@ -776,17 +782,33 @@ func TestOwnsTerminationPoint(t *testing.T) {
 	cases := []struct {
 		name   string
 		labels map[string]string
+		tgw    *gatewayv1alpha1.TenantGateway
 		want   bool
 	}{
-		{"owns ingress", map[string]string{ingressOwnerLabel: "tenant-foo"}, true},
-		{"owns gateway", map[string]string{gatewayOwnerLabel: "tenant-foo"}, true},
-		{"inherits ingress from ancestor", map[string]string{ingressOwnerLabel: "tenant-root"}, false},
-		{"empty owner labels", map[string]string{ingressOwnerLabel: "", gatewayOwnerLabel: ""}, false},
-		{"no labels at all", nil, false},
+		{"owns ingress", map[string]string{ingressOwnerLabel: "tenant-foo"}, nil, true},
+		{"owns gateway, no TenantGateway yet", map[string]string{gatewayOwnerLabel: "tenant-foo"}, nil, true},
+		{"owns gateway, terminating class", map[string]string{gatewayOwnerLabel: "tenant-foo"}, terminatingTenantGateway("tenant-foo"), true},
+		{"owns gateway, edge class", map[string]string{gatewayOwnerLabel: "tenant-foo"}, edgeTenantGateway("tenant-foo"), false},
+		// tenant.spec.ingress + tenant.spec.gateway put both labels on one
+		// namespace: the ingress controller there still terminates TLS
+		// locally, so an edge Gateway next to it must not withdraw the key.
+		{"owns both, edge gateway", map[string]string{ingressOwnerLabel: "tenant-foo", gatewayOwnerLabel: "tenant-foo"}, edgeTenantGateway("tenant-foo"), true},
+		{"inherits ingress from ancestor", map[string]string{ingressOwnerLabel: "tenant-root"}, nil, false},
+		{"empty owner labels", map[string]string{ingressOwnerLabel: "", gatewayOwnerLabel: ""}, nil, false},
+		{"no labels at all", nil, nil, false},
 	}
 	for _, tc := range cases {
 		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo", Labels: tc.labels}}
-		if got := ownsTerminationPoint(ns); got != tc.want {
+		builder := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(ns)
+		if tc.tgw != nil {
+			builder = builder.WithObjects(tc.tgw)
+		}
+		r := &Reconciler{Client: builder.Build()}
+		got, err := r.ownsTerminationPoint(context.TODO(), ns)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
 			t.Errorf("%s: ownsTerminationPoint = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -923,4 +945,166 @@ func sliceHas(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// edgeTenantGateway builds the TenantGateway a tenant on an edge-terminated
+// class ends up with: the gateway chart resolves the class, reads the
+// platform's list of edge-terminated classes, and stamps certMode here.
+// This controller reads that object rather than a cluster-wide value,
+// because the class is a per-tenant choice.
+func edgeTenantGateway(ns string) *gatewayv1alpha1.TenantGateway {
+	return &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: ns},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "example.org",
+			CertMode:         gatewayv1alpha1.CertModeEdge,
+			GatewayClassName: "cloudflare-tunnel",
+		},
+	}
+}
+
+func terminatingTenantGateway(ns string) *gatewayv1alpha1.TenantGateway {
+	return &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: ns},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "example.org",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+		},
+	}
+}
+
+// TestReconcile_EdgeTenantGetsNoWildcardReplica pins the per-tenant rule:
+// one tenant on an edge-terminated class holds no key while its neighbour
+// on a terminating class keeps its replica, out of the same reconcile.
+// The earlier cluster-wide switch could not express this pair at all.
+func TestReconcile_EdgeTenantGetsNoWildcardReplica(t *testing.T) {
+	s := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(
+		configSecret("wildcard-tls", "tenant-root"),
+		tlsSecret("tenant-root", "wildcard-tls", map[string][]byte{"tls.crt": []byte("CRT"), "tls.key": []byte("KEY")}),
+		terminationNS("tenant-edge", "gateway"), edgeTenantGateway("tenant-edge"),
+		terminationNS("tenant-cilium", "gateway"), terminatingTenantGateway("tenant-cilium"),
+		terminationNS("tenant-ingress", "ingress"),
+	).Build()
+	mustReconcile(t, c)
+
+	if _, ok := getSecret(t, c, "tenant-edge", "wildcard-tls"); ok {
+		t.Errorf("a tenant on an edge-terminated class must hold no wildcard replica")
+	}
+	for _, ns := range []string{"tenant-cilium", "tenant-ingress"} {
+		if _, ok := getSecret(t, c, ns, "wildcard-tls"); !ok {
+			t.Errorf("%s still terminates TLS locally and must keep its replica", ns)
+		}
+	}
+}
+
+// TestReconcile_MovingATenantToEdgePrunesOnlyItsReplica pins the transition
+// and its scope: the neighbour's key stays where it is.
+func TestReconcile_MovingATenantToEdgePrunesOnlyItsReplica(t *testing.T) {
+	s := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(
+		configSecret("wildcard-tls", "tenant-root"),
+		tlsSecret("tenant-root", "wildcard-tls", map[string][]byte{"tls.crt": []byte("CRT"), "tls.key": []byte("KEY")}),
+		terminationNS("tenant-edge", "gateway"), terminatingTenantGateway("tenant-edge"),
+		terminationNS("tenant-cilium", "gateway"), terminatingTenantGateway("tenant-cilium"),
+	).Build()
+	mustReconcile(t, c)
+	if _, ok := getSecret(t, c, "tenant-edge", "wildcard-tls"); !ok {
+		t.Fatalf("precondition: expected a replica before the move")
+	}
+
+	tgw := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-edge"}, tgw); err != nil {
+		t.Fatalf("get TenantGateway: %v", err)
+	}
+	tgw.Spec.CertMode = gatewayv1alpha1.CertModeEdge
+	tgw.Spec.GatewayClassName = "cloudflare-tunnel"
+	if err := c.Update(context.TODO(), tgw); err != nil {
+		t.Fatalf("move the tenant onto the edge class: %v", err)
+	}
+	mustReconcile(t, c)
+
+	if _, ok := getSecret(t, c, "tenant-edge", "wildcard-tls"); ok {
+		t.Errorf("the moved tenant's replica must be pruned")
+	}
+	if _, ok := getSecret(t, c, "tenant-cilium", "wildcard-tls"); !ok {
+		t.Errorf("the neighbour's replica must survive")
+	}
+}
+
+// TestReconcile_GatewayNamespaceWithoutATenantGatewayKeepsItsReplica pins
+// the conservative default: a Gateway owner whose TenantGateway is absent
+// (created out of band, or mid-install) counts as terminating, so a missing
+// object never prunes key material.
+func TestReconcile_GatewayNamespaceWithoutATenantGatewayKeepsItsReplica(t *testing.T) {
+	s := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(
+		configSecret("wildcard-tls", "tenant-root"),
+		tlsSecret("tenant-root", "wildcard-tls", map[string][]byte{"tls.crt": []byte("CRT"), "tls.key": []byte("KEY")}),
+		terminationNS("tenant-bar", "gateway"),
+	).Build()
+	mustReconcile(t, c)
+
+	if _, ok := getSecret(t, c, "tenant-bar", "wildcard-tls"); !ok {
+		t.Errorf("a Gateway namespace with no TenantGateway must keep its replica")
+	}
+}
+
+// TestOwnsTerminationPointKeepsTheKeyWhenTenantGatewayCannotBeRead pins the
+// value the error path returns, not just the fact that it errors. A read
+// failure must answer "still terminating", so the key survives no matter
+// what the caller decides to do with the error — today it aborts the
+// reconcile, and the next person to make it skip the namespace instead
+// would otherwise prune live key material on a transient API blip.
+func TestOwnsTerminationPointKeepsTheKeyWhenTenantGatewayCannotBeRead(t *testing.T) {
+	s := newScheme(t)
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "tenant-bar",
+		Labels: map[string]string{gatewayOwnerLabel: "tenant-bar"},
+	}}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(ns).Build()
+	c := interceptor.NewClient(base, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*gatewayv1alpha1.TenantGatewayList); ok {
+				return errors.New("apiserver unavailable")
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+
+	r := &Reconciler{Client: c}
+	terminates, err := r.ownsTerminationPoint(context.TODO(), ns)
+	if err == nil {
+		t.Fatalf("expected the read failure to be surfaced")
+	}
+	if !terminates {
+		t.Errorf("a namespace whose TenantGateway cannot be read must count as terminating, so its key is kept")
+	}
+}
+
+// TestOwnsTerminationPointKeepsTheKeyWhileAnyGatewayTerminates pins the
+// question the controller is actually asking. A namespace holding two
+// TenantGateways — a stale or hand-made one on an edge class next to the
+// chart-rendered one that still terminates — must keep its wildcard: the
+// key is withdrawn only when NOTHING there terminates any more.
+func TestOwnsTerminationPointKeepsTheKeyWhileAnyGatewayTerminates(t *testing.T) {
+	s := newScheme(t)
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "tenant-foo",
+		Labels: map[string]string{gatewayOwnerLabel: "tenant-foo"},
+	}}
+	stale := edgeTenantGateway("tenant-foo")
+	stale.Name = "leftover"
+	canonical := terminatingTenantGateway("tenant-foo")
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(ns, stale, canonical).Build()
+	r := &Reconciler{Client: c}
+	terminates, err := r.ownsTerminationPoint(context.TODO(), ns)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !terminates {
+		t.Errorf("a namespace with a still-terminating Gateway must keep its key, whatever else sits next to it")
+	}
 }

@@ -22,7 +22,7 @@ import (
 )
 
 // CertMode selects how the per-tenant Gateway sources TLS certificates.
-// +kubebuilder:validation:Enum=http01;dns01;existingSecret
+// +kubebuilder:validation:Enum=http01;dns01;existingSecret;edge
 type CertMode string
 
 const (
@@ -44,6 +44,16 @@ const (
 	// issued by a corporate CA). The Secret must live in the
 	// TenantGateway's own namespace.
 	CertModeExistingSecret CertMode = "existingSecret"
+
+	// CertModeEdge is for a GatewayClass whose provider terminates TLS
+	// upstream of the Gateway (a Cloudflare Tunnel ends TLS at the
+	// Cloudflare edge and reaches the Gateway over the tunnel). The
+	// Gateway carries the apex, its wildcard and every inheriting child
+	// apex as plain HTTP listeners; no Issuer, no Certificate and no
+	// http->https redirect route are minted, and
+	// Spec.TLSPassthroughServices is not rendered because a TLS
+	// listener cannot be served by an HTTP-only edge.
+	CertModeEdge CertMode = "edge"
 )
 
 // IssuerName selects the Let's Encrypt environment the per-tenant
@@ -149,8 +159,9 @@ type TenantGatewaySpec struct {
 	// +required
 	Apex string `json:"apex"`
 
-	// CertMode selects between HTTP-01 per-listener Certificates and
-	// a wildcard cert via DNS-01.
+	// CertMode selects between HTTP-01 per-listener Certificates, a
+	// wildcard cert via DNS-01, an operator-supplied wildcard Secret,
+	// and edge (no certificates: TLS ends at the class provider's edge).
 	// +kubebuilder:default=http01
 	CertMode CertMode `json:"certMode,omitempty"`
 
@@ -186,6 +197,7 @@ type TenantGatewaySpec struct {
 	// TLSPassthroughServices names services exposed via TLS-passthrough
 	// (mode: Passthrough listeners). Each service gets a dedicated
 	// listener; HTTPRoutes attach to TLS-terminate listeners instead.
+	// Not rendered when CertMode=edge.
 	// +optional
 	TLSPassthroughServices []string `json:"tlsPassthroughServices,omitempty"`
 

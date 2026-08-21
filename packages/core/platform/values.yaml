@@ -370,8 +370,10 @@ publishing:
     #
     # Child tenants are covered automatically: the platform controller
     # replicates this Secret into every tenant namespace that runs its own
-    # ingress controller or Gateway, so each per-tenant termination point
-    # serves the wildcard from its own namespace (no cross-namespace Secret
+    # ingress controller, and into Gateway owners as long as their Gateway
+    # terminates TLS itself (see gateway.edgeTerminatedClasses below), so each
+    # per-tenant termination point serves the wildcard from its own
+    # namespace (no cross-namespace Secret
     # read, no widened tenant RBAC). No extra input — the same name set
     # here drives both the consumers and the replication. The replica
     # carries the wildcard private key into each terminating tenant
@@ -468,6 +470,51 @@ gateway:
   # materialises the Gateway itself. This flag only controls platform-wide
   # Gateway API integration (cert-manager solver + per-service HTTPRoutes).
   enabled: false
+  # Default GatewayClass for tenant Gateways. A tenant picks another one
+  # with `gatewayClass` on its Tenant resource; this is the value used when
+  # it does not. The default is the Cilium class the platform ships. Reaches
+  # the per-tenant gateway chart as _cluster.gateway-class-name.
+  className: cilium
+  # GatewayClasses whose provider terminates TLS upstream of the Gateway
+  # (a Cloudflare Tunnel class ends TLS at the Cloudflare edge and reaches
+  # the Gateway over the tunnel). TLS termination is a property of the
+  # class, not of the tenant, so it is declared here once and every tenant
+  # that selects such a class gets it: the TenantGateway controller then
+  # issues no certificates for that Gateway, renders plain HTTP listeners
+  # for the apex and its wildcards, and skips the TLS-passthrough listeners
+  # — which leaves the tenant Kubernetes API, VM export and CDI upload
+  # endpoints unpublished through it, their TLSRoutes matching no listener.
+  #
+  # Listing a class here is a claim about that class and nothing validates
+  # it: name the bundled `cilium` and its Gateways publish every app
+  # hostname over plain HTTP on a public address, with no redirect and no
+  # certificate. Only list a class whose provider really does terminate TLS
+  # in front of the Gateway.
+  #
+  # Moving an existing tenant onto such a class also withdraws the operator
+  # wildcard from it: its namespace stops counting as a TLS termination
+  # point, so the replica of publishing.certificates.wildcardSecretName is
+  # deleted from it on the next reconcile. Ingress owners keep theirs, and a
+  # missing source Secret postpones the deletion rather than forcing it.
+  # Reaches the per-tenant gateway chart as _cluster.gateway-edge-classes.
+  edgeTerminatedClasses: []
+  # GatewayClasses a tenant may select for its own Gateway through
+  # `tenant.spec.gatewayClass`, on top of className above (which every
+  # tenant may always end up on, since it is the default). A tenant asking
+  # for anything outside this set fails its own gateway release with a
+  # message naming the class, and reaches no other tenant.
+  #
+  # This is an allowlist because Tenant is a tenant-writable object and a
+  # GatewayClass is cluster-scoped: without it a tenant could attach its
+  # Gateway to any class the cluster registers, including one an admin
+  # keeps for internal-only or differently-fronted traffic. Empty (the
+  # default) means tenants cannot choose at all and every Gateway lands on
+  # className. The allowed set is this list plus the CURRENT className, so
+  # changing className while a tenant pins the previous one by name fails
+  # that tenant's gateway release until it is updated too — list the old
+  # class here when moving the default. Reaches the per-tenant gateway
+  # chart as _cluster.gateway-tenant-classes.
+  tenantSelectableClasses: []
   # Advertise HTTP/2 on every Gateway API listener served by the bundled
   # Cilium dataplane. Browsers negotiate HTTP/2 exclusively through TLS ALPN
   # "h2"; with this off, Envoy advertises no ALPN protocols and every client

@@ -7,13 +7,104 @@
 {{- $provider := (index .Values._cluster "dns01-provider") | default "cloudflare" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 {{- /*
-  Operator-supplied wildcard mode wins over ACME. When
+  Class resolution, most specific first: the tenant's own choice
+  (tenant.spec.gatewayClass, delivered as this chart's gatewayClassName),
+  then the platform default (_cluster.gateway-class-name), then the chart
+  default for a platform that predates the key.
+*/}}
+{{- /* Trimmed on both sides of every later comparison: the class lists
+       below arrive comma-joined and trim their own entries, so an
+       untrimmed scalar here would fail `has` against its own padded
+       self and match neither the edge list nor the allowlist that is
+       supposed to always contain the default.
+
+       Unset falls back; whitespace-only refuses. Unset means the choice
+       was not made, and falling back is its documented behaviour.
+       Whitespace means a choice was made and is garbage, in the field
+       that decides where TLS terminates — resolving it quietly would put
+       a tenant meant for an edge terminator on the bundled class and
+       publish it directly instead. */}}
+{{- $rawDefaultClass := (index .Values._cluster "gateway-class-name") | default "" }}
+{{- $rawClassName := .Values.gatewayClassName | default "" }}
+{{- if and (ne $rawDefaultClass "") (eq (trim $rawDefaultClass) "") }}
+  {{- fail "packages/extra/gateway: _cluster.gateway-class-name is only whitespace. The platform writes this from gateway.className; leave that unset for the bundled cilium class rather than blank." }}
+{{- end }}
+{{- if and (ne $rawClassName "") (eq (trim $rawClassName) "") }}
+  {{- fail "packages/extra/gateway: gatewayClass is only whitespace. Leave tenant.spec.gatewayClass unset to take the platform default, or name a class the operator lists in gateway.tenantSelectableClasses." }}
+{{- end }}
+{{- $defaultClass := $rawDefaultClass | trim | default "cilium" }}
+{{- $className := $rawClassName | trim | default $defaultClass }}
+{{- $edgeClasses := list }}
+{{- range splitList "," ((index .Values._cluster "gateway-edge-classes") | default "") }}
+  {{- $c := . | trim }}
+  {{- if $c }}
+    {{- $edgeClasses = append $edgeClasses $c }}
+  {{- end }}
+{{- end }}
+{{- /*
+  A tenant may only select a class the operator allowed. Tenant is a
+  tenant-writable object and a GatewayClass is cluster-scoped, so without
+  this check a tenant could attach its Gateway to an admin's internal-only
+  class. The platform default is always allowed: every tenant that chooses
+  nothing already lands on it.
+*/}}
+{{- if .Values.gatewayClassName }}
+  {{- $allowed := list $defaultClass }}
+  {{- range splitList "," ((index .Values._cluster "gateway-tenant-classes") | default "") }}
+    {{- $c := . | trim }}
+    {{- if $c }}
+      {{- $allowed = append $allowed $c }}
+    {{- end }}
+  {{- end }}
+  {{- if not (has $className $allowed) }}
+    {{- fail (printf "packages/extra/gateway: gatewayClass=%q is not selectable by tenants. Allowed: %s. The operator extends the set with gateway.tenantSelectableClasses in the platform values." $className (join ", " $allowed)) }}
+  {{- end }}
+  {{- /*
+    The publishing tenant is a special case. Its Gateway is what the
+    cluster-wide ACME ClusterIssuers point their HTTP-01 solver at, and
+    those are rendered from the platform default class alone — a tenant's
+    own choice does not ride that channel. Letting the publishing tenant
+    pick a class whose TLS terminates differently would leave the solver
+    pinned to a listener that Gateway no longer has (or unpinned when it
+    does), and every HTTP-01 certificate in the cluster stops issuing with
+    nothing in any status saying why. Refuse it here, where the operator
+    is looking, rather than in the certificate that silently never renews.
+  */}}
+  {{- /* expose-ingress is overloaded: it is both an ingressClassName and
+         the publishing namespace, and the two coincide only in the default
+         deployment (see the NOTE in the wildcardsecret controller's
+         readConfig). A deployment that splits them makes this guard compare
+         against the wrong namespace, so it stops protecting the tenant it
+         is meant to. */}}
+  {{- $publishingNS := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+  {{- if eq .Release.Namespace $publishingNS }}
+    {{- $defaultAtEdge := has $defaultClass $edgeClasses }}
+    {{- $selectedAtEdge := has $className $edgeClasses }}
+    {{- if ne $defaultAtEdge $selectedAtEdge }}
+      {{- fail (printf "packages/extra/gateway: the publishing tenant (%s) cannot select gatewayClass=%q: it terminates TLS differently from the platform default %q, and the cluster-wide ACME issuers are configured from that default. Change gateway.className instead." $publishingNS $className $defaultClass) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- /*
+  TLS termination is a property of the CLASS, declared once on the platform
+  and read here for whichever class this tenant ended up on — so a tenant
+  that selects an edge-terminated class gets edge behaviour without having
+  to state it again, and cannot get the two out of step.
+*/}}
+{{- $tlsTermination := ternary "edge" "gateway" (has $className $edgeClasses) }}
+{{- /*
+  Edge termination wins over everything else: the class provider ends
+  TLS upstream of the Gateway (Cloudflare Tunnel terminates at the
+  Cloudflare edge), so the controller mints no certificates at all
+  and the solver, provider, issuer and wildcard-secret inputs are
+  not read. Below that, the operator-supplied wildcard mode wins over
+  ACME. When
   _cluster.wildcard-secret-name is set, the Gateway references that
   pre-existing Secret directly (certMode=existingSecret) and the
   controller mints no Issuer/Certificate — so the solver, provider,
   and issuer-name validations below (all ACME concerns) are skipped.
 */}}
-{{- if not $wildcardSecret }}
+{{- if and (ne $tlsTermination "edge") (not $wildcardSecret) }}
 {{- /*
   Validate solver early — same check the old issuer.yaml ran. The
   controller will refuse to render an Issuer with an unsupported
@@ -46,8 +137,10 @@ metadata:
   name: cozystack
 spec:
   apex: {{ $host | quote }}
-  gatewayClassName: {{ .Values.gatewayClassName | quote }}
-  {{- if $wildcardSecret }}
+  gatewayClassName: {{ $className | quote }}
+  {{- if eq $tlsTermination "edge" }}
+  certMode: edge
+  {{- else if $wildcardSecret }}
   certMode: existingSecret
   wildcardSecretRef:
     name: {{ $wildcardSecret | quote }}
@@ -97,7 +190,10 @@ spec:
     - {{ . | quote }}
     {{- end }}
   {{- end }}
-  {{- with .Values.tlsPassthroughServices }}
+  {{- /* Not written at all in edge mode: the controller renders no TLS
+         listener for these, so an object advertising them would send an
+         operator looking for endpoints that are not published. */}}
+  {{- with (ternary (list) .Values.tlsPassthroughServices (eq $tlsTermination "edge")) }}
   tlsPassthroughServices:
     {{- range . }}
     - {{ . | quote }}

@@ -31,14 +31,23 @@ limitations under the License.
 // This controller does that replication with no extra operator input: it
 // reads the same platform values channel the consumers read
 // (cozy-system/cozystack-values), takes the wildcard Secret name from
-// _cluster.wildcard-secret-name and the publishing namespace from
+// _cluster.wildcard-secret-name, the publishing namespace from
 // _cluster.expose-ingress, and mirrors that Secret into every tenant
-// namespace that owns a termination point. Because the source is derived
+// namespace that owns a termination point. A namespace owning a Gateway
+// counts as one only while something there still terminates TLS: a
+// TenantGateway carries certMode=edge when the class it selected ends TLS
+// at the provider's edge, and a namespace whose Gateways are all at the
+// edge has no consumer for the replica, so it does not get one. That is a
+// statement about the REPLICA and not about the namespace being key-free —
+// see ownsTerminationPoint for what stays behind. Because the source is
+// derived
 // from the same value that makes the consumers reference it, the replica
 // is created whenever the consumers expect it — no manual labelling, and
 // no window where a child controller references a Secret that will never
 // exist. Clearing _cluster.wildcard-secret-name (disabling the feature) is
-// the only path that prunes every replica. A values channel that is absent
+// the only path that prunes EVERY replica; moving a tenant onto an
+// edge-terminated class prunes that tenant's replica alone. A values channel
+// that is absent
 // or unreadable, or a source Secret that is merely missing or mistyped,
 // leaves existing replicas in place — so a transient gap, a delete+recreate
 // rotation, or a misconfiguration never drops tenant TLS.
@@ -86,6 +95,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	sigsyaml "sigs.k8s.io/yaml"
+
+	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 )
 
 const (
@@ -107,11 +118,13 @@ const (
 	SourceRefAnnotation = "cozystack.io/wildcard-secret-source"
 
 	// ingressOwnerLabel / gatewayOwnerLabel name the tenant namespace
-	// labels written by the apps/tenant chart. A namespace OWNS a
-	// termination point (and therefore needs the wildcard locally) when
-	// the label value equals the namespace's own name; a value pointing
-	// at an ancestor means the namespace merely inherits and does not run
-	// its own controller / Gateway.
+	// labels written by the apps/tenant chart. A value pointing at an
+	// ancestor means the namespace merely inherits and does not run its
+	// own controller / Gateway. Label equality with the namespace's own
+	// name is therefore necessary for owning a termination point, and for
+	// the ingress label it is also sufficient; for the Gateway label it is
+	// not, since a Gateway on an edge-terminated class terminates nothing
+	// — ownsTerminationPoint has the rest of the rule.
 	ingressOwnerLabel = "namespace.cozystack.io/ingress"
 	gatewayOwnerLabel = "namespace.cozystack.io/gateway"
 
@@ -183,6 +196,7 @@ type platformValues struct {
 
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.cozystack.io,resources=tenantgateways,verbs=get;list;watch
 
 // Reconcile performs a full sync: it reads the wildcard source identity
 // from the platform values channel, mirrors the source into every tenant
@@ -346,7 +360,11 @@ func (r *Reconciler) terminationNamespaces(ctx context.Context, sourceNS string)
 			// forbidden-error requeues.
 			continue
 		}
-		if ownsTerminationPoint(ns) {
+		terminates, err := r.ownsTerminationPoint(ctx, ns)
+		if err != nil {
+			return nil, err
+		}
+		if terminates {
 			out = append(out, ns.Name)
 		}
 	}
@@ -355,9 +373,49 @@ func (r *Reconciler) terminationNamespaces(ctx context.Context, sourceNS string)
 
 // ownsTerminationPoint reports whether a namespace runs its own ingress
 // controller or Gateway — true exactly when an owner label equals the
-// namespace's own name.
-func ownsTerminationPoint(ns *corev1.Namespace) bool {
-	return ns.Labels[ingressOwnerLabel] == ns.Name || ns.Labels[gatewayOwnerLabel] == ns.Name
+// namespace's own name. A Gateway owner terminates nothing when the class
+// it selected ends TLS at its provider's edge: its listeners are plain HTTP
+// and reference no Secret, so the replicated wildcard has no consumer left
+// there and is pruned on the next reconcile. That prunes the REPLICA, not
+// every key in the namespace: the TenantGateway controller deletes the
+// Certificate objects on the switch, and cert-manager ships here with
+// enableCertificateOwnerRef: false, so each cert's own Secret stays behind
+// unreferenced — the same leftover every other mode transition produces.
+// The mode is read off the
+// tenant's own TenantGateway rather than a cluster-wide value, because the
+// class is a per-tenant choice. A namespace whose TenantGateway cannot be
+// read is treated as terminating, so a transient API error never prunes a
+// key a Gateway may still be serving.
+func (r *Reconciler) ownsTerminationPoint(ctx context.Context, ns *corev1.Namespace) (bool, error) {
+	if ns.Labels[ingressOwnerLabel] == ns.Name {
+		return true, nil
+	}
+	if ns.Labels[gatewayOwnerLabel] != ns.Name {
+		return false, nil
+	}
+	list := &gatewayv1alpha1.TenantGatewayList{}
+	if err := r.List(ctx, list, client.InNamespace(ns.Name)); err != nil {
+		// true alongside the error, so the safe answer does not depend on
+		// the caller aborting: whoever later decides to carry on past a
+		// per-namespace read failure keeps the key rather than pruning it.
+		return true, fmt.Errorf("list TenantGateways in %s: %w", ns.Name, err)
+	}
+	// The question is whether ANY Gateway in this namespace terminates TLS,
+	// not whether some object happens to be at the edge: one stale or
+	// hand-made TenantGateway on an edge class must not withdraw the key
+	// from a namespace whose other Gateway is still serving it. An empty
+	// list keeps the key for the same reason as a read failure above — the
+	// namespace carries the owner label, so something there is expected to
+	// terminate even if its TenantGateway has not appeared yet.
+	if len(list.Items) == 0 {
+		return true, nil
+	}
+	for i := range list.Items {
+		if list.Items[i].Spec.CertMode != gatewayv1alpha1.CertModeEdge {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // upsertCopy creates or refreshes the replica of src in namespace ns. It
@@ -497,7 +555,8 @@ func SecretCacheByObject() cache.ByObject {
 // (SecretCacheByObject) to managed replicas + the values channel, so this
 // Secret watch only ever delivers those — replica self-heal and feature
 // enable/disable are immediate. The Namespace watch reacts to a tenant
-// gaining or losing a termination point. The operator source is not
+// gaining or losing a termination point, and the TenantGateway watch to
+// the class its tenant is on changing. The operator source is not
 // watched; its rotation is handled by the result requeue in Reconcile.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	toSingleton := handler.EnqueueRequestsFromMapFunc(enqueueConfigKey)
@@ -505,13 +564,21 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("wildcardsecret").
 		Watches(&corev1.Secret{}, toSingleton).
 		Watches(&corev1.Namespace{}, toSingleton).
+		// A namespace stops being a termination point the moment its
+		// TenantGateway moves onto an edge-terminated class, and that
+		// object is what this controller reads to decide. Without the
+		// watch the withdrawal waits for the periodic resync, leaving
+		// the wildcard private key in a namespace that no longer serves
+		// it for up to sourceResyncInterval.
+		Watches(&gatewayv1alpha1.TenantGateway{}, toSingleton).
 		Complete(r)
 }
 
 // enqueueConfigKey maps every watched event to the single config key, so
 // any relevant change — a managed replica edited or deleted out of band,
-// the values channel toggling the feature, or a namespace gaining/losing a
-// termination point — triggers one full resync. The manager's Secret cache
+// the values channel toggling the feature, a namespace gaining or losing a
+// termination point, or a TenantGateway changing the class its tenant is
+// on — triggers one full resync. The manager's Secret cache
 // is scoped (SecretCacheByObject) to replicas + the values channel, so the
 // Secret watch only ever delivers those; this mapper needs no filtering.
 func enqueueConfigKey(context.Context, client.Object) []reconcile.Request {

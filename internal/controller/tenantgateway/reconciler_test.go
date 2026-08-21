@@ -25,7 +25,9 @@ import (
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -2772,6 +2774,35 @@ func TestReconcile_DNS01ProviderMissingConfigErrors(t *testing.T) {
 	}
 }
 
+// TestBuildSolver_CertlessModesRejected pins the contract guard on the two
+// modes that mint no Issuer: reconcileIssuer never calls buildSolver for
+// them, and a future caller that does must get a named error rather than
+// fall through to the unknown-certMode default.
+func TestBuildSolver_CertlessModesRejected(t *testing.T) {
+	for _, mode := range []gatewayv1alpha1.CertMode{
+		gatewayv1alpha1.CertModeExistingSecret,
+		gatewayv1alpha1.CertModeEdge,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:             "foo.example.com",
+					CertMode:         mode,
+					GatewayClassName: "cilium",
+				},
+			}
+			_, err := buildSolver(tgw)
+			if err == nil {
+				t.Fatalf("expected an error for certMode=%s, got nil", mode)
+			}
+			if !strings.Contains(err.Error(), string(mode)) {
+				t.Errorf("error=%q, want it to name certMode=%s", err.Error(), mode)
+			}
+		})
+	}
+}
+
 func ptrNamespace(ns string) *gatewayv1.Namespace {
 	v := gatewayv1.Namespace(ns)
 	return &v
@@ -3963,5 +3994,344 @@ func TestReconcile_ExistingSecretModeRendersChildApexListenerWithOperatorSecret(
 	}
 	if !sawChild {
 		t.Errorf("expected per-child-apex listener *.alice.example.org in existingSecret mode, got %+v", gw.Spec.Listeners)
+	}
+}
+
+// TestReconcile_EdgeModeRendersPlainHTTPListeners pins the edge cert
+// mode, where TLS ends upstream of the Gateway (a Cloudflare Tunnel
+// class terminates at the Cloudflare edge). The Gateway carries the
+// apex, its wildcard and every inheriting child apex as plain HTTP
+// listeners so app HTTPRoutes attach by hostname exactly as they do to
+// the HTTPS listeners in the other modes; nothing carries a
+// certificateRef; TLS-passthrough services are not rendered because a
+// TLS listener cannot be served by an HTTP-only edge; and no Issuer,
+// Certificate or http->https redirect route is minted, since none of
+// them has anything to do.
+func TestReconcile_EdgeModeRendersPlainHTTPListeners(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "example.org",
+			CertMode:               gatewayv1alpha1.CertModeEdge,
+			GatewayClassName:       "cloudflare-tunnel",
+			TLSPassthroughServices: []string{"api", "vm-exportproxy"},
+		},
+	}
+	child := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "tenant-alice",
+		Labels: map[string]string{
+			namespaceGatewayLabel:         "tenant-root",
+			"namespace.cozystack.io/host": "alice.example.org",
+		},
+	}}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, child).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	if gw.Spec.GatewayClassName != "cloudflare-tunnel" {
+		t.Errorf("gatewayClassName=%q, want cloudflare-tunnel", gw.Spec.GatewayClassName)
+	}
+	byHost := map[string]gatewayv1.Listener{}
+	for _, l := range gw.Spec.Listeners {
+		if l.Protocol != gatewayv1.HTTPProtocolType {
+			t.Errorf("edge mode must render HTTP listeners only, got %s listener %q", l.Protocol, l.Name)
+		}
+		if l.TLS != nil {
+			t.Errorf("edge mode listener %q must carry no TLS config, got %+v", l.Name, l.TLS)
+		}
+		if l.Hostname == nil {
+			// A hostname-less listener admits every host, and Cilium
+			// reads only the first listener when deciding whether a
+			// namespace may attach (cilium#42159), so one sitting at
+			// index 0 with the narrow ACME selector detaches every
+			// inheriting tenant's route.
+			t.Errorf("edge mode must render no hostname-less listener, got %q", l.Name)
+			continue
+		}
+		byHost[string(*l.Hostname)] = l
+	}
+	for _, host := range []string{"*.example.org", "example.org", "*.alice.example.org"} {
+		l, ok := byHost[host]
+		if !ok {
+			t.Errorf("expected an HTTP listener for %s, got %+v", host, gw.Spec.Listeners)
+			continue
+		}
+		if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil || l.AllowedRoutes.Namespaces.Selector == nil ||
+			l.AllowedRoutes.Namespaces.Selector.MatchLabels[namespaceGatewayLabel] != "tenant-root" {
+			t.Errorf("listener %s must admit routes by the %s label so inheriting tenants attach, got %+v", host, namespaceGatewayLabel, l.AllowedRoutes)
+		}
+		if len(l.AllowedRoutes.Kinds) != 1 || l.AllowedRoutes.Kinds[0].Kind != "HTTPRoute" {
+			t.Errorf("listener %s must admit HTTPRoute only, got %+v", host, l.AllowedRoutes.Kinds)
+		}
+	}
+
+	issuers := &cmv1.IssuerList{}
+	if err := c.List(context.TODO(), issuers, client.InNamespace("tenant-root")); err != nil {
+		t.Fatalf("list Issuers: %v", err)
+	}
+	if len(issuers.Items) != 0 {
+		t.Errorf("edge mode must mint no Issuer, got %d", len(issuers.Items))
+	}
+	certs := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certs, client.InNamespace("tenant-root")); err != nil {
+		t.Fatalf("list Certificates: %v", err)
+	}
+	if len(certs.Items) != 0 {
+		t.Errorf("edge mode must mint no Certificate, got %d", len(certs.Items))
+	}
+	redirect := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-root"}, redirect); !apierrors.IsNotFound(err) {
+		t.Errorf("edge mode must not render the http->https redirect route, got err=%v", err)
+	}
+}
+
+// TestReconcile_SwitchToEdgeModeCleansACMEMachinery pins the mode
+// transition: a TenantGateway that already ran in HTTP-01 mode carries
+// an Issuer, per-listener Certificates and the redirect route. Moving it
+// to edge must delete all three, or the tenant keeps ACME machinery
+// (and Let's Encrypt renewals) it can no longer use.
+func TestReconcile_SwitchToEdgeModeCleansACMEMachinery(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "harbor", Namespace: "tenant-foo"},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{Name: "cozystack"}}},
+			Hostnames:       []gatewayv1.Hostname{"harbor.foo.example.com"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, route).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}}
+	if _, err := r.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("http01 reconcile: %v", err)
+	}
+	certs := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certs, client.InNamespace("tenant-foo")); err != nil || len(certs.Items) == 0 {
+		t.Fatalf("precondition: expected a per-listener Certificate in http01 mode, got %d (err=%v)", len(certs.Items), err)
+	}
+
+	if err := c.Get(context.TODO(), req.NamespacedName, tgw); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	tgw.Spec.CertMode = gatewayv1alpha1.CertModeEdge
+	if err := c.Update(context.TODO(), tgw); err != nil {
+		t.Fatalf("update tgw: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("edge reconcile: %v", err)
+	}
+
+	if err := c.List(context.TODO(), certs, client.InNamespace("tenant-foo")); err != nil {
+		t.Fatalf("list Certificates: %v", err)
+	}
+	if len(certs.Items) != 0 {
+		t.Errorf("per-listener Certificates must be removed on the switch to edge, got %d", len(certs.Items))
+	}
+	issuer := &cmv1.Issuer{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: gatewayIssuerName(tgw), Namespace: "tenant-foo"}, issuer); !apierrors.IsNotFound(err) {
+		t.Errorf("Issuer must be removed on the switch to edge, got err=%v", err)
+	}
+	redirect := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, redirect); !apierrors.IsNotFound(err) {
+		t.Errorf("redirect route must be removed on the switch to edge, got err=%v", err)
+	}
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), req.NamespacedName, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	for _, l := range gw.Spec.Listeners {
+		if l.Protocol == gatewayv1.HTTPSProtocolType {
+			t.Errorf("HTTPS listener %q must not survive the switch to edge", l.Name)
+		}
+	}
+}
+
+// TestReconcile_EdgeListenersAdmitTheACMEChallengeNamespace pins the one
+// route that reaches an edge Gateway from outside the tenant tree. With no
+// listener named "http" the cluster-wide ClusterIssuer drops its
+// sectionName pin (packages/system/cert-manager-issuers), so the challenge
+// HTTPRoute cert-manager publishes in its own namespace — ClusterIssuer
+// solver resources land in --cluster-resource-namespace, which is
+// cozy-cert-manager here — attaches by hostname instead. It gets in because
+// the controller labels every AttachedNamespaces entry with the same
+// namespace.cozystack.io/gateway label the edge listeners select on, and
+// the platform ships cozy-cert-manager on that list. Without this the
+// HTTP-01 path would be dead on an edge Gateway with nothing saying why.
+func TestReconcile_EdgeListenersAdmitTheACMEChallengeNamespace(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "example.org",
+			CertMode:           gatewayv1alpha1.CertModeEdge,
+			GatewayClassName:   "cloudflare-tunnel",
+			AttachedNamespaces: []string{acmeChallengeNamespace},
+		},
+	}
+	challengeNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: acmeChallengeNamespace}}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, challengeNS).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &corev1.Namespace{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: acmeChallengeNamespace}, got); err != nil {
+		t.Fatalf("get challenge namespace: %v", err)
+	}
+	if got.Labels[namespaceGatewayLabel] != "tenant-root" {
+		t.Fatalf("challenge namespace must carry %s=tenant-root, got %v", namespaceGatewayLabel, got.Labels)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	for i := range gw.Spec.Listeners {
+		l := &gw.Spec.Listeners[i]
+		sel, err := metav1.LabelSelectorAsSelector(l.AllowedRoutes.Namespaces.Selector)
+		if err != nil {
+			t.Fatalf("listener %s: bad selector: %v", l.Name, err)
+		}
+		if !sel.Matches(labels.Set(got.Labels)) {
+			t.Errorf("listener %s does not admit the ACME challenge namespace (selector %s, labels %v)", l.Name, sel, got.Labels)
+		}
+		var admitsHTTPRoute bool
+		for _, k := range l.AllowedRoutes.Kinds {
+			if k.Kind == "HTTPRoute" {
+				admitsHTTPRoute = true
+			}
+		}
+		if !admitsHTTPRoute {
+			t.Errorf("listener %s must admit HTTPRoute so the challenge route can attach, got %+v", l.Name, l.AllowedRoutes.Kinds)
+		}
+	}
+}
+
+// TestReconcile_EdgeModeLeavesAForeignRedirectRouteAlone pins the
+// ownership guard on the one path in this controller that DELETES a route
+// rather than writing one. Edge mode removes the redirect HTTPRoute it
+// owns, because nothing listens on https for it to point at; an HTTPRoute
+// of the same name that the controller never created belongs to whoever
+// did, and must survive. Note the contract differs from the http01 path on
+// the same object: there a foreign route is a takeover refusal and fails
+// the reconcile, here it is simply left alone, because edge has nothing it
+// wants to put in its place.
+func TestReconcile_EdgeModeLeavesAForeignRedirectRouteAlone(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeEdge,
+			GatewayClassName: "cloudflare-tunnel",
+		},
+	}
+	foreign := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack-http-redirect", Namespace: "tenant-foo"},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"operator.foo.example.com"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, foreign).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("edge reconcile must not fail on a foreign redirect route: %v", err)
+	}
+
+	got := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("the foreign HTTPRoute must survive the switch to edge: %v", err)
+	}
+	if len(got.Spec.Hostnames) != 1 || string(got.Spec.Hostnames[0]) != "operator.foo.example.com" {
+		t.Errorf("the foreign HTTPRoute must be untouched, got %+v", got.Spec)
+	}
+}
+
+// TestReconcile_SwitchingBackFromEdgeRestoresTheACMEShape pins the way out
+// of edge, which is the likelier operational move: an operator who lists a
+// class in edgeTerminatedClasses by mistake takes it back out. The Gateway
+// must lose its plain-HTTP apex listeners and regain the narrow :80
+// listener, the redirect route the edge branch deleted must come back, and
+// the Issuer must be minted again — none of which is exercised by the
+// forward direction, where each of those is a delete.
+func TestReconcile_SwitchingBackFromEdgeRestoresTheACMEShape(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeEdge,
+			GatewayClassName: "cloudflare-tunnel",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}}
+	if _, err := r.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("edge reconcile: %v", err)
+	}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, &gatewayv1.HTTPRoute{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("precondition: edge must leave no redirect route, got err=%v", err)
+	}
+
+	if err := c.Get(context.TODO(), req.NamespacedName, tgw); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	tgw.Spec.CertMode = gatewayv1alpha1.CertModeHTTP01
+	tgw.Spec.GatewayClassName = "cilium"
+	if err := c.Update(context.TODO(), tgw); err != nil {
+		t.Fatalf("switch back: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("http01 reconcile: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), req.NamespacedName, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var sawNarrowHTTP bool
+	for i := range gw.Spec.Listeners {
+		l := &gw.Spec.Listeners[i]
+		if l.Name == "http" && l.Hostname == nil {
+			sawNarrowHTTP = true
+		}
+		if strings.HasPrefix(string(l.Name), "edge") {
+			t.Errorf("edge listener %q survived the switch back", l.Name)
+		}
+	}
+	if !sawNarrowHTTP {
+		t.Errorf("the narrow :80 listener must come back, got %+v", gw.Spec.Listeners)
+	}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, &gatewayv1.HTTPRoute{}); err != nil {
+		t.Errorf("the redirect route must be recreated on the way back: %v", err)
+	}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: gatewayIssuerName(tgw), Namespace: "tenant-foo"}, &cmv1.Issuer{}); err != nil {
+		t.Errorf("the ACME Issuer must be minted again on the way back: %v", err)
 	}
 }

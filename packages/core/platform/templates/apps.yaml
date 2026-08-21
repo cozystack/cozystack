@@ -29,7 +29,9 @@ stringData:
         name is not sensitive). When set, the ingress flow points the
         root ingress controller's --default-ssl-certificate at it and
         drops per-host ACME, and the gateway chart switches the
-        TenantGateway to certMode=existingSecret.
+        TenantGateway to certMode=existingSecret — unless
+        the tenant's Gateway is on an edge-terminated class, which wins
+        over it and issues nothing at all.
 
         The name comes from one of two sources, with the operator-
         provided (BYO) name always winning:
@@ -125,6 +127,65 @@ stringData:
       proxy-protocol: {{ .Values.publishing.proxyProtocol | default false | quote }}
       gateway-enabled: {{ .Values.gateway.enabled | default false | quote }}
       gateway-attached-namespaces: {{ .Values.gateway.attachedNamespaces | default (list) | join "," | quote }}
+      {{- /* Normalised once here rather than at each reader: two charts
+             compare this scalar against the comma-joined lists below,
+             which trim their own entries on split, so a padded name that
+             reached them would match in neither.
+
+             Unset falls back to the bundled class. Whitespace-only does
+             NOT: unset means "I did not choose", while whitespace means
+             "I chose, and what I typed is garbage" — and this key decides
+             where TLS terminates. Resolving it quietly would publish a
+             tenant directly, with a real certificate on a real address,
+             that the operator meant to put behind an edge terminator. */}}
+      {{- /* Read before normalising, and check the kind first. `default`
+             fires on any falsy value, so a `default ""` ahead of these
+             checks would launder 0 and false into the empty string and
+             resolve them to the bundled class — the guard would then
+             cover the loudest bad input and miss the two quietest. The
+             order of a guard's steps is part of the guard. */}}
+      {{- $rawClassName := .Values.gateway.className }}
+      {{- if not (kindIs "invalid" $rawClassName) }}
+      {{- if not (kindIs "string" $rawClassName) }}
+      {{- fail (printf "gateway.className must be a GatewayClass name, got %v" $rawClassName) }}
+      {{- end }}
+      {{- if and (ne $rawClassName "") (eq (trim $rawClassName) "") }}
+      {{- fail "gateway.className is only whitespace. Leave it unset to use the bundled cilium class, or name a real GatewayClass — resolving a blank value silently would decide TLS termination for every tenant that did not choose." }}
+      {{- end }}
+      {{- end }}
+      gateway-class-name: {{ $rawClassName | default "" | trim | default "cilium" | quote }}
+      {{- /*
+        A non-string entry is rejected here rather than travelling as
+        something the join below would render unreadably. Note what is NOT
+        checked: whether the names correspond to GatewayClasses that exist.
+        A misspelled name in this list simply matches no class, so edge
+        behaviour never engages for it and nothing says so — the same shape
+        as a misspelled name in className, which lands a tenant Gateway on
+        a class the cluster does not serve and shows up as a Gateway that
+        never programs.
+      */}}
+      {{- $edgeClasses := .Values.gateway.edgeTerminatedClasses | default (list) }}
+      {{- $tenantClasses := .Values.gateway.tenantSelectableClasses | default (list) }}
+      {{- /* Both lists travel as one comma-joined scalar, so a name that
+             carries a comma would arrive as two names and match neither. */}}
+      {{- range $edgeClasses }}
+      {{- if not (kindIs "string" .) }}
+      {{- fail (printf "gateway.edgeTerminatedClasses must be a list of GatewayClass names, got %v" .) }}
+      {{- end }}
+      {{- if contains "," (. | toString) }}
+      {{- fail (printf "gateway.edgeTerminatedClasses entry %q contains a comma; the list travels comma-joined and the name would be split" .) }}
+      {{- end }}
+      {{- end }}
+      {{- range $tenantClasses }}
+      {{- if not (kindIs "string" .) }}
+      {{- fail (printf "gateway.tenantSelectableClasses must be a list of GatewayClass names, got %v" .) }}
+      {{- end }}
+      {{- if contains "," (. | toString) }}
+      {{- fail (printf "gateway.tenantSelectableClasses entry %q contains a comma; the list travels comma-joined and the name would be split" .) }}
+      {{- end }}
+      {{- end }}
+      gateway-edge-classes: {{ $edgeClasses | join "," | quote }}
+      gateway-tenant-classes: {{ $tenantClasses | join "," | quote }}
       {{- /* Whether the root tenant hosts the platform monitoring stack
              (Tenant/root spec.monitoring). cozystack-basics gates the
              cozy-monitoring -> tenant-root vlinsert/vminsert ExternalName
