@@ -61,7 +61,9 @@
 # .github/workflows/ that runs the suite is silently inert until someone adds it
 # to that list — the fall-through never sees it. The enumeration is the guard,
 # which is why it carries the `rg -l test-chainsaw` reminder; treat that comment
-# as load-bearing rather than decorative.
+# as load-bearing rather than decorative. Inert is the right answer for a lane
+# nothing but a dispatch starts, and the rule beside the pattern says which is
+# which, so read that before adding a name here.
 set -eu
 
 CHANGED="${1:?missing changed-files arg}"
@@ -89,9 +91,14 @@ SOURCES_DIR="${2:-packages/core/platform/sources}"
 #     on the `code` output, which pull-requests.yaml computes as "any path
 #     outside docs/" and never from this script, so those 60 files run on their
 #     own lane whatever the selection here is;
-#   - the workflows that RUN the suite — enumerated rather than matched by
-#     prefix, so an unrelated workflow does not burn a full run. Keep this list
-#     in step with `rg -l test-chainsaw .github/workflows/`.
+#   - the workflows that run the suite on a trigger CI fires by itself —
+#     enumerated rather than matched by prefix, so an unrelated workflow does
+#     not burn a full run. Keep this list in step with
+#     `rg -l test-chainsaw .github/workflows/`, minus any lane whose only
+#     trigger is `workflow_dispatch`: no push and no pull request starts such a
+#     lane, so escalating on an edit to it buys a full run and no coverage of
+#     anything. That exclusion is a property to check on the file, not a name to
+#     remember.
 #
 #     What that costs, stated rather than left to be rediscovered: only
 #     pull-requests.yaml is executed from the PR's own head. e2e-fork runs on
