@@ -44,3 +44,113 @@ jobs:
           free -g || true
           grep -m1 'model name' /proc/cpuinfo || true
           echo "::endgroup::"
+
+      # Does the sibling map the runner VM reports correspond to real hardware?
+      #
+      # The runner sees 32 CPUs as 16 cores x 2 threads with siblings paired
+      # adjacently. That is what it is TOLD. Whether L0 honours it -- whether
+      # two threads the runner believes sit on different cores really get
+      # different physical cores -- is not readable from any file, only from
+      # contention. Everything above this step in the investigation assumes the
+      # map is real; if it is not, no placement decision taken above L0 means
+      # anything and the whole SMT line of enquiry is closed.
+      #
+      # The discriminator is the sibling pair against the cross-core pair. Both
+      # run exactly two busy threads, so both sit at the same all-core turbo
+      # point and the comparison is free of the frequency confound that spoils
+      # any comparison against the single-threaded arm. If the map is real the
+      # sibling pair is materially slower per worker; if the two read the same,
+      # the runner's topology is decoration.
+      #
+      # The lists are built from /sys rather than from the adjacency the last
+      # run happened to report: `taskset -c 0-7` is four cores with both their
+      # threads, not eight cores, and inverting that produces a refutation that
+      # is an artifact of the argument to taskset.
+      - name: SMT reality and scaling
+        run: |
+          set -u
+          ITER=30000000
+          AWKPROG="BEGIN { s = 0; for (i = 0; i < ${ITER}; i++) s = (s + i) % 1000003; print s }"
+          TMP=$(mktemp -d)
+          trap 'rm -rf "${TMP}"' EXIT
+
+          # core_id -> its sibling CPUs, read from the kernel's own map.
+          echo "::group::sibling map as the kernel reports it"
+          FIRSTS=""   # one CPU per physical core
+          SECONDS_=""  # the other thread of each core, in the same core order
+          for d in /sys/devices/system/cpu/cpu[0-9]*; do
+            cpu=${d##*/cpu}
+            sib=$(cat "${d}/topology/thread_siblings_list" 2>/dev/null) || continue
+            printf '%s %s\n' "${cpu}" "${sib}"
+          done | sort -k2,2 -k1,1n | awk '
+            { if ($2 != prev) { print "core-group", $2; prev = $2 } print "  cpu", $1 }' | head -80
+          echo "::endgroup::"
+
+          # Build the two lists without assuming adjacency: first CPU listed in
+          # each distinct siblings_list is a distinct core, the rest are its
+          # siblings.
+          for d in /sys/devices/system/cpu/cpu[0-9]*; do
+            cpu=${d##*/cpu}
+            sib=$(cat "${d}/topology/thread_siblings_list" 2>/dev/null) || continue
+            printf '%s %s\n' "${sib}" "${cpu}"
+          done | sort -u -k1,1 -k2,2n > "${TMP}/pairs"
+          FIRSTS=$(awk '!seen[$1]++ {print $2}' "${TMP}/pairs" | tr '\n' ' ')
+          SECONDS_=$(awk 'seen[$1]++ {print $2}' "${TMP}/pairs" | tr '\n' ' ')
+          echo "one CPU per core : ${FIRSTS}"
+          echo "the other thread : ${SECONDS_}"
+
+          # Take the first N of a list, and say so when the list was shorter:
+          # every label below is built from what was actually taken, so a
+          # short list changes the arm's name rather than quietly renaming it.
+          take() {
+            have=$(echo $2 | wc -w)
+            if [ "${have}" -lt "$1" ]; then
+              echo "NOTE: asked for $1 CPUs, list holds ${have}" >&2
+            fi
+            echo $2 | tr ' ' '\n' | head -"$1" | tr '\n' ' '
+          }
+
+          arm() {
+            label=$1; shift
+            cpus="$*"
+            n=$(echo ${cpus} | wc -w)
+            rm -f "${TMP}"/w.* 2>/dev/null || true
+            t0=$(date +%s%N)
+            for c in ${cpus}; do
+              ( s=$(date +%s%N)
+                taskset -c "${c}" awk "${AWKPROG}" >/dev/null 2>&1
+                e=$(date +%s%N)
+                printf '%s\n' "$(( (e - s) / 1000000 ))" > "${TMP}/w.${c}" ) &
+            done
+            wait
+            t1=$(date +%s%N)
+            wall=$(( (t1 - t0) / 1000000 ))
+            [ "${wall}" -gt 0 ] || wall=1
+            cat "${TMP}"/w.* 2>/dev/null | sort -n > "${TMP}/ms"
+            lo=$(head -1 "${TMP}/ms"); hi=$(tail -1 "${TMP}/ms")
+            mean=$(awk '{s+=$1; k++} END {printf "%d", (k ? s/k : 0)}' "${TMP}/ms")
+            agg=$(awk -v n="${n}" -v w="${wall}" -v it="${ITER}" \
+                  'BEGIN { printf "%.1f", n * it / (w / 1000) / 1000000 }')
+            printf '%-38s n=%-3s wall=%-7s per-worker ms min/mean/max %s/%s/%s   aggregate %s M it/s\n' \
+              "${label}" "${n}" "${wall}ms" "${lo}" "${mean}" "${hi}" "${agg}"
+          }
+
+          echo "::group::arms"
+          echo "each worker does ${ITER} awk iterations; per-worker ms is that fixed work, so higher is slower"
+          echo
+          echo "-- the discriminator: two busy threads either way, same turbo point --"
+          arm "1 thread on 1 core"              $(take 1 "${FIRSTS}")
+          arm "2 threads, SIBLINGS of one core"  $(take 1 "${FIRSTS}") $(take 1 "${SECONDS_}")
+          arm "2 threads, DISTINCT cores"       $(take 2 "${FIRSTS}")
+          echo
+          echo "-- scaling: what a core is worth when its sibling is also busy --"
+          arm "one thread per core, every core"        $(take 16 "${FIRSTS}")
+          arm "same thread count, half the cores"     $(take 8 "${FIRSTS}") $(take 8 "${SECONDS_}")
+          echo
+          echo "-- the e2e shape: 24 guest vCPU threads on 16 cores --"
+          arm "e2e count, packed onto 12 cores"    $(take 12 "${FIRSTS}") $(take 12 "${SECONDS_}")
+          arm "e2e count, spread over every core"      $(take 16 "${FIRSTS}") $(take 8 "${SECONDS_}")
+          echo
+          echo "-- saturation --"
+          arm "every thread busy"                 ${FIRSTS} ${SECONDS_}
+          echo "::endgroup::"
