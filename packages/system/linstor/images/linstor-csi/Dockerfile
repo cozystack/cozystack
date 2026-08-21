@@ -1,4 +1,4 @@
-FROM golang:1.26@sha256:079e59808d2d252516e27e3f3a9c003740dee7f75e55aa71528766d52bcfc16a AS builder
+FROM golang:1.26@sha256:45a5f7a810238aabcbad211d70b9ae082022d96f7c7259e94041ad1b933575ac AS builder
 
 ARG VERSION=v1.11.2
 ARG LINSTOR_WAIT_UNTIL_VERSION=v0.3.1
@@ -23,7 +23,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 \
 
 RUN curl -fsSL https://github.com/LINBIT/linstor-wait-until/releases/download/$LINSTOR_WAIT_UNTIL_VERSION/linstor-wait-until-$LINSTOR_WAIT_UNTIL_VERSION-$TARGETOS-$TARGETARCH.tar.gz | tar xvzC /
 
-FROM debian:trixie-slim@sha256:28de0877c2189802884ccd20f15ee41c203573bd87bb6b883f5f46362d24c5c2
+FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       xfsprogs e2fsprogs nfs-common \

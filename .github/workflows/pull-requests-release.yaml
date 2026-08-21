@@ -79,7 +79,7 @@ jobs:
 
       # Checkout repo & create / push annotated tag
       - name: Checkout repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           # Do NOT persist GITHUB_TOKEN as http.extraheader. Every tag/branch push
@@ -96,7 +96,7 @@ jobs:
       # argument remains the merged packages tree checked out above. This keeps
       # the final guard independent of the release PR's executable contents.
       - name: Checkout release tooling from base
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .release-tooling

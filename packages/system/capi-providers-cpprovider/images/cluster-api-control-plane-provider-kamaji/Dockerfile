@@ -10,7 +10,7 @@
 # which our chart relies on for the talos-trustd sidecar port. Once
 # upstream ships a real migration path, drop both this Dockerfile and the
 # patch and consume vanilla upstream images directly.
-FROM golang:1.26@sha256:079e59808d2d252516e27e3f3a9c003740dee7f75e55aa71528766d52bcfc16a AS builder
+FROM golang:1.26@sha256:45a5f7a810238aabcbad211d70b9ae082022d96f7c7259e94041ad1b933575ac AS builder
 
 # Upstream release tag. Bump together with patches/ when refreshing.
 ARG VERSION=v0.19.0
@@ -28,7 +28,7 @@ RUN git apply --recount /patches/*.diff
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -o manager main.go
 
-FROM gcr.io/distroless/static:nonroot@sha256:d29e660cc75a5b6b1334e03c5c81ccf9bc0884a002c6000dbf0fb96034814478
+FROM gcr.io/distroless/static:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
 WORKDIR /
 COPY --from=builder /workspace/manager /manager
 USER 65532:65532
