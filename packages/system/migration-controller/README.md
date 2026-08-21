@@ -82,13 +82,20 @@ Neither `Administrator` nor a plain read-only role is right. Read-only cannot do
 
 Clone the read-only role, add the privileges Forklift documents, and assign it to a service account created for the migration campaign and disabled afterwards. Scope it to the datacenter being migrated, propagated to children — not the whole vCenter.
 
-Three of the required operations are writes rather than reads, which is why read-only is not enough:
+Eleven privileges cover a cold migration, and several of them are writes, which is why read-only is not enough:
 
-- `VirtualMachine.Provisioning.DiskRandomRead` — how the VDDK reads disk data.
-- Powering off the source VM at cutover.
-- Snapshots and changed-block tracking, for warm migration (not offered in this version, but the same role usually covers both).
+- `Datastore.Browse`, `Datastore.FileManagement`
+- `Sessions.ValidateSession`
+- `VirtualMachine.Interact.PowerOff`, `.PowerOn`, `.GuestControl`
+- `VirtualMachine.Provisioning.DiskRandomAccess`, `.FileRandomAccess`, `.DiskRandomRead`, `.GetVmFiles`, `.PutVmFiles`
 
-Note that the VDDK opens NFC connections to the **ESXi hosts** on TCP 443 and 902, not only to vCenter. That is ordinary client egress from the tenant's namespace and the existing tenant network policy permits it, but it does mean the hosts themselves must be reachable from the cluster.
+Warm migration adds `VirtualMachine.State.CreateSnapshot` and `.RemoveSnapshot`; encrypted guests need the `Cryptographer.*` set. Older vendor documentation asks for all fifteen `Provisioning` privileges — the remainder only matter for template migration, which this path does not do.
+
+Two things about that role are worth knowing before you build it. vCenter **silently ignores an unknown privilege**, so a typo produces a role that looks correct and is quietly under-privileged; enumerate the valid identifiers with `govc role.ls Admin` rather than trusting a document. And the identifiers themselves have drifted between versions — what one document calls `Cryptographic.Direct access` is `Cryptographer.Access` on vSphere 7.
+
+Note that the VDDK opens NFC connections to the **ESXi hosts** on TCP 443 and 902, not only to vCenter. That matters more than it sounds: vCenter frequently advertises a host on an address the cluster cannot reach, and the transfer then fails with `VixDiskLib_Open ... The server refused connection` while everything about the provider still looks healthy. This version does not expose per-host transfer overrides, so the hosts must be reachable from the cluster on the addresses vCenter advertises.
+
+A related trap on the cluster side: if the cluster's Service CIDR overlaps the ESXi network, the VDDK breaks before anything else does.
 
 *The privilege detail above comes from the operational work on the original VMware import implementation, validated against a real vCenter.*
 
@@ -100,6 +107,21 @@ A `WaitForFirstConsumer` class does not fail an import, it **hangs** it: nothing
 
 The transferred volume is handed to its `VMDisk` without being copied: the `PersistentVolume` is retained and re-bound into the claim the disk expects. That volume stays on `Retain` permanently and this is part of the contract, not an implementation detail — CDI takes a controller owner reference on an adopted claim, so deleting the DataVolume garbage-collects the claim, and only the reclaim policy keeps the data.
 
+**Budget roughly twice each disk's size against the tenant quota while an import runs.** CDI allocates a prime volume of the target size *and* a scratch volume of about 106% of it, so a 230 GiB disk occupies around 474 GiB until the transfer finishes. On a tenant near its quota this shows up as the import stalling on `exceeded quota` rather than as anything resembling a storage error, and it clears on its own once the previous disk releases its transit volumes.
+
+Also expect a second phase that nothing reports. After the download, CDI runs `qemu-img convert` from scratch onto the target volume — around half an hour per 230 GiB — while the DataVolume's own progress sits frozen at 99.92%, because that counter only ever measured the download. The real percentage is only visible in the importer pod's log.
+
+## Timings, for planning
+
+Measured on a real vSphere source during the original implementation work, on a 16 GiB UEFI Linux guest:
+
+| Path | Duration |
+|---|---|
+| VDDK raw copy (what this version does) | ≈2 min 55 s |
+| virt-v2v conversion plus its cross-namespace clone | ≈5 min 46 s |
+
+The factor of two is the second copy, not the conversion. For scale at the other end: a 160 GiB Windows Server OVF expanding to 295 GiB took about an hour and five minutes end to end, with the disk transfer itself running near 80 MiB/s.
+
 ## Privilege model
 
 Nothing on the transfer path is privileged. With guest conversion off — the only mode this version offers — no Forklift pod moves the bytes at all: Forklift emits a CDI DataVolume with a VDDK source and CDI's own importer does the work, and that pod satisfies the `restricted` Pod Security Standard. Verified against Forklift v2.11.5 and CDI v1.64.0, and confirmed on a live cluster by importing into a namespace enforcing `restricted` with no admission denial.
@@ -107,6 +129,16 @@ Nothing on the transfer path is privileged. With guest conversion off — the on
 Guest conversion is a separate matter: it needs a node-level seccomp profile, because libguestfs starts `passt`, which unconditionally creates its own namespaces. It is deliberately not part of this version.
 
 Tenants get read and write on both kinds through the standard aggregation labels, and no access at all to `forklift.konveyor.io` — the Forklift objects a task builds are internal machinery.
+
+## Failure modes worth recognising
+
+**A task stuck in `Creating` with the transfer finished** usually means the engine reported success without producing anything. A Plan that already has a failed attempt in its history can report `SUCCEEDED` on a retry while creating neither the volume nor the VM; the task surfaces this rather than hanging, and the remedy is a new task (which builds a new Plan) rather than retrying the old one.
+
+**A transfer whose progress sits at 0 for many minutes** is not reported as an error on any of the migration objects. Look at the target namespace's claim events — the usual cause is the VDDK failing to reach an ESXi host, which surfaces there and nowhere else.
+
+**`server-side dry run does not protect you here.`** `kubectl apply --dry-run=server` is not honoured by Cozystack's aggregated API: for `apps.cozystack.io` resources it really creates the object. That applies to the `VMInstance` and `VMDisk` an import produces, so do not use it as a safety net when experimenting.
+
+**Instance types are not interchangeable after the fact.** A `VirtualMachineInstance` is immutable, so changing `instanceType` on an imported VM requires deleting the VMI to have it re-created. Some catalog sizes also request hugepages, which a node without them cannot satisfy — the VM then stays `Pending` with `Insufficient hugepages-2Mi` rather than failing outright.
 
 ## Uninstalling
 

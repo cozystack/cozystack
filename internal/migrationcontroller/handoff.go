@@ -127,14 +127,29 @@ func (r *VMImportTaskReconciler) fulfill(
 	return &outputs{VMInstance: name, Disks: diskNames}, nil
 }
 
-// findForkliftVM locates the VirtualMachine Forklift created for this source
-// VM. Forklift labels it with the plan it came from, which is the only link
-// that does not depend on guessing how it derived the guest's name.
+// findForkliftVM locates the VirtualMachine Forklift created for this source VM.
+//
+// The link is Forklift's `plan` label, and its value is the Plan's **UID**, not
+// its name — so the Plan has to be read to learn what to match against. Getting
+// this wrong does not fail loudly: the lookup simply never matches, the
+// transferred disk is never adopted, and the task sits in Creating forever.
 func (r *VMImportTaskReconciler) findForkliftVM(
 	ctx context.Context,
 	task *migrationv1alpha1.VMImportTask,
 	req *migrationv1alpha1.VMImportRequest,
 ) (*unstructured.Unstructured, error) {
+	name := planName(task.Name, req.ID)
+
+	plan := newObject(planGVK)
+	err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: name}, plan)
+	if err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	planUID := string(plan.GetUID())
+
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(virtualMachineGVK.GroupVersion().WithKind("VirtualMachineList"))
 	if err := r.List(ctx, list, client.InNamespace(task.Namespace)); err != nil {
@@ -143,16 +158,15 @@ func (r *VMImportTaskReconciler) findForkliftVM(
 		}
 		return nil, err
 	}
-	want := planName(task.Name, req.ID)
 	for i := range list.Items {
 		item := &list.Items[i]
 		labels := item.GetLabels()
-		if labels["plan"] == want || labels["migration"] == want {
+		if planUID != "" && (labels["plan"] == planUID || labels["migration"] == planUID) {
 			return item, nil
 		}
-		// Forklift versions differ on which label carries the plan; fall back
-		// to the plan reference it stamps as an annotation.
-		if item.GetAnnotations()["forklift.konveyor.io/plan"] == want {
+		// Some Forklift versions stamp the name instead; accept either rather
+		// than depending on which one this release happens to use.
+		if labels["plan"] == name || labels["migration"] == name {
 			return item, nil
 		}
 	}
@@ -218,12 +232,27 @@ func (r *VMImportTaskReconciler) adoptVolume(
 		return err
 	}
 
-	// Order matters here, and getting it wrong is expensive rather than noisy.
+	// Order matters here, and getting it wrong destroys data rather than
+	// merely wasting time.
 	//
-	// The owning DataVolume must go first. Deleting a claim while its
-	// DataVolume still exists makes CDI recreate the claim and provision a
-	// second volume, re-running the entire import — the exact duplicate copy
-	// this design exists to remove. Observed on a live cluster, not theorised.
+	// First, orphan the claim. Forklift drives the transfer through CDI's
+	// volume populator, so the transferred disk arrives as a *populated claim*
+	// with no DataVolume of its own — and Forklift puts an ownerReference to
+	// the VirtualMachine it built on that claim, deliberately, so an abandoned
+	// migration cleans itself up. The consequence is that anything deleting
+	// that VM takes the disk with it, and garbage collection is fast enough to
+	// win any race against a copy: on the original implementation it removed
+	// the claim 357 ms after the VM went, long before a clone could finish.
+	// Clearing the reference unconditionally is what makes the rest of this
+	// function safe to reorder.
+	if err := clearOwnerReferences(ctx, r.Client, task.Namespace, sourceClaim); err != nil {
+		return err
+	}
+
+	// Then remove any DataVolume that does own the claim. Deleting a claim
+	// while its DataVolume still exists makes CDI recreate the claim and
+	// provision a second volume, re-running the entire import — the exact
+	// duplicate copy this design exists to remove. Observed on a live cluster.
 	if err := r.deleteOwningDataVolume(ctx, task.Namespace, sourceClaim); err != nil {
 		return err
 	}

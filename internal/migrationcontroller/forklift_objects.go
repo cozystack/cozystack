@@ -411,33 +411,49 @@ func migrationProgress(migration *unstructured.Unstructured) (done bool, progres
 	if reasons, found, _ := unstructured.NestedStringSlice(vm, "error", "reasons"); found && len(reasons) > 0 {
 		return false, 0, strings.Join(reasons, "; ")
 	}
-	if phase, _, _ := unstructured.NestedString(vm, "phase"); phase == "Failed" {
-		return false, 0, "Forklift reported the migration as failed"
+	phase, _, _ := unstructured.NestedString(vm, "phase")
+	if phase == "Failed" {
+		return false, 0, "the migration engine reported the transfer as failed"
 	}
 
-	// Progress is carried per pipeline step; the disk-transfer step is the one
-	// worth showing, and summing all steps would make a 4-step pipeline read
-	// 25% complete when the transfer has not started.
+	// Progress is a completed/total pair per pipeline step, counted in MiB.
+	// Prefer the disk-transfer step, because averaging a four-step pipeline
+	// reads 25% before a byte has moved — but fall back to the sum over every
+	// step that reports a total, since the step names are not part of any
+	// contract and a release that renames them would otherwise peg progress at
+	// zero for the whole transfer.
 	var completed, total int64
+	var namedCompleted, namedTotal int64
 	pipeline, _, _ := unstructured.NestedSlice(vm, "pipeline")
 	for _, raw := range pipeline {
 		step, ok := raw.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		name, _, _ := unstructured.NestedString(step, "name")
-		if !strings.EqualFold(name, "DiskTransfer") && !strings.EqualFold(name, "DiskTransferV2v") {
-			continue
-		}
 		c, _, _ := unstructured.NestedInt64(step, "progress", "completed")
 		t, _, _ := unstructured.NestedInt64(step, "progress", "total")
+		if t <= 0 {
+			continue
+		}
 		completed += c
 		total += t
+		if name, _, _ := unstructured.NestedString(step, "name"); strings.Contains(strings.ToLower(name), "disktransfer") {
+			namedCompleted += c
+			namedTotal += t
+		}
 	}
-	if total > 0 {
+	switch {
+	case namedTotal > 0:
+		progress = int32(namedCompleted * 100 / namedTotal)
+	case total > 0:
 		progress = int32(completed * 100 / total)
 	}
 
+	// Either signal means the transfer is over: the phase the engine settles
+	// on, or the completion timestamp it stamps.
+	if phase == "Completed" {
+		return true, 100, ""
+	}
 	if ts, found, _ := unstructured.NestedString(vm, "completed"); found && ts != "" {
 		return true, 100, ""
 	}
