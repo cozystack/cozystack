@@ -56,8 +56,8 @@ tests:
           apiVersion: cozystack.io/v1alpha1
           kind: Package
           name: cozystack.ouroboros
+          any: true
         not: true
-        documentIndex: -1
 
   - it: renders cleanly with proxyProtocol true when the Package CR exists (steady state)
     set:
