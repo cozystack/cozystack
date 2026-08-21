@@ -242,7 +242,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
 
 	// Create HelmRelease in Kubernetes
-	err = r.c.Create(ctx, helmRelease, &client.CreateOptions{Raw: options})
+	err = r.c.Create(ctx, helmRelease, registry.ClientCreateOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, fmt.Errorf("failed to create HelmRelease: %v", err)
@@ -499,7 +499,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 				klog.Errorf("Failed to get updated object: %v", err)
 				return nil, false, err
 			}
-			createdObj, err := r.Create(ctx, obj, createValidation, &metav1.CreateOptions{})
+			createdObj, err := r.Create(ctx, obj, createValidation, registry.CreateOptionsFromUpdate(options))
 			if err != nil {
 				klog.Errorf("Failed to create new Application: %v", err)
 				return nil, false, err
@@ -606,7 +606,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// real spec conflict here: refresh the resourceVersion from the live object
 	// and retry.
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		updateErr := r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
 		if apierrors.IsConflict(updateErr) {
 			cur := &helmv2.HelmRelease{}
 			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
@@ -688,7 +688,7 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	klog.V(6).Infof("Deleting HelmRelease %s in namespace %s", helmReleaseName, namespace)
 
 	// Delete the HelmRelease corresponding to the Application
-	err = r.c.Delete(ctx, helmRelease, &client.DeleteOptions{Raw: options})
+	err = r.c.Delete(ctx, helmRelease, registry.ClientDeleteOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
 		return nil, false, fmt.Errorf("failed to delete HelmRelease: %v", err)
