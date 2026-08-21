@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/naming"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
@@ -92,12 +93,12 @@ func anyOtherReferences(pss []cozyv1alpha1.PackageSource, srcName, excludeName s
 	return false
 }
 
-// artifactName reproduces the per-component artifact name the PackageSource
-// reconciler generates (dots in the PackageSource name become dashes, joined
-// with the variant and component). It is the key that links a component to the
-// ApplicationDefinition whose release.chartRef.name references its artifact.
+// artifactName links a component to the ApplicationDefinition whose
+// release.chartRef.name references its assembled artifact. It delegates to the
+// shared naming helper so the API, the validator, and the materializer cannot
+// drift on this convention.
 func artifactName(psName, variant, component string) string {
-	return strings.ReplaceAll(psName, ".", "-") + "-" + variant + "-" + component
+	return naming.ArtifactName(psName, variant, component)
 }
 
 // indexAppDefsByChartRef indexes ApplicationDefinitions by their ExternalArtifact

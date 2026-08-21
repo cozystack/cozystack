@@ -29,6 +29,7 @@ import (
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/naming"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )
@@ -142,11 +143,11 @@ func splitYAMLDocuments(data []byte) [][]byte {
 	return out
 }
 
-// artifactName reproduces the per-component artifact name the PackageSource
-// reconciler generates: the PackageSource name with dots replaced by dashes,
-// joined with the variant and component names.
+// artifactName links a component to its ApplicationDefinition via the assembled
+// artifact name; it delegates to the shared naming helper so the validator and
+// the marketplace backend cannot drift on this convention.
 func artifactName(psName, variant, component string) string {
-	return strings.ReplaceAll(psName, ".", "-") + "-" + variant + "-" + component
+	return naming.ArtifactName(psName, variant, component)
 }
 
 // artifactRoot returns the directory that plays the role of the OCI artifact

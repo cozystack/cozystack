@@ -26,14 +26,21 @@ jobs:
         with:
           go-version: "1.26"
 
+      # Pin both tools: the gate decides auto-merge, so its toolchain must be
+      # reproducible and not shiftable by an upstream retag. Bump COZYPKG_VERSION
+      # to the released cozypkg tag this index targets.
       - name: Install cozypkg
-        run: go install github.com/cozystack/cozystack/cmd/cozypkg@latest
+        env:
+          COZYPKG_VERSION: v1.0.0
+        run: go install "github.com/cozystack/cozystack/cmd/cozypkg@${COZYPKG_VERSION}"
 
       - name: Install yq
+        env:
+          YQ_VERSION: v4.44.6
         run: |
           sudo curl --fail --silent --show-error --location \
             --output /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
           sudo chmod +x /usr/local/bin/yq
 
       - uses: sigstore/cosign-installer@v3

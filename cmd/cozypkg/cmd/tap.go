@@ -204,7 +204,14 @@ idempotent. Creating cluster-scoped resources requires cluster-admin.
 
 With --secret the OCIRepository is given a pull-credential secretRef (the
 admin pre-creates the Secret in cozy-system), so a private repository taps in
-one command.`,
+one command.
+
+Trust: tap validates the artifact's structure but does NOT verify its cosign
+signature. Signature verification is the community index's job at publication
+time ('cozypkg validate --require-signature' in the index CI gate, pinned to
+the entry's recorded identity), and can additionally be enforced at pull time
+via Flux OCIRepository verification. Tapping a third-party repository runs its
+charts in your management cluster: tap only sources you trust.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
@@ -271,17 +278,21 @@ one command.`,
 			return err
 		}
 
-		applied := make([]client.Object, 0, len(toApply))
+		// Only roll back objects this invocation actually created; a re-tap is
+		// idempotent and must not delete resources that pre-existed it.
+		created := make([]client.Object, 0, len(toApply))
 		patchOptions := []client.PatchOption{client.FieldOwner("cozypkg"), client.ForceOwnership}
 		for _, obj := range toApply {
+			preExisted := objectExists(ctx, k8sClient, obj)
 			if err := k8sClient.Patch(ctx, obj, client.Apply, patchOptions...); err != nil {
-				// Roll back what we created so we never leave a half-created tap.
-				for _, done := range applied {
+				for _, done := range created {
 					_ = k8sClient.Delete(ctx, done)
 				}
 				return fmt.Errorf("failed to apply %T %s: %w", obj, obj.GetName(), err)
 			}
-			applied = append(applied, obj)
+			if !preExisted {
+				created = append(created, obj)
+			}
 		}
 
 		fmt.Fprintf(cmd.OutOrStdout(), "Tapped %s\n  OCIRepository/%s (%s:%s)\n", fullRef, srcName, ref.URL, ref.Tag)
@@ -348,6 +359,16 @@ refused.`,
 		}
 		return nil
 	},
+}
+
+// objectExists reports whether obj already exists on the cluster, so an
+// idempotent re-tap does not roll back resources it did not create.
+func objectExists(ctx context.Context, k8sClient client.Client, obj client.Object) bool {
+	probe, ok := obj.DeepCopyObject().(client.Object)
+	if !ok {
+		return false
+	}
+	return k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), probe) == nil
 }
 
 // sourceStillReferenced reports whether any PackageSource other than excludeName
