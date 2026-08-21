@@ -42,6 +42,16 @@ type TapSpec struct {
 	// Packages are the packages this tap exposes, derived from the
 	// ApplicationDefinitions attributable to the PackageSource.
 	Packages []TapPackage `json:"packages,omitempty"`
+
+	// URL is a connect-time input only: the oci:// reference to tap. It is
+	// consumed when a Tap is created and is never populated on read.
+	URL string `json:"url,omitempty"`
+	// Tag is a connect-time input only: the OCI tag to tap (defaults to latest).
+	Tag string `json:"tag,omitempty"`
+	// SecretRef is a connect-time input only: the name of a pull-credential
+	// Secret in cozy-system for a private repository. It is consumed when a Tap
+	// is created and, being a credential reference, is never returned on read.
+	SecretRef string `json:"secretRef,omitempty"`
 }
 
 // TapSource identifies the Flux source backing a tap. It carries no credential.

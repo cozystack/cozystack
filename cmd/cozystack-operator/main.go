@@ -318,6 +318,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Setup Tap materializer reconciler (dashboard-connected community taps)
+	if err := (&operator.TapMaterializerReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TapMaterializer")
+		os.Exit(1)
+	}
+
 	// Setup CozyValuesReplicator reconciler
 	if err := (&cozyvaluesreplicator.SecretReplicatorReconciler{
 		Client:                  mgr.GetClient(),

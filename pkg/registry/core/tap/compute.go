@@ -4,6 +4,8 @@
 package tap
 
 import (
+	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -13,6 +15,61 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
+
+var sanitizeDNSRe = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// connectTarget is the parsed form of a connect request's oci:// URL.
+type connectTarget struct {
+	URL  string // reference without a tag
+	Org  string
+	Repo string
+	Tag  string
+	// PackageSourceName is community.<org>.<repo>; FluxSourceName is its RFC-1123 form.
+	PackageSourceName string
+	FluxSourceName    string
+}
+
+// parseConnectURL parses an oci:// URL (and an optional tag override) into the
+// names a connect creates. It mirrors the CLI's tap parsing so the API and CLI
+// agree on community naming.
+func parseConnectURL(url, tagOverride string) (connectTarget, error) {
+	if !strings.HasPrefix(url, "oci://") {
+		return connectTarget{}, fmt.Errorf("url %q must start with oci://", url)
+	}
+	body := strings.TrimPrefix(url, "oci://")
+	if strings.Contains(body, "@") {
+		return connectTarget{}, fmt.Errorf("digest references are not supported; use a tag")
+	}
+	tag := tagOverride
+	if colon := strings.LastIndex(body, ":"); colon >= 0 && !strings.Contains(body[colon:], "/") {
+		if tag == "" {
+			tag = body[colon+1:]
+		}
+		body = body[:colon]
+	}
+	segs := strings.Split(strings.Trim(body, "/"), "/")
+	if len(segs) < 2 {
+		return connectTarget{}, fmt.Errorf("url %q must include a host and a repository path", url)
+	}
+	t := connectTarget{URL: "oci://" + body, Repo: segs[len(segs)-1], Tag: tag}
+	if len(segs) >= 3 {
+		t.Org = segs[len(segs)-2]
+	}
+	if t.Tag == "" {
+		t.Tag = "latest"
+	}
+	nameBase := t.Repo
+	if t.Org != "" {
+		nameBase = t.Org + "." + t.Repo
+	}
+	t.PackageSourceName = "community." + nameBase
+	fluxBase := t.Repo
+	if t.Org != "" {
+		fluxBase = t.Org + "-" + t.Repo
+	}
+	t.FluxSourceName = "community-" + sanitizeDNSRe.ReplaceAllString(strings.ToLower(fluxBase), "-")
+	return t, nil
+}
 
 var (
 	gvrPackageSources = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "packagesources"}

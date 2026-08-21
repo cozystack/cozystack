@@ -27,6 +27,7 @@ import (
 	"k8s.io/klog/v2"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
@@ -40,6 +41,7 @@ var (
 	_ rest.Scoper               = &REST{}
 	_ rest.SingularNameProvider = &REST{}
 	_ rest.GracefulDeleter      = &REST{}
+	_ rest.Creater              = &REST{}
 )
 
 // communityPrefix guards which taps may be disconnected through the API: only
@@ -117,6 +119,83 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 	idx := r.appDefIndex(ctx)
 	tap := buildTap(ps, idx)
 	return &tap, nil
+}
+
+// -----------------------------------------------------------------------------
+// Creater — connect a community tap (mirrors `cozypkg tap`)
+//
+// Create records the intent only: it creates the labeled Flux OCIRepository
+// (with an optional pull-credential secretRef). The operator's tap materializer
+// then pulls the artifact and creates the PackageSource(s), so the API never
+// blocks a request on a registry pull. The returned Tap reflects that
+// materialization is pending.
+// -----------------------------------------------------------------------------
+
+func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, _ *metav1.CreateOptions) (runtime.Object, error) {
+	in, ok := obj.(*corev1alpha1.Tap)
+	if !ok {
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("expected a Tap object, got %T", obj))
+	}
+	if in.Spec.URL == "" {
+		return nil, apierrors.NewBadRequest("spec.url is required to connect a tap")
+	}
+	target, err := parseConnectURL(in.Spec.URL, in.Spec.Tag)
+	if err != nil {
+		return nil, apierrors.NewBadRequest(err.Error())
+	}
+	if createValidation != nil {
+		if err := createValidation(ctx, obj); err != nil {
+			return nil, err
+		}
+	}
+
+	repo := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "source.toolkit.fluxcd.io/v1",
+		"kind":       "OCIRepository",
+		"metadata": map[string]interface{}{
+			"name":        target.FluxSourceName,
+			"namespace":   "cozy-system",
+			"labels":      map[string]interface{}{tapconst.Label: "true"},
+			"annotations": map[string]interface{}{tapconst.NameAnnotation: target.PackageSourceName},
+		},
+		"spec": map[string]interface{}{
+			"url":      target.URL,
+			"interval": "5m0s",
+			"ref":      map[string]interface{}{"tag": target.Tag},
+		},
+	}}
+	if in.Spec.SecretRef != "" {
+		_ = unstructured.SetNestedMap(repo.Object, map[string]interface{}{"name": in.Spec.SecretRef}, "spec", "secretRef")
+	}
+
+	// Create the Flux source, idempotently: a repeat connect updates the
+	// existing source (new tag/secret) rather than erroring.
+	src := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system")
+	if _, err := src.Create(ctx, repo, metav1.CreateOptions{FieldManager: "cozystack-api"}); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return nil, apierrors.NewInternalError(fmt.Errorf("create Flux source for tap %s: %w", target.PackageSourceName, err))
+		}
+		cur, gerr := src.Get(ctx, target.FluxSourceName, metav1.GetOptions{})
+		if gerr != nil {
+			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.PackageSourceName, gerr))
+		}
+		repo.SetResourceVersion(cur.GetResourceVersion())
+		if _, err := src.Update(ctx, repo, metav1.UpdateOptions{FieldManager: "cozystack-api"}); err != nil {
+			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.PackageSourceName, err))
+		}
+	}
+
+	// Return catalog metadata only: never the url or the secret reference.
+	return &corev1alpha1.Tap{
+		TypeMeta:   metav1.TypeMeta{APIVersion: corev1alpha1.SchemeGroupVersion.String(), Kind: "Tap"},
+		ObjectMeta: metav1.ObjectMeta{Name: target.PackageSourceName, ResourceVersion: "0"},
+		Spec: corev1alpha1.TapSpec{
+			Source:    corev1alpha1.TapSource{Kind: "OCIRepository", Name: target.FluxSourceName},
+			Community: true,
+			Ready:     false,
+			Message:   "connecting: waiting for the artifact to be pulled and materialized",
+		},
+	}, nil
 }
 
 // -----------------------------------------------------------------------------

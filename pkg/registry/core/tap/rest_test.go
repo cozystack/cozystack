@@ -15,6 +15,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
 func TestAnyOtherReferences(t *testing.T) {
@@ -105,5 +106,70 @@ func TestDeleteNotFound(t *testing.T) {
 	_, _, err := r.Delete(context.Background(), "community.missing.x", nil, nil)
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("expected NotFound, got %v", err)
+	}
+}
+
+func TestParseConnectURL(t *testing.T) {
+	got, err := parseConnectURL("oci://ghcr.io/foo/bar:v2", "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got.URL != "oci://ghcr.io/foo/bar" || got.Tag != "v2" || got.PackageSourceName != "community.foo.bar" || got.FluxSourceName != "community-foo-bar" {
+		t.Fatalf("unexpected parse: %+v", got)
+	}
+	// tag override wins over the URL tag.
+	if o, _ := parseConnectURL("oci://ghcr.io/foo/bar:v2", "v9"); o.Tag != "v9" {
+		t.Errorf("tag override = %q", o.Tag)
+	}
+	// no tag defaults to latest.
+	if o, _ := parseConnectURL("oci://ghcr.io/foo/bar", ""); o.Tag != "latest" {
+		t.Errorf("default tag = %q", o.Tag)
+	}
+	if _, err := parseConnectURL("ghcr.io/foo/bar", ""); err == nil {
+		t.Error("expected error for non-oci url")
+	}
+	if _, err := parseConnectURL("oci://ghcr.io/foo/bar@sha256:abc", ""); err == nil {
+		t.Error("expected error for digest ref")
+	}
+}
+
+func TestCreateGuards(t *testing.T) {
+	r := fakeREST()
+	if _, err := r.Create(context.Background(), &corev1alpha1.Tap{}, nil, nil); !apierrors.IsBadRequest(err) {
+		t.Errorf("missing url should be BadRequest, got %v", err)
+	}
+	if _, err := r.Create(context.Background(), &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "ghcr.io/x/y"}}, nil, nil); !apierrors.IsBadRequest(err) {
+		t.Errorf("non-oci url should be BadRequest, got %v", err)
+	}
+}
+
+func TestCreateMakesLabeledSource(t *testing.T) {
+	r := fakeREST()
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "oci://ghcr.io/foo/bar:v1", SecretRef: "pull-creds"}}
+	out, err := r.Create(context.Background(), in, nil, nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	tap := out.(*corev1alpha1.Tap)
+	if tap.Name != "community.foo.bar" || tap.Spec.Ready || !tap.Spec.Community {
+		t.Fatalf("unexpected returned tap: %+v", tap.Spec)
+	}
+	// The returned object must never echo the url or secret back.
+	if tap.Spec.URL != "" || tap.Spec.SecretRef != "" {
+		t.Errorf("create response leaked connect inputs: %+v", tap.Spec)
+	}
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-foo-bar", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("OCIRepository not created: %v", err)
+	}
+	if u.GetLabels()["apps.cozystack.io/marketplace-tap"] != "true" {
+		t.Errorf("OCIRepository missing tap label: %v", u.GetLabels())
+	}
+	if u.GetAnnotations()["apps.cozystack.io/tap-name"] != "community.foo.bar" {
+		t.Errorf("OCIRepository missing tap-name annotation: %v", u.GetAnnotations())
+	}
+	secretName, _, _ := unstructured.NestedString(u.Object, "spec", "secretRef", "name")
+	if secretName != "pull-creds" {
+		t.Errorf("secretRef not set on OCIRepository: got %q", secretName)
 	}
 }

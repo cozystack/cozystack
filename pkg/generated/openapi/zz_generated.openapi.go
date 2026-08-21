@@ -700,6 +700,27 @@ func schema_pkg_apis_core_v1alpha1_TapSpec(ref common.ReferenceCallback) common.
 							},
 						},
 					},
+					"url": {
+						SchemaProps: spec.SchemaProps{
+							Description: "URL is a connect-time input only: the oci:// reference to tap. It is consumed when a Tap is created and is never populated on read.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"tag": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Tag is a connect-time input only: the OCI tag to tap (defaults to latest).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"secretRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "SecretRef is a connect-time input only: the name of a pull-credential Secret in cozy-system for a private repository. It is consumed when a Tap is created and, being a credential reference, is never returned on read.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 				},
 			},
 		},
