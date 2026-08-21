@@ -1,0 +1,60 @@
+suite: gateway guest serial console logging
+
+# Every gate from the tunnel coming up onwards depends on the VyOS guest
+# reaching userspace and answering its HTTPS management API, and the cluster can
+# observe none of that: a VMI reporting Running with an address says only that
+# qemu started. KubeVirt exposes the guest console when the VMI asks for it —
+# virt-launcher gains a guest-console-log container whose log is readable from
+# the management cluster with no in-guest cooperation at all — which is the only
+# surface that shows the window where a router boots but never serves 443.
+#
+# The field must stay absent unless asked for. It OVERRIDES the platform's
+# cluster-wide virtualMachineOptions.disableSerialConsoleLog
+# (packages/system/kubevirt/templates/kubevirt-cr.yaml), which is set because the
+# guest-console-log container has been seen holding virt-launcher in
+# PodInitializing (kubevirt/kubevirt#15989). So an explicit false must render the
+# same nothing as an unset field: KubeVirt's tri-state false would opt a gateway
+# that asked for nothing back into the container the platform switched off.
+#
+# Mirrors packages/apps/kubernetes/tests/serial_console_log_test.yaml, which pins
+# the same three cases for the worker VM template.
+
+templates:
+  - templates/vm.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+
+tests:
+  - it: omits the field by default, leaving the platform-wide disable in force
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - notExists:
+          path: spec.template.spec.domain.devices.logSerialConsole
+
+  - it: omits the field when explicitly disabled, rather than rendering a tri-state false
+    set:
+      logSerialConsole: false
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - notExists:
+          path: spec.template.spec.domain.devices.logSerialConsole
+
+  - it: asks KubeVirt for the guest console log when enabled
+    set:
+      logSerialConsole: true
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.logSerialConsole
+          value: true
