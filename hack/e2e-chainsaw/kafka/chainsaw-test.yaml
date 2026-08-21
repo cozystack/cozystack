@@ -46,6 +46,19 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaTopic
+          metadata:
+            name: kafka-test-test-results
+          spec:
+            topicName: testResults
+            (config == null): true
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
 
   - name: verify-zookeeper
     try:
