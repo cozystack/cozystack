@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -38,7 +39,12 @@ var (
 	_ rest.TableConvertor       = &REST{}
 	_ rest.Scoper               = &REST{}
 	_ rest.SingularNameProvider = &REST{}
+	_ rest.GracefulDeleter      = &REST{}
 )
+
+// communityPrefix guards which taps may be disconnected through the API: only
+// community-tapped sources, never an official platform source.
+const communityPrefix = "community."
 
 // REST implements the read-only Tap resource.
 type REST struct {
@@ -111,6 +117,57 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 	idx := r.appDefIndex(ctx)
 	tap := buildTap(ps, idx)
 	return &tap, nil
+}
+
+// -----------------------------------------------------------------------------
+// GracefulDeleter — disconnect a community tap (mirrors `cozypkg untap`)
+// -----------------------------------------------------------------------------
+
+func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, _ *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	if !strings.HasPrefix(name, communityPrefix) {
+		return nil, false, apierrors.NewForbidden(r.gvr.GroupResource(), name,
+			fmt.Errorf("only %s* taps can be disconnected; official sources are protected", communityPrefix))
+	}
+
+	u, err := r.dyn.Resource(gvrPackageSources).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		}
+		return nil, false, apierrors.NewInternalError(fmt.Errorf("get PackageSource %q: %w", name, err))
+	}
+	var ps cozyv1alpha1.PackageSource
+	if err := fromUnstructured(u, &ps); err != nil {
+		return nil, false, apierrors.NewInternalError(fmt.Errorf("decode PackageSource %q: %w", name, err))
+	}
+
+	tap := buildTap(ps, r.appDefIndex(ctx))
+	if deleteValidation != nil {
+		if err := deleteValidation(ctx, &tap); err != nil {
+			return nil, false, err
+		}
+	}
+
+	if err := r.dyn.Resource(gvrPackageSources).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+		return nil, false, apierrors.NewInternalError(fmt.Errorf("delete PackageSource %q: %w", name, err))
+	}
+
+	// Remove the Flux source too, but only when no other PackageSource still
+	// references it. Installed Packages are intentionally left untouched.
+	if ref := ps.Spec.SourceRef; ref != nil && ref.Kind == "OCIRepository" && ref.Name != "" {
+		others, err := r.fetchPackageSources(ctx)
+		if err == nil && !anyOtherReferences(others, ref.Name, name) {
+			ns := ref.Namespace
+			if ns == "" {
+				ns = "cozy-system"
+			}
+			if err := r.dyn.Resource(gvrOCIRepos).Namespace(ns).Delete(ctx, ref.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				klog.V(2).InfoS("tap disconnected but its OCIRepository could not be deleted", "source", ref.Name, "err", err)
+			}
+		}
+	}
+
+	return &tap, true, nil
 }
 
 // fetchPackageSources lists the cluster-scoped PackageSources as typed objects.

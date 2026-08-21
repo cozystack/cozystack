@@ -17,7 +17,23 @@ import (
 var (
 	gvrPackageSources = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "packagesources"}
 	gvrAppDefs        = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "applicationdefinitions"}
+	gvrOCIRepos       = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}
 )
+
+// anyOtherReferences reports whether a PackageSource other than excludeName
+// still points at the given Flux source, so a tap's source is only deleted when
+// nothing else uses it.
+func anyOtherReferences(pss []cozyv1alpha1.PackageSource, srcName, excludeName string) bool {
+	for i := range pss {
+		if pss[i].Name == excludeName {
+			continue
+		}
+		if ref := pss[i].Spec.SourceRef; ref != nil && ref.Name == srcName {
+			return true
+		}
+	}
+	return false
+}
 
 // artifactName reproduces the per-component artifact name the PackageSource
 // reconciler generates (dots in the PackageSource name become dashes, joined
