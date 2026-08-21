@@ -1,5 +1,7 @@
 API rule violation: list_type_missing,github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1,ApplicationStatus,Conditions
 API rule violation: list_type_missing,github.com/cozystack/cozystack/pkg/apis/core/v1alpha1,OptionSpec,Items
+API rule violation: list_type_missing,github.com/cozystack/cozystack/pkg/apis/core/v1alpha1,TapPackage,Tags
+API rule violation: list_type_missing,github.com/cozystack/cozystack/pkg/apis/core/v1alpha1,TapSpec,Packages
 API rule violation: list_type_missing,github.com/cozystack/cozystack/pkg/apis/core/v1alpha1,TenantModuleStatus,Conditions
 API rule violation: list_type_missing,github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1,EgressRule,ToApp
 API rule violation: list_type_missing,github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1,EgressRule,ToCIDR

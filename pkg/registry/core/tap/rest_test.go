@@ -1,0 +1,204 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025 The Cozystack Authors.
+
+package tap
+
+import (
+	"context"
+	"testing"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+)
+
+func TestAnyOtherReferences(t *testing.T) {
+	pss := []cozyv1alpha1.PackageSource{
+		{ObjectMeta: metav1.ObjectMeta{Name: "community.a.b"}, Spec: cozyv1alpha1.PackageSourceSpec{SourceRef: &cozyv1alpha1.PackageSourceRef{Name: "src1"}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "community.c.d"}, Spec: cozyv1alpha1.PackageSourceSpec{SourceRef: &cozyv1alpha1.PackageSourceRef{Name: "src2"}}},
+	}
+	if anyOtherReferences(pss, "src1", "community.a.b") {
+		t.Error("src1 is referenced only by the excluded PS; expected false")
+	}
+	if !anyOtherReferences(pss, "src2", "community.a.b") {
+		t.Error("src2 is referenced by another PS; expected true")
+	}
+}
+
+func psObj(name, srcName string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "cozystack.io/v1alpha1",
+		"kind":       "PackageSource",
+		"metadata":   map[string]interface{}{"name": name},
+		"spec": map[string]interface{}{
+			"sourceRef": map[string]interface{}{"kind": "OCIRepository", "name": srcName, "namespace": "cozy-system"},
+		},
+	}}
+}
+
+func ociRepoObj(name string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "source.toolkit.fluxcd.io/v1",
+		"kind":       "OCIRepository",
+		"metadata":   map[string]interface{}{"name": name, "namespace": "cozy-system"},
+		"spec":       map[string]interface{}{"url": "oci://ghcr.io/a/b"},
+	}}
+}
+
+func fakeREST(objs ...runtime.Object) *REST {
+	scheme := runtime.NewScheme()
+	gvrToKind := map[schema.GroupVersionResource]string{
+		gvrPackageSources: "PackageSourceList",
+		gvrAppDefs:        "ApplicationDefinitionList",
+		gvrOCIRepos:       "OCIRepositoryList",
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToKind, objs...)
+	return NewREST(dyn)
+}
+
+func TestDeleteRefusesOfficialTap(t *testing.T) {
+	r := fakeREST()
+	_, _, err := r.Delete(context.Background(), "cozystack.postgres-application", nil, nil)
+	if err == nil || !apierrors.IsForbidden(err) {
+		t.Fatalf("expected Forbidden deleting an official tap, got %v", err)
+	}
+}
+
+func TestDeleteCommunityTapRemovesSource(t *testing.T) {
+	r := fakeREST(psObj("community.a.b", "community-a-b"), ociRepoObj("community-a-b"))
+	obj, ok, err := r.Delete(context.Background(), "community.a.b", nil, nil)
+	if err != nil || !ok || obj == nil {
+		t.Fatalf("delete failed: ok=%v err=%v", ok, err)
+	}
+	// PackageSource is gone.
+	if _, err := r.dyn.Resource(gvrPackageSources).Get(context.Background(), "community.a.b", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("expected PackageSource deleted, got err=%v", err)
+	}
+	// The unreferenced OCIRepository is gone too.
+	if _, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-a-b", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("expected OCIRepository deleted, got err=%v", err)
+	}
+}
+
+func TestDeleteKeepsSharedSource(t *testing.T) {
+	// Two PackageSources reference the same Flux source; deleting one must keep it.
+	r := fakeREST(
+		psObj("community.a.b", "shared-src"),
+		psObj("community.c.d", "shared-src"),
+		ociRepoObj("shared-src"),
+	)
+	if _, ok, err := r.Delete(context.Background(), "community.a.b", nil, nil); err != nil || !ok {
+		t.Fatalf("delete failed: ok=%v err=%v", ok, err)
+	}
+	if _, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "shared-src", metav1.GetOptions{}); err != nil {
+		t.Errorf("shared OCIRepository must be kept, got err=%v", err)
+	}
+}
+
+func TestDeleteNotFound(t *testing.T) {
+	r := fakeREST()
+	_, _, err := r.Delete(context.Background(), "community.missing.x", nil, nil)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("expected NotFound, got %v", err)
+	}
+}
+
+// orphanOciRepo is a tap OCIRepository with no materialized PackageSource yet
+// (a pending or failed connect).
+func orphanOciRepo(fluxName, tapName string) *unstructured.Unstructured {
+	u := ociRepoObj(fluxName)
+	u.SetLabels(map[string]string{"apps.cozystack.io/marketplace-tap": "true"})
+	u.SetAnnotations(map[string]string{"apps.cozystack.io/tap-name": tapName})
+	return u
+}
+
+func TestDeleteOrphanTapSource(t *testing.T) {
+	// No PackageSource exists, only the labeled OCIRepository from a pending connect.
+	r := fakeREST(orphanOciRepo("community-a-b", "community.a.b"))
+	obj, ok, err := r.Delete(context.Background(), "community.a.b", nil, nil)
+	if err != nil || !ok || obj == nil {
+		t.Fatalf("expected orphan tap source removed: ok=%v err=%v", ok, err)
+	}
+	if _, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-a-b", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("expected orphan OCIRepository deleted, got %v", err)
+	}
+}
+
+func TestDeleteOrphanNoMatch(t *testing.T) {
+	// A labeled source exists but for a different tap name -> still NotFound.
+	r := fakeREST(orphanOciRepo("community-a-b", "community.a.b"))
+	if _, _, err := r.Delete(context.Background(), "community.other.x", nil, nil); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected NotFound for a non-matching orphan, got %v", err)
+	}
+}
+
+func TestParseConnectURL(t *testing.T) {
+	got, err := parseConnectURL("oci://ghcr.io/foo/bar:v2", "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got.URL != "oci://ghcr.io/foo/bar" || got.Tag != "v2" || got.PackageSourceName != "community.foo.bar" || got.FluxSourceName != "community-foo-bar" {
+		t.Fatalf("unexpected parse: %+v", got)
+	}
+	// tag override wins over the URL tag.
+	if o, _ := parseConnectURL("oci://ghcr.io/foo/bar:v2", "v9"); o.Tag != "v9" {
+		t.Errorf("tag override = %q", o.Tag)
+	}
+	// no tag defaults to latest.
+	if o, _ := parseConnectURL("oci://ghcr.io/foo/bar", ""); o.Tag != "latest" {
+		t.Errorf("default tag = %q", o.Tag)
+	}
+	if _, err := parseConnectURL("ghcr.io/foo/bar", ""); err == nil {
+		t.Error("expected error for non-oci url")
+	}
+	if _, err := parseConnectURL("oci://ghcr.io/foo/bar@sha256:abc", ""); err == nil {
+		t.Error("expected error for digest ref")
+	}
+}
+
+func TestCreateGuards(t *testing.T) {
+	r := fakeREST()
+	if _, err := r.Create(context.Background(), &corev1alpha1.Tap{}, nil, nil); !apierrors.IsBadRequest(err) {
+		t.Errorf("missing url should be BadRequest, got %v", err)
+	}
+	if _, err := r.Create(context.Background(), &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "ghcr.io/x/y"}}, nil, nil); !apierrors.IsBadRequest(err) {
+		t.Errorf("non-oci url should be BadRequest, got %v", err)
+	}
+}
+
+func TestCreateMakesLabeledSource(t *testing.T) {
+	r := fakeREST()
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "oci://ghcr.io/foo/bar:v1", SecretRef: "pull-creds"}}
+	out, err := r.Create(context.Background(), in, nil, nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	tap := out.(*corev1alpha1.Tap)
+	if tap.Name != "community.foo.bar" || tap.Spec.Ready || !tap.Spec.Community {
+		t.Fatalf("unexpected returned tap: %+v", tap.Spec)
+	}
+	// The returned object must never echo the url or secret back.
+	if tap.Spec.URL != "" || tap.Spec.SecretRef != "" {
+		t.Errorf("create response leaked connect inputs: %+v", tap.Spec)
+	}
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-foo-bar", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("OCIRepository not created: %v", err)
+	}
+	if u.GetLabels()["apps.cozystack.io/marketplace-tap"] != "true" {
+		t.Errorf("OCIRepository missing tap label: %v", u.GetLabels())
+	}
+	if u.GetAnnotations()["apps.cozystack.io/tap-name"] != "community.foo.bar" {
+		t.Errorf("OCIRepository missing tap-name annotation: %v", u.GetAnnotations())
+	}
+	secretName, _, _ := unstructured.NestedString(u.Object, "spec", "secretRef", "name")
+	if secretName != "pull-creds" {
+		t.Errorf("secretRef not set on OCIRepository: got %q", secretName)
+	}
+}

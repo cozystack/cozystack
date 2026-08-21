@@ -1,0 +1,151 @@
+/*
+Copyright 2025 The Cozystack Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package cmd
+
+import (
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestInitScaffoldValidatesClean is the dogfood property: whatever `cozypkg
+// init` generates must pass `cozypkg validate` with zero findings. If the
+// scaffold and the validator ever disagree on the repository format, this
+// fails.
+func TestInitScaffoldValidatesClean(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeScaffold(dir, scaffoldFiles("example.hello", "hello")); err != nil {
+		t.Fatalf("writeScaffold: %v", err)
+	}
+	rep, err := ValidateRepo(ValidateOptions{RepoRoot: dir})
+	if err != nil {
+		t.Fatalf("ValidateRepo: %v", err)
+	}
+	if len(rep.Findings) != 0 {
+		t.Fatalf("scaffold must validate with zero findings, got: %+v", rep.Findings)
+	}
+}
+
+func TestWriteScaffoldRefusesOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	files := scaffoldFiles("example.hello", "hello")
+	if err := writeScaffold(dir, files); err != nil {
+		t.Fatalf("first writeScaffold: %v", err)
+	}
+	if err := writeScaffold(dir, files); err == nil {
+		t.Fatal("expected second writeScaffold to refuse overwriting existing files")
+	}
+}
+
+func TestDNS1123LabelGuard(t *testing.T) {
+	good := []string{"myapp", "foo-bar", "a", "app123"}
+	bad := []string{"MyApp", "foo_bar", "-foo", "foo-", "foo.bar", ""}
+	for _, s := range good {
+		if !dns1123Label.MatchString(s) {
+			t.Errorf("expected %q to be a valid label", s)
+		}
+	}
+	for _, s := range bad {
+		if dns1123Label.MatchString(s) {
+			t.Errorf("expected %q to be rejected", s)
+		}
+	}
+}
+
+func TestBuildFluxPushArgs(t *testing.T) {
+	got := buildFluxPushArgs("oci://reg/example:v1", "/repo/packages", "https://example.git", "v1:abc", false)
+	want := []string{
+		"push", "artifact", "oci://reg/example:v1",
+		"--path=/repo/packages",
+		"--source=https://example.git",
+		"--revision=v1:abc",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+	if withRepro := buildFluxPushArgs("oci://r/e:v1", "/p", "s", "r", true); withRepro[len(withRepro)-1] != "--reproducible" {
+		t.Fatalf("expected --reproducible as last arg, got %v", withRepro)
+	}
+}
+
+// gitInit sets up a throwaway git repo with a remote and one commit. Signing is
+// disabled locally (config, not the forbidden --no-gpg-sign flag) because this
+// is a disposable test fixture, never a project commit.
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("init")
+	run("remote", "add", "origin", "https://example.com/repo.git")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	run("config", "commit.gpgsign", "false")
+	writeFile(t, dir, "file.txt", "x")
+	run("add", ".")
+	run("commit", "--message", "initial")
+}
+
+func TestDeriveSourceAndRevision(t *testing.T) {
+	dir := t.TempDir()
+	if got := deriveSource(dir); got != "" {
+		t.Fatalf("expected empty source for non-git dir, got %q", got)
+	}
+	if got := deriveRevision(dir); got != "" {
+		t.Fatalf("expected empty revision for non-git dir, got %q", got)
+	}
+
+	gitInit(t, dir)
+	if got := deriveSource(dir); got != "https://example.com/repo.git" {
+		t.Fatalf("deriveSource = %q", got)
+	}
+	rev := deriveRevision(dir)
+	if rev == "" {
+		t.Fatal("deriveRevision returned empty for a git repo with a commit")
+	}
+	// A 40-hex sha must be present either standalone or after "<describe>:".
+	sha := rev
+	if i := strings.LastIndex(rev, ":"); i >= 0 {
+		sha = rev[i+1:]
+	}
+	if len(sha) != 40 {
+		t.Fatalf("expected a 40-char sha in revision %q, got %q", rev, sha)
+	}
+}
+
+func TestScaffoldAppDefArtifactNameLink(t *testing.T) {
+	// The ApplicationDefinition chartRef in the scaffold must name the app
+	// component's assembled artifact exactly, or the dashboard cannot route it.
+	files := scaffoldFiles("example.hello", "hello")
+	var rdContent string
+	for _, f := range files {
+		if strings.Contains(f.Path, filepath.Join("cozyrds", "hello.yaml")) {
+			rdContent = f.Content
+		}
+	}
+	if rdContent == "" {
+		t.Fatal("scaffold has no cozyrds/hello.yaml")
+	}
+	want := artifactName("example.hello", "default", "hello")
+	if !strings.Contains(rdContent, "name: "+want) {
+		t.Fatalf("cozyrds chartRef must reference %q, content:\n%s", want, rdContent)
+	}
+}

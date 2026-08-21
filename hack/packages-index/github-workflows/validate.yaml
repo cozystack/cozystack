@@ -1,0 +1,67 @@
+# Copy to .github/workflows/validate.yaml in the cozystack/packages-index repo.
+# Publication gate: validate every changed index entry and route it to the
+# auto-merge lane (owner version bump, signed by the recorded identity) or the
+# maintainer-review lane (new entry or a security-relevant edit).
+name: validate
+
+on:
+  pull_request:
+    paths:
+      - "entries/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the gate can diff the entry against the base ref.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      # Pin both tools: the gate decides auto-merge, so its toolchain must be
+      # reproducible and not shiftable by an upstream retag. Bump COZYPKG_VERSION
+      # to the released cozypkg tag this index targets.
+      - name: Install cozypkg
+        env:
+          COZYPKG_VERSION: v1.0.0
+        run: go install "github.com/cozystack/cozystack/cmd/cozypkg@${COZYPKG_VERSION}"
+
+      - name: Install yq
+        env:
+          YQ_VERSION: v4.44.6
+        run: |
+          sudo curl --fail --silent --show-error --location \
+            --output /usr/local/bin/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          sudo chmod +x /usr/local/bin/yq
+
+      # Pin the verifier too: cosign is what the auto-merge decision rests on.
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        with:
+          cosign-release: v2.4.3
+
+      - name: Validate changed entries
+        id: gate
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+        run: bash scripts/validate-entry.sh
+
+      - name: Enable auto-merge (owner version bump, signed by recorded identity)
+        if: steps.gate.outputs.lane == 'auto'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --squash --auto "${{ github.event.pull_request.number }}"
+
+      - name: Route to maintainer review (new entry or security-relevant edit)
+        if: steps.gate.outputs.lane == 'review'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr edit "${{ github.event.pull_request.number }}" --add-label needs-maintainer-review

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/naming"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -231,12 +232,11 @@ func (r *PackageSourceReconciler) reconcileArtifactGenerators(ctx context.Contex
 				})
 			}
 
-			// Artifact name: <packagesource>-<variant>-<componentname>
-			// Replace dots with dashes to comply with Kubernetes naming requirements
-			artifactName := fmt.Sprintf("%s-%s-%s",
-				strings.ReplaceAll(packageSource.Name, ".", "-"),
-				strings.ReplaceAll(variant.Name, ".", "-"),
-				strings.ReplaceAll(component.Name, ".", "-"))
+			// Artifact name: <packagesource>-<variant>-<componentname>, dots
+			// replaced by dashes to comply with Kubernetes naming. This is the
+			// single definition shared with the marketplace backend and the
+			// validator via internal/marketplace/naming.
+			artifactName := naming.ArtifactName(packageSource.Name, variant.Name, component.Name)
 
 			outputArtifacts = append(outputArtifacts, sourcewatcherv1beta1.OutputArtifact{
 				Name: artifactName,
@@ -1019,4 +1019,3 @@ func (r *PackageSourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&sourcewatcherv1beta1.ArtifactGenerator{}).
 		Complete(r)
 }
-
