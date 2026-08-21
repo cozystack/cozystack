@@ -763,11 +763,8 @@ func TestUpdateForceCreatePropagatesDryRun(t *testing.T) {
 		WithInterceptorFuncs(interceptor.Funcs{
 			// Capture the create options the force-create path passes through.
 			Create: func(_ context.Context, _ client.WithWatch, _ client.Object, opts ...client.CreateOption) error {
-				for _, o := range opts {
-					if co, ok := o.(*client.CreateOptions); ok && co.Raw != nil {
-						captured = co.Raw.DryRun
-					}
-				}
+				converted := (&client.CreateOptions{}).ApplyOptions(opts)
+				captured = converted.AsCreateOptions().DryRun
 				return nil
 			},
 		}).
