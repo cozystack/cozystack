@@ -1,0 +1,290 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+    options.cozystack.io/source.sourceRef.name: vmimportsource
+    options.cozystack.io/source.storageClass: storageclass
+    options.cozystack.io/source.vms.instanceProfile: instanceprofile
+    options.cozystack.io/source.vms.instanceType: instancetype
+  name: vmimporttasks.migration.cozystack.io
+spec:
+  group: migration.cozystack.io
+  names:
+    kind: VMImportTask
+    listKind: VMImportTaskList
+    plural: vmimporttasks
+    shortNames:
+    - vmit
+    - vmimporttask
+    singular: vmimporttask
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.sourceRef.name
+      name: Source
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .status.message
+      name: Message
+      priority: 1
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VMImportTask runs a one-shot import of VMs from a registered source. It
+          produces VMDisks and VMInstances that outlive it: deleting the task removes
+          the migration machinery and leaves everything already imported in place.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VMImportTaskSpec describes a one-shot import of one or more
+              VMs.
+            properties:
+              sourceRef:
+                description: |-
+                  SourceRef names the VMImportSource to import from. It must live in this
+                  task's own namespace.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+                x-kubernetes-validations:
+                - message: sourceRef is immutable
+                  rule: self == oldSelf
+              storageClass:
+                description: |-
+                  StorageClass is the StorageClass every disk of this task is imported
+                  onto. It must bind Immediate: a WaitForFirstConsumer class deadlocks the
+                  import, because nothing consumes the claim while it is populated. Empty
+                  uses the cluster default, which is validated the same way.
+                type: string
+                x-kubernetes-validations:
+                - message: storageClass is immutable
+                  rule: self == oldSelf
+              vms:
+                description: |-
+                  VMs lists the source VMs to import. Each produces one VMInstance over
+                  one VMDisk per source disk.
+                items:
+                  description: VMImportRequest names one source VM to import and what
+                    to call the result.
+                  properties:
+                    id:
+                      description: |-
+                        ID is the VM's managed-object reference in the source inventory
+                        (e.g. `vm-1234` on vSphere). It appears in the vSphere client's URL, and
+                        `govc ls -i` prints it.
+                      minLength: 1
+                      type: string
+                    instanceProfile:
+                      description: |-
+                        InstanceProfile is the Cozystack instance profile (guest preference set)
+                        for the created VMInstance.
+                      type: string
+                    instanceType:
+                      description: |-
+                        InstanceType is the Cozystack instance type for the created VMInstance.
+                        When omitted the controller sets explicit resources matching the source
+                        VM's CPU and memory, so an import never silently resizes a guest.
+                      type: string
+                    name:
+                      description: |-
+                        Name is the name of the VMInstance to create. Its disks are named after
+                        it. Must be a valid Kubernetes object name; defaults to the source VM's
+                        name normalized to one when omitted.
+                      maxLength: 48
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                  required:
+                  - id
+                  type: object
+                minItems: 1
+                type: array
+                x-kubernetes-validations:
+                - message: vms is immutable
+                  rule: self == oldSelf
+            required:
+            - sourceRef
+            - vms
+            type: object
+          status:
+            description: VMImportTaskStatus represents the observed state of a VMImportTask.
+            properties:
+              completedAt:
+                description: CompletedAt is the time the task reached a terminal phase.
+                format: date-time
+                type: string
+              conditions:
+                description: Conditions represents the latest available observations
+                  of the task's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              message:
+                description: Message is a human-readable message about the current
+                  phase.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the .metadata.generation the status
+                  was computed from.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is a high-level summary of the task's state.
+                enum:
+                - ""
+                - Pending
+                - Validating
+                - Transferring
+                - Creating
+                - Succeeded
+                - Failed
+                type: string
+              startedAt:
+                description: StartedAt is the time the task began validating.
+                format: date-time
+                type: string
+              vms:
+                description: VMs reports per-VM progress, one entry per spec.vms entry.
+                items:
+                  description: VMImportStatus reports the progress of one VM within
+                    a task.
+                  properties:
+                    disks:
+                      description: Disks lists the names of the created VMDisks, in
+                        the source VM's disk order.
+                      items:
+                        type: string
+                      type: array
+                    id:
+                      description: ID is the source VM's managed-object reference,
+                        matching the request.
+                      type: string
+                    message:
+                      description: Message explains this VM's current phase when it
+                        needs explaining.
+                      type: string
+                    name:
+                      description: Name is the name of the VMInstance being created
+                        for this VM.
+                      type: string
+                    phase:
+                      description: Phase is this VM's own lifecycle phase; a task's
+                        phase aggregates these.
+                      enum:
+                      - ""
+                      - Pending
+                      - Validating
+                      - Transferring
+                      - Creating
+                      - Succeeded
+                      - Failed
+                      type: string
+                    progress:
+                      description: Progress is the percentage of disk data transferred,
+                        0-100.
+                      format: int32
+                      maximum: 100
+                      minimum: 0
+                      type: integer
+                    vmInstance:
+                      description: VMInstance is the name of the created VMInstance,
+                        once it exists.
+                      type: string
+                  required:
+                  - id
+                  type: object
+                type: array
+            type: object
+        type: object
+    selectableFields:
+    - jsonPath: .spec.sourceRef.name
+    - jsonPath: .status.phase
+    served: true
+    storage: true
+    subresources:
+      status: {}

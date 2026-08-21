@@ -6,10 +6,12 @@ import {
   Gauge,
   Globe,
   HardDrive,
+  Import,
   Info,
   LayoutGrid,
   Layers,
   Network,
+  Plug,
   Server,
   ToyBrick,
   Users,
@@ -111,6 +113,14 @@ export function useConsoleSidebarSections(): SidebarSection[] {
       ],
     }
 
+    const migrationSection: SidebarSection = {
+      title: "Migration",
+      items: [
+        { label: "Sources", to: "/console/migration/vmimportsources", icon: Plug },
+        { label: "Imports", to: "/console/migration/vmimporttasks", icon: Import },
+      ],
+    }
+
     const administrationSection: SidebarSection = {
       title: "Administration",
       items: [
@@ -121,7 +131,7 @@ export function useConsoleSidebarSections(): SidebarSection[] {
       ],
     }
 
-    return [...categorySections, backupsSection, administrationSection]
+    return [...categorySections, backupsSection, migrationSection, administrationSection]
   }, [grouped])
 }
 

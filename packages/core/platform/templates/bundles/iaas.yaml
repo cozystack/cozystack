@@ -169,4 +169,32 @@
 {{include "cozystack.platform.package" (list "cozystack.virtualprivatecloud-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.vm-disk-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.vm-instance-application" "kubevirt" $) }}
+{{- /*
+  VM import is opt-in: the Forklift operator ships a large manifest with its own
+  CRDs and broad RBAC, and the migration controller holds cluster-wide access to
+  PersistentVolumes so it can hand a transferred volume to a VMDisk without
+  copying it. That surface is worth it for a cluster migrating off vSphere and
+  pure cost for every other iaas cluster, so add these three to
+  bundles.enabledPackages to turn it on.
+
+  The VDDK image travels here as configuration rather than living in the tree:
+  it is built from a proprietary VMware SDK that Cozystack can neither ship nor
+  mirror, so an operator who holds a licence builds it and names it in
+  vmImport.vddkImage. Only the reference travels, never a credential. Empty is
+  the normal state and makes the vSphere path report itself unavailable on each
+  VMImportSource instead of failing midway through a transfer.
+
+  The key is vmImport rather than migration because the platform already has a
+  top-level `migrations` for its own schema migrations, and two neighbouring
+  keys differing by one letter is a configuration mistake waiting to happen.
+*/ -}}
+{{- $migrationComponents := dict -}}
+{{- with .Values.vmImport -}}
+{{- with .vddkImage -}}
+{{- $_ := set $migrationComponents "migration-controller" (dict "values" (dict "vddkImage" .)) -}}
+{{- end -}}
+{{- end -}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.forklift-operator" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.forklift" $) }}
+{{include "cozystack.platform.package.optional" (list "cozystack.migration-controller" "default" $ $migrationComponents) }}
 {{- end }}

@@ -1,0 +1,153 @@
+suite: migration-controller packaging
+release:
+  name: migration-controller
+  namespace: cozy-migration-controller
+tests:
+  # The VDDK reference is the one piece of platform configuration this
+  # controller takes. It must arrive as an environment variable rather than a
+  # flag default baked into the image, so an operator can set it without a
+  # rebuild — and it must be present even when empty, because empty is a
+  # meaningful, documented state (the vSphere path reports itself unavailable).
+  - it: passes the operator-configured VDDK image to the controller
+    templates:
+      - templates/deployment.yaml
+    set:
+      vddkImage: registry.example.com/vddk:8.0.3
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MIGRATION_VDDK_IMAGE
+            value: registry.example.com/vddk:8.0.3
+
+  - it: still declares the VDDK variable when the platform has not set one
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MIGRATION_VDDK_IMAGE
+            value: ""
+
+  - it: runs with leader election so a second replica cannot race a handoff
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect
+
+  # Both CRDs must ship with the controller that reconciles them: a cluster
+  # that installs one without the other has an API nothing serves, or a
+  # controller watching a kind that does not exist.
+  - it: ships both custom resource definitions
+    templates:
+      - templates/crds.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          name: vmimportsources.migration.cozystack.io
+          any: true
+      - containsDocument:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          name: vmimporttasks.migration.cozystack.io
+          any: true
+
+  # Tenant access to a new API group travels with the package that owns the
+  # group. Losing these labels does not break anything visibly — it silently
+  # makes the whole feature invisible to every tenant, which is exactly the
+  # kind of regression worth a test.
+  - it: aggregates read access into the tenant view role
+    templates:
+      - templates/tenant-clusterroles.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozy:migration:view
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-view"]
+          value: "true"
+      - contains:
+          path: rules[0].resources
+          content: vmimportsources
+      - contains:
+          path: rules[0].resources
+          content: vmimporttasks
+      - contains:
+          path: rules[0].verbs
+          content: watch
+
+  - it: aggregates write access into the tenant admin role
+    templates:
+      - templates/tenant-clusterroles.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozy:migration:admin
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-admin"]
+          value: "true"
+      - contains:
+          path: rules[0].verbs
+          content: create
+      - contains:
+          path: rules[0].verbs
+          content: delete
+
+  # Tenants must never reach the Forklift objects a task builds: those are
+  # internal machinery, and a tenant editing a Plan mid-transfer is a support
+  # case nobody wants. They see the migration API's status and nothing else.
+  - it: grants tenants no access to the Forklift API
+    templates:
+      - templates/tenant-clusterroles.yaml
+    asserts:
+      - notContains:
+          path: rules[0].apiGroups
+          content: forklift.konveyor.io
+        documentSelector:
+          path: metadata.name
+          value: cozy:migration:view
+      - notContains:
+          path: rules[0].apiGroups
+          content: forklift.konveyor.io
+        documentSelector:
+          path: metadata.name
+          value: cozy:migration:admin
+
+  # The imported disk and instance are the point of the whole operation and
+  # belong to the tenant from the moment they exist. The controller creates
+  # them and must not be able to modify or remove them afterwards — that is
+  # what makes deleting a finished task safe.
+  - it: lets the controller create imported objects but never delete them
+    templates:
+      - templates/rbac.yaml
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["apps.cozystack.io"]
+            resources: ["vmdisks", "vminstances"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["apps.cozystack.io"]
+            resources: ["vmdisks", "vminstances"]
+            verbs: ["get", "list", "watch", "create"]
+
+  # No list or watch on Secrets: the controller reads the credentials Secrets it
+  # owns by name, and a cluster-wide Secret informer would both need RBAC this
+  # package refuses to grant and hold every tenant's Secret in memory.
+  - it: never grants list or watch on Secrets
+    templates:
+      - templates/rbac.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "create", "update", "patch", "delete"]

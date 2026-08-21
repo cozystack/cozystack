@@ -1,0 +1,55 @@
+---
+# == migration view cluster role ==
+# Aggregated into cozy-tenant-view (and consequently use, admin, super-admin)
+# Provides read-only access to the migration API.
+#
+# Tenant access to a new API group is shipped by the package that owns the
+# group, not by a change to platform policy: cozystack-basics defines the
+# cozy:tenant:* roles as aggregation roles, so a ClusterRole carrying the label
+# below is folded in. This is the same mechanism backup-controller uses for
+# backups.cozystack.io.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:migration:view
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-view: "true"
+rules:
+- apiGroups: ["migration.cozystack.io"]
+  resources:
+  - vmimportsources
+  - vmimporttasks
+  verbs:
+  - get
+  - list
+  - watch
+---
+# == migration admin cluster role ==
+# Aggregated into cozy-tenant-admin (and consequently super-admin)
+# Provides write access to both kinds.
+#
+# Unlike the backup API there is no admin-only class object to withhold here:
+# the one platform-scoped setting is the VDDK image, which is platform
+# configuration on the controller rather than a CRD a tenant could see. A
+# tenant registers their own connection to their own vCenter and runs their own
+# imports, which is the whole point of the API.
+#
+# Note what is NOT granted anywhere: forklift.konveyor.io. The Forklift objects
+# a task creates are internal machinery, so a tenant can neither read nor
+# tamper with them — they only ever see the migration API's own status.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:migration:admin
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+rules:
+- apiGroups: ["migration.cozystack.io"]
+  resources:
+  - vmimportsources
+  - vmimporttasks
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
