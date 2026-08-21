@@ -523,3 +523,116 @@ func TestValidateRemoteCIDRs_RecordsWarningEvent(t *testing.T) {
 		t.Errorf("event %q should be a Warning, not Normal", found)
 	}
 }
+
+// lineageOnlyPod builds a pod that carries this instance's lineage labels but is
+// NOT the gateway VM's virt-launcher pod — it has no vm.kubevirt.io/name. The CDI
+// importer for the boot DataVolume is the real-world instance of this shape: the
+// lineage webhook mutates every pod whose ownership graph reaches the instance's
+// HelmRelease (importer pod -> prime PVC -> DataVolume, which carries
+// helm.toolkit.fluxcd.io/name from helm-controller's origin-label post-renderer),
+// so it is stamped with application.{kind,name} exactly like the gateway pod.
+// Running, and named to sort ahead of virt-launcher-*, which is what the live
+// importer did when it was picked as the gateway in CI.
+func lineageOnlyPod(name, instance, podIP string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "tenant-test",
+			Labels: map[string]string{
+				appKindLabelKey: siteRouterKind,
+				appNameLabelKey: instance,
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: podIP},
+	}
+}
+
+// TestDiscoverGatewayPod_RequiresVMNameLabel is the discovery guard: the lineage
+// labels identify the application INSTANCE, not the gateway VM, so selecting on
+// them alone matches every pod the lineage webhook stamps for this instance — the
+// boot DataVolume's CDI importer among them. Callers then treat whatever comes
+// back as the gateway, which is why this must reject a non-gateway pod outright
+// rather than merely deprioritise it.
+func TestDiscoverGatewayPod_RequiresVMNameLabel(t *testing.T) {
+	t.Run("a lineage-labelled non-gateway pod is not discovered as the gateway", func(t *testing.T) {
+		importer := lineageOnlyPod("importer-prime-c815d6c1", "demo", "10.244.0.212")
+		r := newTestReconciler(t, importer)
+
+		pod, err := r.discoverGatewayPod(context.Background(), &instance{name: "demo", namespace: "tenant-test"})
+		if err != nil {
+			t.Fatalf("discoverGatewayPod: %v", err)
+		}
+		if pod != nil {
+			t.Fatalf("pod %q carries the lineage labels but not %s; discovery must return nil, got it as the gateway",
+				pod.Name, vmNameLabel)
+		}
+	})
+
+	t.Run("the gateway pod wins over a lineage-labelled non-gateway pod", func(t *testing.T) {
+		// Both Running, and the importer sorts first by name — so a selector that
+		// matches both hands back the importer, not the gateway.
+		importer := lineageOnlyPod("importer-prime-c815d6c1", "demo", "10.244.0.212")
+		gateway := gwPod("virt-launcher-"+releasePrefix+"demo-abcde", "demo", "10.244.0.5")
+		r := newTestReconciler(t, importer, gateway)
+
+		pod, err := r.discoverGatewayPod(context.Background(), &instance{name: "demo", namespace: "tenant-test"})
+		if err != nil {
+			t.Fatalf("discoverGatewayPod: %v", err)
+		}
+		if pod == nil {
+			t.Fatalf("expected the gateway pod %q, got nil", gateway.Name)
+		}
+		if pod.Name != gateway.Name {
+			t.Fatalf("discovered %q, want the gateway pod %q", pod.Name, gateway.Name)
+		}
+	})
+}
+
+// TestReconcile_DoesNotAimMediationAtALineageLabelledNonGatewayPod is the impact
+// half of the guard above, through the real reconcile pipeline: the two things the
+// controller does with the discovered pod must both land on the gateway VM. The
+// tenant's kube-ovn next hop becomes the pod IP (programNamespaceRoutes), and the
+// rendered router config plus the management-API token are POSTed to
+// https://<pod IP>/configure with peer-certificate verification off
+// (pushVyOSConfig) — so a wrong pod means tenant return traffic blackholed at it
+// and the instance's API token handed to it.
+func TestReconcile_DoesNotAimMediationAtALineageLabelledNonGatewayPod(t *testing.T) {
+	fakeV := &fakeVyOS{retrieveResult: json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`)}
+	objs := append(readyObjects(t, "demo", routedValues(), "10.244.0.5"),
+		lineageOnlyPod("importer-prime-c815d6c1", "demo", "10.244.0.212"))
+	r, _ := newVyOSReconciler(t, fakeV, objs...)
+
+	// Record what endpoint the config push was actually built against; the shared
+	// fixture's factory discards its arguments.
+	var gotBaseURL, gotToken string
+	r.VyOSClientFactory = func(baseURL, token string) VyOSClient {
+		gotBaseURL, gotToken = baseURL, token
+		return fakeV
+	}
+
+	reconcileInstance(t, r, "demo")
+
+	if gotBaseURL != "https://10.244.0.5" {
+		t.Errorf("config push endpoint = %q, want the gateway pod https://10.244.0.5 (10.244.0.212 is the lineage-labelled importer)", gotBaseURL)
+	}
+	if gotToken != "api-token-xyz" {
+		t.Fatalf("config push token = %q, want the instance api-key token; the assertion above only means anything if the token travelled", gotToken)
+	}
+
+	ns := &corev1.Namespace{}
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "tenant-test"}, ns); err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	routes := routeSet(t, ns.Annotations[routesAnnotation])
+	// Guard the loop below against passing on an empty set: routedValues declares
+	// two remoteCIDRs, so anything short of two entries is a route this reconcile
+	// failed to program rather than a next hop it got right.
+	if len(routes) != 2 {
+		t.Fatalf("expected both remoteCIDRs programmed, got %d entries in %q", len(routes), ns.Annotations[routesAnnotation])
+	}
+	for dst, gw := range routes {
+		if gw != "10.244.0.5" {
+			t.Errorf("route %s -> %s, want next hop 10.244.0.5 (the gateway pod)", dst, gw)
+		}
+	}
+}
