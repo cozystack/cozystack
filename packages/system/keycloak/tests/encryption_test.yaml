@@ -489,6 +489,14 @@ tests:
             name: dekset
             secret:
               secretName: keycloak-kms-proxy-dekset
+      # Exactly one of each: the dekset and Vault CA blocks share these keys, so
+      # a CA volume rendered without its conditional shows up as a second entry.
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 1
+      - lengthEqual:
+          path: spec.template.spec.containers[0].volumeMounts
+          count: 1
 
   - it: rejects HA (replicas > 1) without a dekset
     template: templates/proxy.yaml
@@ -537,3 +545,370 @@ tests:
           content:
             name: KKP_DEKSET_FILE
             value: /etc/kkp/dekset/custom.json
+
+  - it: trusts a private Vault CA supplied inline as caBundle
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.example
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      encryption.kms.vault.appRole.secretName: keycloak-vault-approle
+      encryption.kms.vault.caBundle: |
+        -----BEGIN CERTIFICATE-----
+        dGVzdA==
+        -----END CERTIFICATE-----
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    asserts:
+      - equal:
+          path: stringData["ca.crt"]
+          value: |
+            -----BEGIN CERTIFICATE-----
+            dGVzdA==
+            -----END CERTIFICATE-----
+        documentSelector:
+          path: metadata.name
+          value: keycloak-kms-proxy-vault-ca
+      # SSL_CERT_FILE alone leaves the image's public roots in the pool; both
+      # variables together pin the Vault leg to this CA.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSL_CERT_FILE
+            value: /etc/kkp/vault-ca/ca.crt
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSL_CERT_DIR
+            value: /etc/kkp/vault-ca
+        documentSelector:
+          path: kind
+          value: Deployment
+      # Derived from the bundle, so rotating it rolls the pods — the process
+      # memoizes its root pool and would otherwise keep the old CA.
+      - equal:
+          path: spec.template.metadata.annotations["checksum/vault-ca"]
+          value: de63913efff35e2e9be70b97bd7a0e12a2205f3a0ca00a114606d778abf65fe0
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: vault-ca
+            mountPath: /etc/kkp/vault-ca
+            readOnly: true
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: vault-ca
+            secret:
+              secretName: keycloak-kms-proxy-vault-ca
+              items:
+                - key: ca.crt
+                  path: ca.crt
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: mounts a pre-seeded CA Secret when caSecretName is set
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.example
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      encryption.kms.vault.appRole.secretName: keycloak-vault-approle
+      encryption.kms.vault.caSecretName: vault-ca
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSL_CERT_FILE
+            value: /etc/kkp/vault-ca/ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSL_CERT_DIR
+            value: /etc/kkp/vault-ca
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: vault-ca
+            mountPath: /etc/kkp/vault-ca
+            readOnly: true
+      # No checksum annotation on this path: the chart does not own the Secret
+      # and cannot see its contents, so rotation needs a manual rollout restart.
+      - notExists:
+          path: spec.template.metadata.annotations
+      # Only one key is projected: a cert-manager TLS Secret would otherwise hand
+      # tls.key to the proxy, and a bundle under another key would fail the mount
+      # instead of looking like an unconfigured CA at runtime.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: vault-ca
+            secret:
+              secretName: vault-ca
+              items:
+                - key: ca.crt
+                  path: ca.crt
+      # No dekset here, so a dekset volume rendered without its conditional
+      # (with an empty secretName) shows up as a second entry.
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 1
+      - lengthEqual:
+          path: spec.template.spec.containers[0].volumeMounts
+          count: 1
+
+  - it: fails when both caBundle and caSecretName are set
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.example
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      encryption.kms.vault.appRole.secretName: keycloak-vault-approle
+      encryption.kms.vault.caSecretName: vault-ca
+      encryption.kms.vault.caBundle: PEM
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: mutually exclusive
+
+  - it: leaves the proxy on the system trust store when no CA is configured
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.example
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      encryption.kms.vault.appRole.secretName: keycloak-vault-approle
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: SSL_CERT_FILE
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+
+  # The volume and mount are pod-level, outside the vault-transit env block, so
+  # an ungated caSecretName would have the static backend mount a Secret the
+  # chart never renders — the pod then never leaves ContainerCreating and takes
+  # all Keycloak DB traffic with it.
+  - it: ignores a pre-seeded Vault CA Secret under the static backend
+    set:
+      encryption.enabled: true
+      encryption.kms.vault.caSecretName: vault-ca
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: SSL_CERT_FILE
+
+  - it: ignores an inline Vault CA bundle under the static backend
+    set:
+      encryption.enabled: true
+      encryption.kms.vault.caBundle: PEM
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    asserts:
+      # KEK Secret, ServiceAccount, Deployment, Service — no CA Secret.
+      - hasDocuments:
+          count: 4
+      - notExists:
+          path: spec.template.spec.volumes
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  # Every vault.* key is inert under the static backend, the mutual-exclusion
+  # check included: rejecting a combination that cannot reach Vault anyway would
+  # break a render that is otherwise valid.
+  - it: does not enforce Vault CA mutual exclusion under the static backend
+    set:
+      encryption.enabled: true
+      encryption.kms.vault.caSecretName: vault-ca
+      encryption.kms.vault.caBundle: PEM
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    asserts:
+      - notFailedTemplate: {}
+      - hasDocuments:
+          count: 4
+
+  - it: rolls the pods when a chart-owned caBundle is rotated
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.example
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      encryption.kms.vault.appRole.secretName: keycloak-vault-approle
+      encryption.kms.vault.caBundle: |
+        -----BEGIN CERTIFICATE-----
+        cm90YXRlZA==
+        -----END CERTIFICATE-----
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      # Differs from the checksum asserted for the bundle above.
+      - equal:
+          path: spec.template.metadata.annotations["checksum/vault-ca"]
+          value: 76da7d3279a7bc1e42a021a7c3fdc0e79b506bc152171128003ae15f56512741
+
+  - it: rejects a caBundle that is not a PEM certificate bundle
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.example
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      encryption.kms.vault.appRole.secretName: keycloak-vault-approle
+      encryption.kms.vault.caBundle: not-a-certificate
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "caBundle must be a PEM bundle"
+
+  - it: reads a pre-seeded bundle from a custom caSecretKey
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.example
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      encryption.kms.vault.appRole.secretName: keycloak-vault-approle
+      encryption.kms.vault.caSecretName: vault-serving-cert
+      encryption.kms.vault.caSecretKey: ca-bundle.crt
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      # The key varies, the projected path does not, so SSL_CERT_FILE is fixed.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: vault-ca
+            secret:
+              secretName: vault-serving-cert
+              items:
+                - key: ca-bundle.crt
+                  path: ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSL_CERT_FILE
+            value: /etc/kkp/vault-ca/ca.crt
+
+  # Both optional mounts at once: the dekset and CA blocks share the volumes and
+  # volumeMounts keys, so dropping either inner conditional must fail here.
+  - it: mounts the dekset and the Vault CA side by side
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.example
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      encryption.kms.vault.appRole.secretName: keycloak-vault-approle
+      encryption.kms.vault.caSecretName: vault-ca
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 2
+      - lengthEqual:
+          path: spec.template.spec.containers[0].volumeMounts
+          count: 2
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: dekset
+            secret:
+              secretName: keycloak-kms-proxy-dekset
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: vault-ca
+            secret:
+              secretName: vault-ca
+              items:
+                - key: ca.crt
+                  path: ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: dekset
+            mountPath: /etc/kkp/dekset
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: vault-ca
+            mountPath: /etc/kkp/vault-ca
+            readOnly: true
