@@ -1,0 +1,33 @@
+suite: forklift-operator image pinning
+release:
+  name: forklift-operator
+  namespace: cozy-forklift
+templates:
+  - templates/forklift-operator.yaml
+tests:
+  - it: pins must-gather and console-plugin to immutable digests, not :latest
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MUST_GATHER_IMAGE
+            value: quay.io/kubev2v/forklift-must-gather:v2.7.1@sha256:62eecec1408be00e907fbde6b13be9223fdbca116933ecba85cd87d68d6acfbb
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: UI_PLUGIN_IMAGE
+            value: quay.io/kubev2v/forklift-console-plugin:release-v2.6.7@sha256:99c34ac714604853f4abf589e1ccddb13cd9eaf1bd1eae2c928c622deb22304d
+
+  - it: pins the operator and controller images to immutable digests
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONTROLLER_IMAGE
+            value: quay.io/kubev2v/forklift-controller:release-2.11@sha256:f265574b8432d164d4ae4b388825cbb8ef7806b4afe1e87880735a8dc1868754
