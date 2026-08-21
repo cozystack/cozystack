@@ -9,6 +9,14 @@ TEST_FILE=${1:?Usage: ./cozytest.sh <file.bats> [pattern]}
 PATTERN=${2:-*}
 LINE='----------------------------------------------------------------'
 
+# Bats' skip stops the current test without failing the suite. Each test runs
+# in its own subshell below, so exiting here leaves the runner itself alive to
+# report the skip and continue with the next test.
+skip() {
+  printf '%s\n' "$*" > "$skip_file"
+  exit 0
+}
+
 cols() { stty size 2>/dev/null | awk '{print $2}' || echo 80; }
 if [ -t 1 ]; then
   MAXW=$(( $(cols) - 12 )); [ "$MAXW" -lt 40 ] && MAXW=70
@@ -25,6 +33,7 @@ run_one() {
   fn=$1 title=$2
   tmp=$(mktemp -d) || { echo "Failed to create temp directory" >&2; exit 1; }
   log="$tmp/log"
+  skip_file="$tmp/skip"
 
   echo "╭ » Run test: $title"
   START=$(date +%s)
@@ -57,7 +66,14 @@ run_one() {
   [ -z "$rc" ] && rc=1
   now=$(( $(date +%s) - START ))
 
-  if [ "$rc" -eq 0 ]; then
+  if [ "$rc" -eq 0 ] && [ -f "$skip_file" ]; then
+    skip_reason=$(cat "$skip_file")
+    if [ -n "$skip_reason" ]; then
+      printf '╰[%02d:%02d] ⏭️ Test skipped: %s (%s)\n' $((now/60)) $((now%60)) "$title" "$skip_reason"
+    else
+      printf '╰[%02d:%02d] ⏭️ Test skipped: %s\n' $((now/60)) $((now%60)) "$title"
+    fi
+  elif [ "$rc" -eq 0 ]; then
     printf '╰[%02d:%02d] ✅ Test OK: %s\n' $((now/60)) $((now%60)) "$title"
   else
     printf '╰[%02d:%02d] ❌ Test failed: %s (exit %s)\n' \
