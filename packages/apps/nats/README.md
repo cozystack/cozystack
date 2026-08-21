@@ -56,3 +56,22 @@ Presets follow a cloud-style `<series>.<size>` naming convention. Five series co
 
 See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
 
+### tls
+
+`tls.enabled` is tri-state. Left unset it follows `external`, so TLS is enabled automatically for a NATS instance exposed outside the cluster and disabled for one that is not. Setting it explicitly overrides that in either direction.
+
+When TLS is on, the chart issues a self-signed CA and a server certificate from it, and NATS serves the client port on `:4222` with the server certificate.
+
+**Retrieving the CA certificate** for client verification:
+
+The trust anchor is published as `nats-<name>.tenant-ca`: an object holding `ca.crt` and nothing else, delivered to tenants through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant. It exists only while TLS is on, because that is the only state in which the chart issues a CA to publish.
+
+```bash
+kubectl --context <ctx> --namespace <tenant> \
+  get tenantsecret nats-<name>.tenant-ca \
+  --output jsonpath='{.data.ca\.crt}' | base64 --decode
+```
+
+`nats-<name>.tenant-ca` is the only object that hands over the CA certificate without also handing over a private key, which is why it exists. The chart's own `nats-<name>-ca` Secret stores the CA **private key** under `tls.key` alongside the certificate — read access to it would let the holder issue certificates for anything, so it is never granted to a tenant. The same applies to `nats-<name>-tls`, which holds the server's private key.
+
+It is reached through `tenantsecrets` rather than by reading the Secret directly, and that is deliberate: `tenantsecrets` surfaces only objects the platform has vouched for, whereas a direct grant on the name would convey whatever happens to occupy that name.

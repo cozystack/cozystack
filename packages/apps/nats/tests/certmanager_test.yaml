@@ -139,6 +139,55 @@ tests:
           value: my-nats-ca
 
   ###################################################
+  # Key-bearing Secrets stay invisible to tenants   #
+  ###################################################
+
+  # Both Certificates below mint a private key: the CA Secret stores the CA key
+  # under tls.key, the leaf Secret the server key. The nats ResourceDefinition
+  # grants tenants read access to Secrets matching
+  # internal.cozystack.io/tenant-ca, so only the controller-authored projection
+  # may carry that label.
+  #
+  # A stamp here does not by itself reach a tenant today: tenantsecrets serves
+  # only objects the lineage webhook marked tenantresource=true, and it resolves
+  # lineage from ownerReferences or the Flux helm labels, neither of which a
+  # cert-manager Secret carries while enableCertificateOwnerRef stays false.
+  # These assertions become load-bearing the moment either of those changes, and
+  # the second gate is not one this chart controls.
+  #
+  # Selected by the Secret each Certificate writes rather than by position: a
+  # documentIndex would follow the slot, so reordering this template would let
+  # a labelled key-bearing Certificate slide out from under the assertion and
+  # pass green.
+  - it: the key-bearing CA Secret is never marked tenant-readable
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentSelector:
+      path: spec.secretName
+      value: my-nats-ca
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
+
+  - it: the key-bearing leaf Secret is never marked tenant-readable
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentSelector:
+      path: spec.secretName
+      value: my-nats-tls
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
+
+  ###################################################
   # SAN coverage (internal, tls.enabled=true)       #
   ###################################################
 
