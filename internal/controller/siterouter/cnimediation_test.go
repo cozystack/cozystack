@@ -262,6 +262,11 @@ func gwPod(name, instance, podIP string) *corev1.Pod {
 			Labels: map[string]string{
 				appKindLabelKey: siteRouterKind,
 				appNameLabelKey: instance,
+				// KubeVirt copies the VMI's labels onto the virt-launcher pod, so a
+				// real gateway pod always carries the VM name; discoverGatewayPod
+				// requires it to tell the gateway apart from the other pods the
+				// lineage webhook labels for this instance.
+				vmNameLabel: releasePrefix + instance,
 			},
 			Annotations: map[string]string{portSecurityAnnotation: portSecurityRelaxed},
 		},
