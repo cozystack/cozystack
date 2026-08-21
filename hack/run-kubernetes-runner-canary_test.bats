@@ -260,7 +260,7 @@ capture_path() {
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='100 150 150 250'
+  stamp_values='100 150 150 250 250 300'
   # Set apart on purpose. The canary is work rather than a read, and a read
   # bound lowered to speed the diagnostics up would kill an arm that is meant to
   # take seconds; taking the wrong one of these two is invisible until that
@@ -284,7 +284,7 @@ capture_path() {
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='100 150 150 250'
+  stamp_values='100 150 150 250 250 300'
   COZY_CANARY_RUN_BOUND=0
   COZY_DIAG_READ_GRACE=3
 
@@ -364,15 +364,35 @@ capture_path() {
   real_awk=$(readlink "$tmp/bin/awk")
   real_dd=$(readlink "$tmp/bin/dd")
   rm -f "$tmp/bin/awk" "$tmp/bin/dd"
+  # A step of one second rather than a value each wrapper writes: dd is now the
+  # binary of two arms rather than one, and a wrapper that stamps a constant
+  # gives the second of them a start and an end on the same hundredth. That
+  # reads as an arm too fast to measure, which is the one outcome this case
+  # asserts against, on the arm it is not even about.
   cat >"$tmp/bin/awk" <<EOF
 #!/bin/sh
-printf '70063.90 774208.84\n' >"$tmp/uptime"
+"$real_awk" '{ printf "%.2f 774208.84\n", \$1 + 1 }' "$tmp/uptime" >"$tmp/uptime.next"
+mv "$tmp/uptime.next" "$tmp/uptime"
 exec "$real_awk" "\$@"
 EOF
   cat >"$tmp/bin/dd" <<EOF
 #!/bin/sh
-printf '70064.90 774208.84\n' >"$tmp/uptime"
-exec "$real_dd" "\$@"
+"$real_awk" '{ printf "%.2f 774208.84\n", \$1 + 1 }' "$tmp/uptime" >"$tmp/uptime.next"
+mv "$tmp/uptime.next" "$tmp/uptime"
+# The disk arm asks for O_DIRECT, and whether the filesystem under whoever runs
+# this suite honours it is not what this case is about -- tmpfs refuses it
+# outright, and a refusal here would be read as the unbounded fallback having
+# failed. The flag is dropped so the arm still runs its real dd; that the
+# sandbox image's overlay does honour it is a property of the sandbox, checked
+# where the arm runs rather than here.
+kept=
+for a in "\$@"; do
+  case "\$a" in
+    oflag=direct) continue ;;
+  esac
+  kept="\$kept \$a"
+done
+exec "$real_dd" \$kept
 EOF
   chmod +x "$tmp/bin/awk" "$tmp/bin/dd"
   rc=0
@@ -389,6 +409,7 @@ EOF
       COZY_CANARY_CPU_ITERATIONS=1000
       COZY_CANARY_MEM_BLOCK_MIB=1
       COZY_CANARY_MEM_BLOCKS=1
+      COZY_CANARY_DISK_BLOCKS=1
       PATH='"$tmp"'/bin
       cozy_capture_runner_canary 1
     ' ) 2>&1 ) || rc=$?
@@ -399,15 +420,18 @@ EOF
     false
   }
   capture="$tmp/report/snapshots/canary-smoke/runner-canary/sample-1/fixed-work.txt"
-  # Both arms ran the real binaries, and the wrapped clock gives each of them a
-  # second, so each reports a duration and divides by it: 1000 iterations and
-  # 1 MiB, each in one second. That is what makes this the case that exercises
-  # the unbounded arm end to end rather than only reaching it.
+  # All three arms ran the real binaries, and the wrapped clock gives each of
+  # them a second, so each reports a duration and divides by it: 1000
+  # iterations, 1 MiB and one direct write, each in one second. That is what
+  # makes this the case that exercises the unbounded arm end to end rather than
+  # only reaching it.
   assert_file_contains 'arm: compute' "$capture"
   assert_file_contains 'arm: memory' "$capture"
+  assert_file_contains 'arm: disk' "$capture"
   assert_file_contains 'elapsed: 1000 ms' "$capture"
   assert_file_contains 'rate: 1000 iterations per second' "$capture"
   assert_file_contains 'rate: 1 MiB per second' "$capture"
+  assert_file_contains 'rate: 1 4KiB direct writes per second' "$capture"
   assert_file_lacks_pattern 'produced no reading' "$capture"
   assert_file_lacks_pattern 'finished inside one tick' "$capture"
   # And the capture says it ran without a ceiling. The phase warning that names
@@ -568,7 +592,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   COZY_CANARY_CPU_ITERATIONS=1000000
   COZY_CANARY_MEM_BLOCK_MIB=2048
   COZY_CANARY_MEM_BLOCKS=4
@@ -593,7 +617,7 @@ STUB
   stage "$tmp"
   stub_stamp
   # 50 centiseconds for the compute arm, 200 for the memory one.
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   COZY_CANARY_CPU_ITERATIONS=1000000
   COZY_CANARY_MEM_BLOCK_MIB=2
   COZY_CANARY_MEM_BLOCKS=4
@@ -617,7 +641,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   COZY_CANARY_MEM_BLOCK_MIB=2
   COZY_CANARY_MEM_BLOCKS=4
 
@@ -636,11 +660,11 @@ STUB
   tmp=$(mktemp -d)
   timeout_calls="$tmp/timeout.calls"
   timeout_skip_command=1
-  timeout_rc_match=dd
+  timeout_rc_match=of=/dev/null
   timeout_rc_override=124
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 3050'
+  stamp_values='1000 1050 1050 3050 3050 3100'
   COZY_CANARY_MEM_BLOCK_MIB=100
   COZY_CANARY_MEM_BLOCKS=8
   COZY_CANARY_RUN_BOUND=20
@@ -668,11 +692,11 @@ STUB
   tmp=$(mktemp -d)
   timeout_calls="$tmp/timeout.calls"
   timeout_skip_command=1
-  timeout_rc_match=dd
+  timeout_rc_match=of=/dev/null
   timeout_rc_override=137
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   COZY_CANARY_RUN_BOUND=20
 
   run_canary
@@ -695,11 +719,11 @@ STUB
   tmp=$(mktemp -d)
   timeout_calls="$tmp/timeout.calls"
   timeout_skip_command=1
-  timeout_rc_match=dd
+  timeout_rc_match=of=/dev/null
   timeout_rc_override=137
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 3050'
+  stamp_values='1000 1050 1050 3050 3050 3100'
   COZY_CANARY_MEM_BLOCK_MIB=100
   COZY_CANARY_MEM_BLOCKS=8
   COZY_CANARY_RUN_BOUND=20
@@ -732,7 +756,7 @@ STUB
   # sample would report a shortfall and the call sites would print that they got
   # no reading, which is the vaguest thing they can say about the one machine
   # state worth naming exactly.
-  stamp_values='1000 3000 3000 5000'
+  stamp_values='1000 3000 3000 5000 5000 5050'
   COZY_CANARY_MEM_BLOCK_MIB=100
   COZY_CANARY_MEM_BLOCKS=8
   COZY_CANARY_RUN_BOUND=20
@@ -759,7 +783,7 @@ STUB
   tmp=$(mktemp -d)
   timeout_calls="$tmp/timeout.calls"
   timeout_skip_command=1
-  timeout_rc_match=dd
+  timeout_rc_match=of=/dev/null
   timeout_rc_override=124
   stage "$tmp"
   stub_stamp
@@ -767,7 +791,7 @@ STUB
   # the 20 the default carries: this is the only case that reaches the sentence
   # naming the ceiling it did not reach, so it is the only one that can tell
   # that sentence reading the knob from it reading the compiled-in figure.
-  stamp_values='1000 1050 1050 2149'
+  stamp_values='1000 1050 1050 2149 2149 2199'
   COZY_CANARY_MEM_BLOCK_MIB=100
   COZY_CANARY_MEM_BLOCKS=8
   COZY_CANARY_RUN_BOUND=11
@@ -790,7 +814,7 @@ STUB
   tmp=$(mktemp -d)
   timeout_calls="$tmp/timeout.calls"
   timeout_skip_command=1
-  timeout_rc_match=dd
+  timeout_rc_match=of=/dev/null
   timeout_rc_override=124
   stage "$tmp"
   stub_stamp
@@ -803,7 +827,7 @@ STUB
   # it to exactly that default, so their assertions would hold just as well if
   # the comparison read the compiled-in figure instead of the knob the caller
   # set. Reading the default here classifies a fired ceiling as something else.
-  stamp_values='1000 1050 1050 2150'
+  stamp_values='1000 1050 1050 2150 2150 2200'
   COZY_CANARY_MEM_BLOCK_MIB=100
   COZY_CANARY_MEM_BLOCKS=8
   COZY_CANARY_RUN_BOUND=11
@@ -833,11 +857,11 @@ STUB
   tmp=$(mktemp -d)
   timeout_calls="$tmp/timeout.calls"
   timeout_skip_command=1
-  timeout_rc_match=dd
+  timeout_rc_match=of=/dev/null
   timeout_rc_override=127
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
 
   run_canary
 
@@ -880,13 +904,13 @@ STUB
   tmp=$(mktemp -d)
   timeout_calls="$tmp/timeout.calls"
   timeout_skip_command=1
-  timeout_rc_match=dd
+  timeout_rc_match=of=/dev/null
   timeout_rc_override=127
   stage "$tmp"
   stub_stamp
   # Both stamps of the memory arm land on the same tick, which is what a command
   # this machine does not have actually produces: it fails in well under 10ms.
-  stamp_values='1000 1050 1050 1050'
+  stamp_values='1000 1050 1050 1050 1050 1100'
 
   run_canary
 
@@ -906,7 +930,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   # The clock fails on the memory arm's closing stamp.
   stamp_fail_at=4
 
@@ -938,7 +962,7 @@ STUB
   # pathological finding manufactured on a healthy machine, which is the one
   # outcome this collector must never produce.
   stamp_fail_at=1
-  stamp_values='1000 1050 1150 1250'
+  stamp_values='1000 1050 1150 1250 1250 1300'
   COZY_CANARY_CPU_ITERATIONS=6000000
   COZY_CANARY_MEM_BLOCK_MIB=1000
   COZY_CANARY_MEM_BLOCKS=1
@@ -964,7 +988,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1000 1000 1000'
+  stamp_values='1000 1000 1000 1000 1000 1050'
   rc=0
 
   run_canary || rc=$?
@@ -989,7 +1013,7 @@ STUB
   tmp=$(mktemp -d)
   timeout_calls="$tmp/timeout.calls"
   timeout_skip_command=1
-  timeout_rc_match=dd
+  timeout_rc_match=of=/dev/null
   timeout_rc_override=124
   stage "$tmp"
   stub_stamp
@@ -998,7 +1022,7 @@ STUB
   # needs the whole bound on the clock. Read by status alone this was reported
   # as the ceiling with no duration, which is a finding about the machine
   # manufactured by whatever actually killed the work.
-  stamp_values='1000 1050 1050 1050'
+  stamp_values='1000 1050 1050 1050 1050 1100'
   COZY_CANARY_RUN_BOUND=20
   rc=0
 
@@ -1056,12 +1080,12 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 900 900 800'
+  stamp_values='1000 900 900 800 800 750'
   rc=0
 
   run_canary || rc=$?
 
-  # Neither arm yields a figure, so the collector reports a shortfall -- which
+  # No arm yields a figure, so the collector reports a shortfall -- which
   # is what the two call sites outside the diagnostics block turn into a line in
   # the job log.
   [ "$rc" -ne 0 ] || {
@@ -1088,7 +1112,7 @@ STUB
   stub_stamp
   # 8 MiB in twenty seconds is under half a MiB per second, which integer
   # division reports as none at all.
-  stamp_values='1000 1050 1050 3050'
+  stamp_values='1000 1050 1050 3050 3050 3100'
   COZY_CANARY_MEM_BLOCK_MIB=2
   COZY_CANARY_MEM_BLOCKS=4
 
@@ -1149,7 +1173,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   rc=0
 
   run_canary || rc=$?
@@ -1161,7 +1185,7 @@ STUB
   # One arm failing is not a shortfall: the other still carries a figure, and
   # both call sites outside the diagnostics block turn a non-zero into a warning
   # line saying nothing was measured.
-  timeout_rc_match=dd
+  timeout_rc_match=of=/dev/null
   timeout_rc_override=127
   stamp_index=0
   rc=0
@@ -1190,7 +1214,7 @@ STUB
   # which is the OOM case the ceiling attribution is written for, would report
   # success with nothing measured and both call sites would stay quiet.
   timeout_rc_override=137
-  stamp_values='1000 1200 1200 1400'
+  stamp_values='1000 1200 1200 1400 1400 1450'
   COZY_CANARY_RUN_BOUND=20
   stamp_index=0
   rc=0
@@ -1221,7 +1245,7 @@ STUB
   # The work failed on its own account.
   timeout_rc_match=
   timeout_rc_override=127
-  stamp_values='1000 1200 1200 1400'
+  stamp_values='1000 1200 1200 1400 1400 1450'
   stamp_index=0
   run_canary_here || true
   [ "${_COZY_CANARY_ALERT:-unset}" = 0 ] || {
@@ -1240,7 +1264,7 @@ STUB
 
   # Finished inside one tick, which is too fast to measure rather than slow.
   timeout_rc_override=
-  stamp_values='1000 1000 1000 1000'
+  stamp_values='1000 1000 1000 1000 1000 1050'
   stamp_index=0
   run_canary_here 3 || true
   [ "${_COZY_CANARY_ALERT:-unset}" = 0 ] || {
@@ -1257,7 +1281,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
 
   out=$(run_canary 2)
 
@@ -1281,7 +1305,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
 
   run_canary 2
 
@@ -1306,7 +1330,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   # The report directory outlives a run, so the same sample number can find a
   # file already there. Appended to, the capture would carry two runs of one
   # sample with nothing between them to say where the first ended, and every
@@ -1415,7 +1439,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
 
   run_canary
 
@@ -1445,7 +1469,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   COZY_CANARY_CPU_ITERATIONS=777
   # The floors are overridden away from their defaults for the reason the
   # ceiling case sets a bound of 11: the legend interpolates them, so a fixture
@@ -1485,7 +1509,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
 
   run_canary
 
@@ -1517,11 +1541,20 @@ STUB
   assert_file_contains 'A difference between them puts the change inside the interval the pair brackets' "$capture"
   assert_file_contains 'neither burn falls inside any interval those pairs divide by' "$capture"
   assert_file_contains 'quantised to 10ms' "$capture"
-  # The working set is what makes the two answer the same interference
+  # The working set is what makes the two CPU arms answer the same interference
   # differently; they differ in plenty else, including how much work each does,
-  # so the sentence claims the one property the two-arm design rests on rather
-  # than a separation the arms do not have.
-  assert_file_contains 'what makes them answer the same interference differently is the working set' "$capture"
+  # so the sentence claims the one property their pairing rests on rather than a
+  # separation the arms do not have. It is scoped to those two on purpose: the
+  # disk arm does not sit on that axis at all, and a sentence that swept it in
+  # would describe the collector as three shades of one measurement.
+  assert_file_contains 'What makes the first two answer the same interference differently is the working set' "$capture"
+  # And the disk arm says what it is for and what it is not. Its figure is a
+  # latency in disguise, and a reader who takes the rate at face value has the
+  # wrong end of it; the counters this report already carries are named as not
+  # covering it, so the arm is not read as a duplicate of one of them.
+  assert_file_contains 'what it waits on is the device answering' "$capture"
+  assert_file_contains 'its reciprocal is how long one 4 KiB write took to reach the volume' "$capture"
+  assert_file_contains 'no counter in this report covers that one at all' "$capture"
   rm -rf "$tmp"
 }
 
@@ -1532,7 +1565,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
 
   run_canary
 
@@ -1711,7 +1744,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   # 8 MiB in two seconds: 4 MiB per second, against a floor of 500. The compute
   # arm is sized to 12,000,000 iterations a second, above its own floor, so this
   # arm is the only one that can raise the alert asserted below. The alert is
@@ -1741,7 +1774,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1150'
+  stamp_values='1000 1050 1050 1150 1150 1200'
   # 953 MiB in one second, a gigabyte a second expressed in the unit the rate
   # line is printed in. The floor sits well under that, so this core is slow and
   # nothing more. A floor at the near-1000 MiB/s the legend gives for that
@@ -1771,7 +1804,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   # A rate landing on the floor rather than above or below it, which is the one
   # case that tells `-lt` from `-le`. The neighbours put a rate on either side
   # and both stay correct under either operator, so without this case the
@@ -1803,7 +1836,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1150'
+  stamp_values='1000 1050 1050 1150 1150 1200'
   # 400 MiB in one second, just under the floor rather than an order of
   # magnitude beneath it. The case above pins where the alert stays quiet and
   # this one pins where it starts, so between them the floor is the number that
@@ -1832,7 +1865,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   # 1000 iterations in half a second: 2000 a second against a floor of three
   # million. The memory arm beside it is above its own, so each arm's floor is
   # pinned by the case where only that arm is under it -- one floor left at zero
@@ -1858,11 +1891,11 @@ STUB
   tmp=$(mktemp -d)
   timeout_calls="$tmp/timeout.calls"
   timeout_skip_command=1
-  timeout_rc_match=dd
+  timeout_rc_match=of=/dev/null
   timeout_rc_override=124
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 3050'
+  stamp_values='1000 1050 1050 3050 3050 3100'
   # Sized so the bound rounds up to 1639 MiB per second, above the floor, and
   # the compute arm beside it is above its own: the ceiling has to raise the
   # alert on its own account or nothing here does. An arm the bound stopped got
@@ -1897,9 +1930,10 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  # Eight stamps: four for each sample, because run_kubernetes_test takes both
-  # from one shell and the alert is one variable for the pair.
-  stamp_values='1000 1050 1050 1250 1250 1300 1300 1500'
+  # Twelve stamps: six for each sample, one pair per arm, because
+  # run_kubernetes_test takes both samples from one shell and the alert is one
+  # variable for the pair.
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350 1350 1550 1550 1600'
   COZY_CANARY_CPU_ITERATIONS=1000
   COZY_CANARY_MEM_BLOCK_MIB=2048
   COZY_CANARY_MEM_BLOCKS=4
@@ -1933,7 +1967,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
   # Both arms above their floors. Without this case an alert wired to fire
   # always would satisfy every assertion above it, and the job log would carry
   # the warning on every green run until a reader learned to skip it.
@@ -2028,8 +2062,10 @@ STUB
   blk=$(grep -oE '^COZY_CANARY_MEM_BLOCK_MIB=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
   blocks=$(grep -oE '^COZY_CANARY_MEM_BLOCKS=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
   mem_floor=$(grep -oE '^COZY_CANARY_MEM_MIN_RATE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
+  dblocks=$(grep -oE '^COZY_CANARY_DISK_BLOCKS=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
+  disk_floor=$(grep -oE '^COZY_CANARY_DISK_MIN_RATE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
   bound=$(grep -oE '^COZY_CANARY_RUN_BOUND_DEFAULT=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
-  for v in iters cpu_floor blk blocks mem_floor bound; do
+  for v in iters cpu_floor blk blocks mem_floor dblocks disk_floor bound; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to read $v from $lib; without it this guard reports success for having lost its input" >&2
@@ -2041,15 +2077,20 @@ STUB
   # than reach the branch below, and the failure then arrives as a raw
   # arithmetic error rather than as a sentence naming the floor and the file it
   # was read from.
-  for v in cpu_floor mem_floor; do
+  for v in cpu_floor mem_floor disk_floor; do
     eval "n=\$$v"
     if [ "$n" -eq 0 ]; then
       echo "read $v as zero from $lib; a floor of zero has no window to sit inside and this guard cannot divide by it" >&2
       return 1
     fi
   done
+  # The disk arm's quantity is its block COUNT rather than the bytes it writes,
+  # because that is the unit its rate is printed in: operations a second at
+  # queue depth one, whose reciprocal is the latency the arm exists to read. A
+  # window derived from the byte total would be wrong by the block size.
   for arm in "compute:$(( iters * 1000 / cpu_floor ))" \
-    "memory:$(( blk * blocks * 1000 / mem_floor ))"; do
+    "memory:$(( blk * blocks * 1000 / mem_floor ))" \
+    "disk:$(( dblocks * 1000 / disk_floor ))"; do
     name=${arm%%:*}
     ms=${arm#*:}
     if [ "$ms" -ge $(( bound * 1000 )) ]; then
@@ -2114,7 +2155,9 @@ STUB
   blk=$(grep -oE '^COZY_CANARY_MEM_BLOCK_MIB=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
   blocks=$(grep -oE '^COZY_CANARY_MEM_BLOCKS=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
   mem_floor=$(grep -oE '^COZY_CANARY_MEM_MIN_RATE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
-  for v in iters cpu_floor blk blocks mem_floor; do
+  dblocks=$(grep -oE '^COZY_CANARY_DISK_BLOCKS=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
+  disk_floor=$(grep -oE '^COZY_CANARY_DISK_MIN_RATE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
+  for v in iters cpu_floor blk blocks mem_floor dblocks disk_floor; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to read $v from $lib; without it this guard reports success for having lost its input" >&2
@@ -2136,6 +2179,18 @@ STUB
     echo "the memory arm is ${mem_mib} MiB, so the bottom of the band its legend describes is $(( mem_mib / 8 )) MiB per second, at or under the ${mem_floor} floor: a core at the bottom of the healthy band would read as pathological" >&2
     return 1
   fi
+  # Disk: the same shape as compute, because its legend carries the same anchor
+  # -- the floor is stated as a decade under the low end of a healthy rate, so
+  # the arm's duration at that low end is what the sentence promises. An arm
+  # sized much shorter would print "land in about a second" over a run of a
+  # hundred milliseconds, on the one arm here whose figure is read as its
+  # reciprocal, where a duration near the clock's resolution is a latency near
+  # it too.
+  disk_ms=$(( dblocks * 1000 / ( disk_floor * 10 ) ))
+  if [ "$disk_ms" -lt 500 ] || [ "$disk_ms" -gt 2000 ]; then
+    echo "the disk arm runs ${disk_ms}ms at the healthy rate its own legend states, not the about-a-second the sizing comment promises, so the 10ms clock is no longer about a percent of the figure" >&2
+    return 1
+  fi
 }
 
 @test "each arm runs the work its rate is a rate of" {
@@ -2145,7 +2200,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250'
+  stamp_values='1000 1050 1050 1250 1250 1300'
 
   run_canary
 
@@ -2161,6 +2216,55 @@ STUB
   # The zero device rather than any readable file: dd's read is what fills the
   # buffer this arm is timing the stores of.
   assert_file_contains 'dd if=/dev/zero of=/dev/null' "$capture"
+  # And the disk arm asks the kernel for the device rather than for the page
+  # cache. Without O_DIRECT the write lands in memory and returns, and the arm
+  # reports a healthy volume at any storage speed -- the one failure this
+  # collector cannot be allowed to have, since it exists to be the reading that
+  # stands alone on a red run with no green one beside it. The block size is
+  # pinned with it, because the rate is operations a second and an operation is
+  # only a 4 KiB one while dd is asked for 4 KiB.
+  assert_file_contains 'oflag=direct' "$capture"
+  assert_file_contains "bs=${COZY_CANARY_DISK_BLOCK_BYTES} count=${COZY_CANARY_DISK_BLOCKS}" "$capture"
+  rm -rf "$tmp"
+}
+
+@test "the disk arm writes outside the report it is written into" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  timeout_calls="$tmp/timeout.calls"
+  timeout_skip_command=1
+  stage "$tmp"
+  stub_stamp
+  stamp_values='1000 1050 1050 1250 1250 1300'
+
+  run_canary
+
+  # An arm the ceiling stops leaves its file behind, and a file left inside the
+  # report ships in the artifact -- 16 MiB of zeroes in an archive read by
+  # people looking for a reason a run failed. A scratch path cannot, whatever
+  # happens to the removal, which is why the invariant is the path rather than
+  # the cleanup. The sandbox bringup shipped a Talos secret bundle into the
+  # tree it was writing to for the want of exactly this check.
+  capture=$(capture_path)
+  target=$(grep -oE 'of=[^ ]*cozy-canary-disk[^ ]*' "$capture" | head -n 1)
+  if [ -z "$target" ]; then
+    echo "FAIL: the capture does not record where the disk arm wrote; without it this guard checks nothing" >&2
+    cat "$capture" >&2
+    return 1
+  fi
+  case "${target#of=}" in
+    "$COZY_REPORT_DIR"*)
+      echo "FAIL: the disk arm writes to ${target#of=}, inside the report directory $COZY_REPORT_DIR; an arm stopped at its ceiling would ship its probe file in the artifact" >&2
+      return 1
+      ;;
+  esac
+  # And nothing is left behind on the path it did use. The stub skips the dd, so
+  # what this pins is the removal running at all rather than the size it
+  # reclaimed.
+  if [ -e "${target#of=}" ]; then
+    echo "FAIL: ${target#of=} survived the collector; the probe file is removed as soon as the arm returns" >&2
+    return 1
+  fi
   rm -rf "$tmp"
 }
 

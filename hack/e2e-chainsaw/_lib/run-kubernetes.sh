@@ -2658,6 +2658,21 @@ COZY_CANARY_CPU_ITERATIONS=30000000
 # is written in.
 COZY_CANARY_MEM_BLOCK_MIB=64
 COZY_CANARY_MEM_BLOCKS=128
+# The disk arm's work, as a block size and a count. 4 KiB is the unit a block
+# device is specified in and the unit an allocating write lands on, and the arm
+# issues them one at a time under O_DIRECT, so the rate this divides to is
+# operations per second at queue depth one and its reciprocal is how long one
+# write took to reach the volume. That reciprocal is the reading: nothing else
+# in this report measures how long the storage takes to answer, and every disk
+# hypothesis this lane has closed was closed on byte counts, which say a
+# transfer happened and say nothing about what it cost.
+#
+# Declared in bytes rather than as a dd suffix for the reason the memory block
+# above is: the dds of different machines disagree about which spellings they
+# accept and about whether M is a mebibyte, and the rate here is printed in the
+# unit this constant is written in.
+COZY_CANARY_DISK_BLOCK_BYTES=4096
+COZY_CANARY_DISK_BLOCKS=4096
 # The rate below which an arm is pathological rather than merely slow, in the
 # unit that arm's rate is printed in. The legend prints both figures from these
 # two constants, so the number a reader is given is the number the collector
@@ -2682,6 +2697,15 @@ COZY_CANARY_MEM_BLOCKS=128
 # window.
 COZY_CANARY_CPU_MIN_RATE=3000000
 COZY_CANARY_MEM_MIN_RATE=500
+# The disk arm's floor, in the operations-per-second unit its rate is printed
+# in. It crosses at 13.7s against the 20s ceiling, inside that ceiling for the
+# same reason the memory floor is: a floor the ceiling reaches first never
+# fires, and every alert then arrives as a bound instead of as the slowdown the
+# floor was meant to name. 300 operations a second at queue depth one is 3.3ms
+# for one 4 KiB write, which is pathological for any block device rather than
+# merely slow -- a network-attached volume answers in hundreds of microseconds
+# and a local one in tens.
+COZY_CANARY_DISK_MIN_RATE=300
 # The canary is work rather than a read, so it takes a ceiling of its own
 # instead of COZY_DIAG_READ_TIMEOUT. That bound is sized for an apiserver that
 # answers in under a second and lowering it is what the knob is for, which would
@@ -2964,14 +2988,28 @@ _cozy_canary_report_arm() {
 # reading a scale of its own and makes the pathology visible in a single red run
 # with no green one beside it.
 #
-# Two arms, because the candidates the time counters cannot separate act on
+# Three arms, because the candidates the time counters cannot separate act on
 # different resources: interference on the shared cache and the memory
-# controller from whatever else the host is running, and a core doing less per
-# cycle. The two arms differ in how much of each they feel rather than in being
-# deaf to one: the compute arm's working set is small enough that pressure on
-# the shared cache and the memory controller moves it little, while the memory
-# arm is dominated by it. A large asymmetric shift between them therefore points
-# at one of the two, to the factor of ten these figures resolve and no finer.
+# controller from whatever else the host is running, a core doing less per
+# cycle, and storage that takes longer to answer. The compute and memory arms
+# split the first two of those: they differ in how much of each they feel rather
+# than in being deaf to one, since the compute arm's working set is small enough
+# that pressure on the shared cache and the memory controller moves it little,
+# while the memory arm is dominated by it. A large asymmetric shift between
+# those two therefore points at one of those two candidates, to the factor of
+# ten these figures resolve and no finer.
+#
+# The disk arm is not a third shade of the same thing, it is a different
+# question, and it is here because nothing in this report has ever asked it. The
+# block-IO capture beside it counts bytes, and a byte count says a transfer
+# happened without saying what it cost. The one field already in this report
+# that would say -- delayacct_blkio_ticks, carried verbatim in every per-thread
+# stat line the QEMU thread capture writes -- reads zero on all 225 threads of
+# both samples of a green run and of a red one, which is what it reads on any
+# kernel booted without `delayacct` and therefore silence rather than a finding.
+# This arm times the storage directly,
+# under O_DIRECT so the page cache cannot answer for the device, one operation
+# at a time so the figure is a latency rather than a queue depth.
 #
 # What this is NOT is a measurement of the tenant workers. It runs at the runner
 # layer, where the sandbox nodes are hosted. Two layers down, the same
@@ -2988,6 +3026,7 @@ cozy_capture_runner_canary() {
   local report_dir="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}/runner-canary/sample-${sample}"
   local capture="${report_dir}/fixed-work.txt"
   local readings=0 mem_mib=0 cpu_program='' read_at='' read_done=''
+  local disk_probe=''
 
   # Cleared before anything below can return, so a call site reads it after
   # every exit from here rather than only after the ones that reached an arm.
@@ -3046,6 +3085,30 @@ cozy_capture_runner_canary() {
     dd if=/dev/zero of=/dev/null "bs=$(( COZY_CANARY_MEM_BLOCK_MIB * 1048576 ))" "count=${COZY_CANARY_MEM_BLOCKS}"; then
     readings=$(( readings + 1 ))
   fi
+  # Written outside the report directory, never inside it. An arm the ceiling
+  # stops leaves its file behind, and a file left inside the report ships in the
+  # artifact; a scratch path cannot, whatever happens to the removal below. The
+  # same reasoning kept the sandbox bringup's Talos secret bundle out of the
+  # tree it was writing into.
+  #
+  # The container's own filesystem rather than a mount of the runner's: the
+  # sandbox is started with no volume for /workspace, so the QEMU disk images
+  # the three Talos nodes boot from live on this same overlay. Timing it is
+  # timing the path their IO takes.
+  disk_probe="${TMPDIR:-/tmp}/cozy-canary-disk.$$"
+  if _cozy_canary_report_arm "${capture}" \
+    "disk, single 4KiB direct writes to the filesystem the sandbox runs on" \
+    "${COZY_CANARY_DISK_BLOCKS}" "4KiB direct writes" "${COZY_CANARY_DISK_MIN_RATE}" \
+    dd if=/dev/zero "of=${disk_probe}" "bs=${COZY_CANARY_DISK_BLOCK_BYTES}" \
+    "count=${COZY_CANARY_DISK_BLOCKS}" oflag=direct; then
+    readings=$(( readings + 1 ))
+  fi
+  # On every path, including the one where the arm was stopped at its ceiling
+  # with the file half written. Unchecked on purpose: a scratch file that
+  # outlives this is 16 MiB in a container that is torn down at the end of the
+  # job, and a collector that failed the diagnostics block over its own
+  # housekeeping would cost the report the arms it just took.
+  rm -f "${disk_probe}" 2>/dev/null || true
   read_done=$(date -u +%s)
 
   if ! command -v timeout >/dev/null 2>&1; then
@@ -3061,14 +3124,14 @@ cozy_capture_runner_canary() {
   printf '%s\n' \
     '[this canary runs on the RUNNER VM, inside the sandbox container: one layer above the three Talos nodes and two above the tenant workers. It is the only reading in this report that carries its own unit of work at this layer; two layers down the serial console capture records the tenant workers unpacking their initramfs, and one layer down no capture times it, because the QEMU line that boots the sandbox nodes passes no serial backend for a capture to read; what those nodes put here instead is their kernel ring buffer, under sandbox-host/talos-<node>-dmesg.txt. The counters beside it are read in the units their sources publish -- time in the CPU rows, events in the KVM exits, instantaneous values and running maxima in the files beside those -- and a counter with no unit of work in it cannot see a machine that spent its ticks and got less done with them, which is the shape this lane keeps failing in]' \
     >>"${capture}"
-  printf '[two arms, and what makes them answer the same interference differently is the working set, not the amount of work each does. The compute arm loops over a handful of scalars, which live in registers and the nearest cache, so pressure on the shared cache or the memory controller moves it little rather than not at all. The memory arm streams blocks: a read of /dev/zero zeroes the buffer the caller supplied and a write to /dev/null never looks at it, so each block is one pass of stores over the whole block. The block size is both the working set and the reuse distance -- %s MiB here, against the 32 MiB of last-level cache an EPYC core can allocate into on the parts this lane has run on -- and a block that exceeds that cache leaves no byte still cached by the time it is written again, so the traffic lands on the memory controller. Which part this run got is recorded in sandbox-host/runner-identity.txt at the root of this report, and that is what tells a reader of this artifact which case it is looking at: on a part whose per-core cache exceeds the block size this arm stops being memory-bound and reads high. On a machine in front of you the dd line above can be rerun with a block size that fits the cache, and the figure rises several times over]\n' \
+  printf '[three arms. What makes the first two answer the same interference differently is the working set, not the amount of work each does. The compute arm loops over a handful of scalars, which live in registers and the nearest cache, so pressure on the shared cache or the memory controller moves it little rather than not at all. The memory arm streams blocks: a read of /dev/zero zeroes the buffer the caller supplied and a write to /dev/null never looks at it, so each block is one pass of stores over the whole block. The block size is both the working set and the reuse distance -- %s MiB here, against the 32 MiB of last-level cache an EPYC core can allocate into on the parts this lane has run on -- and a block that exceeds that cache leaves no byte still cached by the time it is written again, so the traffic lands on the memory controller. Which part this run got is recorded in sandbox-host/runner-identity.txt at the root of this report, and that is what tells a reader of this artifact which case it is looking at: on a part whose per-core cache exceeds the block size this arm stops being memory-bound and reads high. On a machine in front of you the dd line above can be rerun with a block size that fits the cache, and the figure rises several times over. The disk arm shares neither property: its working set is one 4 KiB block, and what it waits on is the device answering rather than a cache or a controller. It is the one arm here whose figure can move while the other two hold steady, which is the whole reason it exists -- a runner whose compute and memory read healthy and whose storage does not is a case the first two arms report as a healthy machine]\n' \
     "${COZY_CANARY_MEM_BLOCK_MIB}" >>"${capture}"
-  printf '[expected ranges, and what they are worth. These are what the construction can do on a healthy server core, not figures measured on this lane, and they are stated to the precision they have: a factor of ten is what they resolve and a factor of two is not. Memory arm: one core sustains single-digit to low-double-digit GB per second of streaming stores, because the ceiling is how many misses one core keeps outstanding rather than how many memory channels the socket has, so the %s MiB it writes land in about a second on a fast core and in about eight at the bottom of that band, while anything under %s in the MiB-per-second unit the rate lines above are printed in, about half a gigabyte a second, is pathological rather than merely slow. Compute arm: the rate depends on the awk implementation as much as on the core, and that implementation is a property of the sandbox image rather than of the run, pinned by digest in packages/core/testing/images/e2e-sandbox/Dockerfile, so on the mawk that image ships a simple loop over integer-valued scalars runs at tens of millions of iterations a second and the %s of them here land in about a second, so anything under %s iterations a second, one factor of ten below that, is pathological rather than merely slow]\n' \
-    "${mem_mib}" "${COZY_CANARY_MEM_MIN_RATE}" "${COZY_CANARY_CPU_ITERATIONS}" "${COZY_CANARY_CPU_MIN_RATE}" >>"${capture}"
+  printf '[expected ranges, and what they are worth. These are what the construction can do on a healthy server core, not figures measured on this lane, and they are stated to the precision they have: a factor of ten is what they resolve and a factor of two is not. Memory arm: one core sustains single-digit to low-double-digit GB per second of streaming stores, because the ceiling is how many misses one core keeps outstanding rather than how many memory channels the socket has, so the %s MiB it writes land in about a second on a fast core and in about eight at the bottom of that band, while anything under %s in the MiB-per-second unit the rate lines above are printed in, about half a gigabyte a second, is pathological rather than merely slow. Compute arm: the rate depends on the awk implementation as much as on the core, and that implementation is a property of the sandbox image rather than of the run, pinned by digest in packages/core/testing/images/e2e-sandbox/Dockerfile, so on the mawk that image ships a simple loop over integer-valued scalars runs at tens of millions of iterations a second and the %s of them here land in about a second, so anything under %s iterations a second, one factor of ten below that, is pathological rather than merely slow. Disk arm: the rate is operations a second at queue depth one, so its reciprocal is how long one 4 KiB write took to reach the volume, and that is the figure to read rather than the rate itself. A local NVMe answers in tens of microseconds and a network-attached volume in hundreds, so a healthy reading here is thousands of operations a second and the %s of them land in about a second; anything under %s a second, a decade below the low end of that, is 3.3ms for one write and is pathological for any device rather than merely slow. Storage fast enough to finish well inside a second is the one case this arm reports coarsely rather than precisely: the clock quantises to 10ms, so a run of tens of milliseconds carries a resolution of some percent instead of the one percent the arms are sized for, and two such readings differ by noise. That direction is not the one this arm exists to catch, and a figure in it is already the answer. This arm reports no rate at all where the filesystem refuses O_DIRECT, which is the likely reading of a low non-zero exit status on this arm and not a statement about the storage]\n' \
+    "${mem_mib}" "${COZY_CANARY_MEM_MIN_RATE}" "${COZY_CANARY_CPU_ITERATIONS}" "${COZY_CANARY_CPU_MIN_RATE}" "${COZY_CANARY_DISK_BLOCKS}" "${COZY_CANARY_DISK_MIN_RATE}" >>"${capture}"
   printf '%s\n' \
-    '[what this canary does NOT separate. It reads wall clock only, so an arm that took ten times as long could be a core doing less per cycle or a container that was not on a core at all. Where to look for the second is runner-kernel-cpu-time beside this capture and sandbox-host-cpu-time one layer down, and their steal columns do not read the same way. On the runner row a climb is proof this VM was preempted and a zero proves nothing, because nobody here launches that VM and the column is filled only where the hypervisor exposes the clock. One layer down the sandbox nodes are started with accel=kvm, which hands the guest that accounting, so a zero there means the node got every turn it asked for. Which is what makes the pair worth reading together: a sandbox zero under a climbing runner row puts the wait a layer above them. Read those first when an arm here is slow, and read each for what it covers: the runner-kernel rows are a pair bracketing the node-join wait, so they describe the whole join window next to these seconds rather than these seconds themselves, while the sandbox-host rows are a pair seconds apart inside the on-failure diagnostics block, taken minutes after the wait already failed and absent from a green run altogether]' \
+    '[what this canary does NOT separate. It reads wall clock only, so an arm that took ten times as long could be a core doing less per cycle or a container that was not on a core at all. Where to look for the second is runner-kernel-cpu-time beside this capture and sandbox-host-cpu-time one layer down, and their steal columns do not read the same way. On the runner row a climb is proof this VM was preempted and a zero proves nothing, because nobody here launches that VM and the column is filled only where the hypervisor exposes the clock. One layer down the sandbox nodes are started with accel=kvm, which hands the guest that accounting, so a zero there means the node got every turn it asked for. Which is what makes the pair worth reading together: a sandbox zero under a climbing runner row puts the wait a layer above them. That pair covers the two CPU arms; neither column says anything about the disk arm, whose wait is on a device rather than on a turn at a core, and no counter in this report covers that one at all -- which is why its figure stands alone. Read those first when a CPU arm here is slow, and read each for what it covers: the runner-kernel rows are a pair bracketing the node-join wait, so they describe the whole join window next to these seconds rather than these seconds themselves, while the sandbox-host rows are a pair seconds apart inside the on-failure diagnostics block, taken minutes after the wait already failed and absent from a green run altogether]' \
     '[the two samples. Sample 1 is taken before the node-join wait and sample 2 after it, on the failing and the passing path alike, on the same binaries in the same container. A difference between them puts the change inside the interval the pair brackets, which is the wait together with the readings taken on either side of it; two equally slow samples say it was already there going into that interval, which is the case the expected ranges above are the only instrument for -- the pair speaks for the interval between its own readings and for nothing before them]' \
-    '[this collector perturbs what it measures, which is why it is placed where it is. It occupies one core for the duration of each arm, twice per run. Sample 1 runs before the first reading of all three pairs that bracket the node-join wait, and sample 2 after the last of their second readings, so neither burn falls inside any interval those pairs divide by]' \
+    '[this collector perturbs what it measures, which is why it is placed where it is. It occupies one core for the duration of each CPU arm and writes 16 MiB to the sandbox filesystem in the disk arm, twice per run; the file is removed as soon as the arm returns, so what it leaves on the volume is the write itself rather than the space. Sample 1 runs before the first reading of all three pairs that bracket the node-join wait, and sample 2 after the last of their second readings, so neither burn falls inside any interval those pairs divide by]' \
     '[durations here are read from /proc/uptime, which the kernel prints in hundredths of a second, so every figure is quantised to 10ms. Against arms sized to take about a second that is about a percent, and it is why an arm finishing inside one tick is reported as being under the resolution rather than as a rate]' \
     >>"${capture}"
   printf '[read attempted from %s to %s epoch seconds]\n' \

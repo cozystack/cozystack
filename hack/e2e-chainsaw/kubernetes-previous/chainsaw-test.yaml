@@ -45,10 +45,15 @@ spec:
         # than in this list. Three of the four are reads: the KVM counters and
         # the runner kernel CPU time are one bounded read a side, and the QEMU
         # thread time is a bounded probe walk plus a bounded read of each
-        # sandbox pid file. The canary is two arms of fixed work under a ceiling
-        # of its own apiece, and it is the one of the four that costs a core
-        # rather than a read, which is why it runs outside the brackets of the
-        # other three rather than among them.
+        # sandbox pid file. The canary is three arms of fixed work under a
+        # ceiling of its own apiece, and it is the one of the four that does
+        # work rather than take a read, which is why it runs outside the
+        # brackets of the other three rather than among them. Two of its arms
+        # cost a core; the third writes 16 MiB to this container's filesystem
+        # with O_DIRECT and removes it, and its rate is operations a second at
+        # queue depth one, so what it reports is how long the storage took to
+        # answer -- the one question about this lane that no counter in the
+        # report has ever asked.
         # and then, after the phase rather than inside it, the in-process tenant
         # crust-gather snapshot.
         #
