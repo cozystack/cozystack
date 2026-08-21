@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Eye, EyeOff, Copy, ChevronDown, ChevronRight } from "lucide-react"
+import { Check, Eye, EyeOff, Copy, ChevronDown, ChevronRight } from "lucide-react"
 import {
   useK8sGet,
   useK8sList,
@@ -49,14 +49,22 @@ function SecretRow({
 }) {
   const [revealed, setRevealed] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
   const shouldReveal = forceReveal || revealed
   const { data } = useK8sGet<K8sResource<unknown, unknown> & SecretLike>(
     { ...apiRef, namespace, name },
     { enabled: shouldReveal },
   )
-  const fullValue = shouldReveal
-    ? decodeValue(data?.data?.[keyName]) || data?.stringData?.[keyName] || decodeValue(base64Value)
-    : ""
+  // The list already carries the value, so copying works while it stays
+  // masked on screen; the GET only freshens it once revealed.
+  const fullValue =
+    decodeValue(data?.data?.[keyName]) || data?.stringData?.[keyName] || decodeValue(base64Value)
+
+  const handleCopy = async () => {
+    await navigator.clipboard?.writeText(fullValue)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
 
   const isLarge = fullValue.split('\n').length > 5 || fullValue.length > 200
 
@@ -96,12 +104,16 @@ function SecretRow({
         </button>
         <button
           type="button"
-          disabled={!revealed || !navigator.clipboard}
-          onClick={() => navigator.clipboard?.writeText(fullValue)}
+          disabled={!navigator.clipboard}
+          onClick={handleCopy}
           className="rounded p-1 text-slate-500 hover:bg-slate-100 disabled:opacity-30"
-          title="Copy"
+          title={copied ? "Copied!" : "Copy"}
         >
-          <Copy className="size-3.5" />
+          {copied ? (
+            <Check className="size-3.5 text-emerald-600" />
+          ) : (
+            <Copy className="size-3.5" />
+          )}
         </button>
       </div>
     </div>
@@ -184,8 +196,12 @@ export function SecretsTab({
   instance: ApplicationInstance
 }) {
   const appKind = ad.spec?.application.kind
+  const statusNamespace =
+    typeof instance.status?.namespace === "string"
+      ? instance.status.namespace
+      : undefined
   const ns = appKind === "Tenant"
-    ? (instance.status as any)?.namespace ?? instance.metadata.namespace ?? ""
+    ? statusNamespace ?? instance.metadata.namespace ?? ""
     : instance.metadata.namespace ?? ""
 
   // Use TenantSecrets API for all applications in tenant namespaces
