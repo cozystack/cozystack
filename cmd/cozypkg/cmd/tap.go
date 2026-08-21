@@ -27,6 +27,7 @@ import (
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -362,13 +363,17 @@ refused.`,
 }
 
 // objectExists reports whether obj already exists on the cluster, so an
-// idempotent re-tap does not roll back resources it did not create.
+// idempotent re-tap does not roll back resources it did not create. It fails
+// safe: only a definite NotFound means "this run created it" (eligible for
+// rollback). Any other error (RBAC, throttling, timeout) is treated as
+// possibly-pre-existing so rollback never deletes an object it did not create.
 func objectExists(ctx context.Context, k8sClient client.Client, obj client.Object) bool {
 	probe, ok := obj.DeepCopyObject().(client.Object)
 	if !ok {
-		return false
+		return true
 	}
-	return k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), probe) == nil
+	err := k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), probe)
+	return !apierrors.IsNotFound(err)
 }
 
 // sourceStillReferenced reports whether any PackageSource other than excludeName

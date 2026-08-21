@@ -18,13 +18,17 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 )
@@ -110,6 +114,17 @@ func TestObjectExists(t *testing.T) {
 	absent := &sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{Name: "y", Namespace: "cozy-system"}}
 	if objectExists(context.Background(), cl, absent) {
 		t.Error("expected an absent object to be reported as not existing (eligible for rollback)")
+	}
+
+	// Fail-safe: a non-NotFound Get error (RBAC/throttling/timeout) must report
+	// "exists" so rollback never deletes a possibly-pre-existing object.
+	errCl := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(_ context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+			return apierrors.NewInternalError(errors.New("apiserver unavailable"))
+		},
+	}).Build()
+	if !objectExists(context.Background(), errCl, absent) {
+		t.Error("a non-NotFound Get error must be treated as possibly-existing (spared from rollback)")
 	}
 }
 
