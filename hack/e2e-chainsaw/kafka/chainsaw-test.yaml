@@ -94,6 +94,20 @@ spec:
 
   - name: verify-pvc-reclaim-on-delete
     try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaTopic
+          metadata:
+            name: kafka-test-test-results
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaTopic
+          metadata:
+            name: kafka-test-test-orders
     - delete:
         ref:
           apiVersion: apps.cozystack.io/v1alpha1
