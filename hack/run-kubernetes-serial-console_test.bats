@@ -1012,7 +1012,14 @@ run_capture() {
   fi
   # Anchored on the LAST functional assertion in the function, not a
   # mid-file one, or everything between it and the gate is unprotected.
-  last=$(grep -n 'helmrelease_has_remediation_cycle "${history_statuses}"' "$lib" | tail -n 1 | cut -d: -f1)
+  #
+  # On the call rather than on the text of its arguments. The arguments name
+  # local variables of the library, which a refactor there is free to rename
+  # without touching what this test asserts; an anchor that spells them out
+  # stops matching on that rename, and the failure lands on whoever rebases
+  # second rather than on either author. The call is what the ordering is
+  # about, so it is what the anchor reads.
+  last=$(grep -n '^ *cozy_guard_all_helmreleases ' "$lib" | tail -n 1 | cut -d: -f1)
   if [ -z "$last" ]; then
     echo "expected to find the HelmRelease remediation guard in $lib" >&2
     return 1
