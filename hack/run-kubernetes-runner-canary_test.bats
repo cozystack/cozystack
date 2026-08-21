@@ -260,7 +260,7 @@ capture_path() {
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='100 150 150 250 250 300'
+  stamp_values='100 150 150 250 250 300 300 350'
   # Set apart on purpose. The canary is work rather than a read, and a read
   # bound lowered to speed the diagnostics up would kill an arm that is meant to
   # take seconds; taking the wrong one of these two is invisible until that
@@ -284,7 +284,7 @@ capture_path() {
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='100 150 150 250 250 300'
+  stamp_values='100 150 150 250 250 300 300 350'
   COZY_CANARY_RUN_BOUND=0
   COZY_DIAG_READ_GRACE=3
 
@@ -592,7 +592,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   COZY_CANARY_CPU_ITERATIONS=1000000
   COZY_CANARY_MEM_BLOCK_MIB=2048
   COZY_CANARY_MEM_BLOCKS=4
@@ -617,7 +617,7 @@ STUB
   stage "$tmp"
   stub_stamp
   # 50 centiseconds for the compute arm, 200 for the memory one.
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   COZY_CANARY_CPU_ITERATIONS=1000000
   COZY_CANARY_MEM_BLOCK_MIB=2
   COZY_CANARY_MEM_BLOCKS=4
@@ -641,7 +641,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   COZY_CANARY_MEM_BLOCK_MIB=2
   COZY_CANARY_MEM_BLOCKS=4
 
@@ -664,7 +664,7 @@ STUB
   timeout_rc_override=124
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 3050 3050 3100'
+  stamp_values='1000 1050 1050 3050 3050 3100 3100 3150'
   COZY_CANARY_MEM_BLOCK_MIB=100
   COZY_CANARY_MEM_BLOCKS=8
   COZY_CANARY_RUN_BOUND=20
@@ -696,7 +696,7 @@ STUB
   timeout_rc_override=137
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   COZY_CANARY_RUN_BOUND=20
 
   run_canary
@@ -723,7 +723,7 @@ STUB
   timeout_rc_override=137
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 3050 3050 3100'
+  stamp_values='1000 1050 1050 3050 3050 3100 3100 3150'
   COZY_CANARY_MEM_BLOCK_MIB=100
   COZY_CANARY_MEM_BLOCKS=8
   COZY_CANARY_RUN_BOUND=20
@@ -756,7 +756,7 @@ STUB
   # sample would report a shortfall and the call sites would print that they got
   # no reading, which is the vaguest thing they can say about the one machine
   # state worth naming exactly.
-  stamp_values='1000 3000 3000 5000 5000 5050'
+  stamp_values='1000 3000 3000 5000 5000 5050 5050 5100'
   COZY_CANARY_MEM_BLOCK_MIB=100
   COZY_CANARY_MEM_BLOCKS=8
   COZY_CANARY_RUN_BOUND=20
@@ -791,7 +791,7 @@ STUB
   # the 20 the default carries: this is the only case that reaches the sentence
   # naming the ceiling it did not reach, so it is the only one that can tell
   # that sentence reading the knob from it reading the compiled-in figure.
-  stamp_values='1000 1050 1050 2149 2149 2199'
+  stamp_values='1000 1050 1050 2149 2149 2199 2199 2249'
   COZY_CANARY_MEM_BLOCK_MIB=100
   COZY_CANARY_MEM_BLOCKS=8
   COZY_CANARY_RUN_BOUND=11
@@ -827,7 +827,7 @@ STUB
   # it to exactly that default, so their assertions would hold just as well if
   # the comparison read the compiled-in figure instead of the knob the caller
   # set. Reading the default here classifies a fired ceiling as something else.
-  stamp_values='1000 1050 1050 2150 2150 2200'
+  stamp_values='1000 1050 1050 2150 2150 2200 2200 2250'
   COZY_CANARY_MEM_BLOCK_MIB=100
   COZY_CANARY_MEM_BLOCKS=8
   COZY_CANARY_RUN_BOUND=11
@@ -861,7 +861,7 @@ STUB
   timeout_rc_override=127
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
 
   run_canary
 
@@ -910,7 +910,7 @@ STUB
   stub_stamp
   # Both stamps of the memory arm land on the same tick, which is what a command
   # this machine does not have actually produces: it fails in well under 10ms.
-  stamp_values='1000 1050 1050 1050 1050 1100'
+  stamp_values='1000 1050 1050 1050 1050 1100 1100 1150'
 
   run_canary
 
@@ -930,7 +930,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   # The clock fails on the memory arm's closing stamp.
   stamp_fail_at=4
 
@@ -962,7 +962,7 @@ STUB
   # pathological finding manufactured on a healthy machine, which is the one
   # outcome this collector must never produce.
   stamp_fail_at=1
-  stamp_values='1000 1050 1150 1250 1250 1300'
+  stamp_values='1000 1050 1150 1250 1250 1300 1300 1350'
   COZY_CANARY_CPU_ITERATIONS=6000000
   COZY_CANARY_MEM_BLOCK_MIB=1000
   COZY_CANARY_MEM_BLOCKS=1
@@ -988,7 +988,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1000 1000 1000 1000 1050'
+  stamp_values='1000 1000 1000 1000 1000 1050 1050 1100'
   rc=0
 
   run_canary || rc=$?
@@ -1022,7 +1022,7 @@ STUB
   # needs the whole bound on the clock. Read by status alone this was reported
   # as the ceiling with no duration, which is a finding about the machine
   # manufactured by whatever actually killed the work.
-  stamp_values='1000 1050 1050 1050 1050 1100'
+  stamp_values='1000 1050 1050 1050 1050 1100 1100 1150'
   COZY_CANARY_RUN_BOUND=20
   rc=0
 
@@ -1080,7 +1080,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 900 900 800 800 750'
+  stamp_values='1000 900 900 800 800 750 750 700'
   rc=0
 
   run_canary || rc=$?
@@ -1112,7 +1112,7 @@ STUB
   stub_stamp
   # 8 MiB in twenty seconds is under half a MiB per second, which integer
   # division reports as none at all.
-  stamp_values='1000 1050 1050 3050 3050 3100'
+  stamp_values='1000 1050 1050 3050 3050 3100 3100 3150'
   COZY_CANARY_MEM_BLOCK_MIB=2
   COZY_CANARY_MEM_BLOCKS=4
 
@@ -1173,7 +1173,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   rc=0
 
   run_canary || rc=$?
@@ -1214,7 +1214,7 @@ STUB
   # which is the OOM case the ceiling attribution is written for, would report
   # success with nothing measured and both call sites would stay quiet.
   timeout_rc_override=137
-  stamp_values='1000 1200 1200 1400 1400 1450'
+  stamp_values='1000 1200 1200 1400 1400 1450 1450 1500'
   COZY_CANARY_RUN_BOUND=20
   stamp_index=0
   rc=0
@@ -1245,7 +1245,7 @@ STUB
   # The work failed on its own account.
   timeout_rc_match=
   timeout_rc_override=127
-  stamp_values='1000 1200 1200 1400 1400 1450'
+  stamp_values='1000 1200 1200 1400 1400 1450 1450 1500'
   stamp_index=0
   run_canary_here || true
   [ "${_COZY_CANARY_ALERT:-unset}" = 0 ] || {
@@ -1264,7 +1264,7 @@ STUB
 
   # Finished inside one tick, which is too fast to measure rather than slow.
   timeout_rc_override=
-  stamp_values='1000 1000 1000 1000 1000 1050'
+  stamp_values='1000 1000 1000 1000 1000 1050 1050 1100'
   stamp_index=0
   run_canary_here 3 || true
   [ "${_COZY_CANARY_ALERT:-unset}" = 0 ] || {
@@ -1281,7 +1281,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
 
   out=$(run_canary 2)
 
@@ -1305,7 +1305,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
 
   run_canary 2
 
@@ -1330,7 +1330,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   # The report directory outlives a run, so the same sample number can find a
   # file already there. Appended to, the capture would carry two runs of one
   # sample with nothing between them to say where the first ended, and every
@@ -1439,7 +1439,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
 
   run_canary
 
@@ -1469,7 +1469,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   COZY_CANARY_CPU_ITERATIONS=777
   # The floors are overridden away from their defaults for the reason the
   # ceiling case sets a bound of 11: the legend interpolates them, so a fixture
@@ -1509,7 +1509,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
 
   run_canary
 
@@ -1565,7 +1565,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
 
   run_canary
 
@@ -1744,7 +1744,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   # 8 MiB in two seconds: 4 MiB per second, against a floor of 500. The compute
   # arm is sized to 12,000,000 iterations a second, above its own floor, so this
   # arm is the only one that can raise the alert asserted below. The alert is
@@ -1774,7 +1774,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1150 1150 1200'
+  stamp_values='1000 1050 1050 1150 1150 1200 1200 1250'
   # 953 MiB in one second, a gigabyte a second expressed in the unit the rate
   # line is printed in. The floor sits well under that, so this core is slow and
   # nothing more. A floor at the near-1000 MiB/s the legend gives for that
@@ -1804,7 +1804,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   # A rate landing on the floor rather than above or below it, which is the one
   # case that tells `-lt` from `-le`. The neighbours put a rate on either side
   # and both stay correct under either operator, so without this case the
@@ -1836,7 +1836,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1150 1150 1200'
+  stamp_values='1000 1050 1050 1150 1150 1200 1200 1250'
   # 400 MiB in one second, just under the floor rather than an order of
   # magnitude beneath it. The case above pins where the alert stays quiet and
   # this one pins where it starts, so between them the floor is the number that
@@ -1865,7 +1865,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   # 1000 iterations in half a second: 2000 a second against a floor of three
   # million. The memory arm beside it is above its own, so each arm's floor is
   # pinned by the case where only that arm is under it -- one floor left at zero
@@ -1895,7 +1895,7 @@ STUB
   timeout_rc_override=124
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 3050 3050 3100'
+  stamp_values='1000 1050 1050 3050 3050 3100 3100 3150'
   # Sized so the bound rounds up to 1639 MiB per second, above the floor, and
   # the compute arm beside it is above its own: the ceiling has to raise the
   # alert on its own account or nothing here does. An arm the bound stopped got
@@ -1930,10 +1930,10 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  # Twelve stamps: six for each sample, one pair per arm, because
+  # Sixteen stamps: eight for each sample, one pair per arm, because
   # run_kubernetes_test takes both samples from one shell and the alert is one
   # variable for the pair.
-  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350 1350 1550 1550 1600'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350 1350 1400 1400 1600 1600 1650 1650 1700'
   COZY_CANARY_CPU_ITERATIONS=1000
   COZY_CANARY_MEM_BLOCK_MIB=2048
   COZY_CANARY_MEM_BLOCKS=4
@@ -1967,7 +1967,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
   # Both arms above their floors. Without this case an alert wired to fire
   # always would satisfy every assertion above it, and the job log would carry
   # the warning on every green run until a reader learned to skip it.
@@ -2064,8 +2064,10 @@ STUB
   mem_floor=$(grep -oE '^COZY_CANARY_MEM_MIN_RATE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
   dblocks=$(grep -oE '^COZY_CANARY_DISK_BLOCKS=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
   disk_floor=$(grep -oE '^COZY_CANARY_DISK_MIN_RATE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
+  cacc=$(grep -oE '^COZY_CANARY_CACHE_ACCESSES=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
+  cache_floor=$(grep -oE '^COZY_CANARY_CACHE_MIN_RATE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
   bound=$(grep -oE '^COZY_CANARY_RUN_BOUND_DEFAULT=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
-  for v in iters cpu_floor blk blocks mem_floor dblocks disk_floor bound; do
+  for v in iters cpu_floor blk blocks mem_floor dblocks disk_floor cacc cache_floor bound; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to read $v from $lib; without it this guard reports success for having lost its input" >&2
@@ -2077,7 +2079,7 @@ STUB
   # than reach the branch below, and the failure then arrives as a raw
   # arithmetic error rather than as a sentence naming the floor and the file it
   # was read from.
-  for v in cpu_floor mem_floor disk_floor; do
+  for v in cpu_floor mem_floor disk_floor cache_floor; do
     eval "n=\$$v"
     if [ "$n" -eq 0 ]; then
       echo "read $v as zero from $lib; a floor of zero has no window to sit inside and this guard cannot divide by it" >&2
@@ -2090,7 +2092,8 @@ STUB
   # window derived from the byte total would be wrong by the block size.
   for arm in "compute:$(( iters * 1000 / cpu_floor ))" \
     "memory:$(( blk * blocks * 1000 / mem_floor ))" \
-    "disk:$(( dblocks * 1000 / disk_floor ))"; do
+    "disk:$(( dblocks * 1000 / disk_floor ))" \
+    "cache:$(( cacc * 1000 / cache_floor ))"; do
     name=${arm%%:*}
     ms=${arm#*:}
     if [ "$ms" -ge $(( bound * 1000 )) ]; then
@@ -2157,7 +2160,9 @@ STUB
   mem_floor=$(grep -oE '^COZY_CANARY_MEM_MIN_RATE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
   dblocks=$(grep -oE '^COZY_CANARY_DISK_BLOCKS=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
   disk_floor=$(grep -oE '^COZY_CANARY_DISK_MIN_RATE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
-  for v in iters cpu_floor blk blocks mem_floor dblocks disk_floor; do
+  cacc=$(grep -oE '^COZY_CANARY_CACHE_ACCESSES=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
+  cache_floor=$(grep -oE '^COZY_CANARY_CACHE_MIN_RATE=[0-9]+' "$lib" | head -n 1 | sed -E 's/.*=//')
+  for v in iters cpu_floor blk blocks mem_floor dblocks disk_floor cacc cache_floor; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to read $v from $lib; without it this guard reports success for having lost its input" >&2
@@ -2191,6 +2196,15 @@ STUB
     echo "the disk arm runs ${disk_ms}ms at the healthy rate its own legend states, not the about-a-second the sizing comment promises, so the 10ms clock is no longer about a percent of the figure" >&2
     return 1
   fi
+  # Cache: same anchor again, its legend stating the floor a decade under the
+  # million reads a second a healthy core resolves. This arm is the one whose
+  # figure is read as a latency, so a duration near the clock's resolution is a
+  # latency near it too.
+  cache_ms=$(( cacc * 1000 / ( cache_floor * 10 ) ))
+  if [ "$cache_ms" -lt 500 ] || [ "$cache_ms" -gt 2000 ]; then
+    echo "the cache arm runs ${cache_ms}ms at the healthy rate its own legend states, not the about-a-second the sizing comment promises, so the 10ms clock is no longer about a percent of the figure" >&2
+    return 1
+  fi
 }
 
 @test "each arm runs the work its rate is a rate of" {
@@ -2200,7 +2214,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
 
   run_canary
 
@@ -2225,6 +2239,15 @@ STUB
   # only a 4 KiB one while dd is asked for 4 KiB.
   assert_file_contains 'oflag=direct' "$capture"
   assert_file_contains "bs=${COZY_CANARY_DISK_BLOCK_BYTES} count=${COZY_CANARY_DISK_BLOCKS}" "$capture"
+  # And the cache arm walks a working set of the size its legend prices, in the
+  # order that makes the figure a latency. A fixed stride here is what a
+  # hardware prefetcher follows, so it would report bandwidth wearing a latency
+  # label; the congruential step is the whole reason the number means what the
+  # legend says. The slot count is pinned with it, because the arm only exceeds
+  # last-level cache while the array is that large.
+  assert_file_contains "n = ${COZY_CANARY_CACHE_SLOTS};" "$capture"
+  assert_file_contains '(1103515245 * x + 12345) % n' "$capture"
+  assert_file_contains "k < ${COZY_CANARY_CACHE_ACCESSES}" "$capture"
   rm -rf "$tmp"
 }
 
@@ -2235,7 +2258,7 @@ STUB
   timeout_skip_command=1
   stage "$tmp"
   stub_stamp
-  stamp_values='1000 1050 1050 1250 1250 1300'
+  stamp_values='1000 1050 1050 1250 1250 1300 1300 1350'
 
   run_canary
 
