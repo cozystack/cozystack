@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: migration-controller
+  labels:
+    app: migration-controller
+spec:
+  replicas: {{ .Values.migrationController.replicas }}
+  selector:
+    matchLabels:
+      app: migration-controller
+  template:
+    metadata:
+      labels:
+        app: migration-controller
+    spec:
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      serviceAccountName: migration-controller
+      containers:
+      - name: migration-controller
+        image: "{{ .Values.migrationController.image }}"
+        args:
+        - --leader-elect
+        {{- if .Values.migrationController.metrics.enable }}
+        - --metrics-bind-address={{ .Values.migrationController.metrics.bindAddress }}
+        {{- end }}
+        {{- if .Values.migrationController.debug }}
+        - --zap-log-level=debug
+        {{- else }}
+        - --zap-log-level=info
+        {{- end }}
+        env:
+        {{- /*
+          The VDDK image reference travels as configuration, not as a tenant
+          value, and only a reference travels — never a credential. Empty is a
+          valid, documented state: the vSphere path then reports itself
+          unavailable on each VMImportSource instead of failing mid-transfer.
+        */}}
+        - name: MIGRATION_VDDK_IMAGE
+          value: {{ .Values.vddkImage | default "" | quote }}
+        ports:
+        - name: metrics
+          containerPort: {{ splitList ":" .Values.migrationController.metrics.bindAddress | mustLast }}
+        - name: health
+          containerPort: 8081
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        {{- with .Values.migrationController.resources }}
+        resources: {{- . | toYaml | nindent 10 }}
+        {{- end }}

@@ -1,0 +1,24 @@
+migrationController:
+  image: "ghcr.io/cozystack/cozystack/migration-controller:latest"
+  replicas: 1
+  debug: false
+  metrics:
+    enabled: true
+    bindAddress: ":8443"
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+## The VMware Virtual Disk Development Kit image, delivered from the platform.
+## Never a tenant value: naming an image the cluster will run is not a tenant's
+## decision, and this one is built from a proprietary SDK that Cozystack can
+## neither ship nor mirror. An operator holding a VDDK licence builds it, pushes
+## it somewhere the cluster can pull from, and sets `migration.vddkImage` in the
+## platform values (or the `vddk-image` key in the cozystack ConfigMap).
+## Empty is the normal state and means the vSphere import path is unavailable
+## rather than broken: a vSphere VMImportSource reports it on its own status.
+vddkImage: ""
