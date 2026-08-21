@@ -146,8 +146,9 @@ for raw in $(collect_refs); do
   # registry this job cannot push to, and a copy there would fail and (under
   # set -e) abort the whole promotion. What this drops today:
   #   - third-party hosts: docker.io/clastix/kubectl,
-  #     ghcr.io/lexfrei/{kuberture,ouroboros} (deliberately not mirrored under
-  #     ghcr.io/cozystack — see those packages' values.yaml)
+  #     ghcr.io/lexfrei/{kuberture,ouroboros,cloudflare-tunnel-gateway-controller,
+  #     cloudflare-tunnel-gateway-controller-proxy} (deliberately not mirrored
+  #     under ghcr.io/cozystack — see those packages' values.yaml)
   #   - ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/*, which is a
   #     cozystack-org repo but sits outside $REGISTRY's path
   #   - non-ref scalars, e.g. a "--migrate-image=..." arg string
