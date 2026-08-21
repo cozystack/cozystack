@@ -109,6 +109,35 @@ func TestDeleteNotFound(t *testing.T) {
 	}
 }
 
+// orphanOciRepo is a tap OCIRepository with no materialized PackageSource yet
+// (a pending or failed connect).
+func orphanOciRepo(fluxName, tapName string) *unstructured.Unstructured {
+	u := ociRepoObj(fluxName)
+	u.SetLabels(map[string]string{"apps.cozystack.io/marketplace-tap": "true"})
+	u.SetAnnotations(map[string]string{"apps.cozystack.io/tap-name": tapName})
+	return u
+}
+
+func TestDeleteOrphanTapSource(t *testing.T) {
+	// No PackageSource exists, only the labeled OCIRepository from a pending connect.
+	r := fakeREST(orphanOciRepo("community-a-b", "community.a.b"))
+	obj, ok, err := r.Delete(context.Background(), "community.a.b", nil, nil)
+	if err != nil || !ok || obj == nil {
+		t.Fatalf("expected orphan tap source removed: ok=%v err=%v", ok, err)
+	}
+	if _, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-a-b", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("expected orphan OCIRepository deleted, got %v", err)
+	}
+}
+
+func TestDeleteOrphanNoMatch(t *testing.T) {
+	// A labeled source exists but for a different tap name -> still NotFound.
+	r := fakeREST(orphanOciRepo("community-a-b", "community.a.b"))
+	if _, _, err := r.Delete(context.Background(), "community.other.x", nil, nil); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected NotFound for a non-matching orphan, got %v", err)
+	}
+}
+
 func TestParseConnectURL(t *testing.T) {
 	got, err := parseConnectURL("oci://ghcr.io/foo/bar:v2", "")
 	if err != nil {

@@ -27,6 +27,16 @@ rules:
 - apiGroups: ["cozystack.io"]
   resources: ["*"]
   verbs: ["get", "watch", "list"]
+# Marketplace Tap resource: disconnecting a community tap deletes its
+# PackageSource, and connecting/disconnecting manages the tap's Flux
+# OCIRepository. Both run with this ServiceAccount, so it needs delete on
+# packagesources and full management of the tap OCIRepositories.
+- apiGroups: ["cozystack.io"]
+  resources: ["packagesources"]
+  verbs: ["delete"]
+- apiGroups: ["source.toolkit.fluxcd.io"]
+  resources: ["ocirepositories"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["*"]
   verbs: ["*"]

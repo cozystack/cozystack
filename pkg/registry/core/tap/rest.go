@@ -211,7 +211,11 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	u, err := r.dyn.Resource(gvrPackageSources).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+			// A tap connected but not yet (or never) materialized has an
+			// OCIRepository but no PackageSource. Fall back to removing that
+			// source so a failed or pending connect is still recoverable from
+			// the dashboard rather than orphaning a finalized OCIRepository.
+			return r.deleteOrphanTapSource(ctx, name)
 		}
 		return nil, false, apierrors.NewInternalError(fmt.Errorf("get PackageSource %q: %w", name, err))
 	}
@@ -247,6 +251,34 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	}
 
 	return &tap, true, nil
+}
+
+// deleteOrphanTapSource removes a tap whose OCIRepository exists but whose
+// PackageSource has not been materialized. It matches the labeled OCIRepository
+// carrying the tap-name annotation and deletes it.
+func (r *REST) deleteOrphanTapSource(ctx context.Context, name string) (runtime.Object, bool, error) {
+	list, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").List(ctx, metav1.ListOptions{
+		LabelSelector: tapconst.Label + "=true",
+	})
+	if err != nil {
+		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+	for i := range list.Items {
+		item := &list.Items[i]
+		if item.GetAnnotations()[tapconst.NameAnnotation] != name {
+			continue
+		}
+		if err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Delete(ctx, item.GetName(), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return nil, false, apierrors.NewInternalError(fmt.Errorf("delete tap source %q: %w", item.GetName(), err))
+		}
+		tap := &corev1alpha1.Tap{
+			TypeMeta:   metav1.TypeMeta{APIVersion: corev1alpha1.SchemeGroupVersion.String(), Kind: "Tap"},
+			ObjectMeta: metav1.ObjectMeta{Name: name, ResourceVersion: "0"},
+			Spec:       corev1alpha1.TapSpec{Community: true},
+		}
+		return tap, true, nil
+	}
+	return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 }
 
 // fetchPackageSources lists the cluster-scoped PackageSources as typed objects.
