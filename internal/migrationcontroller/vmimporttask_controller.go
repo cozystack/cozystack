@@ -19,9 +19,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	migrationv1alpha1 "github.com/cozystack/cozystack/api/migration/v1alpha1"
 )
@@ -461,23 +459,21 @@ func asValidationError(err error, target **validationError) bool {
 }
 
 func (r *VMImportTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// Forklift's Migration drives most of a task's progress, so watch it and
-	// map back to the owning task rather than polling. The label is stamped by
-	// this controller, so an unrelated Migration cannot enqueue anything.
-	migrationSource := newObject(migrationGVK)
+	// Deliberately no watch on Forklift's Migration, even though it is what
+	// drives a task's progress.
+	//
+	// Forklift is an optional package. A watch on a kind whose CRD is absent
+	// never syncs its cache, and controller-runtime will not start a controller
+	// whose caches have not synced — so on a cluster without Forklift the whole
+	// task controller stays down and the manager never reports ready. Observed
+	// on a live cluster: the pod sat at 0/1 indefinitely, logging "if kind is a
+	// CRD, it should be installed before calling Start" every ten seconds.
+	//
+	// Polling instead costs at most TransferRequeue of latency on a transfer
+	// measured in minutes, and it works whether Forklift is installed before
+	// this controller, after it, or never.
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&migrationv1alpha1.VMImportTask{}).
-		Watches(migrationSource, handler.EnqueueRequestsFromMapFunc(taskFromLabels)).
 		Named("vmimporttask").
 		Complete(r)
-}
-
-func taskFromLabels(_ context.Context, obj client.Object) []reconcile.Request {
-	labels := obj.GetLabels()
-	name := labels[migrationv1alpha1.OwningTaskNameLabel]
-	namespace := labels[migrationv1alpha1.OwningTaskNamespaceLabel]
-	if name == "" || namespace == "" {
-		return nil
-	}
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: namespace, Name: name}}}
 }

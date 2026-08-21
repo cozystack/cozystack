@@ -66,19 +66,26 @@ spec:
               credentials:
                 description: Credentials is the account used to reach the provider.
                 properties:
+                  caCert:
+                    description: |-
+                      CACert is the PEM-encoded certificate authority that signed the
+                      endpoint's TLS certificate. Required unless insecureSkipVerify is set:
+                      the migration engine refuses a vSphere connection that can neither
+                      verify the endpoint nor was told not to.
+
+                      This is a CA certificate, not a fingerprint. A SHA-1 thumbprint is what
+                      the engine wants for a direct ESXi host connection, which v1 does not
+                      expose, and supplying one here does not satisfy the check.
+                    type: string
                   insecureSkipVerify:
                     description: |-
                       InsecureSkipVerify disables verification of the endpoint's TLS
-                      certificate. Intended for lab environments; prefer a thumbprint.
+                      certificate. Convenient in a lab and a bad idea anywhere else: the
+                      credentials above travel over that connection. Prefer caCert.
                     type: boolean
                   password:
                     description: Password is the account's password.
                     minLength: 1
-                    type: string
-                  thumbprint:
-                    description: |-
-                      Thumbprint is the SHA-1 thumbprint of the endpoint's TLS certificate.
-                      Required for vSphere unless insecureSkipVerify is set.
                     type: string
                   username:
                     description: |-
@@ -90,6 +97,11 @@ spec:
                 - password
                 - username
                 type: object
+                x-kubernetes-validations:
+                - message: 'either caCert must be set or insecureSkipVerify must be
+                    true: the migration engine will not open a vSphere connection
+                    it can neither verify nor was told to trust'
+                  rule: has(self.caCert) || (has(self.insecureSkipVerify) && self.insecureSkipVerify)
               type:
                 description: Type is the source platform this connection speaks to.
                 enum:

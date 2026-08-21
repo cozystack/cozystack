@@ -22,9 +22,28 @@ spec:
         operator: "Exists"
         effect: "NoSchedule"
       serviceAccountName: migration-controller
+      {{- /*
+        A controller whose whole purpose is to keep an import inside the
+        restricted Pod Security Standard has no business violating it itself.
+        The image is a static binary in a scratch layer, so there is nothing to
+        give up here: without these fields the apiserver admits the pod with a
+        restricted-violation warning, which is both a bad example and noise in
+        every operator's audit log.
+      */}}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: migration-controller
         image: "{{ .Values.migrationController.image }}"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
         args:
         - --leader-elect
         {{- if .Values.migrationController.metrics.enable }}

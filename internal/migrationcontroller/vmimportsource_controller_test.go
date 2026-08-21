@@ -14,7 +14,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	migrationv1alpha1 "github.com/cozystack/cozystack/api/migration/v1alpha1"
@@ -59,9 +61,9 @@ func vsphereSource(name, namespace string) *migrationv1alpha1.VMImportSource {
 			Type: migrationv1alpha1.ProviderVSphere,
 			URL:  "https://vcenter.example.com/sdk",
 			Credentials: migrationv1alpha1.ProviderCredentials{
-				Username:   "migration@vsphere.local",
-				Password:   "hunter2",
-				Thumbprint: "AA:BB:CC",
+				Username: "migration@vsphere.local",
+				Password: "hunter2",
+				CACert:   "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
 			},
 		},
 	}
@@ -210,6 +212,59 @@ func TestProjectorRefusesForeignSecret(t *testing.T) {
 	}
 	if !strings.Contains(cond.Message, "not managed by the migration controller") {
 		t.Errorf("message does not explain the collision: %q", cond.Message)
+	}
+}
+
+// TestSourceReportsMissingForkliftInsteadOfLoopingOnAnError locks in a
+// live-only finding. When the Forklift CRDs are absent, creating a Provider
+// fails with a no-match error. Returning that as a reconcile error means the
+// pass never reaches the status write, so the Source keeps whatever condition
+// it had last — which on the cluster meant a Source insisting VDDKNotConfigured
+// long after a VDDK image had been configured, while the controller hot-looped.
+func TestSourceReportsMissingForkliftInsteadOfLoopingOnAnError(t *testing.T) {
+	s := testScheme(t)
+	src := vsphereSource("vcenter", "tenant-foo")
+
+	// The error has to be the one a real apiserver produces for an absent CRD:
+	// a RESTMapper NoKindMatchError. Simply leaving the kind out of the fake
+	// client's scheme yields runtime.notRegisteredErr instead, which
+	// meta.IsNoMatchError does not recognise — so a test built that way would
+	// pass against the wrong error and prove nothing about production.
+	noMatch := &meta.NoKindMatchError{
+		GroupKind:        providerGVK.GroupKind(),
+		SearchedVersions: []string{providerGVK.Version},
+	}
+	c := clientfake.NewClientBuilder().WithScheme(s).
+		WithObjects(src).WithStatusSubresource(src).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if obj.GetObjectKind().GroupVersionKind() == providerGVK {
+					return noMatch
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+
+	r := &VMImportSourceReconciler{
+		Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10),
+		VDDKImage: "registry.example.com/vddk:8.0.3",
+	}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: "tenant-foo", Name: "vcenter"},
+	}); err != nil {
+		t.Fatalf("a cluster without Forklift must not produce a reconcile error: %v", err)
+	}
+
+	got := &migrationv1alpha1.VMImportSource{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-foo", Name: "vcenter"}, got); err != nil {
+		t.Fatalf("get source: %v", err)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, migrationv1alpha1.SourceReadyCondition)
+	if cond == nil {
+		t.Fatal("expected a Ready condition explaining why the source is unusable")
+	}
+	if cond.Reason != migrationv1alpha1.ReasonForkliftNotInstalled {
+		t.Errorf("reason = %q, want %q", cond.Reason, migrationv1alpha1.ReasonForkliftNotInstalled)
 	}
 }
 

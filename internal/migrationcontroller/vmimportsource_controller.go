@@ -67,8 +67,8 @@ func (r *VMImportSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if src.Spec.Type == migrationv1alpha1.ProviderVSphere && r.VDDKImage == "" {
 		return r.fail(ctx, src, migrationv1alpha1.ReasonVDDKNotConfigured,
 			"VMware import requires the platform administrator to configure a VDDK image "+
-				"(migration.vddkImage in the platform values, or the vddk-image key in the "+
-				"cozystack ConfigMap); until then the vSphere import path is unavailable")
+				"(vmImport.vddkImage in the platform values); until then the vSphere import "+
+				"path is unavailable")
 	}
 
 	secretName, err := projectCredentials(ctx, r.Client, src)
@@ -81,6 +81,18 @@ func (r *VMImportSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	if err := r.ensureProviders(ctx, src, secretName); err != nil {
+		// Forklift's absence is a state to report, not a failure to retry
+		// silently. Returning it as an error means the reconcile never reaches
+		// the status write below, so the Source keeps whatever condition it had
+		// — which is actively misleading once the operator fixes the thing the
+		// old condition complained about. Seen on a live cluster: a Source went
+		// on claiming VDDKNotConfigured long after a VDDK image was configured,
+		// because every pass died here before saying anything.
+		if meta.IsNoMatchError(err) {
+			return r.fail(ctx, src, migrationv1alpha1.ReasonForkliftNotInstalled,
+				"the migration engine is not installed in this cluster: enable the "+
+					"forklift-operator and forklift packages")
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -189,8 +201,9 @@ func (r *VMImportSourceReconciler) providerVerdict(ctx context.Context, src *mig
 	}
 	if err != nil {
 		if meta.IsNoMatchError(err) {
-			return false, migrationv1alpha1.ReasonConnectionFailed,
-				"Forklift is not installed in this cluster: enable the forklift-operator and forklift packages", nil
+			return false, migrationv1alpha1.ReasonForkliftNotInstalled,
+				"the migration engine is not installed in this cluster: enable the " +
+					"forklift-operator and forklift packages", nil
 		}
 		return false, "", "", err
 	}
