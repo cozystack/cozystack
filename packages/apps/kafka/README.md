@@ -15,13 +15,13 @@
 
 ### Application-specific parameters
 
-| Name                   | Description           | Type       | Value |
-| ---------------------- | --------------------- | ---------- | ----- |
-| `topics`               | Topics configuration. | `[]object` | `[]`  |
-| `topics[i].name`       | Topic name.           | `string`   | `""`  |
-| `topics[i].partitions` | Number of partitions. | `int`      | `0`   |
-| `topics[i].replicas`   | Number of replicas.   | `int`      | `0`   |
-| `topics[i].config`     | Topic configuration.  | `object`   | `{}`  |
+| Name                   | Description           | Type       | Value  |
+| ---------------------- | --------------------- | ---------- | ------ |
+| `topics`               | Topics configuration. | `[]object` | `[]`   |
+| `topics[i].name`       | Topic name.           | `string`   | `""`   |
+| `topics[i].partitions` | Number of partitions. | `int`      | `0`    |
+| `topics[i].replicas`   | Number of replicas.   | `int`      | `0`    |
+| `topics[i].config`     | Topic configuration.  | `*object`  | `null` |
 
 
 ### Kafka configuration
