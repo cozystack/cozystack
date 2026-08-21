@@ -34,6 +34,14 @@ spec:
 {{- $name := index . 0 -}}
 {{- $variant := default "default" (index . 1) -}}
 {{- $root := default $ (index . 2) -}}
+{{- /* Components are accepted here for the same reason the always-on helper
+       above accepts them: an opt-in package can need platform configuration
+       just as much as a default one. Omitting this silently dropped whatever
+       the caller passed, which is worse than not supporting it at all. */ -}}
+{{- $components := dict -}}
+{{- if gt (len .) 3 -}}
+{{- $components = index . 3 -}}
+{{- end -}}
 {{- $disabled := default (list) $root.Values.bundles.disabledPackages -}}
 {{- $enabled := default (list) $root.Values.bundles.enabledPackages -}}
 {{- if and (has $name $enabled) (not (has $name $disabled)) -}}
@@ -46,6 +54,10 @@ metadata:
     helm.sh/resource-policy: keep
 spec:
   variant: {{ $variant }}
+{{- if $components }}
+  components:
+{{ toYaml $components | indent 4 }}
+{{- end }}
 {{- end }}
 {{ end }}
 

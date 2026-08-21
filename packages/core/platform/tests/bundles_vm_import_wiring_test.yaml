@@ -1,0 +1,132 @@
+suite: bundles.iaas VM import opt-in and VDDK image wiring
+templates:
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # The three packages carry a large vendored manifest, their own CRDs, and a
+  # controller with cluster-wide access to PersistentVolumes. A cluster that is
+  # not migrating off vSphere must not pay for any of it.
+  - it: installs nothing for VM import unless the packages are explicitly enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.forklift-operator
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.forklift
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.migration-controller
+          any: true
+        not: true
+
+  - it: emits all three packages once they are enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.forklift-operator
+          - cozystack.forklift
+          - cozystack.migration-controller
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.forklift-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.forklift
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.migration-controller
+          any: true
+
+  # Empty is the normal state: the vSphere path then reports itself unavailable
+  # on each VMImportSource. No components block should be emitted at all, so the
+  # package keeps its own chart default rather than being handed an empty string.
+  - it: emits no components block when no VDDK image is configured
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.migration-controller
+    documentSelector:
+      path: metadata.name
+      value: cozystack.migration-controller
+    asserts:
+      - equal:
+          path: spec.variant
+          value: default
+      - notExists:
+          path: spec.components
+
+  # The regression this guards: the optional-package helper used to ignore a
+  # components argument entirely, so an operator could set vddkImage, see it
+  # accepted, and never have it reach the controller.
+  - it: forwards the operator-configured VDDK image into the controller component values
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.migration-controller
+      vmImport:
+        vddkImage: registry.example.com/vddk:8.0.3
+    documentSelector:
+      path: metadata.name
+      value: cozystack.migration-controller
+    asserts:
+      - equal:
+          path: spec.components.migration-controller.values.vddkImage
+          value: registry.example.com/vddk:8.0.3
+
+  # A VDDK image set on a cluster that has not enabled the packages must not
+  # conjure them into existence: configuration is not consent to install.
+  - it: does not install the controller just because a VDDK image is set
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+      vmImport:
+        vddkImage: registry.example.com/vddk:8.0.3
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.migration-controller
+          any: true
+        not: true

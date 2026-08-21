@@ -1,0 +1,61 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: migration.cozystack.io:controller
+rules:
+# The API this controller owns.
+- apiGroups: ["migration.cozystack.io"]
+  resources: ["vmimportsources", "vmimporttasks"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["migration.cozystack.io"]
+  resources: ["vmimportsources/status", "vmimporttasks/status"]
+  verbs: ["get", "update", "patch"]
+# Forklift is the migration engine. The controller renders the whole object
+# graph a transfer needs and reads back the verdicts Forklift publishes on it,
+# which is why it needs no provider client of its own.
+- apiGroups: ["forklift.konveyor.io"]
+  resources: ["providers", "plans", "migrations", "networkmaps", "storagemaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# The credentials Secret projected for Forklift to consume. Deliberately no
+# list or watch: the controller reads the Secrets it owns by name, so a
+# cluster-wide Secret informer is neither needed nor granted.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "create", "update", "patch", "delete"]
+# The copy-free handoff: a transferred volume is retained and re-bound into the
+# claim a VMDisk expects. Volumes are cluster-scoped, which is why this role is
+# cluster-wide rather than namespaced.
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Storage classes are read to reject a binding mode that would deadlock an
+# import before anything is created.
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "list", "watch"]
+# CDI DataVolumes: created for the VMDisk release to adopt, and the
+# transferring one is removed before its claim is re-pointed.
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# The KubeVirt VirtualMachine Forklift builds is read for the source VM's shape
+# and then discarded. It is never started.
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines"]
+  verbs: ["get", "list", "watch", "delete"]
+# The imported objects. Create and read only: an import produces tenant
+# objects, and nothing here may edit or delete a disk or instance a tenant
+# already owns.
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["vmdisks", "vminstances"]
+  verbs: ["get", "list", "watch", "create"]
+# Leader election (--leader-elect) and events.
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]

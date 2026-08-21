@@ -685,3 +685,21 @@ gpu:
   # missing entries).
   vgpuDeviceManager:
     enabled: false
+
+# VM import from external virtualization platforms (opt-in; see the iaas bundle).
+vmImport:
+  # Container image carrying the VMware Virtual Disk Development Kit, used by
+  # the raw-copy transfer path. Cozystack neither ships nor mirrors it: it is
+  # built from a proprietary VMware SDK, so an operator who holds a licence
+  # builds the image, pushes it somewhere the cluster can pull from, and names
+  # it here. Only the reference travels to the controller, never a credential.
+  #
+  # Empty is the normal state and means the vSphere import path is unavailable
+  # rather than broken: a vSphere VMImportSource reports VDDKNotConfigured on
+  # its own status, so a tenant learns at registration time instead of watching
+  # a transfer die halfway. Non-VMware providers never need it.
+  #
+  # Named vmImport, not migration, to keep it clearly distinct from the
+  # top-level `migrations` key above, which is the platform's own schema
+  # migrations and has nothing to do with moving virtual machines.
+  vddkImage: ""
