@@ -1,0 +1,17 @@
+suite: csi-node sidecar images
+
+templates:
+  - templates/deploy.yaml
+
+tests:
+  - it: pins upstream CSI sidecars to versioned release tags
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-node-driver-registrar")].image
+          value: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.17.0
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-liveness-probe")].image
+          value: registry.k8s.io/sig-storage/livenessprobe:v2.17.0
