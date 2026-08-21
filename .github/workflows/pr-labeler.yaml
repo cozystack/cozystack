@@ -148,6 +148,7 @@ jobs:
               'cdi':                 'area/virtualization',
               'vmi':                 'area/virtualization',
               'vm-import':           'area/virtualization',
+              'migration':           'area/virtualization',
               'virtual-machine':     'area/virtualization',
               'hami':                'area/virtualization',
               'gpu-operator':        'area/virtualization',
