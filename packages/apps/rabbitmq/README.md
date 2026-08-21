@@ -21,7 +21,7 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 | `resources`        | Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
 | `resources.cpu`    | CPU available to each replica.                                                                                                     | `quantity` | `""`      |
 | `resources.memory` | Memory (RAM) available to each replica.                                                                                            | `quantity` | `""`      |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                            | `string`   | `t1.nano` |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                            | `string`   | `u1.nano` |
 | `size`             | Persistent Volume Claim size available for application data.                                                                       | `quantity` | `10Gi`    |
 | `storageClass`     | StorageClass used to store the data.                                                                                               | `string`   | `""`      |
 | `external`         | Enable external access from outside the cluster.                                                                                   | `bool`     | `false`   |
@@ -56,13 +56,4 @@ resources:
 `resourcesPreset` sets named CPU and memory configurations for each replica.
 This setting is ignored if the corresponding `resources` value is set.
 
-| Preset name | CPU    | memory  |
-|-------------|--------|---------|
-| `nano`      | `100m` | `128Mi` |
-| `micro`     | `250m` | `256Mi` |
-| `small`     | `500m` | `512Mi` |
-| `medium`    | `500m` | `1Gi`   |
-| `large`     | `1`    | `2Gi`   |
-| `xlarge`    | `2`    | `4Gi`   |
-| `2xlarge`   | `4`    | `8Gi`   |
-
+The default `u1.nano` preset supplies 250m CPU and 1Gi of memory per replica. See the [resource preset matrix](../../../docs/operations/resource-presets.md) for all instance types and legacy-name compatibility.
