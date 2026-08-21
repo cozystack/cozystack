@@ -36,7 +36,9 @@ type IndexEntry struct {
 	// Name is the short name a user can `cozypkg tap <name>` / `search` by.
 	Name string `json:"name"`
 	// OCIRef is the artifact location, e.g. oci://ghcr.io/org/repo.
-	OCIRef      string   `json:"ociRef"`
+	OCIRef string `json:"ociRef"`
+	// Version is the OCI tag of the listed release; a version bump updates it.
+	Version     string   `json:"version,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Homepage    string   `json:"homepage,omitempty"`
 	Maintainer  string   `json:"maintainer,omitempty"`

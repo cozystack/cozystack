@@ -25,6 +25,7 @@ func sampleIndex(t *testing.T) string {
 	dir := t.TempDir()
 	writeFile(t, dir, "foo-bar.yaml", `name: foo.bar
 ociRef: oci://ghcr.io/foo/bar
+version: v1.2.3
 description: A SQL database operator
 maintainer: Foo <foo@example.com>
 homepage: https://example.com/foo
@@ -58,6 +59,9 @@ func TestLoadIndex(t *testing.T) {
 	}
 	if entries[1].Signing == nil || entries[1].Signing.Issuer == "" {
 		t.Errorf("expected signing identity on foo.bar")
+	}
+	if entries[1].Version != "v1.2.3" {
+		t.Errorf("expected version v1.2.3 on foo.bar, got %q", entries[1].Version)
 	}
 }
 
