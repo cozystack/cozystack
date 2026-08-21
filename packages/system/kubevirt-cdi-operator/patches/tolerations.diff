@@ -1,0 +1,17 @@
+--- a/packages/system/kubevirt-cdi-operator/templates/cdi-operator.yaml
++++ b/packages/system/kubevirt-cdi-operator/templates/cdi-operator.yaml
+@@ -5807,4 +5807,13 @@
+       securityContext:
+         runAsNonRoot: true
+       serviceAccountName: cdi-operator
++      tolerations:
++      - key: CriticalAddonsOnly
++        operator: Exists
++      - effect: NoSchedule
++        key: node-role.kubernetes.io/control-plane
++        operator: Exists
++      - effect: NoSchedule
++        key: node-role.kubernetes.io/master
++        operator: Exists
+ ---
+\ No newline at end of file
