@@ -63,7 +63,7 @@ spec:
               Storage pool "{{ $labels.storage_pool }}" on node "{{ $labels.node }}" ({{ $labels.driver }}={{ $labels.backing_pool }}) has less than 20% free space available.
           expr: ( linstor_storage_pool_capacity_free_bytes / linstor_storage_pool_capacity_total_bytes ) < 0.20
           labels:
-            severity: warn
+            severity: warning
     - name: drbd.rules
       rules:
         - alert: drbdReactorOffline
@@ -79,14 +79,14 @@ spec:
               DRBD Resource "{{ $labels.name }}" on "{{ $labels.node }}" is not connected to "{{ $labels.conn_name }}": {{ $labels.drbd_connection_state }}.
           expr: drbd_connection_state{drbd_connection_state!="Connected"} > 0
           labels:
-            severity: warn
+            severity: warning
         - alert: drbdDeviceNotUpToDate
           annotations:
             description: |
               DRBD device "{{ $labels.name }}" on "{{ $labels.node }}" has unexpected device state "{{ $labels.drbd_device_state }}".
           expr: drbd_device_state{drbd_device_state!~"UpToDate|Diskless"} > 0
           labels:
-            severity: warn
+            severity: warning
         - alert: drbdDeviceUnintentionalDiskless
           annotations:
             description: |
@@ -94,7 +94,7 @@ spec:
               This usually indicates IO errors reported on the backing device. Check the kernel log.
           expr: drbd_device_unintentionaldiskless > 0
           labels:
-            severity: warn
+            severity: warning
         - alert: drbdDeviceWithoutQuorum
           annotations:
             description: |
@@ -102,7 +102,7 @@ spec:
               This usually indicates connectivity issues.
           expr: drbd_device_quorum == 0
           labels:
-            severity: warn
+            severity: warning
         - alert: drbdResourceSuspended
           annotations:
             description: |
@@ -110,7 +110,7 @@ spec:
           for: 1m
           expr: drbd_resource_suspended > 0
           labels:
-            severity: warn
+            severity: warning
         - alert: drbdResourceResyncWithoutProgress
           annotations:
             description: |
@@ -118,7 +118,7 @@ spec:
               This may indicate there is no connection to UpToDate data, or a stuck resync.
           expr: drbd_device_state{drbd_device_state="Inconsistent"} and delta(drbd_peerdevice_outofsync_bytes[5m]) >= 0
           labels:
-            severity: warn
+            severity: warning
         - alert: drbdResourceWithNoUpToDateReplicas
           annotations:
             description: |
