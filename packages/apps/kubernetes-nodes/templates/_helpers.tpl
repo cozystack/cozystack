@@ -103,6 +103,56 @@ it reconciles.
 {{- if and $owner (ne $owner .Release.Name) -}}
 {{- fail (printf "kubernetes-nodes: MachineDeployment %q in namespace %q is already managed by release %q, not this pool release %q — the pool name collides with a nodeGroup still managed by the parent kubernetes chart. Rename the pool or remove it from the parent Kubernetes CR's nodeGroups first." $mdName .Release.Namespace $owner .Release.Name) -}}
 {{- end -}}
+{{- /* clusterName-drift guard. The release name kubernetes-nodes-<cluster>-<pool>
+       does not encode where <cluster> ends and <pool> begins: for one release
+       name several (.Values.cluster, pool) splits reconstruct the SAME object
+       name kubernetes-<cluster>-<pool>, so an operator who edits spec.cluster to
+       another such value (its immutability is enforced only by the dashboard,
+       not the aggregated apiserver, see docs/storage-immutability.md) does not
+       prune or delete a single worker VM, but silently flips spec.clusterName
+       and the pool WorkloadMonitor selector. CAPI rejects the immutable
+       MachineDeployment.spec.clusterName Update loudly; the WorkloadMonitor
+       drift is the silent half. Refuse the render when our reconstructed
+       clusterName disagrees with the live object's, and name the value to
+       restore. Inert offline (lookup nil). */}}
+{{- $liveCluster := dig "spec" "clusterName" "" $existing -}}
+{{- if and $liveCluster (ne $liveCluster $clusterName) -}}
+{{- fail (printf "kubernetes-nodes: MachineDeployment %q in namespace %q has spec.clusterName %q but this pool release renders clusterName %q: .Values.cluster was changed after the pool was created, and it is immutable. Object names still collide so no worker VM is pruned, but the pool's WorkloadMonitor selector would silently drift off its machines. Restore spec.cluster to %q on this pool's HelmRelease." $mdName .Release.Namespace $liveCluster $clusterName (trimPrefix "kubernetes-" $liveCluster)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+kubernetes-nodes.assertParentVersion fails the render only when the pool's
+Kubernetes minor version is AHEAD of the parent cluster's. Workers must not run a
+kubelet ahead of the apiserver (unsupported skew), but a worker minor lagging the
+control plane is supported (up to n-3 upstream) and is the normal state during a
+rolling upgrade — the parent Kubernetes CR is bumped first, then each pool. A
+symmetric equality check would flip every pool of a cluster to render-failure the
+moment the parent is bumped, blocking all pool operations until each pool is
+hand-edited, so the check is directional. The split removed the single `version`
+that used to feed both control plane and workers. Looks up the parent
+KamajiControlPlane (named like the reconstructed clusterName) and compares its
+spec.version minor against .Values.version. Skipped when the lookup is empty
+(helm template / unittest, or the parent not yet present) so it validates only
+against a real cluster and never blocks offline rendering.
+*/}}
+{{- define "kubernetes-nodes.assertParentVersion" -}}
+{{- $clusterName := include "kubernetes-nodes.clusterName" . -}}
+{{- $kcp := lookup "controlplane.cluster.x-k8s.io/v1alpha1" "KamajiControlPlane" .Release.Namespace $clusterName -}}
+{{- if $kcp -}}
+{{- $parentVer := dig "spec" "version" "" $kcp -}}
+{{- if $parentVer -}}
+{{- $parentMinor := regexFind "v?[0-9]+\\.[0-9]+" $parentVer -}}
+{{- $poolMinor := regexFind "v?[0-9]+\\.[0-9]+" (.Values.version | toString) -}}
+{{- if and $parentMinor $poolMinor -}}
+{{- $parentNorm := printf "%s.0" (trimPrefix "v" $parentMinor) -}}
+{{- $poolNorm := printf "%s.0" (trimPrefix "v" $poolMinor) -}}
+{{- if semverCompare (printf "> %s" $parentNorm) $poolNorm -}}
+{{- fail (printf "kubernetes-nodes: pool version %q is ahead of parent cluster %q version %q — a worker kubelet may not run ahead of the apiserver. A worker minor may lag the control plane (rolling upgrade) but not lead it; set .version to at most the parent Kubernetes CR's minor." (.Values.version | toString) $clusterName $parentVer) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

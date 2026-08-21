@@ -3,6 +3,15 @@
   and patches the parent KamajiControlPlane.spec.network.certSANs with the live
   apiserver Service ClusterIP.
 
+  The ClusterIP certSAN is a best-effort extra, not a worker-join requirement:
+  Talos workers dial the apiserver by DNS name (endpoint https://<release>.<ns>.svc
+  plus extraHostEntries below), so a cluster with zero pools — which never runs
+  this Job — is fine without the IP in the cert. A parent upgrade array-replaces
+  certSANs back to the two DNS names (a KamajiControlPlane merge-patch limitation
+  that predates the split); the next pool reconcile re-adds the ClusterIP. If a
+  future consumer ever needs the IP SAN on a pool-less control plane, that patch
+  belongs in the control-plane (kubernetes) chart, not here.
+
   The Talos worker machineconfig needs values that only exist AFTER the parent
   control-plane release has applied: the apiserver Service ClusterIP (emitted by
   Kamaji), the Talos-CA Secret (issued by cert-manager from the parent's Talos

@@ -5,12 +5,24 @@
     "cluster": {
       "description": "Name of the parent Kubernetes cluster (the `Kubernetes` CR) in the same namespace this node pool attaches to. Required. The pool's CAPI objects are wired to the parent cluster `kubernetes-\u003ccluster\u003e`; the KubernetesNodes CR must be named `\u003ccluster\u003e-\u003cpool\u003e`. The pool name (the part after `\u003ccluster\u003e-`) must not collide with a nodeGroup still managed by the parent kubernetes chart (e.g. the default `md0`), or the render fails on ownership conflict.",
       "type": "string",
-      "default": ""
+      "default": "",
+      "x-kubernetes-validations": [
+        {
+          "rule": "self == oldSelf",
+          "message": "cluster is immutable"
+        }
+      ]
     },
     "storageClass": {
       "description": "StorageClass for the worker node system disk. When empty, the cluster default applies. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so prefer a replicated/DRBD class.",
       "type": "string",
       "default": "replicated",
+      "x-kubernetes-validations": [
+        {
+          "rule": "self == oldSelf",
+          "message": "storageClass is immutable"
+        }
+      ],
       "x-cozystack-options": {
         "source": "storageclass"
       }
@@ -198,7 +210,7 @@
       "default": "30m"
     },
     "version": {
-      "description": "Kubernetes major.minor version the pool joins. Must match the parent cluster's version and satisfy the Talos\u003c-\u003eKubernetes support matrix against `talos.version`.",
+      "description": "Kubernetes major.minor version the pool joins. Must not be ahead of the parent cluster's minor (workers may not lead the apiserver); it may lag behind during a rolling upgrade -- bump the parent Kubernetes CR first, then each pool -- and must satisfy the Talos\u003c-\u003eKubernetes support matrix against `talos.version`.",
       "type": "string",
       "default": "v1.35",
       "enum": [
@@ -255,7 +267,7 @@
       "default": {},
       "properties": {
         "kubectl": {
-          "description": "Image used by the talos-reconcile Job (kubectl). Empty falls back to images/kubectl.tag.",
+          "description": "Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag.",
           "type": "string",
           "default": ""
         }

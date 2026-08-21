@@ -1,0 +1,76 @@
+suite: worker node pool golden render snapshot
+
+# Freezes the full rendered pool (KubevirtMachineTemplate, MachineDeployment,
+# MachineHealthCheck, worker WorkloadMonitor) for a representative node group.
+# In PR-2a this render was proven byte-identical to the monolithic kubernetes
+# chart's output via tests/render-parity.sh; PR-2b removed the pool from the
+# parent, so cross-chart parity can no longer run. This snapshot takes over as
+# the drift guard: any change to the rendered pool objects (which would rename
+# the content-hashed KubevirtMachineTemplate and churn live worker VMs on
+# upgrade) fails here until the snapshot is regenerated deliberately with
+# `helm unittest -u`.
+#
+# Coverage note: every case sets instanceType: "" with explicit resources,
+# because the instancetype-sized branch resolves the VirtualMachineClusterInstancetype
+# via `lookup`, which returns nil under helm unittest. The default (u1.medium)
+# shape is therefore not pinned here; the e2e exercises that branch on a real
+# cluster.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+
+tests:
+  - it: matches the golden render of the pool objects
+    asserts:
+      - matchSnapshot: {}
+
+  # GPU and kubelet-override branches live on in nodegroup.yaml after the split
+  # and are content-hash inputs to the KubevirtMachineTemplate; pin them too so
+  # a change to either branch that would rename the KMT (and roll live GPU or
+  # kubelet-tuned worker VMs) fails here. Value sets mirror the PR-2a parity gate.
+  - it: matches the golden render of a GPU pool
+    set:
+      roles: []
+      resources:
+        cpu: "4"
+        memory: 8Gi
+      gpus:
+        - name: nvidia.com/AD102GL_L40S
+    asserts:
+      - matchSnapshot: {}
+
+  - it: matches the golden render of a kubelet-override pool
+    set:
+      roles: []
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      kubelet:
+        systemReservedMemory: 512Mi
+        kubeReservedMemory: 512Mi
+        systemReservedCpu: 100m
+        kubeReservedCpu: 100m
+        evictionHardMemory: 5%
+        evictionSoftMemory: 8%
+    asserts:
+      - matchSnapshot: {}

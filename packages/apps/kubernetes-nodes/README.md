@@ -60,9 +60,9 @@ the parent cluster `kubernetes-<cluster>` in the same namespace, plus a
 
 ### Kubernetes Version
 
-| Name      | Description                                                                                                                                                       | Type     | Value   |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
-| `version` | Kubernetes major.minor version the pool joins. Must match the parent cluster's version and satisfy the Talos<->Kubernetes support matrix against `talos.version`. | `string` | `v1.35` |
+| Name      | Description                                                                                                                                                                                                                                                                                                               | Type     | Value   |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
+| `version` | Kubernetes major.minor version the pool joins. Must not be ahead of the parent cluster's minor (workers may not lead the apiserver); it may lag behind during a rolling upgrade -- bump the parent Kubernetes CR first, then each pool -- and must satisfy the Talos<->Kubernetes support matrix against `talos.version`. | `string` | `v1.35` |
 
 
 ### Talos Worker Image
@@ -79,8 +79,8 @@ the parent cluster `kubernetes-<cluster>` in the same namespace, plus a
 
 ### Images
 
-| Name             | Description                                                                              | Type     | Value |
-| ---------------- | ---------------------------------------------------------------------------------------- | -------- | ----- |
-| `images`         | Optional image overrides for air-gapped or rate-limited registries.                      | `object` | `{}`  |
-| `images.kubectl` | Image used by the talos-reconcile Job (kubectl). Empty falls back to images/kubectl.tag. | `string` | `""`  |
+| Name             | Description                                                                                                    | Type     | Value |
+| ---------------- | -------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| `images`         | Optional image overrides for air-gapped or rate-limited registries.                                            | `object` | `{}`  |
+| `images.kubectl` | Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag. | `string` | `""`  |
 

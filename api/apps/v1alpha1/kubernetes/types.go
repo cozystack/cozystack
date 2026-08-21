@@ -22,9 +22,6 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
-	// Worker nodes configuration map. When left empty, a default node group `md0` is emitted with `minReplicas: 0` and `roles: [ingress-nginx]` — the MachineDeployment renders but provisions no workers until an unschedulable Pod triggers the cluster-autoscaler (or an operator scales the group manually). Enabling `addons.ingressNginx.enabled: true` on a CR with default `nodeGroups: {}` therefore requires either supplying a nodeGroup with `roles: [ingress-nginx]` and `minReplicas >= 1`, or waiting for the autoscaler to bring up the default md0 in response to the ingress-nginx controller Pods becoming Pending. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.
-	// +kubebuilder:default:={}
-	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
 	Version Version `json:"version"`
@@ -43,12 +40,6 @@ type ConfigSpec struct {
 	// Talos worker image configuration.
 	// +kubebuilder:default:={}
 	Talos Talos `json:"talos"`
-	// MachineHealthCheck tuning for worker node groups.
-	// +kubebuilder:default:={}
-	NodeHealthCheck NodeHealthCheck `json:"nodeHealthCheck"`
-	// How long the cluster-autoscaler waits for a newly created worker to register as a Node before it treats that machine as long-unregistered. Rendered onto every worker MachineDeployment as the `cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime` annotation, which overrides the autoscaler's built-in default for these node groups only. Two things change when the timer fires, and both make a slow join worse rather than better: the machine stops counting towards the group's upcoming capacity, so the autoscaler asks for a replacement for capacity that is already on its way, and the machine becomes eligible for removal. Size it above the slowest join a healthy worker can take, counting the Talos image import, the guest boot and the CNI rollout. Accepted as a whole number of seconds, minutes or hours ("30m", "1h30m"), which is narrower than Go's duration syntax on purpose: the autoscaler ignores a value it cannot parse and falls back to its own default without failing, and the narrower shape cannot express a value that overflows the parser or a fraction it rounds to zero. The canonical form a duration serializes back to ("20m0s", "1h0m0s") is accepted.
-	// +kubebuilder:default:="30m"
-	MaxNodeProvisionTime string `json:"maxNodeProvisionTime"`
 	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
 	// +kubebuilder:default:={}
 	Oidc OIDC `json:"oidc"`
@@ -156,11 +147,6 @@ type CoreDNSAddon struct {
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
-type GPU struct {
-	// Name of GPU, such as "nvidia.com/AD102GL_L40S".
-	Name string `json:"name"`
-}
-
 type GPUOperatorAddon struct {
 	// Enable GPU Operator.
 	// +kubebuilder:default:=false
@@ -227,23 +213,6 @@ type KonnectivityServer struct {
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 }
 
-type Kubelet struct {
-	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
-	// +kubebuilder:default:="7%"
-	EvictionHardMemory string `json:"evictionHardMemory,omitempty"`
-	// Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
-	// +kubebuilder:default:="10%"
-	EvictionSoftMemory string `json:"evictionSoftMemory,omitempty"`
-	// CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
-	KubeReservedCpu string `json:"kubeReservedCpu,omitempty"`
-	// Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
-	KubeReservedMemory string `json:"kubeReservedMemory,omitempty"`
-	// CPU reserved for host OS. Auto-computed from instanceType if empty.
-	SystemReservedCpu string `json:"systemReservedCpu,omitempty"`
-	// Memory reserved for host OS. Auto-computed from instanceType if empty.
-	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
-}
-
 type MonitoringAgentsAddon struct {
 	// Enable monitoring agents.
 	// +kubebuilder:default:=false
@@ -251,57 +220,6 @@ type MonitoringAgentsAddon struct {
 	// Custom Helm values overrides.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
-}
-
-type NodeGroup struct {
-	// System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.
-	// +kubebuilder:default:="20Gi"
-	DiskSize resource.Quantity `json:"diskSize"`
-	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
-	Gpus []GPU `json:"gpus,omitempty"`
-	// Virtual machine instance type.
-	// +kubebuilder:default:="u1.medium"
-	InstanceType string `json:"instanceType"`
-	// Kubelet resource reservations for this node group.
-	Kubelet Kubelet `json:"kubelet,omitempty"`
-	// Stream each worker VM's guest serial console into a `guest-console-log` container beside virt-launcher, readable with `kubectl logs`. The only view of a worker that stalls during boot before Talos apid answers, when neither a Node nor a certificate request exists to diagnose from. Two costs the field name does not show. Changing the value rolls the node group, because it is part of the worker VM template whose name is a hash of its content -- including the stuck VM whose console was wanted, so it buys visibility into the next boot rather than the current one. And it overrides the platform's cluster-wide `disableSerialConsoleLog`, set because that container has been seen holding virt-launcher in `PodInitializing` (kubevirt/kubevirt#15989), which would take the node group down rather than explain it -- so check that virt-launcher Pods reach Running after enabling it.
-	// +kubebuilder:default:=false
-	LogSerialConsole bool `json:"logSerialConsole,omitempty"`
-	// Maximum number of replicas.
-	// +kubebuilder:default:=10
-	MaxReplicas int `json:"maxReplicas"`
-	// Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer ("0", "1", ...) or an integer percentage ("0%", "50%").
-	MaxUnhealthy string `json:"maxUnhealthy,omitempty"`
-	// Minimum number of replicas.
-	// +kubebuilder:default:=0
-	MinReplicas int `json:"minReplicas"`
-	// Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.
-	NodeStartupTimeout string `json:"nodeStartupTimeout,omitempty"`
-	// CPU limit for the worker VM's virt-launcher `compute` container, which is the ceiling the guest vCPU threads, the QEMU emulator thread and the IO threads share. Distinct from `resources.cpu`, which sizes the guest itself. Cannot be combined with `instanceType` sizing: KubeVirt refuses a VM that references an instancetype and also sets `domain.resources.limits.cpu`, so the chart rejects that combination at render time. Sizing the group by `resources` (both `cpu` and `memory`) is what drops the instancetype from the VM, which is where the limit is usable. When unset, KubeVirt derives the limit from the guest vCPU count in any namespace carrying a ResourceQuota that limits CPU, so a worker sized at N vCPUs runs under a ceiling of N with the emulation overhead taken out of the same N. Setting a value declares the limit on the VM directly, which is both what lands it on the container and what stops KubeVirt deriving one. It moves the CPU request with it: KubeVirt copies a declared CPU limit into the CPU request when the VM declares no request of its own, so a node group that sets only this field asks the scheduler for its whole ceiling instead of the fraction of the vCPU count it asked for before, and a ceiling the nodes cannot spare leaves the workers Pending on `Insufficient cpu`. Pair it with `podCpuRequest` to move the ceiling without moving the request. Zero means no ceiling at all rather than the tightest one, since the kubelet turns a zero CPU limit into no CFS quota while the declared key still stops KubeVirt deriving one — but it is only accepted together with `podCpuRequest: 0`, because KubeVirt keeps deriving a request from the vCPU count when the VM declares none and a request above a declared limit of zero is rejected when the worker's Pod is created. A negative value is refused at render time. Changing it rolls the node group, because the worker VM template is named by a hash of its content.
-	PodCpuLimit resource.Quantity `json:"podCpuLimit,omitempty"`
-	// CPU request for the worker VM's virt-launcher `compute` container, which is what the scheduler reserves for a worker on its host and what weights it against neighbours on a contended one. Distinct from `resources.cpu`, which sizes the guest itself. It exists to be paired with `podCpuLimit`: KubeVirt copies a declared CPU limit into the request when the VM declares no request, so raising the ceiling alone raises what every worker in the group asks the scheduler for, and this field is what holds the request still while the ceiling moves. Cannot be combined with `instanceType` sizing, for the same reason as `podCpuLimit`: KubeVirt refuses a VM that references an instancetype and also sets `domain.resources.requests.cpu`, so the chart rejects that combination at render time, as it does a value above `podCpuLimit`. Usable without a limit, where it only changes the scheduler's weighting: KubeVirt still derives the ceiling from the guest vCPU count in any namespace carrying a ResourceQuota that limits CPU, so keep the request at or below that count. A request above that derived ceiling is refused only when the worker's Pod is created, and deliberately not at render time: the ceiling exists only where such a ResourceQuota does, so refusing here would take away a configuration that works in a namespace without one. Zero is accepted on its own and reserves nothing, but zero beside a `podCpuLimit` is refused, because KubeVirt cannot tell an explicit zero request from an absent one and replaces both with the limit — which is the outcome this field exists to avoid, arrived at silently. A negative value is refused as well. When unset, KubeVirt computes the request from the guest vCPU count and the cluster CPU allocation ratio. Changing it rolls the node group, because the worker VM template is named by a hash of its content.
-	PodCpuRequest resource.Quantity `json:"podCpuRequest,omitempty"`
-	// Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
-	Resources Resources `json:"resources,omitempty"`
-	// List of node roles.
-	Roles []string `json:"roles,omitempty"`
-	// StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile, not set on the DataVolume here — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so the fallback targets the replicated/DRBD application storageClass rather than a possibly non-DRBD cluster default. NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
-	StorageClass string `json:"storageClass,omitempty"`
-}
-
-type NodeHealthCheck struct {
-	// Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers. Watch how a percentage behaves in a small group: the MachineHealthCheck controller scales it against the number of machines the check covers and rounds down, then remediates only while the unhealthy count is at or below that result. At "50%" a group of one therefore never remediates, because half of one rounds down to zero, and a group of two remediates one unhealthy machine but not two.
-	// +kubebuilder:default:="50%"
-	MaxUnhealthy string `json:"maxUnhealthy"`
-	// Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator). The MachineHealthCheck measures it from the later of the Machine's creation and its InfrastructureReady transition, so the clock restarts when the infrastructure reports ready: a worker gets this long for the disk image import and the VM to come up, and then this long again for the guest to boot and its kubelet to register with the tenant apiserver. Either leg stretches on a host under load, and a Machine remediated here is deleted before it ever joins, so its replacement starts the same sequence from the beginning.
-	// +kubebuilder:default:="20m"
-	NodeStartupTimeout string `json:"nodeStartupTimeout"`
-	// How long a worker Node may report `Ready=False` before the MachineHealthCheck remediates the Machine. A Node that has registered but has no working CNI yet reports `Ready=False`, so this value is the whole budget a first boot gets for the CNI rollout to reach that node, and a worker deleted mid-rollout takes the rollout with it while its replacement starts over. Raising it delays replacing a worker that is genuinely dead, but not rescheduling its workload: Pods leave an unreachable Node on the node lifecycle controller's taint-based eviction and the toleration that carries, not on this timer. Validated at render time like maxNodeProvisionTime: the CAPI webhook does not check these timeouts, and a zero or negative value would remediate the moment the condition flips.
-	// +kubebuilder:default:="10m"
-	ReadyFalseTimeout string `json:"readyFalseTimeout,omitempty"`
-	// How long a worker Node may report `Ready=Unknown` before the MachineHealthCheck remediates the Machine, which for a KubeVirt worker means deleting the VM. `Ready=Unknown` is what the node lifecycle controller writes once it stops hearing from a kubelet, on a grace period of its own, so the wall clock from a guest going quiet to a deleted worker is this value plus that grace period. A guest starved of CPU stops answering long before it is dead, so a value of a few tens of seconds deletes workers that would have come back on their own. Validated at render time like maxNodeProvisionTime: the CAPI webhook does not check these timeouts, and a zero or negative value would remediate the moment the condition flips.
-	// +kubebuilder:default:="5m"
-	ReadyUnknownTimeout string `json:"readyUnknownTimeout,omitempty"`
 }
 
 type OIDC struct {

@@ -96,6 +96,12 @@ EOF
 }
 
 @test "Boot QEMU VMs" {
+  # cache=unsafe drops guest flush pass-through on these ephemeral CI disks.
+  # Otherwise every management-etcd Raft-commit fsync propagates to the
+  # host-backed raw files, and under the concurrent image/CDI I/O storm etcd
+  # stalls for seconds, the apiserver returns context-deadline-exceeded, and
+  # operators lose their leader-election leases together. The VMs are recreated
+  # per run, so the durability we trade away here is never needed.
   for i in 1 2 3; do
     # `debug-threads=on` names the vCPU threads (`CPU N/KVM`) so the QEMU
     # thread capture on the node-join failure path can tell a vCPU from an IO

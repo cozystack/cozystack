@@ -44,12 +44,19 @@ talos_spec_block() {
 # This wrapper retries a small number of times against a curated allowlist
 # of transient server-side signatures. It does NOT swallow legitimate
 # timeouts (`--timeout=... expired`) or NotFound; those still surface.
+#
+# The capture guards the assignment with `|| _rc=$?`: the chainsaw scripts run
+# under `set -eu`, where a bare `_out=$(kubectl wait ...)` on a failing wait
+# aborts the WHOLE sourcing script right there -- before the retry loop, before
+# anything prints (stderr is captured into _out and dies with the shell). That
+# exact shape killed the kubernetes-latest suite silently the moment a wait
+# failed, with the transient-retry machinery never once reachable.
 kubectl_wait_retry() {
   local _attempts=3
   local _i _out _rc
   for _i in $(seq 1 "${_attempts}"); do
-    _out=$(kubectl wait "$@" 2>&1)
-    _rc=$?
+    _rc=0
+    _out=$(kubectl wait "$@" 2>&1) || _rc=$?
     if [ "${_rc}" = 0 ]; then
       printf '%s\n' "${_out}"
       return 0
@@ -300,6 +307,12 @@ cozy_cleanup() {
   if ! kubectl -n tenant-test delete pod,secret -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=false 2>/dev/null; then
     echo "» WARNING: failed to delete tenant Talos diagnostic Pod/Secret" >&2
   fi
+  # Delete worker node pools (KubernetesNodes) before the parent Kubernetes CR:
+  # the pool owns the workers and its pre-delete hook unpins the adopted objects
+  # so uninstall is clean. Chainsaw does not track this imperatively applied CR,
+  # so cozy_cleanup must reap it too.
+  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test wait kubernetesnodeses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
   # The CR delete above finalizes once the Kubernetes CR is gone, which only
@@ -4630,7 +4643,11 @@ run_kubernetes_test() {
   # running. Nothing else reads it.
   _COZY_RUN_STARTED_AT=$(date +%s)
 
-  # Clean up stale resources from a previous failed retry
+  # Clean up stale resources from a previous failed retry. Delete the worker
+  # pool (KubernetesNodes) before the parent Kubernetes CR so a rerun re-creates
+  # the MachineDeployment instead of no-op'ing on a surviving child HelmRelease.
+  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test wait kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --for=delete --timeout=2m 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "${test_name}" --for=delete --timeout=2m 2>/dev/null || true
 
@@ -4712,47 +4729,63 @@ ${ouroboros_addon}
       resources: {}
       resourcesPreset: micro
   host: ""
-  nodeGroups:
-    md0:
-      diskSize: 20Gi
-      gpus: []
-      # Sizing comes from resources below; this is here because the values
-      # schema requires the field, and the chart drops the instancetype from
-      # the VM whenever a group sets both resources.cpu and resources.memory.
-      instanceType: u1.medium
-      # The failure this suite keeps hitting is a worker that stalls in the
-      # guest before Talos apid answers, which leaves nothing to read on the
-      # management side and nothing for talosctl to connect to. Turning this on
-      # attaches KubeVirt's guest-console-log container, the only artifact that
-      # covers that window.
-      logSerialConsole: true
-      maxReplicas: 10
-      minReplicas: 2
-      # Headroom above the vCPU count, where KubeVirt would otherwise put the
-      # ceiling. Workers failing to join (cozystack/cozystack#3513) have been
-      # measured burning their vCPU threads flat out at a ceiling equal to their
-      # vCPU count while the guest kernel made no progress, which is what a vCPU
-      # spinning on a lock looks like. Spare quota above the pair did not change
-      # it: under a ceiling of 3 the pair kept burning the same 1.4 to 1.8 cores
-      # with no progress, so the spin is not a quota artefact. A single vCPU
-      # cannot spin on its sibling, which is what this shape is here to answer,
-      # and the ceiling above the vCPU count keeps the emulator and IO threads
-      # from eating into the one core the guest computes with. The request is
-      # what keeps scheduling where it was: setDefaultResourceRequests, in
-      # KubeVirt's VMI mutating webhook, copies a declared CPU limit into an
-      # undeclared CPU request, so the limit alone would have every worker ask
-      # the scheduler for its whole ceiling and sit Pending on Insufficient cpu.
-      # Its value is the one KubeVirt derived for these workers before, from the
-      # vCPU count and the cluster CPU allocation ratio.
-      podCpuLimit: 2
-      podCpuRequest: 100m
-      # One vCPU at the memory the workers had before. Sized by resources
-      # rather than by instanceType, which cannot carry the pod CPU pair above.
-      resources:
-        cpu: 1
-        memory: 4Gi
-      roles:
-      - ingress-nginx
+  storageClass: replicated
+  version: "${k8s_version}"
+EOF
+
+  # Worker node pool is a separate KubernetesNodes resource since the Phase 2
+  # split. Named "<cluster>-md0" so it produces MachineDeployment
+  # kubernetes-${test_name}-md0 — the same object the pre-split
+  # spec.nodeGroups.md0 produced, which the waits below still key on. Carries
+  # roles: [ingress-nginx] so the ingress-nginx addon has a node to schedule on.
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: KubernetesNodes
+metadata:
+  name: "${test_name}-md0"
+  namespace: tenant-test
+spec:
+  cluster: "${test_name}"
+${talos_block}
+  diskSize: 20Gi
+  gpus: []
+  # Sizing comes from resources below; this is here because the values
+  # schema requires the field, and the chart drops the instancetype from
+  # the VM whenever a pool sets both resources.cpu and resources.memory.
+  instanceType: u1.medium
+  # The failure this suite keeps hitting is a worker that stalls in the guest
+  # before Talos apid answers, which leaves nothing to read on the management
+  # side and nothing for talosctl to connect to. Turning this on attaches
+  # KubeVirt's guest-console-log container, the only artifact that covers that
+  # window.
+  logSerialConsole: true
+  maxReplicas: 10
+  minReplicas: 2
+  # Headroom above the vCPU count, where KubeVirt would otherwise put the
+  # ceiling. Workers failing to join (cozystack/cozystack#3513) have been
+  # measured burning their vCPU threads flat out at a ceiling equal to their
+  # vCPU count while the guest kernel made no progress, which is what a vCPU
+  # spinning on a lock looks like. Spare quota above the pair did not change
+  # it: under a ceiling of 3 the pair kept burning the same 1.4 to 1.8 cores
+  # with no progress, so the spin is not a quota artefact. A single vCPU
+  # cannot spin on its sibling, which is what this shape is here to answer,
+  # and the ceiling above the vCPU count keeps the emulator and IO threads
+  # from eating into the one core the guest computes with. The request is
+  # what keeps scheduling where it was: setDefaultResourceRequests, in
+  # KubeVirt's VMI mutating webhook, copies a declared CPU limit into an
+  # undeclared CPU request, so the limit alone would have every worker ask
+  # the scheduler for its whole ceiling and sit Pending on Insufficient cpu.
+  # Its value is the one KubeVirt derived for these workers before, from the
+  # vCPU count and the cluster CPU allocation ratio.
+  podCpuLimit: 2
+  podCpuRequest: 100m
+  # One vCPU at the memory the workers had before. Sized by resources
+  # rather than by instanceType, which cannot carry the pod CPU pair above.
+  resources:
+    cpu: 1
+    memory: 4Gi
+  roles:
+  - ingress-nginx
   storageClass: replicated
   version: "${k8s_version}"
 EOF
@@ -4782,6 +4815,17 @@ EOF
 
   # Wait for all required deployments to be available (timeout after 4 minutes)
   kubectl_wait_retry deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-${test_name} kubernetes-${test_name}-cluster-autoscaler kubernetes-${test_name}-kccm kubernetes-${test_name}-kcsi-controller
+
+  # Since the Phase 2 split the MachineDeployment is rendered by the CHILD
+  # kubernetes-nodes-<cluster>-md0 HelmRelease -- a separately-dispatched
+  # reconcile with its own 20-30s helm-controller latency (same figure as the
+  # KCP note above), not by the parent install that produced the deployments
+  # just waited on. A fast parent bringup therefore reaches this point BEFORE
+  # the child HR has applied anything, and `kubectl wait` on an absent object
+  # exits NotFound immediately instead of polling. Event-driven existence
+  # backstop first, same sanctioned pattern as the kamajicontrolplane loop
+  # above; the faster the parent, the more certain the race is lost without it.
+  timeout 3m sh -ec 'until kubectl get machinedeployment -n tenant-test kubernetes-'"${test_name}"'-md0; do sleep 2; done'
 
   # Wait for the machine deployment to scale to 2 replicas. Pre-Talos this
   # was effectively instant because KubeadmConfigTemplate had no async
@@ -5604,6 +5648,9 @@ EOF
   # IP) and the local kubeconfig.
   kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false 2>/dev/null || true
   rm -f "tenantkubeconfig-${test_name}"
+  # Delete the worker pool (KubernetesNodes) before the parent Kubernetes CR so
+  # its pre-delete unpin hook runs and the child HelmRelease does not leak.
+  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
 
 }

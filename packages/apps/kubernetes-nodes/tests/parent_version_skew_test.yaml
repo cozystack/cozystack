@@ -1,0 +1,127 @@
+suite: parent version skew guard (assertParentVersion)
+
+# assertParentVersion looks up the parent KamajiControlPlane by the reconstructed
+# clusterName (kubernetes-<cluster>) and fails the render only when the pool minor
+# is AHEAD of the parent minor. A worker minor lagging the control plane is the
+# normal rolling-upgrade state (parent bumped first) and must render. The mocked
+# KamajiControlPlane sits at v1.34.9; the scheme also registers the other kinds
+# nodegroup.yaml LISTs (MachineSet, KubevirtMachineTemplate) and looks up
+# (MachineDeployment) so the fake client does not error once a provider is set.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: fails when the pool minor is ahead of the parent apiserver minor
+    set:
+      version: "v1.35"
+    kubernetesProvider:
+      scheme: &scheme
+        "controlplane.cluster.x-k8s.io/v1alpha1/KamajiControlPlane":
+          gvr:
+            group: "controlplane.cluster.x-k8s.io"
+            version: "v1alpha1"
+            resource: "kamajicontrolplanes"
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/MachineDeployment":
+          gvr:
+            group: "cluster.x-k8s.io"
+            version: "v1beta1"
+            resource: "machinedeployments"
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/MachineSet":
+          gvr:
+            group: "cluster.x-k8s.io"
+            version: "v1beta1"
+            resource: "machinesets"
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+          gvr:
+            group: "infrastructure.cluster.x-k8s.io"
+            version: "v1alpha1"
+            resource: "kubevirtmachinetemplates"
+          namespaced: true
+      objects: &parentObjects
+        - kind: KamajiControlPlane
+          apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          metadata:
+            name: kubernetes-myk8s
+            namespace: tenant-test
+          spec:
+            version: v1.34.9
+        # helm-unittest only registers a LIST kind for a GVK that has at least one
+        # object. nodegroup.yaml LISTs MachineSet and KubevirtMachineTemplate in the
+        # release namespace (the preserve-KMT block); register both by planting a
+        # throwaway object in an unrelated namespace so the tenant-test LIST stays
+        # empty and the preserve block is a no-op.
+        - kind: MachineSet
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: scheme-registration-only
+            namespace: scheme-registration-only
+          spec:
+            template:
+              spec:
+                infrastructureRef:
+                  kind: KubevirtMachineTemplate
+                  name: none
+        - kind: KubevirtMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata:
+            name: scheme-registration-only
+            namespace: scheme-registration-only
+          spec: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "is ahead of parent cluster"
+
+  - it: renders when the pool minor lags the parent (supported rolling-upgrade skew)
+    set:
+      version: "v1.33"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *parentObjects
+    asserts:
+      - documentSelector:
+          path: kind
+          value: MachineDeployment
+        exists:
+          path: metadata.name
+
+  - it: renders when the pool minor equals the parent minor
+    set:
+      version: "v1.34"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *parentObjects
+    asserts:
+      - documentSelector:
+          path: kind
+          value: MachineDeployment
+        exists:
+          path: metadata.name
+
+  - it: renders offline when the parent KamajiControlPlane is not present (skip branch)
+    set:
+      version: "v1.35"
+    asserts:
+      - documentSelector:
+          path: kind
+          value: MachineDeployment
+        exists:
+          path: metadata.name

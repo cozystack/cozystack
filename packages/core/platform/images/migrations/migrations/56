@@ -1,0 +1,508 @@
+#!/bin/bash
+# Migration 56 --> 57
+# Phase 2 kubernetes chart split: adopt the worker node pools that the
+# monolithic kubernetes chart used to render into per-pool kubernetes-nodes
+# HelmReleases.
+#
+# Before this release, HelmRelease kubernetes-<cluster> rendered the worker
+# KubevirtMachineTemplate / MachineDeployment / MachineHealthCheck / worker
+# WorkloadMonitor for every entry in spec.values.nodeGroups (plus an implicit
+# md0 default when nodeGroups was empty). This release removes those objects
+# from the kubernetes chart (they moved to the kubernetes-nodes chart, one
+# HelmRelease per pool). On upgrade Helm would see them present in the previous
+# kubernetes-<cluster> release manifest but absent in the new one and PRUNE
+# them -- destroying the tenant's running worker VMs.
+#
+# For every parent kubernetes HelmRelease this migration therefore, per pool:
+#   1. creates the child HelmRelease kubernetes-nodes-<cluster>-<pool> (which
+#      cozystack-api reverse-maps to a KubernetesNodes CR by prefix). The child
+#      is created directly as a HelmRelease, not via the aggregated
+#      KubernetesNodes API, because that API's ApplicationDefinition only lands
+#      later in this same upgrade and would 404 from this pre-upgrade hook.
+#   2. re-annotates the existing worker objects onto the child release
+#      (meta.helm.sh/release-name) and pins helm.sh/resource-policy=keep so the
+#      parent kubernetes-<cluster> upgrade -- which now renders control plane
+#      only -- does not prune them during the transition. The child chart then
+#      adopts them byte-identically (proven in PR-2a golden parity; the
+#      KubevirtMachineTemplate content-hash name is preserved so no worker VM
+#      churns).
+#
+# Runs as a pre-upgrade/pre-install hook, i.e. BEFORE any tenant HelmRelease
+# reconciles the new chart, which is the only safe window for the keep +
+# re-annotation to land ahead of the parent's control-plane-only re-render.
+# That window is not perfectly quiet: if a parent kubernetes-<cluster> HR is
+# upgraded during it (a user edit, a forced reconcile, any values change) it
+# renders the OLD chart, still emits the pool objects, and Helm rejects the
+# apply with an ownership-metadata error. It self-heals once the new chart
+# artifact lands, but operators should avoid editing Kubernetes CRs during a
+# platform upgrade (also called out in the release notes).
+#
+# _cluster and nodeHealthCheck are NOT copied verbatim into the child values:
+# _cluster is injected at runtime from the cozystack-values Secret (referenced
+# via the child's valuesFrom, same as every tenant app), and nodeHealthCheck
+# collapses into the child's per-pool maxUnhealthy / nodeStartupTimeout /
+# readyUnknownTimeout / readyFalseTimeout below. The cluster-level
+# maxNodeProvisionTime and the per-group podCpuLimit / podCpuRequest are carried
+# through too: all of these feed the pool's MachineDeployment / MachineHealthCheck
+# or the KubevirtMachineTemplate, so dropping them would silently reset a tuned
+# pool (podCpuLimit/podCpuRequest additionally roll the pool, being KMT-hash
+# inputs). storageClass falls back to the cluster-level value to mirror the
+# parent's `group.storageClass | default .Values.storageClass`.
+#
+# The parent HelmRelease's spec.values keeps its now-unused nodeGroups /
+# nodeHealthCheck keys: the new kubernetes chart schema ignores them (no
+# additionalProperties:false), and stripping them here would rewrite the parent
+# values mid-window and trigger an old-chart re-render. A later cleanup
+# migration can drop them once the whole fleet is past version 57.
+#
+# Idempotent: re-running skips child HRs that already exist and objects already
+# adopted. Strict: any failed create/annotate exits 1 so run-migrations.sh
+# leaves CURRENT_VERSION at 56 and retries on the next upgrade -- best-effort is
+# unsafe because a pool left un-pinned is pruned by the parent upgrade. The
+# same contract governs every read whose absence gates a pin or adopt: absence
+# is detected with --ignore-not-found (success + empty output), so a non-zero
+# read exit can only be a real failure and exits 1 rather than masquerade as
+# absence, because "absent" here means "do not pin", and an un-pinned live
+# pool is destroyed. stderr is never captured into data (kubectl warns on
+# successful reads) and never text-matched for absence (transient failures can
+# contain "not found" too); the child-HR existence check is the one
+# deliberately tolerant read, annotated inline.
+#
+# NOT auto-reversible: downgrading the platform re-renders the OLD kubernetes
+# chart, whose manifest still lists the worker objects now annotated
+# meta.helm.sh/release-name=kubernetes-nodes-<cluster>-<pool>; the parent
+# upgrade then fails Helm ownership validation. To roll back, first re-annotate
+# every adopted object back to the parent release:
+#   kubectl annotate <res> <name> -n <ns> \
+#     meta.helm.sh/release-name=kubernetes-<cluster> --overwrite
+# (and remove the kubernetes-nodes-<cluster>-<pool> HelmReleases) BEFORE
+# downgrading the kubernetes chart.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+CHILD_CHART_REF_NAME="cozystack-kubernetes-nodes-application-kubevirt-kubernetes-nodes"
+
+# The implicit default node group the parent chart's kubernetes.nodeGroups helper
+# injected when spec.values.nodeGroups was empty. Materialised explicitly so a
+# cluster that relied on the default keeps its (ingress-nginx-roled) md0 pool.
+DEFAULT_MD0='{"minReplicas":0,"maxReplicas":10,"instanceType":"u1.medium","diskSize":"20Gi","storageClass":"","roles":["ingress-nginx"],"resources":{},"gpus":[],"kubelet":{}}'
+
+# adopt_one <resource> <object-name> <namespace> <new-release> <expected-old-release>
+adopt_one() {
+  res=$1; obj=$2; ns=$3; new_rel=$4; old_rel=$5
+  # One read serves both the existence check and the owner-annotation fetch.
+  # --ignore-not-found makes absence a SUCCESS with empty output, so a non-zero
+  # exit can only be a real failure (timeout, 429, RBAC, conversion-webhook
+  # outage -- all plausible while the platform is mid-upgrade) and exits 1, so
+  # run-migrations.sh leaves CURRENT_VERSION at 56 and retries on the next
+  # upgrade. Treating a failure as "absent" would skip the keep pin, let the
+  # migration complete and stamp, and the parent's control-plane-only re-render
+  # would then prune the live pool. Do NOT classify by stderr text ("not found"
+  # also appears in transient conversion-webhook failures), and do NOT capture
+  # stderr into data: kubectl warns on SUCCESSFUL reads (API deprecation,
+  # client-side throttling), and a warning glued onto the owner annotation
+  # would trip the foreign-owner refusal below on every tenant, deterministically.
+  if ! out=$(kubectl get "$res" "$obj" -n "$ns" -o json --ignore-not-found); then
+    echo "    ERROR: reading $res/$obj in $ns failed" >&2
+    return 1
+  fi
+  if [ -z "$out" ]; then
+    echo "    $res/$obj absent in $ns, skipping"
+    return 0
+  fi
+  cur=$(printf '%s' "$out" | jq -r '.metadata.annotations["meta.helm.sh/release-name"] // ""')
+  if [ "$cur" = "$new_rel" ]; then
+    echo "    $res/$obj already adopted by $new_rel"
+    return 0
+  fi
+  if [ -n "$cur" ] && [ "$cur" != "$old_rel" ]; then
+    # A foreign owner is a hostile stored shape, same class as a non-object
+    # nodeGroups or an RFC-1123-invalid key: reachable out-of-band via
+    # `kubectl annotate <res> <name> meta.helm.sh/release-name=<other>` on the
+    # tenant namespace. Do NOT exit 1 here -- under set -e that aborts the whole
+    # per-cluster pipeline, run-migrations.sh leaves CURRENT_VERSION unstamped,
+    # and one tenant's corrupted annotation deadlocks the platform upgrade for
+    # EVERY tenant with no path out. Refuse to ADOPT (rewriting a foreign
+    # release-name could corrupt that other release), but still PIN keep exactly
+    # as every sibling skip branch (invalid name, overflow, non-object) does:
+    # the worker object is in the parent's OLD pre-split release manifest, so the
+    # parent's control-plane-only re-render enters it into the prune set, and
+    # Helm's prune gates ONLY on helm.sh/resource-policy=keep -- it does not
+    # consult the live meta.helm.sh/release-name. Skipping without the pin would
+    # let the parent delete the object and cascade-destroy the tenant's worker
+    # VMs. Pinning is additive and cannot corrupt the other release. Migration 56
+    # stamps 57 unconditionally and does not re-run, so recovery is manual.
+    echo "    WARNING: $res/$obj owned by unexpected release '$cur' (expected '$old_rel'); pinning resource-policy=keep and skipping adoption of this object" >&2
+    echo "    WARNING: remedy: if it genuinely belongs to this pool, re-annotate meta.helm.sh/release-name=$new_rel on $res/$obj manually; migration 56 has already stamped and will not re-run" >&2
+    pin_keep "$res" "$obj" "$ns"
+    return 0
+  fi
+  echo "    adopting $res/$obj -> $new_rel"
+  # release-namespace is normally already present (Helm stamped it when the
+  # parent applied the object, and the child release lives in the same
+  # namespace), but an object whose Helm annotations were stripped out-of-band
+  # still passes the empty-cur branch above -- set it alongside release-name so
+  # such an object cannot fail the child's ownership validation.
+  kubectl annotate "$res" "$obj" -n "$ns" \
+    helm.sh/resource-policy=keep \
+    meta.helm.sh/release-name="$new_rel" \
+    meta.helm.sh/release-namespace="$ns" \
+    --overwrite
+  kubectl label "$res" "$obj" -n "$ns" \
+    app.kubernetes.io/managed-by=Helm --overwrite
+}
+
+# pin_keep <resource> <object-name> <namespace> -- protect an object from the
+# parent's control-plane-only re-render prune without transferring ownership.
+# Used for pools we cannot adopt (name overflow): the workers keep running,
+# unmanaged, until the operator gives the cluster a shorter name.
+pin_keep() {
+  res=$1; obj=$2; ns=$3
+  # Same absence-vs-failure split as adopt_one (--ignore-not-found: absence is
+  # success + empty output): a read failure treated as "absent" would leave a
+  # live pool un-pinned for the parent's prune, so it exits 1 and the migration
+  # retries on the next upgrade.
+  if ! out=$(kubectl get "$res" "$obj" -n "$ns" -o name --ignore-not-found); then
+    echo "    ERROR: reading $res/$obj in $ns failed" >&2
+    return 1
+  fi
+  [ -z "$out" ] && return 0
+  echo "    pinning $res/$obj with resource-policy=keep"
+  kubectl annotate "$res" "$obj" -n "$ns" helm.sh/resource-policy=keep --overwrite
+}
+
+# list_kmts <namespace> -- newline-separated names of every
+# KubevirtMachineTemplate in the namespace. Fail-closed: a listing failure must
+# NOT read as "no templates" (the caller would adopt/pin zero KMTs, the
+# migration would complete and stamp, and the parent upgrade would prune a
+# preserved older-revision KMT that an in-flight MachineSet still references --
+# permanently, since the child chart only re-emits KMTs already annotated with
+# its own release name). `for kmt in $(...)` discards the substitution's exit
+# status even under set -e, so callers capture into a variable first (the
+# assignment's failure IS seen by set -e) and grep afterwards. A missing CRD
+# (migration-47 precedent) means no pool can exist -> empty; that is the ONE
+# classification stderr is needed for, so stderr goes to a temp file -- never
+# into the data variable, which kubectl warnings on successful reads would
+# contaminate -- and only the two deterministic RESTMapper/discovery messages
+# match; a transient failure whose text merely contains "not found" does not.
+list_kmts() {
+  ns=$1
+  errf=$(mktemp)
+  if ! out=$(kubectl get kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io -n "$ns" \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>"$errf"); then
+    err=$(cat "$errf"); rm -f "$errf"
+    case "$err" in
+      *"the server doesn't have a resource type"*|*"no matches for kind"*) return 0 ;;
+    esac
+    echo "  ERROR: listing KubevirtMachineTemplates in $ns failed: $err" >&2
+    return 1
+  fi
+  rm -f "$errf"
+  printf '%s' "$out"
+}
+
+# pin_pool_objects <cluster> <group> <namespace> -- pin every worker object of a
+# pool we cannot adopt (name overflow, or a name that is not a valid HelmRelease
+# metadata.name) so the parent's control-plane-only re-render cannot prune them.
+# The pool keeps running unmanaged until the operator recreates it with a legal
+# name. Absence is tolerated inside pin_keep, so it is a safe no-op when the
+# objects are absent (a pool that never rendered under a bad name).
+pin_pool_objects() {
+  cluster=$1; group=$2; ns=$3
+  base="kubernetes-${cluster}-${group}"
+  # The pool's objects only ever existed under this composed name, and the
+  # apiserver only accepts DNS-1123 subdomain names -- so a composed name that
+  # is not one (a group key with a slash, space, underscore, uppercase...)
+  # provably never had an object applied under it. Skip without issuing any
+  # read: there is nothing to pin, and kubectl rejects some malformed names
+  # client-side (e.g. containing '/'), which would read as a failure here and
+  # deadlock the run over a pool that cannot exist.
+  if ! printf '%s' "$base" | grep -qE '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'; then
+    echo "    '$base' is not a valid object name, so no object can exist under it; nothing to pin"
+    return 0
+  fi
+  pin_keep "machinedeployment.cluster.x-k8s.io" "$base" "$ns"
+  pin_keep "machinehealthcheck.cluster.x-k8s.io" "$base" "$ns"
+  pin_keep "workloadmonitor.cozystack.io" "$base" "$ns"
+  kmts=$(list_kmts "$ns")
+  for kmt in $(printf '%s\n' "$kmts" |
+               grep -E "^kubernetes-${cluster}-${group}-[0-9a-f]{6}$" || true); do
+    pin_keep "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io" "$kmt" "$ns"
+  done
+}
+
+# pin_cluster_pools <cluster> <namespace> -- pin every live worker pool of a
+# cluster whose nodeGroups we cannot introspect (stored as a non-object). We
+# cannot enumerate the declared pool keys, so discover the live pools from their
+# KubevirtMachineTemplates (named kubernetes-<cluster>-<group>-<6hex>): each
+# distinct <group> is pinned via pin_pool_objects, the same warn+pin+skip
+# contract every other unadoptable branch uses. Without this the parent's
+# control-plane-only re-render prunes the un-pinned worker VMs. Fail-closed: the
+# KMT listing goes through list_kmts, so a transient read failure aborts the run
+# (retried next upgrade) instead of masquerading as "no pools" and leaving live
+# workers un-pinned. Over-matching a sibling cluster's KMT (when one cluster name
+# is a dash-delimited prefix of another in the same namespace) only pins keep on
+# an object that is preserved anyway, so it is harmless; under-matching would
+# lose VMs, so discovery errs toward pinning.
+pin_cluster_pools() {
+  cluster=$1; ns=$2
+  kmts=$(list_kmts "$ns")
+  groups=$(printf '%s\n' "$kmts" |
+           grep -E "^kubernetes-${cluster}-.+-[0-9a-f]{6}$" |
+           sed -E "s/^kubernetes-${cluster}-(.+)-[0-9a-f]{6}$/\1/" |
+           sort -u || true)
+  for group in $groups; do
+    [ -n "$group" ] || continue
+    pin_pool_objects "$cluster" "$group" "$ns"
+  done
+}
+
+kubectl get helmrelease --all-namespaces \
+  -l apps.cozystack.io/application.kind=Kubernetes -o json |
+  jq -c '.items[] | {ns: .metadata.namespace, name: .metadata.name, values: (.spec.values // {})}' |
+  while IFS= read -r hrjson; do
+    ns=$(printf '%s' "$hrjson" | jq -r '.ns')
+    name=$(printf '%s' "$hrjson" | jq -r '.name')
+    values=$(printf '%s' "$hrjson" | jq -c '.values')
+
+    case "$name" in
+      kubernetes-*) cluster=${name#kubernetes-} ;;
+      *) echo "skipping HelmRelease with unexpected name '$name' in $ns" >&2; continue ;;
+    esac
+    echo "processing cluster '$cluster' (HelmRelease $name in $ns)"
+
+    groups_json=$(printf '%s' "$values" | jq -c '.nodeGroups // {}')
+    # nodeGroups is map[string]NodeGroup, but the aggregated API's old schema never
+    # enforced that shape, so a hand-mangled parent HR (a kubectl edit bypasses the
+    # aggregated API's validation) can persist nodeGroups as a non-object: an array,
+    # string or number. Iterating that shape crashes jq under set -e (e.g. keys[] on
+    # an array yields indices, then .[$idx] fails with "Cannot index array with
+    # string") and, because this runs as the platform pre-upgrade hook, exits 1 and
+    # deadlocks the upgrade for EVERY tenant. Warn and skip this cluster's pool
+    # adoption instead -- but first pin its live worker pools with
+    # resource-policy=keep (discovered from their KMTs, since the declared keys
+    # are unreadable): the objects were rendered by an earlier good revision and
+    # are still live, and skipping without pinning would let the parent's
+    # control-plane-only re-render prune the tenant's worker VMs, the exact
+    # data-loss every sibling skip branch (invalid name, overflow, per-group
+    # non-object) pins to avoid. {} / null still fall through to the implicit md0
+    # default.
+    groups_type=$(printf '%s' "$groups_json" | jq -r 'type')
+    if [ "$groups_type" != "object" ]; then
+      echo "  WARNING: nodeGroups of cluster '$cluster' is a $groups_type, not an object; pinning its live worker pools with resource-policy=keep and skipping adoption" >&2
+      pin_cluster_pools "$cluster" "$ns"
+      continue
+    fi
+    if [ "$(printf '%s' "$groups_json" | jq 'length')" -eq 0 ]; then
+      echo "  nodeGroups empty; materialising implicit md0 default"
+      groups_json=$(jq -cn --argjson d "$DEFAULT_MD0" '{md0: $d}')
+    fi
+
+    # Iterate keys newline-safely. An unquoted `for group in $(... keys[])` would
+    # word-split (and glob-expand) a key containing whitespace or a glob char, e.g.
+    # "my pool", exactly as reachable as the "My_Pool" case the RFC-1123 guard below
+    # was added for, into separate fragments, each individually RFC-1123 valid, so
+    # the guard never fires and bogus child releases get fabricated for a pool that
+    # never existed. `read` consumes whole lines and does not glob, so the intact key
+    # reaches the guard. A key with an embedded newline cannot round-trip line
+    # iteration, but each fragment then fails the RFC-1123 regex as one token, so
+    # nothing hostile survives. Fail-closed exit semantics are preserved: a non-zero
+    # exit inside the loop (set -e) propagates out through pipefail exactly as the
+    # enclosing per-cluster while pipeline already relies on.
+    printf '%s' "$groups_json" | jq -r 'keys[]' | while IFS= read -r group; do
+      child_name="kubernetes-nodes-${cluster}-${group}"
+      app_name="${cluster}-${group}"
+      # Normalize the per-group value to an object or null: the same
+      # unconstrained-schema vector lets a group value be a non-object
+      # (string/number/array), on which the value-mapping jq below (`$grp | has(...)`)
+      # aborts under set -e. A non-object value becomes null and takes the warn + pin
+      # + skip path below, same as an invalid name.
+      grp=$(printf '%s' "$groups_json" | jq -c --arg g "$group" '.[$g] | if type == "object" then . else null end')
+
+      # A HelmRelease metadata.name must be a valid RFC-1123 label. The old
+      # nodeGroups map key was never schema-constrained (map[string]NodeGroup,
+      # no propertyNames pattern), so a stored parent HR can carry a key like
+      # "My_Pool" — added via kubectl/dashboard, whose own render then failed at
+      # apply time, leaving the HR stuck on an older revision with the bad key
+      # persisted. child_name would then be RFC-1123-invalid, `kubectl apply`
+      # rejects it, and under set -e the script exits 1 — deadlocking the
+      # platform pre-upgrade hook for EVERY tenant, exactly the failure the
+      # overflow branch below was built to avoid. Route it through the same
+      # warn + pin + skip path. pin_pool_objects pins whatever can actually
+      # exist: a key that is label-invalid but still a valid object name (e.g.
+      # dotted) may have live objects and gets pinned; one that is not even a
+      # valid object name provably has none and is skipped without a read --
+      # either way the warning is the point.
+      if ! printf '%s' "$child_name" | grep -qE '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'; then
+        echo "  WARNING: child release name '$child_name' (nodeGroup key '$group') is not a valid RFC-1123 label" >&2
+        echo "  WARNING: pinning pool '$cluster'/'$group' objects with resource-policy=keep and skipping adoption" >&2
+        echo "  WARNING: remedy: recreate the pool with an RFC-1123 name (lowercase alphanumeric and '-', must start and end alphanumeric)" >&2
+        pin_pool_objects "$cluster" "$group" "$ns"
+        continue
+      fi
+
+      # Helm refuses release names longer than 53 characters. A legal long
+      # cluster name (up to 42 chars per rest.go) plus the longer
+      # kubernetes-nodes- prefix can overflow. Do NOT fail the whole migration
+      # here: exiting would deadlock the platform pre-upgrade hook for EVERY
+      # tenant, with no path out. Instead pin this pool's worker objects with
+      # resource-policy=keep so the parent's control-plane-only re-render cannot
+      # prune them, skip creating the child HelmRelease, warn loudly, and move
+      # on. The pool keeps running unmanaged until the operator recreates the
+      # cluster with a shorter name (cluster+pool must fit in 36 chars).
+      if [ "${#child_name}" -gt 53 ]; then
+        echo "  WARNING: child release name '$child_name' (${#child_name} chars) exceeds Helm's 53-char limit" >&2
+        echo "  WARNING: pinning pool '$cluster'/'$group' objects with resource-policy=keep and skipping adoption" >&2
+        echo "  WARNING: remedy: recreate the cluster with a shorter name (cluster+pool must fit in 36 chars)" >&2
+        pin_pool_objects "$cluster" "$group" "$ns"
+        continue
+      fi
+
+      # A non-object group value (normalized to null above) carries no pool
+      # configuration; pin any objects it may have rendered and skip adoption, the
+      # same warn + pin + skip contract as an invalid name. Without this the
+      # value-mapping jq below aborts under set -e and deadlocks the pre-upgrade
+      # hook for every tenant.
+      if [ "$grp" = "null" ]; then
+        echo "  WARNING: nodeGroup '$group' of cluster '$cluster' has a non-object value; pinning its objects with resource-policy=keep and skipping adoption" >&2
+        pin_pool_objects "$cluster" "$group" "$ns"
+        continue
+      fi
+
+      # Fields the value-mapping jq below copies verbatim into the child HR must
+      # be scalars. The nodeGroups map value was never fully schema-constrained
+      # (unconstrained NodeGroup subfields, reachable by kubectl/dashboard edit),
+      # so a stored group could carry e.g. storageClass or instanceType as an
+      # object or array. Copied through, that value fails the KubernetesNodes
+      # schema on the child HR install, leaving the pool's child release stuck
+      # Failed. Route a non-scalar scalar-field through the same warn + pin +
+      # skip contract instead: pin the live objects prune-proof and skip
+      # adoption, so the pool keeps running unmanaged until the operator fixes
+      # the stored value, rather than churning on a child install that cannot
+      # validate. Container-typed fields (roles, resources, gpus, kubelet) are
+      # excluded: they are legitimately object/array.
+      bad_scalar=$(printf '%s' "$grp" | jq -r '
+        . as $g
+        | ["minReplicas","maxReplicas","instanceType","diskSize","storageClass","logSerialConsole","maxUnhealthy","nodeStartupTimeout","podCpuLimit","podCpuRequest"]
+        | map(. as $k | select(($g|has($k)) and (($g[$k]|type) as $t | $t == "object" or $t == "array")))
+        | join(",")')
+      if [ -n "$bad_scalar" ]; then
+        echo "  WARNING: nodeGroup '$group' of cluster '$cluster' has non-scalar value(s) for field(s) [$bad_scalar]; pinning its objects with resource-policy=keep and skipping adoption" >&2
+        echo "  WARNING: remedy: restore the field(s) to a scalar on the parent Kubernetes CR's nodeGroups.$group, then recreate the pool; migration 56 has already stamped and will not re-run" >&2
+        pin_pool_objects "$cluster" "$group" "$ns"
+        continue
+      fi
+
+      child_values=$(printf '%s' "$values" | jq -c \
+        --arg cluster "$cluster" \
+        --argjson grp "$grp" '
+        def pick($o; ks): reduce ks[] as $k ({}; if ($o | has($k)) then . + {($k): $o[$k]} else . end);
+        ({cluster: $cluster}
+         + pick($grp; ["minReplicas","maxReplicas","instanceType","diskSize","roles","resources","gpus","kubelet","logSerialConsole","podCpuLimit","podCpuRequest"])
+         # storageClass: per-group value if set and non-empty, else cluster-level
+         # (mirrors the parent `group.storageClass | default .Values.storageClass`).
+         + (if (($grp | has("storageClass")) and ($grp.storageClass != "")) then {storageClass: $grp.storageClass}
+            elif (has("storageClass") and (.storageClass != null)) then {storageClass: .storageClass}
+            else {} end)
+         # effective MHC knobs: per-group override, else cluster-wide nodeHealthCheck
+         + (if ($grp | has("maxUnhealthy")) then {maxUnhealthy: $grp.maxUnhealthy}
+            elif ((.nodeHealthCheck | type) == "object" and (.nodeHealthCheck | has("maxUnhealthy"))) then {maxUnhealthy: .nodeHealthCheck.maxUnhealthy}
+            else {} end)
+         + (if ($grp | has("nodeStartupTimeout")) then {nodeStartupTimeout: $grp.nodeStartupTimeout}
+            elif ((.nodeHealthCheck | type) == "object" and (.nodeHealthCheck | has("nodeStartupTimeout"))) then {nodeStartupTimeout: .nodeHealthCheck.nodeStartupTimeout}
+            else {} end)
+         # cluster-wide MHC condition timeouts: no per-group override exists in the
+         # parent model, so these flatten straight from nodeHealthCheck.
+         + (if ((.nodeHealthCheck | type) == "object" and (.nodeHealthCheck | has("readyUnknownTimeout"))) then {readyUnknownTimeout: .nodeHealthCheck.readyUnknownTimeout} else {} end)
+         + (if ((.nodeHealthCheck | type) == "object" and (.nodeHealthCheck | has("readyFalseTimeout"))) then {readyFalseTimeout: .nodeHealthCheck.readyFalseTimeout} else {} end)
+         # cluster-wide autoscaler budget: top-level parent field, rendered onto the
+         # pool MachineDeployment maxnodeprovisiontime annotation.
+         + (if (has("maxNodeProvisionTime") and (.maxNodeProvisionTime != null)) then {maxNodeProvisionTime: .maxNodeProvisionTime} else {} end)
+         # cluster-level inputs the pool templates consume verbatim
+         + pick(.; ["version","talos"])
+         # images: copy only the declared kubectl override, not the whole
+         # parent images map (which carries waitForKubeconfig/talosCsrSigner that
+         # the KubernetesNodes schema does not declare and a dashboard round-trip
+         # would drop).
+         + (if ((.images | type) == "object" and (.images | has("kubectl"))) then {images: {kubectl: .images.kubectl}} else {} end)
+        )')
+
+      # Adopt the worker objects the parent rendered for this group BEFORE
+      # creating the child HelmRelease. If the kubernetes-nodes ExternalArtifact
+      # already exists (Phase 2a shipped in an earlier release), helm-controller
+      # can start the child install the moment the HR appears; adopting first
+      # guarantees the keep + release-name annotations are already in place, so
+      # the child install never trips Helm's ownership validation.
+      adopt_one "machinedeployment.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
+      adopt_one "machinehealthcheck.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
+      adopt_one "workloadmonitor.cozystack.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
+
+      # All KubevirtMachineTemplates for this group carry a 6-hex content-hash
+      # suffix (parent chart: sha256sum | trunc 6): kubernetes-<cluster>-<group>-<hash>.
+      # Anchor on that suffix so pool 'md0' does not also match a sibling pool
+      # 'md0-large-<hash>' (which would mis-adopt it and deadlock the migration).
+      # Adopt every revision (current + any preserved older one still referenced
+      # by an in-flight MachineSet). Capture-first via list_kmts (fail-closed);
+      # the || true covers only the empty-grep-match case.
+      kmts=$(list_kmts "$ns")
+      for kmt in $(printf '%s\n' "$kmts" |
+                   grep -E "^kubernetes-${cluster}-${group}-[0-9a-f]{6}$" || true); do
+        adopt_one "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io" "$kmt" "$ns" "$child_name" "kubernetes-${cluster}"
+      done
+
+      # This existence check MAY stay fail-open (unlike the reads above): a
+      # transient error here routes into the create path, whose `kubectl apply`
+      # is idempotent for an HR this migration already created and itself fails
+      # closed if the apiserver is genuinely down. No silent-skip hazard.
+      if kubectl get helmrelease "$child_name" -n "$ns" >/dev/null 2>&1; then
+        echo "  child HelmRelease $child_name already exists, skipping create"
+      else
+        echo "  creating child HelmRelease $child_name"
+        # HR shape mirrors pkg/registry/apps/application/rest.go
+        # convertApplicationToHelmRelease (interval, maxHistory, RetryOnFailure
+        # strategy + retryInterval, timeouts+disableWait from the kubernetes-nodes
+        # ApplicationDefinition annotations) so an adopted pool is byte-shaped
+        # like a natively created one and self-heals on a failed install.
+        jq -cn \
+          --arg name "$child_name" --arg ns "$ns" --arg app "$app_name" \
+          --arg chart "$CHILD_CHART_REF_NAME" --argjson values "$child_values" '
+          {
+            apiVersion: "helm.toolkit.fluxcd.io/v2",
+            kind: "HelmRelease",
+            metadata: {
+              name: $name,
+              namespace: $ns,
+              labels: {
+                "sharding.fluxcd.io/key": "tenants",
+                "apps.cozystack.io/application.kind": "KubernetesNodes",
+                "apps.cozystack.io/application.group": "apps.cozystack.io",
+                "apps.cozystack.io/application.name": $app
+              }
+            },
+            spec: {
+              interval: "5m",
+              maxHistory: 5,
+              chartRef: { kind: "ExternalArtifact", name: $chart, namespace: "cozy-system" },
+              install: {
+                timeout: "15m",
+                disableWait: true,
+                strategy: { name: "RetryOnFailure", retryInterval: "30s" }
+              },
+              upgrade: {
+                timeout: "15m",
+                disableWait: true,
+                strategy: { name: "RetryOnFailure", retryInterval: "30s" }
+              },
+              valuesFrom: [ { kind: "Secret", name: "cozystack-values" } ],
+              values: $values
+            }
+          }' | kubectl apply --filename -
+      fi
+    done
+  done
+
+# Stamp version via the shared helper so the no-delete label is preserved.
+stamp_cozystack_version 57

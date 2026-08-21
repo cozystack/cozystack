@@ -1600,9 +1600,11 @@ run_capture() {
 }
 
 @test "the e2e tenant node group asks KubeVirt for the guest console log" {
-  # Anchored to a bare six-space-indented key so a comment or a prose mention
-  # of the field cannot stand in for the setting itself. It does not prove the
-  # key sits in the nodeGroups block specifically -- the render is what would
-  # catch that, and the chart's own suites cover it.
-  grep -q '^      logSerialConsole: true$' hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  # Anchored to a bare two-space-indented key so a comment or a prose mention
+  # of the field cannot stand in for the setting itself. Since the Phase 2 split
+  # the worker pool is a separate KubernetesNodes CR whose fields sit two spaces
+  # under spec, not six spaces under a nodeGroups.<name> block. It does not prove
+  # the key sits in that CR specifically -- the render is what would catch that,
+  # and the chart's own suites cover it.
+  grep -q '^  logSerialConsole: true$' hack/e2e-chainsaw/_lib/run-kubernetes.sh
 }

@@ -1,0 +1,75 @@
+suite: Talos worker machineconfig (GPU labels + kubelet reservations)
+
+# The worker TalosConfigTemplate is not rendered directly by helm — the pool's
+# reconcile Job (templates/talos-reconcile-job.yaml) carries the machineconfig
+# as a string literal in its container command and applies it at runtime. These
+# assert on the rendered Job script:
+#   - GPU pools must inject nodeLabels gpu=on so HAMi's device plugin
+#     (nodeSelector gpu=on) schedules and advertises nvidia.com/gpu;
+#   - kubelet reservation overrides must reach the machineconfig kubelet config.
+# Ported from the parent chart's gpu_node_labels_test / kubelet_reservation_test.
+
+templates:
+  - templates/talos-reconcile-job.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 10
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: []
+  resources:
+    cpu: "8"
+    memory: 16Gi
+
+tests:
+  - it: labels GPU pools with gpu=on
+    set:
+      gpus:
+        - name: nvidia.com/GH200
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:\s*\n\s+gpu: "on"'
+
+  - it: does not label non-GPU pools with gpu=on
+    set:
+      gpus: []
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'gpu: "on"'
+
+  - it: applies kubelet reservation overrides in the machineconfig
+    set:
+      gpus: []
+      kubelet:
+        systemReservedMemory: 512Mi
+        kubeReservedMemory: 512Mi
+        systemReservedCpu: 100m
+        kubeReservedCpu: 100m
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'systemReserved:\s*\n\s+cpu: "100m"\s*\n\s+memory: "512Mi"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubeReserved:\s*\n\s+cpu: "100m"\s*\n\s+memory: "512Mi"'

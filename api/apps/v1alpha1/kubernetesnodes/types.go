@@ -20,9 +20,11 @@ type Config struct {
 type ConfigSpec struct {
 	// Name of the parent Kubernetes cluster (the `Kubernetes` CR) in the same namespace this node pool attaches to. Required. The pool's CAPI objects are wired to the parent cluster `kubernetes-<cluster>`; the KubernetesNodes CR must be named `<cluster>-<pool>`. The pool name (the part after `<cluster>-`) must not collide with a nodeGroup still managed by the parent kubernetes chart (e.g. the default `md0`), or the render fails on ownership conflict.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="cluster is immutable"
 	Cluster string `json:"cluster"`
 	// StorageClass for the worker node system disk. When empty, the cluster default applies. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so prefer a replicated/DRBD class.
 	// +kubebuilder:default:="replicated"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
 	// Minimum number of replicas in this pool. Used as the cluster-autoscaler floor.
 	// +kubebuilder:default:=0
@@ -70,7 +72,7 @@ type ConfigSpec struct {
 	// How long the cluster-autoscaler waits for a newly created worker to register as a Node before it treats that machine as long-unregistered. Rendered onto this pool's MachineDeployment as the `cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime` annotation, which overrides the autoscaler's built-in default for this pool only. Two things change when the timer fires, and both make a slow join worse rather than better: the machine stops counting towards the pool's upcoming capacity, so the autoscaler asks for a replacement for capacity that is already on its way, and the machine becomes eligible for removal. Size it above the slowest join a healthy worker can take, counting the Talos image import, the guest boot and the CNI rollout. Accepted as a whole number of seconds, minutes or hours ("30m", "1h30m"), which is narrower than Go's duration syntax on purpose: the autoscaler ignores a value it cannot parse and falls back to its own default without failing, and the narrower shape cannot express a value that overflows the parser or a fraction it rounds to zero. The canonical form a duration serializes back to ("20m0s", "1h0m0s") is accepted. Keep in sync with the parent kubernetes chart.
 	// +kubebuilder:default:="30m"
 	MaxNodeProvisionTime string `json:"maxNodeProvisionTime"`
-	// Kubernetes major.minor version the pool joins. Must match the parent cluster's version and satisfy the Talos<->Kubernetes support matrix against `talos.version`.
+	// Kubernetes major.minor version the pool joins. Must not be ahead of the parent cluster's minor (workers may not lead the apiserver); it may lag behind during a rolling upgrade -- bump the parent Kubernetes CR first, then each pool -- and must satisfy the Talos<->Kubernetes support matrix against `talos.version`.
 	// +kubebuilder:default:="v1.35"
 	Version Version `json:"version"`
 	// Talos worker image configuration. Keep in sync with the parent cluster's `talos`.
@@ -87,7 +89,7 @@ type GPU struct {
 }
 
 type Images struct {
-	// Image used by the talos-reconcile Job (kubectl). Empty falls back to images/kubectl.tag.
+	// Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag.
 	// +kubebuilder:default:=""
 	Kubectl string `json:"kubectl,omitempty"`
 }
