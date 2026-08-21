@@ -6,6 +6,42 @@ export const COZYSTACK_VERSION = "v1alpha1"
 export const APPS_GROUP = "apps.cozystack.io"
 export const APPS_VERSION = "v1alpha1"
 
+export const CORE_GROUP = "core.cozystack.io"
+export const CORE_VERSION = "v1alpha1"
+
+/**
+ * Tap is the read-only marketplace view of one connected External-Apps
+ * repository and the packages it exposes. The dashboard lists Taps to show
+ * connected repositories, and creates/deletes them to connect/disconnect.
+ * A Tap never carries a pull credential.
+ */
+export interface Tap extends K8sResource<TapSpec> {
+  kind: "Tap"
+}
+
+export interface TapSpec {
+  source?: { kind?: string; name?: string }
+  community?: boolean
+  ready?: boolean
+  message?: string
+  packages?: TapPackage[]
+  /** Connect-time inputs only; never populated on read. */
+  url?: string
+  tag?: string
+  secretRef?: string
+}
+
+export interface TapPackage {
+  name: string
+  kind?: string
+  component?: string
+  description?: string
+  category?: string
+  tags?: string[]
+  icon?: string
+  privileged?: boolean
+}
+
 /**
  * ApplicationDefinition describes a single application kind available in the
  * cluster (postgres, kafka, kubernetes, tenant, etc.). The UI reads all ADs to
