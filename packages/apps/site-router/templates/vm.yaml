@@ -53,14 +53,23 @@ spec:
           interfaces:
           - name: default
             bridge: {}
-          {{- /* Opt-in, and rendered only when true: this key overrides the
-                platform's cluster-wide disableSerialConsoleLog, which exists
-                because the guest-console-log container has held virt-launcher in
+          {{- /* Platform-and-suite-only, and rendered only when true. The
+                underscore is the access control, not a naming style: the
+                aggregated API reserves top-level `_`-prefixed values keys and
+                rejects them from a tenant on both Create and Update
+                (validateNoInternalKeys in pkg/registry/apps/application/rest.go),
+                so the only key that switches the console on cannot come from a
+                tenant. Nothing reads the un-prefixed `logSerialConsole`, so a
+                tenant who sets that renders exactly this nothing. See the block
+                in values.yaml for the whole boundary.
+
+                Rendered only when true because this key overrides the platform's
+                cluster-wide disableSerialConsoleLog, which exists because the
+                guest-console-log container has held virt-launcher in
                 PodInitializing (kubevirt/kubevirt#15989). An explicit false
                 therefore renders the same nothing as an absent field rather than
-                KubeVirt's tri-state false, so a gateway that did not ask for the
-                console keeps the platform default. */}}
-          {{- if .Values.logSerialConsole }}
+                KubeVirt's tri-state false. */}}
+          {{- if .Values._logSerialConsole }}
           logSerialConsole: true
           {{- end }}
         machine:

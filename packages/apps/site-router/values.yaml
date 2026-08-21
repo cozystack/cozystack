@@ -103,5 +103,50 @@ allowOpenManagement: false
 ## @param {string} [cloudInitSeed] - Opaque seed mixed into the VM firmware UUID. Change it to force a first-boot cloud-init re-run; clear it to preserve an existing VM's UUID across re-renders.
 cloudInitSeed: ""
 
-## @param {bool} logSerialConsole - Stream the gateway VM's guest serial console into a `guest-console-log` container beside virt-launcher, readable with `kubectl logs`, and install the bring-up diagnostics that print into it. The only view of a router that stalls inside the guest before the VyOS management API answers, when the VMI reports Running with an address but nothing in the cluster can say how far the boot got. The console alone carries kernel and boot output; the emitter (`files/guest-diag.sh`, run once a minute from `/etc/cron.d` and silent after the first 20 minutes of uptime) adds cloud-init status, failed units, whether the seeded config committed, whether nginx — the `:443` listener — is up, the IPsec state, and the load, which is what separates a guest that is still working from one that is wedged. The two are one switch because the emitter is pointless without the capture and the capture is far weaker without the emitter. Off by default, and three costs are why. It overrides the platform's cluster-wide `disableSerialConsoleLog` (packages/system/kubevirt), which is set because that container has been seen holding virt-launcher in `PodInitializing` (kubevirt/kubevirt#15989) — that would take the gateway down rather than explain it, so check the virt-launcher Pod reaches Running after enabling it. It is part of the VM's device list, so changing it on a live gateway restarts the VM and drops the tunnel with it. And the emitter half rides the cloud-init seed, which re-runs only when the firmware UUID changes, so enabling this on an already-booted gateway gets you the console but not the extra fields until the VM's next first boot (change `cloudInitSeed` to force one). It buys visibility into the next boot, not the current one.
-logSerialConsole: false
+## Guest serial console and bring-up diagnostics: `_logSerialConsole`.
+##
+## DELIBERATELY NOT A @param, and deliberately underscore-prefixed. This switch
+## is platform-and-suite-only: it must not be reachable by a tenant, because the
+## console carries whatever the guest prints and giving tenants logs safely is a
+## separate piece of work. Set it to true and the gateway VM gets KubeVirt's
+## logSerialConsole plus the cron-driven bring-up emitter from
+## files/guest-diag.sh; leave it unset and neither is rendered.
+##
+## WHAT ACTUALLY ENFORCES THAT, since documentation is not an access control.
+## The aggregated apps.cozystack.io API reserves every top-level values key
+## beginning with `_`: pkg/registry/apps/application/rest.go's
+## validateNoInternalKeys rejects such a key with a 400 on both Create (rest.go
+## ~200) and Update (rest.go ~546), and filterInternalKeys strips them from what
+## a tenant reads back. So the only key that switches the console on is one the
+## tenant-facing API refuses to accept. A tenant who sets the un-prefixed
+## `logSerialConsole` instead is not rejected, but no template reads that key, so
+## it renders nothing. That pairing is the boundary: the key that works cannot be
+## submitted, and the key that can be submitted does not work.
+##
+## Omitting the @param is what keeps it out of values.schema.json, README.md,
+## api/apps/v1alpha1/siterouter/types.go and the ApplicationDefinition's
+## openAPISchema. That matters for the dashboard and the published OpenAPI, but it
+## is NOT the access control: `openAPISchema` is only consumed by
+## tools/openapi-gen to publish a document, and Application.Spec is a raw
+## apiextensionsv1.JSON, so nothing prunes an undeclared field on the way to
+## spec.values. The `_` prefix is the part with teeth.
+##
+## This follows the existing convention for platform-injected values rather than
+## inventing one: `_cluster` and `_namespace` are written into app HelmReleases by
+## packages/apps/tenant/templates/namespace.yaml and
+## packages/core/platform/templates/apps.yaml, are consumed by charts as
+## `.Values._cluster` / `.Values._namespace`, and are declared in no values.yaml
+## anywhere in the tree.
+##
+## The e2e suite sets it on the HelmRelease directly
+## (hack/e2e-chainsaw/site-router/site-router-a.yaml), which is an admin write to
+## a resource tenants have no RBAC for, so the suite keeps working unchanged.
+##
+## Costs, unchanged from when this was tenant-facing: it overrides the platform's
+## cluster-wide `disableSerialConsoleLog` (packages/system/kubevirt), which is set
+## because that container has been seen holding virt-launcher in PodInitializing
+## (kubevirt/kubevirt#15989); it is part of the VM's device list, so flipping it
+## on a live gateway restarts the VM and drops the tunnel; and the emitter half
+## rides the cloud-init seed, which re-runs only when the firmware UUID changes,
+## so on an already-booted gateway it takes effect at the next first boot (change
+## cloudInitSeed to force one).

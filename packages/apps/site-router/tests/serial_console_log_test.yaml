@@ -8,6 +8,16 @@ suite: gateway guest serial console logging
 # the management cluster with no in-guest cooperation at all — which is the only
 # surface that shows the window where a router boots but never serves 443.
 #
+# NOT TENANT-REACHABLE. The switch is `_logSerialConsole`, underscore-prefixed
+# because the aggregated apps.cozystack.io API reserves every top-level values key
+# beginning with `_` and rejects it from a tenant with a 400 on both Create and
+# Update (validateNoInternalKeys in pkg/registry/apps/application/rest.go). The
+# un-prefixed `logSerialConsole` a tenant might reasonably try is read by no
+# template, so it renders nothing: the key that works cannot be submitted, and the
+# key that can be submitted does not work. Both halves are asserted below, because
+# only asserting that the suite can still enable it proves the half that was never
+# in doubt.
+#
 # The field must stay absent unless asked for. It OVERRIDES the platform's
 # cluster-wide virtualMachineOptions.disableSerialConsoleLog
 # (packages/system/kubevirt/templates/kubevirt-cr.yaml), which is set because the
@@ -21,6 +31,7 @@ suite: gateway guest serial console logging
 
 templates:
   - templates/vm.yaml
+  - templates/secret-cloudinit.yaml
 
 release:
   name: site-router-test
@@ -28,9 +39,13 @@ release:
 
 set:
   _cluster: {}
+  managementCIDR: 10.244.0.0/16
+  peer:
+    address: 203.0.113.10
 
 tests:
   - it: omits the field by default, leaving the platform-wide disable in force
+    template: templates/vm.yaml
     documentSelector:
       path: kind
       value: VirtualMachine
@@ -40,7 +55,8 @@ tests:
 
   - it: omits the field when explicitly disabled, rather than rendering a tri-state false
     set:
-      logSerialConsole: false
+      _logSerialConsole: false
+    template: templates/vm.yaml
     documentSelector:
       path: kind
       value: VirtualMachine
@@ -48,9 +64,10 @@ tests:
       - notExists:
           path: spec.template.spec.domain.devices.logSerialConsole
 
-  - it: asks KubeVirt for the guest console log when enabled
+  - it: asks KubeVirt for the guest console log when the platform enables it
     set:
-      logSerialConsole: true
+      _logSerialConsole: true
+    template: templates/vm.yaml
     documentSelector:
       path: kind
       value: VirtualMachine
@@ -58,3 +75,43 @@ tests:
       - equal:
           path: spec.template.spec.domain.devices.logSerialConsole
           value: true
+
+  # THE BOUNDARY. A tenant cannot submit `_logSerialConsole` at all, so the only
+  # thing they can actually put in spec.values is the un-prefixed name. Supplying
+  # it exactly as a tenant would must leave the VM untouched and install no
+  # emitter. If this ever goes green with the console on, the rename has been
+  # undone somewhere and the switch is tenant-reachable again.
+  - it: a tenant-supplied logSerialConsole does not turn the console on
+    set:
+      logSerialConsole: true
+    template: templates/vm.yaml
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - notExists:
+          path: spec.template.spec.domain.devices.logSerialConsole
+
+  - it: a tenant-supplied logSerialConsole installs no guest emitter either
+    set:
+      logSerialConsole: true
+    template: templates/secret-cloudinit.yaml
+    documentSelector:
+      path: metadata.name
+      value: site-router-test-cloud-init
+    asserts:
+      - notMatchRegex:
+          path: stringData.userdata
+          pattern: cozy-guest-diag
+
+  - it: the platform switch installs the guest emitter
+    set:
+      _logSerialConsole: true
+    template: templates/secret-cloudinit.yaml
+    documentSelector:
+      path: metadata.name
+      value: site-router-test-cloud-init
+    asserts:
+      - matchRegex:
+          path: stringData.userdata
+          pattern: /etc/cron\.d/cozy-guest-diag
