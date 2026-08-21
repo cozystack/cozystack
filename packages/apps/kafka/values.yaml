@@ -19,7 +19,7 @@ tls: {}
 ## @field {string} name - Topic name.
 ## @field {int} partitions - Number of partitions.
 ## @field {int} replicas - Number of replicas.
-## @field {object} config - Topic configuration.
+## @field {*object} [config] - Topic configuration.
 
 ## @param {[]Topic} topics - Topics configuration.
 topics: []
