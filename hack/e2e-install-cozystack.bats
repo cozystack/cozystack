@@ -342,28 +342,35 @@ EOF
 }
 
 @test "Configure Tenant and wait for applications" {
-  # Capacity experiment (throwaway branch): monitoring, ingress and seaweedfs
-  # are off. Those three flags are what created the ~5.3 CPU of tenant-root
-  # workload (the VictoriaMetrics/VictoriaLogs clusters, Grafana plus its CNPG
-  # database, Alerta, the SeaweedFS chain and the NGINX controller) that the
-  # tenant-Kubernetes suites never touch. etcd stays on: it is Kamaji's
-  # datastore, so the tenant control planes need it.
+  # Capacity experiment (throwaway branch): monitoring and seaweedfs are off.
+  # Those flags are what created most of the ~5.3 CPU of tenant-root workload
+  # (the VictoriaMetrics/VictoriaLogs clusters, Grafana plus its CNPG database,
+  # Alerta and the SeaweedFS chain) that the tenant-Kubernetes suites never
+  # touch. etcd stays on: it is Kamaji's datastore, so the tenant control
+  # planes need it.
+  #
+  # ingress stays on, at ~310m for the NGINX controller and its default
+  # backend, because hack/e2e-test-openapi.bats "Test kinds" reads
+  # .items[0].kind from /apis/apps.cozystack.io/v1alpha1/ingresses and needs an
+  # Ingress instance to exist. Turning it off got null there and failed the
+  # OpenAPI step. Re-enabling one 310m app is the cheap fix; editing that test
+  # would change an assertion that has nothing to do with capacity.
   #
   # The *-application packages themselves stay installed, because
   # cozystack.tenant-application dependsOn all three and disabling the packages
   # would wedge the Tenant CR itself. Turning the instances off via the Tenant
   # spec is the lever that costs nothing.
   timeout 120 sh -ec 'until kubectl get tenants.apps.cozystack.io root -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":false,"monitoring":false,"etcd":true,"isolated":true, "seaweedfs": false}}'
+  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":false,"etcd":true,"isolated":true, "seaweedfs": false}}'
 
-  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd tenant-root >/dev/null 2>&1; do sleep 1; done'
+  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress tenant-root >/dev/null 2>&1; do sleep 1; done'
   # tenant-root parent HR only flips Ready after every child HR is Ready, so
   # listing the one remaining top-level child plus the parent gives precise
   # failure messages without redundant separate waits. The 20m budget is kept
   # from the full-fat lane rather than tightened: it costs nothing in the happy
   # path, and a shorter timeout here would turn "slower than expected" into a
   # different failure than the one this branch exists to measure.
-  kubectl wait hr/etcd hr/tenant-root \
+  kubectl wait hr/etcd hr/ingress hr/tenant-root \
     -n tenant-root --timeout=20m --for=condition=ready
 
   # etcd cluster. The v1alpha2 operator manages member Pods directly and creates
