@@ -91,12 +91,13 @@ git commit --signoff -m "docs(contributing): add installation guide"
 | api, cozystack-api | area/api |
 | build | area/build |
 | ci | area/ci |
+| cilium | area/cilium |
 | dashboard | area/dashboard |
 | postgres, mariadb, redis, etcd, kafka, clickhouse, postgres-operator, mariadb-operator | area/database |
 | extra | area/extra |
 | kubernetes | area/kubernetes |
 | monitoring, vlogs, vmstack, grafana, workloadmonitor | area/monitoring |
-| ingress, gateway, vpn, metallb, cilium, kube-ovn, cozy-proxy, ... | area/networking |
+| ingress, gateway, vpn, metallb, kube-ovn, cozy-proxy, ... | area/networking |
 | platform, bundle, flux, fluxcd, cluster-api, talos, installer, cozyctl, cozystack-engine, cozy-lib | area/platform |
 | backport, release | area/release |
 | seaweedfs, bucket, linstor, velero, harbor, backups | area/storage |
@@ -215,7 +216,7 @@ Its CI validates internal consistency only, never against this repo.
 
 It has no CI at all, it vendors copies of this repo's tooling, and it is the reference every third-party catalogue is built from, so it breaks quietly and takes them with it.
 
-- Change `hack/package.mk` → its `scripts/package.mk` is a byte-for-byte copy.
+- Change `hack/package.mk` → its `scripts/package.mk` was a byte-for-byte copy of ours and no longer is. Diff the two and port your change; do not paste our file over theirs.
 - Change `hack/update-crd.sh` → its `scripts/update-appdef.sh` is a miniature of it.
 - Change the `ApplicationDefinition` CRD, above all the `release.chartRef.kind` enum in `packages/system/application-definition-crd/definition/` → it still uses `chartRef.kind: HelmChart` while this repo has moved on to `ExternalArtifact`. Dropping `HelmChart` from the enum kills it outright.
 - Change the `release.labels` convention, for example the `flux-shard-operator` sharding key.

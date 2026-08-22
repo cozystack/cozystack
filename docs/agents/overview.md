@@ -100,7 +100,7 @@ Package `values.yaml` files carry annotations (`@param`, `@typedef`, `@field`, `
 
 ## Testing
 
-- **Helm unit tests:** `make helm-unit-tests` (runs `hack/helm-unit-tests.sh` over every package that defines a `test` target). `make unit-tests` runs the full unit suite — Helm, BATS, Go, and the preset/readiness checks.
+- **Helm unit tests:** `make helm-unit-tests` (runs `hack/helm-unit-tests.sh` over every package that defines a `test` target). A `test` target is expected to run helm-unittest: the sweep fails a package whose run reports no suite, because exiting 0 having asserted nothing is indistinguishable from passing. A target that drives something else belongs under another name, as `packages/core/testing` already does with its sandbox flow. `make unit-tests` runs the full unit suite — Helm, BATS, Go, and the preset/readiness checks.
 - **E2E tests:** Kyverno Chainsaw suites in `hack/e2e-chainsaw/` (one directory per app), run with `chainsaw test`. Cluster bootstrap (`hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS. Conventions for writing and stabilising them — and the CI that runs them — live in [`e2e-testing.md`](./e2e-testing.md).
 - **Go tests:** standard `go test`, with Ginkgo/Gomega for controllers.
 

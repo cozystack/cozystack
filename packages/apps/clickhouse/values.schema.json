@@ -187,6 +187,23 @@
           "type": "string",
           "default": ""
         },
+        "endpointCA": {
+          "description": "CA bundle the sidecar trusts when the S3 endpoint's certificate is signed by a private CA (e.g. Cozystack's in-cluster SeaweedFS). Applies to both the per-tenant and the `useSystemBucket` flow, and to the `clickhouse-backup` sidecar only — the legacy `schedule` CronJob writes to S3 through restic and does not consume it, so a private-CA endpoint combined with `schedule` still fails TLS. Use the BackupClass flow for such an endpoint.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "key": {
+              "description": "Key inside the Secret holding the PEM CA bundle. Defaults to `ca.crt`.",
+              "type": "string",
+              "default": "ca.crt"
+            },
+            "name": {
+              "description": "Name of the Secret in the application namespace. Empty (default) mounts nothing and leaves the sidecar on the system trust store only.",
+              "type": "string",
+              "default": ""
+            }
+          }
+        },
         "resticPassword": {
           "description": "Legacy. Password for Restic backup encryption used by the legacy CronJob. Unused by the Altinity strategy.",
           "type": "string",

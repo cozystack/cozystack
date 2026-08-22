@@ -11,6 +11,18 @@ metadata:
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  # One retry — not the Kubernetes default of six, and not zero. Every delete
+  # below is idempotent and carries --ignore-not-found, so a second attempt
+  # re-issues an API call rather than re-running any logic, and one short
+  # backoff is what separates a transient apiserver error from a real one.
+  # That distinction is the whole point here: this hook's failures become
+  # visible for the first time with this change, and a signal that fires on
+  # noise stops being read — including on the day it is right. Six is the far
+  # end of the same mistake: the Job would spend about ten minutes backing off
+  # across seven pods, outlasting the hook timeout, and Helm would report that
+  # timeout instead of the hook's own error. Load-bearing only since the script
+  # gained a non-zero exit; before that the script could not report one.
+  backoffLimit: 1
   template:
     metadata:
       labels:
@@ -54,6 +66,29 @@ spec:
             - -c
             - |
               set -u
+              # A delete that did not happen must reach Helm as a non-zero exit.
+              # Otherwise the hook-succeeded delete policy garbage-collects this
+              # Job and the pod that carried the only account of the failure, and
+              # an uninstall that left resources behind is indistinguishable from
+              # one that had nothing to reclaim. Failures are counted and the
+              # exit code is set at the end rather than with `set -e`, so a
+              # failure in the PVC sweep does not skip the ACME sweep below it.
+              # An object that is already gone is not a failure: every delete
+              # below passes --ignore-not-found, which exits 0 in that case, so
+              # re-running this hook over an already-clean namespace still
+              # succeeds. Cost: on failure the Job and its pods stay in the
+              # namespace, which is the point — they hold the log. Nothing
+              # collects them on its own: before-hook-creation deletes the
+              # previous copy only when this hook runs again, and a post-delete
+              # hook runs only on an uninstall. They stay until a release of
+              # this name is installed and uninstalled again, or until the
+              # namespace goes.
+              failures=0
+              fail() {
+                failures=$((failures + 1))
+                echo "ERROR: $*" >&2
+              }
+
               # Harbor's jobservice and trivy PVCs are annotated with
               # helm.sh/resource-policy: keep by the upstream subchart
               # (persistence.resourcePolicy: keep), so Helm/Flux deliberately
@@ -70,7 +105,7 @@ spec:
               echo "Deleting orphaned PVCs for {{ .Release.Name }}-system..."
               kubectl delete pvc -n {{ .Release.Namespace }} \
                 -l release={{ .Release.Name }}-system --ignore-not-found \
-                || echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+                || fail "failed to delete PVCs matching release={{ .Release.Name }}-system in {{ .Release.Namespace }}; orphaned PVCs may remain"
 
               # Remove the cert-manager Certificate owned by this release's
               # Ingress so an in-flight http01 challenge does not leave a
@@ -88,7 +123,7 @@ spec:
               echo "Deleting ACME Certificate for {{ .Release.Name }}-ingress..."
               kubectl delete certificate -n {{ .Release.Namespace }} \
                 {{ .Release.Name }}-ingress-tls --ignore-not-found \
-                || echo "WARNING: cert-manager cleanup failed for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
+                || fail "failed to delete Certificate {{ .Release.Namespace }}/{{ .Release.Name }}-ingress-tls; orphaned ACME resources may remain"
 
               # Belt-and-braces sweep for ACME http01 solver objects that
               # cert-manager may have orphaned (e.g. the Certificate was
@@ -103,18 +138,37 @@ spec:
               # issued for this release's single Harbor host only.
               HOST="{{ $harborHost }}"
               echo "Sweeping orphaned ACME http01 solvers for host $HOST..."
-              for ch in $(kubectl get challenge -n {{ .Release.Namespace }} \
-                -o jsonpath="{range .items[?(@.spec.dnsName=='$HOST')]}{.metadata.name} {end}" 2>/dev/null); do
-                kubectl delete challenge -n {{ .Release.Namespace }} "$ch" --ignore-not-found \
-                  || echo "WARNING: failed to delete challenge $ch for {{ .Release.Name }}; orphaned solver may remain" >&2
-              done
-              for ing in $(kubectl get ingress -n {{ .Release.Namespace }} \
+              # Each listing is captured before it is iterated. Iterating
+              # $(kubectl get ...) directly cannot distinguish a failed listing
+              # from an empty one: both leave the loop with nothing to do, so a
+              # sweep that never got to look reads exactly like a sweep that
+              # found nothing to sweep. kubectl's own diagnostic is left on
+              # stderr for the same reason — it is the only account of why the
+              # listing failed.
+              if challenges=$(kubectl get challenge -n {{ .Release.Namespace }} \
+                -o jsonpath="{range .items[?(@.spec.dnsName=='$HOST')]}{.metadata.name} {end}"); then
+                for ch in $challenges; do
+                  kubectl delete challenge -n {{ .Release.Namespace }} "$ch" --ignore-not-found \
+                    || fail "failed to delete Challenge {{ .Release.Namespace }}/$ch for host $HOST; orphaned solver may remain"
+                done
+              else
+                fail "failed to list Challenges in {{ .Release.Namespace }} for host $HOST; orphaned ACME solvers may remain"
+              fi
+              if solvers=$(kubectl get ingress -n {{ .Release.Namespace }} \
                 -l acme.cert-manager.io/http01-solver=true \
-                -o jsonpath="{range .items[?(@.spec.rules[0].host=='$HOST')]}{.metadata.name} {end}" 2>/dev/null); do
-                kubectl delete ingress -n {{ .Release.Namespace }} "$ing" --ignore-not-found \
-                  || echo "WARNING: failed to delete solver ingress $ing for {{ .Release.Name }}; orphaned solver may remain" >&2
-              done
+                -o jsonpath="{range .items[?(@.spec.rules[0].host=='$HOST')]}{.metadata.name} {end}"); then
+                for ing in $solvers; do
+                  kubectl delete ingress -n {{ .Release.Namespace }} "$ing" --ignore-not-found \
+                    || fail "failed to delete solver Ingress {{ .Release.Namespace }}/$ing for host $HOST; orphaned solver may remain"
+                done
+              else
+                fail "failed to list solver Ingresses in {{ .Release.Namespace }} for host $HOST; orphaned ACME solvers may remain"
+              fi
 
+              if [ "$failures" -ne 0 ]; then
+                echo "Cleanup FAILED for {{ .Release.Name }}: $failures operation(s) did not complete; see the errors above." >&2
+                exit 1
+              fi
               echo "Cleanup complete."
           volumeMounts:
             - name: tmp

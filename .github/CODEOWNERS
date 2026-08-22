@@ -5,15 +5,151 @@
 # Maintainer is responsible for the whole project. The two overlap but are not
 # identical by design. Security reports are NOT routed through this file; see
 # SECURITY.md (GitHub Private Vulnerability Reporting + MAINTAINERS.md).
+#
+# Ordering matters: CODEOWNERS applies the LAST matching pattern, so entries go
+# from broad to specific. The API review gate block stays last so it cannot be
+# overridden.
+#
+# Matching is NOT additive: the last matching rule fully REPLACES every broader
+# one, including the * catch-all. There is no way to say "these people can
+# review anything" other than repeating their handles in every rule — a scoped
+# rule that omits them silently strips their ownership for that path, exactly
+# like the write-access pitfall below, just with valid handles. Policy: @kvaps
+# and @lllamnyp are listed in every rule, except the governance block which is
+# deliberately owned by @tym83 @kvaps alone.
+#
+# "Require review from Code Owners" is already enabled on main, so these rules
+# gate merges from the moment this file lands — they are not an intention to be
+# tightened later. That makes an unhonoured owner worse than a wrong one: GitHub
+# ignores a handle without write access, so scoping a path to someone who lacks
+# it carves that path out from under the catch-all and leaves it gating on
+# nobody, without reporting anything.
 
-* @kvaps @lllamnyp @lexfrei @androndo @IvanHunters @sircthulhu @myasnikovdaniil
+# --- Default: architects own anything not scoped below ---
+*                                            @kvaps @lllamnyp
+
+# --- Dashboards, examples, tests (largest fall-throughs to the default) ---
+/dashboards/                                 @myasnikovdaniil @IvanHunters @kvaps @lllamnyp
+/examples/                                   @lllamnyp @myasnikovdaniil @kvaps
+/examples/backups/                           @androndo @lllamnyp @kvaps
+/test/                                       @myasnikovdaniil @kvaps @lllamnyp
+
+# --- All packages: general owners (overridden by the specific areas below) ---
+/packages/                                   @lexfrei @IvanHunters @myasnikovdaniil @sircthulhu @kvaps @lllamnyp
+
+# --- Go source: general owners (specific cmd/pkg areas overridden below) ---
+/cmd/                                        @kvaps @lllamnyp @sircthulhu @lexfrei
+/internal/                                   @kvaps @lllamnyp @sircthulhu @lexfrei
+/pkg/                                        @kvaps @lllamnyp @sircthulhu @lexfrei
+
+# --- Apps: default owners (specific apps overridden below) ---
+/packages/apps/                              @lexfrei @IvanHunters @myasnikovdaniil @scooby87 @kvaps @lllamnyp
+/packages/apps/vm-instance/                  @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/apps/vm-disk/                      @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/apps/vpc/                          @kvaps @lllamnyp
+
+# --- Managed Kubernetes: app chart, node pools, resource definitions, control plane, CAPI ---
+/packages/apps/kubernetes/                   @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/apps/kubernetes-nodes/             @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/kubernetes-rd/              @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/kubernetes-nodes-rd/        @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/kamaji/                     @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/capi-operator/              @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/capi-providers-core/        @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/capi-providers-bootstrap/   @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/capi-providers-cpprovider/  @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/capi-providers-infraprovider/ @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+
+# --- Extra apps ---
+/packages/extra/                             @kvaps @lllamnyp @IvanHunters @lexfrei @myasnikovdaniil
+
+# --- Core (installer / platform / talos / flux-aio) ---
+/packages/core/                              @lllamnyp @kvaps @myasnikovdaniil @IvanHunters @lexfrei
+
+# --- Virtualization (system side) ---
+/packages/system/kubevirt/                   @scooby87 @lllamnyp @kvaps @lexfrei
+/packages/system/kubevirt-cdi/               @scooby87 @lllamnyp @kvaps
+/packages/system/kubevirt-cdi-operator/      @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/system/kubevirt-operator/          @scooby87 @lllamnyp @kvaps @myasnikovdaniil @IvanHunters
+/packages/system/kubevirt-instancetypes/     @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/system/kubevirt-csi-node/          @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/system/vm-default-images/          @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+
+# --- Backups ---
+/packages/system/backup-controller/          @androndo @lllamnyp @lexfrei @kvaps
+/packages/system/backupstrategy-controller/  @androndo @lllamnyp @kvaps
+/packages/system/velero/                     @androndo @lllamnyp @lexfrei @kvaps
+/cmd/backup-controller/                      @androndo @lllamnyp @kvaps
+/cmd/backupstrategy-controller/              @androndo @lllamnyp @kvaps
+
+# --- GPU ---
+/packages/system/hami/                       @lexfrei @kvaps @lllamnyp
+/packages/system/gpu-operator/               @lexfrei @kvaps @lllamnyp
+/dashboards/gpu/                             @lexfrei @kvaps @lllamnyp
+
+# --- SeaweedFS ---
+/packages/system/seaweedfs/                  @IvanHunters @lexfrei @myasnikovdaniil @kvaps @lllamnyp
+/packages/extra/seaweedfs/                   @sircthulhu @lexfrei @myasnikovdaniil @kvaps @lllamnyp
+
+# --- cozystack-api / controller / lineage webhook ---
+/packages/system/cozystack-api/              @IvanHunters @kvaps @lllamnyp @lexfrei
+/packages/system/cozystack-controller/       @IvanHunters @kvaps @lllamnyp @lexfrei
+/packages/system/lineage-controller-webhook/ @IvanHunters @kvaps @lllamnyp @lexfrei
+/cmd/cozystack-api/                          @IvanHunters @kvaps @lllamnyp @lexfrei
+/cmd/cozystack-controller/                   @IvanHunters @kvaps @lllamnyp @lexfrei
+/cmd/lineage-controller-webhook/             @IvanHunters @kvaps @lllamnyp @lexfrei
+
+# --- Keycloak ---
+/packages/system/keycloak/                   @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil @kvaps @lllamnyp
+/packages/system/keycloak-operator/          @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil @kvaps @lllamnyp
+/packages/system/keycloak-configure/         @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil @kvaps @lllamnyp
+
+# --- API surface (architects): API types, aggregated apiserver, registry ---
+/api/                                        @kvaps @lllamnyp
+/pkg/apis/                                   @kvaps @lllamnyp
+/pkg/apiserver/                              @kvaps @lllamnyp
+/pkg/registry/                               @kvaps @lllamnyp
+/pkg/generated/                              @kvaps @lllamnyp
+
+# --- Per-app generated mirrors of values.schema.json: no owner ---
+# These files are entirely produced by `make generate` (cozyvalues-gen and
+# hack/update-crd.sh) from each app's own values.yaml, which is already
+# reviewed under its /packages/apps/ or /packages/extra/ entry above.
+# Correctness is enforced by the pre-commit `run-make-generate` /
+# `run-make-generate-root` CI hooks (regenerate, then fail on any diff), not
+# by human review, so no owner is listed here — that intentionally waives
+# the /api/ codeowner requirement above for just these generated paths.
+/api/apps/v1alpha1/*/types.go
+/api/apps/v1alpha1/*/zz_generated.deepcopy.go
+/packages/system/*/cozyrds/
+
+# --- Docs ---
+/docs/                                       @lexfrei @myasnikovdaniil @kvaps @lllamnyp
+
+# --- CI / automation ---
+/.github/                                    @myasnikovdaniil @lexfrei @kvaps @lllamnyp
+/hack/                                       @myasnikovdaniil @lexfrei @kvaps @lllamnyp
+/Makefile                                    @myasnikovdaniil @lexfrei @kvaps @lllamnyp
+/.pre-commit-config.yaml                     @myasnikovdaniil @lexfrei @kvaps @lllamnyp
+
+# --- Governance, licensing, project docs ---
+/LICENSE                                     @tym83 @kvaps
+/GOVERNANCE.md                               @tym83 @kvaps
+/MAINTAINERS.md                              @tym83 @kvaps
+/CONTRIBUTOR_LADDER.md                       @tym83 @kvaps
+/CODE_OF_CONDUCT.md                          @tym83 @kvaps
+/CONTRIBUTING.md                             @tym83 @kvaps
+/SECURITY.md                                 @tym83 @kvaps
+/ADOPTERS.md                                 @tym83 @kvaps
+/README.md                                   @tym83 @kvaps
+/.github/CODEOWNERS                          @kvaps @lllamnyp
 
 # The API review gate must not be editable without an API-owner review, or a
 # PR could neuter the detector (it is compiled from the head checkout during
 # bootstrap) and slip a sizeable API change through unreviewed. Scoping these
 # paths to the API owners overrides the catch-all above (last match wins), so
-# changes here require @kvaps or @lllamnyp specifically. Enable "Require review
-# from Code Owners" in branch protection for this to bind.
+# changes here require @kvaps or @lllamnyp specifically. This is in force today,
+# not pending a branch-protection change.
 /cmd/api-gate/                          @kvaps @lllamnyp
 /internal/apigate/                      @kvaps @lllamnyp
 /.github/workflows/api-review-gate.yaml @kvaps @lllamnyp

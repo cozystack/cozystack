@@ -15,9 +15,10 @@
 # (the chart resolves the VirtualMachineClusterInstancetype via `lookup`, which
 # returns nil under `helm template`), so every case here uses explicit
 # `resources` sizing. The GPU and kubelet-reservation branches ARE offline
-# renderable and are covered below. Scope: only the four pool objects are
-# compared; the talos-reconcile Job's rendered output is not (its own
-# content-hash name makes a divergence there visible separately).
+# renderable and are covered below, as is the guest-console-log opt-in. Scope:
+# only the four pool objects are compared; the talos-reconcile Job's rendered
+# output is not (its own content-hash name makes a divergence there visible
+# separately).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,9 +30,10 @@ POOL=md0
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Shared, case-invariant inputs. The parent's default nodeHealthCheck
-# (maxUnhealthy/nodeStartupTimeout) equals the child's per-pool defaults set
-# here, so the MachineHealthCheck stays identical without extra parent config.
+# Shared, case-invariant inputs. Neither side configures the MachineHealthCheck
+# knobs, so the MachineHealthCheck comparison below is a comparison of the two
+# charts' defaults for them -- which is the contract, and which is why pinning
+# either side's values here would defeat it.
 write_values() { # <pool-fields-file>
   local pf="$1"
   cat >"$WORK/parent.yaml" <<EOF
@@ -57,8 +59,6 @@ cluster: ${CLUSTER}
 _cluster:
   cluster-domain: cozy.local
 version: "v1.35"
-maxUnhealthy: "50%"
-nodeStartupTimeout: "10m"
 EOF
   cat "$pf" >>"$WORK/child.yaml"
 }
@@ -147,8 +147,57 @@ kubelet:
   evictionSoftMemory: 8%
 EOF
 
+# --- Case: guest serial console logging enabled ---
+cat >"$WORK/case-serialconsole.yaml" <<'EOF'
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: []
+resources:
+  cpu: "2"
+  memory: 4Gi
+gpus: []
+kubelet: {}
+logSerialConsole: true
+EOF
+
+# --- Case: explicit pod CPU limit ---
+cat >"$WORK/case-podcpulimit.yaml" <<'EOF'
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: []
+resources:
+  cpu: "2"
+  memory: 4Gi
+gpus: []
+kubelet: {}
+podCpuLimit: 3
+EOF
+
+# --- Case: explicit pod CPU request, paired with a limit ---
+cat >"$WORK/case-podcpurequest.yaml" <<'EOF'
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: []
+resources:
+  cpu: "2"
+  memory: 4Gi
+gpus: []
+kubelet: {}
+podCpuLimit: 3
+podCpuRequest: 200m
+EOF
+
 RC=0
-for c in resources gpu kubelet; do
+for c in resources gpu kubelet serialconsole podcpulimit podcpurequest; do
   write_values "$WORK/case-${c}.yaml"
   diff_kinds "$c" || RC=1
 done

@@ -112,6 +112,10 @@ users: {}
 ## @field {string} [accessKeyIDKey] - Key in the Secret holding the access key ID. Defaults to `accessKey`.
 ## @field {string} [secretAccessKeyKey] - Key in the Secret holding the secret access key. Defaults to `secretKey`.
 
+## @typedef {struct} EndpointCA - Reference to a Secret holding a PEM-encoded CA bundle the `clickhouse-backup` sidecar should trust when reaching an S3 endpoint that serves a certificate signed by a private CA. Cozystack's in-cluster SeaweedFS (`seaweedfs-s3.<tenant>:8333`) is the common case: it serves TLS signed by the self-signed "SeaweedFS CA", which no system trust store contains. Leave `name` empty for a publicly-trusted endpoint. The Secret must live in the application namespace; copy `ca.crt` out of the seaweedfs CA Secret (`seaweedfs-ca-cert` in the tenant that hosts seaweedfs) to populate it. The bundle is mounted into the sidecar and added to its trust store via `SSL_CERT_DIR`, which *adds* to the system CA set rather than replacing it, so a release configured this way still reaches publicly-trusted endpoints.
+## @field {string} [name] - Name of the Secret in the application namespace. Empty (default) mounts nothing and leaves the sidecar on the system trust store only.
+## @field {string} [key] - Key inside the Secret holding the PEM CA bundle. Defaults to `ca.crt`.
+
 ## @typedef {struct} Backup - Backup configuration.
 ## @field {bool} enabled - Enable backup integration. Materialises the chart-emitted `<release>-backup-s3` Secret consumed by the Altinity backup strategy and, when `schedule` is non-empty, also renders the legacy chart-managed CronJob.
 ## @field {bool} [useSystemBucket] - Opt-in: when true, the chart-emitted `<release>-backup-s3` Secret is skipped and the `clickhouse-backup` sidecar reads bucket coordinates + S3 credentials from the platform-projected `cozy-backups-creds` Secret. `S3_PATH` is set to `<namespace>/<release>` for cross-tenant isolation. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill any `s3*` field below.
@@ -125,6 +129,7 @@ users: {}
 ## @field {string} [s3SecretKey] - DEPRECATED. Optional; see `s3AccessKey`.
 ## @field {string} [resticPassword] - Legacy. Password for Restic backup encryption used by the legacy CronJob. Unused by the Altinity strategy.
 ## @field {S3CredentialsSecret} [s3CredentialsSecret] - DEPRECATED. Pre-existing Secret reference for the legacy chart-emitted sidecar. The platform flow projects `cozy-backups-creds` instead.
+## @field {EndpointCA} [endpointCA] - CA bundle the sidecar trusts when the S3 endpoint's certificate is signed by a private CA (e.g. Cozystack's in-cluster SeaweedFS). Applies to both the per-tenant and the `useSystemBucket` flow, and to the `clickhouse-backup` sidecar only — the legacy `schedule` CronJob writes to S3 through restic and does not consume it, so a private-CA endpoint combined with `schedule` still fails TLS. Use the BackupClass flow for such an endpoint.
 
 ## @param {Backup} backup - Backup configuration.
 backup:
@@ -146,6 +151,9 @@ backup:
     regionKey: ""
     accessKeyIDKey: ""
     secretAccessKeyKey: ""
+  endpointCA:
+    name: ""
+    key: "ca.crt"
 
 ##
 ## @section ClickHouse Keeper parameters

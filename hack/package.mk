@@ -1,5 +1,7 @@
+# .DEFAULT_GOAL is a variable, so `=` is correct here. .PHONY is a target and
+# takes a colon; written as an assignment it declares nothing and make is silent.
 .DEFAULT_GOAL=help
-.PHONY=help show diff apply delete update image
+.PHONY: help show diff apply delete suspend resume check clean
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {sub("\\\\n",sprintf("\n%22c"," "), $$2);printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)

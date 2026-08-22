@@ -39,6 +39,7 @@ func TestSupportedBackupStrategyKindsMatchesDispatch(t *testing.T) {
 		strategyv1alpha1.CNPGStrategyKind,
 		strategyv1alpha1.AltinityStrategyKind,
 		strategyv1alpha1.MariaDBStrategyKind,
+		strategyv1alpha1.MongoDBStrategyKind,
 		strategyv1alpha1.FoundationDBStrategyKind,
 		strategyv1alpha1.EtcdStrategyKind,
 	}

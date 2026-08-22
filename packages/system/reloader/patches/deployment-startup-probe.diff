@@ -1,0 +1,36 @@
+# The upstream chart renders liveness and readiness from values but no
+# startupProbe at all, so a slow first start has no grace period of its own and
+# is killed by liveness inside ~60s. Reloader binds its :9090 listener as the
+# last statement of startReloader, after a package-level
+# `IsOpenshift = isOpenshift()` in pkg/kube issues a GET
+# /apis/project.openshift.io on a context with no deadline, before main() is
+# entered, so the probes are refused for as long as that takes. The budget and
+# the reasoning behind the numbers live in the package values.yaml.
+#
+# Chart source: https://github.com/stakater/stakater-charts (reloader)
+# This belongs upstream: the chart already renders the other two probes from
+# values, so a startupProbe block is the same shape of change. Not reported
+# upstream yet. Still absent as of chart 2.2.14 / app v1.4.19, where
+# isOpenshift() is also still eager, so the patch is needed on current upstream
+# and not only on the pinned 2.0.0. Drop this hunk once upstream renders one.
+diff --git a/charts/reloader/templates/deployment.yaml b/charts/reloader/templates/deployment.yaml
+--- a/charts/reloader/templates/deployment.yaml
++++ b/charts/reloader/templates/deployment.yaml
+@@ -161,6 +161,17 @@
+         ports:
+         - name: http
+           containerPort: 9090
++        {{- /*
++        cozystack (patches/deployment-startup-probe.diff): the upstream chart
++        renders no startupProbe, which leaves a slow first start no grace period
++        of its own. Why that matters and how the budget was chosen is documented
++        next to the knob, in the package values.yaml. Rendered with `with`, so an
++        unset value emits nothing and the template stays upstream-compatible.
++        */}}
++        {{- with .Values.reloader.deployment.startupProbe }}
++        startupProbe:
++          {{- toYaml . | nindent 10 }}
++        {{- end }}
+         livenessProbe:
+           httpGet:
+             path: /live

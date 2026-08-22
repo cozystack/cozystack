@@ -66,6 +66,12 @@ alerta:
       dashboardUrl: ""
       summaryFmt: ""
 grafana:
+  # Upstream Grafana image, pinned by digest and routed through
+  # cozy-lib.image (so mirrored-registry installs work). Plugins (VictoriaLogs
+  # datasource + panels) are installed at startup via GF_INSTALL_PLUGINS from
+  # the in-cluster grafana-dashboards server, so no custom rebuilt Grafana
+  # image is published anymore.
+  image: docker.io/grafana/grafana:11.6.15@sha256:f739273dfed04760428fcfbfccd1752b3b7fc87ef0a3d5637e2e87cce151e1a2
   db:
     size: 10Gi
   resources:

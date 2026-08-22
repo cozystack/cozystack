@@ -79,12 +79,25 @@ tests:
     asserts:
       - notExists:
           path: spec.config["auth.generic_oauth"]
+      # Anchor the index before asserting on it. notContains passes whenever its
+      # path resolves to something that lacks the content, and a different
+      # container at [0] qualifies, so without this both guards go green if a
+      # sidecar is ever placed ahead of grafana in the CR's deployment spec.
+      - equal:
+          path: spec.deployment.spec.template.spec.containers[0].name
+          value: grafana
+      # any: true matches on the element name alone. Without it the comparison
+      # is a deep-equal against the whole entry, and the real ones carry a
+      # valueFrom or a value alongside the name, so {name: ...} matches nothing
+      # and the guard passes whether or not the variable is rendered.
       - notContains:
           path: spec.deployment.spec.template.spec.containers[0].env
+          any: true
           content:
             name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
       - notContains:
           path: spec.deployment.spec.template.spec.containers[0].env
+          any: true
           content:
             name: GF_PATHS_CUSTOM_INI
 

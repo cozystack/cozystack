@@ -1,0 +1,19 @@
+# Scheduled backups via a Plan (every 6h). The core Plan controller stamps a
+# BackupJob per tick; each is dispatched through the same cozy-default MongoDB
+# strategy as the ad-hoc job. Applied for documentation parity with the other
+# backup examples; run-all.sh drives the ad-hoc BackupJob instead so the smoke
+# test does not wait for a cron tick.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: Plan
+metadata:
+  name: mongodb-src-daily
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: MongoDB
+    name: mongodb-src
+  backupClassName: cozy-default
+  schedule:
+    type: cron
+    cron: "0 */6 * * *"

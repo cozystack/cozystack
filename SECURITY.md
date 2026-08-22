@@ -29,7 +29,7 @@ Please do **not** report security vulnerabilities through public GitHub issues, 
 Please report vulnerabilities privately through one of the following channels, in order of preference:
 
 1. **GitHub Private Vulnerability Reporting** — the preferred channel. Open the repository's **Security** tab, then **Advisories** → **Report a vulnerability** (<https://github.com/cozystack/cozystack/security/advisories/new>). This creates a confidential advisory visible only to you and the maintainers, and is the CNCF-recommended path for coordinated disclosure.
-2. **Contact a maintainer** listed in [`MAINTAINERS.md`](MAINTAINERS.md) through an existing private channel you already have.
+2. **Contact a maintainer** listed in [`MAINTAINERS.md`](MAINTAINERS.md) through an existing private channel you already have. Reports are triaged by the maintainers responsible for security response — [@kvaps](https://github.com/kvaps), [@lexfrei](https://github.com/lexfrei), [@tym83](https://github.com/tym83), [@matthieu-robin](https://github.com/matthieu-robin) and [@mattia-eleuteri](https://github.com/mattia-eleuteri) — but any maintainer can receive a report and route it.
 3. If you have neither, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
 
 Please do not include exploit details, credentials, tokens, private keys, customer data, or other sensitive material in any public message.

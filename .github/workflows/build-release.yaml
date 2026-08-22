@@ -1,0 +1,158 @@
+name: Build release line
+
+# Publishes the per-line equivalent of what build-main.yaml publishes for main:
+# every image tagged with the line's branch name, and the whole packages tree as
+# the `cozystack-packages:<branch>` OCI artifact with each image reference
+# digest-pinned to the images this run just pushed (`make build` ->
+# packages/core/installer image-packages does the `flux push artifact`).
+#
+# Why it exists: pull-requests.yaml overlays image refs for every package a PR
+# did NOT rebuild, so that e2e and the installer do not test last-release images
+# for everything outside the PR's build matrix. That overlay had only
+# `cozystack-packages:main` to read, which meant a release-line PR was handed
+# MAIN's binaries to run against its own line's charts — a cross-generation mix
+# that failed deterministically (see #3437: main's cozystack-controller served an
+# aggregated OpenAPI release-1.6's charts could not validate against). With this
+# artifact published per line, the overlay reads the PR's own base branch and the
+# generations match.
+#
+# Cost: one full `make build` per push to a maintained line, i.e. per merged
+# backport. That is the price of release-line PRs testing their line's tip rather
+# than its last release.
+
+env:
+  # Same per-CI registry as pull-requests.yaml and build-main.yaml.
+  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+
+on:
+  push:
+    # Maintained LINE branches only: `release-<major>.<minor>`. The `+` quantifies
+    # the preceding character class, and `.` is literal, so this matches
+    # release-1.6 but NOT the per-release staging branches promote-rc.yaml creates
+    # (release-1.6.1) nor rc staging branches (release-1.6.0-rc.4) — building
+    # those would be pure waste, since their images are built by tags.yaml.
+    branches: ['release-[0-9]+.[0-9]+']
+    paths-ignore:
+      - 'docs/**'
+
+  # Run against a line on request. The push trigger above cannot cover the moment
+  # a line is BORN: cut-prerelease.yaml creates release-X.Y at a commit that is
+  # already on main, so that push carries no new commits, and GitHub does not run
+  # a workflow whose `paths`/`paths-ignore` filter finds no changed files. Without
+  # a dispatch the line would have no `cozystack-packages:<line>` artifact until
+  # its first cherry-pick merged, and until then pull-requests.yaml's overlay
+  # would find nothing to pull and leave every package on its committed ref — at
+  # freeze time, the PREVIOUS release's, which is the cross-generation mix #3437
+  # fixed. The freeze step dispatches this workflow for the branch it just made.
+  #
+  # Also the recovery path when a line build fails or is cancelled: re-run it
+  # without having to push an empty commit to the line.
+  workflow_dispatch:
+
+# Per line: a newer push to the same line supersedes an in-flight build, but
+# different lines build independently.
+concurrency:
+  group: build-release-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-line:
+    name: Build ${{ github.ref_name }} images and packages artifact
+    runs-on: oracle-vm-24cpu-96gb-x86-64
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # workflow_dispatch takes ANY ref, and the "Run workflow" ref selector
+      # preselects the default branch — which is exactly where the recovery
+      # advice above, and cut-prerelease.yaml's warning, send an operator. Since
+      # IMAGE_TAG below is github.ref_name, a dispatch from 'main' spends two
+      # hours republishing cozystack-packages:main and every main image tag while
+      # build-main.yaml may be writing the same ones: the 409 tag-collision class
+      # #2711 fixed. Nothing is mislabeled (the content really is that ref), but
+      # a runner and a cache generation are gone.
+      #
+      # The push trigger is already filtered to release-X.Y; this closes the
+      # dispatch path to the same set, and keeps holding if that filter is ever
+      # widened. Anchored at both ends on purpose: unanchored, the per-release
+      # staging branches (release-1.6.1, release-1.6.0-rc.4) would qualify, and
+      # those are built by tags.yaml. Fails rather than skips — a skipped job
+      # reads in the run list like one that produced the artifact.
+      - name: Refuse a build for a non-line ref
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" != "branch" ] \
+            || ! printf '%s' "$REF_NAME" | grep -qE '^release-[0-9]+\.[0-9]+$'; then
+            echo "::error::Refusing to build '$REF_NAME' ($REF_TYPE). This workflow publishes cozystack-packages:<ref> and every image tagged <ref>, so it may only run for a maintained release line (release-X.Y)."
+            echo "::error::Pick the release-X.Y branch in the 'Run workflow' ref selector. To build main, use build-main.yaml."
+            exit 1
+          fi
+          echo "Building line '$REF_NAME'."
+
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          # This workflow holds packages:write and an OCIR push token; it never
+          # pushes git, so don't leave the checkout's GITHUB_TOKEN in .git/config
+          # where a later build step could read it.
+          persist-credentials: false
+
+      # Ephemeral runners lack the flux CLI the installer's image-packages step
+      # shells out to; install if absent (idempotent).
+      - name: Set up build toolchain
+        run: |
+          command -v flux >/dev/null \
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
+      - name: Login to OCIR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      # Same isolated buildkit as build-main.yaml, so a line build never contends
+      # with PR builds on the shared embedded builder.
+      - name: Set up Buildx (docker-container driver)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Build line images and publish the packages artifact
+        run: make build
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          # READ the shared mode=max cache, never write it. CACHE_REGISTRY/<img>:
+          # buildcache is a single ref per image and build-main.yaml is
+          # deliberately its only writer, serialized, precisely so concurrent
+          # builds cannot race on the cache manifest (the 409 collision class
+          # #2711 fixed for image tags). A line build can overlap a main build, so
+          # writing here would reintroduce exactly that race.
+          WRITE_CACHE: '0'
+          # Floating per-line handle: images and the packages artifact both land
+          # under the branch name (e.g. :release-1.6). Versioned and :latest tags
+          # belong to releases (tags.yaml / finalize), never to this workflow.
+          IMAGE_TAG: ${{ github.ref_name }}
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'

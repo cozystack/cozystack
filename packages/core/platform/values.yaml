@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 54
+  targetVersion: 56
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -71,6 +71,75 @@ networking:
   # Set this to comma-separated list of master node IPs to override.
   kubeovn:
     MASTER_NODES: ""
+  # In-cluster (east-west) transport encryption. Opt-in, OFF by default.
+  #
+  # When enabled, pod-to-pod traffic that crosses nodes is encrypted at the
+  # network layer by the ACTIVE datapath, regardless of whether the workload
+  # speaks TLS — defense-in-depth for the whole mesh without per-application
+  # changes. This COMPLEMENTS, and does NOT replace, application-level /
+  # end-to-end TLS: it never reaches an external client and gives a tenant no
+  # verifiable endpoint certificate (see the per-app certificate series). Use
+  # it alongside, not instead of, TLS on exposed endpoints.
+  #
+  # The mechanism is datapath-specific (selected by bundles.system.variant):
+  #
+  #   * kubeovn-cilium (isp-full, the default) and kubeovn-cilium-generic
+  #     (isp-full-generic): KubeOVN owns the datapath; its Geneve overlay is
+  #     encrypted with IPsec (kube-ovn ENABLE_OVN_IPSEC). KubeOVN's own
+  #     controller provisions the IPsec CA and per-node certificates through
+  #     the Kubernetes CSR API — no cert-manager wiring is required. This is
+  #     the path this toggle drives today.
+  #   * cilium / cilium-generic (Cilium owns the datapath): Cilium-native
+  #     WireGuard/IPsec is the right mechanism there, but the platform system
+  #     bundle does not select those variants, so this toggle does not reach
+  #     them yet.
+  #   * cilium-kilo: Kilo already establishes a WireGuard mesh, but only at
+  #     meshGranularity=location — it encrypts CROSS-LOCATION traffic and
+  #     leaves intra-location pod-to-pod in cleartext by design. This toggle
+  #     targets exactly that intra-location gap and composes with Kilo rather
+  #     than conflicting with it.
+  #
+  # CAVEATS: encrypting the overlay adds per-packet ESP overhead and lowers
+  # the effective MTU, so east-west throughput drops and latency rises; the
+  # cost is highest for high-bandwidth flows. IPsec here protects the
+  # inter-node overlay tunnels — same-node pod-to-pod traffic never leaves the
+  # host and is not tunneled or encrypted. Flipping this on an existing
+  # cluster triggers a rollout of the CNI components. On variants without a
+  # cozystack-managed encryptable datapath (e.g. isp-hosted / noop) the toggle
+  # has no effect.
+  encryption:
+    enabled: false
+  # Install the upstream reference CNI plugins (bridge, macvlan, ipvlan, ...)
+  # into /opt/cni/bin on every node, from the multus image. Multus-backed
+  # NetworkAttachmentDefinitions delegate to these. Talos puts six binaries in
+  # that directory -- bridge, firewall, host-local, loopback and portmap from the
+  # same upstream release, plus flannel from a different repo -- and generic Linux
+  # gives no guarantee at all, so a bridge-type NAD fails there with
+  # `failed to find plugin "bridge" in path [/opt/cni/bin]`. A NAD naming one of
+  # the other ten needs staging on either platform.
+  #
+  # On for both variants when unset. Four of the names Talos carries are ones
+  # staging writes, so it rewrites those with the same upstream version (v1.9.1
+  # on both sides) and adds the ten it does not carry; loopback is not staged and
+  # flannel was never part of the reference set. Set it explicitly to decline.
+  #
+  # A spelling this chart does not recognise stops the whole platform render, not
+  # just multus, so a typo here halts reconciliation cluster-wide. That is
+  # deliberate -- reading an unreadable value as "off" would defeat the opt-out --
+  # but it is why the accepted spellings are worth getting right first time.
+  #
+  # When on, the plugins are written every time the Multus pod is recreated,
+  # replacing files of the same name. 14 of the upstream reference plugins are
+  # installed; loopback, dhcp, dummy and tap are left alone. See
+  # docs/vm-external-vlan.md.
+  #
+  # On a running cluster this is set on the `platform` component of the
+  # `cozystack.cozystack-platform` Package CR, the same path as backupStorage
+  # (see docs/operations/backup-classes.md). Editing the multus HelmRelease or
+  # the child Package cozystack.multus directly is reverted by the platform
+  # reconcile.
+  # stageCniPlugins: true
+
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"
@@ -351,6 +420,19 @@ publishing:
         tsigAlgorithm: HMACSHA256
         secretName: ""
         secretKey: tsig-secret-key
+# Telemetry reported by platform components.
+#
+# Two components report: cozystack-operator (cluster facts — nodes, storage,
+# packages) and cozystack-controller (application counts). This key covers the
+# CONTROLLER, which the platform deploys. The operator is deployed by the
+# cozy-installer chart and is switched off separately, with
+# cozystackOperator.disableTelemetry=true — a full opt-out needs both, because
+# the two components are installed by two different charts.
+#
+# What is collected, and why, is documented at
+# https://cozystack.io/docs/operations/configuration/telemetry/
+telemetry:
+  disabled: false
 # Authentication configuration
 authentication:
   oidc:

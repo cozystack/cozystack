@@ -196,10 +196,17 @@ spec:
             timeoutSeconds: 3
             periodSeconds: 10
             failureThreshold: 5
+          # Limits, not just requests: a memory limit is what sets memory.max on
+          # the pod cgroup, and the Talos userspace OOM handler (v1.12+) only
+          # ever kills cgroups that lack one. Requests alone left this DaemonSet
+          # an eviction candidate on every node whatever caused the pressure.
+          # Every container in the pod needs one for the pod cgroup to get it.
           resources:
             requests:
               memory: 50Mi
               cpu: 10m
+            limits:
+              memory: 512Mi
         - name: csi-node-driver-registrar
           image: quay.io/openshift/origin-csi-node-driver-registrar:latest
           args:
@@ -224,6 +231,8 @@ spec:
             requests:
               memory: 20Mi
               cpu: 5m
+            limits:
+              memory: 128Mi
         - name: csi-liveness-probe
           image: quay.io/openshift/origin-csi-livenessprobe:latest
           args:
@@ -237,6 +246,8 @@ spec:
             requests:
               memory: 20Mi
               cpu: 5m
+            limits:
+              memory: 128Mi
       volumes:
         - name: kubelet-dir
           hostPath:

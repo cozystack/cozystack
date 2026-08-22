@@ -1,0 +1,80 @@
+#!/bin/sh
+# Migration 54 --> 55
+# Adopt every existing RedisFailover onto the freshworks-oss redis-operator's
+# group filter AND pin its engine, before the new operator starts.
+#
+# redis-operator v3.3.5 watches RedisFailovers through a server-side label
+# selector, redis-failover.freshworks.com/operator-group=$OPERATOR_GROUP_ID
+# (OPERATOR_GROUP_ID=cozystack, set in packages/system/redis-operator). A CR
+# without that label never reaches the operator's informer at all — no event,
+# no reconcile, no error. The chart templates now stamp the label, but an
+# existing CR only receives it when its own HelmRelease next upgrades, which is
+# AFTER the operator rolls (the redis/harbor workloads dependsOn
+# cozystack.redis-operator).
+#
+# That same window is dangerous for the engine version. v3.3.5's compiled-in
+# default image moved 6.2.6 -> 7.2.4, so the moment the operator adopts a
+# labelled CR whose spec.redis.image / spec.sentinel.image is still empty, it
+# rolls that Redis to 7.2.4 — which rewrites dump.rdb into a format 6.2.6 cannot
+# load. The later chart upgrade that pins 6.2.6 then rolls back onto an
+# unreadable file and CrashLoops (Harbor's Redis is PVC-backed). So we label AND
+# pin in the same pass, before the operator sees anything: set spec.redis.image
+# / spec.sentinel.image to redis:6.2.6-alpine only where empty (Harbor has both
+# empty; apps/redis pins its data image via versionMap and leaves only the
+# sentinel empty). The later chart render writes the identical values, so
+# nothing fights.
+#
+# Runs as a pre-upgrade hook, ahead of the new operator.
+#
+# If another migration 54 lands first, renumber this one and bump
+# migrations.targetVersion; the collision surfaces as a loud add/add conflict on
+# rebase.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+# `--ignore-not-found -o name` separates a genuinely absent CRD (rc 0, empty
+# output -> nothing to adopt) from a real API error (rc != 0 -> abort under
+# set -e). A bare `kubectl get crd >/dev/null 2>&1` cannot tell them apart: a
+# one-off apiserver blip during the hook would read as "absent", stamp the
+# version and leave the whole fleet unlabelled and invisible to the new
+# operator, permanently — the exact failure this migration exists to prevent.
+# Mirrors the probe in migration 50.
+crd=$(kubectl get crd redisfailovers.databases.spotahome.com --ignore-not-found -o name)
+if [ -z "$crd" ]; then
+  echo "RedisFailover CRD not present; nothing to adopt"
+  stamp_cozystack_version 55
+  exit 0
+fi
+
+rfs=$(kubectl get redisfailovers.databases.spotahome.com --all-namespaces -o json \
+  | jq -r '.items[] | "\(.metadata.namespace) \(.metadata.name)"')
+
+# Heredoc-fed loop (not a pipe) so a failed patch aborts the migration in this
+# shell rather than only its subshell.
+if [ -n "$rfs" ]; then
+  while read -r ns name; do
+    [ -n "$ns" ] || continue
+    cur=$(kubectl -n "$ns" get redisfailovers.databases.spotahome.com "$name" -o json)
+    redis_img=$(printf '%s' "$cur" | jq -r '.spec.redis.image // ""')
+    sentinel_img=$(printf '%s' "$cur" | jq -r '.spec.sentinel.image // ""')
+    # Always add the operator-group label; pin redis:6.2.6-alpine only where the
+    # image is currently empty. Deep-merge with jq `*` so both spec sub-objects
+    # survive, and a non-empty image (apps/redis's versionMap data image) is
+    # left untouched.
+    patch=$(jq -cn --arg ri "$redis_img" --arg si "$sentinel_img" '
+      {metadata: {labels: {"redis-failover.freshworks.com/operator-group": "cozystack"}}}
+      * (if $ri == "" then {spec: {redis: {image: "redis:6.2.6-alpine"}}} else {} end)
+      * (if $si == "" then {spec: {sentinel: {image: "redis:6.2.6-alpine"}}} else {} end)')
+    echo "Adopting RedisFailover ${ns}/${name} (label + engine pin where empty)"
+    kubectl -n "$ns" patch redisfailovers.databases.spotahome.com "$name" \
+      --type=merge -p "$patch"
+  done <<EOF
+$rfs
+EOF
+fi
+
+# Stamp version
+stamp_cozystack_version 55

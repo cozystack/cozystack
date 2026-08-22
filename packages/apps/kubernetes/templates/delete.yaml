@@ -8,6 +8,37 @@ metadata:
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
   name: {{ .Release.Name }}-pre-cleanup
 spec:
+  # One attempt. restartPolicy Never turns the default of 6 into seven pods in
+  # series, each restarting the script from Step 1 and each paying its own image
+  # pull, which outlives the uninstall budget: helm then times out on its own
+  # instead of reporting which step failed.
+  #
+  # Zero and not one, because a second attempt does not fit. Both waits below
+  # are guarded, so an attempt can spend all of its budget without failing and a
+  # retry starts from Step 1 with the clock already there; on a nodeless tenant
+  # it also re-pays Step 4, since attempt one leaves the TenantControlPlane
+  # terminating. The failure a retry would cover is an eviction (this pod
+  # tolerates control-plane taints), which is not bounded in time and costs most
+  # when it arrives late. The price is that such an eviction fails the whole
+  # attempt and flux repeats it on its own interval — slower, and predictable.
+  backoffLimit: 0
+  # No activeDeadlineSeconds, for arithmetic rather than oversight. A deadline
+  # has to sit above the sum of the waits below, or it cuts runs that were going
+  # to finish, and far enough under helm-controller's uninstall budget to be
+  # what helm reports rather than what it waits through. Those two bounds do not
+  # currently leave a gap, and the image pull comes from Docker Hub with no
+  # mirror in front of it.
+  #
+  # Note that the sum is a whole-Job figure only while backoffLimit is 0:
+  # activeDeadlineSeconds runs from status.startTime and a retry does not reset
+  # it, so allowing retries means the deadline has to clear all of them.
+  #
+  # Room comes from raising spec.uninstall.timeout on the generated HelmRelease,
+  # not from squeezing the waits further.
+  # packages/apps/bucket/templates/hooks/cleanup-acme.yaml is the shape to copy
+  # then: same image, with the deadline and the retry budget set together, and
+  # --request-timeout on each call so an unresponsive apiserver is bounded too,
+  # which --wait=false below does not cover.
   template:
     metadata:
       labels:
@@ -50,6 +81,54 @@ spec:
             - -c
             - |
               set -e
+              # Steps below that can be defeated by a stuck object log a warning
+              # and carry on rather than failing. That is deliberate: this is a
+              # pre-delete hook, so a non-zero exit aborts the Helm uninstall
+              # before the release is removed — the release stays in storage and
+              # the same doomed teardown is retried forever. Those steps
+              # therefore report nothing through the exit code, which leaves the
+              # final message as their only report. Record what those steps
+              # leave behind so that message can name it instead of claiming
+              # success in exactly the case the warnings were written for. The
+              # steps that are NOT backstopped — Steps 3, 5 and 6, and the patch
+              # inside Step 1 — end the run under set -e and never reach that
+              # message at all.
+              #
+              # What gets recorded is RESIDUE, never a change of route. A
+              # bounded delete that times out has a remedy right behind it —
+              # Step 2 falls through to force-clearing finalizers, Step 4 falls
+              # through to Step 4b — and whether anything survived is decided by
+              # that remedy, which records its own outcome. Recording the
+              # timeout as well would report a finished teardown as incomplete
+              # on the commonest fallback path there is: a tenant with no
+              # working nodes, which is exactly why the wait is bounded. Those
+              # steps warn and say nothing to the summary.
+              #
+              # A read that fails looks exactly like one that found nothing: an
+              # empty list and a failed list both give a loop nothing to
+              # iterate, and an absent object and an unreachable apiserver both
+              # make a probe non-zero. Every read this summary rests on
+              # therefore keeps its status — Step 2's force-clear re-list, and
+              # both of Step 4b's probes. Step 1's list is the one that does
+              # not, and that is a decision rather than an omission: Step 2
+              # deletes by label rather than from that list, so a suspend that
+              # never happened leaves nothing of its own behind, and reporting
+              # it would name residue that does not exist.
+              residue_from=""
+              backstop() {
+                # A label is recorded once however many objects hit it: the Step
+                # 2 force-clear runs per child HelmRelease, and a summary that
+                # repeated one step per failed object would read as several
+                # distinct failures. Matched between separators so that a label
+                # which is a prefix of another still counts as absent.
+                case ", $residue_from," in
+                  *", $1,"*) ;;
+                  *) residue_from="${residue_from}${residue_from:+, }$1" ;;
+                esac
+                shift
+                echo "WARNING: $*" >&2
+              }
+
               echo "Step 1: Suspending all HelmReleases with label cozystack.io/target-cluster-name={{ .Release.Name }}"
               for hr in $(kubectl -n {{ .Release.Namespace }} get helmreleases.helm.toolkit.fluxcd.io -l "cozystack.io/target-cluster-name={{ .Release.Name }}" -o name 2>/dev/null || true); do
                 if [ -n "$hr" ]; then           
@@ -80,18 +159,40 @@ spec:
                    -l "cozystack.io/target-cluster-name={{ .Release.Name }}" \
                    --ignore-not-found=true --wait=true --timeout=120s; then
                 echo "WARNING: child HelmReleases for {{ .Release.Name }} did not uninstall within timeout (tenant likely has no working nodes); force-clearing their finalizers so teardown can proceed" >&2
-                for hr in $(kubectl -n {{ .Release.Namespace }} get helmreleases.helm.toolkit.fluxcd.io -l "cozystack.io/target-cluster-name={{ .Release.Name }}" -o name 2>/dev/null || true); do
+                # Captured, not piped straight into `for`: a list that fails and
+                # a list that comes back empty both give the loop nothing to
+                # iterate, and everything this one fails to return keeps its
+                # finalizer. Without the status there is no way to tell those
+                # apart, and the closing message would call the run clean.
+                stuck_hrs=$(kubectl -n {{ .Release.Namespace }} get helmreleases.helm.toolkit.fluxcd.io \
+                              -l "cozystack.io/target-cluster-name={{ .Release.Name }}" -o name 2>/dev/null) \
+                  || backstop "step 2 (child HelmRelease enumeration)" \
+                       "could not list the child HelmReleases left after the timeout, so none could be force-cleared; any still holding finalizers were left in place"
+                for hr in $stuck_hrs; do
                   [ -n "$hr" ] || continue
                   echo "  Force-clearing finalizers on $hr"
                   kubectl -n {{ .Release.Namespace }} patch "$hr" \
                     --type=merge -p '{"metadata":{"finalizers":null}}' \
-                    || echo "WARNING: failed to clear finalizers on $hr" >&2
+                    || backstop "step 2 (child HelmRelease finalizers)" "failed to clear finalizers on $hr"
                 done
               fi
 
               echo "Step 3: Deleting KamajiControlPlane {{ .Release.Name }}"
+              # --wait is spelled out because kubectl defaults it to true, and a
+              # --timeout it does not carry defaults to 0, which kubectl reads
+              # as "wait forever" and turns into a week.
+              #
+              # false rather than a bound, because there is nothing here worth
+              # waiting for. What matters downstream is the TenantControlPlane,
+              # and Step 4 deletes that one directly and waits for it; blocking
+              # on the KamajiControlPlane first only adds a second place for a
+              # CAPI finalizer to stall the hook. Not waiting also keeps this
+              # step under `set -e` with no guard: with no timeout to expire,
+              # every remaining non-zero exit is a real failure — the API
+              # rejecting the request, discovery breaking, RBAC being wrong —
+              # and none of those should be reported as a cleanup that happened.
               kubectl -n {{ .Release.Namespace }} delete kamajicontrolplanes.controlplane.cluster.x-k8s.io {{ .Release.Name }} \
-                --ignore-not-found=true
+                --ignore-not-found=true --wait=false
 
               echo "Step 4: Deleting TenantControlPlane {{ .Release.Name }} and waiting for it to be removed"
               # --wait=true blocks until the TenantControlPlane object is fully
@@ -103,7 +204,7 @@ spec:
               # the backstop for that case.
               kubectl -n {{ .Release.Namespace }} delete tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} \
                 --ignore-not-found=true --wait=true --timeout=120s \
-                || echo "WARNING: TenantControlPlane {{ .Release.Name }} did not delete within timeout; relying on the Step 4b finalizer backstop" >&2
+                || echo "WARNING: TenantControlPlane {{ .Release.Name }} did not delete within timeout; falling through to Step 4b, which reports whether the datastore-secret finalizer was left behind" >&2
 
               echo "Step 4b: Clearing leftover Kamaji datastore-secret finalizer on {{ .Release.Name }}-datastore-config"
               # Kamaji creates a per-tenant datastore connection Secret named
@@ -113,7 +214,10 @@ spec:
               # TenantControlPlane deletion above. If the TCP was force-deleted,
               # or Kamaji did not reconcile the removal in time, the finalizer
               # stays on the Secret and blocks deletion of the entire namespace
-              # (the Secret cannot be garbage-collected, see issue #3062).
+              # (the Secret cannot be garbage-collected). Issue #3062 reported
+              # that leak and is closed, but it was closed by this step rather
+              # than by a Kamaji fix: the ordering it describes is still
+              # reachable, so this backstop stays.
               #
               # By this point the TenantControlPlane is gone (Step 4 waited for
               # it), so Kamaji no longer has any legitimate use for this Secret:
@@ -126,29 +230,78 @@ spec:
               # Kamaji still legitimately owns the datastore Secret, and stripping
               # the finalizer would interfere with its lifecycle management. Gate
               # the patch on the TCP being confirmed absent (CodeRabbit #3078).
-              if kubectl -n {{ .Release.Namespace }} get tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} >/dev/null 2>&1; then
-                echo "  TenantControlPlane {{ .Release.Name }} still present (deletion not complete); leaving the datastore-secret finalizer untouched"
-              elif kubectl -n {{ .Release.Namespace }} get secret {{ .Release.Name }}-datastore-config >/dev/null 2>&1; then
-                echo "  Removing finalizers from secret/{{ .Release.Name }}-datastore-config"
-                kubectl -n {{ .Release.Namespace }} patch secret {{ .Release.Name }}-datastore-config \
-                  --type=merge -p '{"metadata":{"finalizers":null}}' \
-                  || echo "WARNING: failed to clear datastore-secret finalizer for {{ .Release.Name }}; the namespace may stay in Terminating (issue #3062)" >&2
+              #
+              # Both probes below are three-way: present, absent, or unknown.
+              # `>/dev/null 2>&1` would collapse the last two, and the mistake is
+              # not symmetric — reading a throttled apiserver as "confirmed
+              # absent" is exactly what defeats the gate this paragraph is about.
+              # `--ignore-not-found` keeps a missing object at exit 0 with no
+              # output and leaves every other failure non-zero, so the status
+              # separates "not there" from "could not ask". (Measured here: a
+              # kubectl that cannot reach a cluster still exits non-zero with the
+              # flag set. That a NotFound exits 0 is inferred rather than
+              # measured — from Steps 2 to 6 in this same script, which pass
+              # `--ignore-not-found` to `delete` under a bare `set -e` and do not
+              # end the run on an object that is already gone.)
+              tcp_lookup=0
+              tcp=$(kubectl -n {{ .Release.Namespace }} get tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} \
+                      -o name --ignore-not-found 2>/dev/null) || tcp_lookup=1
+              if [ "$tcp_lookup" != 0 ]; then
+                backstop "step 4b (datastore-secret state unknown)" \
+                  "could not determine whether TenantControlPlane {{ .Release.Name }} is gone, so the finalizer on secret/{{ .Release.Name }}-datastore-config was left untouched rather than stripped from an owner that may still exist; if it is still there it will block deletion of namespace {{ .Release.Namespace }}"
+              elif [ -n "$tcp" ]; then
+                # A label of its own, not the one below: both branches leave the
+                # finalizer on the Secret, but they want opposite things from
+                # whoever reads this. Below, the patch was rejected and the
+                # finalizer has to be cleared by hand. Here it is Kamaji's to
+                # clear and the TenantControlPlane is what needs looking at, so
+                # naming the Secret would send the reader to strip a finalizer
+                # its owner is still using.
+                backstop "step 4b (TenantControlPlane still deleting)" \
+                  "TenantControlPlane {{ .Release.Name }} is still present, so Kamaji may still own secret/{{ .Release.Name }}-datastore-config; leaving its finalizer untouched, and it will block deletion of namespace {{ .Release.Namespace }} until that TenantControlPlane finishes deleting"
               else
-                echo "  Secret {{ .Release.Name }}-datastore-config not present; nothing to do"
+                secret_lookup=0
+                secret=$(kubectl -n {{ .Release.Namespace }} get secret {{ .Release.Name }}-datastore-config \
+                           -o name --ignore-not-found 2>/dev/null) || secret_lookup=1
+                if [ "$secret_lookup" != 0 ]; then
+                  backstop "step 4b (datastore-secret state unknown)" \
+                    "could not determine whether secret/{{ .Release.Name }}-datastore-config still exists, so its finalizer was neither confirmed gone nor cleared; if it is still there it will block deletion of namespace {{ .Release.Namespace }}"
+                elif [ -n "$secret" ]; then
+                  echo "  Removing finalizers from secret/{{ .Release.Name }}-datastore-config"
+                  kubectl -n {{ .Release.Namespace }} patch secret {{ .Release.Name }}-datastore-config \
+                    --type=merge -p '{"metadata":{"finalizers":null}}' \
+                    || backstop "step 4b (datastore-secret finalizer)" \
+                         "failed to clear finalizer.kamaji.clastix.io/datastore-secret from secret/{{ .Release.Name }}-datastore-config; it will block deletion of namespace {{ .Release.Namespace }} until it is removed by hand"
+                else
+                  echo "  Secret {{ .Release.Name }}-datastore-config not present; nothing to do"
+                fi
               fi
 
+              # Steps 5 and 6 do not wait. Both defaulted to --wait=true with no
+              # --timeout, so either one parked this hook for a week on a single
+              # stuck finalizer: a DataVolume held by a CDI importer or a PVC
+              # finalizer is the reachable case. Waiting buys nothing here.
+              # Nothing after these steps reads their result, and the DELETE has
+              # already been accepted either way — an expired wait and
+              # --wait=false leave the same cluster state, with the same objects
+              # finalizing in the background once the hook has moved on.
               echo "Step 5: Cleaning up DataVolumes"
               kubectl -n {{ .Release.Namespace }} delete datavolumes \
                 -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}" \
-                --ignore-not-found=true
+                --ignore-not-found=true --wait=false
 
               echo "Step 6: Cleaning up LoadBalancer Services"
               kubectl -n {{ .Release.Namespace }} delete services \
                 -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}" \
                 --field-selector spec.type=LoadBalancer \
-                --ignore-not-found=true
+                --ignore-not-found=true --wait=false
 
-              echo "Cleanup completed successfully"
+              if [ -n "$residue_from" ]; then
+                echo "Cleanup incomplete; residue left by: $residue_from" >&2
+                echo "Objects named in the warnings above may need removing by hand; exiting 0 so the release can still be uninstalled" >&2
+              else
+                echo "Cleanup completed successfully"
+              fi
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -184,6 +337,9 @@ rules:
       - watch
       - patch
       - delete
+  # watch is granted only where a delete still waits: Step 2 on helmreleases and
+  # Step 4 on tenantcontrolplanes. The other three deletes pass --wait=false, so
+  # kubectl never opens a watch for them and the verb would be unexercised.
   - apiGroups:
       - "controlplane.cluster.x-k8s.io"
     resources:
@@ -191,7 +347,6 @@ rules:
     verbs:
       - get
       - list
-      - watch
       - delete
   - apiGroups:
       - "kamaji.clastix.io"
@@ -209,7 +364,6 @@ rules:
     verbs:
       - get
       - list
-      - watch
       - delete
   - apiGroups:
       - ""
@@ -218,11 +372,10 @@ rules:
     verbs:
       - get
       - list
-      - watch
       - delete
   # Scoped to the single Kamaji datastore connection Secret so Step 4b can
-  # strip the leftover finalizer.kamaji.clastix.io/datastore-secret finalizer
-  # (issue #3062). resourceNames limits get/patch to exactly this Secret.
+  # strip the leftover finalizer.kamaji.clastix.io/datastore-secret finalizer.
+  # resourceNames limits get/patch to exactly this Secret.
   - apiGroups:
       - ""
     resources:

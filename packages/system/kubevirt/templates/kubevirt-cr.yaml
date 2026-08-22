@@ -42,6 +42,19 @@ spec:
     - Evict
     batchEvictionInterval: 1m
     batchEvictionSize: 10
-  customizeComponents: {}
+  # virt-handler is a node DaemonSet and ran BestEffort. The Talos userspace OOM
+  # handler (v1.12+) only ever kills cgroups with no memory.max, and picks its
+  # victim by QoS class rather than by what caused the pressure — so virt-handler
+  # was an eviction candidate on every node, and losing it stops VM lifecycle
+  # operations there. virt-operator owns the DaemonSet, so resources cannot be
+  # set from chart values; customizeComponents.patches is the supported seam.
+  # 14d peak 207Mi on a 3-node dev cluster; grows with VMs per node.
+  customizeComponents:
+    patches:
+    - resourceName: virt-handler
+      resourceType: DaemonSet
+      type: strategic
+      patch: |
+        {"spec":{"template":{"spec":{"containers":[{"name":"virt-handler","resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"memory":"2Gi"}}}]}}}}
   imagePullPolicy: IfNotPresent
   monitorNamespace: tenant-root

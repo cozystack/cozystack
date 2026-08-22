@@ -60,3 +60,120 @@ spec:
             name: mongodb-test-rs0
           status:
             readyReplicas: 1
+---
+# Logical-dump backup half of the MongoDB backup flow, driving the validated
+# example scripts (examples/backups/mongodb) as the harness so the test and the
+# documented flow can never drift. run-all.sh runs Bucket -> source MongoDB
+# (backup.enabled) + sentinel document -> ad-hoc BackupJob against the
+# cozy-default BackupClass (waits Succeeded), and SKIP_RESTORE=1 stops it there
+# — the in-cluster witness that a psmdb-operator backup is actually taken.
+#
+# The to-copy restore half is deliberately uncovered. A to-copy restore replays
+# the source cluster's system users into the target, so the target's own
+# generated credentials stop authenticating and the harness cannot read the
+# sentinel back out of the restored copy (#3832). Returning full round-trip
+# coverage once that is fixed means dropping both SKIP_RESTORE below and the
+# marker check beside it: the complete flow never prints that line, so removing
+# only the variable trades this failure for a marker mismatch. The test keeps
+# its round-trip name for that return.
+#
+# Same harness-driving shape as mariadb-2-backup-roundtrip
+# (hack/e2e-chainsaw/mariadb/chainsaw-test.yaml): a single run step pre-cleans
+# any leftover state, drives run-all.sh, and drains in an always-reached finally.
+#
+# Runs in tenant-root, not the default tenant-test: the S3 client here is the
+# percona-backup-mongodb agent INSIDE the mongod pod, and the e2e tenant is
+# created isolated (hack/e2e-install-cozystack.bats) — its Cilium egress
+# allowlist blocks a tenant-test Pod from reaching tenant-root's seaweedfs,
+# while a tenant-root Pod reaches it over same-tenant egress. The harness
+# targets the in-cluster endpoint (S3_ENDPOINT below) instead of the BucketInfo
+# external ingress URL, which in CI is an unroutable placeholder, and tolerates
+# its self-signed cert via backup.insecureSkipTLSVerify=true on the app (the
+# psmdb s3 storage has no CA-bundle field, unlike the mariadb driver's tls
+# block).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mongodb-2-backup-roundtrip
+spec:
+  namespace: tenant-root
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: mongodb-mongodb-src
+  - describe:
+      apiVersion: psmdb.percona.com/v1
+      kind: PerconaServerMongoDB
+      name: mongodb-mongodb-src
+  - describe:
+      apiVersion: psmdb.percona.com/v1
+      kind: PerconaServerMongoDBBackup
+  - describe:
+      apiVersion: psmdb.percona.com/v1
+      kind: PerconaServerMongoDBRestore
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  # The dump/restore runs in the pbm agent inside the mongod pods; a failed
+  # upload or TLS handshake leaves its error in those Pods' logs.
+  - podLogs:
+      selector: app.kubernetes.io/instance=mongodb-mongodb-src
+      tail: 200
+  steps:
+  - name: run
+    try:
+    # Pre-clean: tenant-root is a shared, persistent namespace with fixed
+    # resource names, so a run killed before the finally below leaves stale
+    # state behind. A leftover BackupJob still carrying status.phase=Succeeded
+    # from a prior run would satisfy `wait_for_field ... Succeeded` instantly
+    # and pass without a real backup ever running. cleanup.sh is idempotent
+    # (--ignore-not-found), so this is a no-op on a clean namespace.
+    - script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/mongodb/cleanup.sh
+        check:
+          ($error == null): true
+    # The 30m budget covers what this step drives: bucket provisioning, a
+    # single-replica source MongoDB coming up (psmdb reconcile, PVC bind, image
+    # pull, pbm-agent sidecars) and the logical dump to S3 (convention 6:
+    # justified in-line). It is not lowered for the skipped restore because
+    # run-all.sh's own per-wait budgets up to the backup already exceed it, so
+    # this is the ceiling that fires either way. run-all.sh fails fast on a
+    # terminal BackupJob phase and stalled HelmReleases rather than polling out
+    # the budget.
+    - script:
+        timeout: 30m
+        content: |
+          set -eu
+          cd ../../..
+          [ -x examples/backups/mongodb/run-all.sh ] || { echo "mongodb backup example scripts not found at examples/backups/mongodb" >&2; exit 1; }
+          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+            SKIP_RESTORE=1 examples/backups/mongodb/run-all.sh
+        check:
+          ($error == null): true
+          # Exit zero alone is also what a completed round-trip returns, so the
+          # marker is what tells the skipped flow from the full one — and what
+          # fails the step if SKIP_RESTORE stops reaching the harness. run-all.sh
+          # logs through stderr. The phrase is the skip branch's own line, minus
+          # its colon, which YAML would read as a mapping separator in the key.
+          (contains($stderr, 'stopping after a successful backup')): true
+    finally:
+    # Removes every resource the harness created (chainsaw did not apply them,
+    # so they are not part of automatic cleanup) — including the operator-side
+    # psmdb.percona.com Backup/Restore CRs the Cozystack jobs own only by label.
+    - description: backup-flow cleanup
+      script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/mongodb/cleanup.sh

@@ -1,0 +1,65 @@
+suite: grafana runs the upstream image with in-cluster catalog plugins
+templates:
+  - templates/grafana/grafana.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# Regression cover for the switch off the rebuilt AGPL Grafana image
+# (PR #3378): the Grafana CR must reference the upstream grafana/grafana
+# image routed through cozy-lib.image (so mirrored-registry installs keep
+# working), and install its plugins via GF_INSTALL_PLUGINS from the
+# in-cluster grafana-dashboards server rather than the public catalog
+# (air-gapped installs have no internet egress at pod startup).
+
+tests:
+  - it: uses the digest-pinned upstream image untouched on a default install
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        gateway-enabled: "false"
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    asserts:
+      - equal:
+          path: kind
+          value: Grafana
+      - equal:
+          path: spec.deployment.spec.template.spec.containers[0].image
+          value: docker.io/grafana/grafana:11.6.15@sha256:f739273dfed04760428fcfbfccd1752b3b7fc87ef0a3d5637e2e87cce151e1a2
+
+  - it: prefixes the image with the cluster images-registry when set
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        gateway-enabled: "false"
+        images-registry: mirror.example.com
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    asserts:
+      - equal:
+          path: spec.deployment.spec.template.spec.containers[0].image
+          value: mirror.example.com/docker.io/grafana/grafana:11.6.15@sha256:f739273dfed04760428fcfbfccd1752b3b7fc87ef0a3d5637e2e87cce151e1a2
+
+  - it: installs pinned plugins from the in-cluster grafana-dashboards server
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        gateway-enabled: "false"
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    asserts:
+      - contains:
+          path: spec.deployment.spec.template.spec.containers[0].env
+          content:
+            name: GF_INSTALL_PLUGINS
+            value: "http://grafana-dashboards.cozy-grafana-operator.svc/plugins/grafana-worldmap-panel-1.0.6.zip;grafana-worldmap-panel,http://grafana-dashboards.cozy-grafana-operator.svc/plugins/marcusolsson-dynamictext-panel-6.2.0.zip;marcusolsson-dynamictext-panel,http://grafana-dashboards.cozy-grafana-operator.svc/plugins/natel-discrete-panel-0.1.1.zip;natel-discrete-panel,http://grafana-dashboards.cozy-grafana-operator.svc/plugins/victoriametrics-logs-datasource-0.29.0.zip;victoriametrics-logs-datasource"
+      - notExists:
+          path: spec.config.plugins

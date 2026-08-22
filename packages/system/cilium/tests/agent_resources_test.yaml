@@ -1,0 +1,81 @@
+suite: cilium-agent memory requests and limits
+
+# The cilium-agent DaemonSet ran with no resources at all, which put it in the
+# Talos userspace OOM handler's victim set: that handler (v1.12+) only ever
+# selects cgroups that lack memory.max, and picks by QoS class rather than by
+# what caused the pressure. Losing cilium-agent on a node takes that node's
+# datapath programming with it.
+#
+# The limit is what sets memory.max, and it is set on the POD cgroup only when
+# EVERY container in the pod has one — so all seven are asserted here, not just
+# the agent. Five of the init containers take their values from initResources;
+# install-cni-binaries carries upstream's own cni.resources and is asserted to
+# document that it is already covered rather than overlooked.
+#
+# Both keys are set from the umbrella values.yaml against the vendored subchart.
+# An upstream bump that renames or relocates either one renders nothing and
+# leaves no other trace, silently returning the pod to the victim set; catching
+# that is the main thing these assertions are for.
+release:
+  name: cilium
+  namespace: cozy-cilium
+tests:
+  - it: cilium-agent declares a memory limit and request
+    template: charts/cilium/templates/cilium-agent/daemonset.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="cilium-agent")].resources.limits.memory
+          value: 4Gi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="cilium-agent")].resources.requests.memory
+          value: 256Mi
+
+  # Asserted one container at a time. A negated matcher over the init container
+  # list reads as if it covers them all but passes vacuously, so each limit is
+  # pinned explicitly instead.
+  - it: every cilium-agent init container declares a memory limit
+    template: charts/cilium/templates/cilium-agent/daemonset.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name=="config")].resources.limits.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name=="mount-cgroup")].resources.limits.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name=="apply-sysctl-overwrites")].resources.limits.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name=="mount-bpf-fs")].resources.limits.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name=="clean-cilium-state")].resources.limits.memory
+          value: 256Mi
+      # Upstream's cni.resources, not initResources — pinned so a bump that
+      # drops it is caught here rather than by a pod that quietly loses
+      # memory.max.
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name=="install-cni-binaries")].resources.limits.memory
+          value: 1Gi
+
+  # cilium-envoy is a second DaemonSet on the same nodes. Its limit predates
+  # this suite; it is pinned here because the pod-level argument above applies
+  # to it identically.
+  - it: cilium-envoy declares a memory limit and request
+    template: charts/cilium/templates/cilium-envoy/daemonset.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="cilium-envoy")].resources.limits.memory
+          value: 1Gi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="cilium-envoy")].resources.requests.memory
+          value: 512Mi

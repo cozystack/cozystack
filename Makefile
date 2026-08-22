@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -14,7 +14,6 @@ build: build-deps
 	make -C packages/apps/mariadb image
 	make -C packages/apps/clickhouse image
 	make -C packages/apps/kubernetes image
-	make -C packages/system/monitoring image
 	make -C packages/system/cozystack-api image
 	make -C packages/system/cozystack-controller image
 	make -C packages/system/backup-controller image

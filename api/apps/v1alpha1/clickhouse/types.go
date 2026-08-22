@@ -63,6 +63,9 @@ type Backup struct {
 	// DEPRECATED. S3 endpoint URL for the legacy chart-emitted sidecar.
 	// +kubebuilder:default:=""
 	Endpoint string `json:"endpoint,omitempty"`
+	// CA bundle the sidecar trusts when the S3 endpoint's certificate is signed by a private CA (e.g. Cozystack's in-cluster SeaweedFS). Applies to both the per-tenant and the `useSystemBucket` flow, and to the `clickhouse-backup` sidecar only — the legacy `schedule` CronJob writes to S3 through restic and does not consume it, so a private-CA endpoint combined with `schedule` still fails TLS. Use the BackupClass flow for such an endpoint.
+	// +kubebuilder:default:={}
+	EndpointCA EndpointCA `json:"endpointCA,omitempty"`
 	// Legacy. Password for Restic backup encryption used by the legacy CronJob. Unused by the Altinity strategy.
 	// +kubebuilder:default:="<password>"
 	ResticPassword string `json:"resticPassword,omitempty"`
@@ -105,6 +108,15 @@ type ClickHouseKeeper struct {
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="1Gi"
 	Size resource.Quantity `json:"size,omitempty"`
+}
+
+type EndpointCA struct {
+	// Key inside the Secret holding the PEM CA bundle. Defaults to `ca.crt`.
+	// +kubebuilder:default:="ca.crt"
+	Key string `json:"key,omitempty"`
+	// Name of the Secret in the application namespace. Empty (default) mounts nothing and leaves the sidecar on the system trust store only.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
 }
 
 type Resources struct {

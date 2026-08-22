@@ -1,0 +1,42 @@
+suite: Cilium install retry strategy tests
+templates:
+  - templates/helmreleases/cilium.yaml
+values:
+  - values-ci.yaml
+tests:
+  # Flux's default strategy remediates a failed install by uninstalling the
+  # release, so a missed install budget on the tenant CNI takes the cluster's
+  # only CNI away for the window until the next install applies the manifests
+  # again, once per cycle for as long as retries allows. RetryOnFailure drops
+  # the teardown and retries as an upgrade instead.
+  - it: retries a failed install instead of uninstalling the CNI
+    asserts:
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.install.strategy.retryInterval
+          value: 30s
+
+  # The retry of a failed install runs as an upgrade, so without a strategy on
+  # the upgrade action the second attempt falls back to upgrade remediation.
+  - it: keeps retrying on the upgrade action the install retry runs as
+    asserts:
+      - equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.strategy.retryInterval
+          value: 30s
+
+  # The strategy governs a failed release. Two other branches consult the retry
+  # count instead and refuse to act once it is exhausted: an absent release,
+  # which reads the install block, and an out-of-sync one, which reads upgrade.
+  - it: keeps unlimited retries for the branches no strategy reaches
+    asserts:
+      - equal:
+          path: spec.install.remediation.retries
+          value: -1
+      - equal:
+          path: spec.upgrade.remediation.retries
+          value: -1

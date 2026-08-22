@@ -34,6 +34,9 @@ type ConfigSpec struct {
 	// Deploy own SeaweedFS.
 	// +kubebuilder:default:=false
 	Seaweedfs bool `json:"seaweedfs"`
+	// Deploy own ComputePlane — a single-tenant, Cozystack-managed cluster for untrusted-code applications. The tenant receives no admin kubeconfig for it. Automatic routing of catalog applications onto it (placement: ComputePlane) is a planned follow-up and is not available yet; until it lands, external catalogs target the cluster via its computeplane-cluster-admin-kubeconfig Secret. See design-proposals/compute-plane in cozystack/community.
+	// +kubebuilder:default:=false
+	Computeplane bool `json:"computeplane"`
 	// The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.
 	// +kubebuilder:default:=""
 	SchedulingClass string `json:"schedulingClass,omitempty"`

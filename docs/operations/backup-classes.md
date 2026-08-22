@@ -13,6 +13,7 @@ Tenants reference `cozy-default` from `BackupJob`, `Plan`, and `RestoreJob` reso
 | `apps.cozystack.io/Postgres`     | CloudNativePG (barman)               | `strategy.backups.cozystack.io/CNPG` `cozy-default-cnpg`                   |
 | `apps.cozystack.io/MariaDB`      | mariadb-operator dump                | `strategy.backups.cozystack.io/MariaDB` `cozy-default-mariadb`             |
 | `apps.cozystack.io/ClickHouse`   | Altinity `clickhouse-backup` sidecar | `strategy.backups.cozystack.io/Altinity` `cozy-default-altinity`           |
+| `apps.cozystack.io/MongoDB`      | Percona psmdb operator (pbm) dump    | `strategy.backups.cozystack.io/MongoDB` `cozy-default-mongodb`             |
 | `apps.cozystack.io/Etcd`         | etcd-operator snapshot               | `strategy.backups.cozystack.io/Etcd` `cozy-default-etcd`                   |
 | `apps.cozystack.io/VMInstance`   | Velero + kubevirt-velero-plugin      | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vminstance`    |
 | `apps.cozystack.io/VMDisk`       | Velero                               | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vmdisk`        |
@@ -34,6 +35,7 @@ Different operators expect different endpoint shapes; the strategy templates ren
 | CNPG (Postgres) | `barmanObjectStore.endpointURL` | full URL (scheme preserved) |
 | Etcd            | `destination.s3.endpoint`       | full URL (scheme preserved) |
 | MariaDB         | `storage.s3.endpoint`           | bare host:port (scheme stripped); `tls.enabled` derived from the scheme |
+| MongoDB         | n/a — storage lives on the app (`backup.endpointURL`)                     | full URL (scheme preserved), configured on the MongoDB application, not the strategy |
 | FoundationDB    | `blobStoreConfiguration.accountName` + `urlParameters.secure_connection` | bare host:port + derived secure flag |
 | Velero          | `BackupStorageLocation.spec.config.s3Url` | full URL (scheme preserved) |
 | ClickHouse sidecar | `S3_ENDPOINT` env | bare host:port (from projected Secret) |
@@ -66,6 +68,43 @@ When `useSystemBucket: true`:
 
 `s3Region`, `s3Bucket`, `endpoint`, `s3AccessKey`, `s3SecretKey`, and `s3CredentialsSecret` are ignored in this mode.
 
+## MongoDB: the application owns the backup storage
+
+Unlike CNPG / MariaDB / Altinity, the MongoDB driver cannot inject its S3 target per-backup: the Percona psmdb operator only runs the percona-backup-mongodb (pbm) agents and services `PerconaServerMongoDBBackup` CRs when the `PerconaServerMongoDB` cluster has `spec.backup.enabled: true` and a storage declared, and a `PerconaServerMongoDBBackup` references that storage only by name. So the MongoDB application must **opt into backups** and point at the bucket in its own chart values:
+
+```yaml
+apiVersion: apps.cozystack.io/v1alpha1
+kind: MongoDB
+metadata:
+  name: orders-db
+spec:
+  backup:
+    enabled: true
+    destinationPath: "s3://<bucket>/orders-db/"
+    endpointURL: "https://seaweedfs-s3.tenant-root:8333"
+    insecureSkipTLSVerify: true   # self-signed in-cluster seaweedfs; psmdb s3 storage has no CA-bundle field
+    s3AccessKey: "<key>"
+    s3SecretKey: "<secret>"
+```
+
+The chart declares that storage as `s3-storage`, which the `cozy-default-mongodb` strategy names (`storageName: s3-storage`, `type: logical`). The driver then drives on-demand backups and restores through the unified `BackupJob` / `RestoreJob` / `Plan` interface on top of the operator's storage config — adding restore-to-differently-named instances (via `PerconaServerMongoDBRestore.spec.backupSource`) and point-in-time recovery that the raw scheduled-task / `mongodump` paths do not offer. When a target cluster has backups disabled, the driver surfaces a clear `Ready=False` precondition on the BackupJob/RestoreJob rather than hanging until the deadline.
+
+For a to-copy restore the operator reads the dump from the **source** backup's bucket/endpoint, but authenticates with the **target** cluster's own S3 credentials (the source release's Secret dies with it in a DR scenario). So the target application's credentials must be able to read the source bucket — the common case where both share the one platform `cozy-backups` bucket. A target whose credentials are scoped to a different S3 account or bucket cannot read the source archive, and the restore fails loudly with `AccessDenied` (RestoreJob `Failed`) rather than silently restoring nothing.
+
+A full, scripted example (write a marker document, back up, restore to a copy, assert the round-trip while the source stays untouched) is in [`examples/backups/mongodb/`](../../examples/backups/mongodb/) — driven by `run-all.sh`.
+
+### Point-in-time recovery (MongoDB)
+
+psmdb records an oplog stream between logical backups. A MongoDB `RestoreJob` recovers to a timestamp via `spec.options.recoveryTime` — the same option name and RFC3339 format the Postgres/CNPG driver uses, so the two are uniform:
+
+```yaml
+spec:
+  options:
+    recoveryTime: "2026-08-05T12:34:56Z"   # RFC3339 (UTC), same as the CNPG driver
+```
+
+The driver converts `recoveryTime` to the psmdb oplog target internally. Unlike CNPG (whose empty `recoveryTime` replays WAL to the latest archived point), an empty `recoveryTime` here restores the backup snapshot as taken — a psmdb logical backup is already a consistent point, so "restore this backup" is the safe default. `spec.options.restoreTimeoutSeconds` caps how long the driver waits for the operator restore before failing (default 30m), matching the CNPG option. Any unrecognised key under `spec.options` (e.g. a `recoverytime` typo) is ignored but surfaced as a `UnknownRestoreOption` Warning event on the RestoreJob rather than silently dropped.
+
 ## Inspecting the defaults
 
 ```bash
@@ -93,9 +132,52 @@ On a fresh-cluster install, the Velero `BackupStorageLocation` `cozy-default` is
 
 ### Cozy-default Bucket bootstrap
 
-`cozy-default` ships an `apps.cozystack.io/Bucket cozy-backups` CR in `tenant-root`, which the bucket-application chart turns into a `BucketClaim`; the COSI driver then assigns the real S3 bucket name and writes it to the BucketClaim's `.status.bucketName`. The strategy templates and the Velero BSL all read that real bucket name (Helm `lookup` against the BucketClaim). On a fresh install the BucketClaim takes a short reconcile cycle to populate its status — until it does, the strategy templates render empty and only the `Bucket` CR + `BackupClass` are present in the cluster. The HelmRelease re-reconciles on its interval (5 minutes by default — set by the cozystack operator's `helmrelease-interval` flag, not a Flux default), at which point the populated BucketClaim status causes the missing strategy templates to materialise.
+`cozy-default` ships an `apps.cozystack.io/Bucket cozy-backups` CR in `tenant-root`, which the bucket-application chart turns into a `BucketClaim`; the COSI driver then assigns the real S3 bucket name (`bucket-<claim-UID>`, so it cannot be computed in advance) and writes it to the BucketClaim's `.status.bucketName`. The strategy templates and the Velero BSL all read that real bucket name (Helm `lookup` against the BucketClaim). On a fresh install the BucketClaim takes a reconcile cycle to populate its status — until it does, the strategy templates render empty and only the `Bucket` CR + `BackupClass` are present in the cluster.
 
-If you need the BackupClass functional immediately (e.g. an e2e), trigger a Flux reconcile (`flux reconcile helmrelease backupstrategy-controller -n cozy-backup-controller`) once you see `kubectl get bucketclaim -n tenant-root bucket-cozy-backups -o jsonpath='{.status.bucketName}'` non-empty.
+**That skip does not repair itself on a reconcile.** helm-controller re-renders a release only when its chart or values change; the interval reconcile is a no-op for a healthy release, and drift detection is off on operator-generated HelmReleases. A cluster that lost the race at install time therefore keeps `BackupClass cozy-default` with **no** `Strategy` CRs and **no** Velero BSL indefinitely — which also fail-closes the pre-adoption snapshot in the v1.6.0 etcd migration.
+
+The same trap sits one release earlier, on the Secret everything else depends on. `bucket-cozy-backups-system-credentials` is rendered by the `bucket-cozy-backups-system` release behind a `lookup` of the COSI Secret, and is skipped just as permanently when that lookup is empty. Without it the credentials projector has no source at all, so no strategy, no Velero and no v1.6.0 etcd migration can resolve — and the gate cannot even determine the bucket name, which it reads from that Secret.
+
+Convergence is driven instead by the controller's default-objects gate (`backupStorage.reconcileDefaultObjects`, on by default), which repairs both, in order. While the credentials Secret is absent or carries no bucket name, the gate stamps `reconcile.fluxcd.io/forceAt` + `requestedAt` on the **bucket's** `bucket-<name>-system` HelmRelease. Once the bucket name resolves it checks that every object `cozy-default` routes to exists and stamps the same pair on the **`backupstrategy-controller`** HelmRelease, forcing the real Helm upgrade that re-runs the lookups. The two are throttled independently (one force per 5 minutes each), so the second is not delayed by the first. Expect the objects within a minute or two of the bucket becoming ready.
+
+The gate does not force a suspended HelmRelease — helm-controller ignores both annotations while `spec.suspend` is true, so it logs the skip and leaves the force counter alone. A release left suspended (`cozyhr suspend`) is therefore never repaired until it is resumed.
+
+Watch it with:
+
+```bash
+kubectl -n cozy-backup-controller logs deploy/backupstrategy-controller | grep default-objects-gate
+```
+
+#### Manual recovery on an affected cluster
+
+Only needed on a cluster running a version without the gate (or with `reconcileDefaultObjects: false`). A plain `flux reconcile helmrelease` does **nothing** here — it does not re-render. You need a forced upgrade, and **both** annotations: `forceAt` is what makes helm-controller run a real Helm upgrade, and it is only honoured together with `requestedAt`.
+
+First confirm the bucket name is actually resolvable — forcing before that just re-runs the same empty lookup:
+
+```bash
+kubectl -n tenant-root get bucketclaim bucket-cozy-backups -o jsonpath='{.status.bucketName}'
+```
+
+Then force the two releases, **in this order**:
+
+```bash
+# 1. The credentials Secret. It is rendered by the -system release, not by
+#    bucket-cozy-backups — easy to miss, and the projector (hence every
+#    strategy and Velero) has no source without it.
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n tenant-root annotate helmrelease bucket-cozy-backups-system \
+  reconcile.fluxcd.io/forceAt="$ts" reconcile.fluxcd.io/requestedAt="$ts" --overwrite
+kubectl -n tenant-root get secret bucket-cozy-backups-system-credentials
+
+# 2. The Strategy CRs and the Velero BSL.
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n cozy-backup-controller annotate helmrelease backupstrategy-controller \
+  reconcile.fluxcd.io/forceAt="$ts" reconcile.fluxcd.io/requestedAt="$ts" --overwrite
+kubectl get $(kubectl get crd -o name | grep strategy.backups.cozystack.io) 2>/dev/null
+kubectl -n cozy-velero get backupstoragelocation cozy-default
+```
+
+The race is nested: step 2's `lookup` resolves from the BucketClaim status, but the projector — and the v1.6.0 etcd migration — read the Secret from step 1, so a cluster missing both needs both.
 
 ### Observability
 
@@ -106,9 +188,15 @@ The credentials projector emits two Prometheus counters labelled by `namespace` 
 
 Alert on `rate(cozystack_backup_credentials_projection_failures_total[5m]) > 0` or `absent_over_time(cozystack_backup_credentials_projection_successes_total[10m])` to catch a stale BSL credential or a malformed source Secret without log scraping.
 
+The default-objects gate emits three more:
+
+- `cozystack_backup_default_objects_missing{backupclass="cozy-default"}` — how many of the objects the platform default backups depend on are absent: the credentials Secret, the Strategy CRs `cozy-default` routes to, and the Velero BSL. **This is the alert that would have caught the missing Strategy CRs**: it is non-zero whatever the HelmRelease's `Ready` condition says. Alert on `min_over_time(cozystack_backup_default_objects_missing[15m]) > 0`.
+- `cozystack_backup_default_objects_check_errors_total{backupclass="cozy-default"}` — checks that could not reach a conclusion (an API error reading the source Secret, the BackupClass, or one of the routed objects). The gauge above is deliberately **not** written on those ticks, so that it does not flap on a transient API error — which means that while this counter climbs, the gauge is stale and a `0` on it proves nothing. Pair the two: `min_over_time(cozystack_backup_default_objects_missing[15m]) > 0 or rate(cozystack_backup_default_objects_check_errors_total[15m]) > 0`.
+- `cozystack_backup_default_objects_force_reconciles_total{namespace,name}` — forced Helm upgrades issued, labelled by the release forced (this chart's own, or the bucket's `-system` release). A counter that keeps climbing means the forced render is not producing the objects (a missing CRD, for instance), which is a different problem from the install-time race. A suspended release is skipped before the patch and is **not** counted here, so a paused release cannot masquerade as a render that keeps failing — look for the `skipped forcing a suspended HelmRelease` log line instead.
+
 ## Admin overrides for `cozy-default`
 
-`cozy-default` is rendered by the `backupstrategy-controller` chart and owned by Flux's helm-controller. **Direct `kubectl edit backupclass cozy-default` is overwritten on the next helm reconcile** — the same applies to its companion `strategy.backups.cozystack.io/*` CRs (`cozy-default-cnpg`, `cozy-default-etcd`, `cozy-default-mariadb`, `cozy-default-altinity`, `cozy-default-foundationdb`, the two `cozy-default-velero-*`). The supported override path is the `backupStorage` block on the **`platform` component** of the `cozystack.cozystack-platform` Package CR:
+`cozy-default` is rendered by the `backupstrategy-controller` chart and owned by Flux's helm-controller. **Direct `kubectl edit backupclass cozy-default` is overwritten on the next helm reconcile** — the same applies to its companion `strategy.backups.cozystack.io/*` CRs (`cozy-default-cnpg`, `cozy-default-etcd`, `cozy-default-mariadb`, `cozy-default-altinity`, `cozy-default-mongodb`, `cozy-default-foundationdb`, the two `cozy-default-velero-*`). The supported override path is the `backupStorage` block on the **`platform` component** of the `cozystack.cozystack-platform` Package CR:
 
 ```yaml
 apiVersion: cozystack.io/v1alpha1
@@ -152,7 +240,8 @@ The defaults aim at a reasonable middle (30-day retention, gzip compression wher
 
 - **CNPG strategy**: `barmanObjectStore.retentionPolicy`, `data.compression`, `wal.compression`.
 - **MariaDB strategy**: `compression`, `maxRetention`, `databases[]`.
-- **Altinity strategy**: tune the `clickhouse-backup` sidecar via `backup.*` values on the ClickHouse release; the strategy Pod is a thin HTTP client.
+- **MongoDB strategy**: `storageName` (which `spec.backup.storages` entry on the psmdb cluster to use), `type` (`logical`), `compressionType` / `compressionLevel`. The S3 target itself is tuned via `backup.*` values on the MongoDB release (see [MongoDB: the application owns the backup storage](#mongodb-the-application-owns-the-backup-storage)).
+- **Altinity strategy**: tune the `clickhouse-backup` sidecar via `backup.*` values on the ClickHouse release; the strategy Pod is a thin HTTP client. When the S3 endpoint's certificate is signed by a private CA rather than a publicly-trusted one — SeaweedFS's in-cluster `:8333` being the case in point — point `backup.endpointCA` at a Secret holding that CA bundle; the chart mounts it into the sidecar and adds it to the trust store via `SSL_CERT_DIR`, which supplements the system CA set rather than replacing it.
 - **FoundationDB strategy**: `snapshotPeriodSeconds`, `agentCount`, `urlParameters[]`.
 - **Velero strategy (VMInstance / VMDisk)**: `ttl`, `includedResources[]`, `excludedResources[]`.
 - **Etcd strategy**: today the strategy is path-only; combine with `Plan.spec.retentionPolicy` for trim cadence.

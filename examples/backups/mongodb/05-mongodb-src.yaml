@@ -1,0 +1,41 @@
+# Source MongoDB instance.
+#
+# The psmdb operator can only service on-demand PerconaServerMongoDBBackup CRs
+# when the cluster has the percona-backup-mongodb agents running and a storage
+# declared — that is what `backup.enabled: true` wires up. The cozystack
+# backup-strategy driver names that storage ("s3-storage", the one the chart
+# declares) via the cozy-default-mongodb Strategy; it does NOT inject storage
+# into the cluster, so unlike MariaDB the application must opt into backups.
+#
+# The bucket coordinates (destinationPath / endpointURL / s3AccessKey /
+# s3SecretKey) point the storage at the Bucket provisioned in 00-bucket.yaml.
+# insecureSkipTLSVerify is true because Cozystack's default in-cluster
+# seaweedfs serves a self-signed cert and the psmdb s3 storage has no CA-bundle
+# field. run-all.sh fills the REPLACE_WITH_* placeholders from the Bucket's
+# BucketInfo Secret.
+#
+# The "app" user + "demo" database let a smoke harness (or a human) write a
+# sentinel document before the BackupJob fires.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: MongoDB
+metadata:
+  name: mongodb-src
+spec:
+  replicas: 1
+  size: 1Gi
+  databases:
+    demo:
+      roles:
+        admin:
+          - app
+  users:
+    app:
+      password: REPLACE_WITH_PASSWORD
+  backup:
+    enabled: true
+    destinationPath: "s3://REPLACE_WITH_COSI_BUCKET_NAME/mongodb-src/"
+    endpointURL: "REPLACE_WITH_S3_ENDPOINT"
+    insecureSkipTLSVerify: true
+    s3AccessKey: "REPLACE_WITH_S3_ACCESS_KEY"
+    s3SecretKey: "REPLACE_WITH_S3_SECRET_KEY"

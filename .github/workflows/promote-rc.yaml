@@ -2,19 +2,28 @@ name: Promote RC
 
 # Bless a release-candidate as stable WITHOUT rebuilding it.
 #
-# A stable release is a renamed release-candidate: the bytes shipped as vX.Y.Z
-# are bit-for-bit the bytes built and e2e-tested as vX.Y.Z-rc.N.
+# A stable release promotes the release-candidate's executable bytes: every
+# container digest shipped as vX.Y.Z is bit-for-bit what passed rc e2e. The
+# declarative packages artifact is re-serialized after its rc tag strings are
+# rewritten to stable, then verified before any stable name is created.
 #
-# Promotion is TRANSACTIONAL: this dispatch performs NO registry mutation. It
-# only pushes the release-X.Y.Z staging branch (the rc's digest-vendored tree
-# with the rc version substring rewritten to stable), drafts the stable release
-# with restamped assets, and opens the release-X.Y.Z PR (labelled full-e2e).
-# Every irreversible registry side effect — retagging the rc's images to the
-# stable tag by digest, moving :latest, publishing the stable cozy-installer
-# chart — happens in pull-requests-release.yaml finalize, AFTER the PR's e2e has
-# passed and the PR has merged. An abandoned promotion therefore leaves nothing
-# but an overwritable draft + branch: no stable-named bytes, nothing to wedge a
-# later re-promotion.
+# Promotion CREATES NO STABLE NAME before merge. This is weaker than the "no
+# registry mutation at dispatch" this workflow used to promise, and the
+# difference is deliberate rather than a slip: the dispatch does now write to
+# the registry, publishing one `promotion-*` packages candidate, and that tag is
+# real and publicly listable. What it is not is a name anything resolves — no
+# vX.Y.Z, no :latest, no stable installer chart. Say it that way round; the
+# older phrasing only reads as true if you already know which writes are meant.
+#
+# So the dispatch re-serializes the tag-rewritten packages tree under that
+# temporary tag, pins its digest in the release-X.Y.Z staging branch, drafts the
+# stable release with restamped assets, and opens the release-X.Y.Z PR. The rc's
+# mandatory full e2e is verified before staging; the promote PR does not repeat
+# it by default. Finalize verifies the pinned candidate against the merged tree
+# before performing any stable-named registry or git side effect. An abandoned
+# promotion therefore leaves only an overwritable draft + branch and a
+# temporary artifact, which retention protects until it is retagged stable and
+# can prune once nothing references it.
 #
 # Triggered manually once an rc has gone green. The stable git tag is never
 # pushed by a human and never force-moved — it is created only at PR merge,
@@ -27,6 +36,11 @@ on:
         description: "Release-candidate tag to promote, e.g. v1.4.0-rc.2"
         required: true
         type: string
+      skip_e2e_gate:
+        description: "BYPASS the required green rc E2E check (emergency use only)"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   # Serialize ALL promotions. Keying on the rc tag would parallelize the
@@ -38,27 +52,37 @@ concurrency:
   group: promote-rc
   cancel-in-progress: false
 
+# Read-only by default; each job widens only what it needs (see per-job blocks).
+permissions:
+  contents: read
+
 jobs:
-  promote:
-    name: Promote ${{ inputs.rc_tag }}
-    runs-on: [oracle-vm-4cpu-16gb-x86-64]
-    timeout-minutes: 45
+  # Cheap front door: validate the dispatch input ONCE and derive every release
+  # identifier, before any heavy job starts. Both `promote` and `changelog`
+  # depend on this, so they still run in parallel with each other (this job takes
+  # seconds) while consuming ONE validated tag — no divergent second parse.
+  # Whitespace is rejected outright (not trimmed), matching hack/parse-rc-tag.sh
+  # and the reusable core: a non-canonical spelling is an immediate dispatch
+  # failure, so promote and the changelog job can never disagree about whether the
+  # tag is valid — the divergence that previously left a promote PR with no
+  # changelog.
+  parse:
+    name: Parse and validate rc tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      contents: write
-      packages: write
-      pull-requests: write
-
+      actions: read # list tags.yaml / e2e-tag.yaml runs and their jobs for the rc E2E gate
+      contents: read
+    outputs:
+      rc_tag: ${{ steps.parse.outputs.rc_tag }}
+      rc_version: ${{ steps.parse.outputs.rc_version }}
+      stable_tag: ${{ steps.parse.outputs.stable_tag }}
+      stable_version: ${{ steps.parse.outputs.stable_version }}
+      stable_branch: ${{ steps.parse.outputs.stable_branch }}
+      rc_branch: ${{ steps.parse.outputs.rc_branch }}
+      line: ${{ steps.parse.outputs.line }}
+      e2e_verification: ${{ steps.e2e-gate.outputs.verification || steps.e2e-bypass.outputs.verification }}
     steps:
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
-          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
-          owner: cozystack
-          # Scope the token to this repo only — it never touches other repos.
-          repositories: ${{ github.event.repository.name }}
-
       # Validate the dispatch input against a strict rc pattern before it ever
       # reaches a shell or an API call. Derives the stable version, the rc
       # staging branch, and the maintenance line.
@@ -69,7 +93,16 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
-            const rc = process.env.RC_TAG.trim();
+            const rc = process.env.RC_TAG;
+            // Reject whitespace outright rather than trimming it. Trimming would
+            // accept ' v1.4.0-rc.2 ' here while the parallel changelog job — which
+            // rejects whitespace — refuses the same input, so promote would push
+            // the stable branch and open-pr would open a PR with no changelog. One
+            // policy everywhere: non-canonical spelling = dispatch failure.
+            if (/\s/.test(rc)) {
+              core.setFailed(`rc_tag '${rc}' must not contain whitespace`);
+              return;
+            }
             const m = rc.match(/^v(\d+)\.(\d+)\.(\d+)-rc\.(\d+)$/);
             if (!m) {
               core.setFailed(`rc_tag '${rc}' must match 'vX.Y.Z-rc.N'`);
@@ -85,6 +118,166 @@ jobs:
             core.setOutput('stable_branch', `release-${version}`);
             core.setOutput('line', `${maj}.${min}`);
 
+      # Keep the check in this front-door job: both staging paths already need
+      # parse, so a red/missing rc E2E stops promote and changelog before either
+      # can write anything. GitHub's jobs API names a called-workflow job as
+      # "<caller job name> / <called workflow job name>"; direct dispatch jobs
+      # expose only the called job name. The suffix matcher deliberately accepts
+      # both forms.
+      #
+      # e2e-tag.yaml has no run-name and its workflow name is constant, so a
+      # dispatch run's title cannot identify inputs.tag. The expanded E2E job
+      # name is the strongest API-visible correlator because it embeds the exact
+      # validated tag. Its failure modes are Actions retention/deletion removing
+      # the run/job metadata, or a future rename of that job without updating
+      # this matcher; either case fails closed and can be recovered by running
+      # the E2E Release Tag button again.
+      - name: Verify green RC E2E
+        id: e2e-gate
+        if: ${{ !inputs.skip_e2e_gate }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const rcTag = process.env.RC_TAG;
+            const expectedJob = `E2E ${rcTag} (full suite)`;
+            const matchesE2EJob = (name) =>
+              name === expectedJob || name.endsWith(` / ${expectedJob}`);
+            const jobsForRun = (runId) => github.paginate(
+              github.rest.actions.listJobsForWorkflowRun,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+                filter: 'latest',
+                per_page: 100
+              }
+            );
+
+            // Evidence A: only the latest tags.yaml push run for this tag counts.
+            const tagRunsResponse = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'tags.yaml',
+              branch: rcTag,
+              event: 'push',
+              per_page: 100
+            });
+            const latestTagRun = tagRunsResponse.data.workflow_runs.find(
+              (run) => run.head_branch === rcTag
+            );
+            let tagEvidence = `no tags.yaml push run found with head_branch '${rcTag}'`;
+            if (latestTagRun) {
+              const jobs = await jobsForRun(latestTagRun.id);
+              const matches = jobs.filter((job) => matchesE2EJob(job.name));
+              tagEvidence = `latest tags.yaml run ${latestTagRun.html_url} (${latestTagRun.status}/${latestTagRun.conclusion || 'no conclusion'}), matching jobs: ${
+                matches.length
+                  ? matches.map((job) => `'${job.name}'=${job.conclusion || job.status}`).join(', ')
+                  : 'none'
+              }`;
+              core.info(`Evidence A: ${tagEvidence}`);
+              if (matches.some((job) => job.conclusion === 'success')) {
+                core.setOutput('verification', 'verified');
+                core.notice(`✅ Verified green rc E2E for ${rcTag} via the latest tags.yaml run.`);
+                await core.summary
+                  .addRaw(`✅ RC full E2E verified for \`${rcTag}\` via the latest \`tags.yaml\` run.`)
+                  .write();
+                return;
+              }
+            } else {
+              core.info(`Evidence A: ${tagEvidence}`);
+            }
+
+            // Evidence B: dispatch run titles are all "E2E Release Tag", so walk
+            // retained successful dispatch runs and correlate by the expanded
+            // tag-bearing job name instead.
+            const dispatchRuns = await github.paginate(
+              github.rest.actions.listWorkflowRuns,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'e2e-tag.yaml',
+                event: 'workflow_dispatch',
+                status: 'success',
+                per_page: 100
+              }
+            );
+            let dispatchMatch;
+            for (const run of dispatchRuns) {
+              const jobs = await jobsForRun(run.id);
+              const job = jobs.find(
+                (candidate) =>
+                  matchesE2EJob(candidate.name) &&
+                  candidate.conclusion === 'success'
+              );
+              if (job) {
+                dispatchMatch = {run, job};
+                break;
+              }
+            }
+
+            if (dispatchMatch) {
+              core.info(
+                `Evidence B: ${dispatchMatch.run.html_url}, job '${dispatchMatch.job.name}'=${dispatchMatch.job.conclusion}`
+              );
+              core.setOutput('verification', 'verified');
+              core.notice(`✅ Verified green rc E2E for ${rcTag} via an e2e-tag.yaml workflow_dispatch run.`);
+              await core.summary
+                .addRaw(`✅ RC full E2E verified for \`${rcTag}\` via a manual \`e2e-tag.yaml\` run.`)
+                .write();
+              return;
+            }
+
+            const dispatchEvidence = `${dispatchRuns.length} retained successful e2e-tag.yaml workflow_dispatch run(s), none with a successful '${expectedJob}' job`;
+            core.info(`Evidence B: ${dispatchEvidence}`);
+            core.setFailed(
+              `RC '${rcTag}' has no green full E2E evidence. Checked evidence A: ${tagEvidence}. Checked evidence B: ${dispatchEvidence}. Run the "E2E Release Tag" Actions button for '${rcTag}', or re-dispatch Promote RC with skip_e2e_gate=true only if you intentionally accept the emergency bypass.`
+            );
+
+      - name: Bypass RC E2E gate (emergency override)
+        id: e2e-bypass
+        if: ${{ inputs.skip_e2e_gate }}
+        env:
+          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+        run: |
+          echo "verification=bypassed" >> "$GITHUB_OUTPUT"
+          echo "::warning title=RC E2E GATE BYPASSED::Promoting ${RC_TAG} without verified green full E2E evidence."
+          printf '## ⚠️ RC E2E gate bypassed\n\n`%s` is being promoted without verified green full E2E evidence.\n' "$RC_TAG" >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Promote ${{ needs.parse.outputs.rc_tag }}
+    needs: parse
+    runs-on: [oracle-vm-4cpu-16gb-x86-64]
+    timeout-minutes: 45
+    permissions:
+      contents: write # push the release-X.Y.Z staging branch, stage the draft release
+      packages: write # publish the temporary stable-candidate packages artifact
+      pull-requests: write # reserved for parity; the PR is opened in open-pr
+
+    # open-pr reads these from `promote`, which passes the parse job's validated
+    # outputs straight through.
+    outputs:
+      rc_tag: ${{ needs.parse.outputs.rc_tag }}
+      stable_tag: ${{ needs.parse.outputs.stable_tag }}
+      stable_version: ${{ needs.parse.outputs.stable_version }}
+      stable_branch: ${{ needs.parse.outputs.stable_branch }}
+      line: ${{ needs.parse.outputs.line }}
+      e2e_verification: ${{ needs.parse.outputs.e2e_verification }}
+      base_branch: ${{ steps.validate.outputs.base_branch }}
+
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          # Scope the token to this repo only — it never touches other repos.
+          repositories: ${{ github.event.repository.name }}
+
       # Gate: the rc must exist as a (draft) release and the stable tag must NOT
       # exist yet. Refuse to promote twice or to an already-shipped version.
       - name: Validate rc is promotable
@@ -92,8 +285,8 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const rcTag     = '${{ steps.parse.outputs.rc_tag }}';
-            const stableTag = '${{ steps.parse.outputs.stable_tag }}';
+            const rcTag     = '${{ needs.parse.outputs.rc_tag }}';
+            const stableTag = '${{ needs.parse.outputs.stable_tag }}';
             const releases  = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner, repo: context.repo.repo, per_page: 100
             });
@@ -103,11 +296,12 @@ jobs:
               return;
             }
             // Reject only a *published* stable release. A leftover *draft* is
-            // tolerated: promotion no longer mutates the registry at dispatch
-            // time (retag/chart/:latest all run in finalize, post-merge), so an
-            // abandoned promotion leaves nothing but an overwritable draft +
-            // staging branch. Failing on the draft would wedge re-promotion of a
-            // newer rc to the same version; instead the draft is refreshed below.
+            // tolerated: promotion creates no consumer-visible stable registry
+            // name at dispatch time (retag/chart/:latest all run in finalize,
+            // post-merge), so an abandoned promotion leaves an overwritable
+            // draft + staging branch and a temporary retention-managed packages
+            // candidate. Failing on the draft would wedge re-promotion of a newer
+            // rc to the same version; instead the draft is refreshed below.
             const publishedStable = releases.find(r => r.tag_name === stableTag && !r.draft);
             if (publishedStable) {
               core.setFailed(`Stable release '${stableTag}' is already published — refusing to re-promote.`);
@@ -126,6 +320,62 @@ jobs:
             } catch (e) {
               if (e.status !== 404) throw e;
             }
+            // A maintenance branch created before the candidate pipeline landed
+            // would execute its old pull_request workflows after merge. Refuse
+            // before the first registry write unless the actual target base has
+            // both trusted verification gates and their helpers. Backport this
+            // change to an existing release-X.Y line before promoting its next
+            // patch; the rc-derived head does not need to carry the tooling.
+            //
+            // Every file the base-checked-out verifier reaches for belongs in
+            // the list below, its own sourced libraries included: those are
+            // resolved relative to the verifier at run time, so a base carrying
+            // the script without them fails at the PR gate and at finalize —
+            // after the candidate, the staging branch and the draft exist.
+            const line = '${{ needs.parse.outputs.line }}';
+            let baseBranch = 'main';
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner, repo: context.repo.repo,
+                ref: `heads/release-${line}`
+              });
+              baseBranch = `release-${line}`;
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
+            const requiredBaseFiles = [
+              ['.github/workflows/pull-requests.yaml', 'verify-release-candidate:'],
+              ['.github/workflows/pull-requests-release.yaml', 'Verify stable packages candidate'],
+              ['hack/verify-promoted-packages.sh', 'EXPECTED_PACKAGES_REPOSITORY'],
+              ['hack/lib/image-refs.sh', 'collect_image_refs()'],
+              ['hack/lib/promoted-packages.sh', 'PACKAGES_DIGEST_REF_PATTERN'],
+            ];
+            for (const [path, marker] of requiredBaseFiles) {
+              let file;
+              try {
+                file = await github.rest.repos.getContent({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  path, ref: baseBranch
+                });
+              } catch (e) {
+                if (e.status === 404) {
+                  core.setFailed(`Target base '${baseBranch}' lacks '${path}'. Backport the candidate-aware promotion pipeline before dispatch.`);
+                  return;
+                }
+                throw e;
+              }
+              if (Array.isArray(file.data) || !file.data.content) {
+                core.setFailed(`Target base '${baseBranch}' did not return '${path}' as a file.`);
+                return;
+              }
+              const content = Buffer.from(file.data.content, 'base64').toString('utf8');
+              if (!content.includes(marker)) {
+                core.setFailed(`Target base '${baseBranch}' has an old '${path}'. Backport the candidate-aware promotion pipeline before dispatch.`);
+                return;
+              }
+            }
+            core.setOutput('base_branch', baseBranch);
+            core.info(`✅ Target base '${baseBranch}' carries the candidate-aware promotion pipeline.`);
             // Surface the rc's disk asset id for the copy step.
             const disk = (rcRel.assets || []).find(a => a.name === 'nocloud-amd64.raw.xz');
             if (!disk) {
@@ -139,7 +389,7 @@ jobs:
       - name: Checkout rc staging branch
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ steps.parse.outputs.rc_branch }}
+          ref: ${{ needs.parse.outputs.rc_branch }}
           fetch-depth: 0
           fetch-tags: true
           token: ${{ steps.app-token.outputs.token }}
@@ -147,16 +397,81 @@ jobs:
           # `git remote set-url`, so there's no need to persist it in .git/config.
           persist-credentials: false
 
-      # Only yq is needed here (the asset make targets use it). The registry
-      # side of promotion — retagging the rc images to stable, moving :latest,
-      # publishing the stable chart — is deferred to pull-requests-release.yaml
-      # finalize, so promotion touches the registry only AFTER the promote PR's
-      # e2e has passed and the PR has merged (transactional promotion). No
-      # skopeo/helm login here.
-      - name: Set up toolchain (yq)
+      # Promotion publishes one non-consumer-visible packages candidate. Stable
+      # image/chart tags are still deferred to post-merge finalize.
+      #
+      # Both tools are version-pinned. This step arms the only registry write
+      # the dispatch performs, so what performs it has to be a fixed input:
+      # `latest/download` resolves to whatever mikefarah shipped this morning,
+      # and a yq that changed how it emits or compares a value would rewrite
+      # installer values differently between two promotions of the same rc. The
+      # version tracks packages/core/testing/images/e2e-sandbox/Dockerfile.
+      #
+      # yq is additionally pinned BY CONTENT, which nothing else in this repo
+      # does. It earns the exception by being the one downloaded binary with
+      # write authority over what a release contains: it is what stamps the
+      # candidate digest into installer values. skopeo, helm and oras only move
+      # bytes that are already digest-addressed, so a substituted one is caught
+      # downstream; a substituted yq writes the wrong pin and everything after
+      # it verifies that pin faithfully. A committed SHA-256 is trust-on-first-
+      # use — it fixes the bytes to what a human checked when the version was
+      # chosen (against this release's own published checksums list) and makes
+      # any later substitution loud. Bump the version and this together.
+      #
+      # The Flux installer is deliberately NOT pinned by content. It verifies
+      # the flux binary it fetches against flux_${FLUX_VERSION}_checksums.txt
+      # from the pinned release, so the binary is not the exposure — the ~6 KB
+      # bootstrap script from fluxcd.io is, and it is mutable by design and
+      # fetched the same way in ten other workflows here. Pinning its bytes in
+      # this file alone would break on the next regeneration of a script the
+      # project does not control, while leaving the identical fetch unpinned
+      # everywhere else. Named rather than half-fixed.
+      - name: Set up toolchain (flux, yq)
+        env:
+          FLUX_VERSION: "2.8.6"
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
-          command -v yq >/dev/null \
-            || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
+
+      - name: Login to registry (GHCR)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      # A second checkout of the DISPATCH ref, used only as a source of release
+      # tooling. The primary checkout above is an older commit (the rc tag, or a
+      # branch derived from it) and does not carry hack/validate-changelog.sh or
+      # the current docs/agents/changelog.md — and a script fetched by a script
+      # that is itself missing solves nothing, so this is done declaratively by
+      # actions/checkout rather than by shelling out to the repo's own tooling.
+      # Gitignored, so promote's `git add -A` never stages it.
+      - name: Checkout release tooling from the dispatch ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.ref_name }}
+          path: .release-tooling
+          sparse-checkout: |
+            hack
+            docs/agents
+          persist-credentials: false
 
       # Build the stable digest-vendored tree off the rc tree: the digests are
       # unchanged (they pin the rc's images, which finalize retags to stable);
@@ -166,10 +481,12 @@ jobs:
       - name: Prepare stable branch
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
-          RC_VERSION: ${{ steps.parse.outputs.rc_version }}
-          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
-          STABLE_BRANCH: ${{ steps.parse.outputs.stable_branch }}
-          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          RC_VERSION: ${{ needs.parse.outputs.rc_version }}
+          STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
+          STABLE_BRANCH: ${{ needs.parse.outputs.stable_branch }}
+          RC_TAG: ${{ needs.parse.outputs.rc_tag }}
+          PROMOTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           git config user.name  "cozystack-ci[bot]"
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
@@ -182,14 +499,48 @@ jobs:
           # silently left nine other .tag files and one stamped template on the
           # rc version, which was only observable by cutting a release.
           # The script fails if any rc reference survives it.
-          hack/promote-rewrite-tags.sh "$RC_VERSION" "$STABLE_VERSION"
+          .release-tooling/hack/promote-rewrite-tags.sh "$RC_VERSION" "$STABLE_VERSION"
+          # Preserve a changelog already committed on the stable staging branch
+          # across the rebuild. -B below resets the branch to the rc tree, which
+          # would otherwise silently discard it — and the two ways it gets there
+          # are exactly the ones worth protecting: a maintainer hand-writing it
+          # (the documented escape hatch when generation fails) and an earlier
+          # dispatch's reviewed output. Losing either to a retry would replace
+          # human-edited release notes with a fresh AI run, or with nothing.
+          CL="docs/changelogs/v${STABLE_VERSION}.md"
+          PRESERVED="$(mktemp)"
+          if .release-tooling/hack/changelog-preserve.sh "${STABLE_BRANCH}" "${STABLE_VERSION}" "${PRESERVED}"; then
+            echo "::notice::Preserving existing ${CL} from ${STABLE_BRANCH} across the rebuild."
+          else
+            rm -f "${PRESERVED}"
+            PRESERVED=""
+          fi
           # -B resets the local branch so a re-dispatch starts clean.
           git checkout -B "${STABLE_BRANCH}"
+          if [ -n "$PRESERVED" ]; then
+            mkdir -p docs/changelogs
+            cp "$PRESERVED" "$CL"
+            rm -f "$PRESERVED"
+          fi
+          # Commit the exact rewritten tree before serializing it. The OCI
+          # revision can now point at a real, reviewable commit whose packages
+          # content matches the artifact (including the old embedded self-ref).
           git add -A
           git commit -s -m "Prepare release v${STABLE_VERSION} (promoted from ${RC_TAG})" \
             || echo "No tag-string changes to commit (digests already stable)"
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          # The git rewrite alone is not what the operator installs: it pulls the
+          # packages OCI artifact pinned by platformSourceRef. Publish this
+          # rewritten tree under a unique run-specific temporary tag, then add a
+          # second commit carrying its immutable digest. Container digests do not
+          # move; only the declarative bundle changes. A second artifact push is
+          # impossible because writing its own digest would change it forever.
+          .release-tooling/hack/promote-packages-artifact.sh \
+            "$STABLE_VERSION" "$RC_TAG" "$SOURCE_SHA"
+          git add packages/core/installer/values.yaml
+          git commit -s -m "Pin promoted packages artifact for v${STABLE_VERSION}"
           # Compare-before-force, matching tags.yaml's Create release branch step.
-          # git commit above produces a fresh, timestamp-dependent SHA each run,
+          # The commits above produce fresh, timestamp-dependent SHAs each run,
           # so a re-dispatch (retry after a later step failed, or promoting a
           # newer rc to the same version) creates a SIBLING commit. A plain push
           # would then be rejected non-fast-forward and wedge re-promotion until
@@ -218,23 +569,23 @@ jobs:
       - name: Stage rc assets
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+          RC_TAG: ${{ needs.parse.outputs.rc_tag }}
         run: |
           mkdir -p _out/assets
           gh release download "${RC_TAG}" --dir _out/assets --clobber
 
       - name: Restamp version-stamped assets
         env:
-          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+          STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
         run: |
           make manifests assets-cozypkg openapi-json COZYSTACK_VERSION="${STABLE_VERSION}"
 
       - name: Create draft stable release and upload assets
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          STABLE_TAG: ${{ steps.parse.outputs.stable_tag }}
-          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
-          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+          STABLE_TAG: ${{ needs.parse.outputs.stable_tag }}
+          STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
+          RC_TAG: ${{ needs.parse.outputs.rc_tag }}
         run: |
           # Draft now; pull-requests-release.yaml publishes it on PR merge.
           gh release view "${STABLE_TAG}" >/dev/null 2>&1 \
@@ -245,35 +596,439 @@ jobs:
           # Restamp step above.
           make upload_assets VERSION="${STABLE_TAG}" COZYSTACK_VERSION="${STABLE_VERSION}"
 
+  # ── Changelog: generated by the reusable changelog-generate.yaml, at promote
+  #    time, so it rides the promote PR and is on the base branch the moment the
+  #    release publishes.
+  #
+  #    Previously this lived in tags.yaml::generate-changelog, gated on the stable
+  #    tag push. Under the promote flow that tag is created by
+  #    pull-requests-release.yaml finalize — i.e. AFTER the release is published —
+  #    so the changelog PR could only ever be opened once the release was already
+  #    public. Moving generation here is the only fix; re-gating the tag-triggered
+  #    job cannot help.
+  #
+  #    The generation logic is factored into .github/workflows/changelog-generate.yaml
+  #    (workflow_call) and shared with changelog-rc.yaml, the rc-time button. The
+  #    OBSERVABLE behavior here is unchanged: same detached rc-tag checkout, same
+  #    read-only token for the AI step, same validator gate, same artifact name
+  #    (changelog-vX.Y.Z) that `open-pr` downloads, same non-blocking failure
+  #    tolerance. It gains one thing — the reusable workflow's skip check also
+  #    looks at the rc STAGING branch (release-X.Y.Z-rc.N): if changelog-rc.yaml
+  #    already generated the changelog at rc time, this COPIES it instead of
+  #    running the AI pass again.
+  #
+  #    Runs in PARALLEL with `promote`: generation is AI-driven and slow, while
+  #    `promote` spends most of its wall clock downloading and re-uploading the
+  #    heavy Talos assets. Both depend only on the cheap `parse` job (seconds), so
+  #    they still start together and `open-pr` joins them. It is handed the tag
+  #    `parse` already validated (needs.parse.outputs.rc_tag) rather than the raw
+  #    dispatch input, so promote and this job cannot diverge on whether the tag
+  #    is valid — a whitespace-bearing input fails `parse`, taking the whole
+  #    promotion down, instead of promote succeeding while this job rejects it and
+  #    the PR opens with no changelog. `secrets` are passed explicitly, matching
+  #    the reusable workflow's declared interface.
+  changelog:
+    name: Generate changelog
+    needs: parse
+    permissions:
+      contents: read
+    uses: ./.github/workflows/changelog-generate.yaml
+    with:
+      rc_tag: ${{ needs.parse.outputs.rc_tag }}
+    secrets:
+      COZYSTACK_CI_APP_ID: ${{ secrets.COZYSTACK_CI_APP_ID }}
+      COZYSTACK_CI_PRIVATE_KEY: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+
+  # ── Website docs: open the cozystack/website "update managed apps reference" PR
+  #    at PROMOTE time, not tag time. tags.yaml::update-website-docs still fires on
+  #    the stable tag push as a backstop (see the comment there), but that is too
+  #    late for a reviewer AND it fetched README content from the stable tag, which
+  #    does not exist until finalize pushes it. This job fetches from the
+  #    release-X.Y.Z STAGING BRANCH `promote` just pushed — via the website
+  #    Makefile's FETCH_REF variable — so the docs are ready to review alongside the
+  #    promote PR while the stable tag is still unborn.
+  #
+  #    needs [parse, promote]: the staging branch must exist before FETCH_REF can
+  #    resolve, and `promote` is what pushes it.
+  #
+  #    CRITICAL MERGE-TIMING CONTRACT: the website PR this opens must NOT be merged
+  #    before pull-requests-release.yaml finalize publishes the release. Merging it
+  #    early flips the site's latest-version pointer to a version whose versioned
+  #    docs and openapi are not on GitHub yet, so every version-pin and API link for
+  #    the new version 404s until the release lands. The PR body states this in bold
+  #    and the promote PR body carries a matching reminder line (assembled in
+  #    open-pr from this job's result).
+  #
+  #    Non-blocking for promotion: any failure here — including the FETCH_REF-support
+  #    guard below — surfaces as a ⚠️ line in the promote PR body (open-pr reads
+  #    needs.website-docs.result) and never blocks the promotion. The tag-time
+  #    backstop backfills the same branch.
+  website-docs:
+    name: Update website docs
+    runs-on: ubuntu-latest
+    needs: [parse, promote]
+    timeout-minutes: 20
+    permissions:
+      contents: read # all writes go to cozystack/website through the app token, never this repo's GITHUB_TOKEN
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          # No `repositories:` scope: this token must reach cozystack/website, not
+          # just this repo (matches tags.yaml::update-website-docs).
+          owner: cozystack
+
+      - name: Checkout website repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: cozystack/website
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          # Do not persist the token as http.extraheader. The Commit and push step
+          # re-injects the app token via `git remote set-url`, so the app token (not
+          # a persisted credential) authenticates the push — the same handling
+          # promote-rc's other checkouts use, and precisely the extraheader trap
+          # pull-requests-release.yaml's finalize was bitten by.
+          persist-credentials: false
+
+      # GUARD — refuse to run the promote-time path against a website checkout that
+      # does not understand FETCH_REF yet (before website PR feat/prerelease-fetch-ref
+      # merges). Without FETCH_REF, `make update-all RELEASE_TAG=$TAG FETCH_REF=$REF`
+      # silently ignores the unknown command-line variable and falls back to
+      # BRANCH=RELEASE_TAG=$TAG — a stable tag finalize has NOT created yet. The
+      # pre-FETCH_REF update_apps.sh then fetches READMEs from that nonexistent ref,
+      # warns-and-continues, and commits STUB docs — reopening the exact old-bad
+      # behaviour this move exists to kill. Fail loudly instead; the tag-time
+      # backstop still backfills once the tag (and, by then, FETCH_REF) exist.
+      - name: Require FETCH_REF support in the website checkout
+        run: |
+          if ! grep -q '^FETCH_REF' Makefile; then
+            echo "::warning title=website docs skipped::cozystack/website main has no FETCH_REF support yet (PR feat/prerelease-fetch-ref not merged). Refusing to generate docs from the not-yet-created stable tag; tags.yaml::update-website-docs will backfill at tag time."
+            exit 1
+          fi
+
+      # v0 for a 0.x line, else vX.Y — mirrors the website Makefile routing and
+      # tags.yaml's promote decision. Only a new minor/major (directory absent)
+      # promotes next/ → vX.Y/; a patch updates the existing directory in place.
+      - name: Determine if this release promotes next/
+        id: promote
+        env:
+          VERSION: ${{ needs.parse.outputs.stable_version }}
+        run: |
+          MAJOR="${VERSION%%.*}"
+          MINOR="$(echo "$VERSION" | cut -d. -f2)"
+          if [ "$MAJOR" = "0" ]; then
+            DOC_VERSION="v0"
+          else
+            DOC_VERSION="v${MAJOR}.${MINOR}"
+          fi
+          if [ -d "content/en/docs/${DOC_VERSION}" ]; then
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            echo "content/en/docs/${DOC_VERSION}/ already exists — patch release, updating in place, skipping release-next."
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+            echo "New minor/major release ${DOC_VERSION} — will promote next/ → ${DOC_VERSION}/."
+          fi
+
+      # Refresh the trunk pins from the staging ref BEFORE release-next snapshots
+      # next/ into vX.Y/, so the new version directory inherits fresh Talos /
+      # cozystack pins from release-X.Y.Z instead of a stale next.yaml (the v1.6
+      # talos-pin incident class). Promote path only — a patch leaves the trunk
+      # untouched.
+      - name: Refresh trunk version pins from the staging ref
+        if: steps.promote.outputs.promote == 'true'
+        env:
+          SRC_REF: ${{ needs.parse.outputs.stable_branch }}
+          TAG: ${{ needs.parse.outputs.stable_tag }}
+        run: ./hack/update_versions.sh --dest data/versions/next.yaml --branch "$SRC_REF" --cozystack-tag "$TAG"
+
+      - name: Promote next/ to released version
+        if: steps.promote.outputs.promote == 'true'
+        env:
+          TAG: ${{ needs.parse.outputs.stable_tag }}
+        run: make release-next RELEASE_TAG="$TAG"
+
+      # FETCH_REF pins the content fetch to the staging branch (which exists); TAG
+      # still routes the output directory (vX.Y vs next) and stamps versions. The
+      # stable tag is deliberately NOT the fetch ref — it does not exist until
+      # finalize.
+      - name: Update docs from the staging branch
+        env:
+          TAG: ${{ needs.parse.outputs.stable_tag }}
+          SRC_REF: ${{ needs.parse.outputs.stable_branch }}
+        run: make update-all RELEASE_TAG="$TAG" FETCH_REF="$SRC_REF"
+
+      - name: Commit and push
+        id: commit
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ needs.parse.outputs.stable_version }}
+        run: |
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/cozystack/website"
+          git add content hugo.yaml data/versions
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BRANCH="update-docs-v${VERSION}"
+          # Same mutable-branch idiom as tags.yaml: rebuild the branch from the
+          # current tree and force-push. No-op above when nothing changed.
+          git branch -D "$BRANCH" 2>/dev/null || true
+          git checkout -b "$BRANCH"
+          git commit --signoff -m "[docs] Update managed apps reference for v${VERSION}"
+          git push --force --set-upstream origin "$BRANCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open or refresh the website PR
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ needs.parse.outputs.stable_version }}
+          TAG: ${{ needs.parse.outputs.stable_tag }}
+        run: |
+          BRANCH="update-docs-v${VERSION}"
+          TITLE="[docs] Update managed apps reference for ${TAG}"
+          # Body assembled with printf so paragraphs carry no YAML-block leading
+          # indentation (which would render as code blocks). The DO NOT MERGE
+          # paragraph is load-bearing: merging early breaks the live site.
+          BODY="$(printf '%s\n\n%s\n\n%s' \
+            "Automated docs update for release \`${TAG}\`, generated at PROMOTE time from the \`release-${VERSION}\` staging branch (fetched via FETCH_REF; the stable tag \`${TAG}\` does not exist yet)." \
+            "⛔ **DO NOT MERGE until \`${TAG}\` is published.** This PR is opened before the release exists. Merging it before pull-requests-release.yaml finalize publishes \`${TAG}\` flips the site's latest-version pointer to a version whose versioned docs and openapi.json are not on GitHub yet — every version-pin and API link for the new version 404s until the release lands. Park this PR until the GitHub release for \`${TAG}\` is live, then merge." \
+            "Opened early on purpose so the docs can be reviewed alongside the promote PR. tags.yaml::update-website-docs re-runs at tag time as a backstop and no-ops (\"No changes to commit\") when this already did the work.")"
+          PR_STATE="$(gh pr view "$BRANCH" --repo cozystack/website --json state --jq .state 2>/dev/null || echo "")"
+          if [ "$PR_STATE" = "OPEN" ]; then
+            gh pr edit "$BRANCH" --repo cozystack/website --title "$TITLE" --body "$BODY"
+            echo "Refreshed the open website PR for ${BRANCH}."
+          else
+            gh pr create --repo cozystack/website \
+              --title "$TITLE" --body "$BODY" \
+              --head "$BRANCH" --base main
+          fi
+
+  # Join point: commits the changelog onto the staging branch `promote` pushed,
+  # then opens the release PR. Split out of `promote` so changelog generation can
+  # run concurrently with the asset staging rather than after it.
+  open-pr:
+    name: Open promote PR
+    runs-on: ubuntu-latest
+    needs: [promote, changelog, website-docs]
+    # `needs` alone would SKIP this job whenever `changelog` fails, which would
+    # leave the staging branch pushed and the draft release staged but no promote
+    # PR at all — the exact wedge the non-blocking design exists to prevent.
+    # Only the AI *step* carries continue-on-error; everything else in that job
+    # (token, checkout, node setup, `npm i -g @github/copilot`, artifact upload,
+    # the job timeout) is still fatal, and an npm or Copilot outage is precisely
+    # the scenario this must survive. Gate on `promote` alone and let the
+    # `needs.changelog.outputs.present` guards below degrade to the documented
+    # "PR opens with the ⚠️ body" path. `website-docs` is in `needs` for the same
+    # reason and read the same way — a failed website-docs (or the FETCH_REF guard
+    # tripping) must degrade to a ⚠️ line in the promote PR body, never block it —
+    # so this `if:` deliberately gates on `promote` only, not on website-docs.
+    if: ${{ !cancelled() && needs.promote.result == 'success' }}
+    timeout-minutes: 15
+    permissions:
+      contents: write # commit the changelog onto the staging branch
+      pull-requests: write # open (or refresh) the promote PR
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          repositories: ${{ github.event.repository.name }}
+
+      # Credentials are persisted here (unlike the other checkouts in this
+      # workflow): the Open PR step runs `git ls-remote` to pick the base branch
+      # whether or not the changelog step ran, so it cannot rely on the
+      # `git remote set-url` that only the conditional commit step performs.
+      - name: Checkout stable staging branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.promote.outputs.stable_branch }}
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      # A changelog already on the staging branch was put there deliberately —
+      # hand-written by a maintainer, or carried over from an earlier dispatch by
+      # `promote`'s preserve step — and must win over a fresh AI run. Without this
+      # check the artifact download below would silently overwrite human edits.
+      # A second checkout of the DISPATCH ref, used only as a source of release
+      # tooling. The primary checkout above is an older commit (the rc tag, or a
+      # branch derived from it) and does not carry hack/validate-changelog.sh or
+      # the current docs/agents/changelog.md — and a script fetched by a script
+      # that is itself missing solves nothing, so this is done declaratively by
+      # actions/checkout rather than by shelling out to the repo's own tooling.
+      # Gitignored, so promote's `git add -A` never stages it.
+      - name: Checkout release tooling from the dispatch ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.ref_name }}
+          path: .release-tooling
+          sparse-checkout: |
+            hack
+            docs/agents
+          persist-credentials: false
+
+      # Validated with the same script the changelog job uses, not a bare `-s`.
+      # A pre-existing file reaches here by two routes that skip generation
+      # entirely — hand-written into the rc tree, or preserved by `promote` across
+      # the force-push — so nothing else has checked it. Treating "non-empty" as
+      # "good" would let a truncated hand-commit be advertised with ✅ and
+      # published verbatim as the release body.
+      - name: Check for an existing changelog on the branch
+        id: existing
+        env:
+          STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
+        run: |
+          CL="docs/changelogs/v${STABLE_VERSION}.md"
+          if [ ! -s "$CL" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          elif REASON="$(.release-tooling/hack/validate-changelog.sh "$CL" "${STABLE_VERSION}" 2>&1)"; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Changelog already on the staging branch and valid — keeping it, not overwriting with generated output. ${REASON}"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::A changelog is on the staging branch but is not usable (${REASON}). Falling back to this run's generated output if there is one."
+          fi
+
+      # continue-on-error: a transient artifact-transfer failure must not abort
+      # the job before the PR is opened. Without it the download step is fatal,
+      # and the promotion ends with a pushed staging branch, a drafted release and
+      # no promote PR — the same wedge the job-level `if:` exists to prevent, one
+      # step further down.
+      - name: Download changelog artifact
+        id: download
+        if: needs.changelog.outputs.present == 'true' && steps.existing.outputs.present == 'false'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: changelog-v${{ needs.promote.outputs.stable_version }}
+          path: docs/changelogs
+
+      # Re-establish ground truth from the filesystem rather than trusting the
+      # upstream job's output: the artifact may have failed to transfer, and what
+      # actually matters from here on is whether a usable file is on disk.
+      - name: Confirm changelog on disk
+        id: usable
+        env:
+          STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
+        run: |
+          CL="docs/changelogs/v${STABLE_VERSION}.md"
+          if [ -s "$CL" ] && REASON="$(.release-tooling/hack/validate-changelog.sh "$CL" "${STABLE_VERSION}" 2>&1)"; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "✅ ${REASON}"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No usable changelog available for v${STABLE_VERSION} — the promote PR will open without one."
+          fi
+
+      # Only when the file came from the artifact. A changelog already on the
+      # branch was committed by `promote` (preserve path) and needs no second commit.
+      - name: Commit changelog to staging branch
+        if: steps.usable.outputs.present == 'true' && steps.existing.outputs.present == 'false'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
+          STABLE_BRANCH: ${{ needs.promote.outputs.stable_branch }}
+        run: |
+          set -euo pipefail
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+          git add "docs/changelogs/v${STABLE_VERSION}.md"
+          if git diff --cached --quiet; then
+            echo "✅ Changelog already committed on ${STABLE_BRANCH}; nothing to do."
+            exit 0
+          fi
+          git commit -s -m "docs: add changelog for v${STABLE_VERSION}"
+          git push origin "HEAD:refs/heads/${STABLE_BRANCH}"
+          echo "✅ Committed changelog to ${STABLE_BRANCH}."
+
       - name: Open promote (release) PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          STABLE_BRANCH: ${{ steps.parse.outputs.stable_branch }}
-          STABLE_TAG: ${{ steps.parse.outputs.stable_tag }}
-          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
-          LINE: ${{ steps.parse.outputs.line }}
+          STABLE_BRANCH: ${{ needs.promote.outputs.stable_branch }}
+          STABLE_TAG: ${{ needs.promote.outputs.stable_tag }}
+          STABLE_VERSION: ${{ needs.promote.outputs.stable_version }}
+          # From promote's validated parse, not raw dispatch input — the rc tag is
+          # pattern-checked exactly once and every consumer reads that result.
+          RC_TAG: ${{ needs.promote.outputs.rc_tag }}
+          # True when the PR carries a changelog by EITHER route: preserved on the
+          # branch, or generated this run. The PR body must reflect what merged,
+          # not just what the AI produced.
+          CHANGELOG_PRESENT: ${{ (steps.existing.outputs.present == 'true' || steps.usable.outputs.present == 'true') && 'true' || 'false' }}
+          E2E_VERIFICATION: ${{ needs.promote.outputs.e2e_verification }}
+          BASE_BRANCH: ${{ needs.promote.outputs.base_branch }}
+          # website-docs is non-blocking; its result drives a ✅/⚠️ line only.
+          WEBSITE_DOCS_RESULT: ${{ needs.website-docs.result }}
         run: |
-          # Target the maintenance line if it exists, else main.
-          BASE=main
-          if git ls-remote --exit-code --heads origin "release-${LINE}" >/dev/null 2>&1; then
-            BASE="release-${LINE}"
-          fi
-          BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. The tree pins the rc's images by digest. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit, retags those digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishes the stable cozy-installer chart, and publishes the release — so the stable artifacts are bit-for-bit the rc that passed e2e. The \`full-e2e\` label forces the full suite on this PR. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit."
-          # Reuse an OPEN pr, create one otherwise. `gh pr view <branch>` was
-          # wrong here: it resolves a pr by head branch in any state, so a
-          # closed one satisfied the guard and creation was skipped while the
-          # step still exited 0 — a promotion that reports success and leaves
-          # nothing to merge. That wedges the two paths this workflow is built
-          # to support, because STABLE_BRANCH is derived from the stable
-          # version and is therefore shared by every rc promoted to it:
-          # re-dispatching the same rc, and promoting a newer rc to the same
-          # version. Neither can recover by reopening, since the force-push
-          # below makes the old pr's head unreachable and GitHub then refuses
-          # the reopen outright ("branch was force-pushed or recreated").
-          if [ -n "$(gh pr list --head "${STABLE_BRANCH}" --state open --json number --jq '.[0].number')" ]; then
-            echo "PR already open for ${STABLE_BRANCH}"
+          # `promote` resolved and validated this target before publishing the
+          # packages candidate. Reuse it so the PR cannot drift to an older base.
+          BASE="$BASE_BRANCH"
+          # State the changelog outcome in the PR body: generation is non-blocking,
+          # so a missing changelog must be visible where the reviewer is looking.
+          # finalize reads this file to populate the published release body — if it
+          # is absent at merge, the release ships with empty notes.
+          if [ "${CHANGELOG_PRESENT}" = "true" ]; then
+            CHANGELOG_NOTE="✅ Includes \`docs/changelogs/v${STABLE_VERSION}.md\`, which finalize uses verbatim as the published release body."
           else
+            CHANGELOG_NOTE="⚠️ **No changelog in this PR** — automatic generation failed. Commit \`docs/changelogs/v${STABLE_VERSION}.md\` to this branch before merging, or \`${STABLE_TAG}\` publishes with an empty release body."
+          fi
+          if [ "${E2E_VERIFICATION}" = "verified" ]; then
+            E2E_NOTE="✅ RC full e2e was verified for \`${RC_TAG}\` before promotion."
+          else
+            E2E_NOTE="⚠️ **RC e2e gate bypassed** — this promotion did not verify green full e2e evidence for \`${RC_TAG}\`."
+          fi
+          # website-docs is non-blocking: state its outcome where the reviewer is
+          # looking, and — on success — repeat the DO-NOT-MERGE-early contract so
+          # nobody merges the website PR before this release is finalized.
+          if [ "${WEBSITE_DOCS_RESULT}" = "success" ]; then
+            WEBSITE_NOTE="✅ Website docs PR opened/refreshed on \`cozystack/website\` (branch \`update-docs-v${STABLE_VERSION}\`), generated from the \`${STABLE_BRANCH}\` staging branch. **Do NOT merge that PR until \`${STABLE_TAG}\` is published** — merging it early flips the site's latest-version pointer to an unpublished version and 404s its docs/API links (see the PR body)."
+          else
+            WEBSITE_NOTE="⚠️ **Website docs not updated** — the website-docs job did not succeed (result: \`${WEBSITE_DOCS_RESULT}\`; e.g. \`cozystack/website\` main not yet on FETCH_REF). Promotion is unaffected; tags.yaml::update-website-docs will backfill the docs PR at tag time. Check the promote run's website-docs job."
+          fi
+          BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` without rebuilding containers. Their digests remain bit-for-bit what passed rc e2e; the tag-rewritten packages tree is re-serialized as a temporary OCI candidate and pinned here by digest. On merge, pull-requests-release.yaml verifies that candidate against this tree before creating the write-once \`${STABLE_TAG}\` tag, retagging the candidate and container digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishing the stable cozy-installer chart, and publishing the release. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit.
+
+          ${E2E_NOTE}
+
+          ℹ️ E2E already ran against the immutable rc, so this promote PR does not run E2E by default. A maintainer may add the \`full-e2e\` label to run the full suite again.
+
+          ${CHANGELOG_NOTE}
+
+          ${WEBSITE_NOTE}"
+          # `gh pr view <branch>` resolves CLOSED PRs too. After a promote PR was
+          # closed unmerged and the rc re-dispatched, editing that dead PR would
+          # "succeed" and no new PR would ever be opened — the promotion reports
+          # success and produces nothing. Branch on the state explicitly.
+          PR_STATE="$(gh pr view "${STABLE_BRANCH}" --json state --jq .state 2>/dev/null || echo "")"
+          if [ "${PR_STATE}" = "OPEN" ]; then
+            # Refresh only while the body is still the one this workflow wrote.
+            # docs/release.md tells reviewers to paste upstream breaking-change
+            # notes into this body before merge; a re-dispatch that overwrites it
+            # would destroy that with no trace and no way to recover it.
+            CURRENT="$(gh pr view "${STABLE_BRANCH}" --json body --jq .body 2>/dev/null || echo "")"
+            if [ "${CURRENT}" = "${BODY}" ]; then
+              echo "PR already open for ${STABLE_BRANCH} with an identical body; nothing to do."
+            elif printf '%s' "${CURRENT}" | grep -qF 'Promotes `'; then
+              echo "::notice::Refreshing the body of the open PR for ${STABLE_BRANCH}."
+              gh pr edit "${STABLE_BRANCH}" --body "$BODY"
+            else
+              echo "::warning::The open PR for ${STABLE_BRANCH} has a hand-edited body — leaving it untouched. Changelog status this run: ${CHANGELOG_PRESENT}."
+            fi
+          else
+            # Release-labelled promote PRs deliberately omit full-e2e: the rc
+            # gate above already checked the immutable candidate. Adding the
+            # label later is the explicit maintainer opt-in for a repeat run.
             gh pr create --base "$BASE" --head "${STABLE_BRANCH}" \
               --title "chore(release): promote ${RC_TAG} -> ${STABLE_TAG}" \
-              --body "$BODY" --label release --label full-e2e
+              --body "$BODY" --label release
           fi

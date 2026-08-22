@@ -1,0 +1,36 @@
+# Fixture for hack/release-changelog-behaviour.bats: proves, by RUNNING it, the
+# GitHub Actions semantics promote-rc.yaml depends on — that a job needing a
+# FAILED job still runs when its `if:` gates only on a different, successful one.
+# Mirrors the promote / changelog / open-pr shapes exactly.
+name: needs-semantics-fixture
+on: [push]
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    outputs:
+      stable_version: ${{ steps.p.outputs.stable_version }}
+    steps:
+      - id: p
+        run: echo "stable_version=1.6.0" >> "$GITHUB_OUTPUT"
+
+  changelog:
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.v.outputs.present }}
+    steps:
+      # Stands in for `npm i -g @github/copilot` failing: a fatal step in the
+      # changelog job that is NOT the continue-on-error AI step.
+      - run: exit 1
+      - id: v
+        run: echo "present=true" >> "$GITHUB_OUTPUT"
+
+  open-pr:
+    runs-on: ubuntu-latest
+    needs: [promote, changelog]
+    if: ${{ !cancelled() && needs.promote.result == 'success' }}
+    steps:
+      - run: |
+          echo "OPEN_PR_RAN=yes"
+          echo "changelog_result=${{ needs.changelog.result }}"
+          echo "changelog_present=[${{ needs.changelog.outputs.present }}]"
+          echo "stable_version=[${{ needs.promote.outputs.stable_version }}]"

@@ -1,0 +1,15 @@
+# Ad-hoc BackupJob — useful for smoke-testing the strategy or running a
+# point-in-time backup outside the Plan schedule. Uses the platform-managed
+# cozy-default BackupClass, whose MongoDB entry routes to the
+# cozy-default-mongodb Strategy (storageName=s3-storage, type=logical).
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: mongodb-src-adhoc
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: MongoDB
+    name: mongodb-src
+  backupClassName: cozy-default

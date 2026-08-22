@@ -1,0 +1,237 @@
+name: Generate RC Changelog
+
+# Generate the release changelog at RC time and commit it to the rc staging
+# branch, so the promote flow can COPY it later instead of regenerating.
+#
+# ── Role in the release model ────────────────────────────────────────────────
+# The changelog is normally produced by promote-rc.yaml at PROMOTE time. That is
+# late: generation is AI-driven and slow, it runs while a maintainer is waiting
+# to ship, and a flaky run there opens the promote PR with no changelog. This
+# workflow lets a maintainer press a button the moment an rc goes green — while
+# there is time to review the notes, fix attribution, or hand-edit — and banks
+# the result on the rc staging branch (release-X.Y.Z-rc.N) as
+# docs/changelogs/vX.Y.Z.md (the STABLE name, since that is what will publish).
+#
+# It is OPTIONAL. Skip it and promote-rc generates the changelog itself, exactly
+# as before. Press it and promote-rc's changelog job finds the file on the rc
+# staging branch, copies it, and skips the AI pass — the "copy the rc changelog"
+# pickup. Either way the promote PR carries docs/changelogs/vX.Y.Z.md and
+# finalize publishes it verbatim as the release body.
+#
+# Generation itself is the reusable changelog-generate.yaml, shared with
+# promote-rc so the two paths cannot drift (same detached rc-tag checkout, same
+# read-only token for the AI step, same validator gate, same artifact). This
+# workflow only adds the strict-regex front door, an UP-FRONT check that the rc
+# staging branch exists (so a missing branch fails in seconds, not after a
+# 30-minute AI run), and the idempotent commit to that branch. It writes to no
+# other branch and opens no PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: "Release-candidate tag to generate the changelog for, e.g. v1.6.0-rc.1"
+        required: true
+        type: string
+
+concurrency:
+  # Per rc tag: two dispatches for the same rc racing to commit the same file to
+  # the same staging branch would collide on the push. Different rc tags are
+  # independent and need not serialize. Keying on the RAW input is safe because
+  # the parse job rejects any whitespace outright (hack/parse-rc-tag.sh): a
+  # non-canonical spelling gets its own lane but fails parse before it can push,
+  # so only the one canonical spelling of a tag ever reaches the commit step.
+  group: changelog-rc-${{ inputs.rc_tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Strict front door + fail-fast gate. Validate the dispatch input, derive the
+  # release identifiers, AND confirm the rc staging branch exists — all before
+  # the (slow, AI-driven) generate job is allowed to start. `generate` needs this
+  # job, so a bad tag or a missing branch is reported in seconds rather than
+  # after a 30-minute generation whose output has nowhere to land.
+  parse:
+    name: Parse, validate, and verify the rc staging branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      rc_tag: ${{ steps.parse.outputs.rc_tag }}
+      stable_version: ${{ steps.parse.outputs.stable_version }}
+      rc_branch: ${{ steps.parse.outputs.rc_branch }}
+    steps:
+      # parse-rc-tag.sh lives in the tree, so overlay the dispatch ref's hack/
+      # before calling it. Gitignored; nothing in this job commits.
+      - name: Checkout release tooling from the dispatch ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.ref_name }}
+          path: .release-tooling
+          sparse-checkout: hack
+          persist-credentials: false
+
+      # Strict parse: reject whitespace outright and match ^vX.Y.Z-rc.N$. The
+      # logic is the shared, behaviour-tested hack/parse-rc-tag.sh (the reusable
+      # core inlines the same rules, because its parse must run before any
+      # checkout). Emits rc_tag / stable_version / rc_branch, all reconstructed
+      # from the pattern — never raw dispatch input.
+      - name: Parse and validate rc tag
+        id: parse
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: |
+          .release-tooling/hack/parse-rc-tag.sh "${RC_TAG}" >> "$GITHUB_OUTPUT"
+
+      # Fail fast, UP FRONT, before generation: the rc staging branch MUST
+      # already exist. tags.yaml creates release-X.Y.Z-rc.N as part of the rc
+      # build; its absence means the rc was never built, so there is nothing to
+      # attach a changelog to. Anonymous ls-remote suffices for this public repo;
+      # distinguish "absent" (exit 2) from a transport error (any other non-zero)
+      # so a network blip cannot masquerade as "missing".
+      - name: Verify rc staging branch exists
+        env:
+          RC_BRANCH: ${{ steps.parse.outputs.rc_branch }}
+          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set +e
+          git ls-remote --exit-code --heads "${REPO_URL}" "refs/heads/${RC_BRANCH}" >/dev/null 2>&1
+          rc=$?
+          set -e
+          if [ "${rc}" -eq 2 ]; then
+            echo "::error::rc staging branch '${RC_BRANCH}' does not exist. Cut ${RC_TAG} first (the Cut Pre-release Tag workflow); tags.yaml creates the staging branch as part of the rc build."
+            exit 1
+          elif [ "${rc}" -ne 0 ]; then
+            echo "::error::Could not query origin for '${RC_BRANCH}' (git ls-remote exit ${rc}) — refusing to proceed."
+            exit 1
+          fi
+          echo "rc staging branch '${RC_BRANCH}' exists — proceeding to generation."
+
+  # Generate via the shared reusable workflow. Passing the reconstructed rc_tag
+  # (not raw input) keeps untrusted data out of the called workflow; it re-parses
+  # defensively regardless. Secrets are passed explicitly, matching the reusable
+  # workflow's declared interface.
+  generate:
+    name: Generate changelog
+    needs: parse
+    # Explicit, matching promote-rc.yaml's identical call: a caller's grant is the
+    # ceiling for every job in the called workflow, and the docs describe an
+    # omitted block as "the default permissions for the GITHUB_TOKEN" rather than
+    # this workflow's own top-level block. Spelling it out removes the ambiguity.
+    permissions:
+      contents: read
+    uses: ./.github/workflows/changelog-generate.yaml
+    with:
+      rc_tag: ${{ needs.parse.outputs.rc_tag }}
+    secrets:
+      COZYSTACK_CI_APP_ID: ${{ secrets.COZYSTACK_CI_APP_ID }}
+      COZYSTACK_CI_PRIVATE_KEY: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+
+  # Commit the produced changelog onto the rc staging branch. Unlike promote-rc's
+  # open-pr — which degrades silently to a ⚠️ PR body when generation fails,
+  # because a promotion must never be wedged — this is an explicit maintainer
+  # action, so an empty result fails LOUDLY (first step) instead of finishing
+  # green with nothing committed.
+  commit:
+    name: Commit changelog to rc staging branch
+    needs: [parse, generate]
+    if: ${{ !cancelled() && needs.generate.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # push the changelog commit onto the rc staging branch (via the scoped app token)
+    steps:
+      # Hard-fail when generation produced nothing usable. The reusable workflow
+      # keeps the AI step non-blocking (so promote-rc can degrade), which means
+      # `generate` succeeds even when it yielded no changelog — the maintainer who
+      # pressed this button must be told, not left with a green run and no file.
+      - name: Require a usable changelog from generation
+        env:
+          PRESENT: ${{ needs.generate.outputs.present }}
+          RC_TAG: ${{ needs.parse.outputs.rc_tag }}
+          STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
+          RC_BRANCH: ${{ needs.parse.outputs.rc_branch }}
+        run: |
+          if [ "${PRESENT}" != "true" ]; then
+            echo "::error::Changelog generation produced no usable output for ${RC_TAG}. Nothing to commit. Re-run once the cause is fixed, or hand-commit docs/changelogs/v${STABLE_VERSION}.md to ${RC_BRANCH}."
+            exit 1
+          fi
+          echo "Generation produced a usable changelog; committing to ${RC_BRANCH}."
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          # Scope the token to this repo only — it never touches other repos.
+          repositories: ${{ github.event.repository.name }}
+
+      # The rc staging branch's existence was already verified UP FRONT in the
+      # parse job (before generation), so it is not re-checked here — a checkout
+      # failure for a branch deleted in the meantime is a rare, self-evident race.
+      - name: Checkout rc staging branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.parse.outputs.rc_branch }}
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+
+      # The rc staging branch predates this change and does not carry
+      # hack/validate-changelog.sh. Overlay the current tooling from the dispatch
+      # ref, exactly as promote-rc and changelog-generate do. Gitignored.
+      - name: Checkout release tooling from the dispatch ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.ref_name }}
+          path: .release-tooling
+          sparse-checkout: |
+            hack
+            docs/agents
+          persist-credentials: false
+
+      - name: Download changelog artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: changelog-v${{ needs.parse.outputs.stable_version }}
+          path: docs/changelogs
+
+      # Validate before it ever touches the branch — a truncated hand-path file
+      # must not be committed and later published verbatim as the release body.
+      # Same script the reusable workflow's Verify step and open-pr use.
+      - name: Verify changelog on disk
+        env:
+          STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
+        run: |
+          .release-tooling/hack/validate-changelog.sh "docs/changelogs/v${STABLE_VERSION}.md" "${STABLE_VERSION}"
+
+      # Compare-before-push idempotency: if release-X.Y.Z-rc.N already carries an
+      # identical docs/changelogs/vX.Y.Z.md, `git diff --cached --quiet` sees no
+      # change and this is a green no-op — re-pressing the button never produces a
+      # duplicate commit. Only a genuine change is committed and pushed. Same
+      # pattern as open-pr's "Commit changelog to staging branch" step.
+      - name: Commit changelog to rc staging branch
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
+          RC_BRANCH: ${{ needs.parse.outputs.rc_branch }}
+        run: |
+          set -euo pipefail
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+          git add "docs/changelogs/v${STABLE_VERSION}.md"
+          if git diff --cached --quiet; then
+            echo "✅ docs/changelogs/v${STABLE_VERSION}.md already on ${RC_BRANCH} and identical; nothing to do."
+            exit 0
+          fi
+          git commit -s -m "docs: add changelog for v${STABLE_VERSION}"
+          git push origin "HEAD:refs/heads/${RC_BRANCH}"
+          echo "✅ Committed docs/changelogs/v${STABLE_VERSION}.md to ${RC_BRANCH}."

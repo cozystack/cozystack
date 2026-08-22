@@ -170,6 +170,19 @@ spec:
 {{- $accessKeyKey := "accessKey" }}
 {{- $secretKeyKey := "secretKey" }}
 {{- $s3Path := default .Release.Name .Values.backup.s3PathOverride }}
+{{- /*
+  Optional CA bundle for an S3 endpoint signed by a private CA. Independent of
+  which Secret carries the credentials, so it composes with the per-tenant, the
+  bring-your-own-Secret and the useSystemBucket flows alike.
+*/}}
+{{- $endpointCAName := "" }}
+{{- $endpointCAKey := "ca.crt" }}
+{{- with .Values.backup.endpointCA }}
+{{- if .name }}
+{{- $endpointCAName = .name }}
+{{- if .key }}{{ $endpointCAKey = .key }}{{ end }}
+{{- end }}
+{{- end }}
 {{- if .Values.backup.useSystemBucket }}
 {{- if .Values.backup.s3PathOverride }}
 {{- fail "clickhouse: backup.s3PathOverride is incompatible with backup.useSystemBucket=true. The platform flow scopes the S3 path to <namespace>/<release> automatically; clear s3PathOverride or disable useSystemBucket. To restore from another release's prefix, use a backups.cozystack.io/RestoreJob with spec.targetApplicationRef." }}
@@ -293,6 +306,15 @@ spec:
                   valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $accessKeyKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
                 - name: S3_SECRET_KEY
                   valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $secretKeyKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
+{{- if $endpointCAName }}
+                # Trust the mounted private-CA bundle for the S3 endpoint (see
+                # the `backup.endpointCA` field in values.yaml). SSL_CERT_DIR,
+                # not AWS_CA_BUNDLE: Go reads it in addition to the system store,
+                # so a private and a public endpoint both verify, whereas
+                # AWS_CA_BUNDLE replaces the trust pool and breaks public S3.
+                - name: SSL_CERT_DIR
+                  value: /etc/ssl/cozy-s3-ca:/etc/ssl/certs
+{{- end }}
               resources:
                 requests:
                   cpu: 10m
@@ -303,6 +325,11 @@ spec:
               volumeMounts:
                 - name: data-volume-template
                   mountPath: /var/lib/clickhouse
+{{- if $endpointCAName }}
+                - name: backup-s3-ca
+                  mountPath: /etc/ssl/cozy-s3-ca
+                  readOnly: true
+{{- end }}
               securityContext:
                 # clickhouse-server stores data under /var/lib/clickhouse with
                 # uid=101 / mode 0750 (alpine clickhouse-server image's
@@ -325,6 +352,20 @@ spec:
                 runAsGroup: 0
                 seccompProfile:
                   type: RuntimeDefault
+{{- if $endpointCAName }}
+          # Private-CA bundle for the backup sidecar, projected as ca.crt for
+          # SSL_CERT_DIR above. Not optional on purpose: a missing Secret holds
+          # the whole ClickHouse Pod in ContainerCreating (naming the Secret in
+          # `kubectl describe`) rather than mounting an empty trust dir and
+          # failing later inside clickhouse-backup with an opaque x509 error.
+          volumes:
+            - name: backup-s3-ca
+              secret:
+                secretName: {{ $endpointCAName | quote }}
+                items:
+                  - key: {{ $endpointCAKey | quote }}
+                    path: ca.crt
+{{- end }}
 {{- end }}
     serviceTemplates:
       - name: svc-template

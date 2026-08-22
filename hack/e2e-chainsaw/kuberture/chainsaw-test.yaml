@@ -4,7 +4,7 @@
 # annotation-shape checks and the split-horizon log assertions stay scripts.
 #
 # Everything is applied by chainsaw (the cluster-scoped Package, the cluster
-# RBAC, the probe Pods), so cleanup is automatic — no inlined teardown.
+# RBAC, the probe Jobs), so cleanup is automatic — no inlined teardown.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -21,6 +21,12 @@ spec:
   - podLogs:
       namespace: cozy-kuberture
       selector: app.kubernetes.io/name=kuberture
+      tail: 100
+  # The split-horizon probe pods don't carry the kuberture addon label, so the
+  # selector above misses them; capture their stdout on failure too.
+  - podLogs:
+      namespace: cozy-kuberture
+      selector: app.kubernetes.io/name=kuberture-e2e-edns-probe
       tail: 100
   steps:
   - name: create-package
@@ -129,34 +135,44 @@ spec:
     try:
     - apply:
         file: probes.yaml
-    - script:
+    # Assert each single-shot probe Job reaches Complete rather than polling a
+    # fixed Pod name. The Job re-creates its pod on a fresh IP if the Cilium
+    # reserved:ingress race wedges one and the leak-healer deletes it, so the
+    # proof survives that infra flake instead of failing on a vanished Pod.
+    - assert:
         timeout: 4m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: kuberture-e2e-edns-public
+            namespace: cozy-kuberture
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: kuberture-e2e-edns-internal
+            namespace: cozy-kuberture
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+    - script:
+        timeout: 1m
         content: |
           set -eu
-          for probe in public internal; do
-            deadline=$(( $(date +%s) + 180 ))
-            until kubectl -n cozy-kuberture get pod "kuberture-e2e-edns-${probe}" \
-                -o jsonpath='{.status.phase}' 2>/dev/null | grep -Eq '^(Succeeded|Failed)$'; do
-              [ "$(date +%s)" -ge "$deadline" ] && break
-              sleep 3
-            done
-            # Guard the capture: if the loop timed out before the Pod existed,
-            # an unguarded read fails under `set -e` and skips the dump below.
-            if ! phase=$(kubectl -n cozy-kuberture get pod "kuberture-e2e-edns-${probe}" -o jsonpath='{.status.phase}' 2>/dev/null); then
-              phase="Missing"
-            fi
-            if [ "$phase" != "Succeeded" ]; then
-              echo "==== probe ${probe} failed: phase=${phase} ===="
-              kubectl -n cozy-kuberture describe pod "kuberture-e2e-edns-${probe}" || true
-              kubectl -n cozy-kuberture logs "pod/kuberture-e2e-edns-${probe}" || true
-              exit 1
-            fi
-          done
-
           pub_host=kuberture-e2e-public.cozystack.test
           int_host=kuberture-e2e-internal.cozystack.test
-          pub_logs=$(kubectl -n cozy-kuberture logs pod/kuberture-e2e-edns-public)
-          int_logs=$(kubectl -n cozy-kuberture logs pod/kuberture-e2e-edns-internal)
+
+          # Read each Job's succeeded pod by its job-name label. The healer may
+          # have deleted earlier wedged pods, but the Complete condition asserted
+          # above guarantees one succeeded pod remains to carry the logs.
+          pub_logs=$(kubectl -n cozy-kuberture logs --tail=-1 --max-log-requests=8 -l batch.kubernetes.io/job-name=kuberture-e2e-edns-public)
+          int_logs=$(kubectl -n cozy-kuberture logs --tail=-1 --max-log-requests=8 -l batch.kubernetes.io/job-name=kuberture-e2e-edns-internal)
 
           # The default-prefix probe sees only the public hostname; the internal-
           # prefix probe sees only the internal hostname.

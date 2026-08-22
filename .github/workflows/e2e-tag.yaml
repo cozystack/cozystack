@@ -1,0 +1,379 @@
+name: E2E Release Tag
+
+# Validate the installable release closure for an existing version tag.
+#
+# Every RC must pass this lane after tags.yaml has published the prerelease and
+# pushed its release-X.Y.Z-rc.N digest-pinned staging branch — tags.yaml's
+# rc-e2e job calls this workflow as that mandatory post-cut check. The
+# workflow_dispatch trigger is the manual validation button for published
+# alpha, beta, RC, and stable releases.
+#
+# This lane validates published tags only; draft and promote-time validation are
+# explicitly out of scope because release checks run at RC publication time.
+# Prerelease tags use the matching digest-pinned staging branch, while stable
+# tags use their pinned merge tree directly. In both cases the nocloud disk
+# comes from the published release identified by the same tag.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to validate, e.g. v1.7.0-rc.1"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to validate, e.g. v1.7.0-rc.1"
+        required: true
+        type: string
+      debug:
+        description: "Open a maintainer SSH breakpoint if E2E fails"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: e2e-tag-${{ inputs.tag }}
+  cancel-in-progress: false
+
+# Listing published releases, reading Git refs, downloading a release asset, and
+# checking out the pinned tree require only repository contents read access.
+# Draft releases are not part of this lane's contract. The public GHCR images
+# referenced by that tree need no package token.
+#
+# CALLERS MUST GRANT `contents: read` AND `checks: write`. A caller's permissions
+# are the ceiling for every job here, and GitHub validates that ceiling when it
+# creates the run, before any `if:` is evaluated — so the `checks: write` the e2e
+# job below declares for its dispatch-only breakpoint has to be granted even by a
+# caller whose invocation can never reach that step. Granting less does not
+# degrade the breakpoint; it fails the caller's entire workflow run at startup.
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve release assets and tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      disk_id: ${{ steps.resolve.outputs.disk_id }}
+      tree_ref: ${{ steps.resolve.outputs.tree_ref }}
+    steps:
+      - name: Validate tag and resolve release
+        id: resolve
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            const tag = process.env.TAG;
+            const pattern = /^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$/;
+            if (!pattern.test(tag)) {
+              core.setFailed(`Tag '${tag}' must match vX.Y.Z, vX.Y.Z-alpha.N, vX.Y.Z-beta.N, or vX.Y.Z-rc.N`);
+              return;
+            }
+
+            const isPrerelease = /-(alpha|beta|rc)\.[0-9]+$/.test(tag);
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            const release = releases.find(candidate => candidate.tag_name === tag);
+            if (!release) {
+              core.setFailed(`GitHub release '${tag}' not found`);
+              return;
+            }
+
+            if (release.draft) {
+              core.setFailed(`Release for tag '${tag}' is still a draft — this lane validates published tags only; RC validation runs after tags.yaml publishes the prerelease`);
+              return;
+            } else if (isPrerelease && !release.prerelease) {
+              core.setFailed(`Release '${tag}' must be published as a prerelease`);
+              return;
+            } else if (!isPrerelease && release.prerelease) {
+              core.setFailed(`Release '${tag}' must be published as a stable release`);
+              return;
+            }
+
+            const disk = release.assets.find(asset => asset.name === 'nocloud-amd64.raw.xz');
+            if (!disk) {
+              core.setFailed(`Required asset 'nocloud-amd64.raw.xz' is missing from release '${tag}'`);
+              return;
+            }
+
+            const treeRef = isPrerelease ? `release-${tag.slice(1)}` : tag;
+            const gitRef = isPrerelease ? `heads/${treeRef}` : `tags/${treeRef}`;
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: gitRef
+              });
+            } catch (error) {
+              if (error.status === 404 && isPrerelease) {
+                core.setFailed(`Expected staging branch '${treeRef}' for prerelease tag '${tag}' was not found`);
+                return;
+              }
+              if (error.status === 404) {
+                core.setFailed(`Expected stable tag ref '${tag}' was not found`);
+                return;
+              }
+              throw error;
+            }
+
+            core.setOutput('disk_id', String(disk.id));
+            core.setOutput('tree_ref', treeRef);
+            core.info(`Resolved ${tag}: tree '${treeRef}', disk asset ${disk.id}`);
+
+  e2e:
+    name: E2E ${{ inputs.tag }} (full suite)
+    needs: resolve
+    # The sandbox boots three 8-vCPU / 24-GiB QEMU guests. This runner leaves
+    # enough host headroom for QEMU, networking, containerd, and the runner
+    # agent while the full platform installs across all three guests.
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    # Sized above what the tenant-Kubernetes pair can spend on a failing run, and
+    # held to one figure across every lane that runs the suite. That bound, the
+    # measured run the rest of the margin comes from, and what neither of them
+    # covers are all in hack/node-join-soft-red_test.bats rather than restated
+    # here in four workflows that would then drift apart.
+    timeout-minutes: 215
+    permissions:
+      contents: read
+      checks: write # Breakpoint action updates its dedicated "Breakpoint Open" Check Run.
+    steps:
+      # The resolved ref is the digest-pinned staging branch for a prerelease,
+      # or the stable tag's pinned merge tree.
+      - name: Checkout resolved release tree
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.resolve.outputs.tree_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download disk asset from release
+        env:
+          DISK_ID: ${{ needs.resolve.outputs.disk_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p _out/assets
+          curl --fail-with-body --silent --show-error --location \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o _out/assets/nocloud-amd64.raw.xz \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${DISK_ID}"
+
+      - name: Set sandbox ID
+        env:
+          TAG: ${{ inputs.tag }}
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${TAG}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
+
+      - name: Prepare workspace
+        run: |
+          rm -rf "/tmp/$SANDBOX_NAME"
+          cp -r "${{ github.workspace }}" "/tmp/$SANDBOX_NAME"
+
+      # This is the only retried stage: Talos image unpacking, QEMU startup, and
+      # sandbox networking are pure runner infrastructure, not product logic.
+      - name: Prepare environment
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          attempt=0
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "Attempt $attempt failed, exiting..."
+              exit 1
+            fi
+            echo "Attempt $attempt failed, retrying..."
+          done
+          echo "Prepare environment completed after $((attempt + 1)) attempts"
+
+      - name: Install Cozystack into sandbox
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — see diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: not-Ready HelmReleases (describe)"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Run OpenAPI tests
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+
+      # A tag has no PR diff to scope with Test Impact Analysis. Empty
+      # CHAINSAW_SUITES is the testing Makefile's full-suite mode.
+      - name: Run E2E tests (full suite)
+        id: e2e_tests
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES=""; then
+            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+            echo "::endgroup::"
+            # COSI CRDs have no printer columns, so capture readiness fields at
+            # failure time before tests and report collection can move state.
+            echo "::group::Diagnostics: COSI bucket state"
+            docker exec "$SANDBOX_NAME" sh -c '
+              kubectl get bucketclaims.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.bucketReady,BUCKET:.status.bucketName" 2>&1
+              kubectl get buckets.objectstorage.k8s.io -o custom-columns="NAME:.metadata.name,READY:.status.bucketReady,ID:.status.bucketID,CLAIMNS:.spec.bucketClaim.namespace" 2>&1
+              kubectl get bucketaccesses.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,CLAIM:.spec.bucketClaimName" 2>&1
+            ' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "✅ All E2E tests passed"
+
+      - name: Collect chainsaw report
+        if: always()
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          mkdir -p _out
+          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
+            _out/chainsaw-report.xml || true
+
+      - name: Upload chainsaw report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chainsaw-report-${{ inputs.tag }}
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
+          if-no-files-found: ignore
+
+      # collect-report packages cozyreport plus per-failed-test crust-gather
+      # snapshots captured before Chainsaw cleanup.
+      #
+      # A ceiling of its own, not the job's 215 minutes. `Upload cozyreport.tgz`
+      # is the next step and the collector writes its tarball at the very end of
+      # its run, so a read that never returns spends what is left of the job
+      # budget, the job is cancelled, and the upload never runs -- the artifact
+      # is lost rather than truncated. 30 minutes is measured against the step:
+      # it takes 3-42s across sampled runs, failed e2e jobs included.
+      # `continue-on-error` because the ceiling must not change what the job
+      # reports: `|| true` says collecting diagnostics is never fatal, and a step
+      # killed at its ceiling never reaches it.
+      - name: Collect report
+        id: collect_report
+        if: always()
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      # `continue-on-error` keeps the overrun out of the job's result, which also
+      # keeps it out of everyone's view: a step that ended at its ceiling renders
+      # green and the only trace is in the raw log. This branch's own standard is
+      # that a bound which fires is recorded, and that has to hold for the outer
+      # bound too.
+      #
+      # The wording says what `outcome` establishes and no more. A step can end
+      # non-zero without any ceiling firing -- in e2e-tag.yaml the body opens with
+      # a `cd` into a sandbox tree an earlier step may never have created, and the
+      # default shell is `bash -e` -- so naming the timeout as the cause would be
+      # the same false-mechanism claim the collector refuses to make for a 137.
+      - name: Report collection overran its ceiling
+        if: always() && steps.collect_report.outcome == 'failure'
+        run: |
+          echo "::warning title=cozyreport::Collect report ended non-zero -- its timeout-minutes fired, or the step failed before the collector ran; cozyreport.tgz is missing or partial for this run"
+
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cozyreport-${{ inputs.tag }}
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+
+      - name: Collect images list
+        if: always()
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-images || true
+
+      - name: Upload image list
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-list-${{ inputs.tag }}
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
+
+      # ▸ Open an SSH breakpoint to the failing sandbox so maintainers can attach,
+      #   inspect Talos/Cozystack state and resume with `breakpoint resume`.
+      #
+      #   Gated by the workflow_dispatch `debug` boolean and the configured
+      #   BREAKPOINT_ENDPOINT repository variable. workflow_call runs never get
+      #   a breakpoint. authorized-users is kept as a second defense layer at
+      #   the breakpoint level.
+      #
+      #   Uses cozystack/breakpoint-action (fork of namespacelabs/breakpoint-action)
+      #   pinned by SHA. The fork adds: pause-idle mode (initial grace period for
+      #   the first SSH connection, idle-aware exit afterwards), endpoint output
+      #   and ::notice:: annotation, and a dedicated Check Run "Breakpoint Open"
+      #   that carries the SSH endpoint in output.summary while the breakpoint is
+      #   paused (conclusion=failure → standard ✗ in checks; updated to
+      #   conclusion=success when the breakpoint exits).
+      - name: Breakpoint on E2E failure
+        if: |
+          failure() &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.debug == true &&
+          vars.BREAKPOINT_ENDPOINT != ''
+        # cozystack/breakpoint-action v2-cozy.1
+        # mode: pause-idle defaults: grace-period=20m, idle-timeout=10m
+        uses: cozystack/breakpoint-action@a6f3a6f87be398ad63b6577351e3398e53f578e4
+        with:
+          mode: pause-idle
+          endpoint: ${{ vars.BREAKPOINT_ENDPOINT }}
+          authorized-users: androndo, Arsolitt, IvanHunters, kvaps, lexfrei, lllamnyp, mattia-eleuteri, matthieu-robin, myasnikovdaniil, sircthulhu, tym83
+          check-run-name: "Breakpoint Open"
+          github-token: ${{ github.token }}
+          check-run-summary-template: |
+            ## 🔴 SSH breakpoint open — paused for debug
+
+            ```
+            {endpoint}
+            ```
+
+            Enter the e2e sandbox after SSH:
+            ```
+            docker exec -ti $(docker ps --filter name=cozy-e2e-sandbox -q | head -1) bash
+            export KUBECONFIG=/workspace/kubeconfig
+            ```
+
+            Resume from inside: `breakpoint resume`. Otherwise the breakpoint
+            exits 10 minutes after the last SSH session disconnects.
+
+      - name: Tear down sandbox
+        if: always()
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+
+      - name: Remove workspace
+        if: always()
+        run: rm -rf "/tmp/$SANDBOX_NAME"
+
+      - name: Summarize outcome
+        if: always()
+        env:
+          OUTCOME: ${{ job.status }}
+          TAG: ${{ inputs.tag }}
+        run: printf '| E2E tag `%s` | %s |\n' "$TAG" "$OUTCOME" >> "$GITHUB_STEP_SUMMARY"

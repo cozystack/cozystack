@@ -1,0 +1,273 @@
+name: Generate changelog (reusable)
+
+# Reusable core of release-changelog generation. Given a release-candidate tag it
+# produces docs/changelogs/vX.Y.Z.md for the STABLE version that rc becomes and
+# uploads it as the artifact `changelog-vX.Y.Z`. It writes to no branch and opens
+# no PR — the caller owns every mutation. Two callers exist, and the difference
+# between them is only WHEN the button is pressed:
+#
+#   * promote-rc.yaml  — calls this at PROMOTE time, in parallel with asset
+#     staging; its open-pr job downloads the artifact and commits it onto the
+#     release-X.Y.Z staging branch so it rides the promote PR. This is the
+#     MANDATORY pickup: a release publishes with whatever changelog exists here.
+#   * changelog-rc.yaml — calls this at RC time, when a maintainer presses the
+#     "generate the changelog now" button; its commit job lands the artifact on
+#     the release-X.Y.Z-rc.N staging branch. This is OPTIONAL — pressing the
+#     button early just means promote-rc COPIES the rc-time result instead of
+#     regenerating it (see the rc-staging-branch pickup below).
+#
+# ── Ref semantics under workflow_call (documented decision) ──────────────────
+# The primary checkout is the rc TAG (detached), a commit that predates this
+# workflow and does not carry hack/validate-changelog.sh or today's
+# docs/agents/changelog.md. The tooling is therefore overlaid from a SECOND,
+# sparse checkout of `github.ref_name`. Under workflow_call `github.ref_name` is
+# the CALLER's dispatch ref (main, or release-X.Y), NOT this file's own ref — and
+# for a local `uses: ./…` reference the two coincide anyway, because the reusable
+# workflow body is resolved from the caller's commit. So "current tooling against
+# an old rc tag" holds exactly as it did before the extraction: the tooling is
+# always the tip of whatever branch the maintainer dispatched from. The dispatch
+# ref wins; the rc tag never contributes tooling, only release content.
+#
+# ── Secrets (documented decision) ────────────────────────────────────────────
+# Declared EXPLICITLY rather than relying on `secrets: inherit`, so this file's
+# interface names exactly what it needs and a caller that forgets one fails
+# loudly at parse time instead of at the AI step. The app id/key pair mints two
+# separate tokens: a read-only one for the AI step (it can never push or open a
+# PR even with --allow-all-tools) and — via the caller — the write token that
+# actually commits. COPILOT_GITHUB_TOKEN drives the AI model.
+
+on:
+  workflow_call:
+    inputs:
+      rc_tag:
+        description: "Release-candidate tag to generate the changelog for, e.g. v1.6.0-rc.2"
+        required: true
+        type: string
+    secrets:
+      COZYSTACK_CI_APP_ID:
+        description: "App id for the CozyStack CI GitHub App (mints the read-only token)."
+        required: true
+      COZYSTACK_CI_PRIVATE_KEY:
+        description: "Private key for the CozyStack CI GitHub App."
+        required: true
+      COPILOT_GITHUB_TOKEN:
+        description: "Token the Copilot CLI authenticates the AI model with."
+        required: true
+    outputs:
+      present:
+        description: "true when a usable changelog was produced (generated, copied from the rc staging branch, or already in the rc tag tree)."
+        value: ${{ jobs.changelog.outputs.present }}
+
+# Read-only by default. The job below never writes to the repository — every
+# mutation (the commit, the PR) is the caller's, performed with a separate token.
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    name: Generate changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      present: ${{ steps.changelog_status.outputs.present }}
+    steps:
+      # Read-only token for the AI step. Minting a separate scoped token means
+      # generation cannot push branches, open PRs, or mutate any repository even
+      # with --allow-all-tools, regardless of whether the agent follows the
+      # prompt's instructions. The caller owns every write.
+      - name: Generate read-only GitHub App token
+        id: app-token-read
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          permission-contents: read
+          permission-pull-requests: read
+          permission-metadata: read
+
+      - name: Parse rc tag
+        id: parse
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: |
+          set -euo pipefail
+          # Reject whitespace outright rather than stripping it. This mirrors
+          # hack/parse-rc-tag.sh (which changelog-rc uses), inlined here because
+          # this parse must run BEFORE any checkout — the script lives in the tree
+          # that is only overlaid afterwards, and the rc-tag checkout below needs
+          # the parsed tag first. Stripping (the old `tr -d '[:space:]'`) would
+          # silently rewrite a typo'd 'v1. 6.0-rc.2' into a different valid tag.
+          if [[ "${RC_TAG}" =~ [[:space:]] ]]; then
+            echo "::error::rc_tag '${RC_TAG}' must not contain whitespace"
+            exit 1
+          fi
+          if [[ ! "${RC_TAG}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-rc\.([0-9]+)$ ]]; then
+            echo "::error::rc_tag '${RC_TAG}' must match 'vX.Y.Z-rc.N'"
+            exit 1
+          fi
+          VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          # Re-emit the tag and the rc staging branch from the matched groups
+          # rather than passing inputs.rc_tag through: the checkout `ref` and the
+          # branch fetch below then consume values this step reconstructed from a
+          # strict pattern, never raw dispatch input, so a crafted rc_tag cannot
+          # reach actions/checkout or a git command.
+          {
+            echo "stable_version=${VERSION}"
+            echo "rc_tag=v${VERSION}-rc.${BASH_REMATCH[4]}"
+            echo "rc_branch=release-${VERSION}-rc.${BASH_REMATCH[4]}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Detached at the rc TAG, not the rc staging branch. Two reasons:
+      #
+      # 1. docs/agents/changelog.md §2 is a hard gate — it permits exactly three
+      #    working-tree states (on `main`, detached at the release tag, or
+      #    detached at the release-candidate tag being promoted) and instructs the
+      #    agent to STOP otherwise. A staging-branch checkout is none of them.
+      # 2. The staging branch carries digest-vendoring commits that are not
+      #    release content. Detaching at the tag makes "use the rc tag as the
+      #    upper bound" a property of the checkout rather than an instruction the
+      #    prompt has to talk the agent into honouring.
+      - name: Checkout rc tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.parse.outputs.rc_tag }}
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token-read.outputs.token }}
+          persist-credentials: false
+
+      # A second checkout of the DISPATCH ref, used only as a source of release
+      # tooling. The primary checkout above is an older commit (the rc tag) and
+      # does not carry hack/validate-changelog.sh, hack/changelog-preserve.sh, or
+      # the current docs/agents/changelog.md — and a script fetched by a script
+      # that is itself missing solves nothing, so this is done declaratively by
+      # actions/checkout rather than by shelling out to the repo's own tooling.
+      # Gitignored, so the caller's `git add -A` never stages it.
+      - name: Checkout release tooling from the dispatch ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.ref_name }}
+          path: .release-tooling
+          sparse-checkout: |
+            hack
+            docs/agents
+          persist-credentials: false
+
+      # The agent reads docs/agents/changelog.md from the WORKING TREE, which is
+      # the rc tag — a commit that predates this workflow. Every rc cut before
+      # this change carries the old section 2, which lists only two valid
+      # configurations and instructs the agent to STOP on anything else. A
+      # detached rc-tag checkout is exactly that, so a COMPLIANT agent would
+      # silently decline to generate on every promotion of an existing rc.
+      # Overlay the current instructions so the agent reads today's contract.
+      - name: Refresh agent instructions
+        run: |
+          cp .release-tooling/docs/agents/changelog.md docs/agents/changelog.md
+          echo "Refreshed docs/agents/changelog.md from ${GITHUB_REF_NAME}."
+
+      # Skip-priority + validate-then-fall-through: use a pre-existing changelog
+      # only if it is USABLE, so an invalid higher-priority source can never
+      # suppress a valid lower-priority one. The rc TAG tree wins over the rc
+      # STAGING branch (release-X.Y.Z-rc.N, where changelog-rc.yaml banks the
+      # rc-time button's output), which wins over AI generation. The whole
+      # decision — including each loud ::warning:: for a discarded file — lives in
+      # hack/select-changelog-source.sh so it can be behaviour-tested directly
+      # (see hack/release-changelog-behaviour.bats); it runs here, after the
+      # .release-tooling overlay, so the script and its helpers are present.
+      - name: Check if changelog already exists
+        id: check_changelog
+        env:
+          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+          RC_BRANCH: ${{ steps.parse.outputs.rc_branch }}
+          READ_TOKEN: ${{ steps.app-token-read.outputs.token }}
+        run: |
+          set -euo pipefail
+          # The rc-tag checkout persisted no credentials, so re-point origin at
+          # the read token (contents:read is enough to fetch) before the script's
+          # branch fetch.
+          git remote set-url origin "https://x-access-token:${READ_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+          # Capture the script's output (::warning:: annotations + a final
+          # source= line), re-emit it so the annotations reach the live log, then
+          # read the decision from the last source= line.
+          out="$(.release-tooling/hack/select-changelog-source.sh "${STABLE_VERSION}" "${RC_BRANCH}")"
+          printf '%s\n' "$out"
+          source="$(printf '%s\n' "$out" | sed -n 's/^source=//p' | tail -n1)"
+          if [ -n "$source" ] && [ "$source" != none ]; then
+            {
+              echo "exists=true"
+              echo "source=${source}"
+            } >> "$GITHUB_OUTPUT"
+            echo "✅ Using a pre-existing changelog (source=${source}) — skipping generation."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No usable pre-existing changelog; generating."
+          fi
+
+      - name: Setup Node.js
+        if: steps.check_changelog.outputs.exists == 'false'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install GitHub Copilot CLI
+        if: steps.check_changelog.outputs.exists == 'false'
+        run: npm i -g @github/copilot
+
+      # Non-blocking by decision: a flaky AI step must not wedge a promotion that
+      # is otherwise ready. The caller degrades gracefully — promote-rc opens the
+      # PR WITHOUT a changelog (its body says so), changelog-rc fails loudly so
+      # the maintainer retries or hand-commits.
+      #
+      # Upper bound is the rc TAG, not HEAD and not the staging branch: the branch
+      # carries digest-vendoring commits that are not release content, and the
+      # stable tag does not exist yet (finalize cuts it post-merge).
+      - name: Generate changelog using AI
+        if: steps.check_changelog.outputs.exists == 'false'
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
+          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+        run: |
+          copilot \
+            --prompt "Generate the release changelog for the upcoming stable release v${STABLE_VERSION}, which is being promoted from the release candidate ${RC_TAG}. The repository is checked out in detached HEAD at the ${RC_TAG} tag — the 'promotion' configuration in section 2 of docs/agents/changelog.md. IMPORTANT: the v${STABLE_VERSION} tag does NOT exist yet; it is created only after the promotion PR merges. Use ${RC_TAG} as the upper bound in every git command (for example 'git log v<previous>..${RC_TAG}'), never HEAD. Write the file as docs/changelogs/v${STABLE_VERSION}.md and use v${STABLE_VERSION} — not ${RC_TAG} — in the header, in the 'Full Changelog' link, and in the leading release-link comment (the HTML comment at the very top of the file). Follow the instructions in @docs/agents/changelog.md exactly, including the 'Scope and boundaries' section at the top. Your deliverable is the single file docs/changelogs/v${STABLE_VERSION}.md — write it and exit; this workflow handles committing and opening the PR." \
+            --allow-all-tools --allow-all-paths < /dev/null
+
+      # Structural validation, not just "non-empty". The AI step is allowed to
+      # fail, and a run that dies partway (timeout, quota exhaustion mid-stream)
+      # can leave a fragment behind. A bare `-s` test would call that present,
+      # commit it, advertise it as valid, and finalize would publish it verbatim
+      # as the release notes.
+      #
+      # The predicates live in hack/validate-changelog.sh so they can be tested
+      # directly against real shipped changelogs. A rejected changelog is treated
+      # exactly like "not generated": warn and set present=false, never fail the
+      # job — generation is non-blocking.
+      - name: Verify changelog
+        id: changelog_status
+        env:
+          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+        run: |
+          if REASON="$(.release-tooling/hack/validate-changelog.sh "docs/changelogs/v${STABLE_VERSION}.md" "${STABLE_VERSION}" 2>&1)"; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "✅ ${REASON}"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Changelog not usable (${REASON}). The caller will degrade to its no-changelog path — commit docs/changelogs/v${STABLE_VERSION}.md before the release publishes, or it will have empty notes."
+          fi
+
+      # Hand the file to the caller, which owns every write. Same artifact name
+      # promote-rc's open-pr and changelog-rc's commit job download.
+      - name: Upload changelog artifact
+        if: steps.changelog_status.outputs.present == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: changelog-v${{ steps.parse.outputs.stable_version }}
+          path: docs/changelogs/v${{ steps.parse.outputs.stable_version }}.md
+          retention-days: 7
+          if-no-files-found: error

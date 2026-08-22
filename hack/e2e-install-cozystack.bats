@@ -43,8 +43,9 @@
   # hard curl retry loop and serves it locally; tenant CRs then point
   # spec.talos.imageFactoryURL at its Service. Deployed here (before the long
   # install) so the seed download overlaps the install churn — readiness is gated
-  # at point-of-use in hack/e2e-apps/run-kubernetes.sh, which falls back to the
-  # public factory if the mirror never becomes Available, so this can only help.
+  # at point-of-use in hack/e2e-chainsaw/_lib/talos-image-cache.sh, called from
+  # run-kubernetes.sh, which falls back to the public factory if the mirror never
+  # becomes Available, so this can only help.
   # Best-effort: never fail the suite on the band-aid. Remove once tenant workers
   # no longer bulk-pull the OS image from the public internet in CI.
   local sid ver
@@ -66,6 +67,56 @@
   else
     echo "WARNING: talos-image-cache Deployment NOT created — tenant workers will use public factory.talos.dev"
   fi
+}
+
+@test "Deploy ghcr.io pull-through mirror (best-effort e2e mirror)" {
+  # Tenant Kubernetes worker Talos nodes pull ghcr.io/siderolabs/kubelet straight
+  # from public ghcr.io. That egress is intermittently rate-limited from the CI
+  # runner, the pull dies on a TLS handshake timeout, the kubelet service never
+  # starts and no tenant node joins (cozystack/cozystack#3513). This Deployment
+  # caches ghcr.io locally; tenant CRs point spec.talos.registryMirrors at its
+  # Service. Readiness is gated at point-of-use in
+  # hack/e2e-chainsaw/_lib/ghcr-mirror.sh, which falls back to direct pulls.
+  #
+  # Its own @test, not folded into the Talos image factory cache above: that step
+  # returns early when it cannot read talos.schematicID/version, and this manifest
+  # substitutes no placeholders and needs neither value. Sharing a block would let
+  # a values.yaml restructure silently stop deploying this mirror.
+  #
+  # The CiliumClusterwideNetworkPolicy in the manifest is deferred to point-of-use
+  # for the same reason as above: Cilium's CRDs do not exist until Cozystack is
+  # installed.
+  yq 'select(.kind != "CiliumClusterwideNetworkPolicy")' hack/e2e-ghcr-mirror.yaml \
+    | kubectl apply -f - || echo "WARNING: failed to apply ghcr-mirror (fallback to direct ghcr.io pulls)"
+  if kubectl -n kube-system get deploy ghcr-mirror >/dev/null 2>&1; then
+    echo "ghcr-mirror Deployment created (pull-through cache for ghcr.io)"
+  else
+    echo "WARNING: ghcr-mirror Deployment NOT created — tenant workers will pull ghcr.io directly"
+  fi
+  # Start filling the cache now, not when the first tenant worker asks for it.
+  # An empty pull-through cache makes the first pull a live fetch from ghcr.io, and
+  # that leg is what the tenant worker cannot afford: measured at 40-165 KB/s for a
+  # 61 MiB image, with some blob streams dying mid-transfer. At the low end that
+  # single pull runs about twenty-six minutes, and it is one leg of a join that
+  # also has to boot Talos and get a CNI onto the node inside the same node-Ready
+  # budget. Deliberately not stated as a fraction of that budget: the figure is a
+  # measured transfer rate and stays true whatever the deadline is set to, while a
+  # ratio would have to be re-derived every time the deadline moves and would read
+  # as comfortable the moment it did. The kubernetes suites start tens of minutes
+  # after this step, so a background Job has time to finish.
+  #
+  # What is guaranteed: a warm-up that fails, times out or never starts does not
+  # fail this step, and the suites behave as they did before it existed.
+  #
+  # What is NOT guaranteed, because it would be untrue: that this is free. The Job
+  # pulls the two selected kubelet tags across the same throttled egress the rest of
+  # the install and the pre-pull step below are using, and if a worker cannot reach
+  # the mirror (assumption 2 in hack/e2e-ghcr-mirror.yaml) Talos falls back to public
+  # ghcr.io and the two then compete for it. That is why the warm set is the suites'
+  # two minors (~61 MiB each, one platform) rather than the whole version map, which
+  # would be ~300 MiB at the same one-platform walk.
+  . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+  warm_ghcr_mirror || true
 }
 
 @test "Required installer chart exists" {
@@ -106,6 +157,11 @@
       (..|select(has("containers"))|.containers[]|.image),
       (..|select(has("initContainers"))|.initContainers[]|.image)
     ' "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" > "$images_list"
+  # The failure-only Talos diagnostics Pod can land on any node. The sandbox's
+  # upstream talosctl binary is static, so cache its pinned Alpine base on every
+  # node while the cluster is healthy instead of cold-pulling on a failure path.
+  printf '%s\n' 'docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47' \
+    >> "$images_list"
   hack/e2e-prepull-images.sh < "$images_list"
   rm -f "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" "$images_list"
 }
@@ -117,7 +173,6 @@
     --namespace cozy-system \
     --create-namespace \
     --set cozystackOperator.helmReleaseInterval=30s \
-    --wait \
     --timeout 2m
 
   # The pre-install hook (cozy-system-labeler) must have stamped the PSA and
@@ -127,8 +182,39 @@
   kubectl get ns cozy-system -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' | grep -qx privileged
   kubectl get ns cozy-system -o jsonpath='{.metadata.labels.cozystack\.io/system}' | grep -qx true
 
-  # Verify the operator deployment is available
-  kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
+  # Wait for the ROLLOUT, not for condition=Available: once maxUnavailable
+  # reaches replicas the minimum available replica count is 0, so Available
+  # reports True with no pod running and a broken operator image passes in
+  # milliseconds, surfacing minutes later as a CRD timeout that blames the wrong
+  # component. `rollout status` reads updated and available replicas directly,
+  # and stays correct whatever strategy the chart carries.
+  #
+  # It still only proves a container started, not that the operator is healthy:
+  # there is no readiness probe, so one that starts and then dies mid-install
+  # passes here and is caught by the CRD waits below instead.
+  #
+  # This is the only readiness gate for the operator, since the helm step above
+  # drops --wait, so the timeout must cover scheduling and a cold pull of an
+  # image that is not in the prepull set.
+  kubectl rollout status deployment/cozystack-operator -n cozy-system --timeout=5m || {
+    echo "=== deployment/cozystack-operator rollout did not complete ==="
+    kubectl get deployment/cozystack-operator -n cozy-system -o yaml 2>&1 || true
+    echo "=== cozy-system pods ==="
+    kubectl get pods -n cozy-system -o wide 2>&1 || true
+    # The two shapes this gate exists to catch need different evidence, and
+    # neither is in `get pods -o wide`. ImagePullBackOff produces no logs at
+    # all, and CrashLoopBackOff puts the stack trace in the container that
+    # already died, so describe carries the first and --previous the second.
+    echo "=== cozystack-operator pod detail ==="
+    kubectl describe pod -n cozy-system -l app=cozystack-operator 2>&1 || true
+    echo "=== cozystack-operator logs ==="
+    kubectl logs -n cozy-system -l app=cozystack-operator --all-containers --tail=50 2>&1 || true
+    echo "=== cozystack-operator logs, previous container ==="
+    kubectl logs -n cozy-system -l app=cozystack-operator --all-containers --previous --tail=50 2>&1 || true
+    echo "=== cozy-system events ==="
+    kubectl get events -n cozy-system --sort-by=.lastTimestamp 2>&1 | tail -30 || true
+    false
+  }
 
   # Wait for operator to install CRDs (happens at startup before reconcile loop).
   # kubectl wait fails immediately if the CRD does not exist yet, so poll until it appears first.
@@ -247,7 +333,7 @@ EOF
 @test "Configure Tenant and wait for applications" {
   # Capacity experiment (throwaway branch): monitoring, ingress and seaweedfs
   # are off. Those three flags are what created the ~5.3 CPU of tenant-root
-  # workload (the VictoriaMetrics/VictoriaLogs cluster, Grafana + its CNPG
+  # workload (the VictoriaMetrics/VictoriaLogs clusters, Grafana plus its CNPG
   # database, Alerta, the SeaweedFS chain and the NGINX controller) that the
   # tenant-Kubernetes suites never touch. etcd stays on: it is Kamaji's
   # datastore, so the tenant control planes need it.
@@ -256,6 +342,7 @@ EOF
   # cozystack.tenant-application dependsOn all three and disabling the packages
   # would wedge the Tenant CR itself. Turning the instances off via the Tenant
   # spec is the lever that costs nothing.
+  timeout 120 sh -ec 'until kubectl get tenants.apps.cozystack.io root -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":false,"monitoring":false,"etcd":true,"isolated":true, "seaweedfs": false}}'
 
   timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd tenant-root >/dev/null 2>&1; do sleep 1; done'
@@ -277,7 +364,6 @@ EOF
   kubectl -n tenant-root wait pod \
     -l app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator \
     --for=condition=ready --timeout=10m
-
 }
 
 @test "Node CPU requests fit the runner (capacity preflight)" {

@@ -1,5 +1,9 @@
 {{- $ingress := .Values._namespace.ingress }}
-{{- if and (eq .Values.addons.ingressNginx.exposeMethod "Proxied") .Values.addons.ingressNginx.hosts }}
+{{- /* The _namespace.etcd gate mirrors the ingress-nginx addon HelmRelease:
+       on an etcd-less tenant the chart collapses to the awaiting-etcd beacon,
+       so no addon controller exists and the Service would select nothing. */}}
+{{- if and .Values.addons.ingressNginx.enabled .Values._namespace.etcd (eq .Values.addons.ingressNginx.exposeMethod "Proxied") }}
+{{- if .Values.addons.ingressNginx.hosts }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -41,7 +45,18 @@ spec:
             port:
               number: 80
   {{- end }}
+{{- end }}
 ---
+# The proxy Service is created whenever the addon is enabled on an etcd-backed
+# tenant with exposeMethod Proxied (independent of `hosts`) so that external
+# consumers — e.g. a ComputePlane app's per-app management Ingress — can route to
+# the tenant cluster's ingress-nginx without the tenant module having to know
+# every app host in advance. Both gates match the addon HelmRelease this Service
+# fronts: exposeMethod defaults to Proxied while the addon defaults to off, so
+# gating on exposeMethod alone would emit a selector-less Service on every cluster
+# that runs no ingress-nginx at all; and on an etcd-less tenant the chart collapses
+# to the awaiting-etcd beacon, so the Service would select a controller that never
+# renders.
 apiVersion: v1
 kind: Service
 metadata:

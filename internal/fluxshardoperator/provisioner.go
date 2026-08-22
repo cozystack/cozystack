@@ -263,7 +263,15 @@ func mergeResourceList(dst *corev1.ResourceList, overrides corev1.ResourceList) 
 //   - the required podAntiAffinity cloned from flux-aio (which keeps its own
 //     replicas off one node) is dropped, since it targets
 //     app.kubernetes.io/name=flux and would otherwise leave every shard
-//     Pending on a single-node cluster.
+//     Pending on a single-node cluster;
+//   - the corporate-proxy env inherited from flux-aio is dropped, in both the
+//     upper- and lower-case spellings (HTTP_PROXY/HTTPS_PROXY/NO_PROXY): a
+//     standalone shard needs no external egress, and behind an unreachable
+//     proxy a stalled startup call leaves the manager never serving /healthz,
+//     so the liveness probe crashloops the pod;
+//   - a startupProbe is derived from the liveness handler (generous failure
+//     budget, liveness handler and TimeoutSeconds inherited) so a slow but
+//     progressing start is not killed by the short inherited liveness window.
 func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv1.Deployment, error) {
 	var src *corev1.Container
 	for i := range flux.Spec.Template.Spec.Containers {
@@ -316,6 +324,24 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 		// is not hostNetwork, so it must fall back to the in-cluster defaults.
 		case "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT":
 			continue
+		// Corporate-proxy env inherited from flux-aio. A standalone shard needs
+		// no external egress: source-controller does artifact fetching and
+		// cosign/TUF verification, and every hop the shard makes is in-cluster
+		// (artifacts advertise as flux.$(RUNTIME_NAMESPACE).svc, guest-cluster
+		// apiservers are reached over .svc kubeconfigs). NO_PROXY=.svc covers
+		// those, but not the management apiserver: the KUBERNETES_SERVICE_HOST
+		// case above makes the shard fall back to the kubelet-injected
+		// ClusterIP, a bare IP that no .svc suffix matches, so that startup
+		// call is the one that stalls through an unreachable proxy and leaves
+		// the manager never serving /healthz until the liveness probe
+		// crashloops the pod. Dropping the proxy env (and the then-pointless
+		// NO_PROXY) keeps every hop direct. A HelmRelease targeting a remote
+		// cluster via spec.kubeConfig reachable only through the proxy is the
+		// one theoretical exception; cozystack guest-cluster apiservers are
+		// in-cluster, so this does not apply here.
+		case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+			"http_proxy", "https_proxy", "no_proxy":
+			continue
 		}
 		env = append(env, e)
 	}
@@ -326,6 +352,25 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 	// cloned cpu limit when only a memory limit is configured.
 	mergeResourceList(&hc.Resources.Requests, cfg.ShardResources.Requests)
 	mergeResourceList(&hc.Resources.Limits, cfg.ShardResources.Limits)
+
+	// Guard startup with a startupProbe derived from the liveness handler.
+	// Without it the inherited ~30s liveness window kills a controller that is
+	// still syncing caches (a slow start on a large cluster, or a transient
+	// dependency), turning any slow start into an unrecoverable crashloop. The
+	// generous startup budget defers liveness until the manager is serving,
+	// then liveness still catches a wedged running pod. Only the budget fields
+	// are normalised; the liveness handler and its TimeoutSeconds are inherited,
+	// so a controller whose /healthz is slow under load keeps the same tolerance
+	// at startup as at runtime (overriding TimeoutSeconds down could make the
+	// startup probe stricter than liveness and recreate the crashloop).
+	if hc.LivenessProbe != nil && hc.StartupProbe == nil {
+		sp := hc.LivenessProbe.DeepCopy()
+		sp.InitialDelaySeconds = 0
+		sp.PeriodSeconds = 10
+		sp.SuccessThreshold = 1
+		sp.FailureThreshold = 30
+		hc.StartupProbe = sp
+	}
 
 	mounted := map[string]bool{}
 	for _, m := range hc.VolumeMounts {

@@ -151,16 +151,17 @@ kubectl --namespace <namespace> delete secret percona-server-mongodb-users
 
 ### Backup parameters
 
-| Name                     | Description                                            | Type     | Value                               |
-| ------------------------ | ------------------------------------------------------ | -------- | ----------------------------------- |
-| `backup`                 | Backup configuration.                                  | `object` | `{}`                                |
-| `backup.enabled`         | Enable regular backups.                                | `bool`   | `false`                             |
-| `backup.schedule`        | Cron schedule for automated backups.                   | `string` | `0 2 * * *`                         |
-| `backup.retentionPolicy` | Retention policy (e.g. "30d").                         | `string` | `30d`                               |
-| `backup.destinationPath` | Destination path for backups (e.g. s3://bucket/path/). | `string` | `s3://bucket/path/to/folder/`       |
-| `backup.endpointURL`     | S3 endpoint URL for uploads.                           | `string` | `http://minio-gateway-service:9000` |
-| `backup.s3AccessKey`     | Access key for S3 authentication.                      | `string` | `""`                                |
-| `backup.s3SecretKey`     | Secret key for S3 authentication.                      | `string` | `""`                                |
+| Name                           | Description                                                                         | Type     | Value                               |
+| ------------------------------ | ----------------------------------------------------------------------------------- | -------- | ----------------------------------- |
+| `backup`                       | Backup configuration.                                                               | `object` | `{}`                                |
+| `backup.enabled`               | Enable regular backups.                                                             | `bool`   | `false`                             |
+| `backup.schedule`              | Cron schedule for automated backups.                                                | `string` | `0 2 * * *`                         |
+| `backup.retentionPolicy`       | Retention policy (e.g. "30d").                                                      | `string` | `30d`                               |
+| `backup.destinationPath`       | Destination path for backups (e.g. s3://bucket/path/).                              | `string` | `s3://bucket/path/to/folder/`       |
+| `backup.endpointURL`           | S3 endpoint URL for uploads.                                                        | `string` | `http://minio-gateway-service:9000` |
+| `backup.insecureSkipTLSVerify` | Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs). | `bool`   | `false`                             |
+| `backup.s3AccessKey`           | Access key for S3 authentication.                                                   | `string` | `""`                                |
+| `backup.s3SecretKey`           | Secret key for S3 authentication.                                                   | `string` | `""`                                |
 
 
 ### Bootstrap (recovery) parameters

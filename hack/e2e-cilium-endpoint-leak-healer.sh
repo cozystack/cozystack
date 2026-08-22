@@ -208,6 +208,14 @@ while true; do
     # never count it toward or trigger the agent restart. Gated on an EXACT match
     # (ip_is_node_ingress; an empty ingress IP never matches) so a false positive
     # can never suppress a restart that would clear a real in-memory leak.
+    #
+    # In the sandbox this branch should now be unreachable: the Kubernetes
+    # cluster CIDR the ingress IP is carved from no longer overlaps the range
+    # kube-ovn allocates pod addresses out of, so no pod can be handed it
+    # (hack/sandbox-cidr-disjoint.bats pins that). The branch stays because the
+    # separation is a property of the sandbox configuration, not of cilium, and
+    # a cluster whose ranges do overlap still reaches it. A SURFACE line for an
+    # ingress IP appearing in the sandbox again means that separation broke.
     ingress_ip=$(kubectl get ciliumnode "$node" -o jsonpath='{.spec.ingress.ipv4}' 2>/dev/null)
     if ip_is_node_ingress "$ip" "$ingress_ip"; then
       log "SURFACE node=$node ip=$ip wedged=$ns/$pod: IP is this node's Cilium ingress IP (CiliumNode.spec.ingress.ipv4), held by the reserved:ingress endpoint -- genuine infra/pod double-allocation from the upstream host-scope IPAM + Gateway API restore-window race. Agent restart cannot clear a re-derived reserved IP and can re-trigger the race, so Tier-2 is skipped; rescheduling the wedged pod best-effort."

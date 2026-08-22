@@ -8,7 +8,8 @@ on:
     # (synchronize) or reopen instead.
     types: [opened, reopened, synchronize]
 
-# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so each job restates every scope it needs.
 permissions:
   contents: read
 
@@ -97,11 +98,13 @@ jobs:
               'gateway':             'area/networking',
               'vpn':                 'area/networking',
               'metallb':             'area/networking',
-              'cilium':              'area/networking',
               'kube-ovn':            'area/networking',
               'tcp-balancer':        'area/networking',
               'securitygroups':      'area/networking',
               'cozy-proxy':          'area/networking',
+
+              // area/cilium
+              'cilium':              'area/cilium',
 
               // area/platform
               'platform':            'area/platform',

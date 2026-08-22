@@ -445,6 +445,13 @@ tests:
         root-host: example.org
         cluster-domain: cozy.local
     asserts:
+      # Anchor the index before asserting on it. notContains passes whenever its
+      # path resolves to something that lacks the content, and a different
+      # container at [0] qualifies, so without this the guard goes green if a
+      # sidecar is ever placed ahead of the proxy.
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: proxy
       - notContains:
           path: spec.template.spec.containers[0].env
           any: true

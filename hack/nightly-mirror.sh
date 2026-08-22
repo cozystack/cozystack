@@ -141,8 +141,26 @@ else
   # never pushed to DST_REGISTRY; scanning a file that is not rewritten leaves
   # the published tree pointing at the private CI registry. A `find -name
   # values.yaml` at any depth would do the former to vendored chart defaults.
+  # The second expression reaches one shape the first cannot: a host that is the
+  # *entire* scalar value, with the repository in a sibling key — kubeovn's
+  # `global.registry.address`, now that its image is built here rather than in
+  # cozystack/kubeovn-chart. There is no trailing slash for `<src>/` to match, so
+  # the host survived the rewrite while the image itself was mirrored, publishing
+  # a tree that points at the private CI registry. Anchoring on end-of-line means
+  # it only fires when SRC_REGISTRY is the complete value: a contiguous
+  # `<src>/<repo>@<digest>` ref continues past the host and is left to the first
+  # expression, so the two cannot both fire on one reference.
+  #
+  # It deliberately does NOT fix keycloak-operator, whose host splits at a
+  # different boundary (`registry: iad.ocir.io` + `repository:
+  # idyksih5sir9/cozystack/<name>`): neither key holds SRC_REGISTRY as a whole,
+  # so rewriting it needs the structure-aware pass docs/agents/image-refs.md
+  # describes. That gap stays dormant while no CI path rebuilds the package.
   image_ref_files "$TREE" | while IFS= read -r f; do
-    sed -i "s|${SRC_ESC}/|${DST_REGISTRY}/|g" "$f"
+    sed -i \
+      -e "s|${SRC_ESC}/|${DST_REGISTRY}/|g" \
+      -e "s|\(:[[:space:]]*[\"']\?\)${SRC_ESC}\([\"']\?\)[[:space:]]*$|\1${DST_REGISTRY}\2|" \
+      "$f"
   done
 fi
 

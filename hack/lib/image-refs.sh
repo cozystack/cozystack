@@ -1,17 +1,20 @@
 # shellcheck shell=sh
 # Shared enumeration of where cozystack vendors its image references.
 #
-# Sourced by hack/promote-retag.sh, hack/nightly-mirror.sh and
-# hack/promote-rewrite-tags.sh. It exists because those three call sites each
-# grew their own idea of where a ref can live, and drifted: promote-retag and
-# nightly-mirror scanned only the depth-2 values.yaml, while the promote
-# workflow's tag rewrite scanned those plus packages/apps/kubernetes/images/
-# *.tag alone. Every ref stored in any OTHER images/*.tag file was therefore
-# invisible to all three — never retagged to the stable version in the
-# registry, never mirrored to GHCR for a nightly, and left carrying the rc
-# version string in a promoted release tree. See docs/agents/image-refs.md for
-# the contract this file implements; a new storage location must be added here
-# and nowhere else.
+# Sourced by hack/promote-rewrite-tags.sh, hack/promote-retag.sh,
+# hack/nightly-mirror.sh and hack/verify-promoted-packages.sh. It exists because
+# the first three call sites each grew their own idea of where a ref can live,
+# and drifted: promote-retag and nightly-mirror scanned only the depth-2
+# values.yaml, while the promote workflow's tag rewrite scanned those plus
+# packages/apps/kubernetes/images/*.tag alone. Every ref stored in any OTHER
+# images/*.tag file was therefore invisible to all three — never retagged to
+# the stable version in the registry, never mirrored to GHCR for a nightly, and
+# left carrying the rc version string in a promoted release tree. The verifier
+# is a later consumer that has only ever read this enumeration: it compares the
+# stable candidate's refs against the rc artifact's to prove promotion moved no
+# container bytes, so a shape it could not see would be a proof that passed over
+# the images it skipped. See docs/agents/image-refs.md for the contract this
+# file implements; a new storage location must be added here and nowhere else.
 #
 # Three storage shapes exist, and all are first-class:
 #
@@ -32,13 +35,12 @@
 # sweep in every vendored upstream chart template and every Helm-templated
 # `image:` line, where a blind rewrite corrupts a value `make update`
 # regenerates. An entry here is a deliberate statement that some package's
-# `image:` target sed's a ref into a file it vendors verbatim.
+# `image:` target sed's a ref into a file it vendors from upstream.
 #
 # system/multus is the only one today: its templates/ is the upstream
 # multus-daemonset-thick.yml fetched by `make update`, and multus's Makefile
-# `image:` target sed's the built ref into two `image:` lines inside it. Left
-# undeclared, multus-cni is invisible to promotion and to the nightly mirror —
-# it receives no stable :vX.Y.Z tag and is never copied to the public registry.
+# `image:` target sed's the built ref into every `multus-cni` `image:` line
+# inside it.
 #
 # KNOWN GAP, deliberately not listed: system/capi-providers-cpprovider stamps
 # its kamaji ref into files/control-plane-components.yaml AND into the
@@ -161,14 +163,25 @@ collect_image_refs() {
 
   # Declared extras additionally get the textual scrape, even though most are
   # YAML and were already parsed above. Parsing ALONE would narrow what this
-  # shape means: an extra is a manifest vendored verbatim from upstream, so it
-  # can carry a ref inside a block scalar (a ConfigMap embedding a whole
-  # deployment, say), where yq returns the enclosing block rather than the ref
-  # and the caller's ownership filter then discards it — and it can stop
-  # parsing entirely when `make update` pulls a version yq chokes on, yielding
-  # nothing at all. Both are silent skips, which is the failure mode this
-  # library exists to remove. Running both and letting the callers' existing
-  # dedup absorb the overlap costs nothing.
+  # shape means: an extra is a manifest vendored from upstream, so it can carry
+  # a ref inside a block scalar (a ConfigMap embedding a whole deployment, say),
+  # where yq returns the enclosing block rather than the ref and the caller's
+  # ownership filter then discards it — and it can stop parsing entirely, when
+  # `make update` pulls a version yq chokes on or when the package patches Helm
+  # syntax into the vendored file. Both are silent skips, which is the failure
+  # mode this library exists to remove. Running both and letting the callers'
+  # existing dedup absorb the overlap costs nothing.
+  #
+  # The multus entry is in the second state today: its staging init container is
+  # wrapped in Helm conditionals, so yq refuses the whole file and this scrape is
+  # not a backstop for it but the only leg that reports anything. One consequence
+  # is worth knowing when reading the tests: the completeness oracle in
+  # hack/promote-rewrite-tags_test.bats builds its expected side with
+  # collect_refs_from_file, so for this file that comparison is inert -- it can
+  # neither fail nor pass on it. What pins the multus entry against the real tree
+  # is `image_ref_files enumerates all three storage shapes` for the path and
+  # `collect_image_refs finds refs the depth-2 values.yaml glob misses` for the
+  # ref, both in that same file.
   for _ir_f in $IMAGE_REF_EXTRA_FILES; do
     [ -f "$_ir_root/$_ir_f" ] || continue
     grep -Eo "[^[:space:]\"']+@sha256:[0-9a-f]{64}" "$_ir_root/$_ir_f" 2>/dev/null || true

@@ -285,6 +285,14 @@ vmagent:
   extraArgs: {}
 
 fluent-bit:
+  # 14d peak 319Mi; scales with log volume, so the limit carries wide headroom.
+  # See the node-DaemonSet note at the bottom of this file.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 1Gi
   rbac:
     eventsAccess: true
   # Relax probe timing to survive a loaded install. Fluent-bit's HTTP server on
@@ -445,3 +453,19 @@ fluent-bit:
 scrapeRules:
   etcd:
     enabled: false
+
+# Node DaemonSets: a memory limit is what sets memory.max on the pod cgroup, and
+# the Talos userspace OOM handler (v1.12+) only ever kills cgroups that lack one.
+# Both of these ran BestEffort on every node, so they were eviction candidates
+# whenever a tenant workload drove node memory PSI. Requests come from observed
+# usage (14d peak on a 3-node dev cluster); limits are a runaway backstop rather
+# than a fitted ceiling — fluent-bit in particular scales with log volume, which
+# a dev cluster understates.
+prometheus-node-exporter:
+  # 14d peak 42Mi.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 256Mi

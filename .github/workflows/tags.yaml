@@ -12,7 +12,8 @@ concurrency:
   group: tags-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so each job restates every scope it needs.
 permissions:
   contents: read
 
@@ -311,8 +312,61 @@ jobs:
       # not exists" step was gated on `is_stable && release_exists==false` —
       # unreachable now that a hand-pushed stable tag is rejected above.
 
+  # Mandatory only for vX.Y.Z-rc.N tags. Alpha/beta tags deliberately skip this
+  # job and use e2e-tag.yaml's manual dispatch when validation is wanted.
+  #
+  # Deliberately not gated on release_exists: validating an already-published rc
+  # again is an idempotent re-tag-run check, while prepare-release still provides
+  # the ordering guarantee for a fresh rc. Its "Publish rc release" and "Create
+  # release branch" steps finish before this reusable workflow can start.
+  rc-e2e:
+    name: E2E Release Candidate
+    needs: prepare-release
+    if: needs.prepare-release.result == 'success' && contains(github.ref_name, '-rc.')
+    # A caller's permissions are the ceiling for every job in the called
+    # workflow, and GitHub validates that ceiling STATICALLY, when it creates the
+    # run — before this job's `if:` is evaluated, let alone before a step runs.
+    # e2e-tag.yaml's e2e job declares `checks: write` for its
+    # workflow_dispatch-only breakpoint, so even though workflow_call can never
+    # take that branch, omitting the grant here fails the whole tags.yaml run with
+    # "requesting 'checks: write', but is only allowed 'checks: none'". Not just
+    # rc cuts: the `if:` cannot gate a startup failure, so EVERY tag push — rc and
+    # stable, including the one finalize pushes to publish a release — would build
+    # nothing at all. hack/promote-gate-contract.bats pins the pair, because no CI
+    # lane exercises this file (it runs only on tag pushes).
+    permissions:
+      contents: read
+      checks: write
+    uses: ./.github/workflows/e2e-tag.yaml
+    with:
+      tag: ${{ github.ref_name }}
+
+  # BACKSTOP, and since the rc freeze also the normal route a published changelog
+  # takes to main. It is authored by promote-rc.yaml, which commits it onto the
+  # release-X.Y.Z branch so it rides the promote PR and is on the base branch the
+  # moment finalize publishes the release. That is the whole point of
+  # generating it there: at the time THIS job runs the stable tag has already been
+  # pushed by finalize, which means the release is already public — too late for a
+  # changelog PR to be of any use to a reader.
+  #
+  # What the freeze changed: promote-rc.yaml bases its promote PR on release-X.Y
+  # whenever that branch exists, and cutting vX.Y.0-rc.1 now creates it. So EVERY
+  # release, minor and patch alike, merges its changelog onto the maintenance line
+  # and none of them reach main on the way. Porting the reviewed file here is the
+  # normal path — it used to be the corner case, back when only a patch release
+  # targeted a line.
+  #
+  # The two paths that remain:
+  #   1. the file is at the tag but not on main (the usual state): port it
+  #      verbatim, no AI;
+  #   2. changelog generation failed during promotion (it is non-blocking there)
+  #      and the promote PR merged without one: nothing at the tag either, so the
+  #      AI runs.
+  # Either way this opens the changelog PR against main after the fact. The
+  # self-skip on `exists` survives, but it now means the file reached main some
+  # other way — a hand-commit, or an earlier run of this job.
   generate-changelog:
-    name: Generate Changelog
+    name: Generate Changelog (backstop)
     # git + node + copilot CLI only — no docker, no repo toolchain: GitHub-hosted.
     runs-on: ubuntu-latest
     needs: [prepare-release]
@@ -324,7 +378,8 @@ jobs:
     # (no docs/changelogs/v*-rc*.md is a real file). Cumulative rc notes are
     # finalized at the stable release, so the changelog is generated then.
     if: needs.prepare-release.result == 'success' && !contains(github.ref_name, '-')
-    # Non-blocking: failure here must not prevent update-website-docs from running.
+    # Non-blocking: this is a best-effort backfill of an already-published
+    # release, never a gate on one.
     continue-on-error: true
     steps:
       - name: Generate GitHub App token
@@ -380,11 +435,22 @@ jobs:
           fetch-tags: true
           token: ${{ steps.app-token.outputs.token }}
 
-      # Check whether the changelog already exists on origin/main.
-      # The previous step checked out the tag commit, which never has the
-      # changelog (the changelog PR merges to main AFTER the tag is cut).
-      # Looking at origin/main is what the gate is supposed to do — skip
-      # generation on workflow reruns when the changelog has already merged.
+      # Two independent questions, and the answers select between three paths.
+      #
+      # `exists` — is the changelog already on origin/main? Then this whole job
+      # is a no-op. Since the freeze that is the EXCEPTION: the promote PR merges
+      # into release-X.Y, so the file it carried never touched main, and this is
+      # true only if something else put it there.
+      #
+      # `at_tag` — is it present in THIS checkout (the tag commit)? Under the
+      # promote flow it normally is, because the promote PR carried it onto
+      # release-X.Y and the stable tag sits on that merge commit. Since the freeze
+      # that PR always targets the line, so this is the usual state on arrival:
+      # `exists` false, `at_tag` true, a reviewed and already-published changelog
+      # sitting right here — port it rather than regenerate.
+      #
+      # Only when both are false is there genuinely no changelog to publish, and
+      # only then does the AI run.
       - name: Check if changelog already exists
         id: check_changelog
         env:
@@ -399,19 +465,36 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "Changelog file $CHANGELOG_FILE does not exist on origin/main"
           fi
+          # Is the changelog present at the TAG (this checkout)? Under the promote
+          # flow it normally is: promote-rc.yaml commits it onto release-X.Y.Z and
+          # it reaches the tag via the merge commit. That PR targets the maintenance
+          # line for every release since the freeze, so the file lands on
+          # release-X.Y and never reaches main — `exists` above is false even though
+          # a reviewed, already-PUBLISHED changelog exists right here.
+          #
+          # Regenerating in that case would spend a second AI run and, once the
+          # backstop PR merged, update-releasenotes.yaml would overwrite the
+          # published release body with text nobody approved. Port the reviewed
+          # file verbatim instead; the AI is only for the genuinely-absent case.
+          if [ -s "$CHANGELOG_FILE" ]; then
+            echo "at_tag=true" >> $GITHUB_OUTPUT
+            echo "Changelog present at the tag — will port it to main verbatim, no regeneration."
+          else
+            echo "at_tag=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Setup Node.js
-        if: steps.check_changelog.outputs.exists == 'false'
+        if: steps.check_changelog.outputs.exists == 'false' && steps.check_changelog.outputs.at_tag == 'false'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
       - name: Install GitHub Copilot CLI
-        if: steps.check_changelog.outputs.exists == 'false'
+        if: steps.check_changelog.outputs.exists == 'false' && steps.check_changelog.outputs.at_tag == 'false'
         run: npm i -g @github/copilot
 
       - name: Generate changelog using AI
-        if: steps.check_changelog.outputs.exists == 'false'
+        if: steps.check_changelog.outputs.exists == 'false' && steps.check_changelog.outputs.at_tag == 'false'
         timeout-minutes: 30
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
@@ -433,12 +516,19 @@ jobs:
           CHANGELOG_FILE="docs/changelogs/v${VERSION}.md"
           CHANGELOG_BRANCH="changelog-v${VERSION}"
 
+          # Two ways the file can be here: ported verbatim from the tag commit
+          # (at_tag=true — the reviewed, already-published changelog reaching main
+          # for the first time), or freshly generated above. Either is valid.
           if [ ! -f "$CHANGELOG_FILE" ]; then
-            echo "::error::Changelog file $CHANGELOG_FILE was not produced by the Generate changelog using AI step"
+            echo "::error::Changelog file $CHANGELOG_FILE is absent — it was neither present at the tag nor produced by the Generate changelog using AI step"
             exit 1
           fi
-          if [ ! -s "$CHANGELOG_FILE" ]; then
-            echo "::error::Changelog file $CHANGELOG_FILE is empty"
+          # Same validator promote-rc uses: a ported file came from the tag and a
+          # generated one from a step allowed to fail, so neither has been checked
+          # here. update-releasenotes.yaml will push whatever this PR merges into
+          # the published release body, so a fragment must not get that far.
+          if ! REASON="$(hack/validate-changelog.sh "$CHANGELOG_FILE" "${VERSION}" 2>&1)"; then
+            echo "::error::Changelog file $CHANGELOG_FILE is not usable: ${REASON}"
             exit 1
           fi
 
@@ -521,6 +611,17 @@ jobs:
               console.log(`Created PR #${pr.data.number} for changelog`);
             }
 
+
+  # BACKSTOP ONLY. The cozystack/website "update managed apps reference" PR is now
+  # normally opened earlier, at PROMOTE time, by promote-rc.yaml::website-docs —
+  # which fetches README content from the release-X.Y.Z staging branch (via the
+  # website Makefile's FETCH_REF) so the docs are reviewable alongside the promote
+  # PR while the stable tag is still unborn. This tag-time job stays as the
+  # backstop for the degraded paths (promote's website-docs failed or ran against
+  # a pre-FETCH_REF website): it fires on the stable tag push, force-pushes the
+  # SAME update-docs-vX.Y.Z branch, and no-ops into "No changes to commit" when
+  # promote already did the work. Behaviour is deliberately unchanged — at tag time
+  # the stable tag exists, so its BRANCH=RELEASE_TAG fetch resolves.
   update-website-docs:
     name: Update Website Docs
     # bash + git + yq + gh against the website repo — no docker: GitHub-hosted.

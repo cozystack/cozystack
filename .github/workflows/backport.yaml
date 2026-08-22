@@ -4,27 +4,131 @@ on:
   pull_request_target:
     types: [closed, labeled]   # fires when PR is closed (merged) or labeled
 
+# Two mechanisms here, answering two different failures.
+#
+# A run joins its concurrency group before any job-level `if` is evaluated, so
+# `prepare`'s guard below cannot stop a label event from disturbing the run
+# already backporting this PR; it only decides what the label run does after the
+# damage. Labels set with the default GITHUB_TOKEN start no run, but labels set
+# by third-party GitHub Apps do, and they arrive in bursts. Under a plain
+# `cancel-in-progress: true` each one cancelled the backport the merge had just
+# started, and nothing reports that beyond a cancelled run sitting next to a
+# green one.
+#
+# The delivery survived anyway, because the old guard admitted a run on the PR's
+# cumulative labels: the last label of a burst requalified and redid the work.
+# `prepare`'s narrowing below removes that accidental safety net, so the two
+# changes land together — narrowing alone would turn a noisy delivery into an
+# absent one.
+#
+# So the group key moves a label event that is NOT a backport request aside, and
+# `cancel-in-progress` stops one that IS from cancelling rather than queuing.
+# Both are load-bearing. `backport` and `backport-previous` are separate requests
+# that both have to complete, so they share the main group and must not cancel
+# each other; every other label does no work here and only has to stay out of
+# the way.
+#
+# That is also why this file does not simply copy pull-requests.yaml, which
+# splits the key and leaves cancellation unconditional: a discarded label run
+# there publishes nothing, so isolating it is the whole fix.
+#
+# Queuing protects a pending run from the run ahead of it and never from the one
+# behind: the group holds a single pending run, and a newer one evicts it. With
+# the split in place that costs nothing, and for the same reason the fan-out
+# below is harmless — the only events left in this group are backport requests,
+# the evictor is by definition the newer of the two, and `prepare`'s `Check which
+# labels are present` step reads the cumulative label set. So the survivor covers
+# a superset of what the evicted run would have delivered, for any sequence that
+# only adds labels. Removing one in between is the exception and needs no cover:
+# the evictor then carries less because the request was withdrawn.
+#
+# That is exactly what the split buys. Without it the evictor could be any label
+# at all, and a run that does not qualify delivers nothing in place of the
+# request it displaced.
+#
+# `queue: max` raises the single pending slot to a hundred and is the obvious
+# thing to reach for instead of the split. Taking it means giving up the
+# conditional cancel, because `queue: max` and `cancel-in-progress: true` are a
+# validation error together and this key still evaluates to true on a merge.
+# The trade is available and was not taken: eviction is what keeps a burst to one
+# surviving run rather than a hundred queued ones, and the feature only shipped
+# 2026-05-07, on a path that delivers fixes to release lines.
 concurrency:
-  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'backport' && github.event.label.name != 'backport-previous') && '-label' || '' }}
+  # Stated positively, matching the group key above. `!= 'labeled'` is equivalent
+  # only while `types:` holds exactly these two, and that form fails open: adding
+  # `unlabeled` or `reopened` there would hand those events cancellation in the
+  # main group, which is the behaviour this file exists to remove.
+  #
+  # The positive form removes the cancelling, not the occupying. A third type
+  # still lands in the main group, still takes its single pending slot, and its
+  # `prepare` still skips — so it can evict a genuine backport request and
+  # deliver nothing in its place. `types:` is load-bearing for that reason and is
+  # pinned in hack/release-freeze-contract.bats; widening it needs the group key
+  # widened with it.
+  cancel-in-progress: ${{ github.event.action == 'closed' }}
 
-# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so each job restates every scope it needs.
 permissions:
   contents: read
 
 jobs:
   # Determine which backports are needed
   prepare:
+    # This guard admits each action on the labels it is entitled to. `closed`
+    # carries no label of its own, so it reads the set the PR ended up with.
+    # `labeled` reads only the label just added: matching the cumulative set
+    # here means every later unrelated label on a merged PR that still carries
+    # `backport` re-enters this job to redo a backport already delivered.
+    #
+    # Scope, so this is not read as covering the whole job: the `Check which
+    # labels are present` step below still reads the cumulative set, so a
+    # `backport-previous` event on a PR also carrying `backport` fans out to
+    # both matrix legs. That is deliberate, and each state a re-entered leg can
+    # find is already accounted for: delivered is skipped by the merged-backport
+    # guard, still open is skipped by backport-action on the 422, and closed
+    # unmerged gets a fresh backport PR, which is the retry that guard
+    # deliberately preserves rather than an accident. What the narrowing here
+    # decides is whether the job RUNS, not which targets it picks.
     if: |
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
       (
-        contains(github.event.pull_request.labels.*.name, 'backport') ||
-        contains(github.event.pull_request.labels.*.name, 'backport-previous') ||
+        (github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'backport') || contains(github.event.pull_request.labels.*.name, 'backport-previous'))) ||
         (github.event.action == 'labeled' && (github.event.label.name == 'backport' || github.event.label.name == 'backport-previous'))
       )
     # GitHub API calls only — no docker, no repo toolchain: GitHub-hosted.
     runs-on: ubuntu-latest
+    # Queuing gives a stuck run a way to hurt the next one that a cancelling key
+    # did not: the label event that used to kill it now waits behind it rather
+    # than clearing it.
+    #
+    # This ceiling bounds a stuck JOB, which is the case it can reach. A run can
+    # also wedge at the RUN level with every job already finished, and no
+    # job-level key expires that one; it holds the group until GitHub retires the
+    # run. Rare but real: run 31232645133 has been `in_progress` since
+    # 2026-08-08 with `prepare` and `backport` both skipped. Nothing here
+    # reaches that state, so docs/release.md tells an operator to look for a run
+    # still in flight and clear it before re-applying the label.
+    #
+    # What it bounds is EXECUTION, not the wait for a runner. GitHub's limits
+    # page says "job execution time" for the 6-hour job cap while spelling out
+    # that the 35-day run cap "includes execution duration, and time spent on
+    # waiting and approval" — the contrast is deliberate — and
+    # orgs/community#50926 shows a job sitting six hours on "Waiting for a runner
+    # to pick up this job" under `timeout-minutes: 5`. So queue time is a third
+    # unbounded case alongside the run-level wedge, not something this covers.
+    #
+    # 30 is therefore generous rather than calculated. Execution on run
+    # 29844315422 was 6s for `prepare` and 2s and 16s for the two matrix legs,
+    # against 9m24s, 5m28s and 5m45s of queue for the same three jobs. Every
+    # execution measured on this workflow has been seconds, and no maximum is
+    # quoted on purpose: an absolute maximum over a growing set is stale as soon
+    # as a slower run lands. The value leaves room for a cherry-pick far larger
+    # than anything seen while replacing the 6-hour default, and nothing here is
+    # sized against the queue because nothing here can be.
+    timeout-minutes: 30
     permissions:
       contents: read
     outputs:
@@ -53,41 +157,53 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
-            // Get latest release
-            let latestRelease;
-            try {
-              latestRelease = await github.rest.repos.getLatestRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo
-              });
-            } catch (e) {
-              core.setFailed('No existing releases found; cannot determine backport target.');
+            // Enumerate the real release-X.Y branches rather than deriving them
+            // from the latest published release.
+            //
+            // Since cutting an rc freezes the line (cut-prerelease.yaml),
+            // release-X.Y is created when the first vX.Y.0-rc.N is cut — before
+            // vX.Y.0 is ever published. getLatestRelease returns the newest
+            // published STABLE, so throughout the freeze window it still named
+            // the previous line: a `backport` on a fix for the release being
+            // stabilised would have landed on release-X.(Y-1) and missed the
+            // release it was written for. That window is exactly when backports
+            // matter most, since the frozen branch is the only way in.
+            //
+            // Enumerating branches also drops the contiguous-minor assumption:
+            // `previous` used to be computed as min-1, which named a
+            // non-existent branch whenever a minor was skipped.
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+
+            const lines = branches
+              .map(b => /^release-(\d+)\.(\d+)$/.exec(b.name))
+              .filter(Boolean)
+              .map(m => ({ name: m[0], maj: Number(m[1]), min: Number(m[2]) }))
+              .sort((a, b) => (b.maj - a.maj) || (b.min - a.min));
+
+            if (lines.length === 0) {
+              core.setFailed('No release-X.Y branches found; cannot determine backport target.');
               return;
             }
-            
-            const [maj, min] = latestRelease.data.tag_name.replace(/^v/, '').split('.');
-            const currentBranch = `release-${maj}.${min}`;
-            const prevMin = parseInt(min) - 1;
-            const previousBranch = prevMin >= 0 ? `release-${maj}.${prevMin}` : '';
-            
+
+            const currentBranch  = lines[0].name;
+            const previousBranch = lines.length > 1 ? lines[1].name : '';
+
             core.setOutput('current_branch', currentBranch);
             core.setOutput('previous_branch', previousBranch);
-            
+
+            console.log(`Release lines found: ${lines.map(l => l.name).join(', ')}`);
             console.log(`Current branch: ${currentBranch}, Previous branch: ${previousBranch || 'N/A'}`);
-            
-            // Verify previous branch exists if we need it
-            if (previousBranch && '${{ steps.labels.outputs.backport_previous }}' === 'true') {
-              try {
-                await github.rest.repos.getBranch({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  branch: previousBranch
-                });
-                console.log(`Previous branch ${previousBranch} exists`);
-              } catch (e) {
-                core.setFailed(`Previous branch ${previousBranch} does not exist.`);
-                return;
-              }
+
+            // Both targets come from the enumeration above, so they exist by
+            // construction — no getBranch probe needed. What CAN still fail is
+            // asking for a previous line when only one exists.
+            if (!previousBranch && '${{ steps.labels.outputs.backport_previous }}' === 'true') {
+              core.setFailed('backport-previous requested, but only one release line exists.');
+              return;
             }
 
   backport:
@@ -98,6 +214,10 @@ jobs:
       (needs.prepare.outputs.backport_current == 'true' || needs.prepare.outputs.backport_previous == 'true')
     # git cherry-picks via backport-action — no docker, no repo toolchain: GitHub-hosted.
     runs-on: ubuntu-latest
+    # See `prepare` above: a queued request waits on this one, so it needs a
+    # ceiling rather than the 6-hour default. Bounds this job's execution only;
+    # the wait for a runner is outside it either way.
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -120,15 +240,47 @@ jobs:
             echo "Target branch: ${{ needs.prepare.outputs.previous_branch }}"
           fi
       
-      # 2. Checkout (required by backport‑action)
-      - name: Checkout repository
+      # 2. Skip if this target already has a merged backport.
+      #
+      # The action's backport branch name is deterministic,
+      # backport-<pull_number>-to-<target_branch>. A merged PR with that head
+      # means an earlier run already delivered this change to the target — a
+      # second label event (e.g. backport-previous added after backport
+      # already merged) would re-enter this job and cherry-pick commits the
+      # target branch already has. Git reports that as an empty pick (exit 1)
+      # rather than a conflict, which draft_commit_conflicts below misreads
+      # as a real conflict and reports as a failed backport on the original
+      # PR. Skipping here avoids the false report; it does not touch the
+      # empty-pick behavior itself, which lives in the action.
+      - name: Check for existing merged backport
+        id: guard
         if: steps.target.outcome == 'success'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const targetBranch = '${{ steps.target.outputs.branch }}';
+            const head = `backport-${context.payload.pull_request.number}-to-${targetBranch}`;
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed',
+              head: `${context.repo.owner}:${head}`,
+            });
+            const alreadyMerged = prs.some(p => p.merged_at !== null);
+            core.setOutput('already_merged', alreadyMerged ? 'true' : 'false');
+            if (alreadyMerged) {
+              console.log(`Skipping backport to ${targetBranch}: ${head} already merged.`);
+            }
+
+      # 3. Checkout (required by backport‑action)
+      - name: Checkout repository
+        if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # 3. Create the back‑port pull request
+      # 4. Create the back‑port pull request
       - name: Create back‑port PR
         id: backport
-        if: steps.target.outcome == 'success'
+        if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
         uses: korthout/backport-action@0193454f0c5947491d348f33a275c119f30eb736 # v3.2.1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

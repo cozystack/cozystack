@@ -97,12 +97,18 @@ EOF
 
 @test "Boot QEMU VMs" {
   for i in 1 2 3; do
+    # `debug-threads=on` names the vCPU threads (`CPU N/KVM`) so the QEMU
+    # thread capture on the node-join failure path can tell a vCPU from an IO
+    # thread; without it every thread reports the bare process name. QEMU only
+    # renames threads when the flag is passed, so the capture's legend and its
+    # fixtures are pinned to this line carrying it.
     qemu-system-x86_64 -machine type=pc,accel=kvm -cpu host -smp 4 -m 24576 \
+      -name guest=srv${i},debug-threads=on \
       -device virtio-net,netdev=net0,mac=52:54:00:12:34:5${i} \
       -netdev tap,id=net0,ifname=cozy-srv${i},script=no,downscript=no \
-      -drive file=srv${i}/system.img,if=virtio,format=raw \
-      -drive file=srv${i}/seed.img,if=virtio,format=raw \
-      -drive file=srv${i}/data.img,if=virtio,format=raw \
+      -drive file=srv${i}/system.img,if=virtio,format=raw,cache=unsafe \
+      -drive file=srv${i}/seed.img,if=virtio,format=raw,cache=unsafe \
+      -drive file=srv${i}/data.img,if=virtio,format=raw,cache=unsafe \
       -display none -daemonize -pidfile srv${i}/qemu.pid
   done
 
@@ -188,8 +194,18 @@ cluster:
     cni:
       name: none
     dnsDomain: cozy.local
+    # Deliberately NOT the kube-ovn POD_CIDR (10.244.0.0/16, set as
+    # networking.podCIDR by the install step). kube-ovn owns pod IPAM and
+    # allocates flat from POD_CIDR; cilium is chained behind it and allocates
+    # no pod addresses, but it still carves its own per-node router and
+    # Ingress IPs out of Node.spec.podCIDR, which kube-controller-manager
+    # slices from this value. Overlap and kube-ovn eventually hands a pod an
+    # address cilium already holds. hack/sandbox-cidr-disjoint.bats guards it.
+    # Picking a replacement: 100.64.0.0/16 is the kube-ovn join range and
+    # 100.66.0.0/16 is kilo's transit range, so the free slot in this corner of
+    # RFC 6598 is the one below.
     podSubnets:
-    - 10.244.0.0/16
+    - 100.65.0.0/16
     serviceSubnets:
     - 10.96.0.0/16
 EOF

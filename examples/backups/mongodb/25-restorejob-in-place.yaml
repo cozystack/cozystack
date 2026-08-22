@@ -1,0 +1,14 @@
+# In-place restore. Omitting targetApplicationRef restores back into the source
+# MongoDB (clusterName = the source's PerconaServerMongoDB). This is
+# DESTRUCTIVE — the psmdb operator replays the logical dump into the live source
+# cluster. Applied for documentation parity; run-all.sh drives the
+# non-destructive to-copy restore (30) instead. Optionally add a PITR target via
+# spec.options.recoveryTime (RFC3339) — see README.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: mongodb-src-in-place
+spec:
+  backupRef:
+    name: mongodb-src-adhoc

@@ -160,6 +160,8 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.reconcileAltinityRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.MariaDBStrategyKind:
 		return r.reconcileMariaDBRestore(ctx, restoreJob, backup)
+	case strategyv1alpha1.MongoDBStrategyKind:
+		return r.reconcileMongoDBRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.FoundationDBStrategyKind:
 		return r.reconcileFoundationDBRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.EtcdStrategyKind:
@@ -327,7 +329,7 @@ func (r *RestoreJobReconciler) cleanupOnDelete(ctx context.Context, restoreJob *
 	case strategyv1alpha1.VeleroStrategyKind:
 		r.cleanupVeleroRestore(ctx, restoreJob)
 
-	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind:
+	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MongoDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind:
 		// Nothing to clean up: these drivers don't materialise namespaced
 		// artifacts that outlive the RestoreJob. (Etcd: the operator-side
 		// EtcdCluster is owned by the source HelmRelease, and the

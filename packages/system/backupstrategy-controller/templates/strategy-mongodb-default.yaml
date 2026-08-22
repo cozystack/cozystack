@@ -1,0 +1,44 @@
+{{/*
+  cozy-default MongoDB strategy. Unlike the MariaDB / CNPG / Altinity
+  defaults, this Strategy carries NO bucket coordinates or credentials: the
+  Percona psmdb operator resolves the on-demand backup's storageName against
+  the source PerconaServerMongoDB CR's spec.backup.storages, so the S3 target
+  lives on the MongoDB application (declared by the chart as "s3-storage" when
+  backup.enabled=true), not here.
+
+  It is gated on $bucketName all the same, and NOT because it needs the value.
+  The gate is what keeps this chart installable on a fresh cluster. This chart
+  ships its own strategy.backups.cozystack.io CRDs as ordinary templates
+  (templates/crds.yaml globs definitions/*.yaml), and Helm resolves every
+  document in a release manifest through the cluster's RESTMapper in Build()
+  BEFORE it applies any of them. An ungated Strategy CR therefore has no
+  mapping on the first install, Build() fails with "no matches for kind", and
+  the release applies ZERO objects — including the CRDs that would have made
+  the mapping resolve. Nothing recovers from that: every retry renders the same
+  manifest, so the failure is permanent rather than a race, and Helm's kind
+  sorter cannot help because it orders the apply, not the Build.
+
+  So every default Strategy in this chart must be absent from the first render.
+  $bucketName is empty until the COSI BucketClaim status is reconciled (see
+  templates/_helpers.tpl), which is exactly the window where the CRDs are being
+  applied; by the time DefaultObjectsGate forces a second revision the CRDs
+  exist and the mapping resolves. The seven sibling strategies got this for
+  free by needing the bucket name. This one has to ask for it.
+
+  Precondition (surfaced by the driver as a clear Ready=False, not a silent
+  hang): the MongoDB application must be deployed with backup.enabled=true so
+  the percona-backup-mongodb agents run and the "s3-storage" entry exists. See
+  docs/operations/backup-classes.md.
+*/}}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: MongoDB
+metadata:
+  name: cozy-default-mongodb
+spec:
+  template:
+    storageName: s3-storage
+    type: logical
+    compressionType: gzip
+{{- end -}}

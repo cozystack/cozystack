@@ -10,6 +10,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/00-helpers.sh"
 
 print_header "Step 01: Create Altinity backup strategy"
+
+# Reuse the image the platform's own cozy-default-altinity strategy runs, so the
+# demo Pod needs no `apk add` at run time. That matters twice over: the strategy
+# runs once per BackupJob and RestoreJob, so fetching packages from the Alpine
+# CDN each time makes every backup depend on outbound internet — it fails
+# outright on an air-gapped cluster, and it turns a CDN hiccup into a failed
+# backup — and this same script is the e2e round-trip's harness, where that
+# would surface as an unrelated red E2E run.
+#
+# Read it off the shipped strategy rather than hardcoding a tag, so the demo
+# tracks whatever the platform is pinned to. Falls back to alpine + `apk add`
+# only when that strategy is absent (a cluster without the backupstrategy
+# controller chart), which is also the one case where the demo has to bootstrap
+# its own tooling.
+CH_BACKUP_CLIENT_IMAGE="${CH_BACKUP_CLIENT_IMAGE:-$(kubectl get altinity.strategy.backups.cozystack.io cozy-default-altinity \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="ch-backup-client")].image}' 2>/dev/null || true)}"
+APK_BOOTSTRAP=""
+if [[ -z "$CH_BACKUP_CLIENT_IMAGE" ]]; then
+    CH_BACKUP_CLIENT_IMAGE="alpine:3.19"
+    APK_BOOTSTRAP="apk add --no-cache curl jq >/dev/null"
+    log_warning "cozy-default-altinity not found; falling back to ${CH_BACKUP_CLIENT_IMAGE} + apk add (needs outbound internet)."
+else
+    log_info "Reusing the platform strategy's client image: ${CH_BACKUP_CLIENT_IMAGE}"
+fi
+
 log_command "kubectl apply -f - (Altinity strategy: $STRATEGY_NAME)"
 
 kubectl apply -f - <<EOF
@@ -23,7 +48,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: ch-backup-client
-          image: alpine:3.19
+          image: ${CH_BACKUP_CLIENT_IMAGE}
           imagePullPolicy: IfNotPresent
           # API_USERNAME / API_PASSWORD pulled from the chart-emitted
           # backup-api-auth Secret in the application's namespace. The
@@ -46,7 +71,7 @@ spec:
           args:
             - |
               set -euo pipefail
-              apk add --no-cache curl jq >/dev/null
+              ${APK_BOOTSTRAP}
 
               host="chi-clickhouse-{{ .Release.Name }}-clickhouse-0-0.{{ .Release.Namespace }}.svc"
               api="http://\${host}:7171"
@@ -85,7 +110,7 @@ spec:
                 # source-release prefix. Falls through to "no remote
                 # backup found" if S3_PATH is misconfigured AND none of
                 # the listed names match.
-                target=\$(curl -fsS \${auth} "\${api}/backup/list/remote" \\
+                target=\$(curl -fsS \${auth} --max-time 60 "\${api}/backup/list/remote" \\
                   | jq -rs --arg prefix "\${prefix}" \\
                       '[.[] | select((.name // "") | startswith(\$prefix))] | sort_by(.created // "") | last.name // ""')
                 if [ -z "\${target}" ] || [ "\${target}" = "null" ]; then
@@ -113,7 +138,7 @@ spec:
               # vs. "create_remote X"). The strategy Pod runs one operation
               # at a time, so the most recent matching action is ours.
               while true; do
-                row=\$(curl -fsS \${auth} "\${api}/backup/actions" \\
+                row=\$(curl -fsS \${auth} --max-time 30 "\${api}/backup/actions" \\
                   | jq -rs --arg suffix "\${target}" \\
                       '[.[] | select((.command // "") | endswith(\$suffix))] | sort_by(.start) | last')
                 status=\$(echo "\${row}" | jq -r '.status // ""')
@@ -135,11 +160,19 @@ spec:
               cpu: 200m
               memory: 128Mi
           securityContext:
-            # Pod runs apk add at startup; that needs root. Other fields stay
-            # locked down (no privilege escalation, no extra caps, default
-            # seccomp profile). Tenants that enforce PSA "restricted" should
-            # swap this image for one with curl+jq pre-baked and re-enable
-            # runAsNonRoot on the strategy CR.
+            # Same field set as the platform's cozy-default-altinity strategy
+            # (packages/system/backupstrategy-controller/templates/strategy-altinity-default.yaml):
+            # no privilege escalation, all caps dropped, default seccomp
+            # profile, and runAsNonRoot deliberately left unset rather than
+            # false — the Pod only runs curl and jq, and neither the platform
+            # strategy nor this one pins a UID.
+            #
+            # On the default path there is no `apk add` to need root: the image
+            # above is the platform's, with curl+jq already baked in. Only the
+            # alpine:3.19 fallback (taken when cozy-default-altinity is absent)
+            # installs packages at startup, and that is the one case where a
+            # cluster enforcing PSA "restricted" has to supply its own image
+            # with the tools pre-baked.
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]

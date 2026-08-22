@@ -1,0 +1,82 @@
+suite: worker registry mirrors (talos.registryMirrors)
+
+# The kubernetes-nodes worker pool pulls the same ghcr.io/siderolabs/kubelet image
+# as the parent kubernetes chart and its talos values are kept in sync with it, so
+# it carries the same talos.registryMirrors knob rendered into the worker
+# TalosConfigTemplate's machine.registries.mirrors. Empty by default (byte-identical
+# render); a set value routes worker image pulls through a mirror. Free-form
+# tenant-facing input is shell-escaped because it is emitted into the reconcile-Job's
+# unquoted `cat <<EOF | kubectl apply` heredoc. See cozystack/cozystack#3513.
+
+templates:
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+
+tests:
+  - it: default renders no machine-level mirrors block
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'mirrors:'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: talos.registryMirrors renders machine.registries.mirrors into the worker TalosConfigTemplate
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://ghcr-mirror.kube-system.svc
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'mirrors:'
+        documentSelector:
+          path: kind
+          value: Job
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'ghcr\.io:'
+        documentSelector:
+          path: kind
+          value: Job
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'http://ghcr-mirror\.kube-system\.svc'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: registryMirrors values are shell-escaped so they cannot execute in the reconcile-Job heredoc
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://mirror$(id)
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'http://mirror\\\$\(id\)'
+        documentSelector:
+          path: kind
+          value: Job

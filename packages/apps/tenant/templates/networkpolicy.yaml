@@ -216,6 +216,23 @@ spec:
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
+  # Grafana pods install their plugins at startup from the in-cluster
+  # grafana-dashboards static file server instead of the public Grafana
+  # catalog (see packages/system/monitoring/templates/grafana/grafana.yaml),
+  # so the download keeps working without internet egress. Matching the
+  # whole namespace mirrors allow-to-dashboard / allow-to-keycloak.
+  name: allow-to-grafana-dashboards
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-grafana-operator
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
   name: allow-to-cdi-upload-proxy
   namespace: {{ include "tenant.name" . }}
 spec:

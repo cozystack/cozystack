@@ -9,6 +9,17 @@ release:
 # One Secret write grant serves two reconcilers (WildcardSecret replication and
 # CACert projection, including "delete"); it scopes the platform controller's own
 # ServiceAccount and widens no tenant's RBAC. This rule gates both features, so pin it.
+#
+# This suite pins the rule as written and nothing more. helm-unittest compares
+# every field it is handed by value equality -- `any: true` changes which fields
+# are compared, not how -- which is what a positive pin wants and what an upper
+# bound on the grant cannot use: no spelling of `notContains` bounds what a verbs
+# list may hold, so `verbs: ["get", "*"]` satisfies every one of them. The upper
+# bound therefore lives in
+# hack/cozystack-controller-secret-rbac.bats, which unions the verbs every
+# rendered rule confers on core Secrets and compares that set with the declared
+# one. Extend that file, not this one, when the question is what the controller
+# may do to a Secret.
 
 tests:
   - it: grants the ClusterRole every verb both reconcilers need, including delete
@@ -25,15 +36,3 @@ tests:
             apiGroups: [""]
             resources: ["secrets"]
             verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-
-  - it: does not grant a blanket wildcard verb on secrets
-    documentSelector:
-      path: kind
-      value: ClusterRole
-    asserts:
-      - notContains:
-          path: rules
-          content:
-            apiGroups: [""]
-            resources: ["secrets"]
-            verbs: ["*"]

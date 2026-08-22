@@ -160,7 +160,7 @@ spec:
           prefix: {{ .Values.backup.destinationPath | trimPrefix "s3://" | splitList "/" | rest | join "/" }}
           endpointUrl: {{ .Values.backup.endpointURL }}
           credentialsSecret: {{ .Release.Name }}-s3-creds
-          insecureSkipTLSVerify: false
+          insecureSkipTLSVerify: {{ .Values.backup.insecureSkipTLSVerify | default false }}
           forcePathStyle: true
     tasks:
       - name: daily-backup

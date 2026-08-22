@@ -1,1 +1,2 @@
-zz_generated_deepcopy.go linguist-generated
+zz_generated.deepcopy.go linguist-generated
+apps/v1alpha1/*/types.go linguist-generated

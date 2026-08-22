@@ -51,11 +51,30 @@ spec:
   storageNamespace: cozy-cilium
   interval: 5m
   timeout: 10m
+  {{- /* Flux's default install strategy remediates a failed install by
+         uninstalling the release, which takes the tenant's only CNI away
+         between attempts. RetryOnFailure drops that teardown: the manifests
+         stay applied and the failed install is retried as an upgrade. Both
+         actions carry the strategy because that retry runs as an upgrade and
+         would otherwise fall back to upgrade remediation. The cost is that a
+         genuine upgrade failure no longer rolls back either, which is forced,
+         since the controller cannot tell a retried install from a real one,
+         and what it replaces was an unbounded rollback-and-retry flap. This
+         removes an amplifier, not a cause: an install that outruns its budget
+         because no node has registered yet stays a problem. The remediation
+         blocks cover the branches no strategy reaches, an absent release for
+         install and an out-of-sync one for upgrade, so retries: -1 stays. */}}
   install:
     createNamespace: true
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   values:

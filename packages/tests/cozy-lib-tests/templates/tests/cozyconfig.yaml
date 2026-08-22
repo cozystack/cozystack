@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-cozyconfig
+data:
+  root-host: {{ include "cozy-lib.root-host" . | quote }}
+  bundle-name: {{ include "cozy-lib.bundle-name" . | quote }}
+  images-registry: {{ include "cozy-lib.images-registry" . | quote }}
+  ipv4-cluster-cidr: {{ include "cozy-lib.ipv4-cluster-cidr" . | quote }}
+  ipv4-service-cidr: {{ include "cozy-lib.ipv4-service-cidr" . | quote }}
+  ipv4-join-cidr: {{ include "cozy-lib.ipv4-join-cidr" . | quote }}
+  scheduling: {{ include "cozy-lib.scheduling" . | quote }}
+  branding: {{ include "cozy-lib.branding" . | quote }}
+  ns-host: {{ include "cozy-lib.ns-host" . | quote }}
+  ns-etcd: {{ include "cozy-lib.ns-etcd" . | quote }}
+  ns-ingress: {{ include "cozy-lib.ns-ingress" . | quote }}
+  ns-monitoring: {{ include "cozy-lib.ns-monitoring" . | quote }}
+  ns-seaweedfs: {{ include "cozy-lib.ns-seaweedfs" . | quote }}

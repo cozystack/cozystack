@@ -1,0 +1,32 @@
+suite: tenant egress to the grafana-dashboards plugin server
+# Grafana pods (deployed per tenant by the monitoring chart) install their
+# plugins at startup from the grafana-dashboards static file server in
+# cozy-grafana-operator instead of the public Grafana catalog, so air-gapped
+# installs keep working. Tenant egress is default-deny plus explicit
+# allow-to-* policies, so without this policy the in-cluster download is
+# silently dropped by Cilium and Grafana crash-loops on startup.
+templates:
+  - templates/networkpolicy.yaml
+release:
+  name: tenant-ktj
+  namespace: tenant-root
+tests:
+  - it: allows egress from the tenant namespace to cozy-grafana-operator
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-grafana-dashboards
+        isKind:
+          of: CiliumNetworkPolicy
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-grafana-dashboards
+        equal:
+          path: metadata.namespace
+          value: tenant-ktj
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-grafana-dashboards
+        equal:
+          path: spec.egress[0].toEndpoints[0].matchLabels["k8s:io.kubernetes.pod.namespace"]
+          value: cozy-grafana-operator

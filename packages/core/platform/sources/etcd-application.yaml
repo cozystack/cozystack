@@ -13,6 +13,15 @@ spec:
     - name: default
       dependsOn:
         - cozystack.networking
+        # The etcd chart renders kind: EtcdCluster from
+        # etcd-operator.cozystack.io/v1alpha2, so the operator that serves that
+        # CRD is a genuine prerequisite of offering the app at all. Without this
+        # edge the etcd-rd HelmRelease registers the ApplicationDefinition as
+        # soon as the engine is up, a tenant can create an Etcd before the
+        # operator exists, and its HelmRelease then fails with `no matches for
+        # kind "EtcdCluster"`. Same shape as every other operator-backed app
+        # here (postgres, mariadb, kafka, redis, ...).
+        - cozystack.etcd-operator
         # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
         - cozystack.cozystack-engine
       libraries:

@@ -13,6 +13,17 @@ release:
 # forbidden and List silently drops those dropdowns (Get returns 500). The
 # bare cozystack.io grant does NOT cover backups.cozystack.io — RBAC matches
 # the API group string exactly.
+#
+# The last two tests bound the role from two directions, and neither covers the
+# other. The count bound pins the list at exactly sixteen: templates/rbac.yaml
+# carries no template directives, so anything appended makes rules[16] exist and
+# anything dropped takes rules[15] away, whatever the rule is called. It says
+# nothing about a grant swapped in for an existing one, because the count does
+# not move under a swap. The spelling assert catches that case for the one rule
+# it names, and misses every other wording of it, because helm-unittest compares
+# each field it is handed by value equality and `any: true` only selects which
+# fields are compared. Changing the rule count on purpose means moving both
+# indices below, which is the review this role should get.
 
 tests:
   - it: grants read on backups.cozystack.io plans and backups for the plan/backup providers
@@ -24,6 +35,15 @@ tests:
             resources: ["backupclasses", "plans", "backups"]
             verbs: ["get", "watch", "list"]
 
+  - it: grants full access on cilium.io ciliumnetworkpolicies for SecurityGroup storage
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cilium.io"]
+            resources: ["ciliumnetworkpolicies"]
+            verbs: ["get", "watch", "list", "create", "update", "patch", "delete"]
+
   - it: does not grant objectstorage.k8s.io bucketclasses (no provider reads it)
     asserts:
       - notContains:
@@ -33,11 +53,11 @@ tests:
             resources: ["bucketclasses"]
             verbs: ["get", "watch", "list"]
 
-  - it: grants full access on cilium.io ciliumnetworkpolicies for SecurityGroup storage
+  - it: ships exactly the sixteen rules this role is pinned to
     asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups: ["cilium.io"]
-            resources: ["ciliumnetworkpolicies"]
-            verbs: ["get", "watch", "list", "create", "update", "patch", "delete"]
+      # Both directions. A dropped grant is the failure this suite is about:
+      # the apiserver returns forbidden and List silently drops the dropdown.
+      - exists:
+          path: rules[15]
+      - notExists:
+          path: rules[16]

@@ -120,8 +120,9 @@ jobs:
         with:
           ref: ${{ steps.resolve.outputs.sha }}
           fetch-depth: 1
-          # These jobs copy the checkout into /tmp/$SANDBOX_NAME; don't leave the
-          # checkout token in .git/config to be copied along with it.
+          # Nothing after checkout needs the git token — the mirror steps
+          # authenticate to the registries directly — so don't leave it in
+          # .git/config.
           persist-credentials: false
 
       # Pull the digest-vendored tree build-main baked (but never committed).
@@ -220,8 +221,18 @@ jobs:
   e2e:
     name: E2E (full suite)
     needs: [mirror, build-disk]
-    runs-on: oracle-vm-24cpu-96gb-x86-64
-    timeout-minutes: 180
+    # Same sandbox as the other e2e lanes: three QEMU guests at `-smp 8` commit
+    # 24 vCPU for the whole run, so the runner class has to be strictly larger,
+    # leaving the host its own cycles for QEMU's emulation and IO threads,
+    # containerd and the runner agent. Enforced by
+    # hack/sandbox-runner-headroom.bats.
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    # Sized above what the tenant-Kubernetes pair can spend on a failing run, and
+    # held to one figure across every lane that runs the suite. That bound, the
+    # measured run the rest of the margin comes from, and what neither of them
+    # covers are all in hack/node-join-soft-red_test.bats rather than restated
+    # here in four workflows that would then drift apart.
+    timeout-minutes: 215
     permissions:
       contents: read
       packages: read
@@ -272,14 +283,8 @@ jobs:
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
 
-      - name: Prepare workspace
-        run: |
-          rm -rf "/tmp/$SANDBOX_NAME"
-          cp -r "${{ github.workspace }}" "/tmp/$SANDBOX_NAME"
-
       - name: Prepare environment
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           attempt=0
           until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
             attempt=$((attempt + 1))
@@ -289,7 +294,6 @@ jobs:
 
       - name: Install Cozystack into sandbox
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
             echo "❌ Install failed (no retry — diagnostics below)"
             echo "::group::HelmRelease status"
@@ -307,14 +311,12 @@ jobs:
 
       - name: Run OpenAPI tests
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
 
       # Always the FULL app suite — a nightly has no diff to scope against, so
       # Test Impact Analysis does not apply (empty CHAINSAW_SUITES = whole suite).
       - name: Run E2E tests (full suite)
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES=""; then
             echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
@@ -330,7 +332,6 @@ jobs:
       - name: Collect chainsaw report
         if: always()
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           mkdir -p _out
           docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
             _out/chainsaw-report.xml || true
@@ -340,27 +341,48 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: chainsaw-report
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
+          path: _out/chainsaw-report.xml
           if-no-files-found: ignore
 
+      # A ceiling of its own, not the job's 215 minutes. `Upload cozyreport.tgz`
+      # is the next step and the collector writes its tarball at the very end of
+      # its run, so a read that never returns spends what is left of the job
+      # budget, the job is cancelled, and the upload never runs -- the artifact
+      # is lost rather than truncated. 30 minutes is measured against the step:
+      # it takes 3-42s across sampled runs, failed e2e jobs included.
+      # `continue-on-error` because the ceiling must not change what the job
+      # reports: `|| true` says collecting diagnostics is never fatal, and a step
+      # killed at its ceiling never reaches it.
       - name: Collect report
+        id: collect_report
         if: always()
+        timeout-minutes: 30
+        continue-on-error: true
         run: |
-          cd "/tmp/$SANDBOX_NAME"
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      # `continue-on-error` keeps the overrun out of the job's result, which also
+      # keeps it out of everyone's view: a step that ended at its ceiling renders
+      # green and the only trace is in the raw log. This branch's own standard is
+      # that a bound which fires is recorded, and that has to hold for the outer
+      # bound too.
+      #
+      # The wording says what `outcome` establishes and no more: a step can end
+      # non-zero without any ceiling firing, so naming the timeout as the cause
+      # would be the false-mechanism claim the collector refuses to make for a 137.
+      - name: Report collection overran its ceiling
+        if: always() && steps.collect_report.outcome == 'failure'
+        run: |
+          echo "::warning title=cozyreport::Collect report ended non-zero -- its timeout-minutes fired, or the step failed before the collector ran; cozyreport.tgz is missing or partial for this run"
 
       - name: Upload cozyreport.tgz
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cozyreport
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+          path: _out/cozyreport.tgz
           if-no-files-found: warn
 
       - name: Tear down sandbox
         if: always()
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-
-      - name: Remove workspace
-        if: always()
-        run: rm -rf "/tmp/$SANDBOX_NAME"

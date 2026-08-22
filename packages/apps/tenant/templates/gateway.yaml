@@ -19,10 +19,35 @@ spec:
     namespace: cozy-system
   interval: 5m
   timeout: 10m
+  {{- /* Install remediation is an uninstall in every case Flux offers, and this
+         release does not disable hooks on it, so a remediated install runs the
+         gateway chart's post-delete cleanup Job. That Job deletes the
+         cozystack-acme-account Secret. The key regenerates on the next install,
+         so unlike the storage-owning releases this costs no data: it costs a
+         re-registration against the ACME provider, and repeated cycles run into
+         its rate limits, which can hold certificate issuance for the tenant
+         down for hours. RetryOnFailure keeps the manifests applied and retries
+         the failed release instead, so no uninstall happens and the cleanup Job
+         never runs. Both actions carry the strategy because the controller
+         performs that retry as an upgrade. Two things are traded away: a real
+         upgrade failure now retries rather than rolls back, which gives up no
+         stable safety net, since with retries: -1 the default strategy already
+         rolled back and retried without end; and the uninstall was the only
+         automatic clean slate, so an install wedged on a bad resource state
+         retries against it until an operator removes the release. The
+         remediation blocks stay because an absent release consults install and
+         an out-of-sync one consults upgrade, both by retry count rather than by
+         strategy. */}}
   install:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   valuesFrom:

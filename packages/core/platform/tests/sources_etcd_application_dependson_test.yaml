@@ -1,0 +1,30 @@
+suite: etcd-application waits for the operator that serves its CRD
+# The etcd chart (extra/etcd) renders kind: EtcdCluster from
+# etcd-operator.cozystack.io/v1alpha2, so cozystack.etcd-operator is a genuine
+# prerequisite of offering the app rather than a test-selection hint. Without
+# this edge the etcd-rd HelmRelease registers the ApplicationDefinition as soon
+# as cozystack-engine is up, a tenant can create an Etcd before the operator
+# exists, and its HelmRelease fails with `no matches for kind "EtcdCluster"`.
+# The edge is also what makes the etcd Chainsaw suite reachable from the
+# operator's own package, so a change to the operator selects that suite instead
+# of the whole run — see hack/select-e2e.sh's src_to_suites().
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: etcd-application dependsOn etcd-operator alongside its baseline edges
+    documentSelector:
+      path: metadata.name
+      value: cozystack.etcd-application
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.etcd-operator
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.cozystack-engine

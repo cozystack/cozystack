@@ -15,6 +15,7 @@ templates:
   - templates/clickhouse.yaml
   - templates/backup-strategy-secret.yaml
   - templates/backup-secret.yaml
+  - templates/backup-script.yaml
 
 release:
   name: ch-test
@@ -114,6 +115,126 @@ tests:
           count: 1
         template: templates/backup-strategy-secret.yaml
 
+  # endpointCA: the CA bundle that lets the sidecar verify an S3 endpoint signed
+  # by a private CA (cozystack's in-cluster SeaweedFS). Three contracts, and the
+  # negative one matters most: an unset endpointCA must add no env, no mount and
+  # no volume, so the default rendering is untouched by this feature.
+  - it: "endpointCA unset: no CA env, mount or volume is rendered"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+    asserts:
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="SSL_CERT_DIR")]
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].volumeMounts[?(@.name=="backup-s3-ca")]
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.volumes
+
+  - it: "endpointCA set: sidecar gets SSL_CERT_DIR, the CA mount and the Secret volume"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+        endpointCA:
+          name: my-s3-ca
+    asserts:
+      # SSL_CERT_DIR (not AWS_CA_BUNDLE): Go reads it IN ADDITION to the system
+      # trust store, so a release with a private CA still reaches public S3.
+      # AWS_CA_BUNDLE replaces the pool and breaks that (measured against
+      # altinity/clickhouse-backup:2.7.4).
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="SSL_CERT_DIR")].value
+          value: /etc/ssl/cozy-s3-ca:/etc/ssl/certs
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="AWS_CA_BUNDLE")]
+      # The mount path must be SSL_CERT_DIR's FIRST entry (a mountPath is a
+      # single directory, never a colon list) or the tool scans an empty dir.
+      # The second entry, /etc/ssl/certs, is the image's own system dir.
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].volumeMounts[?(@.name=="backup-s3-ca")].mountPath
+          value: /etc/ssl/cozy-s3-ca
+      - equal:
+          path: spec.templates.podTemplates[0].spec.volumes[?(@.name=="backup-s3-ca")].secret.secretName
+          value: my-s3-ca
+      # Default key, projected under the fixed filename SSL_CERT_DIR scans.
+      - equal:
+          path: spec.templates.podTemplates[0].spec.volumes[?(@.name=="backup-s3-ca")].secret.items[0].key
+          value: ca.crt
+      - equal:
+          path: spec.templates.podTemplates[0].spec.volumes[?(@.name=="backup-s3-ca")].secret.items[0].path
+          value: ca.crt
+      # The CA is the sidecar's business only — the server container must not
+      # get the mount.
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse")].volumeMounts[?(@.name=="backup-s3-ca")]
+
+  - it: "endpointCA.key: a custom key is still projected as ca.crt"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+        endpointCA:
+          name: my-s3-ca
+          key: tls-bundle.pem
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.volumes[?(@.name=="backup-s3-ca")].secret.items[0].key
+          value: tls-bundle.pem
+      - equal:
+          path: spec.templates.podTemplates[0].spec.volumes[?(@.name=="backup-s3-ca")].secret.items[0].path
+          value: ca.crt
+
+  # endpointCA composes with the platform flow: cozy-backups-creds carries the
+  # credentials while the CA arrives separately, so a useSystemBucket release
+  # can target the in-cluster SeaweedFS endpoint too.
+  - it: "endpointCA composes with useSystemBucket"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: true
+        endpointCA:
+          name: my-s3-ca
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="SSL_CERT_DIR")].value
+          value: /etc/ssl/cozy-s3-ca:/etc/ssl/certs
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")].valueFrom.secretKeyRef.name
+          value: cozy-backups-creds
+
+  # backup.enabled=false renders no sidecar at all, so the CA must not leak a
+  # volume onto the Pod either.
+  - it: "endpointCA set but backup disabled: nothing is rendered"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: false
+        endpointCA:
+          name: my-s3-ca
+    asserts:
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.volumes
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")]
+
   - it: "s3PathOverride + useSystemBucket: render fails fast"
     template: templates/clickhouse.yaml
     set:
@@ -124,3 +245,24 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "clickhouse: backup.s3PathOverride is incompatible with backup.useSystemBucket=true. The platform flow scopes the S3 path to <namespace>/<release> automatically; clear s3PathOverride or disable useSystemBucket. To restore from another release's prefix, use a backups.cozystack.io/RestoreJob with spec.targetApplicationRef."
+
+  # Regression for #3758. The legacy per-instance backup script's retention
+  # cleanup loop iterates $DB_LIST, which must be assigned from the table list.
+  # A prior `echo DB_LIST=$(...)` typo left DB_LIST unset, so the cleanup loop
+  # ran zero iterations and `restic forget`/`restic prune` never executed —
+  # snapshots accumulated in object storage forever while the Job still
+  # reported success. Assert the assignment is present and the echo typo is gone.
+  - it: "legacy backup script: DB_LIST is assigned so retention cleanup runs (#3758)"
+    template: templates/backup-script.yaml
+    set:
+      backup:
+        enabled: true
+        schedule: "0 3 * * *"
+        useSystemBucket: false
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: '(?m)^\s*DB_LIST=\$\(echo "\$TABLE_LIST"'
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'echo DB_LIST='

@@ -9,3 +9,54 @@ reloader:
         requests:
           cpu: 10m
           memory: 128Mi
+
+      # -- Startup probe for the `reloader` container. This is the canonical
+      # explanation for the cozystack `patches/deployment-startup-probe.diff`
+      # template patch, which is what makes the key render at all; the template
+      # itself only points back here.
+      #
+      # Reloader binds its :9090 listener as the last statement of
+      # `startReloader`, so /live and /metrics answer connection refused until
+      # everything before it has finished. The blocking part of that prologue is
+      # not the informer construction, which is lazy: it is the package-level
+      # `IsOpenshift = isOpenshift()` in pkg/kube, which issues a
+      # GET /apis/project.openshift.io against the API server, with a
+      # context.TODO() that carries no deadline of its own, before main() is
+      # even entered. Its latency is the API server's, and the container runs at
+      # a 100m CPU limit while it waits.
+      #
+      # Without a startup probe the only grace period is the liveness budget:
+      # initialDelaySeconds 10 + periodSeconds 10 * failureThreshold 5, about
+      # 60s. A first start that needs longer is killed mid-prologue, and the
+      # restart does not resume it, it runs it again from the beginning, so the
+      # loop sustains itself.
+      #
+      # Budget here = periodSeconds * failureThreshold = 5 * 45, about 225s.
+      # Several times the window that was not enough, still well inside the
+      # install timeout that applies (not Flux's own default: cozystack-operator
+      # stamps every generated HelmRelease with --helmrelease-install-timeout,
+      # 10m by default), and short enough that a container which is genuinely
+      # dead surfaces within a few minutes rather than hiding behind the probe.
+      #
+      # Why a startup probe rather than the liveness knobs the chart already
+      # exposes, neither of which would need a patch:
+      # - livenessProbe.failureThreshold buys the grace permanently, loosening
+      #   steady-state hang detection for the life of the container.
+      # - livenessProbe.initialDelaySeconds is start-up-only and would genuinely
+      #   do, but it is a fixed blind window on every start; a startup probe
+      #   returns liveness to its tight budget the moment the listener binds.
+      # Adaptive against fixed is the trade. It is narrower than it sounds while
+      # reloader.enableHA is unset, since /live is then a constant 200 and
+      # liveness can only catch the listener dying outright.
+      #
+      # timeoutSeconds matches the 5s the chart gives liveness and readiness,
+      # rather than the kubelet default of 1s, because at a 100m CPU limit the
+      # listener can be up while a throttled process still needs more than a
+      # second to answer.
+      startupProbe:
+        httpGet:
+          path: /live
+          port: http
+        periodSeconds: 5
+        failureThreshold: 45
+        timeoutSeconds: 5

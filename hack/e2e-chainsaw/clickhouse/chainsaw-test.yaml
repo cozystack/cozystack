@@ -88,3 +88,287 @@ spec:
             name: chi-clickhouse-test-clickhouse-0-1
           status:
             replicas: 1
+---
+# ClickHouse Altinity backup/restore E2E — the two Tests below, executed in
+# name order after the plain `clickhouse` Test above. Chainsaw port of the
+# intended hack/e2e-apps/backup-clickhouse.bats (cozystack#2600), shaped like
+# the etcd/mariadb/postgres suites:
+#
+#   clickhouse-1-backup-contracts  — deploy a backup-enabled ClickHouse and
+#                                    assert the chart<->Altinity-strategy
+#                                    contract (the :7171 clickhouse-backup
+#                                    sidecar + the backup-api-auth Secret the
+#                                    strategy Pod authenticates with). Runs in
+#                                    CI; needs no reachable object store.
+#   clickhouse-2-backup-roundtrip  — the full Bucket -> BackupJob -> Backup ->
+#                                    in-place + to-copy RestoreJob round-trip,
+#                                    driving the validated example scripts
+#                                    (examples/backups/clickhouse). Also runs in
+#                                    CI, in tenant-root.
+#
+# Why the split: the two Tests answer different questions at different cost. The
+# contracts Test needs no object store, so it stays in the default tenant-test
+# namespace next to the other app suites and is the seconds-long guard on the
+# chart wiring the Altinity strategy depends on — the sidecar container/port and
+# the backup-api-auth Secret it authenticates with, each a silent break if a
+# chart bump renames it. The round-trip Test moves real data through S3, so it
+# must run in tenant-root (see its own header) and costs minutes.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: clickhouse-1-backup-contracts
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: clickhouse-test-backup
+  - podLogs:
+      selector: app.kubernetes.io/instance=clickhouse-test-backup
+      tail: 50
+  steps:
+  - name: create-clickhouse
+    try:
+    - apply:
+        file: clickhouse-backup.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: clickhouse-test-backup
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  # The ClickHouseInstallation Pod carries the clickhouse-backup sidecar. Gate
+  # on the StatefulSet actually reporting a ready replica (not just the HR
+  # condition) before inspecting the Pod.
+  - name: wait-statefulset-ready
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: chi-clickhouse-test-backup-clickhouse-0-0
+          status:
+            readyReplicas: 1
+
+  # The chart<->strategy contract, asserted against the running Pod (not the
+  # chart templates): the cozy-default-altinity strategy Pod reaches the
+  # clickhouse-backup HTTP API on the container port named ch-backup-api
+  # (:7171). If a chart bump renames the container or moves the port, every
+  # ClickHouse BackupJob breaks silently — this catches it.
+  - name: verify-backup-sidecar
+    try:
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              app.kubernetes.io/instance: clickhouse-test-backup
+          status:
+            phase: Running
+          # Filter to the sidecar container, take it, project its named port:
+          # exactly one ch-backup-api port on :7171/TCP. String-literal filters
+          # (not numeric) sidestep the chainsaw v0.2.15 JMESPath number-literal
+          # bug; 7171 here is an expected value, not a filter literal.
+          (spec.containers[?name == 'clickhouse-backup'] | [0].ports[?name == 'ch-backup-api']):
+          - containerPort: 7171
+            protocol: TCP
+          # And that the sidecar actually authenticates from that Secret: the
+          # API_USERNAME/API_PASSWORD env must resolve valueFrom the
+          # backup-api-auth Secret's username/password keys. A chart change that
+          # kept both the Secret and the port but repointed or dropped these
+          # secretKeyRefs would otherwise slip through and surface only as 401s
+          # at BackupJob time — the exact silent break this suite guards.
+          (spec.containers[?name == 'clickhouse-backup'] | [0].env[?name == 'API_USERNAME']):
+          - valueFrom:
+              secretKeyRef:
+                name: clickhouse-test-backup-backup-api-auth
+                key: username
+          (spec.containers[?name == 'clickhouse-backup'] | [0].env[?name == 'API_PASSWORD']):
+          - valueFrom:
+              secretKeyRef:
+                name: clickhouse-test-backup-backup-api-auth
+                key: password
+
+  # The strategy Pod authenticates to the sidecar with the credentials in the
+  # chart-emitted <release>-backup-api-auth Secret (env API_USERNAME /
+  # API_PASSWORD on both sides). Assert it exists and carries both keys — a
+  # rename of the Secret or a dropped key surfaces only as 401s (or a Pod that
+  # never starts) at BackupJob time otherwise.
+  - name: verify-backup-api-auth-secret
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: clickhouse-test-backup-backup-api-auth
+          (data.username != null): true
+          (data.password != null): true
+---
+# Full ClickHouse Altinity round-trip: Bucket -> Altinity strategy + BackupClass
+# -> backup-enabled source ClickHouse (+ sentinel write) -> BackupJob (waits
+# Succeeded, emits a Backup) -> in-place RestoreJob -> to-copy RestoreJob into a
+# second ClickHouse. It drives examples/backups/clickhouse/run-all.sh as the
+# harness so the test and the documented flow can never drift — the same reason
+# the etcd/mariadb/postgres round-trips drive their examples.
+#
+# Runs in CI, unlike the etcd round-trip, and the difference is the chart's
+# backup.endpointCA. This mirrors mariadb-2-backup-roundtrip and
+# postgres-2-backup-roundtrip, whose three preconditions all now hold here:
+#   - runs in tenant-root, not the default tenant-test: the S3 client is the
+#     clickhouse-backup sidecar INSIDE the tenant, and the e2e tenant is created
+#     isolated (hack/e2e-install-cozystack.bats) — its Cilium egress allowlist
+#     blocks a tenant-test Pod from reaching tenant-root's seaweedfs, while a
+#     tenant-root Pod reaches it over same-tenant egress;
+#   - targets the in-cluster endpoint (S3_ENDPOINT below) instead of the
+#     BucketInfo external ingress URL, which in CI is the unroutable
+#     s3.example.org placeholder;
+#   - trusts that endpoint's self-signed cert by copying the seaweedfs CA secret
+#     (seaweedfs-ca-cert, auto-discovered from the cert-manager Certificate)
+#     into a per-release Secret referenced by backup.endpointCA, which the chart
+#     mounts into the sidecar and exposes through SSL_CERT_DIR.
+# Before backup.endpointCA existed the sidecar had no CA surface at all, which is
+# why this suite previously skipped the round-trip behind an env gate.
+#
+# Scope, stated plainly: this exercises the strategy the EXAMPLE installs, not
+# the shipped cozy-default-altinity. The two now share a client image (step 01
+# reads it off cozy-default-altinity) but the script body and the BackupClass
+# wiring are the example's own, so a regression in the platform strategy's own
+# script would not be caught here. Same limitation as the mariadb and postgres
+# round-trips, which drive their examples the same way.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: clickhouse-2-backup-roundtrip
+spec:
+  namespace: tenant-root
+  # The round-trip creates its resources through the example scripts, not
+  # Chainsaw `apply`, and also produces controller-owned artifacts (the Backup
+  # CR, the cluster-scoped Altinity strategy + BackupClass). Chainsaw has
+  # nothing of its own to auto-delete, so teardown is the run step's finally
+  # (cleanup.sh), which is idempotent.
+  skipDelete: true
+  catch:
+  - events: {}
+  # Name the HelmReleases. tenant-root is the root tenant of a live e2e cluster,
+  # so an unnamed describe here dumps every HelmRelease on it and buries the two
+  # that matter (mariadb-2-backup-roundtrip names its release for the same
+  # reason). BackupJob/RestoreJob/Altinity stay unnamed — there are only ever a
+  # couple, and the names are the harness's to choose.
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: clickhouse-clickhouse-test
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: clickhouse-clickhouse-restore
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  - describe:
+      apiVersion: strategy.backups.cozystack.io/v1alpha1
+      kind: Altinity
+  # tail 200, not 100: the sidecar logs each backup/restore action, so an S3
+  # error can sit well back from the tail by the time the step fails.
+  - podLogs:
+      selector: app.kubernetes.io/instance=clickhouse-clickhouse-test
+      tail: 200
+  # The to-copy leg (step 07) restores into a second release; capture its Pod
+  # logs too so a failure isolated to that leg keeps its diagnostics.
+  - podLogs:
+      selector: app.kubernetes.io/instance=clickhouse-clickhouse-restore
+      tail: 200
+  # Keeper Pods carry a different label shape (chkeeper.yaml labels them
+  # app: <release>-keeper, not app.kubernetes.io/instance), so the selectors
+  # above miss them entirely. A source ClickHouse that never reaches a ready
+  # replica is usually Keeper failing to form a quorum, and that explains itself
+  # only here.
+  - podLogs:
+      selector: app=clickhouse-clickhouse-test-keeper
+      tail: 100
+  - podLogs:
+      selector: app=clickhouse-clickhouse-restore-keeper
+      tail: 100
+  steps:
+  - name: run
+    try:
+    # Pre-clean: tenant-root is a shared, persistent namespace with fixed
+    # resource names, so a run killed before the finally below leaves stale
+    # state behind. A leftover BackupJob still carrying status.phase=Succeeded
+    # from a prior run would satisfy the harness's Succeeded wait instantly and
+    # pass without a real backup ever running. cleanup.sh is idempotent
+    # (--ignore-not-found), so this is a no-op on a clean namespace.
+    - script:
+        # cleanup.sh now waits for the two ClickHouse releases and the Bucket to
+        # actually go (3 x 180s = 540s), so the step budget has to clear that sum
+        # for the same reason the run step does: an inner wait names the resource
+        # that would not delete, a SIGKILL at the op timeout names nothing.
+        timeout: 12m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/clickhouse/cleanup.sh
+        check:
+          ($error == null): true
+    # Budget: the op timeout must be strictly ABOVE the sum of the inner waits,
+    # per docs/agents/e2e-testing.md — let an inner wait be what fires, because
+    # it names the resource that stalled, whereas hitting the op timeout means
+    # Chainsaw SIGKILLs the script and the failure arrives with no diagnostics
+    # at all (.chainsaw.yaml calls that "strictly worse").
+    #
+    # Inner budgets, sized against what CI actually takes rather than guessed
+    # generously — the whole bucket suite completes in ~37s and a backup-enabled
+    # ClickHouse plus Keeper reaches Ready in ~98s (measured on run 30353894332):
+    #   03  660s = 300 bucket HR + 180 claim + 180 access
+    #   04  600s = 300 HR + 300 StatefulSet
+    #   05  480s = BackupJob to Succeeded
+    #   06  480s = in-place RestoreJob
+    #   07 1080s = 300 HR + 300 StatefulSet + 480 to-copy RestoreJob
+    #        sum = 3300s (55m)
+    # 60m therefore leaves ~5m of headroom for the kubectl apply / exec SQL
+    # calls interleaved between those waits (convention 6: justified in-line).
+    #
+    # Reaching the ceiling at all takes a pathological hang: every wait fails
+    # fast on a terminal state — wait_for_field bails on phase=Failed and
+    # wait_hr_ready on Stalled=True — so a genuinely broken backup reports in
+    # seconds. The happy path is minutes.
+    - script:
+        timeout: 60m
+        content: |
+          set -eu
+          cd ../../..
+          [ -x examples/backups/clickhouse/run-all.sh ] || { echo "clickhouse backup example scripts not found at examples/backups/clickhouse" >&2; exit 1; }
+          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+            examples/backups/clickhouse/run-all.sh
+        check:
+          ($error == null): true
+    finally:
+    # Removes every resource the harness created (chainsaw did not apply them,
+    # so they are not part of automatic cleanup), including the copied CA Secret
+    # and the cluster-scoped Altinity strategy + BackupClass.
+    - description: backup-flow cleanup
+      script:
+        # 12m for the same arithmetic as the pre-clean above (540s of deletion
+        # waits inside cleanup.sh).
+        timeout: 12m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/clickhouse/cleanup.sh
