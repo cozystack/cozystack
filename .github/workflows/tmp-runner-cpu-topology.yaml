@@ -434,3 +434,228 @@ jobs:
           CB_GROUPS=3 CB_PER=8 CB_ROUNDS=400 CB_WORK=20000 CB_REPEATS=7 \
             python3 /tmp/coupled.py
           echo "::endgroup::"
+
+      # Is the advertised L3 domain split real?
+      #
+      # lscpu reports this class as 32 MiB of L3 in two instances, so eight
+      # cores per domain. That is what the hypervisor ADVERTISES. The sibling
+      # map was advertised too and turned out to be real when the arms above
+      # tested it; nothing has ever tested the cache map, and every statement
+      # about a sandbox node straddling two L3 slices rests on it.
+      #
+      # Neither OCI nor cncf/automation has anything to say here. OCI documents
+      # OCPU-to-core and puts NUMA and BIOS tuning on bare metal only, with no
+      # CCD or NUMA alignment guarantee for VM shapes anywhere; the launcher in
+      # cncf/automation sets no PlatformConfig at all. So whatever the placement
+      # engine did is what we got, and this measures it rather than asking.
+      - name: L3 domain split
+        run: |
+          set -u
+          cat > /tmp/l3domains.py <<'L3_EOF'
+          #!/usr/bin/env python3
+          """Is the reported L3 domain split real, or is it decoration?
+
+          `lscpu` reports this runner's 16 cores as two L3 domains of 16 MiB each. That is
+          what the hypervisor ADVERTISES. The sibling map turned out to be real when it was
+          tested the same way; the cache map has never been tested at all, and every
+          statement about a guest straddling two L3 slices rests on it.
+
+          The discriminator is capacity contention between two DISTINCT physical cores.
+          Each worker walks its own dependent chain over its own array, so two workers
+          sharing an L3 domain have to fit two footprints in one cache while two workers on
+          different domains get a cache each. Sweeping the footprint, a real split shows
+          the pair on one domain degrading at half the working set the pair on two domains
+          does. If the two curves lie on top of each other, the advertised split is not a
+          thing our guests pay for.
+
+          Both pair arms use two different physical cores, so SMT is not in this at all --
+          that was the previous experiment. The only difference between them is whether the
+          two cores share an advertised L3 domain.
+
+          The chain is `i = arr[i]` over a multiplicative permutation, which is a dependent
+          load: the next address is not known until the current one comes back, so no
+          prefetcher can run ahead of it, and the footprint is exactly 4 bytes per slot.
+          """
+          import array
+          import glob
+          import multiprocessing as mp
+          import os
+          import sys
+          import time
+
+          PRIME = 1000003
+          REPEATS = int(os.environ.get("L3_REPEATS", "3"))
+          STEPS = int(os.environ.get("L3_STEPS", "5000000"))
+          # Footprints in MiB. The advertised domain is 16 MiB, so the sweep has to cross
+          # both that and half of it for the two pair arms to separate.
+          SIZES_MIB = [int(x) for x in os.environ.get("L3_SIZES", "1,4,8,12,16,24,32").split(",")]
+
+
+          def l3_domains():
+              """[[cpu, ...], ...] -- one entry per distinct advertised L3 domain."""
+              seen, order = {}, []
+              for d in sorted(glob.glob("/sys/devices/system/cpu/cpu[0-9]*"),
+                              key=lambda p: int(p.rsplit("cpu", 1)[1])):
+                  cpu = int(d.rsplit("cpu", 1)[1])
+                  shared = None
+                  for idx in sorted(glob.glob(d + "/cache/index*")):
+                      try:
+                          with open(idx + "/level") as fh:
+                              if fh.read().strip() != "3":
+                                  continue
+                          with open(idx + "/shared_cpu_list") as fh:
+                              shared = fh.read().strip()
+                      except OSError:
+                          continue
+                  if shared is None:
+                      continue
+                  if shared not in seen:
+                      seen[shared] = []
+                      order.append(shared)
+                  seen[shared].append(cpu)
+              return [seen[k] for k in order], order
+
+
+          def core_of(cpu, sibling_cache):
+              return sibling_cache.get(cpu, cpu)
+
+
+          def read_siblings():
+              out = {}
+              for d in glob.glob("/sys/devices/system/cpu/cpu[0-9]*"):
+                  cpu = int(d.rsplit("cpu", 1)[1])
+                  try:
+                      with open(d + "/topology/thread_siblings_list") as fh:
+                          out[cpu] = fh.read().strip()
+                  except OSError:
+                      pass
+              return out
+
+
+          def worker(cpu, n, start, idx, out):
+              os.sched_setaffinity(0, {cpu})
+              # Built after the pin and inside the child, so each worker owns its pages
+              # rather than sharing one copy-on-write copy with its sibling -- sharing one
+              # would halve the footprint and erase the effect this measures.
+              arr = array.array("i", ((i * PRIME) % n for i in range(n)))
+              start.wait()
+              t0 = time.perf_counter()
+              i = 1
+              for _ in range(STEPS):
+                  i = arr[i]
+              out[idx] = time.perf_counter() - t0
+              if i < 0:                      # keep the walk observable
+                  print("", file=sys.stderr)
+
+
+          def run(cpus, n):
+              start = mp.Barrier(len(cpus))
+              out = mp.Array("d", len(cpus))
+              procs = [mp.Process(target=worker, args=(c, n, start, k, out))
+                       for k, c in enumerate(cpus)]
+              for p in procs:
+                  p.start()
+              for p in procs:
+                  p.join()
+              return [out[k] for k in range(len(cpus))]
+
+
+          def main():
+              # Pinned rather than left to the default, which differs by Python version:
+              # 3.14 defaults to forkserver, older ones to fork. Each worker builds its
+              # array after it pins, so the footprint is its own either way, but the arms
+              # should not differ by interpreter.
+              try:
+                  mp.set_start_method("fork", force=True)
+              except (RuntimeError, ValueError):
+                  pass
+              domains, keys = l3_domains()
+              sib = read_siblings()
+              print(f"{len(domains)} advertised L3 domains")
+              for k, cpus in zip(keys, domains):
+                  print(f"  domain shared_cpu_list={k}  cpus={cpus}")
+              if len(domains) < 2:
+                  print("only one advertised L3 domain here, so there is no split to test; nothing run")
+                  return
+              # One CPU per physical core within each domain, so no arm ever puts two
+              # workers on one core.
+              def cores_in(d):
+                  out, seen = [], set()
+                  for cpu in domains[d]:
+                      key = sib.get(cpu, cpu)
+                      if key not in seen:
+                          seen.add(key)
+                          out.append(cpu)
+                  return out
+              d0, d1 = cores_in(0), cores_in(1)
+              if len(d0) < 2 or not d1:
+                  print("not enough distinct cores per domain to build the arms; nothing run")
+                  return
+              arms = {
+                  "solo": [d0[0]],
+                  "same-domain": [d0[0], d0[1]],
+                  "cross-domain": [d0[0], d1[0]],
+              }
+              for name, cpus in arms.items():
+                  print(f"  arm {name:13} cpus={cpus} "
+                        f"cores={[sib.get(c, c) for c in cpus]}")
+              print(f"\n{STEPS} dependent reads per worker, {REPEATS} repeats, "
+                    f"footprints {SIZES_MIB} MiB (4 bytes per slot)\n")
+
+              results = {}
+              for mib in SIZES_MIB:
+                  n = (mib * 1024 * 1024) // 4
+                  for rep in range(REPEATS):
+                      for name, cpus in arms.items():
+                          times = run(cpus, n)
+                          results.setdefault((mib, name), []).extend(times)
+                  row = []
+                  for name in arms:
+                      v = results[(mib, name)]
+                      row.append(f"{name} {min(v):6.3f}s")
+                  print(f"  {mib:3} MiB  " + "   ".join(row))
+
+              print("\nper-worker seconds, best of all repeats, lower is better")
+              print(f"{'MiB':>5} {'solo':>9} {'same-domain':>13} {'cross-domain':>13} "
+                    f"{'same/cross':>11}")
+              ratios = []
+              for mib in SIZES_MIB:
+                  s = min(results[(mib, "solo")])
+                  a = min(results[(mib, "same-domain")])
+                  c = min(results[(mib, "cross-domain")])
+                  r = a / c if c else 0
+                  ratios.append((mib, r))
+                  print(f"{mib:5} {s:9.3f} {a:13.3f} {c:13.3f} {r:11.3f}")
+
+              print()
+              worst = max(ratios, key=lambda x: x[1])
+              print(f"largest same/cross ratio {worst[1]:.3f} at {worst[0]} MiB")
+              if worst[1] > 1.15:
+                  print("VERDICT: two cores sharing an advertised L3 domain contend where two "
+                        "cores on different domains do not. The split is REAL, and a guest "
+                        "whose vCPUs straddle both domains is paying for it.")
+              else:
+                  print("VERDICT: sharing an advertised L3 domain costs no more than not "
+                        "sharing one, across the whole sweep. The advertised split is not "
+                        "something our guests pay for, and the straddling concern is void.")
+
+
+          if __name__ == "__main__":
+              main()
+
+          L3_EOF
+          echo "::group::advertised cache topology"
+          lscpu -C || true
+          for d in /sys/devices/system/cpu/cpu0 /sys/devices/system/cpu/cpu8; do
+            for i in "$d"/cache/index*; do
+              [ -r "$i/level" ] || continue
+              printf '%s level=%s size=%s shared=%s\n' "$i" \
+                "$(cat "$i/level" 2>/dev/null)" \
+                "$(cat "$i/size" 2>/dev/null)" \
+                "$(cat "$i/shared_cpu_list" 2>/dev/null)"
+            done
+          done
+          echo "::endgroup::"
+          echo "::group::capacity contention across the split"
+          python3 /tmp/l3domains.py
+          echo "::endgroup::"
