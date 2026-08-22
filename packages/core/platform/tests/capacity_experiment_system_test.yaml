@@ -13,6 +13,7 @@ set:
       - cozystack.monitoring-agents
       - cozystack.goldpinger
       - cozystack.backup-controller
+      - cozystack.backupstrategy-controller
 tests:
   - it: removes exactly the four disabled packages, and keycloak with oidc off
     asserts:
@@ -27,6 +28,10 @@ tests:
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.monitoring-agents, any: true}
         not: true
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backup-controller, any: true}
+        not: true
+      # dependsOn velero AND backup-controller; leaving it enabled while either
+      # is disabled wedges the platform Helm upgrade until it times out.
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backupstrategy-controller, any: true}
         not: true
   - it: keeps the dependsOn blockers and the tenant path
     asserts:

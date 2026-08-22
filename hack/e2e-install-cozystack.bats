@@ -266,11 +266,22 @@ spec:
           # Not listed because it is never rendered: cozystack.keycloak and
           # cozystack.keycloak-operator come from the system bundle only under
           # authentication.oidc.enabled, which nothing on this branch sets.
+          #
+          # cozystack.backupstrategy-controller MUST be disabled alongside
+          # velero and backup-controller: it is a default package whose
+          # PackageSource dependsOn both, so with either missing it stays
+          # DependenciesNotReady forever and the cozystack-platform Helm
+          # upgrade waits on it until it times out. That is what the first run
+          # of this branch died of, 30 minutes in, with
+          # "timeout waiting for: [Package/cozystack.backupstrategy-controller
+          # status: 'InProgress']". Nothing dependsOn it in turn, so disabling
+          # it closes the chain.
           disabledPackages:
             - cozystack.velero
             - cozystack.monitoring-agents
             - cozystack.goldpinger
             - cozystack.backup-controller
+            - cozystack.backupstrategy-controller
           enabledPackages:
             - cozystack.external-dns-application
 EOF
