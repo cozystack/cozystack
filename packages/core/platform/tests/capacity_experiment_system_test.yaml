@@ -1,0 +1,38 @@
+suite: capacity experiment - system bundle
+templates:
+  - templates/bundles/system.yaml
+release: {name: cozystack, namespace: cozy-system}
+set:
+  bundles:
+    system: {enabled: true, variant: isp-full}
+    iaas: {enabled: true}
+    paas: {enabled: false}
+    naas: {enabled: false}
+    disabledPackages:
+      - cozystack.velero
+      - cozystack.monitoring-agents
+      - cozystack.goldpinger
+      - cozystack.backup-controller
+tests:
+  - it: removes exactly the four disabled packages, and keycloak with oidc off
+    asserts:
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.keycloak, any: true}
+        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.keycloak-operator, any: true}
+        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.velero, any: true}
+        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.goldpinger, any: true}
+        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.monitoring-agents, any: true}
+        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backup-controller, any: true}
+        not: true
+  - it: keeps the dependsOn blockers and the tenant path
+    asserts:
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.etcd-operator, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.vertical-pod-autoscaler, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.tenant-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.monitoring-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.seaweedfs-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.ingress-application, any: true}

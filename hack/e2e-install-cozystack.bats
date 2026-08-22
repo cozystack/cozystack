@@ -158,6 +158,33 @@ spec:
           host: "example.org"
           apiServerEndpoint: "https://192.168.123.10:6443"
         bundles:
+          # Capacity experiment (throwaway branch): the runner has 16 physical
+          # cores and this suite requested 16810m of pod CPU, so the platform
+          # asked for more than the machine has before a single tenant worker
+          # booted. Drop everything the tenant-Kubernetes suites do not use.
+          #
+          # paas covers the DB operators and their app definitions; disabling it
+          # also disables the clickhouse/postgres/kafka/mariadb/mongodb/redis/
+          # qdrant/openbao/harbor/foundationdb Chainsaw suites, so CHAINSAW_SUITES
+          # in the workflow must stay in lockstep with this list.
+          paas:
+            enabled: false
+          naas:
+            enabled: false
+          # NOT disabled, despite being unused here:
+          # cozystack.vertical-pod-autoscaler -- cozystack.etcd-operator's
+          # default variant dependsOn it unconditionally, and etcd is Kamaji's
+          # datastore, so disabling VPA leaves every tenant control plane
+          # without one. It costs ~550m and stays.
+          #
+          # Not listed because it is never rendered: cozystack.keycloak and
+          # cozystack.keycloak-operator come from the system bundle only under
+          # authentication.oidc.enabled, which nothing on this branch sets.
+          disabledPackages:
+            - cozystack.velero
+            - cozystack.monitoring-agents
+            - cozystack.goldpinger
+            - cozystack.backup-controller
           enabledPackages:
             - cozystack.external-dns-application
 EOF
@@ -218,31 +245,28 @@ EOF
 }
 
 @test "Configure Tenant and wait for applications" {
-  # Patch root tenant and wait for its releases
+  # Capacity experiment (throwaway branch): monitoring, ingress and seaweedfs
+  # are off. Those three flags are what created the ~5.3 CPU of tenant-root
+  # workload (the VictoriaMetrics/VictoriaLogs cluster, Grafana + its CNPG
+  # database, Alerta, the SeaweedFS chain and the NGINX controller) that the
+  # tenant-Kubernetes suites never touch. etcd stays on: it is Kamaji's
+  # datastore, so the tenant control planes need it.
+  #
+  # The *-application packages themselves stay installed, because
+  # cozystack.tenant-application dependsOn all three and disabling the packages
+  # would wedge the Tenant CR itself. Turning the instances off via the Tenant
+  # spec is the lever that costs nothing.
+  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":false,"monitoring":false,"etcd":true,"isolated":true, "seaweedfs": false}}'
 
-  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
-
-  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
-  # tenant-root parent HR only flips Ready after every child HR is Ready,
-  # so listing all four top-level children plus the parent gives precise
-  # failure messages without redundant separate waits. seaweedfs now
-  # installs as a serial chain seaweedfs-db (CNPG bootstrap) ->
-  # seaweedfs-system (master raft quorum) -> seaweedfs wrapper, which
-  # pushes the parent's Ready flip to ~5-6 min on an idle runner. On a loaded
-  # runner the tenant stack only starts creating pods ~9-10 min in, so the
-  # parent's Ready can land past the HR's single 15m timeout window; the HR
-  # re-reconciles every 1m until it converges, so this wait is 20m to observe
-  # that eventual Ready rather than expiring first.
-  kubectl wait hr/etcd hr/ingress hr/monitoring hr/seaweedfs hr/tenant-root \
+  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd tenant-root >/dev/null 2>&1; do sleep 1; done'
+  # tenant-root parent HR only flips Ready after every child HR is Ready, so
+  # listing the one remaining top-level child plus the parent gives precise
+  # failure messages without redundant separate waits. The 20m budget is kept
+  # from the full-fat lane rather than tightened: it costs nothing in the happy
+  # path, and a shorter timeout here would turn "slower than expected" into a
+  # different failure than the one this branch exists to measure.
+  kubectl wait hr/etcd hr/tenant-root \
     -n tenant-root --timeout=20m --for=condition=ready
-
-
-  # Expose Cozystack services through ingress
-  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"publishing":{"exposedServices":["api","dashboard","cdi-uploadproxy","vm-exportproxy","keycloak"]}}}}}}'
-
-  # NGINX ingress controller
-  timeout 60 sh -ec 'until kubectl get deploy root-ingress-controller -n tenant-root >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=10m --for=condition=available
 
   # etcd cluster. The v1alpha2 operator manages member Pods directly and creates
   # NO StatefulSet, so gate on the EtcdCluster readiness signal (mirrors
@@ -254,135 +278,66 @@ EOF
     -l app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator \
     --for=condition=ready --timeout=10m
 
-  # VictoriaMetrics components. vmalert/vmalertmanager, vlclusters/generic and
-  # vmcluster/shortterm+longterm are all vm-operator-managed resources that flip
-  # updateStatus=operational only once their workloads are scheduled and Ready.
-  # During platform bring-up they contend for node resources with the rest of
-  # the install, so convergence is load-sensitive: on a calm sandbox each reaches
-  # operational in under a second, but under install-time load (concurrent e2e
-  # sandboxes on one runner) monitoring bring-up is slow. vmalert already uses a
-  # 15m budget; vlclusters and vmcluster used 10m, so this block carried a
-  # 10m/15m split even though all three contend for the same node capacity and a
-  # slow VictoriaLogs bring-up can fail the install on a PR that never touched
-  # monitoring. Unify the block on one 15m budget (near-zero cost in the happy
-  # path, comfortably inside the E2E job budget) and dump live status on timeout
-  # so a genuine stuck-not-slow regression stays legible instead of surfacing as
-  # a bare "timed out" line.
-  timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  timeout 60 sh -ec 'until kubectl get vmalertmanager/alertmanager -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vmalert/vmalert-shortterm, vmalertmanager/alertmanager did not reach updateStatus=operational ==="
-    kubectl get vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get vlclusters/generic -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vlclusters/generic did not reach updateStatus=operational ==="
-    kubectl get vlclusters/generic -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vmcluster/shortterm,longterm did not reach updateStatus=operational ==="
-    kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
+}
 
-  # Grafana. The grafana-db CNPG cluster and the grafana-deployment Deployment
-  # complete the tenant-root monitoring bring-up and contend for the same node
-  # resources as the VictoriaMetrics stack above during install. Under
-  # install-time load (concurrent e2e sandboxes on one runner) either can be slow
-  # and fail the install on a PR that never touched monitoring, so both move from
-  # their 10m budget to the same uniform 15m as the vm-operator waits above and
-  # dump live status on timeout to keep a genuine stuck-not-slow regression
-  # legible instead of surfacing as a bare "timed out" line.
-  timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=15m || {
-    echo "=== clusters.postgresql.cnpg.io/grafana-db did not reach condition=ready ==="
-    kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
+@test "Node CPU requests fit the runner (capacity preflight)" {
+  # Fail here, in seconds, rather than 29 minutes later as an unattributable
+  # node-join timeout. `Insufficient cpu` is a scheduler verdict on the sum of
+  # pod CPU *requests* versus allocatable, and every previous encounter with it
+  # surfaced as "the tenant worker never became Ready" -- the most expensive
+  # possible way to learn that a number did not fit.
+  #
+  # `kubectl describe node` prints the same Allocated-resources total the
+  # scheduler uses, so this reads the authoritative figure instead of
+  # re-deriving it from pod specs and disagreeing with the scheduler about
+  # init-container maxima and terminal pods.
+  threshold=90
+  total_req=0
+  total_alloc=0
+  worst=0
+  for node in $(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
+    alloc=$(kubectl get node "$node" -o jsonpath='{.status.allocatable.cpu}')
+    case "$alloc" in
+      *m) alloc_m=${alloc%m} ;;
+      *)  alloc_m=$((alloc * 1000)) ;;
+    esac
+    req=$(kubectl describe node "$node" \
+      | awk '/^Allocated resources:/{f=1; next} f && $1=="cpu"{print $2; exit}')
+    if [ -z "$req" ]; then
+      echo "could not read Allocated-resources cpu for node $node" >&2
+      false
+    fi
+    case "$req" in
+      *m) req_m=${req%m} ;;
+      *)  req_m=$((req * 1000)) ;;
+    esac
+    pct=$((req_m * 100 / alloc_m))
+    echo "  ${node}: requests ${req_m}m / allocatable ${alloc_m}m = ${pct}%"
+    total_req=$((total_req + req_m))
+    total_alloc=$((total_alloc + alloc_m))
+    if [ "$pct" -gt "$worst" ]; then
+      worst=$pct
+    fi
+  done
+  echo "  TOTAL: requests ${total_req}m / allocatable ${total_alloc}m, worst node ${worst}%"
+  if [ "$worst" -ge "$threshold" ]; then
+    echo "=== a node is at ${worst}% of allocatable CPU (threshold ${threshold}%) ===" >&2
+    echo "the next pod that does not fit will sit Pending with Insufficient cpu," >&2
+    echo "which reaches the suite as a node-join timeout rather than as this." >&2
+    echo "Either raise -smp in hack/e2e-prepare-cluster.bats or trim more" >&2
+    echo "requests via bundles.disabledPackages / the root Tenant flags." >&2
+    kubectl get pods -A --field-selector=status.phase=Pending -o wide >&2 || true
     false
-  }
-  timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=15m || {
-    echo "=== deploy/grafana-deployment did not reach condition=available ==="
-    kubectl get deploy/grafana-deployment -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-
-  # Verify Grafana via ingress
-  ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-  if ! curl -sS -k "https://${ingress_ip}" -H 'Host: grafana.example.org' --max-time 30 | grep -q Found; then
-    echo "Failed to access Grafana via ingress at ${ingress_ip}" >&2
-    exit 1
   fi
 }
 
-@test "Keycloak OIDC stack is healthy" {
-  # Only oidc.enabled is set here: keycloakInternalUrl defaults to the in-cluster
-  # keycloak Service, which makes oauth2-proxy skip OIDC discovery and route the
-  # backend calls (token/jwks/userinfo/logout) through that Service.
-  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"authentication":{"oidc":{"enabled":true}}}}}}}'
-
-  timeout 120 sh -ec 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=20m --for=condition=ready
-
-  # Enabling OIDC swaps the dashboard's token-proxy container for oauth2-proxy,
-  # so the dashboard is the consumer that proves the internal-URL default works.
-  # The install-time `kubectl wait hr --all -A` ran before this test flipped the
-  # flag and only ever saw the token-proxy shape, so nothing has re-checked the
-  # dashboard on the OIDC path.
-  #
-  # Waiting on hr/dashboard directly would be vacuous: it is still Ready=True
-  # from the token-proxy install, so `--for=condition=ready` returns instantly
-  # against the stale condition, before Flux has even consumed the patched
-  # values. Gate on an observable that exists ONLY on the OIDC path instead --
-  # the auth-proxy container appearing in the gatekeeper Deployment -- which is
-  # reached only after the new values are rendered.
-  timeout 600 sh -ec 'until kubectl get deploy/incloud-web-gatekeeper -n cozy-dashboard -o jsonpath="{.spec.template.spec.containers[*].name}" 2>/dev/null | grep -qw auth-proxy; do sleep 5; done' || {
-    echo "=== gatekeeper never re-rendered with the auth-proxy container after enabling OIDC ==="
-    echo "=== the patched values likely never reached the dashboard HelmRelease ==="
-    kubectl get package cozystack.cozystack-platform -o yaml 2>&1 || true
-    kubectl get hr/dashboard -n cozy-dashboard -o yaml 2>&1 || true
-    kubectl get deploy/incloud-web-gatekeeper -n cozy-dashboard -o yaml 2>&1 || true
-    false
-  }
-
-  # Then wait for the ROLLOUT, not for condition=available. The Deployment has
-  # replicas: 1 and maxUnavailable: 25%, which rounds down to 0, so Kubernetes
-  # keeps the old token-proxy pod up while the new one starts: Available stays
-  # True on the strength of the OLD ReplicaSet even as the new auth-proxy pod
-  # crashloops. `rollout status` is the check that only succeeds once the
-  # UPDATED pod is available.
-  #
-  # That is what gives this case teeth: were the default to regress to the
-  # external hostname, oauth2-proxy would do OIDC discovery against
-  # keycloak.example.org -- the e2e host placeholder does not resolve -- and
-  # crashloop, failing the rollout instead of shipping the regression.
-  kubectl rollout status deploy/incloud-web-gatekeeper -n cozy-dashboard --timeout=10m || {
-    echo "=== deploy/incloud-web-gatekeeper rollout did not complete after enabling OIDC ==="
-    kubectl get deploy/incloud-web-gatekeeper -n cozy-dashboard -o yaml 2>&1 || true
-    echo "=== cozy-dashboard pods ==="
-    kubectl get pods -n cozy-dashboard -o wide 2>&1 || true
-    echo "=== auth-proxy logs ==="
-    kubectl logs -n cozy-dashboard -l app.kubernetes.io/name=gatekeeper --all-containers --tail=50 2>&1 || true
-    false
-  }
-
-  # Not the vacuous wait described above: past the rollout gate the HelmRelease
-  # has necessarily been re-reconciled, so Ready here means the whole upgrade
-  # converged -- not just the one Deployment this test watched.
-  kubectl wait hr/dashboard -n cozy-dashboard --timeout=10m --for=condition=ready
-}
+# The "Keycloak OIDC stack is healthy" test is deliberately absent on this
+# capacity-experiment branch. cozystack.keycloak and cozystack.keycloak-operator
+# are emitted by the system bundle ONLY under authentication.oidc.enabled, and
+# that test is the only thing that turns it on. Leaving OIDC off keeps both
+# Packages unrendered -- ~250m of requests, and the cozystack-engine `oidc`
+# variant's dependsOn edge on keycloak-operator goes with it, so nothing has to
+# be listed in disabledPackages to achieve it.
 
 @test "Aggregated API rejects Tenant name with dashes" {
   # Regression guard: the tenant Helm chart's tenant.name helper splits the

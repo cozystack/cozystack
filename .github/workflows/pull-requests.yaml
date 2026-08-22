@@ -676,13 +676,21 @@ jobs:
           FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
         run: |
           cd /tmp/$SANDBOX_NAME
-          if [ "$FULL_E2E" = "true" ] || [ -z "$SELECTED_APPS" ]; then
-            suites=""        # empty => test-chainsaw runs the whole suite
-            echo "Running full chainsaw suite"
-          else
-            suites="$SELECTED_APPS"
-            echo "Running selected chainsaw suites: $suites"
-          fi
+          # Capacity experiment (throwaway branch): the suite list is PINNED,
+          # not selected, and Test Impact Analysis is deliberately ignored --
+          # this branch edits hack/*.bats, which escalates selection to the full
+          # suite, and most of the full suite cannot run here.
+          #
+          # bundles.paas is disabled in hack/e2e-install-cozystack.bats, which
+          # removes the app definitions that the clickhouse, postgres, kafka,
+          # mariadb, mongodb, redis, qdrant, openbao, harbor and foundationdb
+          # suites install; the root Tenant runs with seaweedfs off, which
+          # removes bucket's storage backend. Those suites would fail on a
+          # missing ApplicationDefinition rather than on anything being
+          # measured here, so they are not run. Keep this list in lockstep with
+          # the bundle config and Tenant flags in that file.
+          suites="kubernetes-latest kubernetes-previous"
+          echo "Running pinned chainsaw suites: $suites (SELECTED_APPS=${SELECTED_APPS:-<none>}, FULL_E2E=$FULL_E2E ignored)"
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
             echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"

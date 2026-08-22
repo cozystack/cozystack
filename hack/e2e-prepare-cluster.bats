@@ -97,7 +97,7 @@ EOF
 
 @test "Boot QEMU VMs" {
   for i in 1 2 3; do
-    qemu-system-x86_64 -machine type=pc,accel=kvm -cpu host -smp 8 -m 24576 \
+    qemu-system-x86_64 -machine type=pc,accel=kvm -cpu host -smp 4 -m 24576 \
       -device virtio-net,netdev=net0,mac=52:54:00:12:34:5${i} \
       -netdev tap,id=net0,ifname=cozy-srv${i},script=no,downscript=no \
       -drive file=srv${i}/system.img,if=virtio,format=raw \

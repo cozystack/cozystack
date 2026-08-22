@@ -1,0 +1,23 @@
+suite: capacity experiment - iaas bundle
+templates:
+  - templates/bundles/iaas.yaml
+release: {name: cozystack, namespace: cozy-system}
+set:
+  bundles:
+    system: {enabled: true, variant: isp-full}
+    iaas: {enabled: true}
+    paas: {enabled: false}
+    naas: {enabled: false}
+    disabledPackages:
+      - cozystack.velero
+      - cozystack.monitoring-agents
+      - cozystack.goldpinger
+      - cozystack.backup-controller
+tests:
+  - it: keeps the whole tenant-Kubernetes path
+    asserts:
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.kubernetes-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.kamaji, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.kubevirt, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.kubevirt-cdi, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.capi-provider-cp-kamaji, any: true}
