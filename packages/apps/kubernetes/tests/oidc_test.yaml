@@ -570,3 +570,6 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "spec.oidc.customConfig: set exactly one of `config` (inline) or `secretRef.name` — they are mutually exclusive."
+# vGIF host-draw lane 2. Inert comment: this file is chosen only because
+# hack/select-e2e.sh maps this path to the tenant-Kubernetes suites, so the e2e
+# runs unmodified main code and reports which host it landed on.
