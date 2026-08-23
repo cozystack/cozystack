@@ -278,7 +278,6 @@ spec:
           # it closes the chain.
           disabledPackages:
             - cozystack.velero
-            - cozystack.monitoring-agents
             - cozystack.goldpinger
             - cozystack.backup-controller
             - cozystack.backupstrategy-controller
@@ -342,7 +341,16 @@ EOF
 }
 
 @test "Configure Tenant and wait for applications" {
-  # Capacity experiment (throwaway branch): monitoring and seaweedfs are off.
+  # Attribution arm (throwaway branch): monitoring is back ON, seaweedfs stays
+  # off, and -smp stays at 8. This is the only difference from the smp8 branch
+  # this one is stacked on, so whatever it changes is attributable to the
+  # monitoring stack: the VictoriaMetrics and VictoriaLogs clusters, Grafana
+  # and its CNPG database, Alerta, plus cozystack.monitoring-agents, which is
+  # re-enabled below because the per-node scrapers are the continuously-busy
+  # half of that load and the part most likely to matter to a booting guest.
+  #
+  # Original comment, still true of everything else:
+  # monitoring and seaweedfs are off.
   # Those flags are what created most of the ~5.3 CPU of tenant-root workload
   # (the VictoriaMetrics/VictoriaLogs clusters, Grafana plus its CNPG database,
   # Alerta and the SeaweedFS chain) that the tenant-Kubernetes suites never
@@ -361,16 +369,16 @@ EOF
   # would wedge the Tenant CR itself. Turning the instances off via the Tenant
   # spec is the lever that costs nothing.
   timeout 120 sh -ec 'until kubectl get tenants.apps.cozystack.io root -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":false,"etcd":true,"isolated":true, "seaweedfs": false}}'
+  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": false}}'
 
-  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress tenant-root >/dev/null 2>&1; do sleep 1; done'
+  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring tenant-root >/dev/null 2>&1; do sleep 1; done'
   # tenant-root parent HR only flips Ready after every child HR is Ready, so
   # listing the one remaining top-level child plus the parent gives precise
   # failure messages without redundant separate waits. The 20m budget is kept
   # from the full-fat lane rather than tightened: it costs nothing in the happy
   # path, and a shorter timeout here would turn "slower than expected" into a
   # different failure than the one this branch exists to measure.
-  kubectl wait hr/etcd hr/ingress hr/tenant-root \
+  kubectl wait hr/etcd hr/ingress hr/monitoring hr/tenant-root \
     -n tenant-root --timeout=20m --for=condition=ready
 
   # etcd cluster. The v1alpha2 operator manages member Pods directly and creates

@@ -10,7 +10,6 @@ set:
     naas: {enabled: false}
     disabledPackages:
       - cozystack.velero
-      - cozystack.monitoring-agents
       - cozystack.goldpinger
       - cozystack.backup-controller
       - cozystack.backupstrategy-controller
@@ -25,8 +24,6 @@ tests:
         not: true
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.goldpinger, any: true}
         not: true
-      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.monitoring-agents, any: true}
-        not: true
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backup-controller, any: true}
         not: true
       # dependsOn velero AND backup-controller; leaving it enabled while either
@@ -35,6 +32,9 @@ tests:
         not: true
   - it: keeps the dependsOn blockers and the tenant path
     asserts:
+      # re-enabled on this arm: the per-node scrapers are the subject of the
+      # attribution test, and they dependsOn vertical-pod-autoscaler, which stays
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.monitoring-agents, any: true}
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.etcd-operator, any: true}
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.vertical-pod-autoscaler, any: true}
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.tenant-application, any: true}
