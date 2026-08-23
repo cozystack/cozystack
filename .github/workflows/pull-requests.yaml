@@ -942,6 +942,39 @@ jobs:
           done
           echo "Prepare environment completed after $((attempt + 1)) attempts"
 
+      # DRAW GATE -- present only on the vGIF hunt lanes, never on main.
+      #
+      # Virtual GIF is exposed to roughly one host in eleven in this pool, and no
+      # run without it has passed a tenant-Kubernetes suite. Finding a host that
+      # has one means drawing repeatedly, and a draw that is only readable once
+      # the job ends costs a full run: install plus the 29 minute node-join wait
+      # before the miss is even visible. GitHub serves no log for a job still in
+      # progress, so the reading cannot be taken from outside either.
+      #
+      # So the draw is decided here instead, seconds after `prepare-env` wrote the
+      # record, and a miss ends the job rather than the run continuing to a
+      # failure already measured 62 times. A hit falls through and everything
+      # after this point is main's code, unmodified, which is the run that matters.
+      - name: Require Virtual GIF on this host (draw gate)
+        run: |
+          record=_out/runner-identity.txt
+          if [ ! -f "$record" ]; then
+            echo "::error title=draw gate::$record is missing, so the draw cannot be read"
+            exit 1
+          fi
+          features=$(sed -n 's/^svm features: //p' "$record")
+          echo "svm features: ${features:-<line absent>}"
+          # Whole-word match: `vgif` must not be read out of some longer flag.
+          case " $features " in
+            *' vgif '*)
+              echo "::notice title=draw gate::HIT -- this host exposes Virtual GIF, continuing"
+              ;;
+            *)
+              echo "::error title=draw gate::MISS -- no Virtual GIF on this host; ending the job here rather than spending an install and a 29m node-join wait on a failure already measured"
+              exit 1
+              ;;
+          esac
+
       # ▸ Install Cozystack
       - name: Install Cozystack into sandbox
         run: |
