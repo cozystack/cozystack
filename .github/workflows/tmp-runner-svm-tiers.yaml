@@ -1,0 +1,88 @@
+# TEMPORARY, investigation only. Never merge this file.
+#
+# What it answers: Virtual GIF is exposed to some hosts in the Oracle pool and
+# not others, and no run without it has ever passed a tenant-Kubernetes suite.
+# The e2e lanes all ask for oracle-vm-32cpu-128gb-x86-64, where sampling found
+# the flag once in eleven launches. The question this job exists to settle is
+# whether that rate is a property of the pool or of that one runner class: if a
+# tier the repository already uses exposes vGIF reliably, moving the e2e lane to
+# it is a one-line change in runs-on, and if none of them do, the ask goes to
+# cncf/automation with a per-tier rate attached instead of a single number.
+#
+# One matrix cell per tier per sample, so a push takes N samples of each tier at
+# once rather than N pushes of one. Each cell reads the machine and exits; there
+# is no build and no sandbox, so a cell costs its provisioning time.
+name: TEMP runner SVM feature tiers
+
+on:
+  push:
+    branches:
+      - ci/log-runner-cpu-topology
+
+permissions: {}
+
+jobs:
+  svm:
+    # 4cpu serves the light jobs in nightly, e2e-fork and pull-requests; 24cpu
+    # serves the build jobs; 32cpu serves every e2e job. All three are in the
+    # tree today, so any of them is available to move a lane onto.
+    strategy:
+      fail-fast: false
+      matrix:
+        tier:
+          - oracle-vm-4cpu-16gb-x86-64
+          - oracle-vm-24cpu-96gb-x86-64
+          - oracle-vm-32cpu-128gb-x86-64
+        sample: [1, 2, 3, 4]
+    runs-on: ${{ matrix.tier }}
+    name: "${{ matrix.tier }} #${{ matrix.sample }}"
+    steps:
+      - name: Read SVM feature exposure
+        env:
+          TIER: ${{ matrix.tier }}
+          SAMPLE: ${{ matrix.sample }}
+        run: |
+          # The same flag list the merged reader in hack/e2e-runner-identity.sh
+          # takes, so this samples exactly what a real run would record. Gated on
+          # svm for the same reason: vnmi is a VMX flag name too.
+          flags=$(lscpu 2>/dev/null | sed -n 's/^Flags:[[:space:]]*//p' | sed -n '1p')
+          case " $flags " in
+            *' svm '*)
+              svm_features=$(printf '%s\n' "$flags" | tr ' ' '\n' \
+                | grep -xE 'svm|svm_lock|npt|lbrv|nrip_save|tsc_scale|vmcb_clean|flushbyasid|decodeassists|pausefilter|pfthreshold|avic|x2avic|v_vmsave_vmload|vgif|vnmi|v_spec_ctrl|svme_addr_chk' \
+                | tr '\n' ' ' | sed 's/[[:space:]]*$//') ;;
+            *) svm_features='' ;;
+          esac
+
+          # Read the leaf directly as well, so "the bit is absent" is stated
+          # rather than inferred from the kernel's decision to print a line.
+          vgif_cpuid='?'
+          if command -v gcc >/dev/null 2>&1; then
+            cat > /tmp/svm.c <<'CEOF'
+          #include <stdio.h>
+          #include <cpuid.h>
+          int main(void){unsigned a,b,c,d;
+            if(!__get_cpuid(0x8000000A,&a,&b,&c,&d)){printf("-1\n");return 0;}
+            printf("%u\n", !!(d&(1u<<16))); return 0;}
+          CEOF
+            sed -i 's/^          //' /tmp/svm.c
+            gcc -O0 -o /tmp/svm /tmp/svm.c 2>/dev/null && vgif_cpuid=$(/tmp/svm)
+          fi
+
+          kvm_line=no
+          (sudo dmesg 2>/dev/null || dmesg 2>/dev/null || true) \
+            | grep -q 'kvm_amd: Virtual GIF supported' && kvm_line=yes
+
+          shape=$(curl -sS -m 5 -H 'Authorization: Bearer Oracle' \
+            http://169.254.169.254/opc/v2/instance/shape 2>/dev/null || echo '?')
+          cpu=$(lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | sed -n '1p' | tr ' ' '_')
+
+          echo "::group::full reading"
+          printf 'tier=%s sample=%s\n' "$TIER" "$SAMPLE"
+          printf 'shape=%s cpu=%s kernel=%s nproc=%s\n' "$shape" "$cpu" "$(uname -r)" "$(nproc)"
+          printf 'svm features=%s\n' "${svm_features:-<none>}"
+          (sudo dmesg 2>/dev/null || dmesg 2>/dev/null || true) | grep -E 'kvm_amd|kvm:' || echo '(no kvm lines)'
+          echo "::endgroup::"
+
+          # One line per cell, so a sweep over the run aggregates by grep.
+          echo "TIERVERDICT tier=${TIER} sample=${SAMPLE} vgif_cpuid=${vgif_cpuid} vgif_dmesg=${kvm_line} shape=${shape} cpu=${cpu} svm=[${svm_features}]"
