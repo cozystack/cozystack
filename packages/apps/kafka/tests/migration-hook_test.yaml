@@ -168,3 +168,21 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "already belongs to cluster"
         documentIndex: 3
+
+  # The hook-created pools govern the Kafka pods for the whole migration window
+  # (Helm applies the resourced steady-state pools only after this hook finishes).
+  # They must carry resources or a tenant LimitRange defaults the JVMs to 128Mi
+  # and they OOM, stalling the migration.
+  - it: sets resources on both migration node pools
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\s+- broker[\\s\\S]*?resources:\\s+limits:"
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\s+- controller[\\s\\S]*?resources:\\s+limits:"
+        documentIndex: 3
