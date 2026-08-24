@@ -104,3 +104,67 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "Refusing to apply strimzi.io/kraft=enabled in an unsafe state"
         documentIndex: 3
+
+  # CRITICAL: the adopting broker pool must be named exactly "kafka" so Strimzi
+  # reuses the existing <cluster>-kafka-N brokers and their PVCs on migration.
+  - it: creates the broker node pool named kafka for adoption
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'name: kafka\n'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\n +- broker"
+        documentIndex: 3
+
+  # Fail closed: only a genuine NotFound is a legitimate skip; any other kubectl
+  # error must abort rather than be mistaken for a fresh install.
+  - it: fails closed on non-NotFound errors reading the Kafka CR
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "not\\[\\[:space:\\]\\]\\?found"
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "reading Kafka CR failed \\(not a NotFound\\)"
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "jq -r '\\.status\\.kafkaMetadataState"
+        documentIndex: 3
+
+  # Idempotent: on a retry the cluster may already be past ZooKeeper; do not
+  # re-issue kraft=migration (an invalid backward transition Strimzi rejects).
+  - it: does not re-issue kraft=migration once past the ZooKeeper phase
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "KRaftMigration\\|KRaftDualWriting\\|KRaftPostMigration\\|PreKRaft\\|KRaft\\)"
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "not re-issuing kraft=migration"
+        documentIndex: 3
+
+  # Namespace-unique pool name: refuse to hijack a "kafka" pool owned by another
+  # cluster (a second Kafka mid-migration in the same namespace).
+  - it: fails closed when a kafka pool belongs to another cluster
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "already belongs to cluster"
+        documentIndex: 3

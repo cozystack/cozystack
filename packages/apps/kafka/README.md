@@ -9,7 +9,7 @@
 | `external`    | Enable external access from outside the cluster.                                                                                                                                                                                                                                                                                                                                                    | `bool`   | `false` |
 | `tls`         | TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.                                         | `object` | `{}`    |
 | `tls.enabled` | Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). Warning: setting this to false while external is true exposes Kafka over plaintext on a public IP via LoadBalancer. Strimzi does not provide authentication on this listener unless SCRAM, mTLS, or OAuth is separately configured. Use only in controlled networks. | `*bool`  | `null`  |
-| `version`     | Kafka version to deploy.                                                                                                                                                                                                                                                                                                                                                                            | `string` | `v3.9`  |
+| `version`     | Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v3.9 back to v3.8) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.                                                                                     | `string` | `v3.9`  |
 
 
 ### Application-specific parameters
@@ -86,7 +86,7 @@ Existing ZooKeeper-based instances are migrated automatically on the next chart 
 ### How it works
 
 1. The Job renders only when the version ConfigMap is missing or stamped below `"1"`.
-2. On upgrade, it inspects the existing Kafka CR's `status.kafkaMetadataState`: if the CR is absent (fresh install) or already in `KRaft` it exits immediately; otherwise (typically `ZooKeeper` state) it creates the broker + controller `KafkaNodePool` resources matching the chart's values and annotates the Kafka CR with `strimzi.io/node-pools=enabled` and `strimzi.io/kraft=migration`.
+2. On upgrade, it inspects the existing Kafka CR's `status.kafkaMetadataState`: a genuine NotFound means fresh install (skip); a CR already in `KRaft` means done (skip); any other read error aborts (fail closed) rather than risk stamping a live ZooKeeper cluster into KRaft. Otherwise (typically `ZooKeeper` state) it creates the controller pool plus a broker pool named exactly `kafka` — Strimzi derives broker and PVC names as `<cluster>-<pool>-<id>`, so only the name `kafka` reuses the existing `<cluster>-kafka-N` brokers and their data in place — and annotates the Kafka CR with `strimzi.io/node-pools=enabled` and `strimzi.io/kraft=migration`.
 3. The Job polls `status.kafkaMetadataState` and waits for the migration to reach `KRaftPostMigration | PreKRaft | KRaft`.
 4. Only once that safe state is reached does it flip the annotation to `strimzi.io/kraft=enabled` and wait until the state reaches `KRaft`; if the wait times out in an intermediate state the Job aborts (`exit 1`) without finalising, leaving the ConfigMap unstamped.
 5. When the Job succeeds, Helm applies the chart's KRaft manifests (which match the post-migration state) and stamps the ConfigMap to `"1"`. Subsequent reconciles see the ConfigMap and skip the Job entirely.
@@ -98,9 +98,15 @@ Existing ZooKeeper-based instances are migrated automatically on the next chart 
 - Monitor `status.kafkaMetadataState` on the Kafka CR directly.
 - If migration gets stuck before `KRaftPostMigration`, Strimzi's `rollback` annotation stays available as a manual escape hatch: `kubectl annotate kafka <release> strimzi.io/kraft=rollback --overwrite`, then delete the failed Job and retry.
 
+### One Kafka per namespace during migration
+
+The adopting broker pool must be named exactly `kafka`, and Strimzi `KafkaNodePool` object names are unique within a namespace. Migrating two ZooKeeper-based Kafka instances that share a namespace at the same time is therefore unsupported: the migration hook detects a `kafka` pool already owned by another cluster and fails closed rather than hijack it. Migrate co-namespaced instances one at a time, or keep them in separate namespaces. Fresh KRaft installs are unaffected — their broker pool is release-scoped (`<release>-broker`), so any number can coexist in one namespace.
+
+### Deletion and PVC retention
+
+Both node pools set `deleteClaim: false`, so deleting a Kafka release intentionally leaves its data PVCs (`data-0-<cluster>-kafka-N`, `data-0-<cluster>-controller-N`) behind — this protects data across the migration and against accidental deletion. The trade-off is that the PVCs keep consuming tenant quota until removed by hand, and recreating a same-named Kafka rebinds the stale volumes, whose on-disk cluster id will not match the new cluster (`InconsistentClusterIdException`, CrashLoop). To truly start over, delete the leftover PVCs before recreating: `kubectl -n <namespace> delete pvc -l strimzi.io/cluster=<release>`.
+
 ### Important notes
 
-- **Strimzi 0.45 is the last version supporting ZooKeeper.** Future Strimzi
-  releases only support KRaft.
-- The `kafka.controllerStorageSize` parameter controls PV size for the new
-  KRaft controller nodes (default: `5Gi`).
+- **Strimzi 0.45 is the last version supporting ZooKeeper.** Future Strimzi releases only support KRaft.
+- The `kafka.controllerStorageSize` parameter controls PV size for the new KRaft controller nodes (default: `5Gi`).

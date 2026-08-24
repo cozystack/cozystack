@@ -24,7 +24,7 @@ type ConfigSpec struct {
 	// TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls"`
-	// Kafka version to deploy.
+	// Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v3.9 back to v3.8) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.
 	// +kubebuilder:default:="v3.9"
 	Version Version `json:"version"`
 	// Topics configuration.
