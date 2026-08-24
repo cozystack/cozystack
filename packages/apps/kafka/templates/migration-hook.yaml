@@ -1,7 +1,8 @@
 {{- $shouldRun := true }}
 {{- $cm := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-kafka-deployed-version" .Release.Name) }}
 {{- if $cm }}
-  {{- if ge (dig "data" "version" "0" $cm) "1" }}
+  {{- /* Integer compare: a future threshold like "10" must not read as < "2". */}}
+  {{- if ge (int (dig "data" "version" "0" $cm)) 1 }}
     {{- $shouldRun = false }}
   {{- end }}
 {{- end }}
@@ -57,10 +58,13 @@ metadata:
     helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
 spec:
   backoffLimit: 0
-  # Worst-case in-script waits total ~1800s of sleeps (240x5s + 120x5s) before
-  # kubectl round-trip latency; keep headroom above that so a genuinely-progressing
-  # migration is not SIGKILLed mid-flight and the guard/error paths can run.
-  activeDeadlineSeconds: 3600
+  # Budget chain: in-script waits total ~1800s (240x5s + 120x5s) < this Job
+  # deadline (2400s) < the release's helm-install-timeout (45m, set on the kafka
+  # ApplicationDefinition). helm-controller waits on this pre-upgrade hook within
+  # the release timeout, so that ceiling must exceed the Job deadline or the
+  # migration is aborted before it can finish. Keep the three in this order if
+  # any is changed.
+  activeDeadlineSeconds: 2400
   template:
     metadata:
       labels:
@@ -79,17 +83,41 @@ spec:
               ns={{ .Release.Namespace | quote }}
               name={{ .Release.Name | quote }}
 
-              if ! kubectl -n "$ns" get kafka "$name" >/dev/null 2>&1; then
-                echo "No existing Kafka CR — fresh install, skipping migration."
+              # Fail closed: read the Kafka CR and distinguish a genuine NotFound
+              # (legitimate fresh install — skip) from any other kubectl error
+              # (apiserver/RBAC/timeout). A transient error must abort, never be
+              # mistaken for "fresh" and allowed to stamp the version ConfigMap
+              # while a live ZooKeeper cluster is left behind.
+              if ! cr=$(kubectl -n "$ns" get kafka "$name" -o json 2>&1); then
+                if printf '%s' "$cr" | grep -qiE '(not[[:space:]]?found|notfound)'; then
+                  echo "No existing Kafka CR — fresh install, skipping migration."
+                  exit 0
+                fi
+                echo "ERROR: reading Kafka CR failed (not a NotFound): $cr" >&2
+                exit 1
+              fi
+
+              state=$(printf '%s' "$cr" | jq -r '.status.kafkaMetadataState // ""')
+              echo "Current kafkaMetadataState: '${state}'"
+
+              # Only a cluster already fully in KRaft is done. An EMPTY state on an
+              # EXISTING CR is NOT "migrated" (status may simply not be populated
+              # yet) — proceed; the steps below are idempotent.
+              if [ "$state" = "KRaft" ]; then
+                echo "Already in KRaft — nothing to do."
                 exit 0
               fi
 
-              state=$(kubectl -n "$ns" get kafka "$name" -o jsonpath='{.status.kafkaMetadataState}' || echo "")
-              echo "Current kafkaMetadataState: '${state}'"
-
-              if [ -z "$state" ] || [ "$state" = "KRaft" ]; then
-                echo "Already migrated or no state — nothing to do."
-                exit 0
+              # Fail closed on the namespace-unique broker pool name. The adopting
+              # broker pool must be named "kafka" (Strimzi derives broker/PVC names
+              # as <cluster>-kafka-N). If a "kafka" pool already exists for a
+              # DIFFERENT cluster, a second Kafka is being migrated in this
+              # namespace — unsupported, since node pool names are namespace-unique.
+              owner=$(kubectl -n "$ns" get kafkanodepool kafka -o jsonpath='{.metadata.labels.strimzi\.io/cluster}' 2>/dev/null || echo "")
+              if [ -n "$owner" ] && [ "$owner" != "$name" ]; then
+                echo "ERROR: KafkaNodePool 'kafka' in namespace '$ns' already belongs to cluster '$owner'." >&2
+                echo "In-place ZK->KRaft migration of more than one Kafka per namespace is unsupported (Strimzi node pool names are namespace-unique). Migrate one at a time or in separate namespaces." >&2
+                exit 1
               fi
 
               echo "Ensuring broker + controller KafkaNodePools exist (Helm-owned)..."
@@ -97,7 +125,12 @@ spec:
               apiVersion: kafka.strimzi.io/v1beta2
               kind: KafkaNodePool
               metadata:
-                name: ${name}-broker
+                # Must be exactly "kafka": Strimzi derives broker/PVC names as
+                # <cluster>-<pool>-<id>, and a pre-node-pool ZooKeeper cluster has
+                # brokers <cluster>-kafka-N. Only a pool named "kafka" adopts them
+                # (and their data) in place; any other name provisions fresh empty
+                # brokers and orphans the tenant's data.
+                name: kafka
                 namespace: ${ns}
                 labels:
                   strimzi.io/cluster: ${name}
@@ -150,9 +183,20 @@ spec:
                     deleteClaim: false
               MANIFEST
 
-              echo "Enabling node pools and KRaft migration on the Kafka CR..."
+              # Enabling node pools is idempotent. Only issue kraft=migration from a
+              # genuine pre-migration state: on a retry (Helm timed out and recreated
+              # this Job) the cluster may already be at PreKRaft/KRaftPostMigration —
+              # re-annotating "migration" there is an invalid backward transition
+              # Strimzi rejects, so treat those as "already migrating, do not touch".
+              echo "Enabling node pools on the Kafka CR..."
               kubectl -n "$ns" annotate kafka "$name" strimzi.io/node-pools=enabled --overwrite
-              kubectl -n "$ns" annotate kafka "$name" strimzi.io/kraft=migration --overwrite
+              case "$state" in
+                KRaftMigration|KRaftDualWriting|KRaftPostMigration|PreKRaft|KRaft)
+                  echo "Migration already past the ZooKeeper phase (state: $state); not re-issuing kraft=migration." ;;
+                *)
+                  echo "Starting KRaft migration (kraft=migration)..."
+                  kubectl -n "$ns" annotate kafka "$name" strimzi.io/kraft=migration --overwrite ;;
+              esac
 
               echo "Waiting for migration to reach KRaftPostMigration..."
               migration_ready=false

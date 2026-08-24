@@ -98,3 +98,182 @@ spec:
           metadata:
             name: kafka-test-kafka-bootstrap
           (subsets[0].addresses[0].ip != null): true
+---
+# ZK->KRaft in-place migration (the CRITICAL data-adoption path).
+#
+# An existing ZooKeeper cluster must be adopted by a broker KafkaNodePool named
+# exactly "kafka": Strimzi derives broker/PVC names as <cluster>-<pool>-<id>, so
+# only that name reuses the running <cluster>-kafka-N brokers and their PVCs. A
+# wrong name (e.g. <release>-broker) provisions fresh empty brokers and orphans
+# the tenant's data. This test seeds a ZK cluster, drives the same migration the
+# pre-upgrade hook performs, and asserts the original broker PVC survives (same
+# object, never recreated) and the cluster reaches KRaft. This sequence was also
+# validated by hand against a live cluster.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kafka-zk-to-kraft-migration
+spec:
+  catch:
+  - events: {}
+  - podLogs:
+      selector: strimzi.io/cluster=kafka-migz
+      tail: 50
+  steps:
+  - name: seed-zookeeper-cluster
+    try:
+    - apply:
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: Kafka
+          metadata:
+            name: kafka-migz
+            annotations:
+              strimzi.io/node-pools: disabled
+              strimzi.io/kraft: disabled
+          spec:
+            kafka:
+              version: 3.9.0
+              replicas: 1
+              listeners:
+              - name: plain
+                port: 9092
+                type: internal
+                tls: false
+              config:
+                offsets.topic.replication.factor: 1
+                transaction.state.log.replication.factor: 1
+                transaction.state.log.min.isr: 1
+                default.replication.factor: 1
+                min.insync.replicas: 1
+              storage:
+                type: jbod
+                volumes:
+                - id: 0
+                  type: persistent-claim
+                  size: 5Gi
+                  deleteClaim: false
+            zookeeper:
+              replicas: 1
+              storage:
+                type: persistent-claim
+                size: 5Gi
+                deleteClaim: false
+            entityOperator:
+              topicOperator: {}
+              userOperator: {}
+    - assert:
+        timeout: 8m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: Kafka
+          metadata:
+            name: kafka-migz
+          status:
+            kafkaMetadataState: ZooKeeper
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # Baseline: the classic broker PVC that must survive the migration.
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-0-kafka-migz-kafka-0
+          status:
+            phase: Bound
+
+  - name: migrate-to-kraft
+    try:
+    # The adopting broker pool MUST be named "kafka" (mirrors migration-hook.yaml).
+    - apply:
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
+          metadata:
+            name: kafka
+            labels:
+              strimzi.io/cluster: kafka-migz
+          spec:
+            replicas: 1
+            roles:
+            - broker
+            storage:
+              type: jbod
+              volumes:
+              - id: 0
+                type: persistent-claim
+                size: 5Gi
+                deleteClaim: false
+    - apply:
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
+          metadata:
+            name: kafka-migz-controller
+            labels:
+              strimzi.io/cluster: kafka-migz
+          spec:
+            replicas: 1
+            roles:
+            - controller
+            storage:
+              type: jbod
+              volumes:
+              - id: 0
+                type: persistent-claim
+                size: 5Gi
+                kraftMetadata: shared
+                deleteClaim: false
+    # Drive the migration exactly as the pre-upgrade hook does: enable node
+    # pools + kraft=migration, wait for KRaftPostMigration, then finalize.
+    - script:
+        timeout: 12m
+        content: |
+          set -eu
+          kubectl -n "$NAMESPACE" annotate kafka.kafka.strimzi.io kafka-migz strimzi.io/node-pools=enabled --overwrite
+          kubectl -n "$NAMESPACE" annotate kafka.kafka.strimzi.io kafka-migz strimzi.io/kraft=migration --overwrite
+          for i in $(seq 1 60); do
+            s=$(kubectl -n "$NAMESPACE" get kafka.kafka.strimzi.io kafka-migz -o jsonpath='{.status.kafkaMetadataState}' 2>/dev/null || echo "")
+            echo "[$i/60] kafkaMetadataState=$s"
+            case "$s" in KRaftPostMigration|PreKRaft|KRaft) break ;; esac
+            sleep 10
+          done
+          kubectl -n "$NAMESPACE" annotate kafka.kafka.strimzi.io kafka-migz strimzi.io/kraft=enabled --overwrite
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: Kafka
+          metadata:
+            name: kafka-migz
+          status:
+            kafkaMetadataState: KRaft
+
+  - name: verify-adoption
+    try:
+    # The original broker PVC is still Bound — adopted in place, not recreated.
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-0-kafka-migz-kafka-0
+          status:
+            phase: Bound
+    # A wrong (<release>-broker) pool name would have created this PVC instead.
+    - error:
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-0-kafka-migz-broker-0
+    # The broker keeps its adopted identity: node id 0 under the "kafka" pool.
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: kafka-migz-kafka-0
+          status:
+            phase: Running

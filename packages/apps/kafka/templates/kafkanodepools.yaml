@@ -1,9 +1,10 @@
 {{- $controllerReplicas := include "kafka.controllerReplicas" . }}
+{{- $brokerPool := include "kafka.brokerPoolName" . }}
 ---
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaNodePool
 metadata:
-  name: {{ .Release.Name }}-broker
+  name: {{ $brokerPool }}
   labels:
     strimzi.io/cluster: {{ .Release.Name }}
 spec:
