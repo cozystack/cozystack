@@ -98,9 +98,9 @@ Existing ZooKeeper-based instances are migrated automatically on the next chart 
 - Monitor `status.kafkaMetadataState` on the Kafka CR directly.
 - If migration gets stuck before `KRaftPostMigration`, Strimzi's `rollback` annotation stays available as a manual escape hatch: `kubectl annotate kafka <release> strimzi.io/kraft=rollback --overwrite`, then delete the failed Job and retry.
 
-### One Kafka per namespace during migration
+### One Kafka per namespace
 
-The adopting broker pool must be named exactly `kafka`, and Strimzi `KafkaNodePool` object names are unique within a namespace. Migrating two ZooKeeper-based Kafka instances that share a namespace at the same time is therefore unsupported: the migration hook detects a `kafka` pool already owned by another cluster and fails closed rather than hijack it. Migrate co-namespaced instances one at a time, or keep them in separate namespaces. Fresh KRaft installs are unaffected — their broker pool is release-scoped (`<release>-broker`), so any number can coexist in one namespace.
+This chart runs at most one Kafka cluster per namespace, and fails the render (with a clear message) if you deploy a second one into a namespace that already has one. The reason is upstream: the broker `KafkaNodePool` must be named exactly `kafka` for KRaft (and to adopt an existing ZooKeeper cluster's `<cluster>-kafka-N` brokers and data during migration), but `KafkaNodePool` object names are unique within a namespace, so two clusters cannot both own a `kafka` pool there. This matches Strimzi's own guidance to run one Kafka cluster per namespace — see [strimzi/strimzi-kafka-operator discussions/11120](https://github.com/orgs/strimzi/discussions/11120). Deploy each Kafka in its own namespace.
 
 ### Deletion and PVC retention
 

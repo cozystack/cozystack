@@ -29,11 +29,11 @@ tests:
     asserts:
       - equal:
           path: metadata.name
-          value: test-kafka-broker
+          value: kafka
         documentIndex: 0
       - equal:
           path: metadata.name
-          value: test-kafka-controller
+          value: controller
         documentIndex: 1
 
   - it: sets cluster label on both pools

@@ -47,7 +47,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.selector["strimzi.io/pool-name"]
-          value: test-kafka-broker
+          value: kafka
         documentIndex: 0
 
   - it: sets controller monitor type to kafka-controller with pool-name selector
@@ -61,7 +61,7 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.selector["strimzi.io/pool-name"]
-          value: test-kafka-controller
+          value: controller
         documentIndex: 1
 
   ##################################

@@ -1,5 +1,4 @@
 {{- $controllerReplicas := include "kafka.controllerReplicas" . }}
-{{- $brokerPool := include "kafka.brokerPoolName" . }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
@@ -15,7 +14,7 @@ spec:
   selector:
     app.kubernetes.io/instance: {{ $.Release.Name }}
     app.kubernetes.io/name: kafka
-    strimzi.io/pool-name: {{ $brokerPool }}
+    strimzi.io/pool-name: kafka
   version: {{ $.Chart.Version }}
 ---
 apiVersion: cozystack.io/v1alpha1
@@ -32,5 +31,5 @@ spec:
   selector:
     app.kubernetes.io/instance: {{ $.Release.Name }}
     app.kubernetes.io/name: kafka
-    strimzi.io/pool-name: {{ $.Release.Name }}-controller
+    strimzi.io/pool-name: controller
   version: {{ $.Chart.Version }}
