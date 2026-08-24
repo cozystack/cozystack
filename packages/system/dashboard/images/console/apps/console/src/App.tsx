@@ -15,6 +15,7 @@ import type { HeaderTab } from "@cozystack/ui"
 import { CommandPaletteProvider, useCommandPalette } from "./components/command-palette/command-palette-provider.tsx"
 import { CommandPalette } from "./components/command-palette/command-palette.tsx"
 import type { AppConfig } from "./lib/config.ts"
+import { DEFAULT_LANDING_PATH } from "./lib/portal.ts"
 
 interface ShellProps {
   config: AppConfig
@@ -37,8 +38,8 @@ function Shell({ config, username }: ShellProps) {
   const { toggle } = useCommandPalette()
 
   const tabs: HeaderTab[] = [
-    { id: "marketplace", label: "Marketplace", to: "/marketplace", highlight: true },
-    { id: "console", label: "Console", to: "/console" },
+    { id: "console", label: "Console", to: "/console", highlight: true },
+    { id: "marketplace", label: "Marketplace", to: "/marketplace" },
     ...(canSeeAdmin ? [{ id: "admin", label: "Admin", to: "/admin" }] : []),
   ]
 
@@ -55,7 +56,7 @@ function Shell({ config, username }: ShellProps) {
     >
       <CommandPalette />
       <Routes>
-        <Route path="/" element={<Navigate to="/marketplace" replace />} />
+        <Route path="/" element={<Navigate to={DEFAULT_LANDING_PATH} replace />} />
         <Route path="/marketplace/*" element={<MarketplacePage />} />
         <Route path="/console/*" element={<ConsolePage />} />
         <Route path="/admin/*" element={<AdminPage />} />

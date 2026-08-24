@@ -6,7 +6,6 @@ import {
   Gauge,
   Globe,
   HardDrive,
-  Info,
   LayoutGrid,
   Layers,
   Network,
@@ -18,7 +17,7 @@ import {
 import type { SidebarSection } from "@cozystack/ui"
 import { useBackupClassAdminAccess } from "../hooks/useBackupClassAdminAccess.ts"
 import { useClusterUsageAccess } from "../hooks/useClusterUsageAccess.ts"
-import { useApplicationDefinitions, groupByCategory } from "../lib/app-definitions.ts"
+import { useApplicationDefinitions, groupByCategory, isTenantModule } from "../lib/app-definitions.ts"
 import { humanizeKind } from "../lib/humanize.ts"
 import {
   lucideIcon,
@@ -68,8 +67,9 @@ export function useMarketplaceSidebarSections(): SidebarSection[] {
 
 /**
  * Console sidebar: every non-module, non-Tenant ApplicationDefinition in the
- * cluster as a separate entry grouped by IaaS / PaaS / NaaS, plus a fixed
- * Administration section (Info, Modules, External IPs, Tenants).
+ * cluster as a separate entry grouped by IaaS / PaaS / NaaS, plus the per-tenant
+ * Backups section. Administration (Info, Modules, External IPs, Tenants) now
+ * lives in the Admin portal — see {@link useAdminSidebarSections}.
  */
 export function useConsoleSidebarSections(): SidebarSection[] {
   const { data } = useApplicationDefinitions()
@@ -111,17 +111,7 @@ export function useConsoleSidebarSections(): SidebarSection[] {
       ],
     }
 
-    const administrationSection: SidebarSection = {
-      title: "Administration",
-      items: [
-        { label: "Info", to: "/console/info", icon: Info },
-        { label: "Modules", to: "/console/modules", icon: ToyBrick },
-        { label: "External IPs", to: "/console/external-ips", icon: Globe },
-        { label: "Tenants", to: "/console/tenants", icon: Users },
-      ],
-    }
-
-    return [...categorySections, backupsSection, administrationSection]
+    return [...categorySections, backupsSection]
   }, [grouped])
 }
 
@@ -151,20 +141,58 @@ export function useAdminAccess(): {
   }
 }
 
-/** Boolean convenience wrapper around {@link useAdminAccess} for nav gating. */
+/**
+ * The Admin tab is always visible: Administration (Info, Modules, External IPs,
+ * Tenants) needs no special permission. The gated Capacity/Backup-Classes areas
+ * keep their own per-area guards inside the portal.
+ */
 export function useCanSeeAdmin(): boolean {
-  return useAdminAccess().allowed
+  return true
 }
 
 /**
- * Admin sidebar: the cluster-wide operator areas (Capacity and Backup Classes).
- * Each entry is gated by its own permission so the sidebar never shows an area
- * the user cannot open.
+ * Admin sidebar: Administration first (always visible, no permission needed —
+ * Tenants, Modules, External IPs; per-tenant Info is a row action in the
+ * Tenants tree), then the cluster-wide operator areas (Capacity and Backup
+ * Classes). Each operator area is gated by its own permission so the sidebar
+ * never shows an area the user cannot open.
  */
 export function useAdminSidebarSections(): SidebarSection[] {
   const { canClusterUsage, canBackupClasses } = useAdminAccess()
+  const { data: defs } = useApplicationDefinitions()
+  // Per-tenant Info lives as a row action in the Tenants tree, so the Tenants
+  // entry stays highlighted while an Info detail page is open. Every other
+  // module's detail page keeps Modules highlighted instead.
+  const infoPlural =
+    defs?.items.find((d) => d.spec?.application.kind === "Info")?.spec?.application
+      .plural ?? "infos"
+  const modulePaths = (defs?.items ?? [])
+    .filter(isTenantModule)
+    .filter((d) => d.spec?.application.kind !== "Info")
+    .map((d) => `/admin/${d.spec?.application.plural ?? d.metadata.name}`)
+    .sort()
+    .join(",")
   return useMemo<SidebarSection[]>(() => {
-    const sections: SidebarSection[] = []
+    const sections: SidebarSection[] = [
+      {
+        title: "Administration",
+        items: [
+          {
+            label: "Tenants",
+            to: "/admin/tenants",
+            icon: Users,
+            alsoMatch: [`/admin/${infoPlural}`, "/admin/info"],
+          },
+          {
+            label: "Modules",
+            to: "/admin/modules",
+            icon: ToyBrick,
+            alsoMatch: modulePaths ? modulePaths.split(",") : undefined,
+          },
+          { label: "External IPs", to: "/admin/external-ips", icon: Globe },
+        ],
+      },
+    ]
     if (canClusterUsage) {
       sections.push({
         title: "Capacity",
@@ -184,5 +212,5 @@ export function useAdminSidebarSections(): SidebarSection[] {
       })
     }
     return sections
-  }, [canClusterUsage, canBackupClasses])
+  }, [canClusterUsage, canBackupClasses, infoPlural, modulePaths])
 }
