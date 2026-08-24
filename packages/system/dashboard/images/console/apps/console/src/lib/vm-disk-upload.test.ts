@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   isUploadSource,
   uploadState,
+  usableProxyURL,
   virtctlUploadCommand,
   UPLOAD_PROXY_URL_PLACEHOLDER,
   type DataVolume,
@@ -89,6 +90,19 @@ describe("uploadState", () => {
     expect(state.message).toBe("no capacity")
   })
 
+  it("falls back to the Bound condition when Running carries an empty message", () => {
+    const state = uploadState(
+      dv({ upload: {} }, {
+        phase: "Failed",
+        conditions: [
+          { type: "Bound", message: "no capacity" },
+          { type: "Running", message: "" },
+        ],
+      }),
+    )
+    expect(state.message).toBe("no capacity")
+  })
+
   it("carries progress through at UploadReady", () => {
     expect(
       uploadState(dv({ upload: {} }, { phase: "UploadReady", progress: "42.0%" })).progress,
@@ -105,6 +119,17 @@ describe("uploadState", () => {
   it("does not report a phase it was never given", () => {
     expect(uploadState(dv({ upload: {} }, {})).stage).toBe("preparing")
     expect(uploadState(dv({ upload: {} }, {})).phase).toBe("")
+  })
+})
+
+describe("usableProxyURL", () => {
+  it("treats a blank or whitespace-only URL as no URL at all", () => {
+    expect(usableProxyURL(undefined)).toBeUndefined()
+    expect(usableProxyURL("")).toBeUndefined()
+    expect(usableProxyURL("   ")).toBeUndefined()
+    expect(usableProxyURL("  https://cdi-uploadproxy.example.org  ")).toBe(
+      "https://cdi-uploadproxy.example.org",
+    )
   })
 })
 

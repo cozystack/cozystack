@@ -61,7 +61,8 @@ export function isUploadSource(dv: DataVolume | undefined): boolean {
 function failureMessage(dv: DataVolume): string | undefined {
   const running = dv.status?.conditions?.find((c) => c.type === "Running")
   const bound = dv.status?.conditions?.find((c) => c.type === "Bound")
-  return running?.message ?? bound?.message
+  // `||`, not `??`: an empty Running message must not shadow the Bound one.
+  return running?.message || bound?.message
 }
 
 export function uploadState(dv: DataVolume | undefined): UploadState {
@@ -88,13 +89,23 @@ export interface UploadCommandOptions {
 export const UPLOAD_PROXY_URL_PLACEHOLDER = "https://cdi-uploadproxy.<your-cozystack-domain>"
 
 /**
+ * A whitespace-only `CDIConfig.status.uploadProxyURL` is as unusable as an
+ * absent one. The command builder and the panel's placeholder warning both
+ * read the URL through this, so they cannot disagree over which values need
+ * the placeholder.
+ */
+export function usableProxyURL(uploadProxyURL: string | undefined): string | undefined {
+  return uploadProxyURL?.trim() || undefined
+}
+
+/**
  * The disk's DataVolume is created by the vm-disk Helm release, so the upload
  * has to reuse it (`--no-create`); `--insecure` is required because Cozystack
  * publishes cdi-uploadproxy through TLS passthrough, leaving CDI's internal
  * self-signed certificate on the wire.
  */
 export function virtctlUploadCommand(opts: UploadCommandOptions): string {
-  const proxy = opts.uploadProxyURL?.trim() || UPLOAD_PROXY_URL_PLACEHOLDER
+  const proxy = usableProxyURL(opts.uploadProxyURL) ?? UPLOAD_PROXY_URL_PLACEHOLDER
   return [
     "virtctl image-upload dv",
     opts.name,
