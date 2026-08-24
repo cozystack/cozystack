@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/warning"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -199,6 +200,20 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, apierrors.NewBadRequest(err.Error())
+	}
+
+	// An empty key in the spec (`registryMirrors:` with nothing under it)
+	// arrives here as a JSON null, and Helm's coalescing deletes it together
+	// with the chart default underneath it - which fails the render outright
+	// for a field the schema requires. Repair those before admission, storage
+	// and the emitted HelmRelease see the object; a null on a field the schema
+	// allows to be absent keeps the meaning it has today.
+	emptied, err := r.normalizeSpecNulls(app)
+	if err != nil {
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("failed to normalize spec: %v", err))
+	}
+	if len(emptied) > 0 {
+		warning.AddWarning(ctx, "", emptyFieldsWarning(emptied))
 	}
 
 	r.warnLegacyPresets(app)
@@ -537,6 +552,16 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, false, apierrors.NewBadRequest(err.Error())
+	}
+
+	// Same normalization as on create: an empty key on a required field means
+	// the field was left unset, not that the chart default should be deleted.
+	emptied, err := r.normalizeSpecNulls(app)
+	if err != nil {
+		return nil, false, apierrors.NewBadRequest(fmt.Sprintf("failed to normalize spec: %v", err))
+	}
+	if len(emptied) > 0 {
+		warning.AddWarning(ctx, "", emptyFieldsWarning(emptied))
 	}
 
 	// Enforce hierarchical quota allocation on quota changes too: raising a
