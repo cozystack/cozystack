@@ -17,47 +17,27 @@
 {{- end -}}
 
 {{- /*
-  Broker KafkaNodePool name.
+  One Kafka cluster per namespace.
 
-  Strimzi derives node and PVC names as <cluster>-<pool>-<id>. A pre-node-pool
-  ZooKeeper cluster has brokers <cluster>-kafka-N with PVCs
-  data-0-<cluster>-kafka-N, so to ADOPT those brokers and their data during the
-  ZK->KRaft migration the broker pool must be named exactly "kafka". A genuinely
-  fresh install has nothing to adopt and uses the release-scoped
-  "<release>-broker" name, so multiple Kafka instances can coexist in one
-  namespace (KafkaNodePool object names are namespace-unique).
+  The broker KafkaNodePool must be named exactly "kafka": Strimzi derives node
+  and PVC names as <cluster>-<pool>-<id>, and a pre-node-pool ZooKeeper cluster
+  has brokers <cluster>-kafka-N, so only the pool name "kafka" adopts them and
+  their data during the ZK->KRaft migration. Because KafkaNodePool object names
+  are unique within a namespace, two Kafka clusters cannot both own a "kafka"
+  pool there — this is an upstream Strimzi constraint, and Strimzi's own guidance
+  is one Kafka cluster per namespace (strimzi/strimzi-kafka-operator
+  discussions/11120). So this chart enforces exactly that: it fails the render if
+  another Kafka cluster already lives in the namespace.
 
-  Detection runs at render time, before the pre-upgrade migration Job:
-    - a "kafka" broker pool already exists for this cluster -> "kafka" (migrated, steady state)
-    - a "<release>-broker" pool already exists              -> "<release>-broker" (fresh, steady state)
-    - a Kafka CR exists but has no node pools yet           -> "kafka" (first render of a live ZK cluster about to migrate)
-    - nothing exists                                        -> "<release>-broker" (fresh install)
-
-  Collision guard: a "kafka" pool owned by a DIFFERENT cluster means a second
-  Kafka is being migrated in this namespace. Strimzi node pool names are
-  namespace-unique, so in-place ZK->KRaft migration of more than one Kafka per
-  namespace is unsupported — fail the render loudly rather than hijack the other
-  cluster's pool.
-
-  NOTE: lookup returns nothing during `helm template`/dry-run, so this resolves
-  to "<release>-broker" (the fresh default) in unit tests; the migrated ("kafka")
-  path is exercised by the ZK->KRaft chainsaw upgrade replay.
+  Self is allowed (reconciles/upgrades of the same release). lookup returns
+  nothing during `helm template`/dry-run, so unit tests never trip the guard.
 */ -}}
-{{- define "kafka.brokerPoolName" -}}
-{{- $ns := .Release.Namespace -}}
+{{- define "kafka.assertSingleInstance" -}}
 {{- $release := .Release.Name -}}
-{{- $name := printf "%s-broker" $release -}}
-{{- $kafkaPool := lookup "kafka.strimzi.io/v1beta2" "KafkaNodePool" $ns "kafka" -}}
-{{- if $kafkaPool -}}
-  {{- $owner := dig "metadata" "labels" "strimzi.io/cluster" "" $kafkaPool -}}
-  {{- if and (ne $owner "") (ne $owner $release) -}}
-    {{- fail (printf "KafkaNodePool \"kafka\" in namespace %q already belongs to cluster %q; in-place ZK->KRaft migration of more than one Kafka per namespace is unsupported because Strimzi node pool names are namespace-unique. Migrate them one at a time or in separate namespaces." $ns $owner) -}}
-  {{- end -}}
-  {{- $name = "kafka" -}}
-{{- else if not (lookup "kafka.strimzi.io/v1beta2" "KafkaNodePool" $ns $name) -}}
-  {{- if lookup "kafka.strimzi.io/v1beta2" "Kafka" $ns $release -}}
-    {{- $name = "kafka" -}}
+{{- $ns := .Release.Namespace -}}
+{{- range (lookup "kafka.strimzi.io/v1beta2" "Kafka" $ns "").items -}}
+  {{- if ne .metadata.name $release -}}
+    {{- fail (printf "namespace %q already contains Kafka cluster %q; Cozystack runs one Kafka per namespace (Strimzi node pool names are namespace-unique — see strimzi/strimzi-kafka-operator discussions/11120). Deploy this Kafka in its own namespace." $ns .metadata.name) -}}
   {{- end -}}
 {{- end -}}
-{{- $name -}}
 {{- end -}}

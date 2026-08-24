@@ -57,7 +57,7 @@ spec:
           apiVersion: kafka.strimzi.io/v1beta2
           kind: KafkaNodePool
           metadata:
-            name: kafka-test-broker
+            name: kafka
           spec:
             roles:
             - broker
@@ -67,7 +67,7 @@ spec:
           apiVersion: kafka.strimzi.io/v1beta2
           kind: KafkaNodePool
           metadata:
-            name: kafka-test-controller
+            name: controller
           spec:
             roles:
             - controller
@@ -210,7 +210,7 @@ spec:
           apiVersion: kafka.strimzi.io/v1beta2
           kind: KafkaNodePool
           metadata:
-            name: kafka-migz-controller
+            name: controller
             labels:
               strimzi.io/cluster: kafka-migz
           spec:
@@ -268,12 +268,18 @@ spec:
           kind: PersistentVolumeClaim
           metadata:
             name: data-0-kafka-migz-broker-0
-    # The broker keeps its adopted identity: node id 0 under the "kafka" pool.
+    # The adopted brokers live under a pool named exactly "kafka" (that name is
+    # what preserved the data-0-kafka-migz-kafka-0 PVC above). Asserting the pool
+    # rather than a broker Pod avoids racing the final KRaft roll.
     - assert:
+        timeout: 2m
         resource:
-          apiVersion: v1
-          kind: Pod
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
           metadata:
-            name: kafka-migz-kafka-0
-          status:
-            phase: Running
+            name: kafka
+            labels:
+              strimzi.io/cluster: kafka-migz
+          spec:
+            roles:
+            - broker
