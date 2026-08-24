@@ -7,6 +7,7 @@ import { releasePrefix } from "../../lib/app-definitions.ts"
 import {
   isUploadSource,
   uploadState,
+  usableProxyURL,
   virtctlUploadCommand,
   type CDIConfig,
   type DataVolume,
@@ -35,9 +36,12 @@ const STAGE_TONE = {
 
 function CopyableCommand({ command }: { command: string }) {
   const [copied, setCopied] = useState(false)
+  // navigator.clipboard is absent on insecure origins; the <pre> stays selectable.
+  const canCopy = !!navigator.clipboard
   const copy = async () => {
+    if (!canCopy) return
     try {
-      await navigator.clipboard?.writeText(command)
+      await navigator.clipboard.writeText(command)
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -49,7 +53,13 @@ function CopyableCommand({ command }: { command: string }) {
       <pre className="flex-1 overflow-x-auto rounded-md bg-slate-900 px-3 py-2 text-xs leading-relaxed text-slate-100">
         {command}
       </pre>
-      <Button variant="outline" size="sm" onClick={copy} aria-label="Copy command">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={copy}
+        disabled={!canCopy}
+        aria-label="Copy command"
+      >
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
       </Button>
     </div>
@@ -116,10 +126,11 @@ export function DiskUploadPanel({
   if (!isUploadSource(dv)) return null
 
   const state = uploadState(dv)
+  const proxyURL = usableProxyURL(cdiConfig.data?.status?.uploadProxyURL)
   const command = virtctlUploadCommand({
     name: dvName,
     namespace: ns,
-    uploadProxyURL: cdiConfig.data?.status?.uploadProxyURL,
+    uploadProxyURL: proxyURL,
   })
   const showCommand = state.stage === "awaiting-upload" || state.stage === "failed"
 
@@ -177,14 +188,15 @@ export function DiskUploadPanel({
               at your local image and run:
             </p>
             <CopyableCommand command={command} />
-            {!cdiConfig.data?.status?.uploadProxyURL && (
+            {!proxyURL && (
               <p className="text-xs text-slate-500">
                 This cluster publishes no upload proxy URL, so the address above is a
                 placeholder. Ask your platform administrator for the{" "}
                 <span className="font-mono">cdi-uploadproxy</span> hostname.
               </p>
             )}
-            {!canUpload.isLoading && !canUpload.allowed && (
+            {/* An errored SSAR surfaces as allowed=false, which is not a denial. */}
+            {!canUpload.isLoading && !canUpload.error && !canUpload.allowed && (
               <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                 Your account cannot create{" "}
                 <span className="font-mono">uploadtokenrequests</span> in this

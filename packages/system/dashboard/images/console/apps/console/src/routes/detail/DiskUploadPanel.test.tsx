@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
-import { screen, waitFor, cleanup } from "@testing-library/react"
+import { screen, waitFor, cleanup, fireEvent } from "@testing-library/react"
 import { K8sClient } from "@cozystack/k8s-client"
 import { renderWithK8sProvider } from "../../test-utils/render.tsx"
 import { DiskUploadPanel } from "./DiskUploadPanel.tsx"
@@ -13,9 +13,10 @@ const ad: ApplicationDefinition = {
     application: {
       kind: "VMDisk",
       plural: "vmdisks",
-      singular: "vm-disk",
+      singular: "vmdisk",
       openAPISchema: "{}",
     },
+    release: { prefix: "vm-disk-" },
   },
 }
 
@@ -31,6 +32,7 @@ interface ClusterFixture {
   dvError?: Error
   uploadProxyURL?: string
   canUpload?: boolean
+  ssarError?: Error
 }
 
 function makeClient(fixture: ClusterFixture) {
@@ -57,11 +59,14 @@ function makeClient(fixture: ClusterFixture) {
       }
     },
   )
-  vi.spyOn(client, "create").mockResolvedValue({
-    apiVersion: "authorization.k8s.io/v1",
-    kind: "SelfSubjectAccessReview",
-    metadata: { name: "" },
-    status: { allowed: fixture.canUpload ?? true },
+  vi.spyOn(client, "create").mockImplementation(async () => {
+    if (fixture.ssarError) throw fixture.ssarError
+    return {
+      apiVersion: "authorization.k8s.io/v1",
+      kind: "SelfSubjectAccessReview",
+      metadata: { name: "" },
+      status: { allowed: fixture.canUpload ?? true },
+    }
   })
   vi.spyOn(client, "watch").mockReturnValue(() => {})
   return client
@@ -70,6 +75,8 @@ function makeClient(fixture: ClusterFixture) {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  // jsdom exposes no clipboard; drop the one the copy test installs.
+  Reflect.deleteProperty(navigator, "clipboard")
 })
 
 describe("DiskUploadPanel visibility", () => {
@@ -125,6 +132,14 @@ describe("DiskUploadPanel states", () => {
     expect(await screen.findByText(/publishes no upload proxy URL/)).toBeInTheDocument()
   })
 
+  it("flags the placeholder when the published proxy URL is only whitespace", async () => {
+    const client = makeClient({ uploadProxyURL: "   " })
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={instance} />, { client })
+    expect(await screen.findByText(/publishes no upload proxy URL/)).toBeInTheDocument()
+    const cmd = await screen.findByText(/virtctl image-upload dv vm-disk-demo/)
+    expect(cmd.textContent).toContain("cdi-uploadproxy.<your-cozystack-domain>")
+  })
+
   it("withholds the command before the upload target exists", async () => {
     const client = makeClient({ phase: "Pending" })
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={instance} />, { client })
@@ -169,11 +184,40 @@ describe("DiskUploadPanel RBAC warning", () => {
     )
   })
 
+  it("stays quiet when the access check itself failed", async () => {
+    const client = makeClient({ ssarError: new Error("SSAR unavailable") })
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={instance} />, { client })
+    expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
+    await waitFor(() => expect(client.create).toHaveBeenCalled())
+    await expect(screen.findByText(/will fail with Forbidden/)).rejects.toThrow()
+  })
+
   it("stays quiet when the user is allowed to upload", async () => {
     const client = makeClient({ canUpload: true })
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={instance} />, { client })
     expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
     await waitFor(() => expect(client.create).toHaveBeenCalled())
     expect(screen.queryByText(/will fail with Forbidden/)).not.toBeInTheDocument()
+  })
+})
+
+describe("DiskUploadPanel copy button", () => {
+  it("does not offer a copy the browser cannot perform", async () => {
+    const client = makeClient({})
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={instance} />, { client })
+    expect(await screen.findByLabelText("Copy command")).toBeDisabled()
+  })
+
+  it("copies the command where a clipboard exists", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true })
+    const client = makeClient({})
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={instance} />, { client })
+    fireEvent.click(await screen.findByLabelText("Copy command"))
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        expect.stringContaining("virtctl image-upload dv vm-disk-demo"),
+      ),
+    )
   })
 })
