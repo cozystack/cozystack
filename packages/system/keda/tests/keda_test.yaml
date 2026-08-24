@@ -29,3 +29,30 @@ tests:
           count: 1
       - isKind:
           of: ServiceMonitor
+
+  # cozystack runs on the cozy.local cluster domain, not the upstream default
+  # cluster.local. The metrics-apiserver dials the operator's metrics gRPC
+  # service at keda-operator.<ns>.svc.<clusterDomain>:9666, so an unset override
+  # resolves to NXDOMAIN and every HPA hangs on FailedGetExternalMetric. Guard the
+  # shim's clusterDomain so a re-vendor cannot silently drop it.
+  - it: dials the operator metrics gRPC service on the cozy.local cluster domain
+    templates:
+      - charts/keda/templates/metrics-server/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-service-address=keda-operator.cozy-keda.svc.cozy.local:9666
+
+  # A single-replica operator at the upstream 20 QPS / 30 burst loses its leader
+  # lease under scale-subresource polling (client rate limiter starves the renewal)
+  # and crash-loops. Guard the raised throttle the shim sets via extraArgs.
+  - it: raises the operator client-go throttle above the upstream default
+    templates:
+      - charts/keda/templates/manager/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kube-api-qps=50
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kube-api-burst=100

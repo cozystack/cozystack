@@ -8,6 +8,26 @@ databaseAutoscaling:
     enabled: true
 
 keda:
+  # Cozystack's cluster domain, not the upstream chart default "cluster.local".
+  # KEDA's metrics-apiserver dials the operator's metrics gRPC service at
+  # keda-operator.<ns>.svc.<clusterDomain>:9666 and the operator mints that
+  # service's serving-cert SANs from the same domain. On a cozystack cluster the
+  # domain is cozy.local (packages/core/platform/values.yaml networking.clusterDomain),
+  # so the upstream default resolves to NXDOMAIN — the external-metrics path then
+  # hangs with "timeout establishing gRPC connection" and every HPA reports
+  # FailedGetExternalMetric. cozy.local is the platform default; a cluster that
+  # overrides networking.clusterDomain must override this in lockstep.
+  clusterDomain: cozy.local
+  # Raise the operator's client-go throttle above the upstream 20 QPS / 30 burst.
+  # The operator polls every ScaledObject's /scale subresource on the scale loop;
+  # at the default QPS those polls queue in the client rate limiter ahead of the
+  # leader-election lease renewal, which then misses its deadline and the manager
+  # exits with "leader election lost" (observed crash-looping the single-replica
+  # operator on dev9). A higher ceiling keeps the renewal call from starving.
+  extraArgs:
+    keda:
+      kube-api-qps: 50
+      kube-api-burst: 100
   # Cozystack ships a Prometheus (VictoriaMetrics) stack by default, so surface
   # KEDA's operator, metrics-server and webhook metrics through ServiceMonitors.
   prometheus:
