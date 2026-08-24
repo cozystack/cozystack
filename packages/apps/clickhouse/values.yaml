@@ -75,6 +75,14 @@ size: 10Gi
 ## @x-cozystack-options {source: storageclass}
 storageClass: ""
 
+## @enum {string} Version
+## @value v25.8
+## @value v25.3
+## @value v24.9
+
+## @param {Version} version - ClickHouse major.minor version to deploy. Applies to both the ClickHouse server and ClickHouse Keeper images. Downgrading to an older major is unsafe (ClickHouse cannot read data written by a newer server and Keeper snapshots are not backward compatible) — only increase this value.
+version: v24.9
+
 ##
 ## @section Application-specific parameters
 ##
