@@ -122,6 +122,22 @@ spec:
   steps:
   - name: seed-zookeeper-cluster
     try:
+    # Mirror a real tenant namespace: a LimitRange that defaults every container
+    # to 128Mi. This is what makes resource-less pods OOM — the migration node
+    # pools must set their own resources to survive it (regression guard).
+    - apply:
+        resource:
+          apiVersion: v1
+          kind: LimitRange
+          metadata:
+            name: tenant-defaults
+          spec:
+            limits:
+            - type: Container
+              default:
+                memory: 128Mi
+              defaultRequest:
+                memory: 128Mi
     - apply:
         resource:
           apiVersion: kafka.strimzi.io/v1beta2
@@ -135,6 +151,13 @@ spec:
             kafka:
               version: 3.9.0
               replicas: 1
+              # Explicit resources so the seed survives the LimitRange above,
+              # mirroring a real chart-deployed ZooKeeper cluster.
+              resources:
+                requests:
+                  memory: 1Gi
+                limits:
+                  memory: 1Gi
               listeners:
               - name: plain
                 port: 9092
@@ -155,13 +178,28 @@ spec:
                   deleteClaim: false
             zookeeper:
               replicas: 1
+              resources:
+                requests:
+                  memory: 512Mi
+                limits:
+                  memory: 512Mi
               storage:
                 type: persistent-claim
                 size: 5Gi
                 deleteClaim: false
             entityOperator:
-              topicOperator: {}
-              userOperator: {}
+              topicOperator:
+                resources:
+                  requests:
+                    memory: 256Mi
+                  limits:
+                    memory: 512Mi
+              userOperator:
+                resources:
+                  requests:
+                    memory: 256Mi
+                  limits:
+                    memory: 512Mi
     - assert:
         timeout: 8m
         resource:

@@ -142,6 +142,13 @@ spec:
                 replicas: {{ .Values.kafka.replicas }}
                 roles:
                   - broker
+                # Set the same resources the steady-state pool gets: these
+                # hook-created pools govern the pods for the entire migration
+                # window (Helm applies the resourced kafkanodepools.yaml only
+                # after this pre-upgrade hook finishes). Without them a tenant
+                # LimitRange defaults the Kafka JVMs to 128Mi and they OOM,
+                # stalling the migration.
+                resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
                 storage:
                   type: jbod
                   volumes:
@@ -170,6 +177,8 @@ spec:
                 replicas: {{ $controllerReplicas }}
                 roles:
                   - controller
+                # Resources for the migration window — see the broker pool above.
+                resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
                 storage:
                   type: jbod
                   volumes:
