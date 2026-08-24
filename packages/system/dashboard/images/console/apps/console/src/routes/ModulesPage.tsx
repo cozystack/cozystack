@@ -308,20 +308,28 @@ function TenantSubtree({
           <div className={`flex flex-wrap gap-2 ${hasBranches ? "pl-7" : ""}`}>
           {chips.map(({ ad, kind, provider, inherited, ready }) => {
             const icon = iconDataUrl(ad)
+            // An inherited chip is shown only when its providing tenant is NOT
+            // visible to the user, so there is nothing to open: the instance
+            // GET would be denied and switching the active tenant to a
+            // namespace outside the visible set bounces the selector to an
+            // arbitrary fallback. It stays as a read-only badge that says where
+            // the module comes from.
+            const Chip = inherited ? "div" : "button"
             return (
-              <button
+              <Chip
                 key={ad.metadata.name}
-                type="button"
-                onClick={() => onOpen(provider, ad)}
+                {...(inherited
+                  ? {}
+                  : { type: "button" as const, onClick: () => onOpen(provider, ad) })}
                 title={
                   inherited
-                    ? `Inherited from tenant ${provider.slice(TENANT_NAMESPACE_PREFIX.length)}`
+                    ? `Inherited from tenant ${provider.slice(TENANT_NAMESPACE_PREFIX.length)}, which you cannot open`
                     : `${humanizeKind(kind)} runs in ${relativeTenantName(node)}`
                 }
-                className={`group flex w-80 items-center justify-between gap-3 rounded-lg border px-4 py-3 transition-shadow hover:shadow-sm ${
+                className={`group flex w-80 items-center justify-between gap-3 rounded-lg border px-4 py-3 ${
                   inherited
-                    ? "border-blue-200 bg-blue-50"
-                    : "border-slate-200 bg-white"
+                    ? "cursor-default border-blue-200 bg-blue-50"
+                    : "border-slate-200 bg-white transition-shadow hover:shadow-sm"
                 }`}
               >
                 <div className="flex min-w-0 items-center gap-3">
@@ -353,7 +361,7 @@ function TenantSubtree({
                     <ArrowUpFromLine className="size-3 text-blue-600" />
                   )}
                 </div>
-              </button>
+              </Chip>
             )
           })}
           </div>

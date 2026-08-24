@@ -62,9 +62,13 @@ export function Sidebar({ sections }: SidebarProps) {
             {isOpen(section.title) && (
               <div className="mt-0.5 space-y-0.5 px-2">
                 {section.items.map((item) => {
+                  // Whole-segment match: a bare startsWith would light up
+                  // /admin/apps for /admin/apps-v2.
                   const extraActive =
-                    item.alsoMatch?.some((p) =>
-                      location.pathname.startsWith(p),
+                    item.alsoMatch?.some(
+                      (p) =>
+                        location.pathname === p ||
+                        location.pathname.startsWith(`${p}/`),
                     ) ?? false
                   return (
                     <NavLink

@@ -79,10 +79,16 @@ describe("TenantsPage tree", () => {
       screen.getByTitle("Create a sub-tenant under whmcs-a-b"),
     ).toBeInTheDocument()
 
-    // The forest root (selected tenant, parent invisible) has no Edit button;
-    // children do.
+    // Edit is offered only where the node's REAL parent is readable, because
+    // that is where its Tenant CR lives. Here that is tenant-whmcs-x alone:
+    // the forest root's parent (tenant-root) is invisible, and so is
+    // tenant-whmcs-a-b's real parent (tenant-whmcs-a) — the latter is the
+    // bridged row, whose Edit used to be live and pointed at a CR named "a-b"
+    // in tenant-whmcs, which does not exist.
     const editButtons = screen.getAllByRole("button", { name: /edit/i })
-    expect(editButtons).toHaveLength(2)
+    expect(editButtons).toHaveLength(1)
+    expect(screen.getByTitle("Edit tenant whmcs-x")).toBeInTheDocument()
+    expect(screen.queryByTitle("Edit tenant whmcs-a-b")).not.toBeInTheDocument()
   })
 
   it("collapses a subtree via the row toggle", async () => {

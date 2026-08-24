@@ -8,6 +8,7 @@ import { useTenantContext, tenantDisplayName } from "../lib/tenant-context.tsx"
 import {
   ancestorNamespaces,
   buildTenantForest,
+  realParentNamespace,
   flattenTenantForest,
   relativeTenantName,
   type TenantTreeNode,
@@ -93,6 +94,13 @@ export function TenantsPage() {
     return map
   }, [quotasData])
 
+  // Which namespaces the user can actually read, for deciding whether a node's
+  // Tenant CR is reachable at all.
+  const visibleNs = useMemo(
+    () => new Set(tenants.map((t) => t.metadata.name)),
+    [tenants],
+  )
+
   // The context list is the selected tenant's visible subtree (self included).
   const rows = useMemo(
     () => flattenTenantForest(buildTenantForest(tenants), collapsed),
@@ -114,19 +122,27 @@ export function TenantsPage() {
     navigate(`${basePath}/new/tenant`)
   }
 
-  // A node's Tenant CR lives in its parent namespace, so editing switches the
-  // active tenant to the parent (always visible — the node hangs under it).
-  // The hierarchy root (no ancestor labels at all) is self-referential: its CR
-  // (`root`) lives in its own namespace, so it is editable in place.
+  // A node's Tenant CR lives in its REAL parent's namespace, which is not
+  // necessarily the parent it hangs under: a node whose real parent is
+  // inaccessible is bridged onto the nearest visible ancestor. Deriving the CR
+  // from that bridged ancestor names a CR that does not exist, so the edit
+  // target comes from realParentNamespace instead — and is offered only when
+  // that namespace is actually readable, since otherwise there is no CR the
+  // user could open. The hierarchy root (no ancestor labels at all) is
+  // self-referential: its CR (`root`) lives in its own namespace.
   const isTrueRoot = (node: TreeNode) =>
     !node.parentNs && ancestorNamespaces(node.tn).length === 0
-  const canEdit = (node: TreeNode) => !!node.parentNs || isTrueRoot(node)
+  const editParentNs = (node: TreeNode) => {
+    if (isTrueRoot(node)) return node.tn.metadata.name
+    const real = realParentNamespace(node.tn)
+    return real && visibleNs.has(real) ? real : undefined
+  }
+  const canEdit = (node: TreeNode) => !!editParentNs(node)
   const editNode = (node: TreeNode) => {
-    const ns = node.tn.metadata.name
-    const parentNs = node.parentNs ?? (isTrueRoot(node) ? ns : undefined)
+    const parentNs = editParentNs(node)
     if (!parentNs) return
     selectTenant(parentNs.slice(TENANT_NAMESPACE_PREFIX.length))
-    navigate(`${basePath}/tenants/${tenantCrName(ns, parentNs)}/edit`)
+    navigate(`${basePath}/tenants/${tenantCrName(node.tn.metadata.name, parentNs)}/edit`)
   }
 
   return (
@@ -246,6 +262,7 @@ export function TenantsPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => editNode(node)}
+                            title={`Edit tenant ${tenantDisplayName(node.tn)}`}
                           >
                             <Edit className="size-3" /> Edit
                           </Button>

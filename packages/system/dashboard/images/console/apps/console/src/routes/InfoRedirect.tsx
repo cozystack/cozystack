@@ -13,7 +13,10 @@ export function InfoRedirect() {
   const base = useResourceBasePath()
   if (isLoading) return null
   const ad = data?.items.find((d) => d.spec?.application.kind === "Info")
-  if (!ad) return <Navigate to="/console" replace />
+  // Stay in the active portal on the miss too — hardcoding /console here is
+  // what the docstring above promises not to do, and it throws an admin out of
+  // /admin whenever the Info definition is absent or its query errored.
+  if (!ad) return <Navigate to={base} replace />
   const plural = ad.spec?.application.plural ?? "infos"
   return <Navigate to={`${base}/${plural}/info`} replace />
 }

@@ -127,7 +127,7 @@ describe("ModulesPage tenant tree with module chips", () => {
 
     // kvaps inherits monitoring from root, but root's row already shows the
     // module as its own green chip — no redundant inherited chip.
-    expect(screen.queryByTitle("Inherited from tenant root")).not.toBeInTheDocument()
+    expect(screen.queryByTitle("Inherited from tenant root, which you cannot open")).not.toBeInTheDocument()
 
     // Nobody provides etcd → no Etcd chip anywhere.
     expect(screen.queryByText("Etcd")).not.toBeInTheDocument()
@@ -161,9 +161,15 @@ describe("ModulesPage tenant tree with module chips", () => {
       { client: makeClient([], [KVAPS_TN]), initialRoute: "/admin/modules" },
     )
 
-    expect(
-      await screen.findByTitle("Inherited from tenant root"),
-    ).toBeInTheDocument()
+    const chip = await screen.findByTitle("Inherited from tenant root, which you cannot open")
+    expect(chip).toBeInTheDocument()
+    // The chip is deliberately inert: it is rendered only when the providing
+    // tenant is NOT visible, so opening it would deny the instance GET and
+    // switch the active tenant to a namespace outside the visible set, which
+    // the selector then bounces to an arbitrary fallback. It states where the
+    // module comes from and nothing more.
+    expect(chip.tagName).toBe("DIV")
+    expect(chip).not.toHaveAttribute("type", "button")
   })
 
   it("shows a chip from the TenantModule watch even before provider labels land", async () => {

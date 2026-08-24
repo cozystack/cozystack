@@ -85,3 +85,18 @@ export function relativeTenantName(node: TenantTreeNode): string {
   }
   return tenantDisplayName(node.tn)
 }
+
+/**
+ * The namespace of a node's *real* parent, which is not always the one it
+ * hangs under in the visible forest: a node whose real parent is inaccessible
+ * is bridged onto its nearest visible ancestor instead. Tenant namespaces are
+ * named hierarchically (`tenant-a-b` sits under `tenant-a`), so among the
+ * node's own ancestor labels the real parent is the longest that prefixes it.
+ * Returns undefined for the hierarchy root, which has no ancestors at all.
+ */
+export function realParentNamespace(tn: TenantNamespace): string | undefined {
+  const ns = tn.metadata.name
+  return ancestorNamespaces(tn)
+    .filter((ancestor) => ns.startsWith(`${ancestor}-`))
+    .sort((a, b) => b.length - a.length)[0]
+}

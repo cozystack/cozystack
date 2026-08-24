@@ -49,7 +49,7 @@ function SecretRow({
 }) {
   const [revealed, setRevealed] = useState(false)
   const [expanded, setExpanded] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copyState, setCopyState] = useState<"idle" | "ok" | "failed">("idle")
   const shouldReveal = forceReveal || revealed
   const { data } = useK8sGet<K8sResource<unknown, unknown> & SecretLike>(
     { ...apiRef, namespace, name },
@@ -60,10 +60,17 @@ function SecretRow({
   const fullValue =
     decodeValue(data?.data?.[keyName]) || data?.stringData?.[keyName] || decodeValue(base64Value)
 
+  // writeText rejects on a denied permission or an insecure context, and an
+  // uncaught rejection here would leave the button silent — the user would have
+  // no way to tell the copy from a no-op.
   const handleCopy = async () => {
-    await navigator.clipboard?.writeText(fullValue)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    try {
+      await navigator.clipboard.writeText(fullValue)
+      setCopyState("ok")
+    } catch {
+      setCopyState("failed")
+    }
+    setTimeout(() => setCopyState("idle"), 1500)
   }
 
   const isLarge = fullValue.split('\n').length > 5 || fullValue.length > 200
@@ -107,10 +114,12 @@ function SecretRow({
           disabled={!navigator.clipboard}
           onClick={handleCopy}
           className="rounded p-1 text-slate-500 hover:bg-slate-100 disabled:opacity-30"
-          title={copied ? "Copied!" : "Copy"}
+          title={copyState === "ok" ? "Copied!" : copyState === "failed" ? "Copy failed" : "Copy"}
         >
-          {copied ? (
+          {copyState === "ok" ? (
             <Check className="size-3.5 text-emerald-600" />
+          ) : copyState === "failed" ? (
+            <Copy className="size-3.5 text-red-600" />
           ) : (
             <Copy className="size-3.5" />
           )}
