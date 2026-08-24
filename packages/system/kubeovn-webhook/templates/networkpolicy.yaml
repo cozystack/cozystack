@@ -1,0 +1,62 @@
+{{- if .Values.webhookPolicy.enabled }}
+---
+# The /mutate-pods handler answers whoever asks it with namespace-derived
+# annotations, and only the API server has any business calling it
+# (GHSA-g883-q79m-8225). Client-certificate verification cannot close this on
+# its own: enabling --client-ca-file requires the API server to *present* a
+# certificate, which it does only when its AdmissionConfiguration names a
+# kubeConfigFile for the webhook plugins. A stock Cozystack control plane ships
+# a PodSecurity plugin block and nothing else, so no certificate is offered and
+# RequireAndVerifyClientCert would reject the API server itself -- with
+# failurePolicy: Fail that stops pod creation cluster-wide. Until that changes,
+# the network is the only place the caller can actually be constrained.
+#
+# This is a CiliumNetworkPolicy, not a core NetworkPolicy, and the distinction
+# is the whole reason it works: packages/system/kubeovn/values.yaml sets
+# ENABLE_NP: false, so kube-ovn programs no ACLs and a core NetworkPolicy would
+# be created and never enforced. Cilium enforces its own policies regardless,
+# which is why the platform already relies on them elsewhere.
+#
+# Deny-only, with default-deny explicitly disabled. A Cilium rule carrying an
+# ingress section puts the selected endpoints behind a default-deny, which here
+# would mean enumerating every port these pods serve and silently breaking
+# traffic on the first one forgotten. Subtracting one port leaves everything
+# else exactly as it was.
+#
+# The API server needs no carve-out: it runs on the host network, so it is not
+# a Cilium endpoint and fromEndpoints never matches it. Unlike the ingress-nginx
+# admission webhook, this component exists only on the management cluster, so
+# there is no konnectivity-tunnelled caller to exempt either.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "namespace-annotation-webhook.name" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "namespace-annotation-webhook.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  enableDefaultDeny:
+    ingress: false
+    egress: false
+  ingressDeny:
+  # Every pod in the cluster. The namespace key is matched with Exists so the
+  # rule spans all namespaces: a plain fromEndpoints in a namespaced
+  # CiliumNetworkPolicy would only ever select pods sharing this policy's
+  # namespace, which would leave the webhook open to every other one.
+  - fromEndpoints:
+    - matchExpressions:
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: Exists
+    toPorts:
+    - ports:
+      - port: {{ .Values.webhookPolicy.port | quote }}
+        protocol: TCP
+  - fromEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: {{ .Values.webhookPolicy.port | quote }}
+        protocol: TCP
+{{- end }}

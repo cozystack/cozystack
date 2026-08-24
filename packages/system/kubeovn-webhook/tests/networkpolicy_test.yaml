@@ -1,0 +1,88 @@
+suite: kubeovn-webhook exposure
+release:
+  name: kubeovn-webhook
+  namespace: cozy-kubeovn
+templates:
+  - templates/networkpolicy.yaml
+tests:
+  - it: denies pod traffic to the webhook port
+    # The /mutate-pods handler returns namespace-derived annotations to any
+    # caller that reaches it (GHSA-g883-q79m-8225), so closing the port to pods
+    # is the whole point of the object.
+    asserts:
+      - equal:
+          path: spec.ingressDeny[0].toPorts[0].ports[0].port
+          value: "8443"
+      - equal:
+          path: spec.ingressDeny[0].toPorts[0].ports[0].protocol
+          value: TCP
+
+  - it: spans every namespace rather than only the release namespace
+    # A bare fromEndpoints in a namespaced CiliumNetworkPolicy selects only pods
+    # in the policy's own namespace, which would leave the webhook reachable
+    # from every other one — the exact gap being closed.
+    asserts:
+      - contains:
+          path: spec.ingressDeny[0].fromEndpoints[0].matchExpressions
+          content:
+            key: k8s:io.kubernetes.pod.namespace
+            operator: Exists
+
+  - it: carries no label-based exemption
+    # There is no caller to carve out: the API server runs on the host network
+    # and is therefore not a Cilium endpoint, so fromEndpoints never matches it.
+    # A label exemption would be both unnecessary and forgeable — any workload
+    # can set a pod label on itself, and with default-deny disabled, falling out
+    # of the deny is the entire access decision.
+    asserts:
+      - lengthEqual:
+          path: spec.ingressDeny[0].fromEndpoints[0].matchExpressions
+          count: 1
+      - lengthEqual:
+          path: spec.ingressDeny[0].fromEndpoints
+          count: 1
+
+  - it: denies world traffic to the webhook port
+    asserts:
+      - contains:
+          path: spec.ingressDeny[1].fromEntities
+          content: world
+      - equal:
+          path: spec.ingressDeny[1].toPorts[0].ports[0].port
+          value: "8443"
+
+  - it: does not put the webhook behind a default deny
+    # Enabling default-deny would require enumerating every port these pods
+    # serve and would break traffic on the first one omitted.
+    asserts:
+      - equal:
+          path: spec.enableDefaultDeny.ingress
+          value: false
+      - equal:
+          path: spec.enableDefaultDeny.egress
+          value: false
+      - isNull:
+          path: spec.ingress
+
+  - it: is a CiliumNetworkPolicy rather than a core NetworkPolicy
+    # kube-ovn runs with ENABLE_NP: false, so a core NetworkPolicy would be
+    # created and never enforced. Cilium enforces its own policies regardless.
+    asserts:
+      - isKind:
+          of: CiliumNetworkPolicy
+      - equal:
+          path: apiVersion
+          value: cilium.io/v2
+
+  - it: selects only the webhook pods
+    asserts:
+      - equal:
+          path: spec.endpointSelector.matchLabels["app.kubernetes.io/instance"]
+          value: kubeovn-webhook
+
+  - it: can be disabled where no Cilium is present to enforce it
+    set:
+      webhookPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
