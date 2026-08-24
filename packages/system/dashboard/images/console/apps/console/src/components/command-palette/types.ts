@@ -1,3 +1,5 @@
+import type { ApplicationInstance } from "@cozystack/types"
+
 export interface CommandItem {
   id: string
   label: string
@@ -20,7 +22,7 @@ export type NavigationLevel =
   | {
       type: "instance"
       plural: string
-      instance: any
+      instance: ApplicationInstance
       label: string
       resourceLabel: string
       icon?: string

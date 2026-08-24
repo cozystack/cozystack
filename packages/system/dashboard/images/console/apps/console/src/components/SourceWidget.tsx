@@ -1,9 +1,18 @@
 import { useState, useEffect } from "react"
 import type { WidgetProps } from "@rjsf/utils"
 
+/** Structural view of the mutually-exclusive `source` sub-schemas we render. */
+interface SourceOptionSchema {
+  type?: string
+  title?: string
+  description?: string
+  required?: string[]
+  properties?: Record<string, SourceOptionSchema>
+}
+
 export function SourceWidget(props: WidgetProps) {
   const { schema, value, onChange, id, label, required } = props
-  const properties = schema.properties || {}
+  const properties = (schema.properties || {}) as Record<string, SourceOptionSchema>
   const options = Object.keys(properties)
 
   const currentOption = value
@@ -26,9 +35,9 @@ export function SourceWidget(props: WidgetProps) {
     // If the property is an empty object marker (like upload: {}), set it to {}
     // Otherwise initialize with default value or empty object
     const defaultValue =
-      prop && typeof prop === "object" && Object.keys((prop as any).properties || {}).length === 0
+      prop && typeof prop === "object" && Object.keys(prop.properties || {}).length === 0
         ? {}
-        : prop && typeof prop === "object" && (prop as any).type === "object"
+        : prop && typeof prop === "object" && prop.type === "object"
           ? {}
           : ""
     onChange({ [option]: defaultValue })
@@ -40,7 +49,7 @@ export function SourceWidget(props: WidgetProps) {
   }
 
   const renderFieldInput = (option: string) => {
-    const prop = properties[option] as any
+    const prop = properties[option]
     if (!prop || typeof prop !== "object") return null
 
     // If it's an empty object marker (like upload: {}), show confirmation message
@@ -66,7 +75,7 @@ export function SourceWidget(props: WidgetProps) {
     const subProps = prop.properties || {}
     return (
       <div className="ml-6 mt-2 space-y-2">
-        {Object.entries(subProps).map(([key, subProp]: [string, any]) => (
+        {Object.entries(subProps).map(([key, subProp]) => (
           <div key={key} className="flex flex-col gap-1">
             <label className="text-sm font-medium text-slate-700">
               {subProp.title || key}
@@ -107,7 +116,7 @@ export function SourceWidget(props: WidgetProps) {
 
       <div className="space-y-2">
         {options.map((option: string) => {
-          const prop = properties[option] as any
+          const prop = properties[option]
           const optionDescription =
             typeof prop === "object" && prop ? prop.description : undefined
           const isSelected = selected === option

@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes, useLocation } from "react-router"
 import { AppShell } from "@cozystack/ui"
-import { TenantProvider } from "./lib/tenant-context.tsx"
+import { TenantProvider } from "./lib/tenant-provider.tsx"
 import { Breadcrumb } from "./components/Breadcrumb.tsx"
 import { MarketplacePage } from "./routes/MarketplacePage.tsx"
 import { ConsolePage } from "./routes/ConsolePage.tsx"
@@ -12,7 +12,8 @@ import {
   useMarketplaceSidebarSections,
 } from "./routes/sidebar-sections.tsx"
 import type { HeaderTab } from "@cozystack/ui"
-import { CommandPaletteProvider, useCommandPalette } from "./components/command-palette/command-palette-provider.tsx"
+import { CommandPaletteProvider } from "./components/command-palette/command-palette-provider.tsx"
+import { useCommandPalette } from "./components/command-palette/command-palette-context.ts"
 import { CommandPalette } from "./components/command-palette/command-palette.tsx"
 import type { AppConfig } from "./lib/config.ts"
 
