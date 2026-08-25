@@ -109,8 +109,27 @@ controller_reachable() {
     -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)" ]
 }
 
+# Which storage control plane this install deployed. The prep differs
+# entirely between the two: LINSTOR is driven through `linstor` inside the
+# controller pod, blockstor through CRDs and a zpool made inside the
+# satellite. Everything after the pools — StorageClasses, MetalLB — is
+# shared, because both backends serve the same CSI wire shape.
+#
+# CI sets this to match what it installed; the probe is the fallback for a
+# hand-run against an existing cluster.
+if [ -z "${STORAGE_BACKEND:-}" ]; then
+  if kubectl get deployment blockstor-apiserver -n cozy-linstor >/dev/null 2>&1; then
+    STORAGE_BACKEND=blockstor
+  else
+    STORAGE_BACKEND=linstor
+  fi
+fi
+echo "[post-install-prep] storage backend: $STORAGE_BACKEND"
+
 wait_for_linstor "linstor HelmRelease to be Ready" \
   helmrelease/linstor -n cozy-linstor --for=condition=Ready
+
+if [ "$STORAGE_BACKEND" = linstor ]; then
 wait_for_linstor "linstor-controller Deployment to be Available" \
   deployment/linstor-controller -n cozy-linstor --for=condition=available
 
@@ -154,6 +173,101 @@ done
 for pid in $pids; do
   wait "$pid"
 done
+
+else # STORAGE_BACKEND = blockstor
+
+# piraeus-operator runs in EXTERNAL mode here: there is no in-cluster
+# linstor-controller to exec into. The backing zpool is made inside the
+# blockstor-satellite pod, which carries the privileged /dev + /run/udev +
+# /lib/modules mounts libzfs needs, and the pool is then declared as a
+# StoragePool CRD.
+wait_for_linstor "blockstor-apiserver Deployment to be Available" \
+  deployment/blockstor-apiserver -n cozy-linstor --for=condition=available
+wait_for_linstor "blockstor-controller Deployment to be Available" \
+  deployment/blockstor-controller -n cozy-linstor --for=condition=available
+
+echo "[post-install-prep] waiting for LinstorCluster Available (external mode)"
+if ! timeout 600 sh -ec 'until kubectl get linstorcluster linstorcluster -o jsonpath="{.status.conditions[?(@.type==\"Available\")].status}" 2>/dev/null | grep -q True; do sleep 5; done'; then
+  echo "[post-install-prep] ERROR: LinstorCluster did not become Available within 600s" >&2
+  exit 1
+fi
+
+echo "[post-install-prep] waiting for 3 blockstor-satellite pods Ready"
+sat_deadline=$(( $(date +%s) + 300 ))
+until [ "$(kubectl -n cozy-linstor get pods -l app=blockstor-satellite \
+            -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' \
+            2>/dev/null | grep -c '^True$')" -eq 3 ]; do
+  if [ "$(date +%s)" -ge "$sat_deadline" ]; then
+    echo "[post-install-prep] ERROR: 3 blockstor-satellite pods did not become Ready within 300s" >&2
+    exit 1
+  fi
+  sleep 5
+done
+
+# Cluster-scoped Node CRs must exist with each node's InternalIP before
+# replicated volumes can resolve their DRBD peers: the label-sync controller
+# only patches Node CRs that already exist, so without this replicated PVCs
+# never reach UpToDate.
+echo "[post-install-prep] registering blockstor Node CRs for DRBD peer resolution"
+for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+  ip=$(kubectl get node "$node" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+  kubectl apply -f - <<EOF
+apiVersion: blockstor.cozystack.io/v1alpha1
+kind: Node
+metadata:
+  name: $node
+spec:
+  type: SATELLITE
+  netInterfaces:
+    - {name: default, address: $ip}
+EOF
+done
+
+echo "[post-install-prep] creating 'data' zpool on /dev/vdc + StoragePool (parallel across satellites)"
+pids=""
+for pod in $(kubectl -n cozy-linstor get pods -l app=blockstor-satellite -o jsonpath='{.items[*].metadata.name}'); do
+  (
+    node=$(kubectl -n cozy-linstor get pod "$pod" -o jsonpath='{.spec.nodeName}')
+    # Partition first, then hand zpool the partition: a whole-disk
+    # `zpool create` needs a GPT rescan that fails inside the container's
+    # devtmpfs view. Idempotent.
+    kubectl -n cozy-linstor exec "$pod" -- sh -ec '
+      if zpool list data >/dev/null 2>&1; then
+        echo "zpool data already exists on '"$node"'"
+        exit 0
+      fi
+      wipefs -af /dev/vdc* 2>/dev/null || true
+      sgdisk --zap-all /dev/vdc 2>/dev/null || true
+      sgdisk --new=1:0:0 -t 1:bf01 /dev/vdc
+      partprobe /dev/vdc 2>/dev/null || true
+      sleep 1
+      zpool create -f -o cachefile=none data /dev/vdc1
+      echo "zpool data created on '"$node"'"
+    '
+    # The CRD's CEL rule pins metadata.name == <poolName>.<nodeName>.
+    kubectl apply -f - <<EOF
+apiVersion: blockstor.cozystack.io/v1alpha1
+kind: StoragePool
+metadata:
+  name: data.${node}
+spec:
+  nodeName: ${node}
+  poolName: data
+  providerKind: ZFS_THIN
+  props:
+    StorDriver/ZPoolThin: data
+EOF
+  ) &
+  pids="$pids $!"
+done
+for pid in $pids; do
+  wait "$pid"
+done
+
+echo "[post-install-prep] StoragePools:"
+kubectl get storagepools -o wide 2>/dev/null || true
+
+fi # STORAGE_BACKEND
 
 echo "[post-install-prep] applying StorageClasses"
 kubectl apply -f - <<'EOF'
