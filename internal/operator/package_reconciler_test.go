@@ -899,12 +899,21 @@ func TestReconcileSystemDefaultsLimitRangeRaisesCeilingForTemplateAddedAfterSett
 // churn, so a settled namespace must not write and must not read the one list that dwarfs
 // the others.
 //
-// Skipping the pod list is safe exactly where a memory default is already in force: from
-// then on LimitRanger fills in a limit for every container admitted without one, so a
-// container with a request and no limit — the only thing the scan looks for — cannot be
-// admitted. The 8Gi pod in the fixture could not exist on a real cluster beside a settled
-// 4Gi LimitRange for that reason; it is here as a tripwire, so that a reconcile which did
-// list pods would raise the ceiling and fail the assertion below rather than pass quietly.
+// Skipping the pod list is safe where the namespace already defaults memory at the
+// configured limit, which is this fixture: from then on LimitRanger fills in a limit for
+// every container admitted without one, so a container with a request and no limit — the
+// only thing the scan looks for — cannot be admitted, and no raise is standing that
+// finding one would keep alive. It is not safe merely because "some default is in force";
+// TestReconcileSystemDefaultsLimitRangeKeepsARaisedCeilingWhileTheLivePodRemains covers the
+// raised namespace, where the pod list has to keep being read.
+//
+// The 8Gi pod is a tripwire, so that a reconcile which did list pods here would raise the
+// ceiling and fail the assertion below rather than pass quietly. It is very nearly
+// unreachable rather than impossible: a pod of that shape has to be admitted while nothing
+// defaults a memory limit in the namespace, so reaching a *settled* 4Gi LimitRange beside it
+// means it landed between this reconciler's scan and its apply. Wider than that window the
+// raise covers it, which is what the tests above and below pin. Closing the window itself
+// would mean never skipping the pod list, which is the cost this test exists to hold down.
 func TestReconcileSystemDefaultsLimitRangeSkipsThePodListWhenTheDefaultHolds(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
@@ -939,6 +948,164 @@ func TestReconcileSystemDefaultsLimitRangeSkipsThePodListWhenTheDefaultHolds(t *
 	}
 	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
 		t.Errorf("default memory = %s, want the settled 4Gi left alone", got.String())
+	}
+}
+
+// The regression the "some default is in force" skip caused, and the reason the skip is
+// pinned to the configured limit instead.
+//
+// A ceiling raised for a blocker that exists only as a live Pod — no Deployment,
+// StatefulSet, DaemonSet, CronJob or Job template to read it from, the shape an operator
+// builds straight from its own custom resource — can only be re-justified by reading the pod
+// list. Skip that list because *a* default is in force and the recompute below finds nothing,
+// drops back to the configured limit, and writes it while the pod is still running. The pod
+// is then rejected on its next recreation with "must be less than or equal to memory limit",
+// and because the skip is still in effect nothing ever raises the ceiling again: a component
+// that was healthy goes down at a node reboot, permanently, with the revert unlogged.
+//
+// So: raised ceiling, blocker still present, and the reconcile must read the pod list, find
+// it, and leave the raise exactly where it is without writing.
+func TestReconcileSystemDefaultsLimitRangeKeepsARaisedCeilingWhileTheLivePodRemains(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	raised := (&PackageReconciler{
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("8Gi"))
+
+	var listed []string
+	var writes int
+	cl := scanRecordingClient(scheme, &listed, &writes, raised, systemPod("vmstorage-0", "8Gi", ""))
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if !listedKind(listed, "PodList") {
+		t.Errorf("did not list pods in a namespace sitting above the configured limit; " +
+			"the raise is recomputed from the scan, so skipping the list retracts it")
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Errorf("default memory = %s, want the 8Gi ceiling held while the pod that needs it runs", got.String())
+	}
+	if writes != 0 {
+		t.Errorf("%d writes against a ceiling that already matches the scan; re-justifying a raise must not re-apply", writes)
+	}
+}
+
+// The other half of the same rule: the raise has to come back down on its own, or pinning
+// the skip to the configured limit would just freeze every raised namespace at its
+// high-water mark. Same raised 8Gi ceiling, blocker gone, so the scan comes back empty and
+// the configured limit is reapplied — one write, and from then on the namespace is settled
+// and stops reading the pod list at all.
+func TestReconcileSystemDefaultsLimitRangeDropsARaisedCeilingOnceTheBlockerIsGone(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	raised := (&PackageReconciler{
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("8Gi"))
+
+	var listed []string
+	var writes int
+	cl := scanRecordingClient(scheme, &listed, &writes, raised)
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if !listedKind(listed, "PodList") {
+		t.Errorf("did not list pods; a raised namespace has to be rescanned to find out the raise is no longer needed")
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
+		t.Errorf("default memory = %s, want the ceiling back down at the configured 4Gi", got.String())
+	}
+	if writes != 1 {
+		t.Errorf("writes = %d, want the single apply that lowers the ceiling", writes)
+	}
+}
+
+// Lowering the knob under a running pod reaches the same defect with no race in it at all,
+// which is why it is worth its own case. An operator running at 16Gi has pods admitted with
+// requests that only that ceiling allowed; dropping the flag to 4Gi must not write 4Gi over
+// them, or their next recreation fails admission. The scan has to run — the namespace is
+// above the configured limit, so it does — and it settles the ceiling at what the pod
+// actually needs rather than at either endpoint.
+func TestReconcileSystemDefaultsLimitRangeRescansWhenTheConfiguredLimitDropsBelowTheCeiling(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	previous := (&PackageReconciler{
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("16Gi"))
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(previous, systemPod("vmstorage-0", "8Gi", "")).Build()
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Errorf("default memory = %s, want 8Gi: the pod's own request, not the new 4Gi that would reject it "+
+			"nor the 16Gi ceiling it no longer needs", got.String())
+	}
+}
+
+// The equality that gates the skip is by value, so a namespace settled at the configured
+// limit in different notation is still settled and still skips the pod list. Written the
+// other way round it would read the pod list forever over 4096Mi versus 4Gi — the same
+// wasted list the skip exists to remove, reintroduced by formatting.
+func TestReconcileSystemDefaultsLimitRangeSkipsThePodListAcrossEquivalentNotation(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	settled := (&PackageReconciler{
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4096Mi"))
+
+	var listed []string
+	var writes int
+	cl := scanRecordingClient(scheme, &listed, &writes, settled)
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if listedKind(listed, "PodList") {
+		t.Errorf("listed pods beside a LimitRange defaulting 4096Mi against a configured 4Gi; " +
+			"the two are the same ceiling and the namespace is settled")
+	}
+	if writes != 0 {
+		t.Errorf("%d writes over equivalent notation; the spec comparison is semantic for the same reason", writes)
 	}
 }
 
