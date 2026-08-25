@@ -9,6 +9,14 @@
 # file and passes it as the resolver's TAGS_FILE arg, so no real git history is
 # touched and results are deterministic. Auto-discovered by the Makefile's
 # bats-unit-tests target (it is NOT an hack/e2e-*.bats, so it is included).
+#
+# Each test removes its scratch directory as the last statement of its body
+# rather than from an EXIT handler. A handler installed inside an @test replaces
+# the one the bats binary keeps for its own bookkeeping, and a test that then
+# fails prints no TAP line at all -- not `not ok`, nothing -- so the suite reads
+# green. Both runners set -e, so on failure the removal is unreachable and the
+# directory survives for inspection, which is what a failed test wants anyway.
+# hack/bats-no-exit-trap.bats enforces this tree-wide.
 # -----------------------------------------------------------------------------
 
 # Fixture: a representative multi-line tag set covering several minor lines,
@@ -30,51 +38,50 @@ EOF
 
 @test "rc target resolves to previous minor's latest stable" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _fixture > "$tmp/tags"
   output=$(hack/upgrade-prev-version.sh v1.6.0-rc.1 "$tmp/tags")
   [ "$output" = "v1.5.3" ]
+  rm -rf "$tmp"
 }
 
 @test "stable .0 target resolves to previous minor's latest stable" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _fixture > "$tmp/tags"
   output=$(hack/upgrade-prev-version.sh v1.6.0 "$tmp/tags")
   [ "$output" = "v1.5.3" ]
+  rm -rf "$tmp"
 }
 
 @test "patch target resolves to the PREVIOUS minor, not same-line patches" {
   # Promoting v1.5.4 must upgrade FROM the 1.4 line's latest stable (previous
   # minor), never from an earlier 1.5 patch.
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _fixture > "$tmp/tags"
   output=$(hack/upgrade-prev-version.sh v1.5.4 "$tmp/tags")
   [ "$output" = "v1.4.6" ]
+  rm -rf "$tmp"
 }
 
 @test "leading-v optional in target" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _fixture > "$tmp/tags"
   output=$(hack/upgrade-prev-version.sh 1.6.0-rc.2 "$tmp/tags")
   [ "$output" = "v1.5.3" ]
+  rm -rf "$tmp"
 }
 
 @test "pre-release tags are never selected as the baseline" {
   # Only v1.5.x stable tags exist below 1.6; the 1.6 rc tags must be ignored.
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _fixture > "$tmp/tags"
   output=$(hack/upgrade-prev-version.sh v1.6.0-rc.1 "$tmp/tags")
   case "$output" in *-*) echo "FAIL: selected a pre-release: $output" >&2; false ;; esac
+  rm -rf "$tmp"
 }
 
 @test "skips a minor line that never shipped a stable release" {
   # 1.5 line has only a pre-release; target 1.6 must fall through to 1.4.
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   cat > "$tmp/tags" <<'EOF'
 v1.4.6
 v1.5.0-rc.1
@@ -82,11 +89,11 @@ v1.6.0-rc.1
 EOF
   output=$(hack/upgrade-prev-version.sh v1.6.0-rc.1 "$tmp/tags")
   [ "$output" = "v1.4.6" ]
+  rm -rf "$tmp"
 }
 
 @test "line match is dot-anchored (1.5 does not match v155.x)" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   cat > "$tmp/tags" <<'EOF'
 v1.5.3
 v155.0.0
@@ -94,19 +101,19 @@ v1.6.0-rc.1
 EOF
   output=$(hack/upgrade-prev-version.sh v1.6.0-rc.1 "$tmp/tags")
   [ "$output" = "v1.5.3" ]
+  rm -rf "$tmp"
 }
 
 @test "empty target falls back to the highest stable tag overall" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _fixture > "$tmp/tags"
   output=$(hack/upgrade-prev-version.sh "" "$tmp/tags")
   [ "$output" = "v1.5.3" ]
+  rm -rf "$tmp"
 }
 
 @test "no previous minor (major 0, minor 0) is an error" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   cat > "$tmp/tags" <<'EOF'
 v0.0.1
 EOF
@@ -114,16 +121,17 @@ EOF
     echo "FAIL: expected non-zero exit, got '$out'" >&2
     false
   fi
+  rm -rf "$tmp"
 }
 
 @test "unparseable target is an error" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _fixture > "$tmp/tags"
   if out=$(hack/upgrade-prev-version.sh "not-a-version" "$tmp/tags" 2>/dev/null); then
     echo "FAIL: expected non-zero exit, got '$out'" >&2
     false
   fi
+  rm -rf "$tmp"
 }
 
 # A target naming only a major ("v1") is not a version this resolver can act on,
@@ -135,7 +143,6 @@ EOF
 # upgrade path nobody asked for.
 @test "a target naming only a major version is an error, not a guess" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
 
   # NOT _fixture: it ships no v1.0.x/v1.1.x tag, so the buggy reading of "v1"
   # as v1.1 walked down to an empty v1.0 line and errored for the WRONG reason —
@@ -160,4 +167,5 @@ EOF
   # rejects a missing minor, not a missing patch.
   out=$(hack/upgrade-prev-version.sh "v1.6" "$tmp/tags")
   [ -n "$out" ]
+  rm -rf "$tmp"
 }
