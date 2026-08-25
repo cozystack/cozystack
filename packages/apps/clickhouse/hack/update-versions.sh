@@ -35,14 +35,16 @@ fetch_tags() {
     grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$file" | LC_ALL=C sort -u
     return
   fi
+  # skopeo reads the registry v2 /tags/list, which returns the full tag set.
+  # (Docker Hub's own v2 API caps anonymous pagination at 1000 entries and then
+  # returns an error page with no `.results`, silently truncating the list.)
+  # skopeo is already required by the repo's build-deps and is how the sibling
+  # generators (postgres, redis, mongodb, opensearch, kubernetes) fetch tags.
+  command -v skopeo >/dev/null 2>&1 || { echo "Error: skopeo is required to fetch tags" >&2; exit 1; }
   command -v jq >/dev/null 2>&1 || { echo "Error: jq is required to fetch tags" >&2; exit 1; }
-  local url="https://hub.docker.com/v2/repositories/${repo}/tags/?page_size=100"
-  while [ -n "$url" ] && [ "$url" != "null" ]; do
-    local page
-    page="$(curl -sSL "$url")"
-    printf '%s\n' "$page" | jq -r '.results[].name'
-    url="$(printf '%s\n' "$page" | jq -r '.next')"
-  done | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | LC_ALL=C sort -u
+  skopeo list-tags "docker://docker.io/${repo}" \
+    | jq -r '.Tags[]' \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | LC_ALL=C sort -u
 }
 
 echo "Resolving ClickHouse versions..." >&2
@@ -92,9 +94,11 @@ for mm in $CH_SUPPORTED_MAJORS; do
     if printf '%s\n' "$COMMON_TAGS" | grep -qx "$FROZEN_DEFAULT_TAG"; then
       tag="$FROZEN_DEFAULT_TAG"
     else
-      echo "Warning: frozen default tag ${FROZEN_DEFAULT_TAG} for ${key} is no longer available in both images; falling back to the latest ${mm} patch" >&2
-      [ -n "$latest" ] || { echo "Error: no tag found for default ${mm} in both images" >&2; exit 1; }
-      tag="$latest"
+      # Never silently move the default image. If the frozen tag has genuinely
+      # left the registry, fail and let a maintainer re-pin files/versions.yaml
+      # deliberately.
+      echo "Error: frozen default tag ${FROZEN_DEFAULT_TAG} for ${key} is not available in both images; refusing to move the default. Re-pin files/versions.yaml deliberately if the default must change." >&2
+      exit 1
     fi
   elif [ -n "$latest" ]; then
     tag="$latest"
@@ -163,4 +167,7 @@ done < "$VALUES_FILE"
 
 mv "$TMP_VERSIONS" "$VERSIONS_FILE"
 mv "$TMP_VALUES" "$VALUES_FILE"
+# mktemp creates 0600 files and mv preserves that mode; restore the normal
+# world-readable mode so the committed files are not left at 0600.
+chmod 0644 "$VERSIONS_FILE" "$VALUES_FILE"
 echo "Updated $VERSIONS_FILE and $VALUES_FILE (default ${DEFAULT_VERSION})" >&2

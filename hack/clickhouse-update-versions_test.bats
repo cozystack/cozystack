@@ -133,15 +133,33 @@ init_case() {
   if CH_SUPPORTED_MAJORS="26.99 24.9" bash "$GEN" >/dev/null 2>&1; then echo "expected non-zero exit" >&2; exit 1; fi
 }
 
-@test "on error the committed files are left untouched (atomic)" {
+@test "a frozen default tag missing from the registry is a hard error" {
   init_case
   seed_values "$VALUES_FILE" v24.9
-  printf '%s\n' 24.9.2.42 > "$SERVER"
+  printf '%s\n' '"v24.9": "24.9.2.42"' > "$VERSIONS_FILE"
+  printf '%s\n' 24.9.3.128 > "$SERVER"   # the pinned 24.9.2.42 is absent
+  cp "$SERVER" "$KEEPER"
+  cp "$VERSIONS_FILE" "$WORK/versions.before"
+  cp "$VALUES_FILE" "$WORK/values.before"
+  # Must NOT silently fall back to 24.9.3.128 and move the default image.
+  if CH_SUPPORTED_MAJORS="24.9" bash "$GEN" >/dev/null 2>&1; then echo "expected hard error on missing frozen tag" >&2; exit 1; fi
+  cmp -s "$VERSIONS_FILE" "$WORK/versions.before" || { echo "versions.yaml changed on failure" >&2; exit 1; }
+  cmp -s "$VALUES_FILE" "$WORK/values.before" || { echo "values.yaml changed on failure" >&2; exit 1; }
+}
+
+@test "no files are written when a configured major fails to resolve" {
+  init_case
+  seed_values "$VALUES_FILE" v24.9
+  # The default (v24.9) is valid and 25.8 resolves, so the run passes the
+  # default check and gets deep into the resolution loop before 26.99 fails —
+  # exercising that nothing is written after a partial resolution, not just on
+  # an early exit.
+  printf '%s\n' 24.9.2.42 25.8.28.1 > "$SERVER"
   cp "$SERVER" "$KEEPER"
   printf '%s\n' '"v24.9": "24.9.2.42"' > "$VERSIONS_FILE"
   cp "$VERSIONS_FILE" "$WORK/versions.before"
   cp "$VALUES_FILE" "$WORK/values.before"
-  if CH_SUPPORTED_MAJORS="26.99" bash "$GEN" >/dev/null 2>&1; then echo "expected non-zero exit" >&2; exit 1; fi
+  if CH_SUPPORTED_MAJORS="25.8 24.9 26.99" bash "$GEN" >/dev/null 2>&1; then echo "expected non-zero exit" >&2; exit 1; fi
   cmp -s "$VERSIONS_FILE" "$WORK/versions.before" || { echo "versions.yaml changed on failure" >&2; exit 1; }
   cmp -s "$VALUES_FILE" "$WORK/values.before" || { echo "values.yaml changed on failure" >&2; exit 1; }
 }
