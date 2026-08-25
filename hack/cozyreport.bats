@@ -909,10 +909,10 @@ STUB
   # job is cancelled, and the upload never runs. That loses the artifact instead
   # of truncating it, on the run where it is the only evidence left.
   #
-  # All three workflows that run the collector, not the one that was looked at:
-  # the same step is copied into each, and a ceiling added to one of them leaves
-  # the other two with the defect while the fix looks done.
-  for wf in pull-requests nightly e2e-tag; do
+  # Every workflow that copies this step, not the one that was looked at: the
+  # step is duplicated into each lane, and a ceiling added to one of them leaves
+  # the copies with the defect while the fix looks done.
+  for wf in pull-requests nightly e2e-tag e2e-experiment; do
     f="$HACK_DIR/../.github/workflows/$wf.yaml"
     [ -f "$f" ] || { echo "FAIL: .github/workflows/$wf.yaml is missing"; false; }
     # The job's own cap is the last one seen above the step, told apart from the

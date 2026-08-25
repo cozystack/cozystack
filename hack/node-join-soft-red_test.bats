@@ -284,18 +284,18 @@ report_with_unnameable() {
 # the derived set below so that a lane added to the tree has to be placed here
 # before either guard passes.
 SOFT_LANES=".github/workflows/pull-requests.yaml .github/workflows/e2e-fork.yaml"
-HARD_LANES=".github/workflows/nightly.yaml .github/workflows/e2e-tag.yaml"
+HARD_LANES=".github/workflows/nightly.yaml .github/workflows/e2e-tag.yaml .github/workflows/e2e-experiment.yaml"
 
 chainsaw_lanes() {
   grep -lE 'make -C packages/core/testing .*test-chainsaw' .github/workflows/*.yaml | sort
 }
 
-@test "the merge-blocking lanes ask this gate and the other two never do" {
+@test "the merge-blocking lanes ask this gate and the rest never do" {
   # The tolerance buys one thing -- that a runner degraded enough to miss the
   # node-join deadline does not stand between a correct change and its merge --
   # and it costs the ability to see that failure. So it belongs where a merge is
-  # at stake and nowhere else, and the two lanes left hard are hard for reasons
-  # of their own.
+  # at stake and nowhere else, and the lanes left hard are hard for reasons of
+  # their own.
   #
   # e2e-tag is the release candidate's own e2e check. A soft pass there ships a
   # release whose tenant clusters brought up no worker nodes, which is the one
@@ -304,6 +304,10 @@ chainsaw_lanes() {
   # nightly is the only place an e2e failure reaches anyone who did not open a
   # pull request: no lane in this tree notifies anywhere, so the red job IS the
   # notification, and a soft pass turns it into silence.
+  #
+  # e2e-experiment gates nothing at all, so there is no merge for a tolerance to
+  # unblock. Its whole output is the report of a run at known settings, and a
+  # node-join failure there is the measurement rather than an obstacle to one.
   lanes=$(chainsaw_lanes)
   if [ -z "$lanes" ]; then
     echo "found no workflow running the chainsaw suite at all, so this guard checked nothing" >&2
@@ -323,7 +327,7 @@ chainsaw_lanes() {
   done
   for lane in $HARD_LANES; do
     if grep -q 'e2e-node-join-soft-red.sh' "$lane"; then
-      echo "$lane tolerates the node-join deadline; it must not -- e2e-tag would pass a release candidate whose workers never joined, and nightly is the only surface that reports an e2e failure to anyone" >&2
+      echo "$lane tolerates the node-join deadline and must not; the reason differs per lane and is in the comment above this test" >&2
       return 1
     fi
   done
