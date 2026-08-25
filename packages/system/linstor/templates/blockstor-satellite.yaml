@@ -107,9 +107,9 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       tolerations:
         - operator: Exists
-      # PoC: run on every node (cozystack e2e nodes are all control-plane;
-      # the Talos drbd extension is present on all of them). tolerations
-      # (op=Exists) above already tolerate the control-plane taint.
+      # Runs on every node: the Talos drbd extension is present on all of
+      # them, and a cozystack e2e cluster is control-plane-only. The
+      # tolerations (op=Exists) above already tolerate that taint.
       # Bug 301: short grace, no preStop drain — DRBD kernel state is
       # host-scoped (Talos extension) and survives the pod; the next
       # satellite's cleanKernelState sweeps it on startup.

@@ -2,7 +2,7 @@
 ---
 # Backwards-compat shim for the linstor-scheduler and linstor-gui
 # packages, which are written against the classic in-cluster LINSTOR
-# controller. In this PoC piraeus-operator runs in EXTERNAL mode: there
+# controller. On this backend piraeus-operator runs in EXTERNAL mode: there
 # is NO in-cluster linstor-controller Deployment/Service — the
 # LINSTOR-compatible REST API is served by the blockstor apiserver
 # (Service blockstor-apiserver, mTLS :3371). The scheduler/gui still

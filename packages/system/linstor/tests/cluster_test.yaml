@@ -1,7 +1,7 @@
 suite: LinstorCluster external mode (blockstor backend)
 
-# Pins the LinstorCluster surface this package renders after LINSTOR was
-# replaced by Blockstor. piraeus-operator runs in EXTERNAL mode: it deploys no
+# Pins the LinstorCluster surface this package renders on the BLOCKSTOR
+# backend. piraeus-operator runs in EXTERNAL mode there: it deploys no
 # in-cluster linstor-controller and instead points linstor-csi at the blockstor
 # apiserver (spec.externalController.url), issuing the CSI client certs from the
 # blockstor-api-ca Issuer (spec.apiTLS). Controller-level DRBD tuning is carried
