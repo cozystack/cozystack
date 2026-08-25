@@ -121,8 +121,8 @@ tests:
           pattern: "roles:\\n +- broker"
         documentIndex: 3
 
-  # Fail closed: only a genuine NotFound is a legitimate skip; any other kubectl
-  # error must abort rather than be mistaken for a fresh install.
+  # Fail closed: a real read error (non-zero from the --ignore-not-found get)
+  # must abort, never be mistaken for a fresh install.
   - it: fails closed on non-NotFound errors reading the Kafka CR
     release:
       name: test-kafka
@@ -130,15 +130,11 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: "not\\[\\[:space:\\]\\]\\?found"
+          pattern: 'if ! found=\$\(kubectl .* --ignore-not-found -o name'
         documentIndex: 3
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: "reading Kafka CR failed \\(not a NotFound\\)"
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "jq -r '\\.status\\.kafkaMetadataState"
+          pattern: "ERROR: reading Kafka CR failed"
         documentIndex: 3
 
   # Idempotent: on a retry the cluster may already be past ZooKeeper; do not
@@ -167,6 +163,95 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: "already belongs to cluster"
+        documentIndex: 3
+
+  # The bare plural "kafkas" is ambiguous (also apps.cozystack.io); the hook must
+  # fully qualify the Strimzi resource or it can hit the tenant kind and Forbidden.
+  - it: fully qualifies the Strimzi Kafka and KafkaNodePool resources
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "kafka=kafkas\\.kafka\\.strimzi\\.io"
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "np=kafkanodepools\\.kafka\\.strimzi\\.io"
+        documentIndex: 3
+      - notMatchRegex:
+          # no bare `kubectl ... kafka "$name"` / `annotate kafka` left
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'annotate kafka "'
+        documentIndex: 3
+
+  # NotFound must be structural (--ignore-not-found), never a stderr substring
+  # match that a stray "... not found" error could trip into skipping a live ZK.
+  - it: classifies NotFound structurally, not by stderr substring
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "--ignore-not-found"
+        documentIndex: 3
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "grep -qiE.*not.*found"
+        documentIndex: 3
+
+  # A KRaft-native / already-migrated CR (kraft=enabled) must be a no-op, never
+  # driven backwards into kraft=migration.
+  - it: treats a kraft=enabled cluster as done
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'if \[ "\$kraft" = "enabled" \]; then'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "already KRaft .strimzi.io/kraft=enabled. — nothing to do"
+        documentIndex: 3
+
+  # Preserve failed-Job logs for a post-mortem: only before-hook-creation, never
+  # hook-succeeded (which would delete the previous attempt's pod logs).
+  - it: keeps only before-hook-creation on the Job hook-delete-policy
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+        documentIndex: 3
+
+  # The kubectl image is routed through the cluster registry helper and digest-pinned.
+  - it: pins the hook image by digest through the images registry
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^clastix/kubectl:v[0-9]+\\.[0-9]+(\\.[0-9]+)?@sha256:[0-9a-f]{64}$"
+        documentIndex: 3
+
+  - it: prefixes the hook image with a configured images-registry
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      _cluster:
+        images-registry: registry.example.com
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^registry\\.example\\.com/clastix/kubectl:v[0-9]+\\.[0-9]+(\\.[0-9]+)?@sha256:[0-9a-f]{64}$"
         documentIndex: 3
 
   # The hook-created pools govern the Kafka pods for the whole migration window

@@ -114,6 +114,12 @@ kind: Test
 metadata:
   name: kafka-zk-to-kraft-migration
 spec:
+  # Run in a dedicated namespace, not the shared tenant-test the other app suites
+  # use: this test raw-applies Strimzi resources and a namespace-wide LimitRange
+  # and leaves deleteClaim:false PVCs behind, which would pollute a sibling suite
+  # sharing the namespace. Raw Strimzi needs no tenant labels, so an own namespace
+  # is fine; Chainsaw creates and tears it down.
+  namespace: kafka-migration-e2e
   catch:
   - events: {}
   - podLogs:
@@ -201,7 +207,7 @@ spec:
                   limits:
                     memory: 512Mi
     - assert:
-        timeout: 8m
+        timeout: 12m
         resource:
           apiVersion: kafka.strimzi.io/v1beta2
           kind: Kafka

@@ -106,6 +106,10 @@ This chart runs at most one Kafka cluster per namespace, and fails the render (w
 
 Both node pools set `deleteClaim: false`, so deleting a Kafka release intentionally leaves its data PVCs (`data-0-<cluster>-kafka-N`, `data-0-<cluster>-controller-N`) behind — this protects data across the migration and against accidental deletion. The trade-off is that the PVCs keep consuming tenant quota until removed by hand, and recreating a same-named Kafka rebinds the stale volumes, whose on-disk cluster id will not match the new cluster (`InconsistentClusterIdException`, CrashLoop). To truly start over, delete the leftover PVCs before recreating: `kubectl -n <namespace> delete pvc -l strimzi.io/cluster=<release>`.
 
+### No downgrade across the KRaft boundary
+
+Migration to KRaft is one-way. Strimzi has no supported KRaft→ZooKeeper rollback once the migration completes, so neither lowering the `version` field on a running cluster nor rolling the whole app back to a pre-KRaft chart is supported — the latter would drop the `strimzi.io/kraft` / `strimzi.io/node-pools` annotations and try to restore `spec.zookeeper`, leaving the Strimzi cluster in an invalid state. Treat the migration as a point of no return: take a backup first, and do not downgrade the kafka app once its `<release>-kafka-deployed-version` ConfigMap has been stamped.
+
 ### Important notes
 
 - **Strimzi 0.45 is the last version supporting ZooKeeper.** Future Strimzi releases only support KRaft.

@@ -16,7 +16,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-upgrade
     helm.sh/hook-weight: "1"
-    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+    helm.sh/hook-delete-policy: before-hook-creation
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -25,7 +25,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-upgrade
     helm.sh/hook-weight: "1"
-    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+    helm.sh/hook-delete-policy: before-hook-creation
 rules:
 - apiGroups: ["kafka.strimzi.io"]
   resources: ["kafkas", "kafkanodepools"]
@@ -38,7 +38,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-upgrade
     helm.sh/hook-weight: "1"
-    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+    helm.sh/hook-delete-policy: before-hook-creation
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -55,7 +55,9 @@ metadata:
   annotations:
     helm.sh/hook: pre-upgrade
     helm.sh/hook-weight: "2"
-    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+    # Only before-hook-creation: keep the previous (possibly failed) Job and its
+    # pod logs around for a post-mortem until the next attempt recreates it.
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   backoffLimit: 0
   # Budget chain: in-script waits total ~1800s (240x5s + 120x5s) < this Job
@@ -74,7 +76,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: kubectl
-          image: docker.io/alpine/k8s:1.33.4
+          image: {{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c" $) }}
           command: [sh, -ec]
           args:
             - |
@@ -82,27 +84,41 @@ spec:
 
               ns={{ .Release.Namespace | quote }}
               name={{ .Release.Name | quote }}
+              # Fully qualify the resource: the plural "kafkas" also exists in this
+              # chart's own apps.cozystack.io group, so a bare "kafka" would resolve
+              # by per-cluster discovery priority and could hit the tenant kind —
+              # which this hook's Role does not grant, failing it deterministically.
+              kafka=kafkas.kafka.strimzi.io
+              np=kafkanodepools.kafka.strimzi.io
 
-              # Fail closed: read the Kafka CR and distinguish a genuine NotFound
-              # (legitimate fresh install — skip) from any other kubectl error
-              # (apiserver/RBAC/timeout). A transient error must abort, never be
-              # mistaken for "fresh" and allowed to stamp the version ConfigMap
-              # while a live ZooKeeper cluster is left behind.
-              if ! cr=$(kubectl -n "$ns" get kafka "$name" -o json 2>&1); then
-                if printf '%s' "$cr" | grep -qiE '(not[[:space:]]?found|notfound)'; then
-                  echo "No existing Kafka CR — fresh install, skipping migration."
-                  exit 0
-                fi
-                echo "ERROR: reading Kafka CR failed (not a NotFound): $cr" >&2
+              # Fail closed. --ignore-not-found makes kubectl exit 0 with empty
+              # output on a genuine NotFound (legitimate fresh install) and exit
+              # non-zero only on a real error (apiserver/RBAC/timeout) — no fragile
+              # stderr substring matching that a stray "... not found" could trip.
+              if ! found=$(kubectl -n "$ns" get "$kafka" "$name" --ignore-not-found -o name 2>&1); then
+                echo "ERROR: reading Kafka CR failed: $found" >&2
                 exit 1
               fi
+              if [ -z "$found" ]; then
+                echo "No existing Kafka CR — fresh install, skipping migration."
+                exit 0
+              fi
 
-              state=$(printf '%s' "$cr" | jq -r '.status.kafkaMetadataState // ""')
+              # A KRaft-native cluster (a fresh install, or one already migrated) is
+              # annotated strimzi.io/kraft=enabled. Never drive it through the
+              # migration state machine: re-issuing kraft=migration from there is an
+              # invalid backward transition Strimzi rejects.
+              kraft=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.metadata.annotations.strimzi\.io/kraft}' 2>/dev/null || echo "")
+              if [ "$kraft" = "enabled" ]; then
+                echo "Kafka is already KRaft (strimzi.io/kraft=enabled) — nothing to do."
+                exit 0
+              fi
+
+              state=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.status.kafkaMetadataState}' 2>/dev/null || echo "")
               echo "Current kafkaMetadataState: '${state}'"
-
-              # Only a cluster already fully in KRaft is done. An EMPTY state on an
-              # EXISTING CR is NOT "migrated" (status may simply not be populated
-              # yet) — proceed; the steps below are idempotent.
+              # A cluster already fully in KRaft is done. An EMPTY state on an
+              # EXISTING ZooKeeper CR is NOT "migrated" (status may simply not be
+              # populated yet) — proceed; the steps below are idempotent.
               if [ "$state" = "KRaft" ]; then
                 echo "Already in KRaft — nothing to do."
                 exit 0
@@ -113,7 +129,7 @@ spec:
               # as <cluster>-kafka-N). If a "kafka" pool already exists for a
               # DIFFERENT cluster, a second Kafka is being migrated in this
               # namespace — unsupported, since node pool names are namespace-unique.
-              owner=$(kubectl -n "$ns" get kafkanodepool kafka -o jsonpath='{.metadata.labels.strimzi\.io/cluster}' 2>/dev/null || echo "")
+              owner=$(kubectl -n "$ns" get "$np" kafka -o jsonpath='{.metadata.labels.strimzi\.io/cluster}' 2>/dev/null || echo "")
               if [ -n "$owner" ] && [ "$owner" != "$name" ]; then
                 echo "ERROR: KafkaNodePool 'kafka' in namespace '$ns' already belongs to cluster '$owner'." >&2
                 echo "In-place ZK->KRaft migration of more than one Kafka per namespace is unsupported (Strimzi node pool names are namespace-unique). Migrate one at a time or in separate namespaces." >&2
@@ -198,19 +214,19 @@ spec:
               # re-annotating "migration" there is an invalid backward transition
               # Strimzi rejects, so treat those as "already migrating, do not touch".
               echo "Enabling node pools on the Kafka CR..."
-              kubectl -n "$ns" annotate kafka "$name" strimzi.io/node-pools=enabled --overwrite
+              kubectl -n "$ns" annotate "$kafka" "$name" strimzi.io/node-pools=enabled --overwrite
               case "$state" in
                 KRaftMigration|KRaftDualWriting|KRaftPostMigration|PreKRaft|KRaft)
                   echo "Migration already past the ZooKeeper phase (state: $state); not re-issuing kraft=migration." ;;
                 *)
                   echo "Starting KRaft migration (kraft=migration)..."
-                  kubectl -n "$ns" annotate kafka "$name" strimzi.io/kraft=migration --overwrite ;;
+                  kubectl -n "$ns" annotate "$kafka" "$name" strimzi.io/kraft=migration --overwrite ;;
               esac
 
               echo "Waiting for migration to reach KRaftPostMigration..."
               migration_ready=false
               for i in $(seq 1 240); do
-                state=$(kubectl -n "$ns" get kafka "$name" -o jsonpath='{.status.kafkaMetadataState}' || echo "")
+                state=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.status.kafkaMetadataState}' || echo "")
                 case "$state" in
                   KRaftPostMigration|PreKRaft|KRaft)
                     echo "Reached state: $state"
@@ -238,11 +254,11 @@ spec:
               fi
 
               echo "Finalising migration to KRaft..."
-              kubectl -n "$ns" annotate kafka "$name" strimzi.io/kraft=enabled --overwrite
+              kubectl -n "$ns" annotate "$kafka" "$name" strimzi.io/kraft=enabled --overwrite
 
               echo "Waiting for KRaft state..."
               for i in $(seq 1 120); do
-                state=$(kubectl -n "$ns" get kafka "$name" -o jsonpath='{.status.kafkaMetadataState}' || echo "")
+                state=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.status.kafkaMetadataState}' || echo "")
                 if [ "$state" = "KRaft" ]; then
                   echo "Migration complete."
                   exit 0
