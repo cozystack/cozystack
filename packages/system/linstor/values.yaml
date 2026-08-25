@@ -5,6 +5,28 @@ piraeusServer:
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
+# Whether the node substrate can run DRBD at all.
+#
+# Disable on any substrate where the DRBD kernel module is unavailable or
+# unusable, and LINSTOR then serves storage-only volumes (`layerList: "storage"`)
+# with no replication. The concrete case is Talos nodes running as containers:
+# DRBD's resource registry is global per kernel, so three containers sharing one
+# kernel cannot represent three DRBD nodes — the second `new-resource` for a
+# given name silently aliases the first instead of failing, which is worse than
+# an error because LINSTOR records a replica it does not have.
+#
+# With this false the `drbd-logger` sidecar is omitted. That sidecar tails DRBD
+# state and exits immediately when the module is absent, and because the whole
+# satellite pod is then never Ready, piraeus never registers the node: LINSTOR
+# reports zero nodes, `linstor-csi-node` hangs in Init polling for a node that
+# does not exist, and every PVC stays Pending. So this flag is the difference
+# between working storage and no storage at all on such a substrate, not a
+# cosmetic reduction in logging.
+#
+# Leaving it true on a DRBD-capable node is always correct; this only ever needs
+# disabling where DRBD genuinely cannot work.
+drbd:
+  enabled: true
 linstor:
   autoDiskful:
     enabled: true

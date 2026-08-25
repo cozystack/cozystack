@@ -37,3 +37,42 @@ tests:
       - equal:
           path: spec.podTemplate.spec.containers[?(@.name=="drbd-logger")].resources.limits.memory
           value: 128Mi
+
+  # `drbd.enabled: false` is the difference between working storage and NO
+  # storage on a substrate without DRBD, not a logging preference: the sidecar
+  # exits immediately when the module is absent, the satellite pod is then never
+  # Ready, and piraeus consequently registers zero nodes — so every PVC hangs
+  # Pending behind a cluster that otherwise looks healthy.
+  #
+  # Asserted by container count and name rather than a negated `contains`: a
+  # negation against a path that no longer resolves passes vacuously, so it would
+  # go on passing if the containers list vanished entirely.
+  - it: both plunger sidecars are present by default
+    template: templates/satellites-plunger.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.podTemplate.spec.containers
+          count: 2
+      - equal:
+          path: spec.podTemplate.spec.containers[0].name
+          value: plunger
+      - equal:
+          path: spec.podTemplate.spec.containers[1].name
+          value: drbd-logger
+
+  - it: drbd-logger is omitted when the substrate cannot run DRBD
+    template: templates/satellites-plunger.yaml
+    set:
+      drbd.enabled: false
+    asserts:
+      - lengthEqual:
+          path: spec.podTemplate.spec.containers
+          count: 1
+      - equal:
+          path: spec.podTemplate.spec.containers[0].name
+          value: plunger
+      # the surviving sidecar must keep its limit, or the whole pod re-enters the
+      # Talos OOM handler's victim set that this suite exists to guard
+      - equal:
+          path: spec.podTemplate.spec.containers[0].resources.limits.memory
+          value: 128Mi
