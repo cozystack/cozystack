@@ -989,7 +989,7 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 	// notation does not re-apply forever, and it runs against the spec the scan actually
 	// settled on, so a namespace already sitting at a raised ceiling is left alone too
 	// instead of taking an identical apply on every reconcile.
-	if err == nil && apiequality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+	if apiequality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
 		return nil
 	}
 
