@@ -49,8 +49,6 @@ type ConfigSpec struct {
 	// Quorum configuration for synchronous replication.
 	// +kubebuilder:default:={}
 	Quorum Quorum `json:"quorum"`
-	// Read-load signal for autoscaling.
-	Metric ReadMetric `json:"metric"`
 	// Read-replica autoscaling configuration.
 	// +kubebuilder:default:={}
 	Autoscaling Autoscaling `json:"autoscaling"`
@@ -87,9 +85,9 @@ type Autoscaling struct {
 	// Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.
 	// +kubebuilder:default:=2
 	MinReplicas int `json:"minReplicas"`
-	// Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores).
+	// Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores). Dimensionless integer - a resource.Quantity here would accept `150m`, which PromQL reads as 150 minutes and KEDA cannot use as a threshold.
 	// +kubebuilder:default:=150
-	Target resource.Quantity `json:"target"`
+	Target int `json:"target"`
 	// Migration phase 1: keep `.spec.instances` rendered as a floor (from `replicas`, which the operator stages to the live count) AND pause the ScaledObject, so KEDA stands up without contending for the field. Flip to false (phase 2) to drop the static field and hand the count to KEDA. See the enablement note below.
 	// +kubebuilder:default:=false
 	Transition bool `json:"transition"`

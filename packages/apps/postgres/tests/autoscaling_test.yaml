@@ -47,7 +47,7 @@ tests:
         enabled: true
         minReplicas: 2
         maxReplicas: 6
-        target: "150"
+        target: 150
       quorum:
         maxSyncReplicas: 2
     asserts:
@@ -72,7 +72,7 @@ tests:
         enabled: true
         minReplicas: 2
         maxReplicas: 6
-        target: "150"
+        target: 150
       quorum:
         maxSyncReplicas: 2
     asserts:
@@ -121,7 +121,7 @@ tests:
         enabled: true
         minReplicas: 2
         maxReplicas: 6
-        target: "150"
+        target: 150
       quorum:
         maxSyncReplicas: 6
     asserts:
@@ -141,7 +141,7 @@ tests:
         transition: true
         minReplicas: 2
         maxReplicas: 6
-        target: "150"
+        target: 150
       quorum:
         maxSyncReplicas: 2
     asserts:
@@ -169,7 +169,7 @@ tests:
         metric: ReadCPUUtilization
         minReplicas: 2
         maxReplicas: 6
-        target: "500"
+        target: 500
       quorum:
         maxSyncReplicas: 2
     asserts:
@@ -188,7 +188,7 @@ tests:
         enabled: true
         minReplicas: 2
         maxReplicas: 6
-        target: "150"
+        target: 150
         maxReplicationLagSeconds: 30
       quorum:
         maxSyncReplicas: 2
@@ -214,7 +214,7 @@ tests:
         enabled: true
         minReplicas: 2
         maxReplicas: 6
-        target: "150"
+        target: 150
         maxReplicationLagSeconds: 0
       quorum:
         maxSyncReplicas: 2
@@ -230,7 +230,7 @@ tests:
         dryRun: true
         minReplicas: 2
         maxReplicas: 6
-        target: "150"
+        target: 150
       quorum:
         maxSyncReplicas: 2
     asserts:

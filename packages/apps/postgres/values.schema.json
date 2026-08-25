@@ -197,14 +197,6 @@
         }
       }
     },
-    "metric": {
-      "description": "Read-load signal for autoscaling.",
-      "type": "string",
-      "enum": [
-        "ReadConnections",
-        "ReadCPUUtilization"
-      ]
-    },
     "autoscaling": {
       "description": "Read-replica autoscaling configuration.",
       "type": "object",
@@ -255,18 +247,9 @@
           "default": 2
         },
         "target": {
-          "description": "Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores).",
-          "default": 150,
-          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "x-kubernetes-int-or-string": true
+          "description": "Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores). Dimensionless integer - a resource.Quantity here would accept `150m`, which PromQL reads as 150 minutes and KEDA cannot use as a threshold.",
+          "type": "integer",
+          "default": 150
         },
         "transition": {
           "description": "Migration phase 1: keep `.spec.instances` rendered as a floor (from `replicas`, which the operator stages to the live count) AND pause the ScaledObject, so KEDA stands up without contending for the field. Flip to false (phase 2) to drop the static field and hand the count to KEDA. See the enablement note below.",
