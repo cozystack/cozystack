@@ -1,3 +1,4 @@
+{{- if eq .Values.backend "blockstor" }}
 ---
 # blockstor controller — runs the reconcilers for the blockstor.io
 # CRDs (ResourceDefinitions / Resources / Snapshots / StoragePools /
@@ -90,3 +91,4 @@ spec:
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 500m, memory: 256Mi}
+{{- end }}

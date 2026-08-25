@@ -1,4 +1,18 @@
+{{- /*
+Blockstor's CRDs ship only with the blockstor backend. A LINSTOR
+cluster has no use for them, and installing a component's schema
+without the component that reconciles it invites objects nothing
+serves.
+
+Ordering for a migration: switch the backend first, which installs
+these and starts blockstor's control plane against an empty database,
+then apply the converted resources for it to adopt. LINSTOR's own CRDs
+are installed by piraeus-operator, not from here, so they survive the
+switch and the source data stays readable throughout.
+*/}}
+{{- if eq .Values.backend "blockstor" }}
 {{- range $path, $_ := .Files.Glob "definitions/*" }}
 ---
 {{ $.Files.Get $path }}
+{{- end }}
 {{- end }}

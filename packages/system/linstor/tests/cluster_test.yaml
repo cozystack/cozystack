@@ -12,6 +12,11 @@ suite: LinstorCluster external mode (blockstor backend)
 templates:
   - templates/cluster.yaml
 
+# Blockstor is opt-in. Without this the suite renders the LINSTOR backend,
+# whose LinstorCluster is a different shape entirely.
+set:
+  backend: blockstor
+
 tests:
   - it: "renders a LinstorCluster pointed at the external blockstor apiserver"
     asserts:

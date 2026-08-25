@@ -2,6 +2,10 @@ suite: cozy-linstor blockstor image pins
 release:
   name: linstor
   namespace: cozy-linstor
+# Blockstor is opt-in; without this the suite renders the LINSTOR backend
+# and every blockstor template is empty.
+set:
+  backend: blockstor
 
 # Every image this package ships must be pinned by digest (tag@sha256:...) so a
 # moving upstream tag can never silently change what runs. blockstor-* are the

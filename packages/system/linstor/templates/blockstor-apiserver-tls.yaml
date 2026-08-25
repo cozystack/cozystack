@@ -1,3 +1,4 @@
+{{- if eq .Values.backend "blockstor" }}
 ---
 # cert-manager PKI for the blockstor apiserver's mutual-TLS endpoint.
 #
@@ -110,3 +111,4 @@ spec:
   issuerRef:
     name: blockstor-api-ca
     kind: Issuer
+{{- end }}

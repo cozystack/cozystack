@@ -1,0 +1,60 @@
+suite: storage backend selection
+
+# The backend is opt-in and defaults to LINSTOR. That default is what every
+# existing cluster runs, so a change that quietly flipped it would swap the
+# storage control plane under live data on the next reconcile. These tests
+# pin the default and prove each backend renders only its own control plane.
+
+release:
+  name: linstor
+  namespace: cozy-linstor
+
+tests:
+  - it: "defaults to the LINSTOR backend"
+    templates:
+      - templates/cluster.yaml
+    asserts:
+      - isKind:
+          of: LinstorCluster
+      # The operator runs its own in-cluster controller: no external URL.
+      - notExists:
+          path: spec.externalController
+
+  - it: "renders no blockstor control plane by default"
+    templates:
+      - templates/blockstor-controller.yaml
+      - templates/blockstor-apiserver.yaml
+      - templates/blockstor-satellite.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "renders no blockstor CRDs by default"
+    templates:
+      - templates/crds/crds.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "renders no LINSTOR satellite configuration on the blockstor backend"
+    set:
+      backend: blockstor
+    templates:
+      - templates/satellites-cozy.yaml
+      - templates/satellites-talos.yaml
+      - templates/satellites-plunger.yaml
+      - templates/satellites-reloader.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "ships the blockstor CRDs on the blockstor backend"
+    set:
+      backend: blockstor
+    templates:
+      - templates/crds/crds.yaml
+    asserts:
+      - hasDocuments:
+          count: 8
+      - isKind:
+          of: CustomResourceDefinition

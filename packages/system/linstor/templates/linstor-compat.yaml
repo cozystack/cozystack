@@ -1,3 +1,4 @@
+{{- if eq .Values.backend "blockstor" }}
 ---
 # Backwards-compat shim for the linstor-scheduler and linstor-gui
 # packages, which are written against the classic in-cluster LINSTOR
@@ -55,3 +56,4 @@ spec:
   selector: {app: blockstor-apiserver}
   ports:
     - {name: rest-tls, port: 3371, targetPort: 3371}
+{{- end }}

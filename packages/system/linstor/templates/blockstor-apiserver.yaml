@@ -1,3 +1,4 @@
+{{- if eq .Values.backend "blockstor" }}
 ---
 # blockstor apiserver — the LINSTOR-compatible REST front end split out
 # of the controller binary. linstor-csi (external mode) and the
@@ -124,3 +125,4 @@ spec:
   selector: {app: blockstor-apiserver}
   ports:
     - {name: rest-tls, port: 3371, targetPort: 3371}
+{{- end }}

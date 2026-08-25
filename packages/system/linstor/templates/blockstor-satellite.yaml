@@ -1,3 +1,4 @@
+{{- if eq .Values.backend "blockstor" }}
 ---
 # blockstor-satellite DaemonSet. Runs on every worker, drives drbdadm +
 # ZFS/LVM reconcile, registers its StoragePools (declared via the
@@ -182,3 +183,4 @@ spec:
             name: blockstor-satellite-drbd-conf
             items:
               - {key: global_common.conf, path: global_common.conf}
+{{- end }}
