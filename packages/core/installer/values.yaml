@@ -58,6 +58,13 @@ cozystackOperator:
   # in tenant namespaces that declare resourceQuotas. Tenant namespaces are left to
   # that chart; this closes the same gap for system namespaces.
   #
+  # Scope is every namespace a Package targets whose name does not start with `tenant-`.
+  # That includes kube-system, because cozystack-scheduler is installed there, so a namespace
+  # owned by the underlying Kubernetes distribution is defaulted like any other. Containers
+  # the kubelet builds from an on-disk manifest rather than from the API are unaffected in
+  # both directions: a Talos control-plane static pod gets no memory.max from this, and the
+  # mirror pod representing it is the only thing admission sees.
+  #
   # A ceiling, not a reservation: pick it well above real usage. It should stay above
   # the largest memory request in any system namespace, because a defaulted limit
   # below a container's own request is rejected at admission. Setting it too low
