@@ -1,0 +1,61 @@
+suite: CDI importer worker resources
+
+# CDI's built-in default podResourceRequirements is 600M, which OOM-kills the
+# decompress+convert of a tenant Kubernetes worker disk at 99.8-100% progress.
+# CDI then retries from scratch, so the DataVolume cycles forever and no worker
+# ever boots — a hang rather than a clean failure, on a cluster that otherwise
+# looks healthy.
+#
+# Note this must be set on the CDI CR, not on CDIConfig: the CDI operator
+# reconciles CDIConfig.spec from this CR, so patching CDIConfig directly is
+# silently reverted.
+
+templates:
+  - templates/cdi-cr.yaml
+
+set:
+  _cluster:
+    root-host: example.org
+
+tests:
+  - it: importer workers get a memory ceiling well above CDI's 600M default
+    template: templates/cdi-cr.yaml
+    # Selected by kind rather than by index: this template emits three
+    # documents and the CDI CR is not the one helm prints first, so an index
+    # here would silently point at a ClusterRole after any reordering.
+    documentSelector:
+      path: kind
+      value: CDI
+    asserts:
+      - equal:
+          path: spec.config.podResourceRequirements.limits.memory
+          value: 4Gi
+      # The request stays small on purpose — a limit is a ceiling, not a
+      # reservation, so concurrent imports must still pack onto a node.
+      - equal:
+          path: spec.config.podResourceRequirements.requests.memory
+          value: 256Mi
+
+  - it: importer resources are overridable
+    template: templates/cdi-cr.yaml
+    # Selected by kind rather than by index: this template emits three
+    # documents and the CDI CR is not the one helm prints first, so an index
+    # here would silently point at a ClusterRole after any reordering.
+    documentSelector:
+      path: kind
+      value: CDI
+    set:
+      importerResources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.config.podResourceRequirements.limits.memory
+          value: 8Gi
+      - equal:
+          path: spec.config.podResourceRequirements.requests.cpu
+          value: 50m

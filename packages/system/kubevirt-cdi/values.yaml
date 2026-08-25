@@ -3,3 +3,20 @@ uploadProxyURL: ""
 ## @param cloneStrategyOverride Strategy CDI uses to clone DataVolumes (golden image -> VM disk).
 ## One of: csi-clone, snapshot, copy. Defaults to csi-clone (unchanged behavior).
 cloneStrategyOverride: csi-clone
+
+## @param importerResources Resources for CDI's importer/uploader/cloner worker pods.
+## Applied as CDIConfig.podResourceRequirements. CDI's own default (600M) OOM-kills
+## the decompress+convert of a tenant Kubernetes worker disk at ~100% progress and
+## then retries forever, so no worker boots. Limits are ceilings, not reservations;
+## the requests stay small so concurrent imports still pack onto a node.
+##
+## NOTE: patching the CDIConfig object directly does NOT work -- the CDI operator
+## reconciles CDIConfig.spec from this CR, so a direct patch is silently reverted
+## and .status.defaultPodResourceRequirements stays at the old value.
+importerResources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 4Gi
