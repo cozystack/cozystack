@@ -20,8 +20,9 @@ for app in "$PG_SRC_NAME" "$PG_TARGET_NAME"; do
     fi
 done
 
-log_substep "Deleting RestoreJob..."
-kubectl -n "$NAMESPACE" delete restorejob.backups.cozystack.io "$RESTOREJOB_TOCOPY_NAME" --ignore-not-found
+log_substep "Deleting RestoreJobs..."
+kubectl -n "$NAMESPACE" delete restorejob.backups.cozystack.io \
+    "$RESTOREJOB_TOCOPY_NAME" "$RESTOREJOB_INPLACE_NAME" --ignore-not-found
 
 log_substep "Deleting Plan + BackupJob + derived Backup artefacts..."
 kubectl -n "$NAMESPACE" delete plan.backups.cozystack.io "$PLAN_NAME" --ignore-not-found

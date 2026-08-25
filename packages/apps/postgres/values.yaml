@@ -266,6 +266,7 @@ backup:
 ## @field {string} [recoveryTime] - Timestamp (RFC3339) for point-in-time recovery; empty means latest.
 ## @field {string} oldName - Previous cluster name before deletion.
 ## @field {string} [serverName] - Server name (S3 path prefix) used by the original cluster when writing backups; passed to the barman-cloud plugin via `externalClusters[].plugin.parameters.serverName`. Defaults to `bootstrap.oldName`. Set this only when the original cluster wrote backups under an explicit server name that differed from its Kubernetes resource name.
+## @field {string} [newServerName] - WAL-archive server name (S3 path prefix) the RESTORED cluster writes to. Must differ from `serverName` (the recovery source) so a restored cluster archives to a fresh, empty prefix and barman-cloud-check-wal-archive passes while it recovers from the source's prefix. The CNPG backup driver sets this on restore; empty means the cluster archives under its own name.
 
 ## @param {Bootstrap} bootstrap - Bootstrap configuration.
 bootstrap:
@@ -274,3 +275,4 @@ bootstrap:
   recoveryTime: ""
   oldName: ""
   serverName: ""
+  newServerName: ""
