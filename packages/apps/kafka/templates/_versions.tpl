@@ -7,13 +7,23 @@
 {{- end }}
 
 {{- /*
-  KRaft controller quorum: an odd number of controllers. Single-node clusters
-  (kafka.replicas <= 1) run one controller; everything else runs three. Shared
-  by kafkanodepools.yaml, workloadmonitor.yaml and migration-hook.yaml so the
-  three stay in lockstep.
+  KRaft controller quorum — fixed at creation, never re-derived on a day-2 edit.
+
+  The quorum must be static: Strimzi 0.45 cannot scale a controller node pool, so
+  flipping it (e.g. because a tenant raised kafka.replicas from 1 to 3) would wedge
+  the reconcile or lose the metadata quorum. So the size is pinned once: if the
+  "controller" pool already exists, keep its current replica count; only on first
+  creation is it computed — one controller for a single-node cluster
+  (kafka.replicas <= 1), three otherwise (odd quorum).
+
+  lookup returns nothing during `helm template`/dry-run, so unit tests exercise
+  the creation-time computation. Shared by kafkanodepools.yaml, workloadmonitor.yaml
+  and migration-hook.yaml so the three stay in lockstep.
 */ -}}
 {{- define "kafka.controllerReplicas" -}}
-{{- if le (int .Values.kafka.replicas) 1 -}}1{{- else -}}3{{- end -}}
+{{- $existing := lookup "kafka.strimzi.io/v1beta2" "KafkaNodePool" .Release.Namespace "controller" -}}
+{{- $pinned := dig "spec" "replicas" 0 ($existing | default dict) -}}
+{{- if $pinned -}}{{ int $pinned }}{{- else if le (int .Values.kafka.replicas) 1 -}}1{{- else -}}3{{- end -}}
 {{- end -}}
 
 {{- /*
