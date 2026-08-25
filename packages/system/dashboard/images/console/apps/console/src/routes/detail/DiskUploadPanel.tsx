@@ -97,12 +97,28 @@ export function DiskUploadPanel({
       name: dvName,
       namespace: ns,
     },
-    { enabled: !!ns && !!instance.metadata.name, retry: false },
+    {
+      enabled: !!ns && !!instance.metadata.name,
+      retry: false,
+      // CDI walks the disk to UploadReady on its own and this panel never
+      // unmounts, so without a poll the user sits on "preparing" until they
+      // happen to press Refresh. Matches the detail page's instance poll.
+      // Gated on the source too: the panel renders nothing for the other
+      // vm-disk sources, and polling for a hidden panel is pure load.
+      refetchInterval: (query) => {
+        const dv = query.state.data
+        return isUploadSource(dv) && uploadState(dv).stage === "preparing"
+          ? 5000
+          : false
+      },
+    },
   )
 
-  // CDI binds a config-reader role to system:authenticated, so every logged-in
-  // user can read the proxy URL the platform published (empty unless the
-  // kubevirt-cdi chart was given uploadProxyURL).
+  // The proxy URL lives on the cluster-scoped CDIConfig singleton, and whether
+  // a tenant may read it is up to what upstream CDI binds — this repo grants no
+  // role of its own for it. So a failed read means "unknown", never "the
+  // cluster published none". The field is empty anyway unless the kubevirt-cdi
+  // chart was given uploadProxyURL.
   const cdiConfig = useK8sGet<CDIConfig>(
     {
       apiGroup: CDI_GROUP,
@@ -132,7 +148,10 @@ export function DiskUploadPanel({
     namespace: ns,
     uploadProxyURL: proxyURL,
   })
-  const showCommand = state.stage === "awaiting-upload" || state.stage === "failed"
+  // Only at awaiting-upload: `failed` covers PVC-bind failures where no upload
+  // server was ever created, and CDI does not recreate one for a DataVolume
+  // that already failed — the disk has to be recreated instead.
+  const showCommand = state.stage === "awaiting-upload"
 
   return (
     <div className="px-6 pt-6">
@@ -143,8 +162,11 @@ export function DiskUploadPanel({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void dvQuery.refetch()}
-            disabled={dvQuery.isFetching}
+            onClick={() => {
+              void dvQuery.refetch()
+              void cdiConfig.refetch()
+            }}
+            disabled={dvQuery.isFetching || cdiConfig.isFetching}
           >
             <RefreshCw className="size-3.5" /> Refresh
           </Button>
@@ -176,6 +198,13 @@ export function DiskUploadPanel({
           </p>
         )}
 
+        {state.stage === "failed" && (
+          <p className="mt-3 text-sm text-slate-600">
+            CDI does not retry a failed upload target. Recreate the disk to try
+            again.
+          </p>
+        )}
+
         {state.message && (
           <p className="mt-3 text-sm text-red-700">{state.message}</p>
         )}
@@ -188,10 +217,19 @@ export function DiskUploadPanel({
               at your local image and run:
             </p>
             <CopyableCommand command={command} />
-            {!proxyURL && (
+            {!proxyURL && cdiConfig.isSuccess && (
               <p className="text-xs text-slate-500">
                 This cluster publishes no upload proxy URL, so the address above is a
                 placeholder. Ask your platform administrator for the{" "}
+                <span className="font-mono">cdi-uploadproxy</span> hostname.
+              </p>
+            )}
+            {/* An errored CDIConfig read is not an answer either way. */}
+            {!proxyURL && cdiConfig.isError && (
+              <p className="text-xs text-slate-500">
+                The upload proxy URL could not be read from{" "}
+                <span className="font-mono">CDIConfig</span>, so the address above is
+                a placeholder. Refresh, or ask your platform administrator for the{" "}
                 <span className="font-mono">cdi-uploadproxy</span> hostname.
               </p>
             )}
