@@ -38,10 +38,27 @@ spec:
             apiservices/v1alpha1.apps.cozystack.io \
             apiservices/v1alpha1.core.cozystack.io --timeout=3m
 
+          # Both diffs below compare against a file the seed phase wrote. A
+          # missing file makes `comm -13` print nothing, which reads as "nothing
+          # newly broken" — so a verify run without its seed phase would report
+          # the platform healthy having compared nothing at all. Fail fast
+          # instead, the way verify/vm and verify/redis already do for theirs.
           dir=/workspace/_out/upgrade-baseline
+          for f in unbound-pv.txt crashloop.txt; do
+            [ -f "$dir/$f" ] || {
+              echo "FAIL: missing baseline $dir/$f (seed phase did not run?)" >&2
+              exit 1
+            }
+          done
+
           echo "=== gate: no new unbound PersistentVolumes vs baseline ==="
-          kubectl get pv --no-headers 2>/dev/null | awk '$5 != "Bound" {print $1}' | sort > /tmp/post-unbound-pv.txt
-          new_pv=$(comm -13 "$dir/unbound-pv.txt" /tmp/post-unbound-pv.txt || true)
+          # Written through a file rather than piped straight into awk: a pipeline
+          # takes the exit status of its LAST command, so a failed `kubectl get`
+          # would leave an empty list and pass the diff. Under `set -e` the
+          # redirect below fails the step instead.
+          kubectl get pv --no-headers > /tmp/pv-raw.txt
+          awk '$5 != "Bound" {print $1}' /tmp/pv-raw.txt | sort > /tmp/post-unbound-pv.txt
+          new_pv=$(comm -13 "$dir/unbound-pv.txt" /tmp/post-unbound-pv.txt)
           if [ -n "$new_pv" ]; then
             echo "FAIL: PersistentVolumes newly unbound after upgrade:" >&2
             echo "$new_pv" >&2
@@ -51,8 +68,9 @@ spec:
           echo "no new unbound PVs"
 
           echo "=== warning-only: new CrashLoopBackOff pods vs baseline ==="
-          kubectl get pods -A --no-headers 2>/dev/null | awk '/CrashLoopBackOff/ {print $1"/"$2}' | sort > /tmp/post-crashloop.txt
-          new_cl=$(comm -13 "$dir/crashloop.txt" /tmp/post-crashloop.txt || true)
+          kubectl get pods -A --no-headers > /tmp/pods-raw.txt
+          awk '/CrashLoopBackOff/ {print $1"/"$2}' /tmp/pods-raw.txt | sort > /tmp/post-crashloop.txt
+          new_cl=$(comm -13 "$dir/crashloop.txt" /tmp/post-crashloop.txt)
           if [ -n "$new_cl" ]; then
             echo "::warning::pods in CrashLoopBackOff after upgrade not present in baseline (name churn expected; triage only):" >&2
             echo "$new_cl" >&2
