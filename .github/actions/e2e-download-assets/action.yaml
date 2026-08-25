@@ -47,6 +47,11 @@ runs:
         DISK_ID: ${{ inputs.disk-id }}
       run: |
         mkdir -p _out/assets
-        curl -sSL -H "Authorization: token ${APP_TOKEN}" -H "Accept: application/octet-stream" \
+        # --fail: without it an auth failure or a 404 is written INTO the disk
+        # image and curl still exits 0, so the run continues and surfaces much
+        # later as an unrelated-looking decompression error. This composite
+        # serves both the e2e and the upgrade lane, and the release PR path is
+        # the one the upgrade lane exists for.
+        curl --fail -sSL -H "Authorization: token ${APP_TOKEN}" -H "Accept: application/octet-stream" \
           -o _out/assets/nocloud-amd64.raw.xz \
           "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${DISK_ID}"
