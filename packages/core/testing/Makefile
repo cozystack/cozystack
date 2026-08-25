@@ -36,6 +36,31 @@ copy-nocloud-image:
 prepare-cluster: copy-nocloud-image
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster.bats'
 
+# Container lane: Talos nodes as containers instead of QEMU guests, so tenant
+# workloads sit one nesting level shallower. Sits BESIDE prepare-cluster rather
+# than replacing it; nothing downstream changes, because the addressing, CPU and
+# memory in hack/e2e-compose.yaml mirror the QEMU lane exactly.
+#
+# Two steps, not one, because the halves must run in different places. The nodes
+# have to be siblings on the runner's docker daemon for the /dev and /run/udev
+# binds in hack/e2e-compose.yaml to resolve against the real host devtmpfs --
+# that bind is what lets this lane carry LINSTOR at all -- so the host-side half
+# needs a docker socket the sandbox does not have. Everything Talos-side then
+# runs inside the sandbox exactly as the QEMU lane does.
+#
+# No copy-nocloud-image dependency: containers boot from the Talos image
+# directly and need no nocloud asset, which also means this lane does not wait
+# on `make -C packages/core/talos assets`.
+prepare-cluster-container:
+	SANDBOX_NAME="${SANDBOX_NAME}" $(ROOT_DIR)hack/e2e-container-up.sh
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster-container.bats'
+
+# Tear the container lane down. Volumes included: the node /var volumes hold
+# etcd and the kubelet state, so leaving them behind makes the next run adopt a
+# half-dead cluster instead of building a new one.
+delete-cluster-container:
+	docker compose -p cozy-e2e -f $(ROOT_DIR)hack/e2e-compose.yaml down -v || true
+
 install-cozystack:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
 

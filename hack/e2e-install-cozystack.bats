@@ -242,7 +242,10 @@ spec:
           joinCIDR: "100.64.0.0/16"
         publishing:
           host: "example.org"
-          apiServerEndpoint: "https://192.168.123.10:6443"
+          # 192.168.123.10 is the QEMU lane's ARP VIP. Container mode has no
+          # VIP, so that lane overrides this with a node IP. Default is
+          # unchanged, so the QEMU lane behaves exactly as before.
+          apiServerEndpoint: "${COZY_APISERVER_ENDPOINT:-https://192.168.123.10:6443}"
         bundles:
           enabledPackages:
             - cozystack.external-dns-application

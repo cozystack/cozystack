@@ -1,0 +1,143 @@
+# Talos nodes as containers, the L2 half of the e2e substrate experiment.
+#
+# Sits beside hack/e2e-prepare-cluster.bats' QEMU guests rather than replacing
+# them. Addressing, CPU and memory deliberately mirror that file so everything
+# downstream -- the MetalLB 192.168.123.200-250 pool, hack/e2e-post-install-prep.sh,
+# the chainsaw suites -- is unchanged between the two lanes.
+#
+# NOT `talosctl cluster create docker`: that wrapper forces a single control
+# plane (it has --workers but no --controlplanes), has no --disks, and hides the
+# container spec. Compose keeps three control planes, as today.
+#
+# The contract below comes from siderolabs/talos
+# pkg/provision/providers/docker/node.go: PLATFORM/TALOSSKU/USERDATA, privileged,
+# seccomp:unconfined, read_only, and the tmpfs + volume layout. Two mounts are
+# NOT part of that contract and are mandatory anyway -- see the per-mount notes.
+
+name: cozy-e2e
+
+networks:
+  talos:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.123.0/24
+          gateway: 192.168.123.1
+
+x-node: &node
+  image: ghcr.io/siderolabs/talos:v1.13.5
+  privileged: true
+  security_opt:
+    - seccomp:unconfined
+  read_only: true
+  stop_grace_period: 30s
+  # Matches the QEMU lane's `-smp 8 -m 24576` so neither lane is given more of
+  # the runner than the other. NOTE: a Talos container reports the HOST's memory
+  # as node allocatable, not this limit, so the kube-scheduler will overcommit
+  # against it -- the limit binds the cgroup, not the scheduler.
+  cpus: 8
+  mem_limit: 24576m
+  tmpfs:
+    - /run
+    - /system
+    - /tmp
+  environment: &node-env
+    PLATFORM: container
+    TALOSSKU: 8CPU-24576RAM
+    USERDATA: ${USERDATA:?USERDATA must be set; hack/e2e-container-up.sh generates it}
+
+# The two host binds every node repeats below, and why each is mandatory:
+#
+#   /dev:/dev       Docker gives a privileged container its own 64 MB tmpfs /dev,
+#                   seeded ONCE at creation. /dev/kvm works because it exists at
+#                   start, but ZFS zvols created later never appear, and
+#                   linstor-csi then fails ControllerPublishVolume with "could
+#                   not determine device path". Binding the host devtmpfs fixes
+#                   it, and is why `talosctl cluster create docker` can never
+#                   support LINSTOR.
+#
+#   /run/udev       The LINSTOR satellite hostPath-mounts it. In a container /run
+#                   is tmpfs with no udev, so the pod hangs Init:0/1 on
+#                   "hostPath type check failed: /run/udev is not a directory".
+#
+# Written out per service rather than shared through a YAML anchor: compose
+# merges mappings but not sequences, so an anchored list nests instead of
+# flattening and is rejected as "volumes.0 must be a string".
+
+services:
+  srv1:
+    <<: *node
+    hostname: srv1
+    container_name: srv1
+    environment:
+      <<: *node-env
+    networks:
+      talos:
+        ipv4_address: 192.168.123.11
+    volumes:
+      - /dev:/dev
+      - /run/udev:/run/udev
+      - srv1-var:/var
+      - srv1-state:/system/state
+      - srv1-cni:/etc/cni
+      - srv1-k8s:/etc/kubernetes
+      - srv1-kubelet:/usr/libexec/kubernetes
+      - srv1-opt:/opt
+
+  srv2:
+    <<: *node
+    hostname: srv2
+    container_name: srv2
+    environment:
+      <<: *node-env
+    networks:
+      talos:
+        ipv4_address: 192.168.123.12
+    volumes:
+      - /dev:/dev
+      - /run/udev:/run/udev
+      - srv2-var:/var
+      - srv2-state:/system/state
+      - srv2-cni:/etc/cni
+      - srv2-k8s:/etc/kubernetes
+      - srv2-kubelet:/usr/libexec/kubernetes
+      - srv2-opt:/opt
+
+  srv3:
+    <<: *node
+    hostname: srv3
+    container_name: srv3
+    environment:
+      <<: *node-env
+    networks:
+      talos:
+        ipv4_address: 192.168.123.13
+    volumes:
+      - /dev:/dev
+      - /run/udev:/run/udev
+      - srv3-var:/var
+      - srv3-state:/system/state
+      - srv3-cni:/etc/cni
+      - srv3-k8s:/etc/kubernetes
+      - srv3-kubelet:/usr/libexec/kubernetes
+      - srv3-opt:/opt
+
+volumes:
+  srv1-var: {}
+  srv1-state: {}
+  srv1-cni: {}
+  srv1-k8s: {}
+  srv1-kubelet: {}
+  srv1-opt: {}
+  srv2-var: {}
+  srv2-state: {}
+  srv2-cni: {}
+  srv2-k8s: {}
+  srv2-kubelet: {}
+  srv2-opt: {}
+  srv3-var: {}
+  srv3-state: {}
+  srv3-cni: {}
+  srv3-k8s: {}
+  srv3-kubelet: {}
+  srv3-opt: {}
