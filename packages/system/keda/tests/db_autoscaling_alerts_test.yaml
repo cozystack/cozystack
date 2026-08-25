@@ -32,6 +32,13 @@ tests:
           content:
             alert: DatabaseAutoscalerScalerErrors
           any: true
+      # Guard the metric name: KEDA 2.20 renamed keda_scaler_errors_total away;
+      # the per-ScaledObject error counter is keda_scaled_object_errors_total
+      # (verified on a live 2.20.2 operator). A regression here makes the alert
+      # silently never fire.
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: keda_scaled_object_errors_total
 
   - it: can be disabled
     set:

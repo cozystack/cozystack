@@ -46,7 +46,7 @@ spec:
     # scaling silently stops. Never scale blind.
     - alert: DatabaseAutoscalerScalerErrors
       expr: |-
-        increase(keda_scaler_errors_total[15m]) > 0
+        increase(keda_scaled_object_errors_total[15m]) > 0
       for: 15m
       labels:
         severity: warning
