@@ -9,6 +9,12 @@ export interface SidebarItem {
   icon?: ComponentType<{ className?: string }>
   badge?: ReactNode
   end?: boolean
+  /**
+   * Extra pathname prefixes that keep this entry highlighted — for pages that
+   * belong to the section but live on another route (e.g. Tenants stays lit
+   * on the per-tenant Info detail page).
+   */
+  alsoMatch?: string[]
 }
 
 export interface SidebarSection {
@@ -55,40 +61,52 @@ export function Sidebar({ sections }: SidebarProps) {
             </button>
             {isOpen(section.title) && (
               <div className="mt-0.5 space-y-0.5 px-2">
-                {section.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={`${item.to}${search}`}
-                    end={item.end ?? false}
-                    className={({ isActive }) =>
-                      cn(
-                        "relative flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
-                        isActive
-                          ? "bg-blue-50 font-medium text-blue-700 before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-blue-500 before:content-['']"
-                          : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
-                      )
-                    }
-                  >
-                    {({ isActive }) => (
-                      <>
-                        {item.icon && (
-                          <item.icon
-                            className={cn(
-                              "h-4 w-4 shrink-0 transition-colors",
-                              isActive ? "text-blue-500" : "text-slate-400",
-                            )}
-                          />
-                        )}
-                        <span className="flex-1 truncate">{item.label}</span>
-                        {item.badge != null && (
-                          <span className="shrink-0 text-xs text-slate-400">
-                            {item.badge}
-                          </span>
-                        )}
-                      </>
-                    )}
-                  </NavLink>
-                ))}
+                {section.items.map((item) => {
+                  // Whole-segment match: a bare startsWith would light up
+                  // /admin/apps for /admin/apps-v2.
+                  const extraActive =
+                    item.alsoMatch?.some(
+                      (p) =>
+                        location.pathname === p ||
+                        location.pathname.startsWith(`${p}/`),
+                    ) ?? false
+                  return (
+                    <NavLink
+                      key={item.to}
+                      to={`${item.to}${search}`}
+                      end={item.end ?? false}
+                      className={({ isActive }) =>
+                        cn(
+                          "relative flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
+                          isActive || extraActive
+                            ? "bg-blue-50 font-medium text-blue-700 before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-blue-500 before:content-['']"
+                            : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
+                        )
+                      }
+                    >
+                      {({ isActive }) => (
+                        <>
+                          {item.icon && (
+                            <item.icon
+                              className={cn(
+                                "h-4 w-4 shrink-0 transition-colors",
+                                isActive || extraActive
+                                  ? "text-blue-500"
+                                  : "text-slate-400",
+                              )}
+                            />
+                          )}
+                          <span className="flex-1 truncate">{item.label}</span>
+                          {item.badge != null && (
+                            <span className="shrink-0 text-xs text-slate-400">
+                              {item.badge}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </NavLink>
+                  )
+                })}
               </div>
             )}
           </div>

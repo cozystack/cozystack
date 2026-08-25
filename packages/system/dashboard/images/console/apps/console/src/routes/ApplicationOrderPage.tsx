@@ -11,6 +11,7 @@ import {
   iconDataUrl,
 } from "../lib/app-definitions.ts"
 import { useTenantContext } from "../lib/tenant-context.tsx"
+import { useResourceBasePath } from "../lib/portal.ts"
 import { composeResource } from "../lib/app-resource.ts"
 import { prepareUpdateSpec } from "../lib/prepare-update.ts"
 import { SchemaForm, type SchemaFormHandle } from "../components/SchemaForm.tsx"
@@ -40,6 +41,7 @@ export function ApplicationOrderPage({
   const { tenantNamespace } = useTenantContext()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const basePath = useResourceBasePath()
 
   const [name, setName] = useState(editMode?.name ?? searchParams.get("name") ?? "")
   const [spec, setSpec] = useState<unknown>(editMode?.initialSpec ?? {})
@@ -150,7 +152,7 @@ export function ApplicationOrderPage({
       } else {
         await create.mutateAsync(body)
       }
-      navigate(`/console/${plural}/${snap.name}`)
+      navigate(`${basePath}/${plural}/${snap.name}`)
     } catch (err) {
       if (err instanceof K8sApiError) {
         alert(`Failed: ${err.message}`)
@@ -183,7 +185,7 @@ export function ApplicationOrderPage({
       <div className="border-b border-slate-200 bg-white px-6 pt-4 pb-3">
         <button
           type="button"
-          onClick={() => editMode ? navigate(`/console/${plural}/${editMode.name}`) : navigate(-1)}
+          onClick={() => editMode ? navigate(`${basePath}/${plural}/${editMode.name}`) : navigate(-1)}
           className="mb-2 flex items-center gap-1 text-xs text-slate-500 hover:text-slate-900"
         >
           <ChevronLeft className="size-3.5" /> Back
@@ -239,7 +241,7 @@ export function ApplicationOrderPage({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => editMode ? navigate(`/console/${plural}/${editMode.name}`) : navigate(-1)}
+              onClick={() => editMode ? navigate(`${basePath}/${plural}/${editMode.name}`) : navigate(-1)}
               disabled={create.isPending || update.isPending}
             >
               Cancel

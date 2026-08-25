@@ -71,6 +71,10 @@ function hasItemTo(
   return sections.some((s) => s.items.some((i) => i.to === to))
 }
 
+function sectionIndex(sections: { title: string }[], title: string) {
+  return sections.findIndex((s) => s.title === title)
+}
+
 describe("useConsoleSidebarSections — admin areas moved out", () => {
   it("keeps the per-tenant Backups group but drops Cluster Usage and admin Backup Classes", async () => {
     const client = makeClient({ nodes: true, backupclasses: true })
@@ -83,10 +87,31 @@ describe("useConsoleSidebarSections — admin areas moved out", () => {
     // Cluster-wide admin areas are gone from Console.
     expect(findItem(result.current, "Cluster")).toBeUndefined()
     expect(hasItemTo(result.current, "/console/backups/backupclasses")).toBe(false)
+    // Administration moved to the Admin portal.
+    expect(sectionIndex(result.current, "Administration")).toBe(-1)
+    expect(findItem(result.current, "Info")).toBeUndefined()
+    expect(findItem(result.current, "Tenants")).toBeUndefined()
   })
 })
 
 describe("useAdminSidebarSections", () => {
+  it("always shows Administration, even with no operator permissions", async () => {
+    const client = makeClient({ nodes: false, backupclasses: false })
+    const { result } = renderHook(() => useAdminSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    // Administration is present immediately — it needs no permission review.
+    expect(findItem(result.current, "Tenants")?.to).toBe("/admin/tenants")
+    expect(findItem(result.current, "Modules")?.to).toBe("/admin/modules")
+    // Per-tenant Info moved into the Tenants tree rows — no sidebar entry.
+    expect(findItem(result.current, "Info")).toBeUndefined()
+    expect(findItem(result.current, "External IPs")?.to).toBe("/admin/external-ips")
+    // No operator area leaks in while the gates deny.
+    await waitFor(() => expect(client.create).toHaveBeenCalled())
+    expect(findItem(result.current, "Cluster")).toBeUndefined()
+    expect(findItem(result.current, "Backup Classes")).toBeUndefined()
+  })
+
   it("shows Cluster Usage and Backup Classes when both gates allow", async () => {
     const client = makeClient({ nodes: true, backupclasses: true })
     const { result } = renderHook(() => useAdminSidebarSections(), {
@@ -99,6 +124,11 @@ describe("useAdminSidebarSections", () => {
     expect(findItem(result.current, "Backup Classes")?.to).toBe(
       "/admin/backups/backupclasses",
     )
+    // Administration renders above the gated operator areas.
+    const admin = sectionIndex(result.current, "Administration")
+    expect(admin).toBe(0)
+    expect(admin).toBeLessThan(sectionIndex(result.current, "Capacity"))
+    expect(admin).toBeLessThan(sectionIndex(result.current, "Backups"))
   })
 
   it("shows only Backup Classes when the user lacks nodes/list", async () => {
@@ -125,28 +155,19 @@ describe("useAdminSidebarSections", () => {
 })
 
 describe("useCanSeeAdmin", () => {
-  it("is true when nodes/list is allowed", async () => {
-    const client = makeClient({ nodes: true, backupclasses: false })
-    const { result } = renderHook(() => useCanSeeAdmin(), {
-      wrapper: makeWrapper(client),
-    })
-    await waitFor(() => expect(result.current).toBe(true))
-  })
-
-  it("is true when only backupclasses/update is allowed", async () => {
-    const client = makeClient({ nodes: false, backupclasses: true })
-    const { result } = renderHook(() => useCanSeeAdmin(), {
-      wrapper: makeWrapper(client),
-    })
-    await waitFor(() => expect(result.current).toBe(true))
-  })
-
-  it("is false when neither admin area is allowed", async () => {
-    const client = makeClient({ nodes: false, backupclasses: false })
-    const { result } = renderHook(() => useCanSeeAdmin(), {
-      wrapper: makeWrapper(client),
-    })
-    await waitFor(() => expect(client.create).toHaveBeenCalled())
-    expect(result.current).toBe(false)
+  // The Admin tab is always visible now: Administration needs no permission.
+  it("is true regardless of operator permissions", () => {
+    for (const perms of [
+      { nodes: true, backupclasses: true },
+      { nodes: true, backupclasses: false },
+      { nodes: false, backupclasses: true },
+      { nodes: false, backupclasses: false },
+    ]) {
+      const client = makeClient(perms)
+      const { result } = renderHook(() => useCanSeeAdmin(), {
+        wrapper: makeWrapper(client),
+      })
+      expect(result.current).toBe(true)
+    }
   })
 })

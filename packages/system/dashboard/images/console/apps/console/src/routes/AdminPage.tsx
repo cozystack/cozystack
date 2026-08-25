@@ -1,6 +1,4 @@
-import { Link, Navigate, Route, Routes } from "react-router"
-import { Section, Spinner } from "@cozystack/ui"
-import { useAdminAccess } from "./sidebar-sections.tsx"
+import { Navigate, Route, Routes } from "react-router"
 import { ClusterUsagePage } from "./ClusterUsagePage.tsx"
 import { ClusterUsageResourcePage } from "./ClusterUsageResourcePage.tsx"
 import { StorageClassUsagePage } from "./StorageClassUsagePage.tsx"
@@ -12,54 +10,27 @@ import { BackupClassDetailPage } from "./BackupClassDetailPage.tsx"
 import { BackupClassEditPage } from "./BackupClassEditPage.tsx"
 import { BackupClassAdminGuard } from "./BackupClassAdminGuard.tsx"
 import { CapacityAdminGuard } from "./CapacityAdminGuard.tsx"
+import { InfoRedirect } from "./InfoRedirect.tsx"
+import { ModulesPage } from "./ModulesPage.tsx"
+import { ExternalIpsPage } from "./ExternalIpsPage.tsx"
+import { TenantsPage } from "./TenantsPage.tsx"
+import { ApplicationOrderPage } from "./ApplicationOrderPage.tsx"
+import { ApplicationEditRoute } from "./detail/ApplicationEditRoute.tsx"
+import { ApplicationDetailPage } from "./detail/ApplicationDetailPage.tsx"
+import { ApplicationListPage } from "./ApplicationListPage.tsx"
 
 /**
- * Admin portal at /admin/*, hosting two cluster-wide operator areas with
- * independent permissions: Capacity (nodes/list) and Backup Classes
- * (backupclasses/update). useAdminAccess lets a user in if they hold either,
- * so the portal-level gate alone would let a backup-only operator reach a
- * Capacity URL — hence each area is wrapped in its own layout guard that closes
- * the direct-URL hole the sidebar already hides. While the review is in flight
- * we show a spinner; a user with neither area gets a 403 notice.
+ * Admin portal at /admin/*. Administration (Info, Modules, External IPs,
+ * Tenants) is always accessible, so the portal itself carries no gate. The two
+ * cluster-wide operator areas keep their own independent permissions: Capacity
+ * (nodes/list) and Backup Classes (backupclasses/update). Each is wrapped in a
+ * layout guard that closes the direct-URL hole the sidebar already hides, so a
+ * user without an area can never reach its pages even by typing the URL.
  */
 export function AdminPage() {
-  const { allowed, isLoading, canClusterUsage } = useAdminAccess()
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-2 p-6 text-sm text-slate-500">
-        <Spinner /> Loading…
-      </div>
-    )
-  }
-
-  if (!allowed) {
-    return (
-      <div className="p-6">
-        <Section>
-          <div className="px-2 py-4 text-sm text-slate-700">
-            You do not have permission to access the Admin portal.{" "}
-            <Link to="/console" className="text-blue-700 underline hover:text-blue-800">
-              Back to console
-            </Link>
-            .
-          </div>
-        </Section>
-      </div>
-    )
-  }
-
   return (
     <Routes>
-      <Route
-        index
-        element={
-          <Navigate
-            to={canClusterUsage ? "capacity/cluster" : "backups/backupclasses"}
-            replace
-          />
-        }
-      />
+      <Route index element={<Navigate to="tenants" replace />} />
       <Route element={<CapacityAdminGuard />}>
         <Route path="capacity/cluster" element={<ClusterUsagePage />} />
         <Route path="capacity/cluster/r/*" element={<ClusterUsageResourcePage />} />
@@ -73,6 +44,14 @@ export function AdminPage() {
         <Route path="backups/backupclasses/:name" element={<BackupClassDetailPage />} />
         <Route path="backups/backupclasses/:name/edit" element={<BackupClassEditPage />} />
       </Route>
+      <Route path="info" element={<InfoRedirect />} />
+      <Route path="modules" element={<ModulesPage />} />
+      <Route path="external-ips" element={<ExternalIpsPage />} />
+      <Route path="tenants" element={<TenantsPage />} />
+      <Route path="new/:appName" element={<ApplicationOrderPage />} />
+      <Route path=":plural/:name/edit" element={<ApplicationEditRoute />} />
+      <Route path=":plural/:name/*" element={<ApplicationDetailPage />} />
+      <Route path=":plural" element={<ApplicationListPage />} />
     </Routes>
   )
 }

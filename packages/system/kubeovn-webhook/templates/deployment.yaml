@@ -50,6 +50,9 @@ spec:
             - "--tls-key-file=/etc/webhook/certs/tls.key"
             - "--port-security={{ .Values.portSecurity }}"
             - "--routes={{ .Values.routes }}"
+            {{- with .Values.clientCAFile }}
+            - "--client-ca-file={{ . }}"
+            {{- end }}
       tolerations:
       - effect: NoSchedule
         operator: Exists
