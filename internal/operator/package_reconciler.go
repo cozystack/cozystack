@@ -920,11 +920,16 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		return fmt.Errorf("failed to read the system defaults LimitRange in namespace %s: %w", nsName, err)
 	}
 
-	// The pod half of the scan is skippable once a memory default is in force, and only
-	// then. From that moment LimitRanger writes a limit onto every new container that
-	// declares none, so a container carrying a memory request with no limit beside it —
-	// the only shape this scan looks for — can no longer be admitted, and the ones that
-	// predate the LimitRange are already running and would not be changed by finding them.
+	// The pod half of the scan is skippable only where the namespace already defaults
+	// container memory at exactly the configured limit. There LimitRanger writes a limit
+	// onto every new container that declares none, so a container carrying a memory request
+	// with no limit beside it — the only shape this scan looks for — can no longer be
+	// admitted, and there is no raise standing that finding one could justify keeping.
+	//
+	// "Some memory default is in force" is the weaker condition, and it was the wrong one:
+	// it also covers a namespace sitting at a ceiling this reconciler raised, where skipping
+	// the pod list destroys the evidence for the raise and the recompute below then retracts
+	// it under a pod that is still running. memoryDefaultSettledAt carries that argument.
 	//
 	// Nothing of the kind holds for the templates. LimitRanger gates pods, not Deployments,
 	// so a workload added to a settled namespace with a request above the ceiling and no
@@ -934,7 +939,8 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 	// rollout with no pods and nothing in the log, because the ceiling that would have
 	// cleared it is raised by a scan that never ran. The template Lists are the cheap half
 	// and they are the half that has to keep running.
-	blocker, err := r.findRequestAboveDefaultLimit(ctx, nsName, !memoryDefaultInForce(existing))
+	blocker, err := r.findRequestAboveDefaultLimit(ctx, nsName,
+		!memoryDefaultSettledAt(existing, r.SystemNamespaceMemoryLimit))
 	if err != nil {
 		// Without the scan there is no way to tell whether the configured default is
 		// safe here, and guessing risks the admission failure the scan exists to
@@ -1012,18 +1018,42 @@ func systemDefaultsLimitRangeApplyConfiguration(lr *corev1.LimitRange) *corev1ac
 		WithSpec(corev1ac.LimitRangeSpec().WithLimits(items...))
 }
 
-// memoryDefaultInForce reports whether lr already defaults a container memory limit in its
-// namespace, which is the condition that makes the pod list skippable: from that moment
-// LimitRanger fills in a limit for every container that declares none, so no container can
-// be admitted carrying a memory request with no limit beside it. An absent LimitRange, or
-// one whose spec has been stripped, defaults nothing and leaves the pod list meaningful.
-func memoryDefaultInForce(lr *corev1.LimitRange) bool {
+// memoryDefaultSettledAt reports whether lr already defaults container memory in its
+// namespace at exactly the configured limit — the one condition under which the pod list
+// stops being worth reading.
+//
+// The weaker "defaults container memory at all" was wrong here, and wrong in a way that
+// took a component down rather than costing precision. The default this reconciler writes
+// is either the configured limit or a ceiling raised above it to clear an oversized
+// request, and the raise is recomputed from the scan on every reconcile rather than read
+// back off the object in the cluster. Under the weaker test, a raise that only the pod half
+// of the scan could justify — a live pod requesting more than the limit with no limit of
+// its own, in no workload template this scan can read — was reverted by the very next
+// reconcile: the raised LimitRange satisfied "in force", that reconcile skipped the pod
+// list, the scan came back empty, and the configured limit was reapplied underneath a pod
+// that was still running. Its next recreation was then rejected for good, because the skip
+// stayed in effect and nothing rescanned to notice. Lowering the knob under a running pod
+// reached the same place without needing any race.
+//
+// Equality with the configured limit keeps the pod list alive for exactly as long as the
+// namespace sits raised, which is what lets the raise be re-justified or dropped on
+// evidence instead of frozen at its high-water mark or forgotten. The cost is that a raised
+// namespace reads the pod list on every reconcile; that is the price of being able to lower
+// the ceiling again, and it is bounded by how many namespaces sit raised, which is none
+// once the oversized requests are gone.
+//
+// The comparison is by value rather than by struct, for the same reason the spec comparison
+// further up is semantic: a LimitRange stored as 4096Mi defaults the same 4Gi the configured
+// quantity does, and re-reading the pod list over notation would be this bug again in a
+// smaller coat. An absent LimitRange, or one whose spec has been stripped, defaults nothing
+// and leaves the pod list meaningful.
+func memoryDefaultSettledAt(lr *corev1.LimitRange, configured resource.Quantity) bool {
 	for _, item := range lr.Spec.Limits {
 		if item.Type != corev1.LimitTypeContainer {
 			continue
 		}
-		if _, ok := item.Default[corev1.ResourceMemory]; ok {
-			return true
+		if got, ok := item.Default[corev1.ResourceMemory]; ok {
+			return got.Cmp(configured) == 0
 		}
 	}
 	return false
