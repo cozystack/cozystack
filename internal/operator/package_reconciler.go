@@ -1083,6 +1083,12 @@ func (r *PackageReconciler) deleteSystemDefaultsLimitRange(ctx context.Context, 
 	// operator never wrote. Only objects carrying this reconciler's managed-by label are
 	// its to delete; anything else is left where it is, which is also the right answer if
 	// the name is ever taken over by another component.
+	//
+	// The label bounds what disabling can remove; it is not protection from the feature
+	// being enabled. While enabled the apply above takes the name over with ForceOwnership
+	// and stamps the label itself, so a hand-written cozystack-system-defaults is adopted
+	// and then removed here on the way out. What the guard buys is that a LimitRange of
+	// that name this reconciler never wrote to survives the knob.
 	if stale.Labels["app.kubernetes.io/managed-by"] != packageControllerFieldOwner {
 		return nil
 	}
