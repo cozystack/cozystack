@@ -92,11 +92,25 @@ EOF
   rm -rf "$tmp"
 }
 
-@test "line match is dot-anchored (1.5 does not match v155.x)" {
+# Line "1.5" selects from the v1.5 line and nowhere else, not merely the highest
+# stable tag that mentions those digits. v11.5.0 is the fixture that can catch
+# the difference: it ends in "1.5.0", and `sort -rV` puts it FIRST, so a pattern
+# that has lost its leading "^v" takes it and the case resolves v11.5.0.
+# Verified non-vacuous: dropping the "^v" from latest_on_line's pattern turns
+# exactly this case red.
+#
+# The earlier fixture here was v155.0.0, under the name "line match is
+# dot-anchored (1.5 does not match v155.x)", and it pinned nothing: no reading of
+# the pattern matches that tag, so the case stayed green with the dot escaping
+# removed. The narrower truth is that over the tags stable_desc emits — vX.Y.Z
+# and nothing else — the escaping, the trailing "$" and the "^" are each
+# unfalsifiable, because such a tag carries exactly one "v" and it is at the
+# front. The "^v" pair is the one piece of that anchoring a fixture can reach.
+@test "previous-minor walk never selects a higher major line" {
   tmp=$(mktemp -d)
   cat > "$tmp/tags" <<'EOF'
 v1.5.3
-v155.0.0
+v11.5.0
 v1.6.0-rc.1
 EOF
   output=$(hack/upgrade-prev-version.sh v1.6.0-rc.1 "$tmp/tags")

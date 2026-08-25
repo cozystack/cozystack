@@ -35,8 +35,14 @@ stable_desc() {
   all_tags | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -rV
 }
 
-# Latest stable tag on the given "MAJOR.MINOR" line (empty if none). Dots in the
-# line are escaped so line "1.5" cannot spuriously match "v155.x".
+# Latest stable tag on the given "MAJOR.MINOR" line (empty if none). The leading
+# "^v" is what confines the match to one line: line "1.5" against a tag list
+# holding v11.5.0 selects it without that anchor, since the tag ends in "1.5.0"
+# and sorts above v1.5.3. The rest of the pattern is belt-and-braces: every tag
+# stable_desc emits is vX.Y.Z, and over that set the trailing "$" and the escaped
+# dots accept exactly what their unescaped, unanchored counterparts accept. Kept
+# for a reader's benefit, and because the set stable_desc admits is one grep away
+# from being widened.
 latest_on_line() {
   _line=$(printf '%s' "$1" | sed 's/\./\\./g')
   stable_desc | grep -E "^v${_line}\.[0-9]+$" | head -n1
