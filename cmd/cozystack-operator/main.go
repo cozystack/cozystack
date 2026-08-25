@@ -157,7 +157,10 @@ func main() {
 			"pod out of the victim set where no memory.max does not - and it drops back to this value on "+
 			"its own once the request is gone. Grep the operator log for \"raising the default container "+
 			"memory limit\" to see which namespace, workload and container caused it. "+
-			"Empty or 0 disables the LimitRange and removes any previously created one.")
+			"Scope is every namespace a Package targets that is not a tenant namespace, which "+
+			"includes kube-system - cozystack-scheduler is installed there - so namespaces owned "+
+			"by the underlying distribution are covered too. Empty or 0 disables the LimitRange "+
+			"and removes any previously created one.")
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", "32Mi",
 		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+
 			"explicitly: Kubernetes defaults an unset request to the limit, which would reserve the full "+
