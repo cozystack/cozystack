@@ -1291,21 +1291,27 @@ jobs:
           fi
           echo "✅ Upgrade test passed"
 
-      # Chainsaw writes its JUnit report to the upgrade tree; the verify run is
-      # the last invocation, so its report is what lands here.
-      - name: Collect chainsaw report
+      # One JUnit report per Chainsaw phase. Both phases write the name
+      # .chainsaw.yaml gives them, so the make targets rename each on the way
+      # out (see packages/core/testing/Makefile); collecting them under those
+      # names is what keeps a seed-phase failure from being published as the
+      # verify report. A phase that never ran leaves no file, which is the
+      # answer this is meant to give.
+      - name: Collect chainsaw reports
         if: always()
         run: |
           mkdir -p _out
-          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw-upgrade/chainsaw-report.xml \
-            _out/upgrade-chainsaw-report.xml || true
+          for phase in seed verify; do
+            docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw-upgrade/chainsaw-report-"$phase".xml \
+              _out/upgrade-chainsaw-report-"$phase".xml || true
+          done
 
-      - name: Upload chainsaw report
+      - name: Upload chainsaw reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: upgrade-chainsaw-report
-          path: _out/upgrade-chainsaw-report.xml
+          path: _out/upgrade-chainsaw-report-*.xml
           if-no-files-found: ignore
 
       - name: Collect sandbox diagnostics

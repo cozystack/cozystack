@@ -75,10 +75,16 @@ upgrade-install-previous:
 		-e UPGRADE_TARGET_TAG="${UPGRADE_TARGET_TAG}" \
 		"${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-upgrade-install-previous.bats'
 
+# Both Chainsaw phases take their report name from .chainsaw.yaml, so both write
+# the same chainsaw-report.xml next to it and the second overwrites the first.
+# Rename per phase: when the lane fails during seed there IS no verify run, and
+# publishing the seed report under the verify name is the one case where someone
+# is actually reading the file. `rm -f` first so a stale report from an earlier
+# phase cannot be renamed as this one's.
 upgrade-seed:
 	docker exec \
 		-e UPGRADE_E2E_TENANT_K8S="${UPGRADE_E2E_TENANT_K8S}" \
-		"${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw-upgrade && chainsaw test seed'
+		"${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw-upgrade && rm -f chainsaw-report.xml; chainsaw test seed; rc=$$?; if [ -f chainsaw-report.xml ]; then mv chainsaw-report.xml chainsaw-report-seed.xml; fi; exit $$rc'
 
 upgrade-apply:
 	docker exec \
@@ -88,7 +94,7 @@ upgrade-apply:
 upgrade-verify:
 	docker exec \
 		-e UPGRADE_E2E_TENANT_K8S="${UPGRADE_E2E_TENANT_K8S}" \
-		"${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw-upgrade && chainsaw test verify'
+		"${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw-upgrade && rm -f chainsaw-report.xml; chainsaw test verify; rc=$$?; if [ -f chainsaw-report.xml ]; then mv chainsaw-report.xml chainsaw-report-verify.xml; fi; exit $$rc'
 
 upgrade-cozystack: upgrade-install-previous upgrade-seed upgrade-apply upgrade-verify ## Run the release upgrade test in an existing sandbox.
 
