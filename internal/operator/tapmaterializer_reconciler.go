@@ -20,12 +20,17 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
+	"strings"
 	"time"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -101,7 +106,12 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if fetch == nil {
 		fetch = httpFetch
 	}
-	data, err := fetch(ctx, art.URL)
+	// The artifact URL is a cluster-DNS name (flux.<ns>.svc/...). cozystack-operator
+	// runs with hostNetwork, so it resolves against the host's DNS, not CoreDNS,
+	// and that name does not resolve. Rewrite the host to the Service ClusterIP,
+	// which a hostNetwork pod can reach directly; on any failure fall back to the
+	// original URL so clusters where DNS does work are unaffected.
+	data, err := fetch(ctx, r.resolveArtifactURL(ctx, art.URL))
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetch artifact for tap %s: %w", repo.Name, err)
 	}
@@ -192,6 +202,74 @@ func (r *TapMaterializerReconciler) pruneMaterialized(ctx context.Context, sourc
 		}
 	}
 	return nil
+}
+
+// resolveArtifactURL rewrites a cluster-DNS artifact host (e.g.
+// flux.cozy-fluxcd.svc) to the backing Service's ClusterIP, so the hostNetwork
+// operator pod can reach it without CoreDNS. It fails open: any parse/lookup
+// problem (non-cluster host, Service missing, headless/empty ClusterIP) returns
+// the original URL unchanged, so this only ever adds a reachable path.
+func (r *TapMaterializerReconciler) resolveArtifactURL(ctx context.Context, rawURL string) string {
+	logger := log.FromContext(ctx)
+	u, err := neturl.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	svc, ns, ok := parseClusterServiceHost(u.Hostname())
+	if !ok {
+		return rawURL
+	}
+	var service corev1.Service
+	if err := r.Get(ctx, types.NamespacedName{Name: svc, Namespace: ns}, &service); err != nil {
+		logger.V(1).Info("artifact host not resolved to ClusterIP; using DNS name", "host", u.Hostname(), "err", err.Error())
+		return rawURL
+	}
+	ip := service.Spec.ClusterIP
+	if ip == "" || ip == corev1.ClusterIPNone {
+		return rawURL
+	}
+	rewritten, err := rewriteURLHost(rawURL, ip)
+	if err != nil {
+		return rawURL
+	}
+	return rewritten
+}
+
+// parseClusterServiceHost recognises an in-cluster Service DNS name of the form
+// <service>.<namespace>.svc or <service>.<namespace>.svc.cluster.local and
+// returns the service and namespace.
+func parseClusterServiceHost(host string) (service, namespace string, ok bool) {
+	host = strings.TrimSuffix(host, ".")
+	labels := strings.Split(host, ".")
+	// <svc>.<ns>.svc[.cluster.local]
+	if len(labels) < 3 || labels[2] != "svc" {
+		return "", "", false
+	}
+	if len(labels) > 3 {
+		rest := strings.Join(labels[3:], ".")
+		if rest != "cluster.local" {
+			return "", "", false
+		}
+	}
+	if labels[0] == "" || labels[1] == "" {
+		return "", "", false
+	}
+	return labels[0], labels[1], true
+}
+
+// rewriteURLHost replaces the host of rawURL with newHost, preserving scheme,
+// port, path and query.
+func rewriteURLHost(rawURL, newHost string) (string, error) {
+	u, err := neturl.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	if port := u.Port(); port != "" {
+		u.Host = net.JoinHostPort(newHost, port)
+	} else {
+		u.Host = newHost
+	}
+	return u.String(), nil
 }
 
 // httpFetch downloads a Flux artifact tarball, bounded in size and time.

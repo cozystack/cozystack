@@ -21,10 +21,12 @@ import (
 	"testing"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -63,6 +65,78 @@ func tapRepo(finalizer bool) *sourcev1.OCIRepository {
 
 func req() ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Name: "community-foo-bar", Namespace: "cozy-system"}}
+}
+
+func TestParseClusterServiceHost(t *testing.T) {
+	cases := []struct {
+		host    string
+		svc, ns string
+		ok      bool
+	}{
+		{"flux.cozy-fluxcd.svc", "flux", "cozy-fluxcd", true},
+		{"flux.cozy-fluxcd.svc.cluster.local", "flux", "cozy-fluxcd", true},
+		{"flux.cozy-fluxcd.svc.", "flux", "cozy-fluxcd", true},
+		{"source-controller.flux-system.svc", "source-controller", "flux-system", true},
+		{"example.com", "", "", false},
+		{"flux.cozy-fluxcd", "", "", false},
+		{"flux.cozy-fluxcd.svc.example.com", "", "", false},
+		{"10.96.0.1", "", "", false},
+		{".cozy-fluxcd.svc", "", "", false},
+	}
+	for _, c := range cases {
+		svc, ns, ok := parseClusterServiceHost(c.host)
+		if ok != c.ok || svc != c.svc || ns != c.ns {
+			t.Errorf("parseClusterServiceHost(%q) = (%q,%q,%v), want (%q,%q,%v)", c.host, svc, ns, ok, c.svc, c.ns, c.ok)
+		}
+	}
+}
+
+func TestRewriteURLHost(t *testing.T) {
+	cases := []struct{ in, ip, want string }{
+		{"http://flux.cozy-fluxcd.svc/gitrepository/a/b.tar.gz", "10.96.1.2", "http://10.96.1.2/gitrepository/a/b.tar.gz"},
+		{"http://flux.cozy-fluxcd.svc:9090/x?rev=1", "10.96.1.2", "http://10.96.1.2:9090/x?rev=1"},
+	}
+	for _, c := range cases {
+		got, err := rewriteURLHost(c.in, c.ip)
+		if err != nil || got != c.want {
+			t.Errorf("rewriteURLHost(%q,%q) = %q,%v; want %q", c.in, c.ip, got, err, c.want)
+		}
+	}
+}
+
+func TestResolveArtifactURL(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "flux", Namespace: "cozy-fluxcd"},
+		Spec:       corev1.ServiceSpec{ClusterIP: "10.96.7.7"},
+	}
+	headless := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "flux", Namespace: "headless-ns"},
+		Spec:       corev1.ServiceSpec{ClusterIP: corev1.ClusterIPNone},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(svc, headless).Build()
+	r := &TapMaterializerReconciler{Client: cl, Scheme: scheme}
+
+	// ClusterIP service: host rewritten to the IP.
+	if got := r.resolveArtifactURL(context.Background(), "http://flux.cozy-fluxcd.svc/a/b.tar.gz"); got != "http://10.96.7.7/a/b.tar.gz" {
+		t.Errorf("expected rewrite to ClusterIP, got %q", got)
+	}
+	// Service missing: fall back to the original URL.
+	orig := "http://flux.other-ns.svc/a/b.tar.gz"
+	if got := r.resolveArtifactURL(context.Background(), orig); got != orig {
+		t.Errorf("expected fallback for missing service, got %q", got)
+	}
+	// Headless (no ClusterIP): fall back.
+	head := "http://flux.headless-ns.svc/a/b.tar.gz"
+	if got := r.resolveArtifactURL(context.Background(), head); got != head {
+		t.Errorf("expected fallback for headless service, got %q", got)
+	}
+	// Non-cluster host: untouched.
+	ext := "http://example.com/a/b.tar.gz"
+	if got := r.resolveArtifactURL(context.Background(), ext); got != ext {
+		t.Errorf("expected external host untouched, got %q", got)
+	}
 }
 
 func TestReconcileAddsFinalizer(t *testing.T) {
