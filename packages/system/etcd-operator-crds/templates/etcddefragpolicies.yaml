@@ -1,0 +1,318 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+    helm.sh/resource-policy: keep
+  name: etcddefragpolicies.etcd-operator.cozystack.io
+spec:
+  group: etcd-operator.cozystack.io
+  names:
+    kind: EtcdDefragPolicy
+    listKind: EtcdDefragPolicyList
+    plural: etcddefragpolicies
+    singular: etcddefragpolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterRef.name
+      name: Cluster
+      type: string
+    - jsonPath: .spec.schedule.cron
+      name: Schedule
+      type: string
+    - jsonPath: .spec.schedule.timezone
+      name: Timezone
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspend
+      type: boolean
+    - jsonPath: .status.lastScheduleTime
+      name: Last Schedule
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          EtcdDefragPolicy is the Schema for the etcddefragpolicies API. It stamps out
+          EtcdDefrag runs on a cron schedule so the operator drives recurring
+          defragmentation itself. Each run is a discrete, auditable EtcdDefrag owned by
+          the policy.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              EtcdDefragPolicySpec is the desired state of an EtcdDefragPolicy: a recurring
+              schedule that stamps out EtcdDefrag runs against one EtcdCluster, so the
+              operator absorbs the cadence instead of relying on an external CronJob.
+            properties:
+              clusterRef:
+                description: |-
+                  ClusterRef names the EtcdCluster (same namespace) each stamped EtcdDefrag
+                  targets.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              concurrencyPolicy:
+                default: Forbid
+                description: |-
+                  ConcurrencyPolicy decides what a due tick does when a previous stamped run
+                  is still active. Defaults to Forbid.
+                enum:
+                - Allow
+                - Forbid
+                type: string
+              historyLimit:
+                description: |-
+                  HistoryLimit caps how many finished (Complete/Failed) EtcdDefrags stamped
+                  by this policy are retained; the oldest beyond the limit are deleted.
+                  Absent leaves cleanup to each run's ttlSecondsAfterFinished.
+                format: int32
+                minimum: 0
+                type: integer
+              rule:
+                description: |-
+                  Rule is stamped verbatim into each EtcdDefrag; it decides which members a
+                  run touches. Absent stamps runs with no rule (the default gate).
+                properties:
+                  all:
+                    description: |-
+                      All defragments every member unconditionally, regardless of size — the
+                      explicit "do it now". Mutually exclusive with the threshold fields below.
+                    type: boolean
+                  freeSpaceAbove:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      FreeSpaceAbove defragments a member whose reclaimable space
+                      (DbSize-DbSizeInUse) exceeds this. The primary, always-applied gate.
+                      Absent means the built-in default (200Mi).
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  minReclaim:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      MinReclaim floors the quota arm: even under quota pressure, skip a member
+                      that would reclaim less than this. Only meaningful with QuotaUsageAbove,
+                      and must not exceed FreeSpaceAbove. Absent means the built-in default
+                      (32Mi).
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  quotaUsageAbove:
+                    description: |-
+                      QuotaUsageAbove: when DbSize exceeds this fraction of the backend quota
+                      (approaching NOSPACE), lower the reclaimable floor to MinReclaim so small
+                      wins are taken under pressure. A member is never defragmented when its
+                      reclaimable space is below MinReclaim. Integer percent 1..99 with a "%"
+                      suffix, e.g. "80%"; 100% is rejected because a backend never exceeds its
+                      quota (etcd raises NOSPACE first), so the arm could never fire.
+                    pattern: ^[1-9][0-9]?%$
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: rule.all cannot be combined with freeSpaceAbove/quotaUsageAbove/minReclaim
+                  rule: '!(has(self.all) && self.all) || (!has(self.freeSpaceAbove)
+                    && !has(self.quotaUsageAbove) && !has(self.minReclaim))'
+                - message: freeSpaceAbove must be greater than 0
+                  rule: '!has(self.freeSpaceAbove) || quantity(string(self.freeSpaceAbove)).isGreaterThan(quantity(''0''))'
+                - message: minReclaim must be greater than 0
+                  rule: '!has(self.minReclaim) || quantity(string(self.minReclaim)).isGreaterThan(quantity(''0''))'
+                - message: minReclaim is only meaningful with quotaUsageAbove
+                  rule: '!has(self.minReclaim) || has(self.quotaUsageAbove)'
+                - message: minReclaim must not exceed freeSpaceAbove
+                  rule: '!(has(self.minReclaim) && has(self.freeSpaceAbove)) || quantity(string(self.minReclaim)).compareTo(quantity(string(self.freeSpaceAbove)))
+                    <= 0'
+              schedule:
+                description: Schedule names when a run is stamped.
+                properties:
+                  cron:
+                    description: |-
+                      Cron is a standard five-field cron expression (e.g. "0 3 * * *" for 03:00).
+                      Descriptors (@daily) and a TZ=/CRON_TZ= prefix are rejected; use Timezone
+                      for the zone.
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: set the zone in schedule.timezone, not a TZ= prefix
+                      rule: '!self.contains(''TZ='')'
+                  timezone:
+                    description: |-
+                      Timezone is an IANA zone name (e.g. "Europe/Moscow") the cron expression is
+                      read in. Absent reads it in UTC.
+                    type: string
+                required:
+                - cron
+                type: object
+              startingDeadlineSeconds:
+                description: |-
+                  StartingDeadlineSeconds bounds how late a missed tick may still be started.
+                  If the operator was down (or the tick forbidden) and more than this many
+                  seconds have passed since the scheduled time, that tick is skipped rather
+                  than started late. Absent means no deadline.
+
+                  Capped at ten years: the value is multiplied out to a time.Duration, which
+                  overflows past ~292 years and wraps to a negative window that silently
+                  suppresses every tick. Anything near the cap already means "no deadline".
+                format: int64
+                maximum: 315360000
+                minimum: 0
+                type: integer
+              suspend:
+                description: |-
+                  Suspend pauses stamping. Runs already in flight are left alone. On resume
+                  the single most recent missed tick may be stamped (subject to
+                  StartingDeadlineSeconds); earlier missed ticks are never replayed.
+                type: boolean
+              ttlSecondsAfterFinished:
+                description: |-
+                  TTLSecondsAfterFinished is stamped into each EtcdDefrag so a stamped run
+                  garbage-collects itself once finished. Complements HistoryLimit.
+                format: int32
+                minimum: 0
+                type: integer
+            required:
+            - clusterRef
+            - schedule
+            type: object
+            x-kubernetes-validations:
+            - message: spec.clusterRef.name is required
+              rule: size(self.clusterRef.name) != 0
+          status:
+            description: EtcdDefragPolicyStatus is the observed state of an EtcdDefragPolicy.
+            properties:
+              active:
+                description: Active references the stamped EtcdDefrags that have not
+                  yet finished.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
+                x-kubernetes-list-type: atomic
+              conditions:
+                description: |-
+                  Conditions represent the latest observations — notably why stamping is
+                  paused (Suspended) or not happening (InvalidSchedule).
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastScheduleTime:
+                description: |-
+                  LastScheduleTime is the scheduled time of the most recent tick the policy
+                  stamped a run for, or consumed by skipping under ConcurrencyPolicy. It
+                  anchors the next tick, so a tick is never acted on twice. A tick dropped
+                  for being too far in the past does not advance it; those are reported as
+                  MissedSchedule events.
+                format: date-time
+                type: string
+              lastSuccessfulTime:
+                description: LastSuccessfulTime is when a stamped run most recently
+                  reached Complete.
+                format: date-time
+                type: string
+            type: object
+        type: object
+        x-kubernetes-validations:
+        - message: 'metadata.name must be 52 characters or fewer: it becomes a label
+            value on each stamped EtcdDefrag'
+          rule: size(self.metadata.name) <= 52
+    served: true
+    storage: true
+    subresources:
+      status: {}
