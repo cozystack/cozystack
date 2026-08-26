@@ -48,6 +48,12 @@ const (
 	// storage; when it leaves StorageName empty the driver falls back to this.
 	psmdbDefaultStorageName = "s3-storage"
 
+	// psmdbFieldManager is the server-side-apply field owner for the driver's
+	// storage injection on the useSystemBucket flow. A dedicated manager (with
+	// ForceOwnership) keeps the injected spec.backup.storages entry from being
+	// reverted by the app's Helm/Flux field manager on re-render.
+	psmdbFieldManager = "cozystack-psmdb-backup-driver"
+
 	// Driver-metadata keys persisted on Cozystack Backup artifacts. The
 	// restore path reads Destination (+ the S3 snapshot) to drive the operator
 	// Restore CR's backupSource, so a restore-to-differently-named instance
@@ -220,6 +226,23 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 		return ctrl.Result{}, err
 	}
+	// System-bucket flow: the app chart leaves spec.backup.storages unset (it
+	// cannot know the platform bucket/endpoint at render time), so SSA-inject
+	// the storage from the strategy's coordinates before the precondition looks
+	// for it. Owned by a dedicated field manager with ForceOwnership so a Flux
+	// re-render of the app never reverts it (mirrors the CNPG driver's
+	// spec.plugins patch). Gated on the storage being ABSENT: rendered.S3==nil
+	// (a custom strategy) or a legacy app that already ships its own static
+	// s3-storage is left untouched, so this never clobbers a manual bucket.
+	_, hasStorage := cluster.Spec.Backup.Storages[storageName]
+	if rendered.S3 != nil && !hasStorage {
+		if err := r.applyMongoDBSystemStorage(ctx, j.Namespace, psmdbName, storageName, rendered.S3); err != nil {
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to inject system-bucket storage onto psmdb.percona.com/PerconaServerMongoDB %s/%s: %v", j.Namespace, psmdbName, err))
+		}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: j.Namespace, Name: psmdbName}, cluster); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	if msg := psmdbBackupPrecondition(cluster, storageName); msg != "" {
 		if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
@@ -371,6 +394,45 @@ func psmdbStorageS3CredentialsSecret(raw runtime.RawExtension) string {
 		return ""
 	}
 	return st.S3.CredentialsSecret
+}
+
+// applyMongoDBSystemStorage SSA-injects the system-bucket S3 storage onto the
+// live PerconaServerMongoDB's spec.backup.storages[storageName]. On the
+// useSystemBucket flow the app chart omits the storage (it cannot know the
+// platform bucket/endpoint at render time), so the driver owns this subtree
+// via a dedicated field manager + ForceOwnership - the app's Helm/Flux manager
+// never sets it, so re-renders leave the injected storage intact (mirrors the
+// CNPG driver's spec.plugins patch). CredentialsSecret defaults to
+// cozy-backups-creds, which the BackupJob reconciler projects into the
+// namespace before dispatch.
+func (r *BackupJobReconciler) applyMongoDBSystemStorage(ctx context.Context, namespace, psmdbName, storageName string, s3 *strategyv1alpha1.MongoDBStorageS3) error {
+	cred := s3.CredentialsSecret
+	if cred == "" {
+		cred = "cozy-backups-creds"
+	}
+	s3Cfg := map[string]interface{}{
+		"bucket":                s3.Bucket,
+		"endpointUrl":           s3.EndpointURL,
+		"region":                s3.Region,
+		"prefix":                s3.Prefix,
+		"credentialsSecret":     cred,
+		"insecureSkipTLSVerify": s3.InsecureSkipTLSVerify,
+	}
+	if s3.ForcePathStyle != nil {
+		s3Cfg["forcePathStyle"] = *s3.ForcePathStyle
+	}
+	entry, err := json.Marshal(map[string]interface{}{"type": "s3", "s3": s3Cfg})
+	if err != nil {
+		return err
+	}
+	patch := &psmdbtypes.PerconaServerMongoDB{
+		TypeMeta:   metav1.TypeMeta{APIVersion: psmdbtypes.GroupVersion.String(), Kind: "PerconaServerMongoDB"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: psmdbName},
+	}
+	patch.Spec.Backup.Storages = map[string]runtime.RawExtension{
+		storageName: {Raw: entry},
+	}
+	return r.Patch(ctx, patch, client.Apply, client.FieldOwner(psmdbFieldManager), client.ForceOwnership)
 }
 
 // psmdbBackupDeadlineExceeded reports whether enough wall-clock time elapsed
@@ -907,6 +969,25 @@ func marshalMongoDBBackupSnapshot(mdbBackup *psmdbtypes.PerconaServerMongoDBBack
 		StorageName: storageName,
 		S3:          mdbBackup.Status.S3.DeepCopy(),
 		Parameters:  parameters,
+	}
+	// On the useSystemBucket flow the driver injected the storage, so fall back
+	// to those coordinates when the operator's status echo is empty - the
+	// restore path rebuilds backupSource from this snapshot and needs the
+	// endpoint + credentialsSecret (cozy-backups-creds) to be present.
+	if snap.S3 == nil && rendered.S3 != nil {
+		cred := rendered.S3.CredentialsSecret
+		if cred == "" {
+			cred = "cozy-backups-creds"
+		}
+		snap.S3 = &psmdbtypes.BackupStorageS3{
+			Bucket:                rendered.S3.Bucket,
+			CredentialsSecret:     cred,
+			EndpointURL:           rendered.S3.EndpointURL,
+			Prefix:                rendered.S3.Prefix,
+			Region:                rendered.S3.Region,
+			ForcePathStyle:        rendered.S3.ForcePathStyle,
+			InsecureSkipTLSVerify: rendered.S3.InsecureSkipTLSVerify,
+		}
 	}
 	raw, err := json.Marshal(snap)
 	if err != nil {

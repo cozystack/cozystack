@@ -84,6 +84,9 @@ type Backup struct {
 	// Cron schedule for automated backups.
 	// +kubebuilder:default:="0 2 * * *"
 	Schedule string `json:"schedule,omitempty"`
+	// Opt-in: when true the chart skips the <release>-s3-creds Secret AND leaves spec.backup.storages unset; the cozy-default MongoDB BackupClass driver SSA-injects the S3 storage (bucket/endpoint/prefix/credentials from the platform system bucket) onto the live PerconaServerMongoDB at first BackupJob time. Tenants do not supply s3AccessKey/s3SecretKey/destinationPath/endpointURL; backups scope to <namespace>/<release> under the system bucket.
+	// +kubebuilder:default:=false
+	UseSystemBucket bool `json:"useSystemBucket,omitempty"`
 }
 
 type Bootstrap struct {

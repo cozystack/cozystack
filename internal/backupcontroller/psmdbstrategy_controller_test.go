@@ -482,6 +482,47 @@ func TestMarshalUnmarshalMongoDBBackupSnapshot_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestMarshalMongoDBBackupSnapshot_SystemBucketFallback guards the
+// useSystemBucket restore path: when the operator Backup status carries no S3
+// echo, the snapshot must fall back to the strategy's injected coordinates
+// (rendered.S3) so restore can rebuild backupSource - with credentialsSecret
+// defaulting to cozy-backups-creds.
+func TestMarshalMongoDBBackupSnapshot_SystemBucketFallback(t *testing.T) {
+	mdbBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			Destination: "s3://cozybkt/tenant-root/mongodb-src/2026-08-26T00:00:00Z",
+			// S3 intentionally nil: operator did not echo storage config.
+		},
+	}
+	rendered := &strategyv1alpha1.MongoDBTemplate{
+		Type: "logical",
+		S3: &strategyv1alpha1.MongoDBStorageS3{
+			Bucket:      "cozybkt",
+			EndpointURL: "https://s3.example.org",
+			Prefix:      "tenant-root/mongodb-src",
+			Region:      "us-east-1",
+			// CredentialsSecret intentionally empty -> defaults below.
+		},
+	}
+	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", nil)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	snap, err := unmarshalMongoDBBackupSnapshot(raw)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if snap.S3 == nil {
+		t.Fatal("snapshot S3 must be populated from rendered.S3 when the operator echo is empty")
+	}
+	if snap.S3.CredentialsSecret != "cozy-backups-creds" {
+		t.Errorf("credentialsSecret must default to cozy-backups-creds; got %q", snap.S3.CredentialsSecret)
+	}
+	if snap.S3.EndpointURL != "https://s3.example.org" || snap.S3.Bucket != "cozybkt" {
+		t.Errorf("snapshot S3 coords mismatch: %#v", snap.S3)
+	}
+}
+
 func TestUnmarshalMongoDBBackupSnapshot_Empty(t *testing.T) {
 	snap, err := unmarshalMongoDBBackupSnapshot(nil)
 	if err != nil || snap != nil {
