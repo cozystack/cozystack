@@ -1,4 +1,7 @@
 {{- if .Values.bootstrap.enabled }}
+{{- if .Values.backup.useSystemBucket }}
+{{- fail "mongodb: bootstrap.enabled=true is incompatible with backup.useSystemBucket=true. Restore from the system bucket with a backups.cozystack.io/RestoreJob against the cozy-default BackupClass; see docs/operations/backup-classes.md." }}
+{{- end }}
 {{- if not .Values.bootstrap.backupName }}
 {{- fail "bootstrap.backupName is required when bootstrap.enabled is true" }}
 {{- end }}

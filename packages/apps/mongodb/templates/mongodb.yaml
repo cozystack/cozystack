@@ -151,7 +151,17 @@ spec:
   backup:
     enabled: {{ .Values.backup.enabled | default false }}
     image: percona/percona-backup-mongodb:2.11.0
-    {{- if .Values.backup.enabled }}
+    {{- /*
+      useSystemBucket: keep enabled (so the pbm agents run) but omit the static
+      storage/tasks/pitr. The chart cannot know the platform bucket/endpoint at
+      render time, so the cozy-default BackupClass driver SSA-injects
+      spec.backup.storages["s3-storage"] under its own field manager at
+      BackupJob time; Helm never owns that subtree, so a Flux re-render leaves
+      the injected storage intact (same split the postgres useSystemBucket flow
+      uses for spec.plugins). Scheduling is driven by a BackupClass Plan, not
+      the chart's tasks; PITR on the system bucket is not wired here yet.
+    */}}
+    {{- if and .Values.backup.enabled (not .Values.backup.useSystemBucket) }}
     storages:
       s3-storage:
         type: s3

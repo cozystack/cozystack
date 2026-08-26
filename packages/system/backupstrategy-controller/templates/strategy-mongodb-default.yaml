@@ -1,10 +1,12 @@
 {{/*
-  cozy-default MongoDB strategy. Unlike the MariaDB / CNPG / Altinity
-  defaults, this Strategy carries NO bucket coordinates or credentials: the
-  Percona psmdb operator resolves the on-demand backup's storageName against
-  the source PerconaServerMongoDB CR's spec.backup.storages, so the S3 target
-  lives on the MongoDB application (declared by the chart as "s3-storage" when
-  backup.enabled=true), not here.
+  cozy-default MongoDB strategy. The psmdb operator resolves the on-demand
+  backup's storageName against the source PerconaServerMongoDB CR's
+  spec.backup.storages, so the S3 target must live on the MongoDB application.
+  On the useSystemBucket flow the app chart cannot know the platform
+  bucket/endpoint at render time, so this Strategy carries the coordinates and
+  the driver SSA-injects them into the app's spec.backup.storages["s3-storage"]
+  at BackupJob time (only when that storage is absent - a legacy app that ships
+  its own static "s3-storage" is left untouched).
 
   It is gated on $bucketName all the same, and NOT because it needs the value.
   The gate is what keeps this chart installable on a fresh cluster. This chart
@@ -41,4 +43,18 @@ spec:
     storageName: s3-storage
     type: logical
     compressionType: gzip
+    # System-bucket coordinates the driver SSA-injects onto the source
+    # PerconaServerMongoDB's spec.backup.storages[s3-storage] only when that
+    # storage is absent - i.e. the app ran with backup.useSystemBucket=true and
+    # the chart omitted the static storage. A legacy app that ships its own
+    # static s3-storage keeps it (the driver skips injection). endpointUrl
+    # carries the scheme from the endpoint helper so PBM's aws-sdk client gets a
+    # valid URL; credentials come from the projected cozy-backups-creds.
+    s3:
+      bucket: {{ $bucketName | quote }}
+      endpointUrl: {{ include "backupstrategy-controller.endpoint" . | quote }}
+      prefix: {{ printf "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}" | quote }}
+      region: {{ .Values.backupStorage.region | quote }}
+      credentialsSecret: cozy-backups-creds
+      forcePathStyle: {{ .Values.backupStorage.forcePathStyle }}
 {{- end -}}
