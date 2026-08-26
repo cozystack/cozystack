@@ -2774,7 +2774,7 @@
               }
             ]
           },
-          "unit": "short"
+          "unit": "ms"
         },
         "overrides": []
       },
@@ -2801,7 +2801,7 @@
       "targets": [
         {
           "datasource": "${DS_PROMETHEUS}",
-          "expr": "sum(kafka_server_zookeeperclientmetrics_zookeeperrequestlatencyms{namespace=\"$kubernetes_namespace\",pod=~\"$strimzi_cluster_name-$kafka_broker\",strimzi_io_name=\"$strimzi_cluster_name-kafka\"}) by (pod)",
+          "expr": "sum(kafka_server_raftmetrics_commit_latency_avg{namespace=\"$kubernetes_namespace\",pod=~\"$strimzi_cluster_name-controller-.*\"}) by (pod)",
           "format": "time_series",
           "instant": false,
           "intervalFactor": 1,
@@ -2809,7 +2809,7 @@
           "refId": "A"
         }
       ],
-      "title": "ZK request latecy",
+      "title": "KRaft controller commit latency (avg, ms)",
       "type": "timeseries"
     }
   ],
