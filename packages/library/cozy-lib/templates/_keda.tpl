@@ -123,6 +123,11 @@ spec:
 {{-   end }}
   triggers:
     - type: prometheus
+      {{- /* Explicit, not relying on KEDA's default: the desired-count identity
+             desired = ceil(query / threshold) holds only for an AverageValue
+             external metric (no per-pod divisor). Pinning it keeps a KEDA
+             re-vendor or default change from silently breaking the arithmetic. */}}
+      metricType: AverageValue
       metadata:
         serverAddress: {{ .serverAddress | quote }}
         query: {{ .query | quote }}

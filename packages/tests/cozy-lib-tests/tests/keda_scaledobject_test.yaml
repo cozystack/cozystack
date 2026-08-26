@@ -54,6 +54,11 @@ tests:
       - equal:
           path: spec.triggers[0].type
           value: prometheus
+      # AverageValue is load-bearing: desired = ceil(query / threshold) only holds
+      # for an AverageValue external metric. Pinned explicitly, not left to KEDA's default.
+      - equal:
+          path: spec.triggers[0].metricType
+          value: AverageValue
       - equal:
           path: spec.triggers[0].metadata.serverAddress
           value: http://vmselect-shortterm.tenant-root.svc:8481/select/0/prometheus
