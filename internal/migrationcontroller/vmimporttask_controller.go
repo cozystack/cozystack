@@ -99,14 +99,6 @@ func (r *VMImportTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		task.Status.StartedAt = &now
 	}
 
-	// Refuse to overwrite anything a tenant already has. Checked every pass
-	// rather than once, because a name can be taken while a transfer runs.
-	if collision, err := r.findOutputCollision(ctx, task); err != nil {
-		return ctrl.Result{}, err
-	} else if collision != "" {
-		return r.terminalFail(ctx, task, migrationv1alpha1.ReasonOutputExists, collision)
-	}
-
 	if err := r.ensureMaps(ctx, task, src, storageClass); err != nil {
 		// Forklift's CRDs can vanish under a running task — the operand is
 		// removed, or this is the window before the Source's recheck notices.
@@ -181,6 +173,18 @@ func (r *VMImportTaskReconciler) reconcileVM(
 		if status.Phase.IsTerminal() {
 			return status, false, nil
 		}
+	}
+
+	// Refuse to overwrite anything a tenant already has, and refuse it before
+	// spending a transfer on it. Checked every pass rather than once, because a
+	// name can be taken while a transfer runs, and per VM rather than per task:
+	// one VM whose name is occupied does not stop its siblings from finishing.
+	if collision, err := r.outputCollision(ctx, task, req); err != nil {
+		return status, false, err
+	} else if collision != "" {
+		status.Phase = migrationv1alpha1.VMImportTaskPhaseFailed
+		status.Message = collision
+		return status, false, nil
 	}
 
 	plan := newObject(planGVK)
@@ -324,26 +328,36 @@ func (r *VMImportTaskReconciler) resolveStorageClass(ctx context.Context, task *
 	return name, nil
 }
 
-// findOutputCollision reports the first output name that is already taken.
-func (r *VMImportTaskReconciler) findOutputCollision(ctx context.Context, task *migrationv1alpha1.VMImportTask) (string, error) {
-	for i := range task.Spec.VMs {
-		req := &task.Spec.VMs[i]
-		if req.Name == "" {
-			continue
+// outputCollision reports a tenant object standing where this VM's output goes,
+// or "" when the name is free or already holds this task's own earlier output.
+//
+// The distinction is the whole point. Without it every resume is a guess, and
+// both guesses are destructive: treating a tenant's object as its own attaches
+// stale data while the fresh transfer is collected with the scaffolding VM,
+// and treating its own output as a collision terminally fails an import that
+// actually succeeded. The marker isOwnOutput reads is written by stampOutput on
+// everything this controller creates.
+func (r *VMImportTaskReconciler) outputCollision(
+	ctx context.Context,
+	task *migrationv1alpha1.VMImportTask,
+	req *migrationv1alpha1.VMImportRequest,
+) (string, error) {
+	if req.Name == "" {
+		// The instance is named after the imported VM, which is not known
+		// until the transfer finishes; the handoff checks it then.
+		return "", nil
+	}
+	existing := newObject(vmInstanceGVK)
+	err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: req.Name}, existing)
+	if err == nil {
+		if isOwnOutput(existing, task, req.ID) {
+			return "", nil
 		}
-		// A VM this task already imported is not a collision with itself.
-		if prev := findVMStatus(task.Status.VMs, req.ID); prev != nil && prev.VMInstance == req.Name {
-			continue
-		}
-		existing := newObject(vmInstanceGVK)
-		err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: req.Name}, existing)
-		if err == nil {
-			return fmt.Sprintf("a VMInstance named %q already exists in this namespace; "+
-				"the import will not overwrite it — choose another name for VM %s", req.Name, req.ID), nil
-		}
-		if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
-			return "", err
-		}
+		return fmt.Sprintf("a VMInstance named %q already exists in this namespace and was not created by "+
+			"this import; the import will not overwrite it — choose another name for VM %s", req.Name, req.ID), nil
+	}
+	if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+		return "", err
 	}
 	return "", nil
 }

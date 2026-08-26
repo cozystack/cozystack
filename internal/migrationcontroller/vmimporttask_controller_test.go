@@ -230,7 +230,7 @@ func TestAdoptVolumeReplicatesVolumeModeAndAccessModes(t *testing.T) {
 	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(pv, transferred, tk).Build()
 	r := &VMImportTaskReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.adoptVolume(context.Background(), tk, "forklift-claim", "web-01-disk-0"); err != nil {
+	if err := r.adoptVolume(context.Background(), tk, "vm-1", "forklift-claim", "web-01-disk-0"); err != nil {
 		t.Fatalf("adoptVolume: %v", err)
 	}
 
@@ -343,7 +343,7 @@ func TestAdoptVolumeRemovesOwningDataVolumeFirst(t *testing.T) {
 		WithObjects(pv, transferred, forkliftDV, tk).Build()
 	r := &VMImportTaskReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.adoptVolume(context.Background(), tk, "forklift-claim", "web-01-disk-0"); err != nil {
+	if err := r.adoptVolume(context.Background(), tk, "vm-1", "forklift-claim", "web-01-disk-0"); err != nil {
 		t.Fatalf("adoptVolume: %v", err)
 	}
 
@@ -368,7 +368,16 @@ func TestAdoptVolumeIsIdempotent(t *testing.T) {
 	s := testScheme(t)
 	tk := task("import", "tenant-foo", "vcenter", "replicated")
 	already := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-web-01-disk-0", Namespace: "tenant-foo"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vm-disk-web-01-disk-0",
+			Namespace: "tenant-foo",
+			// The markers are what make this a resume rather than a collision:
+			// an unmarked claim of the same name belongs to the tenant.
+			Labels: map[string]string{
+				migrationv1alpha1.OutputTaskUIDLabel: "import-uid",
+				migrationv1alpha1.OutputVMIDLabel:    "vm-1",
+			},
+		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			VolumeName: "pv-1",
 			Resources: corev1.VolumeResourceRequirements{
@@ -380,7 +389,7 @@ func TestAdoptVolumeIsIdempotent(t *testing.T) {
 	r := &VMImportTaskReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
 
 	// The source claim is deliberately absent: a second pass must not need it.
-	if err := r.adoptVolume(context.Background(), tk, "forklift-claim", "web-01-disk-0"); err != nil {
+	if err := r.adoptVolume(context.Background(), tk, "vm-1", "forklift-claim", "web-01-disk-0"); err != nil {
 		t.Fatalf("second pass over an adopted disk failed: %v", err)
 	}
 	disk := newObject(vmDiskGVK)
@@ -538,7 +547,7 @@ func TestAdoptVolumeOrphansAClaimWithNoDataVolume(t *testing.T) {
 	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(pv, populated, tk).Build()
 	r := &VMImportTaskReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.adoptVolume(context.Background(), tk, "import-vm-1234-pdbdm", "web-01-disk-0"); err != nil {
+	if err := r.adoptVolume(context.Background(), tk, "vm-1", "import-vm-1234-pdbdm", "web-01-disk-0"); err != nil {
 		t.Fatalf("adoptVolume on the populator path: %v", err)
 	}
 
@@ -682,5 +691,83 @@ func TestEFIBootloaderIsDetected(t *testing.T) {
 				t.Errorf("efiBootloader = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// The failure this marker exists to stop: a first import half-succeeds, the
+// tenant deletes the VMInstance but keeps the disks, and retries under the same
+// name. Without an identity check the leftover claim reads as this task's own
+// finished work, adoptVolume early-returns, and the freshly transferred claim
+// keeps its ownerRef to the scaffolding VM — which fulfill then deletes, taking
+// the new transfer with it. The import reports success over stale data.
+func TestAdoptVolumeRefusesAClaimItDidNotCreate(t *testing.T) {
+	s := testScheme(t)
+	tk := task("import", "tenant-foo", "vcenter", "replicated")
+	foreign := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-web-01-disk-0", Namespace: "tenant-foo"},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			VolumeName: "pv-1",
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("20Gi")},
+			},
+		},
+	}
+	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(foreign, tk).Build()
+	r := &VMImportTaskReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+	err := r.adoptVolume(context.Background(), tk, "vm-1", "forklift-claim", "web-01-disk-0")
+	if err == nil {
+		t.Fatal("adoptVolume accepted a claim this task never created; the transfer would be garbage-collected")
+	}
+	var verr *validationError
+	if !asValidationError(err, &verr) {
+		t.Fatalf("error = %v, want a tenant-visible validationError", err)
+	}
+	if verr.reason != migrationv1alpha1.ReasonOutputExists {
+		t.Errorf("reason = %q, want %q", verr.reason, migrationv1alpha1.ReasonOutputExists)
+	}
+}
+
+// A claim carrying another task's marker is just as foreign as an unmarked one:
+// names are reused, so the UID is what decides.
+func TestAdoptVolumeRefusesAnotherTasksOutput(t *testing.T) {
+	s := testScheme(t)
+	tk := task("import", "tenant-foo", "vcenter", "replicated")
+	other := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vm-disk-web-01-disk-0",
+			Namespace: "tenant-foo",
+			Labels: map[string]string{
+				migrationv1alpha1.OutputTaskUIDLabel: "some-older-task-uid",
+				migrationv1alpha1.OutputVMIDLabel:    "vm-1",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "pv-1"},
+	}
+	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(other, tk).Build()
+	r := &VMImportTaskReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.adoptVolume(context.Background(), tk, "vm-1", "forklift-claim", "web-01-disk-0"); err == nil {
+		t.Fatal("adoptVolume adopted an output belonging to a different task")
+	}
+}
+
+// Outputs must carry the marker, or the checks above can never recognise them
+// on a later pass and every resume becomes a collision.
+func TestAdoptedOutputsCarryTheTaskMarker(t *testing.T) {
+	tk := task("import", "tenant-foo", "vcenter", "replicated")
+	obj := newObject(vmDiskGVK)
+	stampOutput(obj, tk, "vm-1")
+
+	if !isOwnOutput(obj, tk, "vm-1") {
+		t.Error("a freshly stamped output is not recognised as this task's own")
+	}
+	if isOwnOutput(obj, tk, "vm-2") {
+		t.Error("an output for one source VM is recognised as another's")
+	}
+	other := task("import", "tenant-foo", "vcenter", "replicated")
+	other.UID = "different-uid"
+	if isOwnOutput(obj, other, "vm-1") {
+		t.Error("an output is recognised as belonging to a different task")
 	}
 }

@@ -28,6 +28,21 @@ const (
 	OwningTaskNameLabel      = thisGroup + "/owned-by.VMImportTaskName"
 	OwningTaskNamespaceLabel = thisGroup + "/owned-by.VMImportTaskNamespace"
 
+	// OutputTaskUIDLabel and OutputVMIDLabel mark what a task produced: the
+	// VMDisks, the VMInstances and the claims behind them. They are how the
+	// controller tells its own earlier output from a tenant object that happens
+	// to carry the same name, which every resume has to decide and cannot
+	// otherwise know. Mistaking a tenant's disk for its own silently attaches
+	// stale data while the fresh transfer is collected with the scaffolding VM;
+	// mistaking its own output for a collision terminally fails an import that
+	// in fact succeeded.
+	//
+	// Deliberately labels, not owner references: the outputs of a task outlive
+	// the task, so nothing here may create a garbage-collection edge back to it.
+	// The UID rather than the name, because names are reused.
+	OutputTaskUIDLabel = thisGroup + "/output-of.TaskUID"
+	OutputVMIDLabel    = thisGroup + "/output-of.VMID"
+
 	// TaskValidatedCondition reports whether the task's inputs resolved: the
 	// source is ready, every named VM exists in the inventory, and the storage
 	// class can actually complete an import.

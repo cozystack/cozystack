@@ -29,6 +29,42 @@ func taskOwnership(task *migrationv1alpha1.VMImportTask) (map[string]string, met
 			migrationv1alpha1.GroupVersion.WithKind("VMImportTask"), task.Name, task.UID)
 }
 
+// outputMarkers are the labels every object a task produces carries: which
+// task made it, and for which source VM. Labels rather than owner references,
+// because outputs are meant to outlive the task that created them.
+func outputMarkers(task *migrationv1alpha1.VMImportTask, vmID string) map[string]string {
+	return map[string]string{
+		migrationv1alpha1.OutputTaskUIDLabel: string(task.UID),
+		migrationv1alpha1.OutputVMIDLabel:    sanitizeName(vmID),
+	}
+}
+
+// stampOutput writes the markers onto an object being created, preserving any
+// labels already set on it.
+func stampOutput(obj metav1.Object, task *migrationv1alpha1.VMImportTask, vmID string) {
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	for k, v := range outputMarkers(task, vmID) {
+		labels[k] = v
+	}
+	obj.SetLabels(labels)
+}
+
+// isOwnOutput reports whether an existing object is this task's own earlier
+// output for this source VM, rather than something that merely shares its name.
+// Absence of the marker is the answer that matters: it means a tenant object is
+// standing where an output would go, which is a collision and never a resume.
+func isOwnOutput(obj metav1.Object, task *migrationv1alpha1.VMImportTask, vmID string) bool {
+	labels := obj.GetLabels()
+	if labels == nil {
+		return false
+	}
+	return labels[migrationv1alpha1.OutputTaskUIDLabel] == string(task.UID) &&
+		labels[migrationv1alpha1.OutputVMIDLabel] == sanitizeName(vmID)
+}
+
 // providerRefs is the source/destination pair every Forklift object in a task
 // points at. Both live in the task's namespace, because a Source does.
 func providerRefs(task *migrationv1alpha1.VMImportTask, src *migrationv1alpha1.VMImportSource) map[string]interface{} {

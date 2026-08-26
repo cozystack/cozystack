@@ -122,7 +122,7 @@ func (r *VMImportTaskReconciler) fulfill(
 	for i, claim := range claims {
 		diskName := fmt.Sprintf("%s-disk-%d", name, i)
 		diskNames = append(diskNames, diskName)
-		if err := r.adoptVolume(ctx, task, claim, diskName); err != nil {
+		if err := r.adoptVolume(ctx, task, req.ID, claim, diskName); err != nil {
 			return nil, err
 		}
 	}
@@ -237,16 +237,29 @@ func efiBootloader(vm *unstructured.Unstructured) bool {
 func (r *VMImportTaskReconciler) adoptVolume(
 	ctx context.Context,
 	task *migrationv1alpha1.VMImportTask,
+	vmID string,
 	sourceClaim string,
 	diskName string,
 ) error {
 	target := vmDiskReleasePrefix + diskName
 
-	// Idempotency: a previous pass may have finished this disk already.
+	// Idempotency, but only over this task's own work. A claim of the right
+	// name that this task did not create is a tenant's disk standing where an
+	// output goes: treating it as a finished pass would attach stale data to
+	// the instance and leave the freshly transferred claim owned by the
+	// scaffolding VM, to be collected the moment that VM is deleted.
 	existing := &corev1.PersistentVolumeClaim{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: target}, existing)
 	if err == nil {
-		return r.ensureVMDisk(ctx, task, diskName, existing)
+		if !isOwnOutput(existing, task, vmID) {
+			return &validationError{
+				reason: migrationv1alpha1.ReasonOutputExists,
+				message: fmt.Sprintf(
+					"a PersistentVolumeClaim named %q already exists in this namespace and was not created by this import; "+
+						"the import will not overwrite it — choose another name for VM %s", target, vmID),
+			}
+		}
+		return r.ensureVMDisk(ctx, task, vmID, diskName, existing)
 	}
 	if !apierrors.IsNotFound(err) {
 		return err
@@ -313,9 +326,15 @@ func (r *VMImportTaskReconciler) adoptVolume(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      target,
 			Namespace: task.Namespace,
-			Labels: map[string]string{
-				migrationv1alpha1.ManagedByLabel: migrationv1alpha1.ManagedByValue,
-			},
+			Labels: func() map[string]string {
+				l := map[string]string{
+					migrationv1alpha1.ManagedByLabel: migrationv1alpha1.ManagedByValue,
+				}
+				for k, v := range outputMarkers(task, vmID) {
+					l[k] = v
+				}
+				return l
+			}(),
 			Annotations: map[string]string{
 				populatedForAnnotation: target,
 			},
@@ -369,7 +388,7 @@ func (r *VMImportTaskReconciler) adoptVolume(
 	if err := r.createDataVolume(ctx, task, diskName, bound); err != nil {
 		return err
 	}
-	return r.ensureVMDisk(ctx, task, diskName, bound)
+	return r.ensureVMDisk(ctx, task, vmID, diskName, bound)
 }
 
 // deleteOwningDataVolume removes the DataVolume that owns a claim, and waits
@@ -478,12 +497,21 @@ func (r *VMImportTaskReconciler) createDataVolume(
 func (r *VMImportTaskReconciler) ensureVMDisk(
 	ctx context.Context,
 	task *migrationv1alpha1.VMImportTask,
+	vmID string,
 	diskName string,
 	pvc *corev1.PersistentVolumeClaim,
 ) error {
 	existing := newObject(vmDiskGVK)
 	err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: diskName}, existing)
 	if err == nil {
+		if !isOwnOutput(existing, task, vmID) {
+			return &validationError{
+				reason: migrationv1alpha1.ReasonOutputExists,
+				message: fmt.Sprintf(
+					"a VMDisk named %q already exists in this namespace and was not created by this import; "+
+						"the import will not overwrite it — choose another name for VM %s", diskName, vmID),
+			}
+		}
 		return nil
 	}
 	if !apierrors.IsNotFound(err) {
@@ -494,6 +522,7 @@ func (r *VMImportTaskReconciler) ensureVMDisk(
 	obj := newObject(vmDiskGVK)
 	obj.SetName(diskName)
 	obj.SetNamespace(task.Namespace)
+	stampOutput(obj, task, vmID)
 	spec := map[string]interface{}{
 		"storage": size.String(),
 		"optical": false,
@@ -526,6 +555,17 @@ func (r *VMImportTaskReconciler) createVMInstance(
 	existing := newObject(vmInstanceGVK)
 	err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: name}, existing)
 	if err == nil {
+		// Only this task's own instance counts as a finished pass. Anything
+		// else of that name belongs to the tenant, and an import never
+		// overwrites or silently adopts one.
+		if !isOwnOutput(existing, task, req.ID) {
+			return &validationError{
+				reason: migrationv1alpha1.ReasonOutputExists,
+				message: fmt.Sprintf(
+					"a VMInstance named %q already exists in this namespace and was not created by this import; "+
+						"the import will not overwrite it — choose another name for VM %s", name, req.ID),
+			}
+		}
 		return nil
 	}
 	if !apierrors.IsNotFound(err) {
@@ -570,6 +610,7 @@ func (r *VMImportTaskReconciler) createVMInstance(
 	obj := newObject(vmInstanceGVK)
 	obj.SetName(name)
 	obj.SetNamespace(task.Namespace)
+	stampOutput(obj, task, req.ID)
 	if err := unstructured.SetNestedMap(obj.Object, spec, "spec"); err != nil {
 		return err
 	}
