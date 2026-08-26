@@ -7,7 +7,7 @@ test:
 	helm unittest .
 
 # Pinned ref of github.com/cozystack/etcd-operator to vendor CRDs from.
-ETCD_OPERATOR_REF ?= v0.5.4
+ETCD_OPERATOR_REF ?= v0.5.5
 
 # controller-gen writes the CRDs to charts/etcd-operator/crd-bases/ upstream (there
 # is no config/crd kustomization). Vendor each verbatim and stamp
@@ -17,7 +17,7 @@ ETCD_OPERATOR_REF ?= v0.5.4
 # annotation per CRD, or the update fails. templates/ is replaced only after
 # every CRD has been counted, so a failure leaves the vendored files as they
 # were.
-CRDS = etcdclusters etcdmembers etcdsnapshots
+CRDS = etcdclusters etcddefragpolicies etcddefrags etcdmembers etcdsnapshots
 update:
 	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	for c in $(CRDS); do \

@@ -1,8 +1,9 @@
 suite: controller-manager RBAC — ServiceAccount, manager ClusterRole, and bindings
 
 # The manager ClusterRole is vendored by hand from the operator's
-# config/rbac/role.yaml (see Makefile `update`), so a stale re-vendor could drop
-# a rule the operator needs and only surface as a runtime RBAC-forbidden error.
+# charts/etcd-operator/files/manager-role-rules.yaml (see Makefile `update`), so
+# a stale re-vendor could drop a rule the operator needs and only surface as a
+# runtime RBAC-forbidden error.
 # Pin the ServiceAccount, a couple of load-bearing ClusterRole rules, and that
 # the binding actually wires the role to the controller ServiceAccount.
 
@@ -38,8 +39,14 @@ tests:
           path: rules
           content:
             apiGroups: [etcd-operator.cozystack.io]
-            resources: [etcdmembers, etcdsnapshots]
+            resources: [etcddefrags, etcdmembers, etcdsnapshots]
             verbs: [create, delete, get, list, patch, update, watch]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [etcd-operator.cozystack.io]
+            resources: [etcddefragpolicies]
+            verbs: [get, list, patch, update, watch]
       - contains:
           path: rules
           content:
