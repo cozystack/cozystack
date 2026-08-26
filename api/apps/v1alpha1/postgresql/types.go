@@ -88,7 +88,7 @@ type Autoscaling struct {
 	// Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores). Dimensionless integer - a resource.Quantity here would accept `150m`, which PromQL reads as 150 minutes and KEDA cannot use as a threshold.
 	// +kubebuilder:default:=150
 	Target int `json:"target"`
-	// Migration phase 1: keep `.spec.instances` rendered as a floor (from `replicas`, which the operator stages to the live count) AND pause the ScaledObject, so KEDA stands up without contending for the field. Flip to false (phase 2) to drop the static field and hand the count to KEDA. See the enablement note below.
+	// Migration phase 1: render `.spec.instances` from `replicas` (which the operator stages to the current live count) AND pause the ScaledObject, so KEDA stands up without actuating. Flip to false (phase 2) to hand the runtime count to KEDA. Only needed to avoid a dip when enabling on an existing cluster sized above the quorum floor; see the enablement note below.
 	// +kubebuilder:default:=false
 	Transition bool `json:"transition"`
 }

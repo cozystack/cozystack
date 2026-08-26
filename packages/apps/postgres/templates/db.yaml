@@ -6,10 +6,18 @@ kind: Cluster
 metadata:
   name: {{ .Release.Name }}
 spec:
-  {{- if not $autoscaling }}
-  # Under active autoscaling the KEDA-managed HPA owns .spec.instances via the
-  # scale subresource, so the chart must not declare it (a declared value would
-  # be reverted by Flux). See templates/scaledobject.yaml and the design proposal.
+  {{- if $autoscaling }}
+  # Under active autoscaling the KEDA-managed HPA owns .spec.instances at runtime
+  # via the /scale subresource. The chart still seeds the synchronous-quorum floor
+  # (effectiveMin) instead of omitting the field: CNPG defaults an absent
+  # .spec.instances to 1, which its admission webhook rejects when
+  # maxSyncReplicas>=1 ("maxSyncReplicas must be lower than the number of
+  # instances"), so a fresh autoscaled + sync-quorum Cluster would never be
+  # admitted. Because the chart renders the same constant floor on every
+  # reconcile, Helm's three-way merge is a no-op on this field and never reverts
+  # KEDA's higher live value. See templates/scaledobject.yaml and the design proposal.
+  instances: {{ include "postgres.autoscaling.effectiveMin" . }}
+  {{- else }}
   instances: {{ .Values.replicas }}
   {{- end }}
   {{- if and $tlsEnabled .Values.external }}

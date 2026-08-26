@@ -45,7 +45,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: drops spec.instances from the Cluster and floors the WorkloadMonitor under active autoscaling
+  - it: seeds spec.instances at the quorum floor and floors the WorkloadMonitor under active autoscaling
     templates:
       - templates/db.yaml
     set:
@@ -57,8 +57,13 @@ tests:
       quorum:
         maxSyncReplicas: 2
     asserts:
-      - notExists:
+      # The field is seeded (not omitted) to effectiveMin = max(minReplicas=2,
+      # maxSyncReplicas+1=3, 2) = 3 so a fresh Cluster is admitted at a valid,
+      # quorum-satisfying count; KEDA then owns the runtime value via /scale and
+      # the constant render keeps three-way merge from reverting it.
+      - equal:
           path: spec.instances
+          value: 3
         documentSelector:
           path: kind
           value: Cluster
@@ -69,6 +74,29 @@ tests:
         documentSelector:
           path: kind
           value: WorkloadMonitor
+
+  - it: seeds a quorum-valid instance count on a fresh autoscaled cluster with synchronous replication
+    templates:
+      - templates/db.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 1
+    asserts:
+      # Regression guard for the CNPG admission webhook: an absent .spec.instances
+      # defaults to 1, and "maxSyncReplicas must be lower than the number of
+      # instances" rejects the Cluster when maxSyncReplicas>=1. effectiveMin here is
+      # max(2, 1+1, 2) = 2 > maxSyncReplicas=1, so the fresh Cluster is admitted.
+      - equal:
+          path: spec.instances
+          value: 2
+        documentSelector:
+          path: kind
+          value: Cluster
 
   - it: renders a KEDA ScaledObject with quorum-floored bounds under active autoscaling
     templates:

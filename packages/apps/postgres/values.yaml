@@ -152,22 +152,29 @@ quorum:
 ## @field {int} target - Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores). Dimensionless integer - a resource.Quantity here would accept `150m`, which PromQL reads as 150 minutes and KEDA cannot use as a threshold.
 ## @field {int} maxReplicationLagSeconds - Freeze scaling while replication lag exceeds this and the primary is writing.
 ## @field {bool} dryRun - Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate). Permanent, unlike `transition`.
-## @field {bool} transition - Migration phase 1: keep `.spec.instances` rendered as a floor (from `replicas`, which the operator stages to the live count) AND pause the ScaledObject, so KEDA stands up without contending for the field. Flip to false (phase 2) to drop the static field and hand the count to KEDA. See the enablement note below.
+## @field {bool} transition - Migration phase 1: render `.spec.instances` from `replicas` (which the operator stages to the current live count) AND pause the ScaledObject, so KEDA stands up without actuating. Flip to false (phase 2) to hand the runtime count to KEDA. Only needed to avoid a dip when enabling on an existing cluster sized above the quorum floor; see the enablement note below.
 
 ## @enum {string} ReadMetric - Read-load metric type.
 ## @value ReadConnections - Active read connections on the standby pods.
 ## @value ReadCPUUtilization - CPU (millicores) of the postgres container on the standby pods.
 
-## Enabling autoscaling on an EXISTING database is a two-phase, count-preserving
-## migration — a naive enable drops `.spec.instances` and CNPG defaults to 1.
-## Phase 1: stage `replicas` to the current live instance count and set
-## `autoscaling: {enabled: true, transition: true, ...}` — the field is held as a
-## floor and the ScaledObject comes up paused (no writer conflict); verify KEDA is
-## healthy. Phase 2: set `transition: false`. Because helm-controller applies via
-## Helm's three-way merge (not SSA), suspend the HelmRelease across the phase-2
-## apply so dropping the static field does not race CNPG's default-to-1 (the exact
-## safe handoff is confirmed on a live cluster per the design proposal). A NEW
-## database can skip the migration — set `enabled: true` directly.
+## Enabling autoscaling seeds `.spec.instances` at the quorum floor
+## (effectiveMin = max(minReplicas, maxSyncReplicas+1, 2)) and lets the KEDA HPA own
+## the runtime count via the /scale subresource. The chart re-renders that same
+## constant floor on every reconcile, so Helm's three-way merge is a no-op on the
+## field and never reverts KEDA's higher live value.
+## A NEW database can enable autoscaling directly — the seeded floor is a valid,
+## quorum-satisfying count, so CNPG's admission webhook accepts it even with
+## synchronous replication (maxSyncReplicas>=1), where an absent/defaulted
+## instances=1 would be rejected.
+## On an EXISTING database sized above the floor, a direct enable rebases the
+## Cluster to effectiveMin before KEDA scales it back up by load. To avoid that dip,
+## use the two-phase flow: (phase 1) stage `replicas` to the live count and set
+## `autoscaling: {enabled: true, transition: true, ...}` — the live count is held
+## and the ScaledObject comes up paused; verify KEDA is healthy. (phase 2) set
+## `transition: false` to hand the count to KEDA. Suspend the HelmRelease across the
+## phase-2 apply so the render/actuation handoff does not race (helm-controller uses
+## Helm's three-way merge, not SSA).
 ## @param {Autoscaling} autoscaling - Read-replica autoscaling configuration.
 autoscaling:
   enabled: false
