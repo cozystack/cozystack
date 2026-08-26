@@ -48,12 +48,12 @@ tests:
       - containsDocument:
           apiVersion: apiextensions.k8s.io/v1
           kind: CustomResourceDefinition
-          name: vmimportsources.migration.cozystack.io
+          name: vmimportsources.forklift.cozystack.io
           any: true
       - containsDocument:
           apiVersion: apiextensions.k8s.io/v1
           kind: CustomResourceDefinition
-          name: vmimporttasks.migration.cozystack.io
+          name: vmimporttasks.forklift.cozystack.io
           any: true
 
   # Tenant access to a new API group travels with the package that owns the

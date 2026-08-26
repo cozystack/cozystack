@@ -144,7 +144,7 @@ func (r *VMImportTaskReconciler) ensureMaps(
 
 // storageClassAnnotation records the resolved StorageClass on the task's
 // StorageMap, so mappings learned later all land on the same class.
-const storageClassAnnotation = "migration.cozystack.io/storage-class"
+const storageClassAnnotation = "forklift.cozystack.io/storage-class"
 
 // forkliftPowerStateOff is Forklift's `off` target power state
 // (plan.TargetPowerStateOff upstream). Spelled out rather than imported: the

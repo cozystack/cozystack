@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Package v1alpha1 defines migration.cozystack.io API types.
+// Package v1alpha1 defines forklift.cozystack.io API types.
 //
-// Group: migration.cozystack.io
+// Group: forklift.cozystack.io
 // Version: v1alpha1
 package v1alpha1
 

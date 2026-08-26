@@ -1,11 +1,11 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: migration.cozystack.io:controller
+  name: forklift.cozystack.io:controller
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: migration.cozystack.io:controller
+  name: forklift.cozystack.io:controller
 subjects:
 - kind: ServiceAccount
   name: migration-controller

@@ -15,7 +15,7 @@ export function MigrationSourceCreatePage() {
   const [name, setName] = useState("")
   const schemaFormRef = useRef<SchemaFormHandle>(null)
 
-  const { schema, isLoading: schemaLoading } = useCRDSchema("vmimportsources.migration.cozystack.io")
+  const { schema, isLoading: schemaLoading } = useCRDSchema("vmimportsources.forklift.cozystack.io")
 
   const createMutation = useK8sCreate({
     apiGroup: MIGRATION_GROUP,

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command migration-controller reconciles the migration.cozystack.io API group:
+// Command migration-controller reconciles the forklift.cozystack.io API group:
 // VMImportSource connections and the VMImportTask operations that run over them.
 package main
 
@@ -110,7 +110,7 @@ func main() {
 		WebhookServer:          webhook.NewServer(webhook.Options{TLSOpts: tlsOpts}),
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "migration.cozystack.io",
+		LeaderElectionID:       "forklift.cozystack.io",
 		Client: client.Options{
 			// Secrets and volumes are read and written point-wise across
 			// arbitrary tenant namespaces. A cluster-wide informer for them

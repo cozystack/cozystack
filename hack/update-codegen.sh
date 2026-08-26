@@ -102,7 +102,7 @@ mv ${TMPDIR}/cozystack.io_applicationdefinitions.yaml \
 
 mv ${TMPDIR}/backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
 mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/
-mv ${TMPDIR}/migration.cozystack.io*.yaml ${MIGRATION_CRDDIR}/
+mv ${TMPDIR}/forklift.cozystack.io*.yaml ${MIGRATION_CRDDIR}/
 
 mv ${TMPDIR}/*.yaml ${COZY_CONTROLLER_CRDDIR}/
 

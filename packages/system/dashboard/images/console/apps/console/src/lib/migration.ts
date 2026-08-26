@@ -1,5 +1,5 @@
 /**
- * Shared shapes and helpers for the migration.cozystack.io console pages.
+ * Shared shapes and helpers for the forklift.cozystack.io console pages.
  *
  * The API is a pair split by lifecycle: a VMImportSource is a long-lived
  * connection whose readiness is a condition, and a VMImportTask is a one-shot
@@ -7,7 +7,7 @@
  * disks and instances it produced in place.
  */
 
-export const MIGRATION_GROUP = "migration.cozystack.io"
+export const MIGRATION_GROUP = "forklift.cozystack.io"
 export const MIGRATION_VERSION = "v1alpha1"
 
 export type MigrationResourceType = "vmimportsources" | "vmimporttasks"

@@ -20,7 +20,7 @@ export function MigrationTaskCreatePage() {
   const [name, setName] = useState("")
   const schemaFormRef = useRef<SchemaFormHandle>(null)
 
-  const { schema, isLoading: schemaLoading } = useCRDSchema("vmimporttasks.migration.cozystack.io")
+  const { schema, isLoading: schemaLoading } = useCRDSchema("vmimporttasks.forklift.cozystack.io")
 
   // sourceRef.name is a dropdown served by the vmimportsource option provider,
   // but the list is also read here to warn about a connection that is not ready

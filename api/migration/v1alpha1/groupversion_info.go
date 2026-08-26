@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package v1alpha1 contains API Schema definitions for the  v1alpha1 API group.
 // +kubebuilder:object:generate=true
-// +groupName=migration.cozystack.io
+// +groupName=forklift.cozystack.io
 package v1alpha1
 
 import (
@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	thisGroup   = "migration.cozystack.io"
+	thisGroup   = "forklift.cozystack.io"
 	thisVersion = "v1alpha1"
 )
 

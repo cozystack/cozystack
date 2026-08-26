@@ -1,6 +1,6 @@
 # migration-controller
 
-Reconciles `migration.cozystack.io`: `VMImportSource` connections and the `VMImportTask` operations that run over them. Konveyor Forklift is the transfer engine underneath; this controller owns the tenant-facing API, drives Forklift's objects, and turns each finished transfer into a Cozystack `VMDisk` and `VMInstance`.
+Reconciles `forklift.cozystack.io`: `VMImportSource` connections and the `VMImportTask` operations that run over them. Konveyor Forklift is the transfer engine underneath; this controller owns the tenant-facing API, drives Forklift's objects, and turns each finished transfer into a Cozystack `VMDisk` and `VMInstance`.
 
 Opt-in. Add all three packages to `bundles.enabledPackages`:
 
@@ -30,7 +30,7 @@ Leaving it empty is a normal, supported state. A vSphere `VMImportSource` then r
 A connection, reusable across imports:
 
 ```yaml
-apiVersion: migration.cozystack.io/v1alpha1
+apiVersion: forklift.cozystack.io/v1alpha1
 kind: VMImportSource
 metadata:
   name: vcenter-prod
@@ -50,7 +50,7 @@ spec:
 Then an import, which is one-shot:
 
 ```yaml
-apiVersion: migration.cozystack.io/v1alpha1
+apiVersion: forklift.cozystack.io/v1alpha1
 kind: VMImportTask
 metadata:
   name: import-web-tier

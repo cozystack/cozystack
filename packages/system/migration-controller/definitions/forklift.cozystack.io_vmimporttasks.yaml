@@ -8,9 +8,9 @@ metadata:
     options.cozystack.io/source.storageClass: storageclass
     options.cozystack.io/source.vms.instanceProfile: instanceprofile
     options.cozystack.io/source.vms.instanceType: instancetype
-  name: vmimporttasks.migration.cozystack.io
+  name: vmimporttasks.forklift.cozystack.io
 spec:
-  group: migration.cozystack.io
+  group: forklift.cozystack.io
   names:
     kind: VMImportTask
     listKind: VMImportTaskList

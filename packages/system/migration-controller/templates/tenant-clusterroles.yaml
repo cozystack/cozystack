@@ -15,7 +15,7 @@ metadata:
   labels:
     rbac.cozystack.io/aggregate-to-tenant-view: "true"
 rules:
-- apiGroups: ["migration.cozystack.io"]
+- apiGroups: ["forklift.cozystack.io"]
   resources:
   - vmimportsources
   - vmimporttasks
@@ -44,7 +44,7 @@ metadata:
   labels:
     rbac.cozystack.io/aggregate-to-tenant-admin: "true"
 rules:
-- apiGroups: ["migration.cozystack.io"]
+- apiGroups: ["forklift.cozystack.io"]
   resources:
   - vmimportsources
   - vmimporttasks

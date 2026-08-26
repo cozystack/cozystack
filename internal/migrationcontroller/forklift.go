@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package migrationcontroller reconciles the migration.cozystack.io API group:
+// Package migrationcontroller reconciles the forklift.cozystack.io API group:
 // VMImportSource connections and the VMImportTask operations that run over them.
 //
 // Forklift, KubeVirt and CDI objects are handled as unstructured rather than

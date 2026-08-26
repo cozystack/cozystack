@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: vmimportsources.migration.cozystack.io
+  name: vmimportsources.forklift.cozystack.io
 spec:
-  group: migration.cozystack.io
+  group: forklift.cozystack.io
   names:
     kind: VMImportSource
     listKind: VMImportSourceList

@@ -1,13 +1,13 @@
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: migration.cozystack.io:controller
+  name: forklift.cozystack.io:controller
 rules:
 # The API this controller owns.
-- apiGroups: ["migration.cozystack.io"]
+- apiGroups: ["forklift.cozystack.io"]
   resources: ["vmimportsources", "vmimporttasks"]
   verbs: ["get", "list", "watch"]
-- apiGroups: ["migration.cozystack.io"]
+- apiGroups: ["forklift.cozystack.io"]
   resources: ["vmimportsources/status", "vmimporttasks/status"]
   verbs: ["get", "update", "patch"]
 # Forklift is the migration engine. The controller renders the whole object
