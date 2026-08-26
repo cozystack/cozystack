@@ -23,12 +23,11 @@ rules:
   resources: ["helmreleases"]
   verbs: ["get", "list", "watch", "patch", "update"]
 # TapMaterializerReconciler manages the finalizer and materialized-revision
-# annotation on a community tap's OCIRepository (read is covered by the
-# catch-all rule; update/patch are the new grants). PackageSource writes it
+# annotation on a community tap's OCIRepository. Read (get/list/watch) is
+# covered by the catch-all rule below; the update/patch it needs are scoped to a
+# namespaced Role in cozy-system (see tap-source-role.yaml), since the
+# materializer only ever touches tap sources there. PackageSource writes it
 # performs are already covered by the cozystack.io:*/* rule above.
-- apiGroups: ["source.toolkit.fluxcd.io"]
-  resources: ["ocirepositories"]
-  verbs: ["get", "list", "watch", "update", "patch"]
 # CACertReconciler reconciles TenantProjection sentinels a chart renders and
 # writes their Ready status. It never creates or deletes a sentinel; that is
 # the chart's (helm-controller's) job. No tenant role grants any verb on

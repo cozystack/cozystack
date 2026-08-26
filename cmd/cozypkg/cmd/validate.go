@@ -17,6 +17,8 @@ limitations under the License.
 package cmd
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -32,6 +34,7 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/naming"
 	"github.com/spf13/cobra"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 )
 
@@ -128,18 +131,27 @@ type typeMeta struct {
 	Kind       string `json:"kind"`
 }
 
-var docSeparator = regexp.MustCompile(`(?m)^---\s*$`)
-
 // splitYAMLDocuments splits a multi-document YAML byte slice into individual
-// documents, dropping empty ones.
+// documents, dropping empty ones. It uses the apimachinery reader so a block
+// scalar containing a separator-looking line does not fracture a document (the
+// same reader the operator's materializer uses, so both decode identically).
 func splitYAMLDocuments(data []byte) [][]byte {
-	parts := docSeparator.Split(string(data), -1)
-	out := make([][]byte, 0, len(parts))
-	for _, p := range parts {
-		if strings.TrimSpace(p) == "" {
+	reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
+	var out [][]byte
+	for {
+		doc, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// Malformed stream; stop here and let the per-document decode below
+			// surface a schema error for whatever was already read.
+			break
+		}
+		if len(bytes.TrimSpace(doc)) == 0 {
 			continue
 		}
-		out = append(out, []byte(p))
+		out = append(out, doc)
 	}
 	return out
 }

@@ -289,6 +289,36 @@ spec:
 	}
 }
 
+func TestValidateRepo_BlockScalarNotFractured(t *testing.T) {
+	root := t.TempDir()
+	// The annotation's block scalar contains a separator-looking line; a naive
+	// split would fracture the document and fail the strict decode.
+	writeFile(t, root, "packages/core/platform/sources/p.yaml", `apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: example.app
+  annotations:
+    note: |
+      line one
+      ---
+      line two
+spec:
+  variants:
+    - name: default
+      components:
+        - name: app
+          path: apps/app
+`)
+	writeFile(t, root, "packages/apps/app/Chart.yaml", "apiVersion: v2\nname: app\nversion: 0.1.0\n")
+	rep, err := ValidateRepo(ValidateOptions{RepoRoot: root})
+	if err != nil {
+		t.Fatalf("ValidateRepo: %v", err)
+	}
+	if codeCounts(rep)["schema"] != 0 || codeCounts(rep)["no-packagesource"] != 0 {
+		t.Fatalf("block scalar fractured the document: %+v", rep.Findings)
+	}
+}
+
 func TestValidateRepo_ArtifactNameCollision(t *testing.T) {
 	root := t.TempDir()
 	// variant "v1.0"/comp "c" and variant "v1"/comp "0-c" both normalise to
