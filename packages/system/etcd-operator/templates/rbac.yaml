@@ -5,8 +5,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
 ---
 # Manager ClusterRole — vendored from github.com/cozystack/etcd-operator
-# config/rbac/role.yaml. Cluster-scoped because etcd clusters live in tenant
-# namespaces. Refresh via `make update` when the operator's role.yaml changes.
+# charts/etcd-operator/files/manager-role-rules.yaml. Cluster-scoped because
+# etcd clusters live in tenant namespaces. Refresh via `make update` when the
+# operator's role rules change.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
