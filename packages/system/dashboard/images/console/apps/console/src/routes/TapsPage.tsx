@@ -17,6 +17,7 @@ export function TapsPage() {
 
   const [url, setUrl] = useState("")
   const [secret, setSecret] = useState("")
+  const [query, setQuery] = useState("")
 
   const onConnect = async () => {
     const trimmed = url.trim()
@@ -48,6 +49,8 @@ export function TapsPage() {
   }
 
   const taps = data?.items ?? []
+  const q = query.trim().toLowerCase()
+  const visibleTaps = q === "" ? taps : taps.filter((tap) => tapMatches(tap, q))
 
   return (
     <div className="p-6">
@@ -56,6 +59,11 @@ export function TapsPage() {
         <p className="mt-0.5 text-sm text-slate-500">
           External-Apps repositories connected to this cluster and the packages they expose.
         </p>
+      </div>
+
+      <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        Connecting a repository runs its charts in the management cluster. Connect only sources you
+        trust. The index verifies signatures at publication time; connecting does not verify them.
       </div>
 
       <div className="mb-6 flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 bg-white p-4">
@@ -105,12 +113,40 @@ export function TapsPage() {
         </div>
       )}
 
+      {taps.length > 0 && (
+        <input
+          className="mb-3 w-96 rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-900"
+          placeholder="Search repositories and packages…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      )}
+
+      {taps.length > 0 && visibleTaps.length === 0 && (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+          No repositories or packages match “{query}”.
+        </div>
+      )}
+
       <div className="space-y-3">
-        {taps.map((tap) => (
+        {visibleTaps.map((tap) => (
           <TapCard key={tap.metadata.name} tap={tap} onDisconnect={onDisconnect} />
         ))}
       </div>
     </div>
+  )
+}
+
+// tapMatches reports whether a tap's name, source, or any of its packages match
+// the lowercased query.
+function tapMatches(tap: Tap, q: string): boolean {
+  if (tap.metadata.name.toLowerCase().includes(q)) return true
+  const spec = tap.spec ?? {}
+  if ((spec.source?.name ?? "").toLowerCase().includes(q)) return true
+  return (spec.packages ?? []).some((p) =>
+    [p.name, p.kind, p.description, p.category, ...(p.tags ?? [])]
+      .filter(Boolean)
+      .some((s) => (s as string).toLowerCase().includes(q)),
   )
 }
 
