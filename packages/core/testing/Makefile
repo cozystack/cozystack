@@ -58,8 +58,15 @@ prepare-cluster-container:
 # Tear the container lane down. Volumes included: the node /var volumes hold
 # etcd and the kubelet state, so leaving them behind makes the next run adopt a
 # half-dead cluster instead of building a new one.
+# USERDATA is set to a placeholder because compose interpolates the whole file
+# before it decides what the subcommand needs, so the `${USERDATA:?}` guard that
+# makes a missing machine config fail loudly on `up` also fails `down`, where no
+# machine config is required. The value is never read: `down` matches containers
+# by project and service name. Without it teardown always errored, `|| true`
+# swallowed it, and the nodes and their /var volumes survived into the next run
+# -- the exact half-dead cluster this target exists to prevent.
 delete-cluster-container:
-	docker compose -p cozy-e2e -f $(ROOT_DIR)hack/e2e-compose.yaml down -v || true
+	USERDATA=teardown docker compose -p cozy-e2e -f $(ROOT_DIR)hack/e2e-compose.yaml down -v || true
 
 # COZY_APISERVER_ENDPOINT crosses into the sandbox explicitly: docker exec
 # starts a fresh environment, so a value exported by the caller does not reach

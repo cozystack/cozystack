@@ -17,7 +17,14 @@
 set -eu
 
 SANDBOX_NAME="${SANDBOX_NAME:?SANDBOX_NAME must be set (packages/core/testing/Makefile sets it)}"
-COMPOSE_FILE="${COMPOSE_FILE:-hack/e2e-compose.yaml}"
+# Resolved from this script's own location, not the caller's cwd: the Makefile
+# target runs it from packages/core/testing, where a relative hack/ does not
+# exist, while a contributor runs it from the repo root, where it does. Deriving
+# the root here makes both work and keeps the compose project name, the file and
+# the teardown in packages/core/testing/Makefile referring to the same thing.
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
+COMPOSE_FILE="${COMPOSE_FILE:-${REPO_ROOT}/hack/e2e-compose.yaml}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-cozy-e2e}"
 # 60 GB is NOT enough: LINSTOR can place both tenant workers on one node, and
 # 2x20 GiB worker disks + 2x~21 GiB CDI import scratch + etcd is ~86 GiB. The
