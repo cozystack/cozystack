@@ -29,6 +29,20 @@ KUBERNETES_VERSION="${KUBERNETES_VERSION:-v1.33.12}"
 log() { echo "[e2e-container-up] $*"; }
 die() { echo "[e2e-container-up] FATAL: $*" >&2; exit 1; }
 
+# modprobe and zpool need root; docker does not, and must NOT be run through
+# sudo, or the compose project ends up owned by a different user than the
+# teardown in packages/core/testing/Makefile runs as. So escalate per command
+# rather than re-exec'ing the whole script. Empty when already root, which is
+# how this runs on a dev box; `sudo` on a CI runner, which runs as an
+# unprivileged user with passwordless sudo.
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null 2>&1 \
+    || die "not root and no sudo available; this script needs to load kernel
+     modules and create zpools on the host."
+  SUDO="sudo"
+fi
+
 # ---------------------------------------------------------------------------
 # 1. Host kernel modules.
 #
@@ -40,12 +54,14 @@ die() { echo "[e2e-container-up] FATAL: $*" >&2; exit 1; }
 # or CNI error with no obvious cause.
 # ---------------------------------------------------------------------------
 for mod in openvswitch zfs; do
-  modprobe "$mod" 2>/dev/null || true
+  $SUDO modprobe "$mod" 2>/dev/null || true
   if ! grep -q "^${mod} " /proc/modules; then
     die "kernel module '${mod}' is not loaded on the host.
      The container lane takes its kernel from the host and Talos cannot load
      modules in container mode, so this must be loaded before the nodes start.
-     Both ship in the base linux-modules package: 'modprobe ${mod}'."
+     openvswitch ships with the distro kernel, so 'modprobe openvswitch' is
+     usually enough; zfs needs the OpenZFS packages first (on Ubuntu,
+     'apt-get install zfsutils-linux', then 'modprobe zfs')."
   fi
   log "host module ${mod}: loaded"
 done
@@ -57,14 +73,14 @@ done
 # node-distinct and each satellite pinned to its own; nothing enforces the
 # pinning. Acceptable for CI, not a production pattern.
 # ---------------------------------------------------------------------------
-mkdir -p "$ZPOOL_BACKING_DIR"
+$SUDO mkdir -p "$ZPOOL_BACKING_DIR"
 for n in 1 2 3; do
-  if zpool list "data-srv${n}" >/dev/null 2>&1; then
+  if $SUDO zpool list "data-srv${n}" >/dev/null 2>&1; then
     log "zpool data-srv${n}: already present"
     continue
   fi
-  truncate -s "$ZPOOL_SIZE" "${ZPOOL_BACKING_DIR}/srv${n}.img"
-  zpool create -f "data-srv${n}" "${ZPOOL_BACKING_DIR}/srv${n}.img"
+  $SUDO truncate -s "$ZPOOL_SIZE" "${ZPOOL_BACKING_DIR}/srv${n}.img"
+  $SUDO zpool create -f "data-srv${n}" "${ZPOOL_BACKING_DIR}/srv${n}.img"
   log "zpool data-srv${n}: created (${ZPOOL_SIZE})"
 done
 

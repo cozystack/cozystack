@@ -61,8 +61,14 @@ prepare-cluster-container:
 delete-cluster-container:
 	docker compose -p cozy-e2e -f $(ROOT_DIR)hack/e2e-compose.yaml down -v || true
 
+# COZY_APISERVER_ENDPOINT crosses into the sandbox explicitly: docker exec
+# starts a fresh environment, so a value exported by the caller does not reach
+# the bats file that reads it. Unset expands to empty here, and the default in
+# hack/e2e-install-cozystack.bats uses `:-`, which treats empty as absent -- so
+# the QEMU lane keeps 192.168.123.10 without naming it. The container lane has
+# no VIP and passes .11 instead.
 install-cozystack:
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
+	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
 
 test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'
