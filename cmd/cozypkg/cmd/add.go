@@ -25,24 +25,25 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spf13/cobra"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
 var addCmdFlags struct {
-	files      []string
-	kubeconfig string
+	files           []string
+	kubeconfig      string
+	allowPrivileged bool
 }
 
 var addCmd = &cobra.Command{
@@ -59,7 +60,7 @@ Multiple -f flags can be specified, and they can point to files or directories.`
 		// Collect package names from arguments and files
 		packageNames := make(map[string]bool)
 		packagesFromFiles := make(map[string]string) // packageName -> filePath
-		
+
 		for _, arg := range args {
 			packageNames[arg] = true
 		}
@@ -119,7 +120,7 @@ Multiple -f flags can be specified, and they can point to files or directories.`
 				}
 				// If failed, fall back to interactive installation
 			}
-			
+
 			// Interactive installation from PackageSource
 			if err := installPackage(ctx, k8sClient, packageName); err != nil {
 				return err
@@ -178,7 +179,7 @@ func readPackagesFromYAMLFile(filePath string) ([]string, error) {
 
 	// Split YAML documents (in case of multiple resources)
 	documents := strings.Split(string(data), "---")
-	
+
 	for _, doc := range documents {
 		doc = strings.TrimSpace(doc)
 		if doc == "" {
@@ -240,7 +241,7 @@ func buildDependencyTree(ctx context.Context, k8sClient client.Client, rootName 
 	tree := make(map[string][]string)
 	dependencyRequesters := make(map[string]string) // dep -> requester
 	visited := make(map[string]bool)
-	
+
 	// Ensure root is in tree even if it has no dependencies
 	tree[rootName] = []string{}
 
@@ -354,7 +355,7 @@ func createPackageFromFile(ctx context.Context, k8sClient client.Client, filePat
 
 	// Split YAML documents
 	documents := strings.Split(string(data), "---")
-	
+
 	for _, doc := range documents {
 		doc = strings.TrimSpace(doc)
 		if doc == "" {
@@ -462,6 +463,18 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 			return fmt.Errorf("failed to select variant for %s: %w", pkgName, err)
 		}
 
+		// A privileged component runs with elevated access; require an explicit
+		// confirmation (or --allow-privileged) before installing it.
+		if privileged := privilegedComponents(ps, variant); len(privileged) > 0 && !addCmdFlags.allowPrivileged {
+			ok, err := confirmPrivileged(pkgName, variant, privileged)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("aborted: %s variant %s has privileged component(s) %v; re-run with --allow-privileged to install", pkgName, variant, privileged)
+			}
+		}
+
 		packageVariants[pkgName] = variant
 	}
 
@@ -541,9 +554,44 @@ func selectVariantInteractive(ps *cozyv1alpha1.PackageSource) (string, error) {
 	}
 }
 
+// privilegedComponents returns the names of components in the given variant
+// that declare install.privileged: true.
+func privilegedComponents(ps *cozyv1alpha1.PackageSource, variantName string) []string {
+	var names []string
+	for _, v := range ps.Spec.Variants {
+		if v.Name != variantName {
+			continue
+		}
+		for _, c := range v.Components {
+			if c.Install != nil && c.Install.Privileged {
+				names = append(names, c.Name)
+			}
+		}
+	}
+	return names
+}
+
+// confirmPrivileged prompts the operator to confirm installing privileged
+// components. It defaults to No.
+func confirmPrivileged(pkgName, variant string, components []string) (bool, error) {
+	fmt.Fprintf(os.Stderr, "\n⚠ %s variant %s installs privileged component(s): %s\n", pkgName, variant, strings.Join(components, ", "))
+	fmt.Fprint(os.Stderr, "These run with elevated cluster access. Install anyway? [y/N]: ")
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return false, fmt.Errorf("failed to read confirmation: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
 func init() {
 	rootCmd.AddCommand(addCmd)
+	addCmd.Flags().BoolVar(&addCmdFlags.allowPrivileged, "allow-privileged", false, "Install privileged components without an interactive confirmation")
 	addCmd.Flags().StringArrayVarP(&addCmdFlags.files, "file", "f", []string{}, "Read packages from file or directory (can be specified multiple times)")
 	addCmd.Flags().StringVar(&addCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file (defaults to ~/.kube/config or KUBECONFIG env var)")
 }
-
