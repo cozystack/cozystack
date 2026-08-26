@@ -59,6 +59,14 @@ jobs:
           BASE_REF: origin/${{ github.base_ref }}
         run: bash scripts/validate-entry.sh
 
+      # NOTE: for a pull request from a fork (the common case for a community
+      # index), GITHUB_TOKEN is read-only regardless of the permissions above,
+      # so the two steps below fail with 403. Before enabling this in the real
+      # packages-index repo, move the merge/label actions into a separate
+      # `workflow_run` job that checks out no untrusted code (do NOT switch the
+      # validation job to pull_request_target, which would run the contributor's
+      # gate script with a write token). The validation job above is safe on
+      # pull_request as-is.
       - name: Enable auto-merge (owner version bump, signed by recorded identity)
         if: steps.gate.outputs.lane == 'auto'
         env:

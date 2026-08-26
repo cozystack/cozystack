@@ -179,8 +179,23 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		if gerr != nil {
 			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.PackageSourceName, gerr))
 		}
-		repo.SetResourceVersion(cur.GetResourceVersion())
-		if _, err := src.Update(ctx, repo, metav1.UpdateOptions{FieldManager: "cozystack-api"}); err != nil {
+		// Update only the fields this API owns (spec, the tap label and name
+		// annotation) on the FETCHED object, so the operator's finalizer and
+		// materialized-revision annotation on the existing source survive.
+		cur.Object["spec"] = repo.Object["spec"]
+		labels := cur.GetLabels()
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels[tapconst.Label] = "true"
+		cur.SetLabels(labels)
+		ann := cur.GetAnnotations()
+		if ann == nil {
+			ann = map[string]string{}
+		}
+		ann[tapconst.NameAnnotation] = target.PackageSourceName
+		cur.SetAnnotations(ann)
+		if _, err := src.Update(ctx, cur, metav1.UpdateOptions{FieldManager: "cozystack-api"}); err != nil {
 			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.PackageSourceName, err))
 		}
 	}

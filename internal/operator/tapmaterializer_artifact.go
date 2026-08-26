@@ -101,8 +101,13 @@ func verifyAndExtract(data []byte, expectedDigest, destDir string) error {
 	return nil
 }
 
-// safeJoin joins name under base, rejecting entries that escape base.
+// safeJoin joins name under base, rejecting entries that escape base. It
+// rejects any ".." component outright (the traversal marker) and, as a second
+// guard, confirms the resolved path stays within base.
 func safeJoin(base, name string) (string, error) {
+	if name == ".." || strings.HasPrefix(name, "../") || strings.Contains(name, "/../") || strings.HasSuffix(name, "/..") {
+		return "", fmt.Errorf("tar entry %q contains a path-traversal segment", name)
+	}
 	target := filepath.Join(base, name)
 	rel, err := filepath.Rel(base, target)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {

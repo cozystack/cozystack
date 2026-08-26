@@ -122,6 +122,7 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		base = communityBaseFromURL(repo.Spec.URL)
 	}
 	single := len(sources) == 1
+	applied := make(map[string]bool, len(sources))
 	for i := range sources {
 		ps := sources[i].DeepCopy()
 		origPath := "/"
@@ -140,10 +141,19 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err := r.Patch(ctx, ps, client.Apply, client.FieldOwner(tapFieldOwner), client.ForceOwnership); err != nil {
 			return ctrl.Result{}, fmt.Errorf("materialize PackageSource %s: %w", ps.GetName(), err)
 		}
+		applied[ps.GetName()] = true
 		logger.Info("materialized PackageSource from tap", "name", ps.GetName(), "tap", repo.Name)
 	}
 	if len(sources) == 0 {
 		logger.Info("tap artifact carried no PackageSource", "tap", repo.Name, "revision", art.Revision)
+	}
+
+	// Prune PackageSources this tap materialized from an earlier revision that
+	// the current artifact no longer contains (including a rename when the
+	// single/multi package count flips), so a removed package leaves the
+	// catalog. Installed Packages are left in place.
+	if err := r.pruneMaterialized(ctx, repo.Name, applied); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Stamp the revision so an unchanged artifact is not re-pulled every resync.
@@ -157,16 +167,22 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{}, nil
 }
 
-// deleteMaterialized removes the PackageSources materialized from the given tap
-// source. Installed Packages are intentionally left in place.
+// deleteMaterialized removes every PackageSource materialized from the given
+// tap source. Installed Packages are intentionally left in place.
 func (r *TapMaterializerReconciler) deleteMaterialized(ctx context.Context, sourceName string) error {
+	return r.pruneMaterialized(ctx, sourceName, nil)
+}
+
+// pruneMaterialized deletes the PackageSources materialized from sourceName
+// except those whose names are in keep (nil keep deletes all of them).
+func (r *TapMaterializerReconciler) pruneMaterialized(ctx context.Context, sourceName string, keep map[string]bool) error {
 	var list cozyv1alpha1.PackageSourceList
 	if err := r.List(ctx, &list, client.MatchingLabels{tapconst.Label: "true"}); err != nil {
 		return err
 	}
 	for i := range list.Items {
 		ps := &list.Items[i]
-		if ps.Annotations[tapconst.SourceAnnotation] != sourceName {
+		if ps.Annotations[tapconst.SourceAnnotation] != sourceName || keep[ps.Name] {
 			continue
 		}
 		if err := r.Delete(ctx, ps); err != nil && client.IgnoreNotFound(err) != nil {

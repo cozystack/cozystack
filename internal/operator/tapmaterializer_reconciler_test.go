@@ -143,3 +143,31 @@ func TestDeleteMaterialized(t *testing.T) {
 		t.Errorf("expected community.baz.qux kept, got %v", err)
 	}
 }
+
+func TestPruneMaterializedKeepsCurrentSet(t *testing.T) {
+	scheme := tapScheme(t)
+	src := "community-foo-bar"
+	keepPS := &cozyv1alpha1.PackageSource{ObjectMeta: metav1.ObjectMeta{
+		Name:        "community.foo.bar",
+		Labels:      map[string]string{tapconst.Label: "true"},
+		Annotations: map[string]string{tapconst.SourceAnnotation: src},
+	}}
+	stalePS := &cozyv1alpha1.PackageSource{ObjectMeta: metav1.ObjectMeta{
+		Name:        "community.foo.bar.removed",
+		Labels:      map[string]string{tapconst.Label: "true"},
+		Annotations: map[string]string{tapconst.SourceAnnotation: src},
+	}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(keepPS, stalePS).Build()
+	r := &TapMaterializerReconciler{Client: cl, Scheme: scheme}
+
+	// The new revision still contains community.foo.bar but not .removed.
+	if err := r.pruneMaterialized(context.Background(), src, map[string]bool{"community.foo.bar": true}); err != nil {
+		t.Fatalf("pruneMaterialized: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "community.foo.bar"}, &cozyv1alpha1.PackageSource{}); err != nil {
+		t.Errorf("expected kept PS to survive, got %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "community.foo.bar.removed"}, &cozyv1alpha1.PackageSource{}); !apierrors.IsNotFound(err) {
+		t.Errorf("expected stale PS pruned, got %v", err)
+	}
+}

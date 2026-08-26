@@ -18,6 +18,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -523,30 +524,59 @@ var validateCmdFlags struct {
 	knownSources     []string
 }
 
+var digestRe = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
+
 // verifyCosignSignature verifies an OCI artifact's keyless cosign signature
 // against the expected certificate identity and OIDC issuer, shelling out to
 // the cosign binary. This is the trust anchor the index CI gate relies on: a
-// version bump must stay signed by the entry's recorded identity.
-func verifyCosignSignature(ref, identity, issuer string) error {
+// version bump must stay signed by the entry's recorded identity. It returns
+// the verified manifest digest so the caller can pull that exact content and
+// close the tag-mutation window between verify and pull; the digest is empty
+// if it could not be parsed (the caller then falls back to the tag).
+func verifyCosignSignature(ref, identity, issuer string) (string, error) {
 	if _, err := exec.LookPath("cosign"); err != nil {
-		return fmt.Errorf("--require-signature needs the cosign binary in PATH: %w", err)
+		return "", fmt.Errorf("--require-signature needs the cosign binary in PATH: %w", err)
 	}
 	if identity == "" || issuer == "" {
-		return fmt.Errorf("--require-signature needs --certificate-identity and --certificate-oidc-issuer for keyless verification")
+		return "", fmt.Errorf("--require-signature needs --certificate-identity and --certificate-oidc-issuer for keyless verification")
 	}
 	cosignRef := strings.TrimPrefix(ref, "oci://")
 	ctx, cancel := context.WithTimeout(context.Background(), ociPullTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "cosign", "verify", cosignRef,
 		"--certificate-identity", identity,
-		"--certificate-oidc-issuer", issuer).CombinedOutput()
+		"--certificate-oidc-issuer", issuer,
+		"--output", "json").CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
-		return fmt.Errorf("timed out verifying the signature of %q", ref)
+		return "", fmt.Errorf("timed out verifying the signature of %q", ref)
 	}
 	if err != nil {
-		return fmt.Errorf("cosign verification failed for %q: %v\n%s", ref, err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("cosign verification failed for %q: %v\n%s", ref, err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	// Extract the verified manifest digest from the JSON payload
+	// (.critical.image."docker-manifest-digest").
+	return parseVerifiedDigest(out), nil
+}
+
+// parseVerifiedDigest pulls the docker-manifest-digest out of cosign's JSON
+// verification output, or returns "" if it is not present.
+func parseVerifiedDigest(out []byte) string {
+	var payloads []struct {
+		Critical struct {
+			Image struct {
+				Digest string `json:"docker-manifest-digest"`
+			} `json:"image"`
+		} `json:"critical"`
+	}
+	if err := json.Unmarshal(out, &payloads); err == nil {
+		for _, p := range payloads {
+			if digestRe.MatchString(p.Critical.Image.Digest) {
+				return p.Critical.Image.Digest
+			}
+		}
+	}
+	// Fallback: any sha256 digest present in the output.
+	return digestRe.FindString(string(out))
 }
 
 var validateCmd = &cobra.Command{
@@ -568,12 +598,21 @@ runs "helm lint" on every component chart.`,
 		root := target
 
 		if isOCIRef(target) {
+			pullRef := target
 			if validateCmdFlags.requireSignature {
-				if err := verifyCosignSignature(target, validateCmdFlags.certIdentity, validateCmdFlags.certIssuer); err != nil {
+				digest, err := verifyCosignSignature(target, validateCmdFlags.certIdentity, validateCmdFlags.certIssuer)
+				if err != nil {
 					return err
 				}
+				// Pull the exact content cosign verified, closing the window in
+				// which the tag could be moved between verify and pull.
+				if digest != "" {
+					if parsed, perr := parseOCIRef(target); perr == nil {
+						pullRef = parsed.URL + "@" + digest
+					}
+				}
 			}
-			dir, cleanup, err := pullOCIArtifact(target)
+			dir, cleanup, err := pullOCIArtifact(pullRef)
 			if err != nil {
 				return err
 			}

@@ -19,6 +19,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -333,8 +334,23 @@ func TestSplitYAMLDocuments(t *testing.T) {
 func TestVerifyCosignSignatureGuards(t *testing.T) {
 	// Errors regardless of whether cosign is installed: absent -> missing-binary
 	// error; present -> missing identity/issuer error. Either way, no silent pass.
-	if err := verifyCosignSignature("oci://ghcr.io/foo/bar:v1", "", ""); err == nil {
+	if _, err := verifyCosignSignature("oci://ghcr.io/foo/bar:v1", "", ""); err == nil {
 		t.Fatal("expected an error when identity/issuer are missing or cosign is absent")
+	}
+}
+
+func TestParseVerifiedDigest(t *testing.T) {
+	a := "sha256:" + strings.Repeat("a", 64)
+	b := "sha256:" + strings.Repeat("b", 64)
+	if got := parseVerifiedDigest([]byte(`[{"critical":{"image":{"docker-manifest-digest":"` + a + `"}}}]`)); got != a {
+		t.Errorf("parseVerifiedDigest = %q", got)
+	}
+	// Fallback: digest present anywhere in non-JSON output.
+	if got := parseVerifiedDigest([]byte("verified " + b)); got != b {
+		t.Errorf("fallback parseVerifiedDigest = %q", got)
+	}
+	if got := parseVerifiedDigest([]byte("no digest here")); got != "" {
+		t.Errorf("expected empty digest, got %q", got)
 	}
 }
 

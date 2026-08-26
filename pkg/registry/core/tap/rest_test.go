@@ -172,6 +172,37 @@ func TestCreateGuards(t *testing.T) {
 	}
 }
 
+func TestCreateRepeatPreservesFinalizerAndRevision(t *testing.T) {
+	// A source already connected and materialized carries the operator's
+	// finalizer and materialized-revision annotation; a repeat connect must
+	// update the tag without stripping them.
+	existing := ociRepoObj("community-foo-bar")
+	existing.SetFinalizers([]string{"apps.cozystack.io/tap-materializer"})
+	existing.SetAnnotations(map[string]string{"apps.cozystack.io/materialized-revision": "rev-1"})
+	r := fakeREST(existing)
+
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "oci://ghcr.io/foo/bar:v2"}}
+	if _, err := r.Create(context.Background(), in, nil, nil); err != nil {
+		t.Fatalf("repeat create: %v", err)
+	}
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-foo-bar", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u.GetFinalizers()) == 0 {
+		t.Error("repeat connect stripped the operator finalizer")
+	}
+	if u.GetAnnotations()["apps.cozystack.io/materialized-revision"] != "rev-1" {
+		t.Error("repeat connect stripped the materialized-revision annotation")
+	}
+	if tag, _, _ := unstructured.NestedString(u.Object, "spec", "ref", "tag"); tag != "v2" {
+		t.Errorf("repeat connect did not update the tag, got %q", tag)
+	}
+	if u.GetAnnotations()["apps.cozystack.io/tap-name"] != "community.foo.bar" {
+		t.Error("repeat connect did not set the tap-name annotation")
+	}
+}
+
 func TestCreateMakesLabeledSource(t *testing.T) {
 	r := fakeREST()
 	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "oci://ghcr.io/foo/bar:v1", SecretRef: "pull-creds"}}

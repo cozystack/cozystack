@@ -28,15 +28,15 @@ rules:
   resources: ["*"]
   verbs: ["get", "watch", "list"]
 # Marketplace Tap resource: disconnecting a community tap deletes its
-# PackageSource, and connecting/disconnecting manages the tap's Flux
-# OCIRepository. Both run with this ServiceAccount, so it needs delete on
-# packagesources and full management of the tap OCIRepositories.
+# (cluster-scoped) PackageSource. The tap's Flux OCIRepository is read here for
+# List/Get/Watch; its write verbs are scoped to a namespaced Role in cozy-system
+# (see tap-source-role.yaml), since the API only ever manages tap sources there.
 - apiGroups: ["cozystack.io"]
   resources: ["packagesources"]
   verbs: ["delete"]
 - apiGroups: ["source.toolkit.fluxcd.io"]
   resources: ["ocirepositories"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  verbs: ["get", "list", "watch"]
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["*"]
   verbs: ["*"]
