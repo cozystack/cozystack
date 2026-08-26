@@ -48,6 +48,11 @@ jobs:
         with:
           cosign-release: v2.4.3
 
+      # helm is needed for `cozypkg validate --helm-lint` in the gate.
+      - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v3.16.4
+
       - name: Validate changed entries
         id: gate
         env:

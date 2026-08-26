@@ -72,8 +72,10 @@ while IFS= read -r file; do
     lane="review"
   fi
 
-  # Mandatory validation plus cosign verification against the RECORDED identity.
+  # Mandatory validation (including helm lint of every component chart) plus
+  # cosign verification against the RECORDED identity.
   cozypkg validate "${ociRef}:${version}" \
+    --helm-lint \
     --require-signature \
     --certificate-identity "$identity" \
     --certificate-oidc-issuer "$issuer"

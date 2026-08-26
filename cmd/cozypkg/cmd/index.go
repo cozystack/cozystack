@@ -215,6 +215,12 @@ func resolveTapTarget(arg, indexRef string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("no index entry named %q", arg)
 	}
+	// Pin to the entry's recorded version: the CI gate validated and
+	// cosign-verified <ociRef>:<version>, so tapping must consume that exact
+	// tag rather than defaulting to latest.
+	if entry.Version != "" {
+		return entry.OCIRef + ":" + entry.Version, nil
+	}
 	return entry.OCIRef, nil
 }
 

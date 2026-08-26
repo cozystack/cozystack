@@ -106,8 +106,14 @@ func TestResolveTapTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveTapTarget: %v", err)
 	}
-	if got != "oci://ghcr.io/foo/bar" {
-		t.Fatalf("resolved ref = %q", got)
+	// Must pin to the entry's recorded version, not default to latest.
+	if got != "oci://ghcr.io/foo/bar:v1.2.3" {
+		t.Fatalf("resolved ref = %q, want the version-pinned ref", got)
+	}
+
+	// An entry without a version resolves to the bare ref (tap defaults to latest).
+	if got, err := resolveTapTarget("baz.qux", dir); err != nil || got != "oci://ghcr.io/baz/qux" {
+		t.Fatalf("versionless resolve = %q err %v", got, err)
 	}
 
 	if _, err := resolveTapTarget("does.not.exist", dir); err == nil {

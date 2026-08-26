@@ -1,0 +1,8 @@
+# Every index entry requires maintainer review before merge (the auto-merge
+# lane in validate.yaml only fires for an owner version bump signed by the
+# entry's recorded identity; everything else lands here).
+/entries/  @cozystack/maintainers
+
+# The gate itself and the workflow are maintainer-owned.
+/scripts/            @cozystack/maintainers
+/github-workflows/   @cozystack/maintainers
