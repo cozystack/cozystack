@@ -52,6 +52,25 @@ func TestWriteScaffoldRefusesOverwrite(t *testing.T) {
 	}
 }
 
+func TestCapitalizeYieldsValidKind(t *testing.T) {
+	cases := map[string]string{
+		"myapp":       "Myapp",
+		"foo-bar":     "FooBar",
+		"a-b-c":       "ABC",
+		"minecraft":   "Minecraft",
+		"redis-cache": "RedisCache",
+	}
+	for in, want := range cases {
+		if got := capitalize(in); got != want {
+			t.Errorf("capitalize(%q) = %q, want %q", in, got, want)
+		}
+		// A Kubernetes kind must not contain hyphens.
+		if strings.Contains(capitalize(in), "-") {
+			t.Errorf("capitalize(%q) = %q contains a hyphen (invalid kind)", in, capitalize(in))
+		}
+	}
+}
+
 func TestDNS1123LabelGuard(t *testing.T) {
 	good := []string{"myapp", "foo-bar", "a", "app123"}
 	bad := []string{"MyApp", "foo_bar", "-foo", "foo-", "foo.bar", ""}

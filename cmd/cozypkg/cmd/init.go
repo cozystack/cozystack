@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -179,15 +180,19 @@ func writeScaffold(dir string, files []scaffoldFile) error {
 	return nil
 }
 
+// capitalize builds an upper CamelCase identifier from an RFC-1123 label so a
+// hyphenated --app (e.g. "foo-bar") yields a valid Kubernetes kind ("FooBar"),
+// not the apiserver-rejected "Foo-bar".
 func capitalize(s string) string {
-	if s == "" {
-		return s
+	var b strings.Builder
+	for _, seg := range strings.Split(s, "-") {
+		if seg == "" {
+			continue
+		}
+		b.WriteString(strings.ToUpper(seg[:1]))
+		b.WriteString(seg[1:])
 	}
-	b := []byte(s)
-	if b[0] >= 'a' && b[0] <= 'z' {
-		b[0] -= 'a' - 'A'
-	}
-	return string(b)
+	return b.String()
 }
 
 var initCmd = &cobra.Command{
@@ -215,8 +220,8 @@ to validate and push. The generated tree passes 'cozypkg validate' as-is.`,
 		if err := writeScaffold(dir, files); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Scaffolded %d files under %s\nNext: cozypkg validate %s\n", len(files), dir, dir)
-		return nil
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "Scaffolded %d files under %s\nNext: cozypkg validate %s\n", len(files), dir, dir)
+		return err
 	},
 }
 

@@ -137,7 +137,7 @@ func TestBuildTapOCIRepository(t *testing.T) {
 	if obj.Spec.Reference == nil || obj.Spec.Reference.Tag != "v1" {
 		t.Fatalf("expected tag v1, got %+v", obj.Spec.Reference)
 	}
-	if obj.Spec.Interval.Duration.Minutes() != 5 {
+	if obj.Spec.Interval.Minutes() != 5 {
 		t.Fatalf("expected 5m interval, got %v", obj.Spec.Interval)
 	}
 	if obj.Spec.SecretRef != nil {

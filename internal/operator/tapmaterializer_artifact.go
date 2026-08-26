@@ -56,7 +56,7 @@ func verifyAndExtract(data []byte, expectedDigest, destDir string) error {
 	if err != nil {
 		return fmt.Errorf("open gzip: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 	var written int64
@@ -90,10 +90,10 @@ func verifyAndExtract(data []byte, expectedDigest, destDir string) error {
 				return err
 			}
 			if _, err := io.CopyN(f, tr, hdr.Size); err != nil {
-				f.Close()
+				_ = f.Close()
 				return err
 			}
-			f.Close()
+			_ = f.Close()
 		default:
 			// Skip symlinks, devices, etc.: an app artifact needs only files.
 		}

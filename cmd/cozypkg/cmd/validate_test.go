@@ -33,11 +33,6 @@ func writeFile(t *testing.T, root, rel, content string) {
 	}
 }
 
-const chartYAML = `apiVersion: v2
-name: %s
-version: 0.1.0
-`
-
 // validRepo builds a minimal but complete External-Apps repository:
 // one PackageSource with a default variant that has a library, an app
 // component that uses the library, and a paired -rd component whose chart

@@ -334,7 +334,7 @@ refused.`,
 		// after its PackageSource).
 		pkg := &cozyv1alpha1.Package{}
 		if err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg); err == nil && !untapConfirmFlag {
-			return fmt.Errorf("Package %s is still installed from this source; delete it with 'cozypkg del %s' first, or pass --yes to untap anyway (the Package stays installed)", name, name)
+			return fmt.Errorf("package %s is still installed from this source; delete it with 'cozypkg del %s' first, or pass --yes to untap anyway (the Package stays installed)", name, name)
 		}
 
 		srcName := ""

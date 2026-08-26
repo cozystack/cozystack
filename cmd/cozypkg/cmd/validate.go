@@ -400,7 +400,7 @@ func helmLint(artRoot string, v cozyv1alpha1.Variant, c cozyv1alpha1.Component, 
 			r.add(SeverityError, "helm-lint", file, "component %q: failed to create temp dir for library staging: %v", c.Name, err)
 			return
 		}
-		defer os.RemoveAll(tmp)
+		defer func() { _ = os.RemoveAll(tmp) }()
 		dst := filepath.Join(tmp, filepath.Base(chartDir))
 		if err := copyTree(chartDir, dst); err != nil {
 			r.add(SeverityError, "helm-lint", file, "component %q: failed to stage chart: %v", c.Name, err)
@@ -476,7 +476,7 @@ func pullOCIArtifact(ref string) (string, func(), error) {
 	if err != nil {
 		return "", func() {}, err
 	}
-	cleanup := func() { os.RemoveAll(dir) }
+	cleanup := func() { _ = os.RemoveAll(dir) }
 	ctx, cancel := context.WithTimeout(context.Background(), ociPullTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "flux", "pull", "artifact", ref, "--output", dir).CombinedOutput()

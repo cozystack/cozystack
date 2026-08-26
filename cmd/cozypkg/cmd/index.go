@@ -149,13 +149,17 @@ func defaultIndexRef(flagVal string) string {
 	return os.Getenv("COZYPKG_INDEX")
 }
 
-func printEntries(entries []IndexEntry, w io.Writer) {
+func printEntries(entries []IndexEntry, w io.Writer) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tOCI REF\tDESCRIPTION")
-	for _, e := range entries {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", e.Name, e.OCIRef, e.Description)
+	if _, err := fmt.Fprintln(tw, "NAME\tOCI REF\tDESCRIPTION"); err != nil {
+		return err
 	}
-	tw.Flush()
+	for _, e := range entries {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\n", e.Name, e.OCIRef, e.Description); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
 }
 
 var searchCmdFlags struct {
@@ -187,11 +191,10 @@ without tapping them. Configure the index with --index or COZYPKG_INDEX.`,
 		}
 		matches := filterEntries(entries, term)
 		if len(matches) == 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "No packages match %q\n", term)
-			return nil
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "No packages match %q\n", term)
+			return err
 		}
-		printEntries(matches, cmd.OutOrStdout())
-		return nil
+		return printEntries(matches, cmd.OutOrStdout())
 	},
 }
 

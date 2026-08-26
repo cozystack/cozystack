@@ -74,8 +74,8 @@ func TestReconcileAddsFinalizer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if !res.Requeue {
-		t.Errorf("expected requeue after adding finalizer")
+	if res.RequeueAfter <= 0 {
+		t.Errorf("expected a requeue after adding the finalizer")
 	}
 	var got sourcev1.OCIRepository
 	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
@@ -108,7 +108,7 @@ func TestReconcileIgnoresUnlabeled(t *testing.T) {
 	r := &TapMaterializerReconciler{Client: cl, Scheme: scheme}
 
 	res, err := r.Reconcile(context.Background(), req())
-	if err != nil || res.Requeue || res.RequeueAfter != 0 {
+	if err != nil || res.RequeueAfter != 0 {
 		t.Fatalf("unlabeled source must be ignored, got res=%+v err=%v", res, err)
 	}
 	var got sourcev1.OCIRepository

@@ -83,7 +83,7 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err := r.Update(ctx, &repo); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	art := repo.Status.Artifact
@@ -108,7 +108,7 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 	if err := verifyAndExtract(data, art.Digest, tmp); err != nil {
 		return ctrl.Result{}, fmt.Errorf("extract artifact for tap %s: %w", repo.Name, err)
 	}
@@ -188,7 +188,7 @@ func httpFetch(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %s fetching %s", resp.Status, url)
 	}
