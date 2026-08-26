@@ -108,6 +108,15 @@ func (r *VMImportTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if err := r.ensureMaps(ctx, task, src, storageClass); err != nil {
+		// Forklift's CRDs can vanish under a running task — the operand is
+		// removed, or this is the window before the Source's recheck notices.
+		// reconcileVM already reports that as Pending; without the same here
+		// the reconcile returns an error and hot-loops with nothing written for
+		// a tenant to read.
+		if meta.IsNoMatchError(err) {
+			return r.pending(ctx, task, migrationv1alpha1.ReasonForkliftNotInstalled,
+				"Forklift is not installed in this cluster")
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -306,8 +315,10 @@ func (r *VMImportTaskReconciler) resolveStorageClass(ctx context.Context, task *
 			reason: migrationv1alpha1.ReasonStorageClassNotImmediate,
 			message: fmt.Sprintf(
 				"StorageClass %q (%s) binds WaitForFirstConsumer, which deadlocks an import: "+
-					"nothing consumes the volume while it is being populated. Name a class with "+
-					"volumeBindingMode Immediate in spec.storageClass", name, origin),
+					"nothing consumes the volume while it is being populated. Create a new task "+
+					"naming a class with volumeBindingMode Immediate in spec.storageClass — this "+
+					"task is terminal and spec.storageClass is immutable, so editing it will not "+
+					"restart the import", name, origin),
 		}
 	}
 	return name, nil

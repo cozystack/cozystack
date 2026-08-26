@@ -46,7 +46,7 @@ spec:
             drop: ["ALL"]
         args:
         - --leader-elect
-        {{- if .Values.migrationController.metrics.enable }}
+        {{- if .Values.migrationController.metrics.enabled }}
         - --metrics-bind-address={{ .Values.migrationController.metrics.bindAddress }}
         {{- end }}
         {{- if .Values.migrationController.debug }}

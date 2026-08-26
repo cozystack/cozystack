@@ -17,8 +17,8 @@ migrationController:
 ## Never a tenant value: naming an image the cluster will run is not a tenant's
 ## decision, and this one is built from a proprietary SDK that Cozystack can
 ## neither ship nor mirror. An operator holding a VDDK licence builds it, pushes
-## it somewhere the cluster can pull from, and sets `migration.vddkImage` in the
-## platform values (or the `vddk-image` key in the cozystack ConfigMap).
+## it somewhere the cluster can pull from, and sets `vmImport.vddkImage` in the
+## platform values, which the iaas bundle forwards into this chart.
 ## Empty is the normal state and means the vSphere import path is unavailable
 ## rather than broken: a vSphere VMImportSource reports it on its own status.
 vddkImage: ""
