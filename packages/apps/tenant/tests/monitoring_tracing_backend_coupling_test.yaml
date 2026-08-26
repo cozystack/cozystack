@@ -1,0 +1,62 @@
+suite: shared-central tracing couples the collector backend to tracingCentral
+# The collector's export target (tracingCollector.backend) and the Cilium egress
+# rule that permits the cross-boundary hop (networkpolicy-traces-central.yaml)
+# must never diverge: backend=central without the egress rule silently drops
+# every span at the network layer (the #3181 silent-loss class). tracingCentral
+# is the single source of truth — the monitoring HelmRelease derives backend
+# from it via inline spec.values, which Flux merges over the cozystack-values
+# Secret so a backend set directly in the Monitoring app config cannot
+# re-introduce the mismatch. These cases pin both directions.
+#
+# Restrict rendering to the two coupled templates so an unrelated template
+# (e.g. keycloakgroups.yaml, which errors on the platform-injected .Values._cluster
+# this suite has no reason to set) cannot fail the suite.
+templates:
+  - templates/monitoring.yaml
+  - templates/networkpolicy-traces-central.yaml
+
+release:
+  name: tenant-ktj
+  namespace: tenant-root
+
+tests:
+  - it: forces backend=local when tracingCentral is unset (no cross-boundary export without the egress rule)
+    set:
+      monitoring: true
+    asserts:
+      - template: templates/monitoring.yaml
+        equal:
+          path: spec.values.tracingCollector.backend
+          value: local
+      # ...and the egress rule is correspondingly absent.
+      - template: templates/networkpolicy-traces-central.yaml
+        containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-ktj-egress-traces-central
+        not: true
+
+  - it: derives backend=central when tracingCentral is set, alongside the egress rule
+    set:
+      monitoring: true
+      tracingCentral: true
+    asserts:
+      - template: templates/monitoring.yaml
+        equal:
+          path: spec.values.tracingCollector.backend
+          value: central
+      # ...and the egress rule that authorises the central hop renders in lockstep.
+      - template: templates/networkpolicy-traces-central.yaml
+        containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-ktj-egress-traces-central
+
+  - it: no monitoring release means no backend to diverge (monitoring off)
+    set:
+      monitoring: false
+      tracingCentral: true
+    asserts:
+      - template: templates/monitoring.yaml
+        hasDocuments:
+          count: 0
