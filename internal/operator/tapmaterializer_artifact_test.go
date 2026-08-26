@@ -81,6 +81,46 @@ func TestVerifyAndExtractAndParse(t *testing.T) {
 	}
 }
 
+func TestVerifyAndExtractRequiresDigest(t *testing.T) {
+	data, _ := tarGz(t, map[string]string{"packages/x.yaml": "a: b\n"})
+	if err := verifyAndExtract(data, "", t.TempDir()); err == nil {
+		t.Fatal("expected an error when no digest is provided (fail closed)")
+	}
+}
+
+func TestParsePackageSourcesHandlesBlockScalar(t *testing.T) {
+	// A PackageSource whose values contain a line that looks like a document
+	// separator must not be fractured by the splitter.
+	ps := `apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: example.notes
+  annotations:
+    note: |
+      first line
+      ---
+      after a separator-looking line
+spec:
+  variants:
+    - name: default
+      components:
+        - name: app
+          path: apps/app
+`
+	dir := t.TempDir()
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/notes.yaml": ps})
+	if err := verifyAndExtract(data, digest, dir); err != nil {
+		t.Fatal(err)
+	}
+	pss, err := parsePackageSourcesFromTree(dir)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(pss) != 1 || pss[0].Name != "example.notes" {
+		t.Fatalf("expected 1 PackageSource despite the block scalar, got %+v", pss)
+	}
+}
+
 func TestVerifyAndExtractDigestMismatch(t *testing.T) {
 	data, _ := tarGz(t, map[string]string{"packages/x.yaml": "a: b\n"})
 	if err := verifyAndExtract(data, "sha256:"+hex.EncodeToString(make([]byte, 32)), t.TempDir()); err == nil {

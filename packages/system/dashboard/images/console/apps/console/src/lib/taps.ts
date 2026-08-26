@@ -6,6 +6,9 @@ import {
 } from "@cozystack/k8s-client"
 import { CORE_GROUP, CORE_VERSION, type Tap } from "@cozystack/types"
 
+// Community-tap name prefix; must match internal/marketplace/tapconst.Prefix.
+export const COMMUNITY_PREFIX = "community."
+
 // Cluster-scoped: no namespace key.
 const TAPS_REF: ResourceRef = {
   apiGroup: CORE_GROUP,
@@ -40,5 +43,5 @@ export function deriveTapName(url: string): string {
   const segs = body.split("/").filter(Boolean)
   const repo = segs[segs.length - 1] ?? ""
   const org = segs.length >= 3 ? segs[segs.length - 2] : ""
-  return org ? `community.${org}.${repo}` : `community.${repo}`
+  return org ? `${COMMUNITY_PREFIX}${org}.${repo}` : `${COMMUNITY_PREFIX}${repo}`
 }

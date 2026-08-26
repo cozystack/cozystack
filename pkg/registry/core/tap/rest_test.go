@@ -177,6 +177,8 @@ func TestCreateRepeatPreservesFinalizerAndRevision(t *testing.T) {
 	// finalizer and materialized-revision annotation; a repeat connect must
 	// update the tag without stripping them.
 	existing := ociRepoObj("community-foo-bar")
+	// Same repository, connected earlier at a different tag.
+	_ = unstructured.SetNestedField(existing.Object, "oci://ghcr.io/foo/bar", "spec", "url")
 	existing.SetFinalizers([]string{"apps.cozystack.io/tap-materializer"})
 	existing.SetAnnotations(map[string]string{"apps.cozystack.io/materialized-revision": "rev-1"})
 	r := fakeREST(existing)
@@ -200,6 +202,25 @@ func TestCreateRepeatPreservesFinalizerAndRevision(t *testing.T) {
 	}
 	if u.GetAnnotations()["apps.cozystack.io/tap-name"] != "community.foo.bar" {
 		t.Error("repeat connect did not set the tap-name annotation")
+	}
+}
+
+func TestCreateRefusesConflictingURL(t *testing.T) {
+	// A source with the same derived name but a different registry host must not
+	// be silently retargeted.
+	existing := ociRepoObj("community-foo-bar")
+	_ = unstructured.SetNestedField(existing.Object, "oci://other.host/foo/bar", "spec", "url")
+	r := fakeREST(existing)
+
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "oci://ghcr.io/foo/bar:v1"}}
+	_, err := r.Create(context.Background(), in, nil, nil)
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("expected Conflict for a different repository at the same name, got %v", err)
+	}
+	// The existing source keeps its original URL.
+	u, _ := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-foo-bar", metav1.GetOptions{})
+	if url, _, _ := unstructured.NestedString(u.Object, "spec", "url"); url != "oci://other.host/foo/bar" {
+		t.Errorf("existing source URL was overwritten: %q", url)
 	}
 }
 

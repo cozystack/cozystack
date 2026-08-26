@@ -14,6 +14,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/naming"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
@@ -63,7 +64,7 @@ func parseConnectURL(url, tagOverride string) (connectTarget, error) {
 	if t.Org != "" {
 		nameBase = t.Org + "." + t.Repo
 	}
-	t.PackageSourceName = "community." + nameBase
+	t.PackageSourceName = tapconst.Prefix + nameBase
 	fluxBase := t.Repo
 	if t.Org != "" {
 		fluxBase = t.Org + "-" + t.Repo
@@ -130,7 +131,7 @@ func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.Applica
 			ResourceVersion: "0",
 		},
 		Spec: corev1alpha1.TapSpec{
-			Community: strings.HasPrefix(ps.Name, "community."),
+			Community: strings.HasPrefix(ps.Name, tapconst.Prefix),
 		},
 	}
 	if ps.Spec.SourceRef != nil {

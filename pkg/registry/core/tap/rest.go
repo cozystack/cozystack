@@ -44,10 +44,6 @@ var (
 	_ rest.Creater              = &REST{}
 )
 
-// communityPrefix guards which taps may be disconnected through the API: only
-// community-tapped sources, never an official platform source.
-const communityPrefix = "community."
-
 // REST implements the read-only Tap resource.
 type REST struct {
 	dyn dynamic.Interface
@@ -179,6 +175,14 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		if gerr != nil {
 			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.PackageSourceName, gerr))
 		}
+		// Refuse to silently retarget: two repositories that share an org/repo
+		// path on different registry hosts derive the same name, so a blind
+		// update would repoint the first at the second. Require a disconnect
+		// first when the existing source points at a different URL.
+		if curURL, _, _ := unstructured.NestedString(cur.Object, "spec", "url"); curURL != "" && curURL != target.URL {
+			return nil, apierrors.NewConflict(r.gvr.GroupResource(), target.PackageSourceName,
+				fmt.Errorf("a different repository (%s) is already connected as %q; disconnect it before connecting %s", curURL, target.PackageSourceName, target.URL))
+		}
 		// Update only the fields this API owns (spec, the tap label and name
 		// annotation) on the FETCHED object, so the operator's finalizer and
 		// materialized-revision annotation on the existing source survive.
@@ -218,9 +222,9 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 // -----------------------------------------------------------------------------
 
 func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, _ *metav1.DeleteOptions) (runtime.Object, bool, error) {
-	if !strings.HasPrefix(name, communityPrefix) {
+	if !strings.HasPrefix(name, tapconst.Prefix) {
 		return nil, false, apierrors.NewForbidden(r.gvr.GroupResource(), name,
-			fmt.Errorf("only %s* taps can be disconnected; official sources are protected", communityPrefix))
+			fmt.Errorf("only %s* taps can be disconnected; official sources are protected", tapconst.Prefix))
 	}
 
 	u, err := r.dyn.Resource(gvrPackageSources).Get(ctx, name, metav1.GetOptions{})

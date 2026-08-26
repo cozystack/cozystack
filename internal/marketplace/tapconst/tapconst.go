@@ -8,6 +8,12 @@
 package tapconst
 
 const (
+	// Prefix namespaces a community-tapped PackageSource name
+	// (community.<org>.<repo>) so a third-party package can never shadow an
+	// official one. It is load-bearing: the untap/disconnect guard, the
+	// community-vs-official badge, and the anti-shadowing guarantee all key on
+	// it, so it lives here as the single definition shared by every side.
+	Prefix = "community."
 	// Label marks a Flux source (and the PackageSources materialized from it)
 	// as belonging to a dashboard-created community tap.
 	Label = "apps.cozystack.io/marketplace-tap"

@@ -42,9 +42,6 @@ import (
 )
 
 const (
-	// communityPrefix namespaces tapped PackageSource names so a third-party
-	// package can never shadow an official (cozystack.*) one.
-	communityPrefix = "community."
 	// cozySystemNamespace is where tap creates the Flux source, alongside the
 	// platform and External-Apps sources.
 	cozySystemNamespace = "cozy-system"
@@ -116,7 +113,7 @@ func fluxSourceName(r ociRef) string {
 // repository carries a single PackageSource the name is community.<org>.<repo>;
 // with several, the original name is appended to keep them distinct.
 func tapPackageSourceName(r ociRef, originalName string, single bool) string {
-	base := communityPrefix
+	base := tapconst.Prefix
 	if r.Org != "" {
 		base += r.Org + "."
 	}
@@ -124,7 +121,7 @@ func tapPackageSourceName(r ociRef, originalName string, single bool) string {
 	if single {
 		return base
 	}
-	orig := strings.TrimPrefix(originalName, communityPrefix)
+	orig := strings.TrimPrefix(originalName, tapconst.Prefix)
 	return base + "." + orig
 }
 
@@ -285,6 +282,16 @@ charts in your management cluster: tap only sources you trust.`,
 			return err
 		}
 
+		// Refuse to silently retarget an existing tap: two repositories that
+		// share an org/repo path on different hosts derive the same source name,
+		// and a force-apply would repoint the first at the second.
+		existing := &sourcev1.OCIRepository{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, existing); err == nil {
+			if existing.Spec.URL != "" && existing.Spec.URL != ref.URL {
+				return fmt.Errorf("a different repository (%s) is already tapped as %q; run 'cozypkg untap %s' before tapping %s", existing.Spec.URL, srcName, names[0], ref.URL)
+			}
+		}
+
 		// Only roll back objects this invocation actually created; a re-tap is
 		// idempotent and must not delete resources that pre-existed it.
 		created := make([]client.Object, 0, len(toApply))
@@ -322,7 +329,7 @@ refused.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 		name := args[0]
-		if !strings.HasPrefix(name, communityPrefix) {
+		if !strings.HasPrefix(name, tapconst.Prefix) {
 			return fmt.Errorf("refusing to untap %q: only community.* sources can be untapped", name)
 		}
 

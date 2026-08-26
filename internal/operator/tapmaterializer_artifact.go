@@ -18,6 +18,7 @@ package operator
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -26,13 +27,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 )
 
 // maxArtifactBytes bounds the decompressed size of a tapped artifact so a
@@ -44,12 +46,15 @@ const maxArtifactBytes = 256 << 20 // 256 MiB
 // rejects path traversal and caps the total extracted size. A digest mismatch
 // is a hard error so a tampered artifact is never materialized.
 func verifyAndExtract(data []byte, expectedDigest, destDir string) error {
-	if expectedDigest != "" {
-		sum := sha256.Sum256(data)
-		got := "sha256:" + hex.EncodeToString(sum[:])
-		if got != expectedDigest {
-			return fmt.Errorf("artifact digest mismatch: got %s, want %s", got, expectedDigest)
-		}
+	// Fail closed: this handles untrusted remote content, so an absent digest is
+	// an error, not a reason to skip verification.
+	if expectedDigest == "" {
+		return fmt.Errorf("refusing to extract a tap artifact with no digest to verify against")
+	}
+	sum := sha256.Sum256(data)
+	got := "sha256:" + hex.EncodeToString(sum[:])
+	if got != expectedDigest {
+		return fmt.Errorf("artifact digest mismatch: got %s, want %s", got, expectedDigest)
 	}
 
 	gz, err := gzip.NewReader(bytes.NewReader(data))
@@ -116,10 +121,10 @@ func safeJoin(base, name string) (string, error) {
 	return target, nil
 }
 
-var docSeparator = regexp.MustCompile(`(?m)^---\s*$`)
-
 // parsePackageSourcesFromTree walks an extracted artifact and strict-decodes
-// every PackageSource manifest it finds.
+// every PackageSource manifest it finds. It splits multi-document YAML with the
+// apimachinery reader, which honours block scalars (a naive `^---$` split would
+// fracture a document whose values contain such a line).
 func parsePackageSourcesFromTree(root string) ([]cozyv1alpha1.PackageSource, error) {
 	var out []cozyv1alpha1.PackageSource
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -133,16 +138,24 @@ func parsePackageSourcesFromTree(root string) ([]cozyv1alpha1.PackageSource, err
 		if e != nil {
 			return nil
 		}
-		for _, doc := range docSeparator.Split(string(data), -1) {
-			if strings.TrimSpace(doc) == "" {
+		reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
+		for {
+			doc, rerr := reader.Read()
+			if rerr == io.EOF {
+				break
+			}
+			if rerr != nil {
+				return fmt.Errorf("%s: read YAML: %w", filepath.Base(path), rerr)
+			}
+			if len(bytes.TrimSpace(doc)) == 0 {
 				continue
 			}
 			var tm metav1.TypeMeta
-			if err := yaml.Unmarshal([]byte(doc), &tm); err != nil || tm.Kind != "PackageSource" {
+			if err := yaml.Unmarshal(doc, &tm); err != nil || tm.Kind != "PackageSource" {
 				continue
 			}
 			var ps cozyv1alpha1.PackageSource
-			if err := yaml.UnmarshalStrict([]byte(doc), &ps); err != nil {
+			if err := yaml.UnmarshalStrict(doc, &ps); err != nil {
 				return fmt.Errorf("%s: decode PackageSource: %w", filepath.Base(path), err)
 			}
 			out = append(out, ps)
@@ -159,7 +172,7 @@ func materializedName(base, originalName string, single bool) string {
 	if single {
 		return base
 	}
-	return base + "." + strings.TrimPrefix(originalName, "community.")
+	return base + "." + strings.TrimPrefix(originalName, tapconst.Prefix)
 }
 
 // communityBaseFromURL derives a community.<org>.<repo> base name from an OCI
@@ -173,7 +186,7 @@ func communityBaseFromURL(url string) string {
 		body = body[:i]
 	}
 	segs := strings.Split(strings.Trim(body, "/"), "/")
-	base := "community."
+	base := tapconst.Prefix
 	if len(segs) >= 3 {
 		base += segs[len(segs)-2] + "."
 	}

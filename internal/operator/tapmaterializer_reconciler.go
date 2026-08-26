@@ -87,8 +87,10 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	art := repo.Status.Artifact
-	if art == nil || art.URL == "" {
-		// Source not pulled yet; wait for source-controller.
+	if art == nil || art.URL == "" || art.Digest == "" {
+		// Source not pulled yet (or digest not yet reported); wait for
+		// source-controller. Requiring the digest keeps materialization
+		// fail-closed on the integrity check.
 		return ctrl.Result{RequeueAfter: tapWaitRequeue}, nil
 	}
 	if repo.Annotations[tapconst.MaterializedRevisionAnnotation] == art.Revision {
