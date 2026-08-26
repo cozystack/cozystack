@@ -70,7 +70,7 @@ type Autoscaling struct {
 	// Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate). Permanent, unlike `transition`.
 	// +kubebuilder:default:=false
 	DryRun bool `json:"dryRun"`
-	// Enable horizontal autoscaling of read replicas.
+	// Enable horizontal autoscaling of read replicas. Requires the platform `keda` package to be enabled by an administrator first; the chart fails to render (rather than break the release) if KEDA is not installed.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
 	// Maximum total instances; raised to the quorum floor if the floor exceeds it.

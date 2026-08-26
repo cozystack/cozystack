@@ -218,7 +218,7 @@
           "default": false
         },
         "enabled": {
-          "description": "Enable horizontal autoscaling of read replicas.",
+          "description": "Enable horizontal autoscaling of read replicas. Requires the platform `keda` package to be enabled by an administrator first; the chart fails to render (rather than break the release) if KEDA is not installed.",
           "type": "boolean",
           "default": false
         },

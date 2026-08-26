@@ -16,6 +16,12 @@ set:
   _namespace:
     monitoring: tenant-root
 
+# The ScaledObject template guards on the KEDA CRD being present; make it available
+# to every rendering test (individual guard tests override this).
+capabilities:
+  apiVersions:
+    - keda.sh/v1alpha1
+
 templates:
   - templates/db.yaml
   - templates/scaledobject.yaml
@@ -245,3 +251,18 @@ tests:
           path: metadata.annotations["autoscaling.keda.sh/paused"]
           value: "true"
         template: templates/scaledobject.yaml
+
+  - it: rejects a non-positive autoscaling target
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 0
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: autoscaling.target must be a positive integer (the desired-replica formula divides the read load by it)."

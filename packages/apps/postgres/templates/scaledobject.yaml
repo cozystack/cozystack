@@ -1,4 +1,21 @@
 {{- if .Values.autoscaling.enabled }}
+{{- /*
+Fail closed when KEDA is not installed. KEDA is an optional platform package and
+is NOT enabled by default, but autoscaling.enabled is a tenant-facing knob, so a
+tenant can turn it on against a cluster where the admin never enabled `keda`.
+Without this guard the ScaledObject renders against an unknown kind and the whole
+database HelmRelease fails with an opaque `no matches for kind "ScaledObject"`.
+We must NOT instead skip rendering: db.yaml already drops the static
+`.spec.instances` under active autoscaling, so a missing ScaledObject would let
+CNPG collapse the cluster to 1 instance. Stop with an actionable message instead.
+*/ -}}
+{{- if not (.Capabilities.APIVersions.Has "keda.sh/v1alpha1") }}
+{{- fail "postgres: autoscaling.enabled is set, but the KEDA platform package is not installed (keda.sh/v1alpha1 is unknown to the cluster). Ask your platform admin to enable the 'keda' package before enabling database autoscaling." }}
+{{- end }}
+{{- /* The HPA divides read load by target; 0 is undefined and negatives invert scaling. */ -}}
+{{- if lt (int .Values.autoscaling.target) 1 }}
+{{- fail "postgres: autoscaling.target must be a positive integer (the desired-replica formula divides the read load by it)." }}
+{{- end }}
 {{- include "cozy-lib.keda.scaledObject" (dict
      "name" .Release.Name
      "namespace" .Release.Namespace

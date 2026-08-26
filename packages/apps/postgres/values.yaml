@@ -145,7 +145,7 @@ quorum:
 ##
 
 ## @typedef {struct} Autoscaling - Horizontal autoscaling of read replicas via KEDA. When active, `replicas` is no longer declared statically — a KEDA ScaledObject drives the CNPG instance count from read load.
-## @field {bool} enabled - Enable horizontal autoscaling of read replicas.
+## @field {bool} enabled - Enable horizontal autoscaling of read replicas. Requires the platform `keda` package to be enabled by an administrator first; the chart fails to render (rather than break the release) if KEDA is not installed.
 ## @field {int} minReplicas - Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.
 ## @field {int} maxReplicas - Maximum total instances; raised to the quorum floor if the floor exceeds it.
 ## @field {ReadMetric} metric - Read-load signal to scale on.

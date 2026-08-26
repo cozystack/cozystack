@@ -1,0 +1,42 @@
+suite: postgres autoscaling fails closed without KEDA
+
+# Isolated from autoscaling_test.yaml because that suite makes the KEDA CRD
+# available cluster-wide via suite-level capabilities. Here we assert the
+# opposite: with KEDA absent (default capabilities), enabling autoscaling must
+# stop the render with an actionable message rather than emit a ScaledObject
+# against an unknown kind - which would fail the tenant's whole HelmRelease, and
+# since db.yaml already drops spec.instances under autoscaling, must never
+# silently skip the ScaledObject either.
+
+release:
+  name: postgres-db
+  namespace: tenant-acme
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+  _namespace:
+    monitoring: tenant-root
+
+templates:
+  - templates/scaledobject.yaml
+
+tests:
+  - it: fails closed when autoscaling is enabled but the KEDA package is not installed
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: autoscaling.enabled is set, but the KEDA platform package is not installed (keda.sh/v1alpha1 is unknown to the cluster). Ask your platform admin to enable the 'keda' package before enabling database autoscaling."
+
+  - it: renders nothing when autoscaling is off even without KEDA
+    asserts:
+      - hasDocuments:
+          count: 0
