@@ -25,8 +25,10 @@ field() {
 }
 
 # git diff failing (e.g. a bad base ref) must abort, not silently report "no
-# changes" and pass — so there is no "|| true" here.
-changed="$(git diff --name-only --diff-filter=AM "${BASE_REF}...HEAD" -- "$ENTRIES_DIR")"
+# changes" and pass — so there is no "|| true" here. Renames (R) and copies (C)
+# are included: a renamed entry file is still a present entry that must be
+# validated, otherwise a rename could smuggle an unreviewed ociRef past the gate.
+changed="$(git diff --name-only --diff-filter=ACMR "${BASE_REF}...HEAD" -- "$ENTRIES_DIR")"
 if [ -z "$changed" ]; then
   echo "no entry changes to validate"
   echo "lane=none" >>"${GITHUB_OUTPUT:-/dev/null}"

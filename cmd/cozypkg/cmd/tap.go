@@ -24,6 +24,7 @@ import (
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"github.com/spf13/cobra"
@@ -139,6 +140,11 @@ func buildTapOCIRepository(name string, r ociRef, secret string) *sourcev1.OCIRe
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: cozySystemNamespace,
+			// Mark the source as a community tap and record its base name, so
+			// the dashboard's orphan-disconnect (deleteOrphanTapSource) and the
+			// operator's materializer recognise a CLI-created source too.
+			Labels:      map[string]string{tapconst.Label: "true"},
+			Annotations: map[string]string{tapconst.NameAnnotation: tapPackageSourceName(r, "", true)},
 		},
 		Spec: sourcev1.OCIRepositorySpec{
 			URL:      r.URL,

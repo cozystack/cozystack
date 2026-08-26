@@ -288,6 +288,33 @@ spec:
 	}
 }
 
+func TestValidateRepo_ArtifactNameCollision(t *testing.T) {
+	root := t.TempDir()
+	// variant "v1.0"/comp "c" and variant "v1"/comp "0-c" both normalise to
+	// <ps>-v1-0-c after dot-to-dash.
+	writeFile(t, root, "packages/core/platform/sources/p.yaml", `apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: example.app
+spec:
+  variants:
+    - name: "v1.0"
+      components:
+        - name: c
+          path: apps/c
+    - name: v1
+      components:
+        - name: 0-c
+          path: apps/0-c
+`)
+	writeFile(t, root, "packages/apps/c/Chart.yaml", "apiVersion: v2\nname: c\nversion: 0.1.0\n")
+	writeFile(t, root, "packages/apps/0-c/Chart.yaml", "apiVersion: v2\nname: c\nversion: 0.1.0\n")
+	rep, _ := ValidateRepo(ValidateOptions{RepoRoot: root})
+	if codeCounts(rep)["artifact-name-collision"] != 1 {
+		t.Fatalf("expected an artifact-name-collision error, got %+v", rep.Findings)
+	}
+}
+
 func TestArtifactName(t *testing.T) {
 	got := artifactName("cozystack.postgres-application", "default", "postgres")
 	want := "cozystack-postgres-application-default-postgres"

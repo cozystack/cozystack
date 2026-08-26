@@ -129,13 +129,19 @@ func TestObjectExists(t *testing.T) {
 }
 
 func TestBuildTapOCIRepository(t *testing.T) {
-	r := ociRef{URL: "oci://ghcr.io/foo/bar", Tag: "v1"}
+	r := ociRef{URL: "oci://ghcr.io/foo/bar", Org: "foo", Repo: "bar", Tag: "v1"}
 	obj := buildTapOCIRepository("community-foo-bar", r, "")
 	if obj.Namespace != "cozy-system" || obj.Spec.URL != "oci://ghcr.io/foo/bar" {
 		t.Fatalf("unexpected OCIRepository: %+v", obj.Spec)
 	}
 	if obj.Spec.Reference == nil || obj.Spec.Reference.Tag != "v1" {
 		t.Fatalf("expected tag v1, got %+v", obj.Spec.Reference)
+	}
+	if obj.Labels["apps.cozystack.io/marketplace-tap"] != "true" {
+		t.Errorf("expected marketplace-tap label, got %v", obj.Labels)
+	}
+	if obj.Annotations["apps.cozystack.io/tap-name"] != "community.foo.bar" {
+		t.Errorf("expected tap-name annotation community.foo.bar, got %v", obj.Annotations)
 	}
 	if obj.Spec.Interval.Minutes() != 5 {
 		t.Fatalf("expected 5m interval, got %v", obj.Spec.Interval)

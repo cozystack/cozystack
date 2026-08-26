@@ -285,6 +285,7 @@ func validatePackageSource(artRoot string, l loadedPackageSource, r *Report, opt
 	}
 
 	seenVariant := map[string]bool{}
+	seenArtifacts := map[string]string{} // artifact name -> variant/component, to catch normalisation collisions
 	for _, v := range ps.Spec.Variants {
 		if v.Name == "" {
 			r.add(SeverityError, "variant-name", l.File, "PackageSource %s has a variant with empty name", ps.Name)
@@ -320,6 +321,17 @@ func validatePackageSource(artRoot string, l loadedPackageSource, r *Report, opt
 				r.add(SeverityError, "comp-dup", l.File, "PackageSource %s variant %s has duplicate component %q", ps.Name, v.Name, c.Name)
 			}
 			seenComp[c.Name] = true
+
+			// Dot-to-dash normalisation in the artifact name can make two
+			// distinct (variant, component) pairs collide (e.g. "v1.0"/"c" and
+			// "v1"/"0-c"); the reconciler would then overwrite one OutputArtifact
+			// with the other. Reject the collision at validation time.
+			art := artifactName(ps.Name, v.Name, c.Name)
+			if prev, ok := seenArtifacts[art]; ok {
+				r.add(SeverityError, "artifact-name-collision", l.File, "PackageSource %s: %s and %s both normalise to artifact name %q", ps.Name, prev, v.Name+"/"+c.Name, art)
+			} else {
+				seenArtifacts[art] = v.Name + "/" + c.Name
+			}
 
 			for _, ln := range c.Libraries {
 				if !libNames[ln] {
