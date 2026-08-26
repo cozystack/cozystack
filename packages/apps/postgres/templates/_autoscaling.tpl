@@ -105,7 +105,12 @@ tuned per the proposal's PoC; the base (no-lag) path is validated live.
 {{- $writing := printf "(max(rate(cnpg_collector_wal_records{namespace=%q}[5m]) %s) > bool 0)" $ns $joinCluster -}}
 {{- $braking := printf "((%s * %s) or vector(0))" $lagHigh $writing -}}
 {{- $frozen := printf "(count(kube_pod_labels{namespace=%q,label_cnpg_io_cluster=%q}) * %v)" $ns $rel $target -}}
-{{- /* base when not braking, frozen (= currentInstances * target) when braking. */ -}}
-{{- printf "(%s) * (1 - %s) + %s * %s" $base $braking $frozen $braking -}}
+{{- /* base when not braking, frozen (= currentInstances * target) when braking.
+       The frozen summand is floored with `or vector(0)`: PromQL `+` is a set
+       intersection, so if count(kube_pod_labels) is momentarily empty (a
+       kube-state-metrics scrape gap) an unfloored frozen term would empty the
+       whole sum and defeat the base term's own `or vector(0)`, silently pinning
+       desired to the floor under real load. Flooring keeps base + 0 = base. */ -}}
+{{- printf "(%s) * (1 - %s) + ((%s * %s) or vector(0))" $base $braking $frozen $braking -}}
 {{- end -}}
 {{- end -}}
