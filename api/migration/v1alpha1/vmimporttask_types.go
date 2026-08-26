@@ -49,6 +49,13 @@ const (
 	ReasonOutputExists = "OutputExists"
 	// ReasonTransferFailed means Forklift reported the migration as failed.
 	ReasonTransferFailed = "TransferFailed"
+	// ReasonFirmwareUnsupported means the source VM boots through EFI, which
+	// the imported VMInstance cannot yet reproduce: vm-instance grows a
+	// `firmware` field in cozystack/cozystack#3002, and until it lands the
+	// rendered VM boots BIOS regardless of the source. Importing such a guest
+	// would succeed and produce a machine that does not boot, so the import
+	// stops before anything is created instead.
+	ReasonFirmwareUnsupported = "FirmwareUnsupported"
 	// ReasonCompleted means every VM of the task was imported.
 	ReasonCompleted = "Completed"
 )

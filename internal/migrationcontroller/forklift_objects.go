@@ -110,6 +110,12 @@ func (r *VMImportTaskReconciler) ensureMaps(
 // StorageMap, so mappings learned later all land on the same class.
 const storageClassAnnotation = "migration.cozystack.io/storage-class"
 
+// forkliftPowerStateOff is Forklift's `off` target power state
+// (plan.TargetPowerStateOff upstream). Spelled out rather than imported: the
+// controller deliberately builds Forklift objects as unstructured data and
+// takes no compile-time dependency on the Forklift API module.
+const forkliftPowerStateOff = "off"
+
 // createPlan renders the Forklift Plan that migrates one VM.
 //
 // Raw copy (skipGuestConversion) is the only mode v1 offers, and it is the one
@@ -149,7 +155,18 @@ func (r *VMImportTaskReconciler) createPlan(
 		// cross-namespace coercion bugs.
 		"targetNamespace": task.Namespace,
 		"vms": []interface{}{
-			map[string]interface{}{"id": req.ID},
+			map[string]interface{}{
+				"id": req.ID,
+				// Keep the machine Forklift builds powered off. Left unset,
+				// Forklift matches the source's pre-migration power state, so
+				// migrating a running VM — every VM in a production cutover —
+				// yields a target that boots the moment the transfer finishes.
+				// That is a duplicate of a live machine on the network, and it
+				// starts a guest on the very volume the handoff is about to
+				// re-point. The VMInstance this controller builds is what
+				// starts the imported guest, on the tenant's terms.
+				"targetPowerState": forkliftPowerStateOff,
+			},
 		},
 	}
 	if err := unstructured.SetNestedMap(obj.Object, spec, "spec"); err != nil {

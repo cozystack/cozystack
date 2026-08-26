@@ -617,3 +617,70 @@ func TestUnmappedRefsReadsForkliftValidation(t *testing.T) {
 		t.Errorf("planCriticalCondition = %q, want empty for unmapped refs", got)
 	}
 }
+
+// A Plan that does not pin the target power state lets Forklift match the
+// source's: a production cutover migrates running machines, so the imported VM
+// would boot the instant the transfer finished — a duplicate of a live machine
+// on the network, started on the very volume the handoff is about to re-point.
+func TestPlanKeepsTheImportedVMPoweredOff(t *testing.T) {
+	s := testScheme(t)
+	tk := task("import", "tenant-foo", "vcenter", "replicated")
+	src := readySource("vcenter", "tenant-foo")
+	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(tk, src).Build()
+	r := &VMImportTaskReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+	req := &migrationv1alpha1.VMImportRequest{ID: "vm-1234"}
+	if err := r.createPlan(context.Background(), tk, src, req); err != nil {
+		t.Fatalf("createPlan: %v", err)
+	}
+
+	plan := newObject(planGVK)
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Namespace: "tenant-foo", Name: planName("import", "vm-1234"),
+	}, plan); err != nil {
+		t.Fatalf("Plan was not created: %v", err)
+	}
+	vms, _, _ := unstructured.NestedSlice(plan.Object, "spec", "vms")
+	if len(vms) != 1 {
+		t.Fatalf("spec.vms = %d entries, want 1", len(vms))
+	}
+	entry, _ := vms[0].(map[string]interface{})
+	got, _, _ := unstructured.NestedString(entry, "targetPowerState")
+	if got != "off" {
+		t.Errorf("targetPowerState = %q, want \"off\" — Forklift would boot the migrated guest before the handoff", got)
+	}
+}
+
+// EFI guests must be refused, not imported: the VMInstance has no firmware
+// field until cozystack/cozystack#3002, so the rendered VM boots BIOS and the
+// import would "succeed" with a machine that never comes up.
+func TestEFIBootloaderIsDetected(t *testing.T) {
+	cases := []struct {
+		name string
+		set  func(vm *unstructured.Unstructured)
+		want bool
+	}{
+		{"efi", func(vm *unstructured.Unstructured) {
+			_ = unstructured.SetNestedMap(vm.Object, map[string]interface{}{},
+				"spec", "template", "spec", "domain", "firmware", "bootloader", "efi")
+		}, true},
+		{"efi with secureBoot", func(vm *unstructured.Unstructured) {
+			_ = unstructured.SetNestedField(vm.Object, true,
+				"spec", "template", "spec", "domain", "firmware", "bootloader", "efi", "secureBoot")
+		}, true},
+		{"bios", func(vm *unstructured.Unstructured) {
+			_ = unstructured.SetNestedMap(vm.Object, map[string]interface{}{},
+				"spec", "template", "spec", "domain", "firmware", "bootloader", "bios")
+		}, false},
+		{"no firmware at all", func(vm *unstructured.Unstructured) {}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vm := newObject(virtualMachineGVK)
+			tc.set(vm)
+			if got := efiBootloader(vm); got != tc.want {
+				t.Errorf("efiBootloader = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
