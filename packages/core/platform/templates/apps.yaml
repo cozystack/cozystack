@@ -18,6 +18,16 @@ metadata:
 type: Opaque
 stringData:
   values.yaml: |
+    # KEDA's clusterDomain is a vendored-subchart value a chart template cannot
+    # derive from _cluster; inject it here from the authoritative
+    # networking.clusterDomain so KEDA's metrics-apiserver dials the operator at the
+    # right domain on clusters whose domain is not the cozy.local default (otherwise
+    # the external-metrics gRPC target is NXDOMAIN and every DB HPA stalls). Ignored
+    # by packages without a keda subchart (no app/extra schema sets root
+    # additionalProperties:false), and the keda package keeps cozy.local as its own
+    # fallback default.
+    keda:
+      clusterDomain: {{ .Values.networking.clusterDomain | quote }}
     _cluster:
       root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}
