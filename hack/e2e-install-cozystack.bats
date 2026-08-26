@@ -137,6 +137,13 @@
   # actually pulls (skips configmap fields and CRD examples that happen to
   # contain an `image:` key). Add a chart here when a new peer-sensitive
   # workload is found.
+  #
+  # `select(. != null)` drops container entries that carry no image. The pod
+  # templates embedded in a LinstorCluster CR are strategic-merge fragments,
+  # so one that overrides only `args` has no image of its own to pull.
+  # Without the filter yq emits a bare `null`, which reaches the prepull
+  # DaemonSet as a container with an empty image and fails apply with a
+  # message naming a container index rather than the chart behind it.
   # Stage each render AND the yq filter through tmp files instead of
   # piping. Two constraints stack here: `set -x` would expand any
   # `var=$(helm ...)` capture into the trace and balloon CI logs, and
@@ -154,8 +161,8 @@
   helm template packages/system/linstor > "$linstor_yaml"
   helm template packages/system/cert-manager > "$certmanager_yaml"
   yq -N '
-      (..|select(has("containers"))|.containers[]|.image),
-      (..|select(has("initContainers"))|.initContainers[]|.image)
+      (..|select(has("containers"))|.containers[]|.image|select(. != null)),
+      (..|select(has("initContainers"))|.initContainers[]|.image|select(. != null))
     ' "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" > "$images_list"
   # The failure-only Talos diagnostics Pod can land on any node. The sandbox's
   # upstream talosctl binary is static, so cache its pinned Alpine base on every
