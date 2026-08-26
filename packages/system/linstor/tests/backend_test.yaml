@@ -36,17 +36,47 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: "renders no LINSTOR satellite configuration on the blockstor backend"
+  - it: "renders no LINSTOR-controller satellite configuration on the blockstor backend"
     set:
       backend: blockstor
     templates:
       - templates/satellites-cozy.yaml
-      - templates/satellites-talos.yaml
       - templates/satellites-plunger.yaml
       - templates/satellites-reloader.yaml
     asserts:
       - hasDocuments:
           count: 0
+
+  # The Talos patch is NOT one of those. piraeus-operator still creates
+  # linstor-satellite.<node> DaemonSets in external mode, and on Talos
+  # they wedge at Init:0/3 without it — the hostPath /run/systemd/system
+  # does not exist there — which then churns linstor-csi-node and blocks
+  # every PVC attach while every HelmRelease still reports Ready.
+  - it: "patches the satellite for Talos under both backends"
+    set:
+      backend: blockstor
+    templates:
+      - templates/satellites-talos.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: LinstorSatelliteConfiguration
+      - equal:
+          path: metadata.name
+          value: cozystack-talos
+
+  - it: "patches the satellite for Talos on the LINSTOR backend too"
+    set:
+      backend: linstor
+    templates:
+      - templates/satellites-talos.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: cozystack-talos
 
   - it: "ships the blockstor CRDs on the blockstor backend"
     set:
