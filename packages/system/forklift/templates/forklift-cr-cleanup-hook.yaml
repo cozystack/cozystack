@@ -1,0 +1,136 @@
+{{- /*
+  Uninstalling this chart deletes the ForkliftController CR, and the operator's
+  finalizer on it holds the delete open until the operator has torn its operand
+  down. If the operator is already gone — which is the normal order when the
+  whole bundle is being removed, since nothing sequences the operator package
+  against this one — nothing will ever clear that finalizer and the release
+  never finishes uninstalling. Observed live.
+
+  So: delete the CR first, give the operator a bounded chance to do it properly,
+  and only then clear the finalizer by hand. Doing it in that order means a
+  live operator still performs its own cleanup; the finalizer strip is the
+  fallback for when it cannot.
+
+  The hook always exits 0. A cleanup that cannot complete must not be the reason
+  an operator cannot uninstall the chart.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: forklift-cr-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: forklift-cr-cleanup
+  namespace: cozy-forklift
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+rules:
+  - apiGroups: ["forklift.konveyor.io"]
+    resources: ["forkliftcontrollers"]
+    resourceNames: ["forklift-controller"]
+    # get to poll for the delete completing, delete to start it, patch to clear
+    # the finalizer when the operator is no longer there to clear it itself.
+    verbs: ["get", "delete", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: forklift-cr-cleanup
+  namespace: cozy-forklift
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: forklift-cr-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: forklift-cr-cleanup
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: forklift-cr-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  # Bounded so a wedged API call cannot hold helm uninstall open indefinitely.
+  activeDeadlineSeconds: 120
+  backoffLimit: 1
+  # Failed pods outlive the hook bundle so their logs can still be read.
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: forklift-cr-cleanup
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # kubectl writes its discovery cache under $HOME; with a read-only root
+      # filesystem it aborts before running any subcommand unless HOME points
+      # at something writable.
+      volumes:
+        - name: kube-cache
+          emptyDir: {}
+      containers:
+        - name: cleanup
+          image: docker.io/clastix/kubectl:v1.32
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: kube-cache
+              mountPath: /tmp
+          command:
+            - sh
+            - -c
+            - |
+              set -x
+              ns=cozy-forklift
+              cr=forklift-controller
+
+              kubectl -n "$ns" get forkliftcontroller "$cr" >/dev/null 2>&1 || {
+                echo "ForkliftController $cr already gone"
+                exit 0
+              }
+
+              kubectl -n "$ns" delete forkliftcontroller "$cr" --wait=false || true
+
+              # Give a live operator its chance to finish. 60s against the
+              # 120s activeDeadlineSeconds leaves room for the strip below.
+              i=0
+              while [ "$i" -lt 30 ]; do
+                kubectl -n "$ns" get forkliftcontroller "$cr" >/dev/null 2>&1 || {
+                  echo "operator completed its own teardown"
+                  exit 0
+                }
+                i=$((i + 1))
+                sleep 2
+              done
+
+              echo "finalizer still held after 60s; clearing it"
+              kubectl -n "$ns" patch forkliftcontroller "$cr" \
+                --type=merge -p '{"metadata":{"finalizers":null}}' || true
+              exit 0
