@@ -98,6 +98,27 @@ tests:
           path: kind
           value: Cluster
 
+  - it: omits spec.instances under active autoscaling without synchronous quorum
+    templates:
+      - templates/db.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 0
+    asserts:
+      # Design proposal §3: with no sync quorum the field is omitted and the KEDA
+      # HPA is the sole writer via /scale (CNPG's default of 1 is admissible, so no
+      # seed is needed and the chart avoids ever contending for the field).
+      - notExists:
+          path: spec.instances
+        documentSelector:
+          path: kind
+          value: Cluster
+
   - it: renders a KEDA ScaledObject with quorum-floored bounds under active autoscaling
     templates:
       - templates/scaledobject.yaml

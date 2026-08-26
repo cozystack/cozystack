@@ -7,16 +7,20 @@ metadata:
   name: {{ .Release.Name }}
 spec:
   {{- if $autoscaling }}
-  # Under active autoscaling the KEDA-managed HPA owns .spec.instances at runtime
-  # via the /scale subresource. The chart still seeds the synchronous-quorum floor
-  # (effectiveMin) instead of omitting the field: CNPG defaults an absent
-  # .spec.instances to 1, which its admission webhook rejects when
-  # maxSyncReplicas>=1 ("maxSyncReplicas must be lower than the number of
-  # instances"), so a fresh autoscaled + sync-quorum Cluster would never be
-  # admitted. Because the chart renders the same constant floor on every
-  # reconcile, Helm's three-way merge is a no-op on this field and never reverts
-  # KEDA's higher live value. See templates/scaledobject.yaml and the design proposal.
+  {{- if gt (int .Values.quorum.maxSyncReplicas) 0 }}
+  # Synchronous quorum requires instances > maxSyncReplicas at creation, but an
+  # omitted .spec.instances defaults to 1 and CNPG's admission webhook rejects
+  # "maxSyncReplicas must be lower than the number of instances". Seed the quorum
+  # floor (effectiveMin) so a fresh autoscaled + sync-quorum Cluster is admitted.
+  # The chart re-renders this same constant on every reconcile, so Helm's
+  # three-way merge is a no-op on the field and never reverts KEDA's higher live
+  # value written through /scale.
   instances: {{ include "postgres.autoscaling.effectiveMin" . }}
+  {{- end }}
+  # Without synchronous quorum the field is omitted: CNPG defaults it to 1 and the
+  # KEDA-managed HPA is the sole writer of .spec.instances via the /scale
+  # subresource (design proposal §3). A brief cold-start window at 1 is expected
+  # until KEDA scales up to the floor. See templates/scaledobject.yaml.
   {{- else }}
   instances: {{ .Values.replicas }}
   {{- end }}

@@ -158,23 +158,25 @@ quorum:
 ## @value ReadConnections - Active read connections on the standby pods.
 ## @value ReadCPUUtilization - CPU (millicores) of the postgres container on the standby pods.
 
-## Enabling autoscaling seeds `.spec.instances` at the quorum floor
-## (effectiveMin = max(minReplicas, maxSyncReplicas+1, 2)) and lets the KEDA HPA own
-## the runtime count via the /scale subresource. The chart re-renders that same
-## constant floor on every reconcile, so Helm's three-way merge is a no-op on the
-## field and never reverts KEDA's higher live value.
-## A NEW database can enable autoscaling directly — the seeded floor is a valid,
-## quorum-satisfying count, so CNPG's admission webhook accepts it even with
-## synchronous replication (maxSyncReplicas>=1), where an absent/defaulted
-## instances=1 would be rejected.
-## On an EXISTING database sized above the floor, a direct enable rebases the
-## Cluster to effectiveMin before KEDA scales it back up by load. To avoid that dip,
-## use the two-phase flow: (phase 1) stage `replicas` to the live count and set
-## `autoscaling: {enabled: true, transition: true, ...}` — the live count is held
-## and the ScaledObject comes up paused; verify KEDA is healthy. (phase 2) set
-## `transition: false` to hand the count to KEDA. Suspend the HelmRelease across the
-## phase-2 apply so the render/actuation handoff does not race (helm-controller uses
-## Helm's three-way merge, not SSA).
+## Under active autoscaling the KEDA HPA owns the runtime count via the /scale
+## subresource. Without synchronous quorum (maxSyncReplicas=0) the chart omits
+## `.spec.instances` entirely — the HPA is the sole writer and no field is contested;
+## CNPG starts a fresh Cluster at 1 and KEDA scales it up to the floor (a brief
+## cold-start window at 1 is expected). With synchronous quorum (maxSyncReplicas>=1)
+## omission is impossible — CNPG would default the field to 1 and its admission
+## webhook rejects "maxSyncReplicas must be lower than the number of instances" — so
+## the chart seeds the quorum floor (effectiveMin = max(minReplicas, maxSyncReplicas+1, 2))
+## instead; it re-renders that same constant every reconcile, so three-way merge is a
+## no-op on the field and never reverts KEDA's higher live value.
+## A NEW database can enable autoscaling directly in either case.
+## On an EXISTING database, a direct enable drops the live count to the CNPG default
+## (no quorum) or rebases it to effectiveMin (quorum) before KEDA scales back up by
+## load. To avoid that dip, use the two-phase flow: (phase 1) stage `replicas` to the
+## live count and set `autoscaling: {enabled: true, transition: true, ...}` — the live
+## count is held and the ScaledObject comes up paused; verify KEDA is healthy.
+## (phase 2) set `transition: false` to hand the count to KEDA. Suspend the
+## HelmRelease across the phase-2 apply so the render/actuation handoff does not race
+## (helm-controller uses Helm's three-way merge, not SSA).
 ## @param {Autoscaling} autoscaling - Read-replica autoscaling configuration.
 autoscaling:
   enabled: false
