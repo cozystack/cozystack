@@ -234,8 +234,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 	// spec.plugins patch). Gated on the storage being ABSENT: rendered.S3==nil
 	// (a custom strategy) or a legacy app that already ships its own static
 	// s3-storage is left untouched, so this never clobbers a manual bucket.
-	_, hasStorage := cluster.Spec.Backup.Storages[storageName]
-	if rendered.S3 != nil && !hasStorage {
+	if shouldInjectMongoDBSystemStorage(cluster, storageName, rendered) {
 		if err := r.applyMongoDBSystemStorage(ctx, j.Namespace, psmdbName, storageName, rendered.S3); err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to inject system-bucket storage onto psmdb.percona.com/PerconaServerMongoDB %s/%s: %v", j.Namespace, psmdbName, err))
 		}
@@ -396,16 +395,28 @@ func psmdbStorageS3CredentialsSecret(raw runtime.RawExtension) string {
 	return st.S3.CredentialsSecret
 }
 
-// applyMongoDBSystemStorage SSA-injects the system-bucket S3 storage onto the
-// live PerconaServerMongoDB's spec.backup.storages[storageName]. On the
-// useSystemBucket flow the app chart omits the storage (it cannot know the
-// platform bucket/endpoint at render time), so the driver owns this subtree
-// via a dedicated field manager + ForceOwnership - the app's Helm/Flux manager
-// never sets it, so re-renders leave the injected storage intact (mirrors the
-// CNPG driver's spec.plugins patch). CredentialsSecret defaults to
-// cozy-backups-creds, which the BackupJob reconciler projects into the
-// namespace before dispatch.
-func (r *BackupJobReconciler) applyMongoDBSystemStorage(ctx context.Context, namespace, psmdbName, storageName string, s3 *strategyv1alpha1.MongoDBStorageS3) error {
+// shouldInjectMongoDBSystemStorage reports whether the driver must SSA-inject
+// the system-bucket storage onto the live cluster: only when the strategy
+// carries S3 coordinates (the useSystemBucket flow) AND the cluster does not
+// already declare the named storage. The absence gate is the load-bearing
+// guarantee that a legacy app shipping its own static storage — or a custom
+// strategy with no S3 coordinates — is left untouched, so injection never
+// clobbers a manually configured bucket.
+func shouldInjectMongoDBSystemStorage(cluster *psmdbtypes.PerconaServerMongoDB, storageName string, rendered *strategyv1alpha1.MongoDBTemplate) bool {
+	if rendered.S3 == nil {
+		return false
+	}
+	_, hasStorage := cluster.Spec.Backup.Storages[storageName]
+	return !hasStorage
+}
+
+// buildMongoDBSystemStorageEntry constructs the psmdb spec.backup.storages
+// entry the driver injects on the useSystemBucket flow. Factored out of the
+// SSA path so the defaulting (empty credentialsSecret → cozy-backups-creds),
+// the forcePathStyle omit-when-nil (a nil pointer must not surface as a
+// forcePathStyle:false the app never chose), and the {"type":"s3","s3":{…}}
+// shape are exercised without a live apiserver.
+func buildMongoDBSystemStorageEntry(s3 *strategyv1alpha1.MongoDBStorageS3) map[string]interface{} {
 	cred := s3.CredentialsSecret
 	if cred == "" {
 		cred = "cozy-backups-creds"
@@ -421,7 +432,20 @@ func (r *BackupJobReconciler) applyMongoDBSystemStorage(ctx context.Context, nam
 	if s3.ForcePathStyle != nil {
 		s3Cfg["forcePathStyle"] = *s3.ForcePathStyle
 	}
-	entry, err := json.Marshal(map[string]interface{}{"type": "s3", "s3": s3Cfg})
+	return map[string]interface{}{"type": "s3", "s3": s3Cfg}
+}
+
+// applyMongoDBSystemStorage SSA-injects the system-bucket S3 storage onto the
+// live PerconaServerMongoDB's spec.backup.storages[storageName]. On the
+// useSystemBucket flow the app chart omits the storage (it cannot know the
+// platform bucket/endpoint at render time), so the driver owns this subtree
+// via a dedicated field manager + ForceOwnership - the app's Helm/Flux manager
+// never sets it, so re-renders leave the injected storage intact (mirrors the
+// CNPG driver's spec.plugins patch). CredentialsSecret defaults to
+// cozy-backups-creds, which the BackupJob reconciler projects into the
+// namespace before dispatch.
+func (r *BackupJobReconciler) applyMongoDBSystemStorage(ctx context.Context, namespace, psmdbName, storageName string, s3 *strategyv1alpha1.MongoDBStorageS3) error {
+	entry, err := json.Marshal(buildMongoDBSystemStorageEntry(s3))
 	if err != nil {
 		return err
 	}

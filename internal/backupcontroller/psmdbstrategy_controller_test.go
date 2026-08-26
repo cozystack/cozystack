@@ -750,6 +750,127 @@ func TestCreateMongoDBBackupArtifact_ArtifactShape(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// System-bucket storage injection
+// ---------------------------------------------------------------------------
+
+// TestShouldInjectMongoDBSystemStorage pins both branches of the injection
+// gate: inject only when the strategy carries S3 coordinates AND the cluster
+// does not already declare the named storage. The skip-when-present branch is
+// the guarantee that a legacy app's manually configured storage is never
+// clobbered.
+func TestShouldInjectMongoDBSystemStorage(t *testing.T) {
+	s3 := &strategyv1alpha1.MongoDBStorageS3{Bucket: "b", EndpointURL: "https://s3"}
+	withStorage := func(names ...string) *psmdbtypes.PerconaServerMongoDB {
+		c := &psmdbtypes.PerconaServerMongoDB{}
+		if len(names) > 0 {
+			c.Spec.Backup.Storages = map[string]runtime.RawExtension{}
+			for _, n := range names {
+				c.Spec.Backup.Storages[n] = runtime.RawExtension{Raw: []byte(`{"type":"s3"}`)}
+			}
+		}
+		return c
+	}
+	cases := []struct {
+		name     string
+		cluster  *psmdbtypes.PerconaServerMongoDB
+		rendered *strategyv1alpha1.MongoDBTemplate
+		want     bool
+	}{
+		{
+			name:     "useSystemBucket flow, storage absent: inject",
+			cluster:  withStorage(),
+			rendered: &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage", S3: s3},
+			want:     true,
+		},
+		{
+			name:     "storage already declared: skip (never clobber a manual bucket)",
+			cluster:  withStorage("s3-storage"),
+			rendered: &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage", S3: s3},
+			want:     false,
+		},
+		{
+			name:     "custom strategy without S3 coordinates: skip",
+			cluster:  withStorage(),
+			rendered: &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage"},
+			want:     false,
+		},
+		{
+			name:     "S3 set but a different storage is declared: inject (named one is absent)",
+			cluster:  withStorage("other-storage"),
+			rendered: &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage", S3: s3},
+			want:     true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			storageName := psmdbStorageNameOrDefault(tc.rendered.StorageName)
+			if got := shouldInjectMongoDBSystemStorage(tc.cluster, storageName, tc.rendered); got != tc.want {
+				t.Fatalf("shouldInjectMongoDBSystemStorage = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildMongoDBSystemStorageEntry pins the injected storage-entry shape: the
+// {"type":"s3","s3":{…}} envelope, the empty-credentialsSecret default, and the
+// forcePathStyle omit-when-nil (a nil pointer must not surface as
+// forcePathStyle:false the app never chose).
+func TestBuildMongoDBSystemStorageEntry(t *testing.T) {
+	t.Run("defaults credentialsSecret and omits forcePathStyle when nil", func(t *testing.T) {
+		entry := buildMongoDBSystemStorageEntry(&strategyv1alpha1.MongoDBStorageS3{
+			Bucket:      "sys-bucket",
+			EndpointURL: "https://s3.example",
+			Region:      "us-east-1",
+			Prefix:      "mongodb-src",
+		})
+		if entry["type"] != "s3" {
+			t.Fatalf("type = %v, want s3", entry["type"])
+		}
+		s3, ok := entry["s3"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("s3 block is not a map: %#v", entry["s3"])
+		}
+		if s3["credentialsSecret"] != "cozy-backups-creds" {
+			t.Errorf("credentialsSecret = %v, want cozy-backups-creds", s3["credentialsSecret"])
+		}
+		if _, present := s3["forcePathStyle"]; present {
+			t.Errorf("forcePathStyle must be omitted when the pointer is nil; got %v", s3["forcePathStyle"])
+		}
+		for k, want := range map[string]interface{}{
+			"bucket":                "sys-bucket",
+			"endpointUrl":           "https://s3.example",
+			"region":                "us-east-1",
+			"prefix":                "mongodb-src",
+			"insecureSkipTLSVerify": false,
+		} {
+			if s3[k] != want {
+				t.Errorf("s3[%q] = %v, want %v", k, s3[k], want)
+			}
+		}
+	})
+
+	t.Run("honours explicit credentialsSecret and forcePathStyle", func(t *testing.T) {
+		fps := true
+		entry := buildMongoDBSystemStorageEntry(&strategyv1alpha1.MongoDBStorageS3{
+			Bucket:                "b",
+			CredentialsSecret:     "custom-creds",
+			ForcePathStyle:        &fps,
+			InsecureSkipTLSVerify: true,
+		})
+		s3 := entry["s3"].(map[string]interface{})
+		if s3["credentialsSecret"] != "custom-creds" {
+			t.Errorf("credentialsSecret = %v, want custom-creds", s3["credentialsSecret"])
+		}
+		if s3["forcePathStyle"] != true {
+			t.Errorf("forcePathStyle = %v, want true", s3["forcePathStyle"])
+		}
+		if s3["insecureSkipTLSVerify"] != true {
+			t.Errorf("insecureSkipTLSVerify = %v, want true", s3["insecureSkipTLSVerify"])
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
