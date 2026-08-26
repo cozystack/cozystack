@@ -114,9 +114,18 @@ type VMImportRequest struct {
 	// Name is the name of the VMInstance to create. Its disks are named after
 	// it. Must be a valid Kubernetes object name; defaults to the source VM's
 	// name normalized to one when omitted.
+	//
+	// Capped at 46 rather than the usual 63 because the name is not used alone:
+	// each disk becomes `vm-disk-<name>-disk-<i>`, and that whole string is
+	// stamped as the DataVolume's `app.kubernetes.io/instance` label value,
+	// which Kubernetes limits to 63 characters. The fixed parts cost 14
+	// (`vm-disk-` plus `-disk-`), leaving 49 to share between the name and the
+	// disk index; 46 keeps a VM with up to a thousand disks inside the limit.
+	// Overflowing it does not fail cleanly — the DataVolume is simply rejected
+	// after the transfer has already run.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-	// +kubebuilder:validation:MaxLength=48
+	// +kubebuilder:validation:MaxLength=46
 	Name string `json:"name,omitempty"`
 
 	// InstanceType is the Cozystack instance type for the created VMInstance.
@@ -226,6 +235,7 @@ type VMImportTaskStatus struct {
 // +kubebuilder:selectablefield:JSONPath=`.spec.sourceRef.name`
 // +kubebuilder:selectablefield:JSONPath=`.status.phase`
 // +kubebuilder:metadata:annotations={"options.cozystack.io/source.sourceRef.name=vmimportsource","options.cozystack.io/source.storageClass=storageclass","options.cozystack.io/source.vms.instanceType=instancetype","options.cozystack.io/source.vms.instanceProfile=instanceprofile"}
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="metadata.name must be at most 63 characters: the task's name is carried as a label value on the Forklift objects it owns, and Kubernetes limits label values to 63"
 
 // VMImportTask runs a one-shot import of VMs from a registered source. It
 // produces VMDisks and VMInstances that outlive it: deleting the task removes

@@ -124,7 +124,16 @@ spec:
                         Name is the name of the VMInstance to create. Its disks are named after
                         it. Must be a valid Kubernetes object name; defaults to the source VM's
                         name normalized to one when omitted.
-                      maxLength: 48
+
+                        Capped at 46 rather than the usual 63 because the name is not used alone:
+                        each disk becomes `vm-disk-<name>-disk-<i>`, and that whole string is
+                        stamped as the DataVolume's `app.kubernetes.io/instance` label value,
+                        which Kubernetes limits to 63 characters. The fixed parts cost 14
+                        (`vm-disk-` plus `-disk-`), leaving 49 to share between the name and the
+                        disk index; 46 keeps a VM with up to a thousand disks inside the limit.
+                        Overflowing it does not fail cleanly — the DataVolume is simply rejected
+                        after the transfer has already run.
+                      maxLength: 46
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                   required:
@@ -281,6 +290,11 @@ spec:
                 type: array
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: 'metadata.name must be at most 63 characters: the task''s name
+            is carried as a label value on the Forklift objects it owns, and Kubernetes
+            limits label values to 63'
+          rule: self.metadata.name.size() <= 63
     selectableFields:
     - jsonPath: .spec.sourceRef.name
     - jsonPath: .status.phase
