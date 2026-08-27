@@ -40,8 +40,7 @@ spec:
         - name: linstor-controller
           image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
           # Guarantee CPU/memory so the JVM keeps answering its /health probe
-          # under node contention, with a memory ceiling above the -Xmx the image
-          # was built with and no CPU ceiling — see values.yaml controller.*.
+          # under node contention. Requests only — see values.yaml controller.*.
           resources:
             {{- toYaml .Values.controller.resources | nindent 12 }}
           # Partial override: piraeus-operator merges podTemplate as a strategic
