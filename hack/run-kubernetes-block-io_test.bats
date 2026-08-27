@@ -20,6 +20,8 @@
 # filesystem's own counters, which are not this Pod's. A zero read as an idle
 # disk is the wrong conclusion this suite pins against.
 
+load test_helper
+
 kubectl_calls=/dev/null
 kubectl_node_names=
 kubectl_list_rc=0

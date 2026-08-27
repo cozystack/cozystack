@@ -25,6 +25,8 @@
 # Run with: hack/cozytest.sh hack/node-join-soft-red_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 GATE=hack/e2e-node-join-soft-red.sh
 
 # The sandbox stands in for a container, and it has to be a real executable on

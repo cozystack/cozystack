@@ -25,14 +25,15 @@
 # assertions exact and keeps the real repo's suites, which take minutes, out of
 # a unit test.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` at column
-# 0, and injects `set -e`, so exit statuses are captured explicitly; there is no
-# bats `run` or `$status`. setup()/teardown() are not honored, so each test
-# creates and removes its own scratch dir inline rather than through a
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` at column 0. The tests therefore
+# capture statuses directly and manage their own scratch dirs rather than use
+# `run`, `$status`, setup(), teardown(), or a
 # `trap ... EXIT`: that trap replaces the one the bats binary installs for its
 # own bookkeeping, and a test failing under it can print no TAP line at all.
 #
-# Run with: hack/cozytest.sh hack/helm-unit-tests.bats
+# Run with: bats hack/helm-unit-tests.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

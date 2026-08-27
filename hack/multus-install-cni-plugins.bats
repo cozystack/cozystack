@@ -3,10 +3,10 @@
 # extracted from the rendered DaemonSet and run. The helm-unittest cases in
 # packages/system/multus/tests/multus_test.yaml match its source TEXT instead.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
-# paths resolve against that cwd. The runner has no setup/teardown, so each
-# @test builds its own fixture and removes it at the last reachable cleanup
-# point of its body.
+# Run from the repo root through `make bats-unit-tests`; relative paths resolve
+# against that cwd. The file also remains compatible with the legacy
+# `hack/cozytest.sh` translator, so each @test builds and removes its fixture
+# inline instead of relying on setup()/teardown().
 #
 # That cleanup is deliberately not a `trap ... EXIT`. A handler installed inside
 # an @test body replaces the one the bats binary keeps its bookkeeping in, and a

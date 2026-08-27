@@ -47,15 +47,16 @@
 # Same base, same busybox ash, plus the one tool the script actually requires;
 # the selection logic under test is jq's own, run for real.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its own
-# line, rewriting the latter into `return 0` + `}`; there is no bats
-# `run`/`$status`/`setup`. A helper whose exit status matters must therefore
-# capture it and `return` it by hand before its closing brace, or the injected
-# `return 0` would mask it (see run_migration below). Assertions are direct shell
-# tests that exit non-zero on failure.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# rewrites a bare `}` into `return 0` plus `}`. The tests avoid `run`, `$status`,
+# and setup() for that path. A helper whose status matters captures and returns
+# it before its closing brace so the injected return cannot mask it.
 #
-# Run with: hack/cozytest.sh hack/migration-55-fluxcd-orphan.bats
+# Run with: bats hack/migration-55-fluxcd-orphan.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/migration-55-fluxcd"
 MIG_DIR="$PWD/packages/core/platform/images/migrations/migrations"

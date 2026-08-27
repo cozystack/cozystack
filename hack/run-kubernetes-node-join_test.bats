@@ -25,9 +25,10 @@
 # its budget inside a Pod it creates, and shrinking that budget would change
 # which image factory the happy path picks.
 #
-# cozytest.sh's awk parser ends an @test block at the first bare closing brace,
-# so command mocks stay at top level, and there is no bats `run`/`$status`:
-# assertions are direct shell tests that exit non-zero on failure. EXIT-trap
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, which ends an @test
+# block at the first bare closing brace, so command mocks stay at top level and
+# assertions avoid `run` and `$status`. EXIT-trap
 # cleanup is banned in hack/*.bats and frozen by a guard in hack/cozyreport.bats,
 # so each test removes its own temp dir on its last line.
 #

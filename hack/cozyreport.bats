@@ -28,9 +28,9 @@
 #   - Only [A-Za-z0-9] from the title survives into the function name, so keep
 #     titles distinctive in their alphanumeric run.
 #
-# Run with: hack/cozytest.sh hack/cozyreport.bats
-#           (or `bats hack/cozyreport.bats` if the bats binary is installed;
-#           cozytest.sh is the CI path.)
+# Run from the repo root with `make bats-unit-tests`, or directly with
+# `bats hack/cozyreport.bats`. The legacy `hack/cozytest.sh` runner remains a
+# supported compatibility path.
 # -----------------------------------------------------------------------------
 
 load test_helper

@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
 # Unit tests for hack/build-matrix.sh — the CI build-matrix selector.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); the
-# relative `hack/build-matrix.sh` calls below resolve against that cwd. A bats
-# setup() hook would be dead here — cozytest never invokes it — so the
-# repo-root cwd is supplied by the runner rather than a setup() cd.
+# Run from the repo root through `make bats-unit-tests`; the relative
+# `hack/build-matrix.sh` calls below resolve against that cwd. The file also
+# remains compatible with the legacy `hack/cozytest.sh` translator, which does
+# not invoke setup(), so neither runner depends on a setup() cd.
 #
 # Each fixture test removes its own scratch file at the last reachable cleanup
 # point of its body rather than from an EXIT handler. A handler installed inside

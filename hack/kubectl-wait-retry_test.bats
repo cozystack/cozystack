@@ -10,10 +10,14 @@
 # is captured into the substitution. These tests execute the wrapper in a
 # `sh -eu` subshell, exactly as chainsaw runs it, against a fake kubectl.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run`/`$status`. Assertions are direct shell tests.
-# Run with: hack/cozytest.sh hack/kubectl-wait-retry_test.bats
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run` and `$status` for that compatibility path and use direct shell assertions.
+# Run with: bats hack/kubectl-wait-retry_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/kubectl-wait-retry"
 

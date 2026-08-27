@@ -30,6 +30,8 @@
 # body): each assertion exits non-zero on failure and the body relies on
 # `set -e`.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 GEN="$REPO_ROOT/packages/apps/clickhouse/hack/update-versions.sh"
 

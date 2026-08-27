@@ -16,12 +16,13 @@
 # at all, and it caches that decision for every later suite in the shared sandbox. Its
 # kubectl calls are stubbed below, so all four outcomes are reachable without a cluster.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its own line;
-# there is no bats `run`/`$status`, and setup()/teardown() are not honored. Sourcing
-# ghcr-mirror.sh has no cluster side effects (it only sets defaults and defines
-# functions). mikefarah yq prints `---` between matched documents.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, setup(), and teardown() for that compatibility path. Sourcing
+# ghcr-mirror.sh has no cluster side effects. mikefarah yq separates documents.
 #
-# Run with: hack/cozytest.sh hack/ghcr-mirror_test.bats
+# Run with: bats hack/ghcr-mirror_test.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

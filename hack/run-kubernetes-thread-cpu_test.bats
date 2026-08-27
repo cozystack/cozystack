@@ -12,6 +12,8 @@
 # and it exists nowhere else in this tree. These tests pin the split and the
 # separation between an unread container and a quiet one, not the reading.
 
+load test_helper
+
 kubectl_calls=/dev/null
 kubectl_pod_names=
 kubectl_list_rc=0

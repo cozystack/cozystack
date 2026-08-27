@@ -22,6 +22,8 @@
 # Run with: hack/cozytest.sh hack/kubernetes-nodes-unpin-hook.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 FAKEBIN="$PWD/hack/testdata/kubernetes-nodes-unpin"
 CHART="$PWD/packages/apps/kubernetes-nodes"
 

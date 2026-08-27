@@ -41,13 +41,13 @@
 # Root cause + fix are from cozystack/cozystack#3254 (@lexfrei); this is the port
 # to the Chainsaw layout (hack/e2e-chainsaw/_lib/).
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`, and setup()/teardown() are not
-# honored. Each test runs under `set -eu -x`; assertions are direct shell tests
-# that exit non-zero on failure. mikefarah yq prints `---` between matched
-# documents, so document streams are compared with those separators stripped.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, setup(), and teardown() for that compatibility path and use
+# direct shell assertions. mikefarah yq's document separators are stripped.
 #
-# Run with: hack/cozytest.sh hack/talos-image-cache_test.bats
+# Run with: bats hack/talos-image-cache_test.bats
 # -----------------------------------------------------------------------------
 
 load test_helper
