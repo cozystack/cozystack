@@ -40,10 +40,10 @@ Two installer values, both empty by default so the operator's own defaults apply
 
 | Value | Operator flag | Default |
 |---|---|---|
-| `cozystackOperator.systemNamespaceMemoryLimit` | `--system-namespace-memory-limit` | `4Gi` |
+| `cozystackOperator.systemNamespaceMemoryLimit` | `--system-namespace-memory-limit` | `32Gi` |
 | `cozystackOperator.systemNamespaceMemoryRequest` | `--system-namespace-memory-request` | `32Mi` |
 
-The limit is a ceiling, not a reservation, so it is deliberately set far above real usage — the point is that `memory.max` exists, not that it binds. Raising it is close to free; lowering it is where the risk lives.
+The limit is a ceiling, not a reservation, and the default is deliberately far above any real working set. The handler discards a cgroup for carrying a `memory.max` at all, whatever its value, so what the default buys is immunity rather than a fitted ceiling. That is also why it is set so high: the scan described below sees *declared requests*, never a container's actual resident set, so a ceiling low enough to bind is a ceiling that can convert a rare pressure-driven kill into a deterministic one for any component whose real usage nobody measured. Raising it is close to free; lowering it is where the risk lives, and it is worth doing per component in that component's own chart before doing it fleet-wide here.
 
 **The limit must stay above the largest memory request in any system namespace.** A defaulted limit below a container's own request is rejected at admission, and the pod simply will not start. List the requests before lowering it — the operator marks exactly the namespaces it treats as system with `cozystack.io/system=true`, the same condition under which it creates the LimitRange:
 
@@ -61,7 +61,17 @@ done | sort -u
 
 The operator also refuses to start when the request exceeds the limit. A `LimitRange` whose `defaultRequest` is above its `default` is rejected by the API server, which would wedge namespace reconciliation for every system package, so the check happens at startup rather than at apply time.
 
-Setting the limit to `0` disables the feature and removes the LimitRanges the operator previously created, so the knob is reversible. Leaving it empty is not the same thing — that selects the operator's `4Gi` default.
+Setting the limit to `0` disables the feature and removes the LimitRanges the operator previously created, so the knob is reversible. Leaving it empty is not the same thing — that selects the operator's `32Gi` default.
+
+**A namespace holding an oversized request gets a raised ceiling, not no ceiling.** Before applying the default, the operator scans each system namespace for a container that requests more memory than the configured limit and declares no limit of its own — the shape that would be rejected at admission once defaulted. Where it finds one, that namespace's ceiling is raised to clear the request instead of the LimitRange being withheld, because a loose `memory.max` still takes the pod out of the victim set where no `memory.max` does not. The raise is logged with the namespace, workload, container and both limits:
+
+```bash
+kubectl -n cozy-system logs deploy/cozystack-operator | grep "raising the default container memory limit"
+```
+
+**A raised ceiling comes back down on a delay.** Once the request that justified the raise is gone, the ceiling returns to the configured limit — but only after the scan has come back empty for a continuous grace period, currently 30 minutes. The delay is not caution for its own sake: an empty scan is also exactly what a pod between deletion and recreation looks like, and for a workload visible only as a live Pod — every CNPG `Cluster` in a system namespace builds its instance pods directly rather than through a StatefulSet — an ordinary node drain produces that window. Lowering the ceiling there would default the recreated pod a limit below its own request and reject it permanently, because a rejected pod never exists for a later scan to find. Both the start of the countdown and the eventual drop are logged, the latter as `lowering this namespace's container memory ceiling`.
+
+**A namespace another LimitRange already governs is left alone.** If a system namespace — `kube-system` included — already carries a LimitRange that defaults or caps container memory, the operator writes nothing there, and withdraws anything it wrote earlier. Two defaults in one namespace leave the effective ceiling to the order `LimitRanger` happens to iterate them, and a foreign container memory `max` below this default would have every container that declares no limit of its own rejected at admission, since the default is written first and validated against the `max` it exceeds. LimitRanges bounding cpu, or scoped to `Pod` rather than `Container`, do not trigger this and coexist normally.
 
 A LimitRange only mutates at admission. Existing pods keep running without limits until they restart, so the protection lands progressively as workloads roll rather than the moment the setting is applied.
 
