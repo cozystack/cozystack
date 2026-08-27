@@ -1234,13 +1234,18 @@ func TestReconcileSystemDefaultsLimitRangeKeepsARaisedCeilingWhileTheLivePodRema
 	}
 }
 
-// Lowering the knob under a running pod reaches the same defect with no race in it at all,
-// which is why it is worth its own case. An operator running at 16Gi has pods admitted with
-// requests that only that ceiling allowed; dropping the flag to 4Gi must not write 4Gi over
-// them, or their next recreation fails admission. The scan has to run — the namespace is
-// above the configured limit, so it does — and it settles the ceiling at what the pod
-// actually needs rather than at either endpoint.
-func TestReconcileSystemDefaultsLimitRangeRescansWhenTheConfiguredLimitDropsBelowTheCeiling(t *testing.T) {
+// Lowering the knob under a running pod reaches the same defect, which is why it is worth
+// its own case. An operator running at 16Gi has pods admitted with requests that only that
+// ceiling allowed; dropping the flag to 4Gi must not write 4Gi over them, or their next
+// recreation fails admission.
+//
+// It is a downward move, so it goes through the grace period like any other: a pod
+// requesting 8Gi is visible, but a pod requesting between 8Gi and 16Gi that happens to be
+// between deletion and recreation is not, and one scan cannot tell those apart. What the
+// eventual drop pins is that it lands on what the scan actually justifies rather than on
+// either endpoint — 8Gi, not the new 4Gi that would reject the visible pod, and not the
+// 16Gi the namespace no longer needs.
+func TestReconcileSystemDefaultsLimitRangeSettlesAtTheJustifiedCeilingWhenTheKnobDrops(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
 	previous := (&PackageReconciler{
@@ -1250,21 +1255,84 @@ func TestReconcileSystemDefaultsLimitRangeRescansWhenTheConfiguredLimitDropsBelo
 	cl := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(previous, systemPod("vmstorage-0", "8Gi", "")).Build()
 
+	clock := testClockAt(t, "2026-08-27T12:00:00Z")
 	r := &PackageReconciler{
 		Client:                       cl,
 		APIReader:                    cl,
 		Scheme:                       scheme,
 		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
 		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+		Now:                          clock.now,
 	}
 
 	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("16Gi")) != 0 {
+		t.Errorf("default memory = %s immediately after the knob dropped, want the 16Gi ceiling held: "+
+			"a pod requesting more than 8Gi and merely unobserved would be rejected by anything lower", got.String())
+	}
 
+	clock.advance(memoryCeilingDropGrace + time.Minute)
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile after the grace period: %v", err)
+	}
 	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
-		t.Errorf("default memory = %s, want 8Gi: the pod's own request, not the new 4Gi that would reject it "+
-			"nor the 16Gi ceiling it no longer needs", got.String())
+		t.Errorf("default memory = %s, want 8Gi: the visible pod's own request, not the new 4Gi that would "+
+			"reject it nor the 16Gi ceiling nothing justifies any more", got.String())
+	}
+}
+
+// The sibling of the drop-back defect, in the branch where the scan does find something.
+// A blocker smaller than the standing ceiling is not evidence that the larger one is gone,
+// so lowering to the smaller request rejects the larger pod's recreation exactly as
+// lowering to the configured limit would. Every downward move goes through the grace
+// period, whatever prompted it.
+func TestReconcileSystemDefaultsLimitRangeHoldsTheCeilingForASmallerBlocker(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	// Raised to 16Gi for a pod that is currently between deletion and recreation; a
+	// second, smaller oversized pod is still visible.
+	raised := raisedFixture(t, "16Gi", "")
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(raised, systemPod("keycloak-db-2", "8Gi", "")).Build()
+
+	clock := testClockAt(t, "2026-08-27T12:00:00Z")
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+		Now:                          clock.now,
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("16Gi")) != 0 {
+		t.Errorf("default memory = %s, want the 16Gi ceiling held; dropping to the smaller visible request "+
+			"rejects the 16Gi pod's recreation just as dropping to the configured limit would", got.String())
+	}
+
+	// The absent pod comes back inside the grace period: the countdown is cancelled and
+	// the ceiling stands on its own evidence again.
+	clock.advance(time.Minute)
+	if err := cl.Create(t.Context(), systemPod("keycloak-db-1", "16Gi", "")); err != nil {
+		t.Fatalf("recreate the larger pod: %v", err)
+	}
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile after the larger pod returned: %v", err)
+	}
+	if got := clearSinceAnnotation(t, cl, "cozy-monitoring"); got != "" {
+		t.Errorf("clear-since = %q with the larger pod back, want the countdown cancelled", got)
+	}
+	clock.advance(memoryCeilingDropGrace + time.Minute)
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile long after the larger pod returned: %v", err)
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("16Gi")) != 0 {
+		t.Errorf("default memory = %s a grace period after the larger pod returned, want the 16Gi it requests", got.String())
 	}
 }
 

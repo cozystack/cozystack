@@ -1030,69 +1030,87 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		logger.Error(err, "skipping the system defaults LimitRange: could not read the namespace's pods and workloads", "namespace", nsName)
 		return nil
 	}
-	desired := r.systemDefaultsLimitRange(nsName, r.SystemNamespaceMemoryLimit)
-	switch ceiling, raised := containerMemoryDefault(existing); {
-	case blocker != nil:
-		// Raise this namespace's ceiling to clear the request instead of withholding
-		// the LimitRange. A looser ceiling still puts memory.max on the pod cgroup,
-		// which is the whole point: the Talos OOM handler discards any cgroup that has
-		// one, so 8Gi protects the pod exactly as well as 4Gi would. Withholding gives
-		// the namespace no memory.max at all, which is the failure this feature exists
-		// to remove — and it would fall on cozy-monitoring in particular, whose VPAs
-		// hold requests above any sane default on precisely the busy clusters this was
-		// written for.
+	// needed is the ceiling the evidence in hand justifies: the configured limit, or the
+	// largest oversized request the scan found where that is higher.
+	needed := r.SystemNamespaceMemoryLimit
+	if blocker != nil {
+		needed = blocker.request
+	}
+	desired := r.systemDefaultsLimitRange(nsName, needed)
+	ceiling, raised := containerMemoryDefault(existing)
+
+	switch {
+	case !raised || needed.Cmp(ceiling) >= 0:
+		// Level or upward, which is always safe to write immediately: no pod can be
+		// rejected by a ceiling being raised above where it already was. This is also
+		// the path that clears the grace stamp, by building desired without it — a
+		// namespace whose evidence has come back does not get to keep counting down.
+		//
+		// Raise this namespace's ceiling to clear the request instead of withholding the
+		// LimitRange. A looser ceiling still puts memory.max on the pod cgroup, which is
+		// the whole point: the Talos OOM handler discards any cgroup that has one, so
+		// 8Gi protects the pod exactly as well as the configured limit would.
+		// Withholding gives the namespace no memory.max at all, which is the failure
+		// this feature exists to remove — and it would fall on cozy-monitoring in
+		// particular, whose VPAs hold requests above any sane default on precisely the
+		// busy clusters this was written for.
 		//
 		// Withholding was also self-perpetuating there, which is the sharper reason it
 		// had to go. With no LimitRange in the namespace nothing defaults a memory
 		// limit, so the next VPA-sized pod is admitted with a large request and no
 		// limit, the scan finds it again, and the namespace is withheld again: the
 		// feature could never get its foot in the door. Applying at the raised ceiling
-		// breaks that loop, because from then on every new pod is defaulted a limit,
-		// the scan stops finding limitless requests, and the ceiling drops back on its
-		// own.
+		// breaks that loop, because from then on every new pod is defaulted a limit and
+		// the scan stops finding limitless requests.
 		//
-		// It needs no knowledge of what raised the request, and it undoes itself: once
-		// the oversized pod or template is gone the scan finds nothing and the ceiling
-		// drops back to the configured limit — but only after memoryCeilingDropGrace,
-		// because a scan that finds nothing is not the same evidence as the request
-		// being gone. The countdown to that is started by the next case and cancelled
-		// here, by building desired without the annotation that carries it: a blocker
-		// seen again at any point puts the namespace back to square one.
-		desired = r.systemDefaultsLimitRange(nsName, blocker.request)
-		logger.Info("raising the default container memory limit for this namespace to the request below, to clear it; "+
-			"the namespace keeps a memory.max ceiling instead of none, and drops back to the configured limit once the request is gone",
-			"namespace", nsName,
-			"workload", blocker.workload,
-			"container", blocker.container,
-			"request", blocker.request.String(),
-			"configuredLimit", r.SystemNamespaceMemoryLimit.String())
+		// Logged only where the ceiling actually moves up. A namespace holding a
+		// permanently oversized pod re-justifies the same ceiling on every reconcile,
+		// and announcing a raise that changes nothing would put a line in the log for
+		// every system namespace on every HelmRelease status change.
+		if blocker != nil && (!raised || needed.Cmp(ceiling) > 0) {
+			logger.Info("raising the default container memory limit for this namespace to the request below, to clear it; "+
+				"the namespace keeps a memory.max ceiling instead of none, and drops back to the configured limit "+
+				"once the request has been gone for the grace period",
+				"namespace", nsName,
+				"workload", blocker.workload,
+				"container", blocker.container,
+				"request", blocker.request.String(),
+				"configuredLimit", r.SystemNamespaceMemoryLimit.String())
+		}
 
-	case raised && ceiling.Cmp(r.SystemNamespaceMemoryLimit) > 0:
-		// The namespace sits above the configured limit and this scan found nothing to
-		// justify that. Lowering it here is the one write in this function that can
-		// take a running component down — see memoryCeilingDropGrace — so it waits
-		// until the same emptiness has held for long enough to mean something, with
-		// the instant it was first observed recorded on the object rather than in
-		// memory so that it survives an operator restart and a change of leader.
+	default:
+		// Downward, and every downward move goes through the grace period regardless of
+		// what prompted it — see memoryCeilingDropGrace. That covers three cases which
+		// look different and fail identically:
+		//
+		//   - the scan found nothing and the raise looks unnecessary;
+		//   - the scan found a smaller blocker than the one the ceiling was raised for,
+		//     so the larger one is merely unobserved and lowering to the smaller request
+		//     rejects it exactly as lowering to the configured limit would;
+		//   - the configured limit itself was lowered beneath a standing ceiling.
+		//
+		// In all three the ceiling is held at what the object already carries, and the
+		// eventual drop lands on needed rather than on the configured limit, so a
+		// smaller blocker that is still there keeps the ceiling it requires.
 		clearSince, dated := memoryCeilingClearSince(existing)
 		switch {
 		case !dated:
 			desired = r.raisedCeiling(nsName, ceiling, r.now())
-			logger.Info("nothing found to justify this namespace's raised container memory ceiling; "+
+			logger.Info("this namespace's container memory ceiling is above what the scan now justifies; "+
 				"holding it and starting the grace period, because a scan finding no oversized request is also "+
 				"what a pod between deletion and recreation looks like",
 				"namespace", nsName,
 				"ceiling", ceiling.String(),
-				"configuredLimit", r.SystemNamespaceMemoryLimit.String(),
+				"justified", needed.String(),
 				"grace", memoryCeilingDropGrace.String())
 		case r.now().Sub(clearSince) < memoryCeilingDropGrace:
 			desired = r.raisedCeiling(nsName, ceiling, clearSince)
 		default:
-			logger.Info("lowering this namespace's container memory ceiling back to the configured limit; "+
-				"the oversized request that raised it has been absent for the whole grace period",
+			logger.Info("lowering this namespace's container memory ceiling; the request that raised it "+
+				"has been absent for the whole grace period",
 				"namespace", nsName,
 				"ceiling", ceiling.String(),
-				"configuredLimit", r.SystemNamespaceMemoryLimit.String(),
+				"loweredTo", needed.String(),
 				"clearSince", clearSince.Format(time.RFC3339))
 		}
 	}
