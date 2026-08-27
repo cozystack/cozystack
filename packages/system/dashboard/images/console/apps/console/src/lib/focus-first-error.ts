@@ -18,8 +18,9 @@ function propertySegments(property: string): string[] {
  *
  * Not every widget puts that id on an element. `SourceField` and
  * `SourceWidget` render radios carrying only `name="<id>-source"`, so an exact
- * lookup finds nothing and the submit scrolls nowhere. Fall back to the first
- * input whose id or name starts with the generated id.
+ * lookup finds nothing and the submit scrolls nowhere. Fall back to a
+ * descendant input, matched on a segment boundary: a bare prefix would let an
+ * error on `data` grab the sibling `database`, scrolling to the wrong field.
  */
 export function focusFirstError(
   error: Pick<RJSFValidationError, "property">,
@@ -27,11 +28,13 @@ export function focusFirstError(
   idSeparator = "_",
 ) {
   const id = [idPrefix, ...propertySegments(error.property ?? "")].join(idSeparator)
-  const escaped = id.replace(/["\\]/g, "\\$&")
+  const quote = (v: string) => v.replace(/["\\]/g, "\\$&")
+  const escaped = quote(id)
+  const escapedSeparator = quote(idSeparator)
   const field =
     document.getElementById(id) ??
     document.querySelector<HTMLElement>(
-      `input[id^="${escaped}"], input[name^="${escaped}"]`,
+      `input[id^="${escaped}${escapedSeparator}"], input[name^="${escaped}-"]`,
     )
   field?.scrollIntoView?.({ block: "center" })
   field?.focus?.({ preventScroll: true })
