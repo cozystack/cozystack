@@ -1360,7 +1360,7 @@ type memoryRequestBlocker struct {
 // no limit beside it. Most realistically that is an operator lowering
 // --system-namespace-memory-limit below a request some chart declares statically. The
 // largest static memory request in the system packages today is 2Gi
-// (packages/system/rabbitmq-operator), so the 4Gi default clears every one of them and
+// (packages/system/rabbitmq-operator), so the default clears every one of them and
 // lowering the knob is what would put one over. The node DaemonSets have since been given
 // requests and limits of their own, which shrinks the set of containers the default reaches
 // at all: a container that declares its own memory limit is never touched here.

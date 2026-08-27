@@ -147,20 +147,29 @@ func main() {
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
-	flag.StringVar(&systemNamespaceMemoryLimit, "system-namespace-memory-limit", "4Gi",
+	flag.StringVar(&systemNamespaceMemoryLimit, "system-namespace-memory-limit", "32Gi",
 		"Default container memory limit applied through a LimitRange in every system namespace. "+
 			"Keeps system components out of the Talos userspace OOM handler's victim set, which only "+
-			"considers cgroups with no memory.max. Should stay above the largest memory request in any "+
-			"system namespace, since a defaulted limit below a container's own request fails admission. "+
+			"considers cgroups with no memory.max. The default is deliberately far above any real "+
+			"working set: the handler discards a cgroup for having a memory.max at all, whatever its "+
+			"value, so what this buys is immunity rather than a fitted ceiling, and a ceiling nothing "+
+			"reaches cannot turn a rare pressure-driven kill into a deterministic one. Lower it to make "+
+			"it bind, per component or fleet-wide, once real usage is known. It should stay above the "+
+			"largest memory request in any system namespace, since a defaulted limit below a "+
+			"container's own request fails admission. "+
 			"Where a namespace does hold such a container, that namespace's ceiling is raised to clear "+
 			"the request rather than the LimitRange being withheld - a loose memory.max still takes the "+
-			"pod out of the victim set where no memory.max does not - and it drops back to this value on "+
-			"its own once the request is gone. Grep the operator log for \"raising the default container "+
-			"memory limit\" to see which namespace, workload and container caused it. "+
+			"pod out of the victim set where no memory.max does not - and it drops back to this value "+
+			"once the request has been absent for a grace period, since a scan finding nothing is also "+
+			"what a pod between deletion and recreation looks like. Grep the operator log for \"raising "+
+			"the default container memory limit\" to see which namespace, workload and container caused "+
+			"it, and for \"lowering this namespace's container memory ceiling\" to see it come back down. "+
 			"Scope is every namespace a Package targets that is not a tenant namespace, which "+
 			"includes kube-system - cozystack-scheduler is installed there - so namespaces owned "+
-			"by the underlying distribution are covered too. Empty or 0 disables the LimitRange "+
-			"and removes any previously created one.")
+			"by the underlying distribution are covered too. A namespace where another LimitRange "+
+			"already defaults or caps container memory is left alone, because two defaults leave the "+
+			"effective ceiling to the order LimitRanger iterates them. Empty or 0 disables the "+
+			"LimitRange and removes any previously created one.")
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", "32Mi",
 		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+
 			"explicitly: Kubernetes defaults an unset request to the limit, which would reserve the full "+

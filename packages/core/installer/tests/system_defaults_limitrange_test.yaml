@@ -6,7 +6,7 @@ suite: cozystack-operator system namespace memory defaults
 # its victim set — without it, system components are killed on behalf of tenant
 # workloads that caused the pressure but do have limits.
 #
-# Both knobs default to "" so the operator's own defaults (4Gi / 32Mi) apply, and
+# Both knobs default to "" so the operator's own defaults (32Gi / 32Mi) apply, and
 # "0" must reach the operator rather than being swallowed as empty: it is how an
 # operator disables the LimitRange.
 
