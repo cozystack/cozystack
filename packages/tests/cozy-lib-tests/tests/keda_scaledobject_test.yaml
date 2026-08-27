@@ -6,6 +6,7 @@ templates:
   - templates/tests/keda-scaledobject-nondict.yaml
   - templates/tests/keda-scaledobject-params.yaml
   - templates/tests/keda-scaledobject-bounds.yaml
+  - templates/tests/keda-scaledobject-arg.yaml
 
 release:
   name: postgres-db
@@ -117,3 +118,38 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "cozy-lib.keda.scaledObject: maxReplicaCount must be >= minReplicaCount"
+
+
+  # Remaining fail-closed guards (one required field dropped per case via the
+  # keda-scaledobject-arg fixture) so the helper's full rejection contract is
+  # executable-documented, not just sampled.
+  - it: fails closed when name is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: name}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: name is required"}
+  - it: fails closed when scaleTargetRef.kind is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: kind}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: scaleTargetRef.kind is required"}
+  - it: fails closed when scaleTargetRef.apiVersion is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: apiVersion}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: scaleTargetRef.apiVersion is required"}
+  - it: fails closed when query is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: query}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: query is required"}
+  - it: fails closed when threshold is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: threshold}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: threshold is required"}
+  - it: fails closed when serverAddress is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: serverAddress}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: serverAddress is required"}
