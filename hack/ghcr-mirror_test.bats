@@ -119,6 +119,7 @@ timeout() {
     [ "${1:-}" = -k ] || return 97
     shift 3
     "$@"
+    return $?
 }
 
 @test "manifest documents partition into pre-Cilium apply plus the Cilium policy" {
