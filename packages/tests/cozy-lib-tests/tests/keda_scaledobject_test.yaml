@@ -163,3 +163,8 @@ tests:
     set: {omit: maxReplicaCount}
     asserts:
       - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: maxReplicaCount is required"}
+  - it: fails closed when scaleTargetRef is not a dict
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {badRef: true}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: scaleTargetRef must be a dict"}
