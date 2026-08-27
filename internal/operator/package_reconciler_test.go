@@ -625,25 +625,206 @@ func TestReconcileSystemDefaultsLimitRangeRaisesCeilingWhenRequestExceedsDefault
 // The ceiling is raised only for as long as the request is there. Nothing else lowers it,
 // so if this regressed a namespace would keep an 8Gi default forever after one oversized
 // pod, and the configured limit would silently stop meaning anything.
-func TestReconcileSystemDefaultsLimitRangeDropsBackWhenRequestIsGone(t *testing.T) {
+func TestReconcileSystemDefaultsLimitRangeHoldsARaisedCeilingThroughTheGracePeriod(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
-	raised := &corev1.LimitRange{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      SystemDefaultsLimitRangeName,
-			Namespace: "cozy-monitoring",
-		},
-		Spec: corev1.LimitRangeSpec{
-			Limits: []corev1.LimitRangeItem{{
-				Type:           corev1.LimitTypeContainer,
-				Default:        corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("8Gi")},
-				DefaultRequest: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Mi")},
-			}},
-		},
+	raised := raisedFixture(t, "8Gi", "")
+	// The 8Gi pod that caused the raise is not in the list; only a small one is.
+	var listed []string
+	var writes int
+	cl := scanRecordingClient(scheme, &listed, &writes, raised, systemPod("vmstorage-0", "512Mi", ""))
+
+	clock := testClockAt(t, "2026-08-27T12:00:00Z")
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+		Now:                          clock.now,
 	}
-	// The 8Gi pod that caused the raise is gone; only a small one is left.
-	cl := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(raised, systemPod("vmstorage-0", "512Mi", "")).Build()
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// The first clean scan starts the countdown; it does not end it. Lowering here is the
+	// one write in this function that can reject a running component's next pod, and an
+	// empty scan is also what a pod between deletion and recreation looks like.
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Errorf("default memory = %s, want the raised 8Gi held on the first clean scan", got.String())
+	}
+	if got := clearSinceAnnotation(t, cl, "cozy-monitoring"); got != "2026-08-27T12:00:00Z" {
+		t.Errorf("clear-since = %q, want the instant of the first clean scan", got)
+	}
+
+	// Most of the grace period later, still nothing found: still held, and — because the
+	// stamp is carried forward verbatim rather than refreshed — still no second write.
+	clock.advance(memoryCeilingDropGrace - time.Minute)
+	writes = 0
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile inside the grace period: %v", err)
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Errorf("default memory = %s, want the raised 8Gi still held inside the grace period", got.String())
+	}
+	if writes != 0 {
+		t.Errorf("%d writes inside the grace period, want none; the countdown must not restart on every reconcile, "+
+			"or it never elapses and the ceiling is frozen instead of merely delayed", writes)
+	}
+}
+
+// The other half of the same contract: the delay is a delay, not a freeze. Once the
+// emptiness has held long enough to mean something, the ceiling comes down on its own, and
+// the pod list has to have been read to get here at all — a raised namespace that stopped
+// scanning could never find out the raise was no longer needed.
+func TestReconcileSystemDefaultsLimitRangeDropsARaisedCeilingOnceTheGraceElapses(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	raised := raisedFixture(t, "8Gi", "2026-08-27T12:00:00Z")
+
+	var listed []string
+	var writes int
+	cl := scanRecordingClient(scheme, &listed, &writes, raised)
+
+	clock := testClockAt(t, "2026-08-27T12:00:00Z")
+	clock.advance(memoryCeilingDropGrace + time.Minute)
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+		Now:                          clock.now,
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if !listedKind(listed, "PodList") {
+		t.Errorf("did not list pods; a raised namespace has to be rescanned to find out the raise is no longer needed")
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
+		t.Errorf("default memory = %s, want the ceiling back down at the configured 4Gi once the grace elapsed", got.String())
+	}
+	if writes != 1 {
+		t.Errorf("writes = %d, want the single apply that lowers the ceiling", writes)
+	}
+	// The stamp is dropped by omission: this reconciler owns that annotation, so an apply
+	// built without it removes it. That is server-side-apply field ownership, which the
+	// fake client only emulates for fields an apply put there in the first place, and this
+	// fixture was seeded directly. The cancellation path is asserted in
+	// TestReconcileSystemDefaultsLimitRangeKeepsARaisedCeilingAcrossATransientAbsence,
+	// where the stamp does arrive through an apply.
+}
+
+// The defect the grace period exists for, as a regression test.
+//
+// A blocker that appears only as a live Pod — every CNPG Cluster in a system namespace
+// builds its instance pods directly rather than through a StatefulSet, so this class is
+// shipped, not hypothetical — is deleted and recreated by an ordinary Talos node drain.
+// Reconciles follow HelmRelease status churn and a node upgrade produces plenty, so one
+// lands in that window and the scan comes back empty. Without the grace period the ceiling
+// was lowered there and then, and the recreated pod was rejected at admission for good:
+// the rejected pod never exists, so no later scan can find it, and the namespace settles at
+// the configured limit where the pod half of the scan stops running at all.
+func TestReconcileSystemDefaultsLimitRangeKeepsARaisedCeilingAcrossATransientAbsence(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	raised := raisedFixture(t, "8Gi", "")
+	blocker := systemPod("keycloak-db-1", "8Gi", "")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(raised).Build()
+
+	clock := testClockAt(t, "2026-08-27T12:00:00Z")
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+		Now:                          clock.now,
+	}
+
+	// Mid-drain: the pod is gone from the API and the scan finds nothing.
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile mid-drain: %v", err)
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Fatalf("default memory = %s mid-drain, want the raised 8Gi held; lowering it here is what rejects "+
+			"the pod's recreation permanently", got.String())
+	}
+
+	// The node comes back and the pod with it, still well inside the grace period.
+	clock.advance(2 * time.Minute)
+	if err := cl.Create(t.Context(), blocker); err != nil {
+		t.Fatalf("recreate the blocker pod: %v", err)
+	}
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile after the pod returned: %v", err)
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Errorf("default memory = %s after the pod returned, want the 8Gi its request needs", got.String())
+	}
+
+	// The countdown has to be cancelled, not merely paused: left standing, it would elapse
+	// under a pod that is present and lower the ceiling anyway.
+	if got := clearSinceAnnotation(t, cl, "cozy-monitoring"); got != "" {
+		t.Errorf("clear-since = %q with the blocker back, want it cleared", got)
+	}
+	clock.advance(memoryCeilingDropGrace + time.Minute)
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile long after the pod returned: %v", err)
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Errorf("default memory = %s a grace period after the pod returned, want the 8Gi it still requests", got.String())
+	}
+}
+
+// Anything ambiguous about the stamp has to mean "wait longer", never "lower now", because
+// the write it gates is the one that can take a component down. A stamp that cannot be
+// parsed is therefore treated as absent, which restarts the grace period.
+func TestReconcileSystemDefaultsLimitRangeRestartsTheGraceOnAnUnparseableStamp(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	raised := raisedFixture(t, "8Gi", "not-a-timestamp")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(raised).Build()
+
+	clock := testClockAt(t, "2026-08-27T12:00:00Z")
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+		Now:                          clock.now,
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Errorf("default memory = %s, want the raised 8Gi held; an unreadable stamp must not end the grace period", got.String())
+	}
+	if got := clearSinceAnnotation(t, cl, "cozy-monitoring"); got != "2026-08-27T12:00:00Z" {
+		t.Errorf("clear-since = %q, want the garbage replaced with a fresh stamp", got)
+	}
+}
+
+// The managed-by label is what deleteSystemDefaultsLimitRange reads to decide whether the
+// object is this reconciler's to remove. Compared on the spec alone, a LimitRange whose
+// label had been stripped was never re-stamped, and turning the knob off then left an object
+// the operator did own sitting in the namespace forever.
+func TestReconcileSystemDefaultsLimitRangeRestampsAStrippedManagedByLabel(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	stripped := (&PackageReconciler{
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4Gi"))
+	stripped.Labels = nil
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(stripped).Build()
 
 	r := &PackageReconciler{
 		Client:                       cl,
@@ -657,8 +838,15 @@ func TestReconcileSystemDefaultsLimitRangeDropsBackWhenRequestIsGone(t *testing.
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
-		t.Errorf("default memory = %s, want the configured 4Gi back", got.String())
+	lr := &corev1.LimitRange{}
+	if err := cl.Get(t.Context(), types.NamespacedName{
+		Name:      SystemDefaultsLimitRangeName,
+		Namespace: "cozy-monitoring",
+	}, lr); err != nil {
+		t.Fatalf("get LimitRange: %v", err)
+	}
+	if got := lr.Labels[managedByLabel]; got != packageControllerFieldOwner {
+		t.Errorf("managed-by = %q, want it re-stamped as %q", got, packageControllerFieldOwner)
 	}
 }
 
@@ -847,6 +1035,52 @@ func scanRecordingClient(scheme *runtime.Scheme, listed *[]string, writes *int, 
 		}).Build()
 }
 
+// raisedFixture builds a LimitRange standing above the configured limit, as the reconciler
+// would have left it after a raise. clearSince is written verbatim when non-empty, so the
+// wire format of the stamp is pinned by the test rather than copied from the code that
+// produces it — including the cases where it is deliberately not a timestamp at all.
+func raisedFixture(t *testing.T, ceiling, clearSince string) *corev1.LimitRange {
+	t.Helper()
+	lr := (&PackageReconciler{
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse(ceiling))
+	if clearSince != "" {
+		lr.Annotations = map[string]string{memoryCeilingClearSinceAnnotation: clearSince}
+	}
+	return lr
+}
+
+// testClock is a hand-wound clock. The grace period is measured in wall-clock time
+// precisely so that a burst of reconciles cannot age it, which also means no number of
+// reconciles can advance it in a test either.
+type testClock struct{ t time.Time }
+
+func testClockAt(t *testing.T, stamp string) *testClock {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		t.Fatalf("parse test clock %q: %v", stamp, err)
+	}
+	return &testClock{t: at}
+}
+
+func (c *testClock) now() time.Time          { return c.t }
+func (c *testClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+// clearSinceAnnotation reads the grace-period stamp back off the object in the cluster,
+// returning "" when it is absent.
+func clearSinceAnnotation(t *testing.T, cl client.Client, ns string) string {
+	t.Helper()
+	lr := &corev1.LimitRange{}
+	if err := cl.Get(t.Context(), types.NamespacedName{
+		Name:      SystemDefaultsLimitRangeName,
+		Namespace: ns,
+	}, lr); err != nil {
+		t.Fatalf("get LimitRange in %s: %v", ns, err)
+	}
+	return lr.Annotations[memoryCeilingClearSinceAnnotation]
+}
+
 func listedKind(listed []string, kind string) bool {
 	for _, l := range listed {
 		if strings.Contains(l, kind) {
@@ -1000,45 +1234,6 @@ func TestReconcileSystemDefaultsLimitRangeKeepsARaisedCeilingWhileTheLivePodRema
 	}
 }
 
-// The other half of the same rule: the raise has to come back down on its own, or pinning
-// the skip to the configured limit would just freeze every raised namespace at its
-// high-water mark. Same raised 8Gi ceiling, blocker gone, so the scan comes back empty and
-// the configured limit is reapplied — one write, and from then on the namespace is settled
-// and stops reading the pod list at all.
-func TestReconcileSystemDefaultsLimitRangeDropsARaisedCeilingOnceTheBlockerIsGone(t *testing.T) {
-	scheme := limitRangeScheme(t)
-
-	raised := (&PackageReconciler{
-		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("8Gi"))
-
-	var listed []string
-	var writes int
-	cl := scanRecordingClient(scheme, &listed, &writes, raised)
-
-	r := &PackageReconciler{
-		Client:                       cl,
-		APIReader:                    cl,
-		Scheme:                       scheme,
-		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
-		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}
-
-	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	if !listedKind(listed, "PodList") {
-		t.Errorf("did not list pods; a raised namespace has to be rescanned to find out the raise is no longer needed")
-	}
-	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
-		t.Errorf("default memory = %s, want the ceiling back down at the configured 4Gi", got.String())
-	}
-	if writes != 1 {
-		t.Errorf("writes = %d, want the single apply that lowers the ceiling", writes)
-	}
-}
-
 // Lowering the knob under a running pod reaches the same defect with no race in it at all,
 // which is why it is worth its own case. An operator running at 16Gi has pods admitted with
 // requests that only that ceiling allowed; dropping the flag to 4Gi must not write 4Gi over
@@ -1122,10 +1317,14 @@ func TestReconcileSystemDefaultsLimitRangeSkipsThePodListAcrossEquivalentNotatio
 func TestReconcileSystemDefaultsLimitRangeDoesNotReapplyEquivalentQuantities(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
+	// Carries the managed-by label, because this fixture stands for an object the
+	// reconciler wrote itself; without it the case would be re-applied over the missing
+	// label and stop saying anything about how quantities compare.
 	settled := &corev1.LimitRange{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      SystemDefaultsLimitRangeName,
 			Namespace: "cozy-monitoring",
+			Labels:    map[string]string{managedByLabel: packageControllerFieldOwner},
 		},
 		Spec: corev1.LimitRangeSpec{
 			Limits: []corev1.LimitRangeItem{{
