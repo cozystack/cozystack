@@ -14,12 +14,13 @@
 # non-zero exit aborts the test (that is the exit-0 assertion). A test that
 # expects a non-zero exit must capture it with `|| rc=$?`. mikefarah yq is
 # assumed present (provided by the test toolchain). Each test removes its
-# synthetic tree on the last line of its body rather than from a `trap ... EXIT`:
-# a handler installed inside an @test body replaces the one the bats binary keeps
-# its bookkeeping in, and a test that then FAILS prints no TAP line at all — the
-# run only reports having executed fewer tests than it planned, which reads as a
-# green suite. Both runners set -e, so on failure the cleanup is unreachable and
-# the tree survives for inspection. See hack/bats-no-exit-trap.bats and
+# synthetic tree at the last reachable cleanup point of its body rather than
+# from a `trap ... EXIT`: a handler installed inside an @test body replaces the
+# one the bats binary keeps its bookkeeping in, and a test that then FAILS prints
+# no TAP line at all — the run only reports having executed fewer tests than it
+# planned, which reads as a green suite. Every converted body reaches cleanup
+# only after a bare `grep -q` whose failure aborts the body, so the tree survives
+# for inspection on failure. See hack/bats-no-exit-trap.bats and
 # docs/agents/e2e-testing.md.
 #
 # Run with: hack/cozytest.sh hack/nightly-mirror_test.bats

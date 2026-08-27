@@ -8,13 +8,14 @@
 # non-zero on failure. setup()/teardown() are not honored — each test creates
 # and cleans its own scratch dir.
 #
-# That cleanup is the last statement of the body and never a `trap ... EXIT`. A
-# handler installed inside an @test body replaces the one the bats binary keeps
-# its bookkeeping in, and a test that then FAILS prints no TAP line at all — the
-# run only reports having executed fewer tests than it planned, which reads as a
-# green suite. Both runners set -e, so on failure the cleanup is unreachable and
-# the scratch directory survives for inspection, which is what a failed test
-# wants anyway. See hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
+# Each fixture test removes its scratch directory at the last reachable cleanup
+# point of the body and never from a `trap ... EXIT`. A handler installed inside
+# an @test body replaces the one the bats binary keeps its bookkeeping in, and a
+# test that then FAILS prints no TAP line at all — the run only reports having
+# executed fewer tests than it planned, which reads as a green suite. Every
+# converted body reaches cleanup only after an assertion whose failure aborts
+# the body, so the scratch directory survives for inspection on failure. See
+# hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 #
 # Run with: hack/cozytest.sh hack/select-e2e_test.bats
 # -----------------------------------------------------------------------------

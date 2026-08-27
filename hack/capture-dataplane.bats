@@ -37,14 +37,15 @@
 # unreachable, so their stubs answer `nc -z` with a failure on purpose. A stub
 # that stops short leaves the test green against every implementation.
 #
-# A test of the second shape removes its scratch directory on the last line of
-# its body, never from a `trap ... EXIT`. A handler installed inside an @test
-# body replaces the one the bats binary keeps its bookkeeping in, and a test that
-# then FAILS prints no TAP line at all — the run only reports having executed
-# fewer tests than it planned, which reads as a green suite. Both runners set -e,
-# so on failure the cleanup is unreachable and the scratch directory survives for
-# inspection, which for a capture test is the artifact under assertion. See
-# hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
+# Tests of the second shape remove their scratch directories at the last
+# reachable cleanup point of the body, never from a `trap ... EXIT`. A handler
+# installed inside an @test body replaces the one the bats binary keeps its
+# bookkeeping in, and a test that then FAILS prints no TAP line at all — the run
+# only reports having executed fewer tests than it planned, which reads as a
+# green suite. Their cleanup follows an assertion or explicit failure branch
+# whose failure aborts the body, so the scratch directory survives for
+# inspection on failure, which for a capture test is the artifact under
+# assertion. See hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 #
 # Title syntax constraints (inherited from cozytest.sh's awk parser):
 #   - Titles delimited by ASCII double quotes; embedded quotes truncate.

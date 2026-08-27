@@ -5,16 +5,18 @@
 #
 # Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
 # paths resolve against that cwd. The runner has no setup/teardown, so each
-# @test builds its own fixture and removes it on the last line of its body.
+# @test builds its own fixture and removes it at the last reachable cleanup
+# point of its body.
 #
 # That cleanup is deliberately not a `trap ... EXIT`. A handler installed inside
 # an @test body replaces the one the bats binary keeps its bookkeeping in, and a
 # test that then FAILS prints no TAP line at all — the run only reports having
-# executed fewer tests than it planned, which reads as a green suite. Both
-# runners set -e, so on failure the cleanup is unreachable and the fixture
-# survives for inspection. See hack/bats-no-exit-trap.bats and
-# docs/agents/e2e-testing.md. The EXIT traps the tests below talk about are the
-# ones inside the script UNDER TEST, which is a different shell entirely.
+# executed fewer tests than it planned, which reads as a green suite. Every
+# converted body reaches cleanup only after an assertion or explicit failure
+# branch whose failure aborts the body, so the fixture survives for inspection
+# on failure. See hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md. The
+# EXIT traps the tests below talk about are the ones inside the script UNDER
+# TEST, which is a different shell entirely.
 
 CHART=packages/system/multus
 

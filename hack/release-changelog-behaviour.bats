@@ -28,18 +28,18 @@
 #   * That the sparse tooling checkout resolves on GitHub's runners. actions/
 #     checkout is not runnable here; the contract suite pins its presence.
 #
-# Each test removes its throwaway repositories on the last line of its body and
-# never from a `trap ... EXIT`. A handler installed inside an @test body replaces
-# the one the bats binary keeps its bookkeeping in, and a test that then FAILS
-# prints no TAP line at all — the run only reports having executed fewer tests
-# than it planned, which reads as a green suite. Both runners set -e, so on
-# failure the cleanup is unreachable and the fixture repositories survive for
-# inspection, which is what a failed test wants anyway. Where a body ends in an
-# explicit `return 0` the cleanup goes just above it: that `return` is what turns
-# the preceding `&&`/`||` list — which errexit does not abort on — into the
-# verdict, so cleanup below it would be dead and cleanup replacing it would
-# change what the test asserts. See hack/bats-no-exit-trap.bats and
-# docs/agents/e2e-testing.md.
+# Each test that needs scratch directories removes its throwaway repositories at
+# the last reachable cleanup point of its body and never from a `trap ... EXIT`.
+# A handler installed inside an @test body replaces the one the bats binary keeps
+# its bookkeeping in, and a test that then FAILS prints no TAP line at all — the
+# run only reports having executed fewer tests than it planned, which reads as a
+# green suite. Most converted bodies reach cleanup only after an assertion whose
+# failure aborts the body, so the fixture repositories survive for inspection on
+# failure. Where a body ends in an explicit `return 0`, cleanup goes immediately
+# above it: that `return` finalizes the preceding `&&`/`||` control flow, which
+# errexit does not abort on, so cleanup below it would be dead and cleanup
+# replacing it would change the test's verdict. See
+# hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PRESERVE="$REPO_ROOT/hack/changelog-preserve.sh"

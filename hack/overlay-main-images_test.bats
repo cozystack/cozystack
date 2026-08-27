@@ -6,21 +6,22 @@
 # Run from the repo root:  bats hack/overlay-main-images_test.bats
 # (CI runs it via hack/cozytest.sh through `make unit-tests`.)
 #
-# Each test builds a throwaway tree: a `packages/` tree on release (ghcr/v1.5.0)
-# refs, and a `main/` dir standing in for the extracted cozystack-packages:main
-# artifact (root = contents of packages/) on current-main (OCIR/:main) refs.
-# $root is the real repo, captured before cd.
+# Each fixture test builds a throwaway tree: a `packages/` tree on release
+# (ghcr/v1.5.0) refs, and a `main/` dir standing in for the extracted
+# cozystack-packages:main artifact (root = contents of packages/) on current-main
+# (OCIR/:main) refs. $root is the real repo, captured before cd.
 #
-# Each test then walks back out with `cd "$root"` and removes the tree on the
-# last two lines of its body, rather than from a `trap ... EXIT`. A handler
-# installed inside an @test body replaces the one the bats binary keeps its
-# bookkeeping in, and a test that then FAILS prints no TAP line at all — the run
-# only reports having executed fewer tests than it planned, which reads as a
-# green suite. Both runners set -e, so on failure neither line is reached and the
-# tree survives for inspection. The `cd` back is what the trap did not have to
-# do: a body that removes the directory it is standing in leaves the shell with
-# no working directory, which is harmless only for as long as every test gets a
-# process of its own. See hack/bats-no-exit-trap.bats and
+# Each fixture test then walks back out with `cd "$root"` and removes the tree at
+# the last reachable cleanup point of its body, normally its last two lines,
+# rather than from a `trap ... EXIT`. A handler installed inside an @test body
+# replaces the one the bats binary keeps its bookkeeping in, and a test that
+# then FAILS prints no TAP line at all — the run only reports having executed
+# fewer tests than it planned, which reads as a green suite. Every converted
+# body reaches those lines only after an assertion whose failure aborts the body,
+# so the tree survives for inspection on failure. The `cd` back is what the trap
+# did not have to do: a body that removes the directory it is standing in leaves
+# the shell with no working directory, which is harmless only for as long as
+# every test gets a process of its own. See hack/bats-no-exit-trap.bats and
 # docs/agents/e2e-testing.md.
 
 @test "overlays an unbuilt unit (.tag) to current-main and reports it" {

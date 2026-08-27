@@ -6,13 +6,13 @@
 # setup() hook would be dead here — cozytest never invokes it — so the
 # repo-root cwd is supplied by the runner rather than a setup() cd.
 #
-# Each test removes its own scratch file on the last line of its body rather
-# than from an EXIT handler. A handler installed inside an @test body replaces
-# the one the bats binary keeps its bookkeeping in, and a test that then FAILS
-# prints no TAP line at all — the run just reports having executed fewer tests
-# than it planned, which reads as a green suite. Both runners set -e, so on
-# failure the cleanup line is never reached and the scratch file survives for
-# inspection, which is what a failed test wants anyway. See
+# Each fixture test removes its own scratch file at the last reachable cleanup
+# point of its body rather than from an EXIT handler. A handler installed inside
+# an @test body replaces the one the bats binary keeps its bookkeeping in, and a
+# test that then FAILS prints no TAP line at all — the run just reports having
+# executed fewer tests than it planned, which reads as a green suite. Every
+# converted body reaches cleanup only after an assertion whose failure aborts
+# the body, so the scratch file survives for inspection on failure. See
 # hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 
 @test "no argument emits the full matrix" {

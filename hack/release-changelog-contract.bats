@@ -71,12 +71,13 @@
 #   * Whether the release body ACTUALLY lands. That is one API call at publish
 #     time, on a path no unit test reaches.
 #
-# The one test here that needs a scratch directory removes it on the last line of
-# its body, never from a `trap ... EXIT`. A handler installed inside an @test body
-# replaces the one the bats binary keeps its bookkeeping in, and a test that then
-# FAILS prints no TAP line at all — the run only reports having executed fewer
-# tests than it planned, which reads as a green suite. Both runners set -e, so on
-# failure the cleanup is unreachable and the fixtures survive for inspection. See
+# The one test here that needs a scratch directory removes it at the last
+# reachable cleanup point of its body, never from a `trap ... EXIT`. A handler
+# installed inside an @test body replaces the one the bats binary keeps its
+# bookkeeping in, and a test that then FAILS prints no TAP line at all — the run
+# only reports having executed fewer tests than it planned, which reads as a
+# green suite. Its cleanup follows an assertion whose failure aborts the body, so
+# the fixtures survive for inspection on failure. See
 # hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
