@@ -28,7 +28,7 @@
 #   - A line that is exactly `}` is rewritten, so stub bodies below use `case`
 #     rather than nested functions.
 #
-# Run with: hack/cozytest.sh hack/post-install-prep.bats
+# Run with: bats hack/post-install-prep.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

@@ -21,7 +21,7 @@
 # `run` helper (cozytest.sh has no `run`). Mock IPs use the RFC 5737
 # documentation range (TEST-NET-1, 192.0.2.0/24).
 #
-# Run with: hack/cozytest.sh hack/cilium-leak-healer_test.bats
+# Run with: bats hack/cilium-leak-healer_test.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

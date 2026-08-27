@@ -52,7 +52,7 @@
 # recognizes only @test blocks and a bare `}` at column 0, and injects `set -e`,
 # so exit statuses are captured explicitly rather than tested inline.
 #
-# Run with: hack/cozytest.sh hack/package-mk-phony.bats
+# Run with: bats hack/package-mk-phony.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

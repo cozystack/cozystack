@@ -25,10 +25,10 @@
 #
 # The generator is exercised offline: CH_SERVER_TAGS_FILE / CH_KEEPER_TAGS_FILE
 # inject the tag lists (no curl), and VALUES_FILE / VERSIONS_FILE stay in a
-# scratch dir. Written in the portable subset hack/cozytest.sh understands (no
-# `run`/`$status`/`$lines`, no setup/teardown, no standalone `}` inside a test
-# body): each assertion exits non-zero on failure and the body relies on
-# `set -e`.
+# scratch dir. It remains compatible with the legacy hack/cozytest.sh
+# translator, so it avoids `run`/`$status`/`$lines`, file-local setup/teardown,
+# and a standalone `}` inside a test body. Each assertion exits non-zero on
+# failure and the body relies on `set -e`.
 
 load test_helper
 

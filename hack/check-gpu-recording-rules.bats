@@ -33,7 +33,7 @@
 #   - Only [A-Za-z0-9] from the title survives into the function name; titles
 #     differing only in punctuation collapse to the same function.
 #
-# Run with: hack/cozytest.sh hack/check-gpu-recording-rules.bats
+# Run with: bats hack/check-gpu-recording-rules.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

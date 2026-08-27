@@ -32,7 +32,7 @@
 # cleanup is banned in hack/*.bats and frozen by a guard in hack/cozyreport.bats,
 # so each test removes its own temp dir on its last line.
 #
-# Run with: hack/cozytest.sh hack/run-kubernetes-node-join_test.bats
+# Run with: bats hack/run-kubernetes-node-join_test.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

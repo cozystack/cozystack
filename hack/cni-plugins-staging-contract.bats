@@ -2,7 +2,7 @@
 # Contract checks for the CNI plugin staging that a helm-unittest case cannot
 # make: they read files outside the chart, or render it more than one way.
 #
-# Run with: hack/cozytest.sh hack/cni-plugins-staging-contract.bats
+# Run with: bats hack/cni-plugins-staging-contract.bats
 
 load test_helper
 
