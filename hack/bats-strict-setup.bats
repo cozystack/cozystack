@@ -41,19 +41,24 @@
 # checked too: a file-local `setup()` must call `strict_setup`. No file in the
 # tree defines one today, which is precisely when a guard is cheap to add.
 #
-# LIMITS, stated rather than discovered. The scan is lexical and anchored at
-# column zero. A `load` indented inside a function body would not run at source
+# LIMITS, stated rather than discovered. The load scan is lexical and anchored
+# at column zero. A `load` indented inside a function body would not run at source
 # time and is correctly not credited, but neither is a legitimate one hidden
 # behind a conditional -- the audit asks for the one spelling the suite uses,
 # and a file with a reason to differ has to change this guard rather than work
-# around it. In the other direction the line is credited wherever it appears at
-# column zero, including inside a heredoc that writes a fixture .bats, which
-# would let a file take credit for text it only generates; no file does that
-# today, and the fixtures below assemble the line from printf arguments so this
-# guard does not do it to itself. Finally, a green audit says the load is
-# present, not that `set -u` was in force for a given assertion -- for that,
-# hack/test_helper.bash's own effect is what the mutation check in #3453
-# covered: remove the load and a test reading an unset variable stops aborting.
+# around it. The setup scan is deliberately fail-closed: it recognizes the
+# common Bash declaration spellings wherever they are indented, but accepts one
+# column-zero `setup() {` only, and credits only an executable `strict_setup`
+# line inside that body. This rejects ambiguous nesting and keeps comments or an
+# unrelated helper from satisfying the guard. In the other direction the load
+# line is credited wherever it appears at column zero, including inside a heredoc
+# that writes a fixture .bats, which would let a file take credit for text it only
+# generates; no file does that today, and the fixtures below assemble the line
+# from printf arguments so this guard does not do it to itself. Finally, a green
+# audit says the load is present, not that `set -u` was in force for a given
+# assertion -- for that, hack/test_helper.bash's own effect is what the mutation
+# check in #3453 covered: remove the load and a test reading an unset variable
+# stops aborting.
 # -----------------------------------------------------------------------------
 
 load test_helper
@@ -93,13 +98,22 @@ bss_audit() {
       echo "$_b: does not load the strict-mode helper; add a column-zero \`load test_helper\` line under the file's leading comment block"
       continue
     fi
-    # A file-local setup() replaces the helper's without a word from either
-    # runner. Match the two spellings bash accepts for a definition at column
-    # zero; one indented inside another function is not a definition bats will
-    # call, and is not what this looks for.
-    if grep -qE '^(function[[:space:]]+)?setup[[:space:]]*\(\)' "$_f" \
-      && ! grep -q 'strict_setup' "$_f"; then
-      echo "$_b: defines its own setup() and never calls strict_setup, which drops the \`set -u\` the helper exists to restore"
+    # A file-local setup replaces the helper's without a word from either
+    # runner. Recognize the common Bash forms, including indentation and
+    # `function setup {`, then require the suite's one canonical spelling. That
+    # makes an ambiguous nested declaration fail closed instead of guessing
+    # whether Bats will see it at source time.
+    _setup_count=$(grep -cE '^[[:space:]]*(function[[:space:]]+)?setup([[:space:]]*\(\))?[[:space:]]*\{' "$_f" || :)
+    _canonical_count=$(grep -c '^setup() {$' "$_f" || :)
+    if [ "$_setup_count" -gt 0 ] \
+      && { [ "$_setup_count" -ne 1 ] || [ "$_canonical_count" -ne 1 ]; }; then
+      echo "$_b: uses a noncanonical or repeated setup declaration; use exactly one column-zero \`setup() {\` block"
+      continue
+    fi
+    if [ "$_canonical_count" -eq 1 ] \
+      && ! sed -n '/^setup() {$/,/^}$/p' "$_f" \
+        | grep -qE '^[[:space:]]*strict_setup[[:space:]]*$'; then
+      echo "$_b: defines its own setup() and never calls strict_setup as a command, which drops the \`set -u\` the helper exists to restore"
     fi
   done
   return 0
@@ -135,6 +149,26 @@ bss_add_own_setup() {
 
 bss_add_strict_own_setup() {
   printf '%s\n' 'setup() {' '  strict_setup' '  export FIXTURE=1' '}' >> "$1/subject.bats"
+  return 0
+}
+
+bss_add_function_own_setup() {
+  printf '%s\n' 'function setup {' '  export FIXTURE=1' '}' >> "$1/subject.bats"
+  return 0
+}
+
+bss_add_indented_own_setup() {
+  printf '%s\n' '  setup() {' '    export FIXTURE=1' '  }' >> "$1/subject.bats"
+  return 0
+}
+
+bss_add_commented_strict_own_setup() {
+  printf '%s\n' 'setup() {' '  # strict_setup' '  export FIXTURE=1' '}' >> "$1/subject.bats"
+  return 0
+}
+
+bss_add_unrelated_strict_call() {
+  printf '%s\n' 'unrelated() {' '  strict_setup' '}' >> "$1/subject.bats"
   return 0
 }
 
@@ -245,6 +279,58 @@ bss_rename() {
   report=$(bss_audit "$tmp")
   if [ -n "$report" ]; then
     echo "FAIL: a compliant setup() override was reported: $report"
+    rm -rf "$tmp"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "function-style or indented setup declarations are rejected" {
+  tmp=$(mktemp -d)
+  bss_new_fixture "$tmp"
+  bss_add_load "$tmp"
+  bss_add_function_own_setup "$tmp"
+  report=$(bss_audit "$tmp")
+  if ! echo "$report" | grep -q 'noncanonical or repeated setup declaration'; then
+    echo "FAIL: function-style setup was not rejected; got: $report"
+    rm -rf "$tmp"
+    false
+  fi
+  bss_new_fixture "$tmp"
+  bss_add_load "$tmp"
+  bss_add_indented_own_setup "$tmp"
+  report=$(bss_audit "$tmp")
+  if ! echo "$report" | grep -q 'noncanonical or repeated setup declaration'; then
+    echo "FAIL: indented setup was not rejected; got: $report"
+    rm -rf "$tmp"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "a comment-only strict_setup mention does not satisfy setup" {
+  tmp=$(mktemp -d)
+  bss_new_fixture "$tmp"
+  bss_add_load "$tmp"
+  bss_add_commented_strict_own_setup "$tmp"
+  report=$(bss_audit "$tmp")
+  if ! echo "$report" | grep -q 'never calls strict_setup as a command'; then
+    echo "FAIL: a comment-only strict_setup mention was credited; got: $report"
+    rm -rf "$tmp"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "a strict_setup call outside setup does not satisfy setup" {
+  tmp=$(mktemp -d)
+  bss_new_fixture "$tmp"
+  bss_add_load "$tmp"
+  bss_add_unrelated_strict_call "$tmp"
+  bss_add_own_setup "$tmp"
+  report=$(bss_audit "$tmp")
+  if ! echo "$report" | grep -q 'never calls strict_setup as a command'; then
+    echo "FAIL: a strict_setup call outside setup was credited; got: $report"
     rm -rf "$tmp"
     false
   fi
