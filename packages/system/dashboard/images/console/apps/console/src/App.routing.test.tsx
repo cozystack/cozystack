@@ -111,3 +111,13 @@ describe("runtime config", () => {
     expect(await screen.findByText("v0.0.0-test")).toBeTruthy()
   })
 })
+
+describe("shell subtitle", () => {
+  it("hides the tenant picker in the admin portal", async () => {
+    const client = makeClient()
+    renderWithK8sProvider(<App />, { client, initialRoute: "/admin/tenants" })
+
+    expect(await screen.findByRole("heading", { name: "Tenants" })).toBeTruthy()
+    expect(screen.queryByText("No tenants found")).toBeNull()
+  })
+})

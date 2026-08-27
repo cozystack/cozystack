@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest"
-import { focusFirstError } from "./focus-first-error.ts"
+import { focusFirstError } from "@/lib/focus-first-error.ts"
 
 describe("focusFirstError", () => {
   beforeEach(() => {
@@ -24,12 +24,30 @@ describe("focusFirstError", () => {
     expect(document.activeElement).toBe(field)
   })
 
+  it("preserves a dot inside a bracketed property name", () => {
+    document.body.innerHTML = `<input id="root_spec_foo.bar" />`
+    const field = document.getElementById("root_spec_foo.bar")
+
+    focusFirstError({ property: ".spec['foo.bar']" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  it("uses the same custom prefix and separator as the form", () => {
+    document.body.innerHTML = `<input id="form/spec/name" />`
+    const field = document.getElementById("form/spec/name")
+
+    focusFirstError({ property: ".spec.name" }, "form", "/")
+
+    expect(document.activeElement).toBe(field)
+  })
+
   // SourceField and SourceWidget render no element carrying the generated id,
   // only radios named `<id>-source`, so the exact lookup misses and a blocked
   // submit used to scroll nowhere.
   it("falls back to the name attribute when no element carries the id", () => {
     document.body.innerHTML = `
-      <div class="field">
+      <div id="root_source-help" class="field">
         <input type="radio" name="root_source-source" value="http" />
         <input type="radio" name="root_source-source" value="pvc" />
       </div>
