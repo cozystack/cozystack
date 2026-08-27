@@ -153,3 +153,13 @@ tests:
     set: {omit: serverAddress}
     asserts:
       - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: serverAddress is required"}
+  - it: fails closed when minReplicaCount is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: minReplicaCount}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: minReplicaCount is required"}
+  - it: fails closed when maxReplicaCount is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: maxReplicaCount}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: maxReplicaCount is required"}
