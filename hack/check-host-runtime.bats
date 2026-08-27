@@ -18,9 +18,9 @@
 # Both runners set -e, so a failed test leaves its stub dir behind, which is what
 # you want to look at anyway.
 #
-# Tests are otherwise self-contained — no shared setup/teardown helpers,
-# because cozytest.sh's awk parser only recognizes @test blocks and treats a
-# bare `}` on its own line as the end of a test function.
+# Fixture setup is otherwise self-contained rather than placed in file-local
+# setup()/teardown() hooks, preserving compatibility with the legacy
+# cozytest.sh translator. Strict setup still comes from `load test_helper`.
 #
 # Title syntax constraints (inherited from cozytest.sh's awk parser):
 #   - Titles must be delimited by ASCII double quotes; embedded literal

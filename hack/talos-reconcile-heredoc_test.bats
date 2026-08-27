@@ -23,8 +23,8 @@
 # heredoc still emits the TalosConfigTemplate (non-empty) and that the hostile
 # value rendered as a LITERAL (never command-substituted).
 #
-# Needs `helm` + `yq`; cozytest.sh runs from the repo root.
-# Run with: hack/cozytest.sh hack/talos-reconcile-heredoc_test.bats
+# Needs `helm` + `yq` and must run from the repo root.
+# Run with: bats hack/talos-reconcile-heredoc_test.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

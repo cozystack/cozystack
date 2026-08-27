@@ -14,9 +14,10 @@
 # skipped, ANY read failure aborts the run before the version stamp, and
 # stderr never contaminates data.
 #
-# cozytest.sh awk parser: @test blocks only, a bare `}` at column 0 ends a test,
-# no run/$status/setup/teardown. Assertions are direct shell tests.
-# Run with: hack/cozytest.sh hack/migration-56-adopt-path.bats
+# For compatibility with the legacy cozytest.sh translator, tests avoid
+# run/$status and file-local setup/teardown, and keep bare `}` lines out of test
+# bodies. Assertions are direct shell tests.
+# Run with: bats hack/migration-56-adopt-path.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

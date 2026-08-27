@@ -25,7 +25,7 @@
 # release; extra/ is <name> and derives the child), and that is the ONLY sanctioned
 # difference. Both are asserted separately below.
 #
-# Run with: hack/cozytest.sh hack/seaweedfs-guard-parity.bats
+# Run with: bats hack/seaweedfs-guard-parity.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

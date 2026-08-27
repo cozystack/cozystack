@@ -23,13 +23,12 @@
 #   - stamps the version (kubectl apply) on a clean run;
 #   - is a safe no-op that still stamps when the CRDs are absent.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line (column 0); assertions are direct shell tests, and the fake-kubectl
-# heredoc keeps every `}` off column 0. Each @test cleans up inline (no
-# EXIT/RETURN trap — see docs/agents/e2e-testing.md §3).
+# For compatibility with the legacy cozytest.sh translator, assertions are
+# direct shell tests and the fake-kubectl heredoc keeps every `}` off column 0.
+# Each @test cleans up inline (no EXIT/RETURN trap — see
+# docs/agents/e2e-testing.md §3).
 #
-# Run with: hack/cozytest.sh hack/monitoring-pvc-backfill-migration.bats
-#           (or `bats hack/monitoring-pvc-backfill-migration.bats`)
+# Run with: bats hack/monitoring-pvc-backfill-migration.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

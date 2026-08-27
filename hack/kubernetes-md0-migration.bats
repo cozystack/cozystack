@@ -30,8 +30,7 @@
 # subshell, and cleanup is inline (no EXIT/RETURN trap — see
 # docs/agents/e2e-testing.md §3).
 #
-# Run with: hack/cozytest.sh hack/kubernetes-md0-migration.bats
-#           (or `bats hack/kubernetes-md0-migration.bats`)
+# Run with: bats hack/kubernetes-md0-migration.bats
 # -----------------------------------------------------------------------------
 
 load test_helper
