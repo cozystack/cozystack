@@ -68,14 +68,13 @@ prepare-cluster-container:
 delete-cluster-container:
 	USERDATA=teardown docker compose -p cozy-e2e -f $(ROOT_DIR)hack/e2e-compose.yaml down -v || true
 
-# COZY_APISERVER_ENDPOINT crosses into the sandbox explicitly: docker exec
-# starts a fresh environment, so a value exported by the caller does not reach
-# the bats file that reads it. Unset expands to empty here, and the default in
-# hack/e2e-install-cozystack.bats uses `:-`, which treats empty as absent -- so
-# the QEMU lane keeps 192.168.123.10 without naming it. The container lane has
-# no VIP and passes .11 instead.
+# The API endpoint and E2E-only LINSTOR mode cross into the sandbox explicitly:
+# docker exec starts a fresh environment, so values exported by the caller do
+# not reach the manifest generator. Empty values retain the QEMU defaults; the
+# container lane supplies its node endpoint and disables DRBD because its Talos
+# nodes share a kernel that cannot load the module.
 install-cozystack:
-	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
+	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" -e COZY_LINSTOR_DRBD_ENABLED="${COZY_LINSTOR_DRBD_ENABLED}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
 
 test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'

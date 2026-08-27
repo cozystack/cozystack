@@ -1307,6 +1307,10 @@ jobs:
       - name: Install Cozystack into sandbox
         env:
           COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          # Talos containers share the runner kernel and cannot load DRBD.
+          # This only suppresses the DRBD-dependent logger sidecar; LINSTOR's
+          # file-backed storage path remains available to the E2E suites.
+          COZY_LINSTOR_DRBD_ENABLED: "false"
         run: |
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
             echo "❌ Install failed (no retry — see diagnostics below)"

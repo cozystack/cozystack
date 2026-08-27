@@ -231,32 +231,14 @@
   # Wait for operator to create the platform PackageSource
   timeout 120 sh -ec 'until kubectl get packagesource cozystack.cozystack-platform >/dev/null 2>&1; do sleep 2; done'
 
-  # Create platform Package with isp-full variant
-  kubectl apply -f - <<EOF
-apiVersion: cozystack.io/v1alpha1
-kind: Package
-metadata:
-  name: cozystack.cozystack-platform
-spec:
-  variant: isp-full
-  components:
-    platform:
-      values:
-        networking:
-          podCIDR: "10.244.0.0/16"
-          podGateway: "10.244.0.1"
-          serviceCIDR: "10.96.0.0/16"
-          joinCIDR: "100.64.0.0/16"
-        publishing:
-          host: "example.org"
-          # 192.168.123.10 is the QEMU lane's ARP VIP. Container mode has no
-          # VIP, so that lane overrides this with a node IP. Default is
-          # unchanged, so the QEMU lane behaves exactly as before.
-          apiServerEndpoint: "${COZY_APISERVER_ENDPOINT:-https://192.168.123.10:6443}"
-        bundles:
-          enabledPackages:
-            - cozystack.external-dns-application
-EOF
+  # Stage the generated manifest instead of piping it into kubectl: cozytest
+  # runs under /bin/sh without pipefail, so a generator failure in a pipeline
+  # could be hidden by kubectl successfully applying empty input.
+  local platform_packages
+  platform_packages=$(mktemp)
+  hack/e2e-platform-packages.sh > "$platform_packages"
+  kubectl apply -f "$platform_packages"
+  rm -f "$platform_packages"
 
   # Launch storage + LB configuration in the background. It waits for its
   # own prerequisites (linstor-controller deploy, MetalLB CRDs) and finishes
