@@ -1,5 +1,15 @@
 import type { RJSFValidationError } from "@rjsf/utils"
 
+function propertySegments(property: string): string[] {
+  const segments: string[] = []
+  const pattern = /(?:^|\.)([^.[\]]+)|\[(?:'([^']*)'|"([^"]*)"|([^\]]+))\]/g
+  for (const match of property.matchAll(pattern)) {
+    const segment = match[1] ?? match[2] ?? match[3] ?? match[4]
+    if (segment) segments.push(segment)
+  }
+  return segments
+}
+
 /**
  * Errors render inline with the error list hidden, so a blocked submit is
  * invisible unless the offending field is brought into view. RJSF's built-in
@@ -9,18 +19,20 @@ import type { RJSFValidationError } from "@rjsf/utils"
  * Not every widget puts that id on an element. `SourceField` and
  * `SourceWidget` render radios carrying only `name="<id>-source"`, so an exact
  * lookup finds nothing and the submit scrolls nowhere. Fall back to the first
- * element whose id or name starts with the generated id.
+ * input whose id or name starts with the generated id.
  */
-export function focusFirstError(error: Pick<RJSFValidationError, "property">) {
-  const segments = (error.property ?? "")
-    .replace(/\['?([^'\]]+)'?\]/g, ".$1")
-    .split(".")
-    .filter(Boolean)
-  const id = ["root", ...segments].join("_")
+export function focusFirstError(
+  error: Pick<RJSFValidationError, "property">,
+  idPrefix = "root",
+  idSeparator = "_",
+) {
+  const id = [idPrefix, ...propertySegments(error.property ?? "")].join(idSeparator)
   const escaped = id.replace(/["\\]/g, "\\$&")
   const field =
     document.getElementById(id) ??
-    document.querySelector<HTMLElement>(`[id^="${escaped}"], [name^="${escaped}"]`)
+    document.querySelector<HTMLElement>(
+      `input[id^="${escaped}"], input[name^="${escaped}"]`,
+    )
   field?.scrollIntoView?.({ block: "center" })
   field?.focus?.({ preventScroll: true })
 }

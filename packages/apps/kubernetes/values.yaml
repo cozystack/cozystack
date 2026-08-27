@@ -131,15 +131,18 @@ host: ""
 
 ## @typedef {struct} Addons - Cluster addons configuration.
 ## @field {CertManagerAddon} certManager - Cert-manager addon.
-## @field {CiliumAddon} cilium - Cilium CNI plugin. Always installed: it is the tenant cluster's CNI and has no enable switch, so this section only overrides its Helm values.
+## @field {CiliumAddon} cilium - Cilium CNI plugin. Always installed as the tenant cluster's CNI; this section only overrides its Helm values.
+## @x-cozystack-no-enable-switch true
 ## @field {GatewayAPIAddon} gatewayAPI - Gateway API addon.
 ## @field {IngressNginxAddon} ingressNginx - Ingress-NGINX controller.
 ## @field {GPUOperatorAddon} gpuOperator - NVIDIA GPU Operator.
 ## @field {HAMiAddon} hami - HAMi GPU virtualization middleware.
 ## @field {MonitoringAgentsAddon} monitoringAgents - Monitoring agents.
-## @field {VerticalPodAutoscalerAddon} verticalPodAutoscaler - Vertical Pod Autoscaler. Has no enable switch of its own: it is installed and removed together with addons.monitoringAgents.enabled, so this section only overrides its Helm values.
+## @field {VerticalPodAutoscalerAddon} verticalPodAutoscaler - Vertical Pod Autoscaler. Installed and removed together with addons.monitoringAgents.enabled; this section only overrides its Helm values.
+## @x-cozystack-no-enable-switch true
 ## @field {VeleroAddon} velero - Velero backup/restore addon.
-## @field {CoreDNSAddon} coredns - CoreDNS addon. Always installed: it is the tenant cluster's DNS and has no enable switch, so this section only overrides its Helm values.
+## @field {CoreDNSAddon} coredns - CoreDNS addon. Always installed as the tenant cluster's DNS; this section only overrides its Helm values.
+## @x-cozystack-no-enable-switch true
 ## @field {OuroborosAddon} ouroboros - Hairpin-NAT fix for ingress-nginx with PROXY-protocol.
 
 ## @param {Addons} addons - Cluster addons configuration.

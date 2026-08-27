@@ -404,6 +404,17 @@ describe("overlayImmutable", () => {
     expect(result).toEqual({ spec: { storage: { storageClass: "replicated" } } })
   })
 
+  it("preserves a scalar submitted at an immutable leaf's ancestor", () => {
+    const submitted = { spec: { storage: "keep-me" } } as Record<string, unknown>
+    const original = {
+      spec: { storage: { storageClass: "replicated", size: "10Gi" } },
+    }
+    const result = overlayImmutable(submitted, original, [
+      ["spec", "storage", "storageClass"],
+    ])
+    expect(result).toEqual({ spec: { storage: "keep-me" } })
+  })
+
   it("array reordering by the user with index-aligned overlay re-anchors source values to the new index (pinned current behaviour)", () => {
     // Tracked in cozystack/cozystack-ui#10.
     // The overlay walks by index, not by content identity. Reordering an

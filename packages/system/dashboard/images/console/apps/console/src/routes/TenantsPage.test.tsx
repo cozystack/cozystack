@@ -89,6 +89,14 @@ describe("TenantsPage tree", () => {
     expect(editButtons).toHaveLength(1)
     expect(screen.getByTitle("Edit tenant whmcs-x")).toBeInTheDocument()
     expect(screen.queryByTitle("Edit tenant whmcs-a-b")).not.toBeInTheDocument()
+
+    // A reachable Tenant CR links directly to its detail page, where Delete is
+    // available. A bridged row with an unreadable real parent stays plain text.
+    expect(screen.getByRole("link", { name: "x" })).toHaveAttribute(
+      "href",
+      "/admin/tenants/x",
+    )
+    expect(screen.queryByRole("link", { name: "a-b" })).toBeNull()
   })
 
   it("collapses a subtree via the row toggle", async () => {

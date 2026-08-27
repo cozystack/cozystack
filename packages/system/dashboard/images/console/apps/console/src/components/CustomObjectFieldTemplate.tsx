@@ -6,6 +6,10 @@ import type {
   FormContextType,
 } from "@rjsf/utils"
 
+type CozystackSchema = RJSFSchema & {
+  "x-cozystack-no-enable-switch"?: boolean
+}
+
 function isSimpleField(schema: any): boolean {
   if (!schema) return true
   const type = schema.type
@@ -53,17 +57,12 @@ export function CustomObjectFieldTemplate<
   const hasOtherFields = props.properties.some((p) => p.name !== "enabled")
   const isAddon = hasEnabledField && hasOtherFields
 
-  // An addon carrying only overrides and no 'enabled' has no switch of its own:
-  // cilium and coredns are always installed, verticalPodAutoscaler follows
-  // monitoringAgents. Rendered as a plain group it reads as a toggleable addon
-  // whose switch failed to appear, which is how users end up adding
-  // `<addon>.enabled: true` in YAML — the schema sets no additionalProperties,
-  // so the API stores that field, echoes it back, and nothing reads it. State
-  // the absence here; the per-addon schema description says why.
+  // This must be declared by schema rather than inferred from the current
+  // fields: an unrelated valuesOverride-only object must not inherit addon
+  // copy, and adding another config field must not silently remove the notice.
   const hasNoToggle =
     !hasEnabledField &&
-    props.properties.length > 0 &&
-    props.properties.every((p) => p.name === "valuesOverride")
+    (props.schema as CozystackSchema)["x-cozystack-no-enable-switch"] === true
 
   if (hasNoToggle) {
     return (
@@ -72,8 +71,7 @@ export function CustomObjectFieldTemplate<
           <legend className="text-xs font-semibold text-slate-700 px-1">{props.title}</legend>
         )}
         <p className="text-xs text-slate-500 mb-2">
-          No enable switch. This section only overrides Helm values — adding an enabled field in
-          YAML has no effect.
+          No enable switch. Adding an enabled field in YAML has no effect.
         </p>
         {props.description && (
           <p className="field-description text-xs text-slate-400 mb-2">{props.description}</p>

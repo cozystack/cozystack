@@ -15,7 +15,7 @@ const prop = (name: string): ObjectFieldTemplatePropertyType => ({
 // `registry` is a large RJSF object this template never reads.
 const base = {
   idSchema: { $id: "root_addons_cilium" },
-  schema: {},
+  schema: { "x-cozystack-no-enable-switch": true },
   title: "cilium",
   description: "Cilium CNI plugin.",
   formData: {},
@@ -25,7 +25,7 @@ const base = {
 } as unknown as ObjectFieldTemplateProps
 
 describe("addons with no enable switch", () => {
-  it("says the switch is absent when the object carries only valuesOverride", () => {
+  it("says the switch is absent when the schema declares it", () => {
     render(<CustomObjectFieldTemplate {...base} properties={[prop("valuesOverride")]} />)
     expect(screen.getByText(/No enable switch/)).toBeTruthy()
     expect(screen.queryByRole("checkbox")).toBeNull()
@@ -33,7 +33,7 @@ describe("addons with no enable switch", () => {
 
   it("warns that an enabled field in YAML does nothing", () => {
     render(<CustomObjectFieldTemplate {...base} properties={[prop("valuesOverride")]} />)
-    expect(screen.getByText(/adding an enabled field in YAML has no effect/)).toBeTruthy()
+    expect(screen.getByText(/adding an enabled field in YAML has no effect/i)).toBeTruthy()
   })
 
   // The three addons in this class are not all always-on: verticalPodAutoscaler
@@ -44,13 +44,36 @@ describe("addons with no enable switch", () => {
       <CustomObjectFieldTemplate
         {...base}
         title="verticalPodAutoscaler"
-        description="Vertical Pod Autoscaler. Has no enable switch of its own: it is installed and removed together with addons.monitoringAgents.enabled, so this section only overrides its Helm values."
+        description="Vertical Pod Autoscaler. Installed and removed together with addons.monitoringAgents.enabled; this section only overrides its Helm values."
         properties={[prop("valuesOverride")]}
       />,
     )
     expect(screen.getByText(/together with addons.monitoringAgents.enabled/)).toBeTruthy()
     expect(screen.queryByText(/cannot be disabled/)).toBeNull()
     expect(screen.queryByText(/Always on/)).toBeNull()
+  })
+
+  it("does not infer addon copy from a valuesOverride-only shape", () => {
+    render(
+      <CustomObjectFieldTemplate
+        {...base}
+        schema={{}}
+        properties={[prop("valuesOverride")]}
+      />,
+    )
+    expect(screen.queryByText(/No enable switch/)).toBeNull()
+    expect(screen.getByTestId("field-valuesOverride")).toBeTruthy()
+  })
+
+  it("keeps the notice when another configuration field is added", () => {
+    render(
+      <CustomObjectFieldTemplate
+        {...base}
+        properties={[prop("valuesOverride"), prop("config")]}
+      />,
+    )
+    expect(screen.getByText(/No enable switch/)).toBeTruthy()
+    expect(screen.getByTestId("field-config")).toBeTruthy()
   })
 
   it("leaves a toggleable addon alone", () => {
