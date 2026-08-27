@@ -16,6 +16,44 @@
 # machines, where rg/fd/bash-isms are not available.
 set -eu
 
+# kubernetes_memory_to_kib <quantity>
+#
+# Kubernetes canonicalizes binary memory quantities to the largest exact unit.
+# A Node that previously reported Ki can therefore switch to Mi when kubelet
+# reservations make the result an exact MiB value. Normalize the units used by
+# Node status so the live capacity assertion validates the value, not its
+# presentation.
+kubernetes_memory_to_kib() {
+  cozy_memory_quantity=$1
+  case "$cozy_memory_quantity" in
+    *Ki)
+      cozy_memory_value=${cozy_memory_quantity%Ki}
+      cozy_memory_multiplier=1
+      ;;
+    *Mi)
+      cozy_memory_value=${cozy_memory_quantity%Mi}
+      cozy_memory_multiplier=1024
+      ;;
+    *Gi)
+      cozy_memory_value=${cozy_memory_quantity%Gi}
+      cozy_memory_multiplier=$(( 1024 * 1024 ))
+      ;;
+    *)
+      echo "unsupported Kubernetes memory quantity: '$cozy_memory_quantity'" >&2
+      return 1
+      ;;
+  esac
+
+  case "$cozy_memory_value" in
+    '' | *[!0-9]*)
+      echo "invalid Kubernetes memory quantity: '$cozy_memory_quantity'" >&2
+      return 1
+      ;;
+  esac
+
+  printf '%s\n' "$(( cozy_memory_value * cozy_memory_multiplier ))"
+}
+
 # calculate_node_reservations <host-cpus> <host-memory-kib>
 #                             <node-cpus> <node-memory-mib> <node-count>
 #
@@ -55,7 +93,7 @@ calculate_node_reservations() {
   printf '%sKi\n' "$(( cozy_host_memory_kib - cozy_node_memory_mib * 1024 ))"
 }
 
-# Unit tests source only the capacity calculation above.
+# Unit tests and the live capacity assertion source only the helpers above.
 if [ "${E2E_CONTAINER_UP_LIB:-false}" = true ]; then
   return 0 2>/dev/null || exit 0
 fi

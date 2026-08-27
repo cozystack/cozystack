@@ -20,6 +20,9 @@
 # VIP, so .11 stands in for the QEMU lane's 192.168.123.10.
 # -----------------------------------------------------------------------------
 
+HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
+E2E_CONTAINER_UP_LIB=true . "$HACK_DIR/e2e-container-up.sh"
+
 @test "Talos API is reachable on all three container nodes" {
   # e2e-container-up.sh has already started them; this is the handoff check, and
   # it is a wait rather than a probe because container start is asynchronous.
@@ -128,13 +131,10 @@
     esac
 
     memory=$(kubectl get node "$node" -o jsonpath='{.status.allocatable.memory}')
-    case "$memory" in
-      *Ki) memory_kib=${memory%Ki} ;;
-      *)
-        echo "node $node reported an unexpected allocatable memory quantity: '$memory'" >&2
-        return 1
-        ;;
-    esac
+    if ! memory_kib=$(kubernetes_memory_to_kib "$memory"); then
+      echo "node $node reported an unreadable allocatable memory quantity: '$memory'" >&2
+      return 1
+    fi
 
     if [ "$cpu_m" -lt "$min_cpu_m" ] || [ "$cpu_m" -gt "$max_cpu_m" ]; then
       echo "node $node allocatable CPU $cpu is outside ${min_cpu_m}-${max_cpu_m}m" >&2

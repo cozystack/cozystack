@@ -28,6 +28,28 @@ E2E_CONTAINER_UP_LIB=true . "$CONTAINER_UP"
   fi
 }
 
+@test "Kubernetes canonical memory units normalize to KiB" {
+  for fixture in \
+    '25165824Ki:25165824' \
+    '24476Mi:25063424' \
+    '23Gi:24117248'; do
+    quantity=${fixture%%:*}
+    expected=${fixture#*:}
+    actual=$(kubernetes_memory_to_kib "$quantity")
+    if [ "$actual" != "$expected" ]; then
+      echo "$quantity normalized to $actual KiB, expected $expected KiB" >&2
+      return 1
+    fi
+  done
+
+  for invalid in 24476 24.0Gi garbage; do
+    if kubernetes_memory_to_kib "$invalid" >/dev/null 2>&1; then
+      echo "invalid quantity was accepted: $invalid" >&2
+      return 1
+    fi
+  done
+}
+
 @test "container capacity values cross host compose sandbox and live assertion" {
   make_command=$(make -n -C packages/core/testing SANDBOX_NAME=test prepare-cluster-container)
 
