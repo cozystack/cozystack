@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import { useSearchParams } from "react-router"
+import { useLocation, useSearchParams } from "react-router"
 import { useK8sList } from "@cozystack/k8s-client"
 import type { TenantNamespace } from "@cozystack/types"
 import { SELECTED_TENANT_KEY, TENANT_NAMESPACE_PREFIX } from "./constants.ts"
@@ -107,20 +107,25 @@ export function useTenantContext(): TenantContextValue {
  * new tab, a bookmarked or pasted URL — never run React's onClick, and two
  * tenants under different parents can share a relative CR name, so the name
  * alone would resolve against whichever tenant happened to be selected last.
- * Applied once per distinct value, so the provider's own fallback stays free
- * to reject a tenant the user cannot see.
+ * Applied once per navigation rather than on every render, so the tenant picker
+ * -- which switches the tenant without leaving the page -- is not dragged back
+ * to the URL under the user, while returning to the entry through history
+ * asserts it again. The provider's own fallback stays free to reject a tenant
+ * the user cannot see.
  */
 export function useTenantFromUrl() {
+  const { key } = useLocation()
   const [params] = useSearchParams()
   const wanted = params.get("tenant")
   const { selectTenant } = useTenantContext()
-  const applied = useRef<string | null>(null)
+  const navigated = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!wanted || applied.current === wanted) return
-    applied.current = wanted
+    const previous = navigated.current
+    navigated.current = key
+    if (!wanted || previous === key) return
     selectTenant(wanted)
-  }, [wanted, selectTenant])
+  }, [key, wanted, selectTenant])
 }
 
 /**

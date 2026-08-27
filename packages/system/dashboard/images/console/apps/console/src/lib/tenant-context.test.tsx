@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { useNavigate } from "react-router"
 import { K8sClient, type K8sList } from "@cozystack/k8s-client"
 import { TenantProvider, useTenantContext, useTenantFromUrl } from "./tenant-context.tsx"
 import { SELECTED_TENANT_KEY } from "./constants.ts"
@@ -32,8 +34,22 @@ function makeClient(): K8sClient {
 
 function Probe() {
   useTenantFromUrl()
-  const { tenantNamespace } = useTenantContext()
-  return <output>{tenantNamespace ?? "none"}</output>
+  const { tenantNamespace, selectTenant } = useTenantContext()
+  const navigate = useNavigate()
+  return (
+    <>
+      <output>{tenantNamespace ?? "none"}</output>
+      <button type="button" onClick={() => selectTenant("globex")}>
+        pick globex
+      </button>
+      <button type="button" onClick={() => navigate("/console")}>
+        leave
+      </button>
+      <button type="button" onClick={() => navigate(-1)}>
+        back
+      </button>
+    </>
+  )
 }
 
 function renderAt(route: string) {
@@ -69,6 +85,29 @@ describe("useTenantFromUrl", () => {
 
     await screen.findByText("tenant-acme")
     expect(window.localStorage.getItem(SELECTED_TENANT_KEY)).toBe("acme")
+  })
+
+  // The picker switches tenant without leaving the page, so re-applying the
+  // param on every render would drag the user back to it.
+  it("does not drag the picker back to the tenant in the URL", async () => {
+    renderAt("/console/vminstances/demo?tenant=acme")
+    await screen.findByText("tenant-acme")
+
+    await userEvent.click(screen.getByRole("button", { name: "pick globex" }))
+
+    expect(await screen.findByText("tenant-globex")).toBeInTheDocument()
+  })
+
+  it("asserts the URL tenant again when the entry is revisited", async () => {
+    renderAt("/console/vminstances/demo?tenant=acme")
+    await screen.findByText("tenant-acme")
+    await userEvent.click(screen.getByRole("button", { name: "pick globex" }))
+    await screen.findByText("tenant-globex")
+
+    await userEvent.click(screen.getByRole("button", { name: "leave" }))
+    await userEvent.click(screen.getByRole("button", { name: "back" }))
+
+    expect(await screen.findByText("tenant-acme")).toBeInTheDocument()
   })
 
   it("leaves the stored tenant alone when the URL names none", async () => {
