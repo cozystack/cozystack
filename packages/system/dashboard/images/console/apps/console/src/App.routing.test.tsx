@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll } from "vitest"
-import { screen } from "@testing-library/react"
+import { screen, waitFor } from "@testing-library/react"
 import {
   K8sClient,
   type K8sList,
@@ -9,14 +9,14 @@ import App from "./App.tsx"
 import { SELECTED_TENANT_KEY } from "./lib/constants.ts"
 import { renderWithK8sProvider } from "./test-utils/render.tsx"
 
-function makeClient(): K8sClient {
+function makeClient(tenants: unknown[] = []): K8sClient {
   const client = new K8sClient()
   vi.spyOn(client, "list").mockImplementation(async (_g, _v, plural) => {
     return {
       apiVersion: "v1",
       kind: `${plural}List`,
       metadata: {},
-      items: [],
+      items: plural === "tenantnamespaces" ? tenants : [],
     } as K8sList<unknown>
   })
   vi.spyOn(client, "getApiGroups").mockResolvedValue({
@@ -94,11 +94,31 @@ describe("tenant in the URL", () => {
 })
 
 describe("shell subtitle", () => {
-  it("hides the tenant picker in the admin portal", async () => {
-    const client = makeClient()
-    renderWithK8sProvider(<App />, { client, initialRoute: "/admin/tenants" })
+  // The picker only renders its "Tenant /" label once a tenant list has
+  // arrived; asserting against an empty list passes whether or not the picker
+  // is there, because its empty and loading branches say something else.
+  // The picker labels itself "Tenant"; the admin route is Modules rather than
+  // the tenant list, whose own "Tenant" create button would match too.
+  const TENANTS = ["tenant-acme", "tenant-globex"].map((name) => ({
+    apiVersion: "core.cozystack.io/v1alpha1",
+    kind: "TenantNamespace",
+    metadata: { name, labels: {} },
+  }))
 
-    expect(await screen.findByRole("heading", { name: "Tenants" })).toBeTruthy()
-    expect(screen.queryByText("No tenants found")).toBeNull()
+  it("hides the tenant picker in the admin portal", async () => {
+    const client = makeClient(TENANTS)
+    renderWithK8sProvider(<App />, { client, initialRoute: "/admin/modules" })
+
+    // The picker's first render says "Loading tenants…"; wait that out, or the
+    // absence below passes only because the list had not arrived yet.
+    await waitFor(() => expect(screen.queryByText("Loading tenants…")).toBeNull())
+    expect(screen.queryByText("Tenant", { exact: true })).toBeNull()
+  })
+
+  it("still shows the tenant picker outside the admin portal", async () => {
+    const client = makeClient(TENANTS)
+    renderWithK8sProvider(<App />, { client, initialRoute: "/console" })
+
+    expect(await screen.findByText("Tenant", { exact: true })).toBeTruthy()
   })
 })
