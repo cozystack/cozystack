@@ -41,6 +41,88 @@
 # MetalLB wait below, and still well inside the timeout the job carries.
 set -eu
 
+# The QEMU lane gives every satellite a private /dev/vdc and lets LINSTOR
+# create the zpool. Container nodes share the runner kernel, where zpools are
+# global, so hack/e2e-container-up.sh creates one node-distinct pool ahead of
+# time and the satellite must register that existing pool instead.
+validate_linstor_storage_mode() {
+  case "${COZY_LINSTOR_DRBD_ENABLED:-true}" in
+    true | false) return 0 ;;
+    *)
+      echo "[post-install-prep] COZY_LINSTOR_DRBD_ENABLED must be true or false, got '${COZY_LINSTOR_DRBD_ENABLED}'" >&2
+      return 1
+      ;;
+  esac
+}
+
+create_linstor_storage_pool() {
+  e2e_linstor_node=$1
+  case "${COZY_LINSTOR_DRBD_ENABLED:-true}" in
+    true)
+      kubectl exec -n cozy-linstor deploy/linstor-controller -- \
+        linstor physical-storage create-device-pool zfs "$e2e_linstor_node" /dev/vdc \
+        --pool-name data --storage-pool data
+      ;;
+    false)
+      kubectl exec -n cozy-linstor deploy/linstor-controller -- \
+        linstor storage-pool create zfs "$e2e_linstor_node" data "data-$e2e_linstor_node"
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+render_linstor_storageclasses() {
+  cat <<'EOF'
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/layerList: "storage"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+EOF
+
+  if [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" = false ]; then
+    return 0
+  fi
+
+  cat <<'EOF'
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: replicated
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/autoPlace: "3"
+  linstor.csi.linbit.com/layerList: "drbd storage"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+  property.linstor.csi.linbit.com/DrbdOptions/auto-quorum: suspend-io
+  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-no-data-accessible: suspend-io
+  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-suspended-primary-outdated: force-secondary
+  property.linstor.csi.linbit.com/DrbdOptions/Net/rr-conflict: retry-connect
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+EOF
+}
+
+# Unit tests source the pure helpers above without reaching a cluster.
+if [ "${E2E_POST_INSTALL_PREP_LIB:-false}" = true ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+if ! validate_linstor_storage_mode; then
+  exit 2
+fi
+
 # Per-link budget in seconds, applied by wait_for_linstor to each link separately.
 LINK_BUDGET=900
 
@@ -148,7 +230,7 @@ for node in srv1 srv2 srv3; do
   case $created_pools in
     *" $node "*) echo "  pool 'data' already exists on $node"; continue;;
   esac
-  kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor ps cdp zfs ${node} /dev/vdc --pool-name data --storage-pool data &
+  create_linstor_storage_pool "$node" &
   pids="$pids $!"
 done
 for pid in $pids; do
@@ -156,39 +238,7 @@ for pid in $pids; do
 done
 
 echo "[post-install-prep] applying StorageClasses"
-kubectl apply -f - <<'EOF'
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: local
-  annotations:
-    storageclass.kubernetes.io/is-default-class: "true"
-provisioner: linstor.csi.linbit.com
-parameters:
-  linstor.csi.linbit.com/storagePool: "data"
-  linstor.csi.linbit.com/layerList: "storage"
-  linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"
-volumeBindingMode: WaitForFirstConsumer
-allowVolumeExpansion: true
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: replicated
-provisioner: linstor.csi.linbit.com
-parameters:
-  linstor.csi.linbit.com/storagePool: "data"
-  linstor.csi.linbit.com/autoPlace: "3"
-  linstor.csi.linbit.com/layerList: "drbd storage"
-  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
-  property.linstor.csi.linbit.com/DrbdOptions/auto-quorum: suspend-io
-  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-no-data-accessible: suspend-io
-  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-suspended-primary-outdated: force-secondary
-  property.linstor.csi.linbit.com/DrbdOptions/Net/rr-conflict: retry-connect
-volumeBindingMode: Immediate
-allowVolumeExpansion: true
-EOF
+render_linstor_storageclasses | kubectl apply -f -
 
 echo "[post-install-prep] waiting for MetalLB CRDs"
 timeout 300 sh -ec 'until kubectl get crd ipaddresspools.metallb.io l2advertisements.metallb.io >/dev/null 2>&1; do sleep 2; done'
