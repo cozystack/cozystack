@@ -66,6 +66,20 @@ kubectl() { printf '%s\n' "$*"; }
   fi
 }
 
+@test "container mode pins CDI local StorageProfile to RWO Block" {
+  command=$(patch_local_cdi_storage_profile)
+  expected='patch storageprofile local --type merge -p {"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Block"}]}}'
+
+  if [ "$command" != "$expected" ]; then
+    echo "unexpected CDI StorageProfile patch: $command" >&2
+    return 1
+  fi
+  if ! grep -Fq 'timeout 600 sh -ec '\''until kubectl get storageprofile local' "$POST_PREP"; then
+    echo "container prep does not wait for CDI to create StorageProfile/local" >&2
+    return 1
+  fi
+}
+
 @test "invalid DRBD mode is rejected before cluster access" {
   COZY_LINSTOR_DRBD_ENABLED=unsupported
   if validate_linstor_storage_mode; then
@@ -96,13 +110,19 @@ kubectl() { printf '%s\n' "$*"; }
   fi
 }
 
-@test "container workflow forwards local storage through Makefile and Chainsaw" {
+@test "container workflow forwards local storage through install and Chainsaw" {
+  install_value=$(yq '.jobs.e2e-container.steps[] | select(.name == "Install Cozystack into sandbox") | .env.COZY_E2E_STORAGE_CLASS' .github/workflows/pull-requests.yaml)
   workflow_value=$(yq '.jobs.e2e-container.steps[] | select(.name == "Run E2E tests") | .env.COZY_E2E_STORAGE_CLASS' .github/workflows/pull-requests.yaml)
   qemu_value=$(yq '.jobs.e2e.steps[] | select(.name == "Run E2E tests") | .env.COZY_E2E_STORAGE_CLASS // ""' .github/workflows/pull-requests.yaml)
+  install_command=$(make -n -C packages/core/testing SANDBOX_NAME=test COZY_E2E_STORAGE_CLASS=local install-cozystack)
   make_command=$(make -n -C packages/core/testing SANDBOX_NAME=test COZY_E2E_STORAGE_CLASS=local CHAINSAW_SUITES=vminstance test-chainsaw)
 
-  if [ "$workflow_value" != local ] || [ -n "$qemu_value" ]; then
-    echo "unexpected workflow storage modes: container=$workflow_value qemu=${qemu_value:-<default>}" >&2
+  if [ "$install_value" != local ] || [ "$workflow_value" != local ] || [ -n "$qemu_value" ]; then
+    echo "unexpected workflow storage modes: install=$install_value chainsaw=$workflow_value qemu=${qemu_value:-<default>}" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$install_command" | grep -Fq -- '-e COZY_E2E_STORAGE_CLASS="local"'; then
+    echo "testing Makefile does not forward COZY_E2E_STORAGE_CLASS into installation" >&2
     return 1
   fi
   if ! printf '%s\n' "$make_command" | grep -Fq -- '-e COZY_E2E_STORAGE_CLASS="local"'; then
@@ -111,6 +131,47 @@ kubectl() { printf '%s\n' "$*"; }
   fi
   if ! printf '%s\n' "$make_command" | grep -Fq -- '--set-string storageClass="${COZY_E2E_STORAGE_CLASS:-replicated}" vminstance'; then
     echo "testing Makefile does not pass the lane storage class to Chainsaw values" >&2
+    return 1
+  fi
+}
+
+@test "container install supplies VictoriaLogs local storage before monitoring exists" {
+  install_suite=hack/e2e-install-cozystack.bats
+
+  if ! grep -Fq 'storage_class="${COZY_E2E_STORAGE_CLASS:-replicated}"' "$install_suite"; then
+    echo "install suite does not retain the replicated QEMU default" >&2
+    return 1
+  fi
+  if ! grep -Fq 'kubectl patch secret cozystack-values -n tenant-root --type merge --patch-file "$root_values_patch_file"' "$install_suite"; then
+    echo "install suite does not put the monitoring override in root values" >&2
+    return 1
+  fi
+  if grep -Fq 'kubectl patch hr/monitoring' "$install_suite"; then
+    echo "install suite still races monitoring reconciliation with a HelmRelease patch" >&2
+    return 1
+  fi
+  if ! grep -Fq '.logsStorages = [{"name":"generic","retentionPeriod":"1","storage":"10Gi","storageClassName":strenv(COZY_E2E_STORAGE_CLASS)}]' "$install_suite"; then
+    echo "monitoring override does not preserve the required VictoriaLogs values" >&2
+    return 1
+  fi
+
+  secret_patch_line=$(grep -nF 'kubectl patch secret cozystack-values' "$install_suite" | cut -d: -f1)
+  tenant_patch_line=$(grep -nF 'kubectl patch tenants/root' "$install_suite" | cut -d: -f1)
+  if [ -z "$secret_patch_line" ] || [ -z "$tenant_patch_line" ] || [ "$secret_patch_line" -ge "$tenant_patch_line" ]; then
+    echo "root values must be patched before monitoring is enabled: secret=$secret_patch_line tenant=$tenant_patch_line" >&2
+    return 1
+  fi
+
+  rendered=$(mktemp)
+  helm template monitoring packages/extra/monitoring --namespace tenant-root \
+    --set-string 'logsStorages[0].name=generic' \
+    --set-string 'logsStorages[0].retentionPeriod=1' \
+    --set-string 'logsStorages[0].storage=10Gi' \
+    --set-string 'logsStorages[0].storageClassName=local' > "$rendered"
+  rendered_class=$(yq 'select(.kind == "HelmRelease" and .metadata.name == "monitoring-system") | .spec.values.logsStorages[0].storageClassName' "$rendered")
+  rm -f "$rendered"
+  if [ "$rendered_class" != local ]; then
+    echo "monitoring chart did not carry the root values override into its child release: $rendered_class" >&2
     return 1
   fi
 }

@@ -1311,6 +1311,10 @@ jobs:
           # The E2E harness suppresses DRBD-dependent chart content, registers
           # the host's pre-created zpools, and keeps LINSTOR's local ZFS path.
           COZY_LINSTOR_DRBD_ENABLED: "false"
+          # Root monitoring is the one install-time workload whose chart
+          # explicitly selects replicated instead of using the default class.
+          # Keep that E2E-only override aligned with the Chainsaw fixtures below.
+          COZY_E2E_STORAGE_CLASS: local
         run: |
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
             echo "❌ Install failed (no retry — see diagnostics below)"

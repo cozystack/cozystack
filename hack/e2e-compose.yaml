@@ -32,18 +32,18 @@ x-node: &node
   read_only: true
   stop_grace_period: 30s
   # Matches the QEMU lane's `-smp 8 -m 24576` so neither lane is given more of
-  # the runner than the other. NOTE: a Talos container reports the HOST's memory
-  # as node allocatable, not this limit, so the kube-scheduler will overcommit
-  # against it -- the limit binds the cgroup, not the scheduler.
-  cpus: 8
-  mem_limit: 24576m
+  # the runner than the other. Talos reports host capacity in container mode;
+  # e2e-container-up.sh counterbalances that with dynamic kubelet reservations,
+  # and e2e-prepare-cluster-container.bats asserts the resulting allocatable.
+  cpus: ${COZY_E2E_NODE_CPUS:-8}
+  mem_limit: ${COZY_E2E_NODE_MEMORY_MIB:-24576}m
   tmpfs:
     - /run
     - /system
     - /tmp
   environment: &node-env
     PLATFORM: container
-    TALOSSKU: 8CPU-24576RAM
+    TALOSSKU: ${COZY_E2E_NODE_CPUS:-8}CPU-${COZY_E2E_NODE_MEMORY_MIB:-24576}RAM
     USERDATA: ${USERDATA:?USERDATA must be set; hack/e2e-container-up.sh generates it}
 
 # The two host binds every node repeats below, and why each is mandatory:

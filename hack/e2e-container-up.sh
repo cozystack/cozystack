@@ -16,6 +16,50 @@
 # machines, where rg/fd/bash-isms are not available.
 set -eu
 
+# calculate_node_reservations <host-cpus> <host-memory-kib>
+#                             <node-cpus> <node-memory-mib> <node-count>
+#
+# Talos container nodes read capacity from the shared host kernel, not from
+# their Docker CPU/memory cgroups. Return the kubelet systemReserved quantities
+# that reduce each node's scheduler-visible capacity to its container limit.
+# Also reject a host that cannot hold all node limits with strict headroom,
+# matching the QEMU lane's runner contract instead of relying on cgroup OOMs.
+calculate_node_reservations() {
+  cozy_host_cpus=$1
+  cozy_host_memory_kib=$2
+  cozy_node_cpus=$3
+  cozy_node_memory_mib=$4
+  cozy_node_count=$5
+
+  for cozy_quantity in "$cozy_host_cpus" "$cozy_host_memory_kib" "$cozy_node_cpus" "$cozy_node_memory_mib" "$cozy_node_count"; do
+    case "$cozy_quantity" in
+      '' | *[!0-9]* | 0)
+        echo "all container capacity inputs must be positive integers, got '$cozy_quantity'" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  cozy_required_cpus=$(( cozy_node_cpus * cozy_node_count ))
+  cozy_required_memory_kib=$(( cozy_node_memory_mib * 1024 * cozy_node_count ))
+  if [ "$cozy_host_cpus" -le "$cozy_required_cpus" ]; then
+    echo "container lane needs more than ${cozy_required_cpus} host CPUs, found ${cozy_host_cpus}" >&2
+    return 1
+  fi
+  if [ "$cozy_host_memory_kib" -le "$cozy_required_memory_kib" ]; then
+    echo "container lane needs more than ${cozy_required_memory_kib} KiB host memory, found ${cozy_host_memory_kib} KiB" >&2
+    return 1
+  fi
+
+  printf '%sm\n' "$(( (cozy_host_cpus - cozy_node_cpus) * 1000 ))"
+  printf '%sKi\n' "$(( cozy_host_memory_kib - cozy_node_memory_mib * 1024 ))"
+}
+
+# Unit tests source only the capacity calculation above.
+if [ "${E2E_CONTAINER_UP_LIB:-false}" = true ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 SANDBOX_NAME="${SANDBOX_NAME:?SANDBOX_NAME must be set (packages/core/testing/Makefile sets it)}"
 # Resolved from this script's own location, not the caller's cwd: the Makefile
 # target runs it from packages/core/testing, where a relative hack/ does not
@@ -32,6 +76,9 @@ COMPOSE_PROJECT="${COMPOSE_PROJECT:-cozy-e2e}"
 ZPOOL_SIZE="${ZPOOL_SIZE:-120G}"
 ZPOOL_BACKING_DIR="${ZPOOL_BACKING_DIR:-/var/lib/cozy-e2e-zpools}"
 KUBERNETES_VERSION="${KUBERNETES_VERSION:-v1.33.12}"
+COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS:-8}"
+COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB:-24576}"
+export COZY_E2E_NODE_CPUS COZY_E2E_NODE_MEMORY_MIB
 
 log() { echo "[e2e-container-up] $*"; }
 die() { echo "[e2e-container-up] FATAL: $*" >&2; exit 1; }
@@ -49,6 +96,16 @@ if [ "$(id -u)" -ne 0 ]; then
      modules and create zpools on the host."
   SUDO="sudo"
 fi
+
+HOST_CPUS=$(getconf _NPROCESSORS_ONLN)
+HOST_MEMORY_KIB=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo)
+NODE_RESERVATIONS=$(calculate_node_reservations \
+  "$HOST_CPUS" "$HOST_MEMORY_KIB" \
+  "$COZY_E2E_NODE_CPUS" "$COZY_E2E_NODE_MEMORY_MIB" 3) \
+  || die "the runner cannot safely host three configured Talos containers"
+SYSTEM_RESERVED_CPU=$(printf '%s\n' "$NODE_RESERVATIONS" | sed -n '1p')
+SYSTEM_RESERVED_MEMORY=$(printf '%s\n' "$NODE_RESERVATIONS" | sed -n '2p')
+log "node limit ${COZY_E2E_NODE_CPUS} CPU/${COZY_E2E_NODE_MEMORY_MIB} MiB; kubelet systemReserved ${SYSTEM_RESERVED_CPU}/${SYSTEM_RESERVED_MEMORY} against host ${HOST_CPUS} CPU/${HOST_MEMORY_KIB} KiB"
 
 # ---------------------------------------------------------------------------
 # 1. Host kernel modules.
@@ -102,7 +159,10 @@ done
 #                                   apiServerEndpoint is a node IP
 # Everything else is deliberately identical.
 # ---------------------------------------------------------------------------
-docker exec "$SANDBOX_NAME" sh -ec '
+docker exec \
+  -e COZY_E2E_SYSTEM_RESERVED_CPU="$SYSTEM_RESERVED_CPU" \
+  -e COZY_E2E_SYSTEM_RESERVED_MEMORY="$SYSTEM_RESERVED_MEMORY" \
+  "$SANDBOX_NAME" sh -ec '
 cd /workspace
 cat > container-patch.yaml <<PATCH
 machine:
@@ -112,6 +172,9 @@ machine:
       - 192.168.123.0/24
     extraConfig:
       maxPods: 512
+      systemReserved:
+        cpu: "${COZY_E2E_SYSTEM_RESERVED_CPU}"
+        memory: "${COZY_E2E_SYSTEM_RESERVED_MEMORY}"
   registries:
     mirrors:
       docker.io:

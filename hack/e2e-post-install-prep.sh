@@ -114,6 +114,16 @@ allowVolumeExpansion: true
 EOF
 }
 
+# CDI infers ReadWriteMany/Block first for the LINSTOR provisioner because it
+# assumes a DRBD-capable StorageClass. The container lane deliberately exposes
+# only LINSTOR's local storage layer, and linstor-csi rejects RWX without DRBD.
+# Pin the one class used by that lane to the RWO/Block combination phase-0
+# proved before any DataVolume can consume the inferred default.
+patch_local_cdi_storage_profile() {
+  kubectl patch storageprofile local --type merge \
+    -p '{"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Block"}]}}'
+}
+
 # Unit tests source the pure helpers above without reaching a cluster.
 if [ "${E2E_POST_INSTALL_PREP_LIB:-false}" = true ]; then
   return 0 2>/dev/null || exit 0
@@ -239,6 +249,13 @@ done
 
 echo "[post-install-prep] applying StorageClasses"
 render_linstor_storageclasses | kubectl apply -f -
+
+if [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" = false ]; then
+  echo "[post-install-prep] waiting for CDI StorageProfile/local"
+  timeout 600 sh -ec 'until kubectl get storageprofile local >/dev/null 2>&1; do sleep 2; done'
+  echo "[post-install-prep] forcing CDI StorageProfile/local to RWO/Block"
+  patch_local_cdi_storage_profile
+fi
 
 echo "[post-install-prep] waiting for MetalLB CRDs"
 timeout 300 sh -ec 'until kubectl get crd ipaddresspools.metallb.io l2advertisements.metallb.io >/dev/null 2>&1; do sleep 2; done'

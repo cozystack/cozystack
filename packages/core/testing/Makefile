@@ -3,6 +3,8 @@ NAME := sandbox
 CLEAN := 1
 TESTING_APPS := $(shell find ../../apps -maxdepth 1 -mindepth 1 -type d | awk -F/ '{print $$NF}')
 SANDBOX_NAME := cozy-e2e-sandbox-$(shell echo "$$(hostname):$$(pwd)" | sha256sum | cut -c -6)
+COZY_E2E_NODE_CPUS ?= 8
+COZY_E2E_NODE_MEMORY_MIB ?= 24576
 
 ROOT_DIR = $(dir $(abspath $(firstword $(MAKEFILE_LIST))/../../..))
 
@@ -52,8 +54,8 @@ prepare-cluster: copy-nocloud-image
 # directly and need no nocloud asset, which also means this lane does not wait
 # on `make -C packages/core/talos assets`.
 prepare-cluster-container:
-	SANDBOX_NAME="${SANDBOX_NAME}" $(ROOT_DIR)hack/e2e-container-up.sh
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster-container.bats'
+	SANDBOX_NAME="${SANDBOX_NAME}" COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS}" COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB}" $(ROOT_DIR)hack/e2e-container-up.sh
+	docker exec -e COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS}" -e COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster-container.bats'
 
 # Tear the container lane down. Volumes included: the node /var volumes hold
 # etcd and the kubelet state, so leaving them behind makes the next run adopt a
@@ -68,13 +70,13 @@ prepare-cluster-container:
 delete-cluster-container:
 	USERDATA=teardown docker compose -p cozy-e2e -f $(ROOT_DIR)hack/e2e-compose.yaml down -v || true
 
-# The API endpoint and E2E-only LINSTOR mode cross into the sandbox explicitly:
+# The API endpoint and E2E-only storage mode cross into the sandbox explicitly:
 # docker exec starts a fresh environment, so values exported by the caller do
-# not reach the manifest generator. Empty values retain the QEMU defaults; the
-# container lane supplies its node endpoint and disables DRBD because its Talos
-# nodes share a kernel that cannot load the module.
+# not reach the manifest generator or root-tenant setup. Empty values retain the
+# QEMU defaults; the container lane supplies its node endpoint, disables DRBD,
+# and selects local storage because its Talos nodes share one kernel.
 install-cozystack:
-	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" -e COZY_LINSTOR_DRBD_ENABLED="${COZY_LINSTOR_DRBD_ENABLED}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
+	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" -e COZY_LINSTOR_DRBD_ENABLED="${COZY_LINSTOR_DRBD_ENABLED}" -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
 
 test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'

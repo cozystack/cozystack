@@ -304,6 +304,39 @@
   # wait in the previous test does not cover that. Prove an AUTHENTICATED
   # request against the actual resource succeeds before the patch's own GET.
   timeout 120 sh -ec 'until kubectl get tenants.apps.cozystack.io root -n tenant-root >/dev/null 2>&1; do sleep 2; done'
+  local storage_class
+  storage_class="${COZY_E2E_STORAGE_CLASS:-replicated}"
+  case "$storage_class" in
+    replicated) ;;
+    local)
+      # VictoriaLogs is the only root-tenant install workload that explicitly
+      # defaults to replicated instead of inheriting the cluster's default
+      # StorageClass. The container lane has no DRBD and intentionally exposes
+      # only local. Put the override in the values Secret BEFORE monitoring is
+      # enabled, so the monitoring HelmRelease's first render creates local
+      # claims. Patching that HelmRelease after creation races the operator: a
+      # replicated PVC can be created first, and storageClassName is immutable.
+      # Flux drift detection is disabled, so the owning cozystack-basics release
+      # does not rewrite this E2E-only live override on its ordinary interval.
+      local root_values_b64_file root_values_file root_values_patch_file
+      root_values_b64_file=$(mktemp)
+      root_values_file=$(mktemp)
+      root_values_patch_file=$(mktemp)
+      kubectl get secret cozystack-values -n tenant-root -o jsonpath='{.data.values\.yaml}' > "$root_values_b64_file"
+      base64 -d "$root_values_b64_file" > "$root_values_file"
+      COZY_E2E_STORAGE_CLASS="$storage_class" yq -i \
+        '.logsStorages = [{"name":"generic","retentionPeriod":"1","storage":"10Gi","storageClassName":strenv(COZY_E2E_STORAGE_CLASS)}]' \
+        "$root_values_file"
+      jq -Rs '{"stringData":{"values.yaml":.}}' < "$root_values_file" > "$root_values_patch_file"
+      kubectl patch secret cozystack-values -n tenant-root --type merge --patch-file "$root_values_patch_file"
+      rm -f "$root_values_b64_file" "$root_values_file" "$root_values_patch_file"
+      ;;
+    *)
+      echo "COZY_E2E_STORAGE_CLASS must be local or replicated, got '$storage_class'" >&2
+      return 1
+      ;;
+  esac
+
   kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
 
   timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
