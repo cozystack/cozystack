@@ -33,22 +33,27 @@
 # targets, so a fifth lane written as an ordinary job is covered the day it is
 # added rather than the day someone remembers to extend a literal list here.
 #
-# The floor of that derivation is the workflow file itself, and it is worth
-# naming rather than leaving as an implied promise of total coverage. A lane
-# that reached the sandbox through a composite action would carry the make
-# target inside the action and only `runs-on` in the workflow, so neither the
-# marker sweep nor the coverage cross-check would see it. Nothing in the tree
-# is written that way today. A workflow reached through `workflow_call` is a
-# different case and is covered, because the called file carries both its own
-# `runs-on` and its own marker. Covering a composite action means teaching both
-# legs to follow `uses:`, which is a larger change than widening a pattern.
+# A lane can also reach the sandbox through a composite action, which carries
+# the make target inside the action and leaves only `runs-on` in the workflow.
+# Both legs follow a local `uses: ./…` into the action file it names and read
+# the marker there, and into a local action that action uses in turn, so a job
+# is matched wherever the target actually sits. A workflow reached through
+# `workflow_call` is the opposite case and is deliberately not followed: the
+# called file is swept on its own terms and carries both its own `runs-on` and
+# its own marker, while the calling job has no `runs-on` for this check to size.
+#
+# The floor of that derivation is what this repository holds, and it is worth
+# naming rather than leaving as an implied promise of total coverage. An action
+# published elsewhere (`uses: owner/repo@ref`) is not read, because it is not in
+# the tree to read, so a lane that booted the sandbox from inside one would go
+# unseen. No action outside this repository touches the sandbox today.
 #
 # A derivation that cannot read its input has two ways out, and only one of
 # them is safe. Guessing produces a number smaller than the truth, which passes
 # a runner that cannot hold the sandbox; stopping produces a red naming the
 # line. This one stops. The guest-side shapes in the list below are pinned by
-# the fixture tests at the end of this file; the last bullet is a runner-side
-# refusal, which only the live tree exercises.
+# the fixture tests at the end of this file; the last two are runner-side
+# refusals, which only the live tree exercises.
 #
 #   - a line naming qemu-system-x86_64 with no literal `-smp <n>` or no literal
 #     `-m <n>`, which covers `-smp cpus=8` and `-m size=24576` as well as an
@@ -65,6 +70,9 @@
 #     its iteration count is not a static property at all;
 #   - more than one qemu launch or more than one `for` loop in a single @test
 #     block;
+#   - a `uses:` naming something inside the repository that the strict path
+#     pattern cannot read, that resolves to no readable action.yaml /
+#     action.yml, or that reaches itself;
 #   - a sandbox job whose `runs-on` does not carry an `oracle-vm-<n>cpu-<m>gb`
 #     class.
 #
@@ -97,7 +105,9 @@
 # reindented: the parser simply finds fewer jobs and the survivors still pass.
 # So every workflow file that drives the sandbox make targets at all must yield
 # at least one matched job, which turns a half-broken parser red instead of
-# quietly narrowing what is checked.
+# quietly narrowing what is checked. A workflow drives those targets through the
+# local actions it names as much as in its own steps, so the file and those
+# actions are read together for that question.
 #
 # Harness note: the CI path is hack/cozytest.sh, NOT real bats. There is no
 # `run`, `$status`, `$output`, `skip`, or setup()/teardown(); each test runs as
@@ -215,15 +225,22 @@ GUEST_DEMAND_AWK='
     return 1
   fi
 
-  # ── Runner side. One line per job that drives the sandbox make targets:
-  # workflow path, job name, the vCPU and GiB of its runner class (or NONE for
-  # both) and the raw runs-on value. Comment lines are dropped before the
-  # marker match, so prose naming e2e-prepare-cluster.bats above a job cannot
-  # enrol it. Both globs are passed unquoted: if either matches nothing awk
-  # gets a literal path and exits 2, which errexit turns into a red without the
-  # named line the refusals above carry. Louder than they are, and still the
-  # safe direction, since no workflow extension drops out of the sweep quietly.
-  sandbox_jobs=$(awk '
+  # ── Runner side. The sweep emits three kinds of record, so that both legs
+  # below read one derivation instead of two that can disagree:
+  #   JOB   <wf> <job> <vcpu> <gib> <raw runs-on> — a job that drives the
+  #         sandbox make targets, in its own steps or through a local action;
+  #         vcpu and gib are NONE when the runs-on names no known class,
+  #   REF   <wf> <action file> — a local action the file names, for the
+  #         coverage cross-check,
+  #   ERROR <sentence> — a reference this cannot resolve, which stops the check
+  #         rather than narrowing it.
+  # Comment lines are dropped before the marker match, so prose naming
+  # e2e-prepare-cluster.bats above a job cannot enrol it. Both globs are passed
+  # unquoted: if either matches nothing awk gets a literal path and exits 2,
+  # which errexit turns into a red without the named line the refusals above
+  # carry. Louder than they are, and still the safe direction, since no workflow
+  # extension drops out of the sweep quietly.
+  sweep=$(awk '
     function class_of(s,   n) {
       if (match(s, /oracle-vm-[0-9]+cpu-[0-9]+gb/)) {
         n = substr(s, RSTART, RLENGTH)
@@ -234,8 +251,66 @@ GUEST_DEMAND_AWK='
       }
       return "NONE NONE"
     }
+    # The repository path a `uses:` names, or "" for one this leg does not
+    # follow: a published action, which is not in the tree to read, and a
+    # reusable workflow, which .github/workflows already sweeps as a file of its
+    # own. A value that names something in the tree but is not a path this can
+    # read is refused rather than dropped.
+    function local_ref(s, ctx,   p) {
+      if (s !~ /uses:/) return ""
+      p = s
+      sub(/^.*uses:[[:space:]]*/, "", p)
+      sub(/[[:space:]]+#.*$/, "", p)
+      sub(/[[:space:]]+$/, "", p)
+      if (p !~ /^\.\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/) {
+        if (p ~ /\.\//) print "ERROR " ctx " names a local reference this sweep cannot read as a path: " s
+        return ""
+      }
+      if (p ~ /^\.\/\.github\/workflows\//) return ""
+      return p
+    }
+    # The action file a local reference resolves to, or "" if nothing readable
+    # sits there. The directory form is the one GitHub documents; the file form
+    # is legal too.
+    function action_file(p,   i, n, cand, line, r) {
+      if (p ~ /action\.ya?ml$/) { n = 1; cand[1] = p }
+      else { n = 2; cand[1] = p "/action.yaml"; cand[2] = p "/action.yml" }
+      for (i = 1; i <= n; i++) {
+        r = (getline line < cand[i])
+        close(cand[i])
+        if (r >= 0) return cand[i]
+      }
+      return ""
+    }
+    # Whether the action at p drives the sandbox, directly or through a local
+    # action it uses in turn, and the REF line the coverage leg reads. reading[]
+    # is the loop guard: awk holds one read position per filename, so an action
+    # that reaches itself would otherwise reopen the file from the top forever.
+    function action_marker(p, w,   fn, line, hit, ref) {
+      if (p in reading) {
+        print "ERROR local action " p " reaches itself through a uses: of its own"
+        return 0
+      }
+      fn = action_file(p)
+      if (fn == "") {
+        print "ERROR " w " uses " p " but no action.yaml or action.yml is readable there"
+        return 0
+      }
+      if (!((w, fn) in emitted)) { emitted[w, fn] = 1; print "REF", w, fn }
+      reading[p] = 1
+      hit = 0
+      while ((getline line < fn) > 0) {
+        if (line ~ /^[[:space:]]*#/) continue
+        if (line ~ /prepare-env/ || line ~ /prepare-cluster/) hit = 1
+        ref = local_ref(line, fn)
+        if (ref != "" && action_marker(ref, w)) hit = 1
+      }
+      close(fn)
+      delete reading[p]
+      return hit
+    }
     function flush() {
-      if (job != "" && sandbox) print wf, job, class_of(ro), ro
+      if (job != "" && sandbox) print "JOB", wf, job, class_of(ro), ro
       job = ""; ro = ""; sandbox = 0
     }
     FNR == 1 { flush(); wf = FILENAME }
@@ -253,9 +328,21 @@ GUEST_DEMAND_AWK='
         sub(/^[[:space:]]*runs-on:[[:space:]]*/, "", ro)
       }
       if ($0 ~ /prepare-env/ || $0 ~ /prepare-cluster/) sandbox = 1
+      ref = local_ref($0, wf)
+      if (ref != "" && action_marker(ref, wf)) sandbox = 1
     }
     END { flush() }
   ' "$workflow_dir"/*.yaml "$workflow_dir"/*.yml)
+
+  refusals=$(printf '%s\n' "$sweep" | sed -n 's/^ERROR //p')
+  if [ -n "$refusals" ]; then
+    echo "the sandbox job sweep could not read every reference in $workflow_dir:" >&2
+    printf '%s\n' "$refusals" >&2
+    echo "a local 'uses: ./<path>' is one of the places the sandbox marker lives, so one this cannot open is a lane it cannot see." >&2
+    return 1
+  fi
+
+  sandbox_jobs=$(printf '%s\n' "$sweep" | sed -n 's/^JOB //p')
 
   if [ -z "$sandbox_jobs" ]; then
     echo "no job in $workflow_dir invokes the sandbox make targets" >&2
@@ -266,15 +353,21 @@ GUEST_DEMAND_AWK='
   # ── Coverage cross-check, before the comparison it guards. A file that runs
   # anything under packages/core/testing is a sandbox lane, so failing to match
   # a job in it means the parser above lost the file, not that the file is
-  # innocent.
+  # innocent. The local actions it names are read with it, since a lane's make
+  # targets sit in an action as readily as in a job.
   for wf in "$workflow_dir"/*.yaml "$workflow_dir"/*.yml; do
     [ -e "$wf" ] || continue
-    if grep -v '^[[:space:]]*#' "$wf" | grep -q 'packages/core/testing'; then
+    scan=$wf
+    for ref in $(printf '%s\n' "$sweep" | awk -v w="$wf" '$1 == "REF" && $2 == w { print $3 }'); do
+      scan="$scan $ref"
+    done
+    # shellcheck disable=SC2086 # deliberate split: $scan is a list of repo paths
+    if grep -v '^[[:space:]]*#' $scan | grep -q 'packages/core/testing'; then
       if printf '%s\n' "$sandbox_jobs" | grep -qF "$wf "; then
         continue
       fi
       echo "$wf runs the packages/core/testing make targets but no job in it matched the sandbox marker" >&2
-      echo "the job parser reads job names at two-space indent and runs-on at four; a reindent or a renamed target breaks it silently." >&2
+      echo "the job parser reads job names at two-space indent and runs-on at four and follows a local 'uses:' into the action it names; a reindent, a renamed target or an unread reference breaks it silently." >&2
       return 1
     fi
   done
