@@ -1,0 +1,32 @@
+suite: kubeovn-webhook port agreement
+release:
+  name: kubeovn-webhook
+  namespace: cozy-kubeovn
+templates:
+  - templates/networkpolicy.yaml
+  - templates/deployment.yaml
+  - templates/service.yaml
+tests:
+  - it: protects exactly the port the webhook serves and the Service routes to
+    # The regression guard for the one drift that fails open. The policy runs
+    # with default-deny disabled, so a policy port that disagrees with the
+    # container port denies a port nothing serves and leaves the real one
+    # reachable -- the control disappears without anything breaking visibly.
+    # All three render from namespace-annotation-webhook.port for that reason.
+    asserts:
+      - equal:
+          path: spec.ingressDeny[0].toPorts[0].ports[0].port
+          value: "8443"
+        template: templates/networkpolicy.yaml
+      - equal:
+          path: spec.ingressDeny[1].toPorts[0].ports[0].port
+          value: "8443"
+        template: templates/networkpolicy.yaml
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8443
+        template: templates/deployment.yaml
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 8443
+        template: templates/service.yaml

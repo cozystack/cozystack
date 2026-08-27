@@ -1,3 +1,27 @@
 portSecurity: true
 routes: ""
 image: ghcr.io/cozystack/cozystack/kubeovn-webhook:v1.6.2@sha256:8abc089c4469b6572d7eb6cba1bd87528dc1298101a2250d4b351d6ba0ca0620
+
+# Restrict who may reach the webhook's serving port.
+#
+# The handler returns namespace-derived annotations to any caller, and only the
+# API server should be calling it (GHSA-g883-q79m-8225). Client-certificate
+# verification cannot enforce that on a stock control plane -- the API server
+# presents no client certificate unless its AdmissionConfiguration names a
+# kubeConfigFile for the webhook plugins, and a stock Cozystack control plane
+# ships only a PodSecurity block. Until that changes, this policy is the
+# enforcement.
+#
+# Rendered as a CiliumNetworkPolicy on purpose: kube-ovn runs with
+# ENABLE_NP: false, so a core NetworkPolicy object would be created and never
+# enforced. Set enabled: false on a cluster whose networking variant ships no
+# Cilium, where the object would have no controller to act on it.
+#
+# The port is deliberately not configurable here. It has to agree with the
+# container port and the Service targetPort, and because the policy runs with
+# default-deny disabled, a disagreement fails open: the policy would deny a port
+# nothing serves while the real one stayed reachable, removing this control
+# without breaking anything visible. All three read one definition instead --
+# see namespace-annotation-webhook.port in templates/_helpers.tpl.
+webhookPolicy:
+  enabled: true
