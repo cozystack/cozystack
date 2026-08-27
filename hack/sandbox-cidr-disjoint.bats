@@ -39,15 +39,15 @@
 # legal reformats and all of them turn the guard red with the offending value
 # in the message, which is the safe direction but not the same promise.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats. There is no
-# `run`, `$status`, `$output`, `skip`, or setup()/teardown(); each test runs as
-# a shell function under `set -eu -x`, so a non-zero exit is the failure. A
-# `!`-negated command never trips errexit, so every assertion below is written
-# as an explicit `if ... return 1`. A top-level helper function would have
-# `return 0` injected before its closing brace by the runner's awk, which is
-# why the arithmetic is inlined instead. Paths are repo-root-relative.
+# Harness compatibility note: CI runs this file under Bats through
+# `make bats-unit-tests`. It also remains compatible with the narrower legacy
+# `hack/cozytest.sh` translator, so it avoids `run`, `$status`, `$output`,
+# `skip`, and setup()/teardown(). A `!`-negated command never trips errexit, so
+# every assertion below is written as an explicit `if ... return 1`. The legacy
+# translator injects `return 0` before a top-level helper's closing brace, which
+# is why the arithmetic is inlined instead. Paths stay repo-root-relative.
 #
-# Run with: hack/cozytest.sh hack/sandbox-cidr-disjoint.bats
+# Run with: bats hack/sandbox-cidr-disjoint.bats
 
 load test_helper
 

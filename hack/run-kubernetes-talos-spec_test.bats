@@ -20,11 +20,13 @@
 # keys land under spec.talos", which is the actual contract. A string match
 # would keep passing on a block indented into the wrong parent.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run`/`$status`. Sourcing run-kubernetes.sh only
-# defines functions and touches no cluster.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run` and `$status` for that compatibility path. Sourcing run-kubernetes.sh
+# only defines functions and touches no cluster.
 #
-# Run with: hack/cozytest.sh hack/run-kubernetes-talos-spec_test.bats
+# Run with: bats hack/run-kubernetes-talos-spec_test.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

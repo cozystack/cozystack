@@ -2,11 +2,11 @@
 # -----------------------------------------------------------------------------
 # Unit tests for hack/select-e2e.sh
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Each test runs as a shell
-# function under `set -eu -x`, so assertions are direct shell tests that exit
-# non-zero on failure. setup()/teardown() are not honored — each test creates
-# and cleans its own scratch dir.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, setup(), and teardown() for that compatibility path and use
+# direct shell assertions with inline fixture cleanup.
 #
 # Each fixture test removes its scratch directory at the last reachable cleanup
 # point of the body and never from a `trap ... EXIT`. A handler installed inside
@@ -17,7 +17,7 @@
 # the body, so the scratch directory survives for inspection on failure. See
 # hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 #
-# Run with: hack/cozytest.sh hack/select-e2e_test.bats
+# Run with: bats hack/select-e2e_test.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

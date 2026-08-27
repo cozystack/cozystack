@@ -19,6 +19,8 @@
 # Run with: hack/cozytest.sh hack/migration-56-adopt-path.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 FAKEBIN="$PWD/hack/testdata/migration-56"
 MIG="$PWD/packages/core/platform/images/migrations/migrations/56"
 

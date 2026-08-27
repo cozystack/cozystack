@@ -9,11 +9,12 @@
 # is never misread as "the tenant has drained". The function returns 0 (drained)
 # only when every capture is empty/whitespace, non-zero otherwise.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Assertions are expressed as
-# direct shell tests that exit non-zero on failure.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run` and `$status` for that compatibility path and use direct shell assertions.
 #
-# Run with: hack/cozytest.sh hack/run-kubernetes-drain_test.bats
+# Run with: bats hack/run-kubernetes-drain_test.bats
 # -----------------------------------------------------------------------------
 
 load test_helper

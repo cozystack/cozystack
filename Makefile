@@ -191,8 +191,8 @@ bats-unit-tests:
 		echo "ERROR: bats not found. Install bats-core >= 1.5 — https://bats-core.readthedocs.io"; \
 		exit 1; \
 	}
-	@mkdir -p $(BATS_REPORT_DIR)
-	bats -j $(BATS_JOBS) --report-formatter junit -o $(BATS_REPORT_DIR) $(BATS_UNIT_FILES)
+	@mkdir -p "$(BATS_REPORT_DIR)"
+	bats -j $(BATS_JOBS) --report-formatter junit -o "$(BATS_REPORT_DIR)" $(BATS_UNIT_FILES)
 
 # Operator-facing host preflight check. Warns about a standalone
 # containerd.service or docker.service running alongside the embedded

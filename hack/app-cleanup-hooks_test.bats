@@ -19,9 +19,10 @@
 #     already-clean namespace exits 0;
 #   * a listing that FAILED is distinguishable from one that returned nothing.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
-# paths resolve against that cwd. The runner has no setup/teardown, so each
-# @test builds its own fixture and removes it at the end of the body. No EXIT
+# Run from the repo root through `make bats-unit-tests`; relative paths resolve
+# against that cwd. The file also remains compatible with the legacy
+# `hack/cozytest.sh` translator, so each @test builds and removes its fixture
+# inline instead of relying on setup()/teardown(). No EXIT
 # trap: docs/agents/e2e-testing.md bans them in hack/*.bats, and under the bats
 # binary a test that installs one and then fails prints no TAP line at all.
 

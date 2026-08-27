@@ -11,12 +11,13 @@
 # same manager would strip the label, so the manifest is centralized here and
 # every migration sources it instead of copy-pasting a heredoc.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Assertions are expressed as
-# direct shell tests that exit non-zero on failure. Each test runs in its own
-# subshell, so NAMESPACE set/unset in one test does not leak into another.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run` and `$status` for that compatibility path and use direct shell
+# assertions. Each test runs in its own process, so NAMESPACE does not leak.
 #
-# Run with: hack/cozytest.sh hack/cozystack-version-stamp.bats
+# Run with: bats hack/cozystack-version-stamp.bats
 # -----------------------------------------------------------------------------
 
 load test_helper
