@@ -61,9 +61,14 @@ cozystackOperator:
   # Scope is every namespace a Package targets whose name does not start with `tenant-`.
   # That includes kube-system, because cozystack-scheduler is installed there, so a namespace
   # owned by the underlying Kubernetes distribution is defaulted like any other. Containers
-  # the kubelet builds from an on-disk manifest rather than from the API are unaffected in
-  # both directions: a Talos control-plane static pod gets no memory.max from this, and the
-  # mirror pod representing it is the only thing admission sees.
+  # the kubelet builds from an on-disk manifest rather than from the API get no memory.max
+  # from this: the kubelet runs them from disk whatever the API says, so a Talos
+  # control-plane static pod is neither protected nor constrained by the default. Its mirror
+  # pod is a different matter, being an ordinary API object that passes admission like any
+  # other — a static pod declaring a memory request above the ceiling with no limit of its
+  # own therefore has its mirror pod rejected, which leaves the container running with no
+  # representation in the API rather than taking anything down. The scan covers that case,
+  # since a mirror pod is a live Pod and raises the namespace ceiling like any other.
   #
   # A ceiling, not a reservation, and the default is deliberately far above any real
   # working set. The OOM handler discards a cgroup for having a memory.max at all,

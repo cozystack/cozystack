@@ -1292,10 +1292,18 @@ func (r *PackageReconciler) deleteSystemDefaultsLimitRange(ctx context.Context, 
 	//
 	// The label bounds what disabling can remove; it is not protection from the feature
 	// being enabled. While enabled the apply above takes the name over with ForceOwnership
-	// and stamps the label itself, so a hand-written cozystack-system-defaults is adopted
-	// and then removed here on the way out. What the guard buys is that a LimitRange of
-	// that name this reconciler never wrote to survives the knob.
-	if stale.Labels["app.kubernetes.io/managed-by"] != packageControllerFieldOwner {
+	// and stamps the label, so a hand-written cozystack-system-defaults is normally adopted
+	// and then removed here on the way out.
+	//
+	// "Normally", because that apply is skipped when the object already matches what would
+	// be applied, and a foreign LimitRange of this name whose spec happens to be identical
+	// is therefore never stamped and never adopted. It survives the knob, which is the same
+	// answer the guard gives deliberately elsewhere, so the outcome is right either way —
+	// but it is reached by the apply not running, not by the guard.
+	//
+	// What the guard buys is that a LimitRange of that name this reconciler never wrote to
+	// survives the knob.
+	if stale.Labels[managedByLabel] != packageControllerFieldOwner {
 		return nil
 	}
 
@@ -1429,11 +1437,17 @@ func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, ns
 	// template only when its request is strictly larger, which is exactly the case the
 	// template cannot show: a webhook-injected request.
 	//
-	// ReplicaSets are deliberately absent. A live one is a copy of its Deployment's
-	// template, already covered above, while the older revisions a Deployment keeps carry
-	// superseded templates that no scale-up will ever instantiate — only an explicit
-	// rollout undo brings one back. Scanning them would withhold the LimitRange from a
-	// whole namespace over a request that was replaced releases ago.
+	// ReplicaSets are deliberately absent, and the reason covers only the ones a Deployment
+	// owns. A live one is a copy of its Deployment's template, already covered above, while
+	// the older revisions a Deployment keeps carry superseded templates that no scale-up
+	// will ever instantiate — only an explicit rollout undo brings one back. Scanning them
+	// would raise a whole namespace's ceiling over a request that was replaced releases ago.
+	//
+	// An ownerless ReplicaSet is genuinely out of scope rather than covered by that
+	// argument: at replicas 0 it has no pods to be seen through and no Deployment template
+	// standing in for it, so a request above the ceiling in one is invisible here and its
+	// first pod would be rejected on scale-up. Nothing in this tree ships a bare
+	// ReplicaSet, which is why this is a gap left open rather than a sixth List.
 	deployments := &appsv1.DeploymentList{}
 	if err := reader.List(ctx, deployments, client.InNamespace(nsName)); err != nil {
 		return nil, fmt.Errorf("failed to list deployments in namespace %s: %w", nsName, err)
