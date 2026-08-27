@@ -415,6 +415,17 @@ describe("overlayImmutable", () => {
     expect(result).toEqual({ spec: { storage: "keep-me" } })
   })
 
+  it("leaves a null ancestor alone when original has no leaf to restore", () => {
+    // Materialising on the ancestor merely existing would trade the user's
+    // explicit null for an empty object with nothing put back into it.
+    const submitted = { spec: null } as Record<string, unknown>
+    const original = { spec: { storage: { size: "10Gi" } } }
+    const result = overlayImmutable(submitted, original, [
+      ["spec", "storage", "storageClass"],
+    ])
+    expect(result).toEqual({ spec: null })
+  })
+
   it("array reordering by the user with index-aligned overlay re-anchors source values to the new index (pinned current behaviour)", () => {
     // Tracked in cozystack/cozystack-ui#10.
     // The overlay walks by index, not by content identity. Reordering an
