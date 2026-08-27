@@ -1744,3 +1744,165 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 		})
 	}
 }
+
+// foreignLimitRange builds an administrator's own LimitRange, constraining whichever
+// resource and limit kind the case is about.
+func foreignLimitRange(name string, limitType corev1.LimitType, field, resourceName, value string) *corev1.LimitRange {
+	item := corev1.LimitRangeItem{Type: limitType}
+	quantities := corev1.ResourceList{corev1.ResourceName(resourceName): resource.MustParse(value)}
+	switch field {
+	case "default":
+		item.Default = quantities
+	case "max":
+		item.Max = quantities
+	}
+	return &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cozy-monitoring"},
+		Spec:       corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{item}},
+	}
+}
+
+// Two LimitRanges defaulting container memory in one namespace leave the effective ceiling
+// to the order LimitRanger iterates them, which is the hazard this feature cites to keep
+// itself out of tenant namespaces. It does not stop being one in a system namespace.
+func TestReconcileSystemDefaultsLimitRangeStaysOutOfANamespaceAnotherLimitRangeGoverns(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	admin := foreignLimitRange("platform-defaults", corev1.LimitTypeContainer, "default", "memory", "512Mi")
+	var listed []string
+	var writes int
+	cl := scanRecordingClient(scheme, &listed, &writes, admin)
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("32Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	err := cl.Get(t.Context(), types.NamespacedName{
+		Name:      SystemDefaultsLimitRangeName,
+		Namespace: "cozy-monitoring",
+	}, &corev1.LimitRange{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("wrote a second container memory default beside %q (err = %v)", admin.Name, err)
+	}
+	if writes != 0 {
+		t.Errorf("%d writes into a namespace another LimitRange already governs, want none", writes)
+	}
+}
+
+// The sharper half of the same guard. This reconciler writes a default and no max, so an
+// administrator's max below the configured default would have every container that declares
+// no limit of its own rejected: the default is written first, then validated against the max
+// it exceeds. That takes out the whole namespace, and it reaches kube-system.
+func TestReconcileSystemDefaultsLimitRangeStaysUnderAForeignContainerMemoryMax(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	admin := foreignLimitRange("tight-ceiling", corev1.LimitTypeContainer, "max", "memory", "2Gi")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(admin).Build()
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("32Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	err := cl.Get(t.Context(), types.NamespacedName{
+		Name:      SystemDefaultsLimitRangeName,
+		Namespace: "cozy-monitoring",
+	}, &corev1.LimitRange{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("defaulted 32Gi into a namespace capped at 2Gi, which rejects every container "+
+			"that declares no limit of its own (err = %v)", err)
+	}
+}
+
+// A foreign LimitRange appearing after this one was already applied has to be resolved by
+// withdrawing, not by sitting beside it: the object this reconciler wrote is half of the
+// ambiguity, so leaving it is leaving the hazard.
+func TestReconcileSystemDefaultsLimitRangeWithdrawsWhenAForeignPolicyAppears(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	ours := (&PackageReconciler{
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("32Gi"))
+	admin := foreignLimitRange("platform-defaults", corev1.LimitTypeContainer, "default", "memory", "512Mi")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ours, admin).Build()
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("32Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	err := cl.Get(t.Context(), types.NamespacedName{
+		Name:      SystemDefaultsLimitRangeName,
+		Namespace: "cozy-monitoring",
+	}, &corev1.LimitRange{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("kept its own default beside %q (err = %v)", admin.Name, err)
+	}
+
+	// The administrator's object is not this reconciler's to touch, in either direction.
+	if err := cl.Get(t.Context(), types.NamespacedName{
+		Name:      admin.Name,
+		Namespace: "cozy-monitoring",
+	}, &corev1.LimitRange{}); err != nil {
+		t.Errorf("removed the administrator's own LimitRange: %v", err)
+	}
+}
+
+// Read too widely the guard becomes a blanket opt-out that any unrelated LimitRange trips,
+// and a namespace loses its memory default over a cpu policy. Only a container memory
+// default or max collides with what this reconciler writes.
+func TestReconcileSystemDefaultsLimitRangeIgnoresLimitRangesThatDoNotTouchContainerMemory(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	for _, tc := range []struct {
+		name    string
+		foreign *corev1.LimitRange
+	}{
+		{"container cpu default", foreignLimitRange("cpu-policy", corev1.LimitTypeContainer, "default", "cpu", "500m")},
+		{"container cpu max", foreignLimitRange("cpu-ceiling", corev1.LimitTypeContainer, "max", "cpu", "2")},
+		{"pod-scoped memory max", foreignLimitRange("pod-policy", corev1.LimitTypePod, "max", "memory", "2Gi")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.foreign).Build()
+
+			r := &PackageReconciler{
+				Client:                       cl,
+				APIReader:                    cl,
+				Scheme:                       scheme,
+				SystemNamespaceMemoryLimit:   resource.MustParse("32Gi"),
+				SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+			}
+
+			if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+
+			if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("32Gi")) != 0 {
+				t.Errorf("default memory = %s, want the configured 32Gi; %q constrains neither container "+
+					"memory default nor max and must not withhold it", got.String(), tc.foreign.Name)
+			}
+		})
+	}
+}
