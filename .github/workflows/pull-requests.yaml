@@ -312,24 +312,30 @@ jobs:
       # self-hosted runner accreted. Install if absent (idempotent).
       - name: Set up test toolchain
         env:
-          BATS_VERSION: v1.14.0
+          BATS_VERSION: "1.14.0"
+          BATS_COMMIT: eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
+          BATS_SHA256: 845574549f4c9777bf02fcdf307f1bf347d40c66920fb6b47dcc8fdfa065ac39
         run: |
           set -euo pipefail
           helm plugin list 2>/dev/null | grep -q unittest \
             || helm plugin install https://github.com/helm-unittest/helm-unittest
           # The hack/*.bats unit suite moved from hack/cozytest.sh (an in-repo
           # shell runner with no external dependency) to bats(1) in #3453, so
-          # CI now needs bats. Installed from a pinned tag rather than the
-          # distro package, whose version varies by base image, and pinned to the
-          # version the suite was verified against. GNU parallel is optional;
-          # the Makefile falls back to a serial run
-          # when it is absent.
-          if ! command -v bats >/dev/null 2>&1; then
-            git clone --depth 1 --branch "$BATS_VERSION" \
-              https://github.com/bats-core/bats-core.git /tmp/bats-core
-            sudo /tmp/bats-core/install.sh /usr/local
+          # CI now needs bats. The runner image is not the version authority:
+          # accept its binary only when it is the version this suite was
+          # verified against, otherwise install a commit-addressed archive after
+          # checking its digest. GNU parallel is optional; the Makefile falls
+          # back to a serial run when it is absent or is not GNU parallel.
+          if ! bats --version 2>/dev/null | grep -qx "Bats $BATS_VERSION"; then
+            bats_archive="$RUNNER_TEMP/bats-core-$BATS_COMMIT.tar.gz"
+            bats_source=$(mktemp -d "$RUNNER_TEMP/bats-core.XXXXXX")
+            curl -fsSL -o "$bats_archive" \
+              "https://github.com/bats-core/bats-core/archive/$BATS_COMMIT.tar.gz"
+            printf '%s  %s\n' "$BATS_SHA256" "$bats_archive" | sha256sum -c -
+            tar -xzf "$bats_archive" -C "$bats_source" --strip-components=1
+            sudo "$bats_source/install.sh" /usr/local
           fi
-          bats --version
+          bats --version | grep -qx "Bats $BATS_VERSION"
       - name: Run unit tests
         run: make unit-tests
       - name: Upload unit test report

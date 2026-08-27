@@ -43,9 +43,9 @@ repos:
     # the regressions they exist to catch through.
     - id: bats-unit-tests
       name: Run hack/*.bats unit tests
-      entry: make bats-unit-tests
+      entry: make bats-unit-tests bats-posix-compat-tests
       language: system
-      files: ^(hack/|Makefile$|\.github/|packages/|\.claude/hooks/|docs/)
+      files: ^.*$
       pass_filenames: false
 # Lints changed GitHub Actions workflows for unpinned actions and excessive token
 # permissions (audit scope is set in .github/zizmor.yml). Runs offline so it needs
