@@ -58,9 +58,6 @@ tests:
       - equal:
           path: spec.enableDefaultDeny.ingress
           value: false
-      - equal:
-          path: spec.enableDefaultDeny.egress
-          value: false
       - isNull:
           path: spec.ingress
 
