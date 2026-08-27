@@ -966,6 +966,42 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		return fmt.Errorf("failed to read the system defaults LimitRange in namespace %s: %w", nsName, err)
 	}
 
+	// Another LimitRange already governing container memory here makes this namespace one
+	// to stay out of, for the same reason tenant namespaces are excluded: LimitRanger
+	// applies defaults from every LimitRange in the namespace and then validates the pod
+	// against every one, and nothing orders them. Adding a second default leaves which one
+	// wins to the order the plugin happens to iterate, so a container's ceiling moves
+	// between the administrator's value and this one for reasons no chart author can see —
+	// exactly the hazard cited above to keep this reconciler out of tenant namespaces, and
+	// it does not stop being one because the namespace is a system namespace.
+	//
+	// A max is the sharper half. This reconciler writes a default and no max, so an
+	// administrator's LimitRange carrying a container memory max below the configured
+	// default has every container that declares no limit of its own rejected: the default
+	// is written first, then validated against the max it exceeds. That takes out a whole
+	// namespace, and it reaches kube-system, which this feature enters for
+	// cozystack-scheduler and which is the namespace an administrator's or a
+	// distribution's own LimitRange is likeliest to be sitting in.
+	//
+	// Logged on every reconcile that finds one rather than only when something is written.
+	// The disabled path's quietness is about writes — an apiserver call and an audit entry
+	// per namespace per reconcile — and a log line is neither. Silence here would leave a
+	// deliberately unprotected namespace indistinguishable from a broken one.
+	governing, err := r.foreignContainerMemoryPolicy(ctx, nsName)
+	if err != nil {
+		return err
+	}
+	if governing != "" {
+		logger.Info("leaving this namespace's container memory default alone: another LimitRange already sets one; "+
+			"a second default would leave the effective ceiling to the order LimitRanger iterates them",
+			"namespace", nsName,
+			"limitRange", governing)
+		// Withdraw rather than sit beside it. Anything this reconciler wrote earlier is
+		// half of the ambiguity being described, and the label guard inside keeps this
+		// from touching an object it does not own.
+		return r.deleteSystemDefaultsLimitRange(ctx, nsName)
+	}
+
 	// The pod half of the scan is skippable only where the namespace already defaults
 	// container memory at exactly the configured limit. There LimitRanger writes a limit
 	// onto every new container that declares none, so a container carrying a memory request
@@ -1109,6 +1145,42 @@ func systemDefaultsLimitRangeApplyConfiguration(lr *corev1.LimitRange) *corev1ac
 		WithLabels(lr.Labels).
 		WithAnnotations(lr.Annotations).
 		WithSpec(corev1ac.LimitRangeSpec().WithLimits(items...))
+}
+
+// foreignContainerMemoryPolicy names a LimitRange in the namespace, other than the one this
+// reconciler maintains, that already constrains container memory — or "" when there is none.
+//
+// Deliberately narrow. Only a container memory default or max collides with what this
+// reconciler writes, so a LimitRange bounding cpu, or storage, or setting limits for the Pod
+// rather than the Container type, is left to coexist. Read the other way round this would be
+// a blanket opt-out that any unrelated LimitRange could trigger, and a namespace would lose
+// its memory default over a cpu policy.
+//
+// The List is cached: a LimitRange informer already backs the Get above, and there is one
+// small object per namespace behind it, so this costs no apiserver call. It is the pod scan
+// that has to bypass the cache, and only the pod scan.
+func (r *PackageReconciler) foreignContainerMemoryPolicy(ctx context.Context, nsName string) (string, error) {
+	present := &corev1.LimitRangeList{}
+	if err := r.List(ctx, present, client.InNamespace(nsName)); err != nil {
+		return "", fmt.Errorf("failed to list LimitRanges in namespace %s: %w", nsName, err)
+	}
+	for i := range present.Items {
+		lr := &present.Items[i]
+		if lr.Name == SystemDefaultsLimitRangeName {
+			continue
+		}
+		for _, item := range lr.Spec.Limits {
+			if item.Type != corev1.LimitTypeContainer {
+				continue
+			}
+			_, defaulted := item.Default[corev1.ResourceMemory]
+			_, capped := item.Max[corev1.ResourceMemory]
+			if defaulted || capped {
+				return lr.Name, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // raisedCeiling builds the LimitRange for a namespace held above the configured limit,
