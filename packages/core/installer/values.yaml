@@ -44,7 +44,7 @@ cozystackOperator:
   # Use 0 for unlimited; lower values reduce Secret accumulation in test clusters.
   helmReleaseMaxHistory: ""
   # When non-empty, overrides the operator's --system-namespace-memory-limit flag
-  # (operator default: 4Gi). The operator maintains a LimitRange in every system
+  # (operator default: 32Gi). The operator maintains a LimitRange in every system
   # namespace defaulting container memory for anything that declares none.
   #
   # This exists for the Talos userspace OOM handler (v1.12+), which ranks cgroups
@@ -65,21 +65,45 @@ cozystackOperator:
   # both directions: a Talos control-plane static pod gets no memory.max from this, and the
   # mirror pod representing it is the only thing admission sees.
   #
-  # A ceiling, not a reservation: pick it well above real usage. It should stay above
-  # the largest memory request in any system namespace, because a defaulted limit
-  # below a container's own request is rejected at admission. Setting it too low
-  # costs precision rather than availability: before applying, the operator scans
-  # each system namespace for a container that requests more than this and declares
-  # no limit of its own, and where it finds one it raises that namespace's ceiling to
-  # the request instead, logging the namespace, workload, container and both limits.
-  # A raised namespace still gets memory.max on its pod cgroups, which is the whole
-  # point — withholding the LimitRange would leave it with none — and it drops back to
-  # this value on its own once the oversized request is gone. Grep the operator log
-  # for "raising the default container memory limit" to find them.
+  # A ceiling, not a reservation, and the default is deliberately far above any real
+  # working set. The OOM handler discards a cgroup for having a memory.max at all,
+  # whatever its value, so the default buys immunity rather than a fitted ceiling —
+  # and a ceiling nothing reaches cannot convert a rare pressure-driven kill into a
+  # deterministic one, which is the failure mode this repository already carries a scar
+  # from (see the vertical-pod-autoscaler values). Lower it to make it bind once real
+  # usage is known; the scan below cannot see real usage, only declared requests.
+  #
+  # It should stay above the largest memory request in any system namespace, because a
+  # defaulted limit below a container's own request is rejected at admission. Setting
+  # it too low costs precision rather than availability: before applying, the operator
+  # scans each system namespace for a container that requests more than this and
+  # declares no limit of its own, and where it finds one it raises that namespace's
+  # ceiling to the request instead, logging the namespace, workload, container and both
+  # limits. A raised namespace still gets memory.max on its pod cgroups, which is the
+  # whole point — withholding the LimitRange would leave it with none.
+  #
+  # A raised ceiling drops back to this value once the oversized request has been absent
+  # for a grace period, not on the first scan that misses it: an empty scan is also what
+  # a pod between deletion and recreation looks like, and for a workload visible only as
+  # a live Pod (every CNPG Cluster in a system namespace builds its instance pods
+  # directly) an ordinary node drain produces exactly that. Lowering the ceiling under
+  # such a pod rejects its recreation permanently. Grep the operator log for "raising the
+  # default container memory limit" to find raised namespaces, and for "lowering this
+  # namespace's container memory ceiling" to see one come back down.
+  #
+  # Raising a namespace's ceiling raises it for every container in that namespace, not
+  # only the one that caused it, so it also widens the request-to-limit ratio VPA
+  # preserves when it rescales those containers.
   #
   # A container that declares its own memory limit is never touched, so a component
-  # that has to sit above this ceiling states a limit in its own chart rather than
-  # relying on the knob; packages/system/linstor does exactly that for its JVM.
+  # that needs a ceiling other than this one states a limit in its own chart rather than
+  # relying on the knob.
+  #
+  # A system namespace where another LimitRange already defaults or caps container memory
+  # is left alone entirely, and anything the operator wrote there earlier is withdrawn.
+  # Two defaults in one namespace leave the effective ceiling to the order LimitRanger
+  # happens to iterate them, and a foreign container memory max below this default would
+  # have every container that declares no limit of its own rejected at admission.
   #
   # Set to 0 to disable, which also removes the LimitRanges the operator previously
   # created.
