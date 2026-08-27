@@ -168,16 +168,12 @@ function sourceHasLeaf(
   if (depth === path.length) return source !== undefined
   const seg = path[depth]
   if (seg === "*") {
-    // A trailing wildcard freezes the whole collection, so the collection
-    // being present is itself the value to restore.
-    if (depth === path.length - 1) return source !== undefined
-    if (Array.isArray(source)) {
-      return source.some((v) => sourceHasLeaf(v, path, depth + 1))
-    }
-    if (isPlainObject(source)) {
-      return Object.values(source).some((v) => sourceHasLeaf(v, path, depth + 1))
-    }
-    return false
+    // A trailing wildcard freezes the whole collection, so source holding it
+    // is the value to restore. A wildcard with more path under it overlays
+    // element by element against the collection the user submitted, so one
+    // they removed has already answered what belongs there -- materialising
+    // it would put the deleted entries back.
+    return depth === path.length - 1 && source !== undefined
   }
   if (!isPlainObject(source)) return false
   return sourceHasLeaf(source[seg], path, depth + 1)

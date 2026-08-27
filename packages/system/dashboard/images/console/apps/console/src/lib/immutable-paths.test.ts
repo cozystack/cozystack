@@ -426,6 +426,30 @@ describe("overlayImmutable", () => {
     expect(result).toEqual({ spec: null })
   })
 
+  // No shipped schema nests a wildcard under an immutable path yet; these pin
+  // the two answers the leaf check gives when one does. A granular wildcard
+  // overlays element by element against what the user submitted, so an
+  // ancestor they deleted is not rebuilt to hold entries they removed.
+  it("leaves a deleted ancestor alone when a granular wildcard sits under it", () => {
+    const submitted = { spec: null } as Record<string, unknown>
+    const original = { spec: { items: [{ storageClass: "replicated" }] } }
+    const result = overlayImmutable(submitted, original, [
+      ["spec", "items", "*", "storageClass"],
+    ])
+    expect(result).toEqual({ spec: null })
+  })
+
+  // A trailing wildcard freezes the whole collection instead, so there the
+  // ancestor is rebuilt and the collection comes back.
+  it("rebuilds a deleted ancestor when the wildcard is the immutable leaf", () => {
+    const submitted = { spec: null } as Record<string, unknown>
+    const original = { spec: { items: [{ storageClass: "replicated" }] } }
+    const result = overlayImmutable(submitted, original, [["spec", "items", "*"]])
+    expect(result).toEqual({
+      spec: { items: [{ storageClass: "replicated" }] },
+    })
+  })
+
   it("array reordering by the user with index-aligned overlay re-anchors source values to the new index (pinned current behaviour)", () => {
     // Tracked in cozystack/cozystack-ui#10.
     // The overlay walks by index, not by content identity. Reordering an
