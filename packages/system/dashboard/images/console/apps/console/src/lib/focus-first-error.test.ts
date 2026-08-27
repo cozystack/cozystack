@@ -60,6 +60,29 @@ describe("focusFirstError", () => {
     expect(document.activeElement).toBe(first)
   })
 
+  // A bare prefix match would grab any sibling whose id merely starts with the
+  // same string, scrolling to a field the user was not asked about.
+  it("does not fall back to a sibling that merely shares the prefix", () => {
+    document.body.innerHTML = `<input id="root_database" />`
+
+    focusFirstError({ property: ".data" })
+
+    expect(document.getElementById("root_data")).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it("falls back to a nested input under the errored object", () => {
+    document.body.innerHTML = `
+      <input id="root_database" />
+      <input id="root_data_host" />
+    `
+    const nested = document.getElementById("root_data_host")
+
+    focusFirstError({ property: ".data" })
+
+    expect(document.activeElement).toBe(nested)
+  })
+
   it("does nothing when the field is nowhere in the document", () => {
     document.body.innerHTML = `<input id="root_other" />`
 
