@@ -92,9 +92,12 @@ describe("TenantsPage tree", () => {
 
     // A reachable Tenant CR links directly to its detail page, where Delete is
     // available. A bridged row with an unreadable real parent stays plain text.
+    // The CR name is relative to the parent, so the link has to name the tenant
+    // too: middle click and open-in-new-tab never run onClick, and the detail
+    // page would otherwise resolve "x" against the previously selected tenant.
     expect(screen.getByRole("link", { name: "x" })).toHaveAttribute(
       "href",
-      "/admin/tenants/x",
+      "/admin/tenants/x?tenant=whmcs",
     )
     expect(screen.queryByRole("link", { name: "a-b" })).toBeNull()
   })

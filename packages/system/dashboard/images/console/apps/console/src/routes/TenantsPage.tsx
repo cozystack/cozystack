@@ -140,9 +140,15 @@ export function TenantsPage() {
   const tenantRoute = (node: TreeNode) => {
     const parentNs = editParentNs(node)
     if (!parentNs) return undefined
+    const parentTenant = parentNs.slice(TENANT_NAMESPACE_PREFIX.length)
+    const path = `${basePath}/tenants/${tenantCrName(node.tn.metadata.name, parentNs)}`
     return {
-      parentTenant: parentNs.slice(TENANT_NAMESPACE_PREFIX.length),
-      path: `${basePath}/tenants/${tenantCrName(node.tn.metadata.name, parentNs)}`,
+      parentTenant,
+      path,
+      // The CR name is relative to the parent, so two tenants under different
+      // parents share one path; the detail page reads the namespace from the
+      // tenant context, which only the query param can set on a new tab.
+      href: `${path}?tenant=${encodeURIComponent(parentTenant)}`,
     }
   }
   const canEdit = (node: TreeNode) => !!tenantRoute(node)
@@ -150,7 +156,9 @@ export function TenantsPage() {
     const route = tenantRoute(node)
     if (!route) return
     selectTenant(route.parentTenant)
-    navigate(`${route.path}/edit`)
+    navigate(
+      `${route.path}/edit?tenant=${encodeURIComponent(route.parentTenant)}`,
+    )
   }
 
   return (
@@ -218,7 +226,7 @@ export function TenantsPage() {
                         <div className="min-w-0">
                           {route ? (
                             <Link
-                              to={route.path}
+                              to={route.href}
                               onClick={() => selectTenant(route.parentTenant)}
                               className="block truncate text-sm font-medium text-slate-900 hover:underline"
                             >

@@ -181,7 +181,12 @@ describe("ClusterUsageResourcePage", () => {
     renderResource(client, GPU)
 
     const link = await screen.findByRole("link", { name: "demo-vm" })
-    expect(link).toHaveAttribute("href", "/console/vminstances/demo-vm/workloads")
+    // The tenant travels in the URL: this table lists workloads from every
+    // namespace, and a middle click never runs the link's onClick.
+    expect(link).toHaveAttribute(
+      "href",
+      "/console/vminstances/demo-vm/workloads?tenant=root",
+    )
   })
 
   it("does not link a consumer whose kind is not a known application", async () => {
