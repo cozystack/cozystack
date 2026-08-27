@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests print-bats-unit-files rd-presets-check migrations-target-check test test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests bats-posix-compat-tests print-bats-unit-files print-bats-jobs rd-presets-check migrations-target-check test test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -106,7 +106,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests bats-posix-compat-tests go-unit-tests rd-presets-check test-check-readiness migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -174,12 +174,15 @@ BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
 print-bats-unit-files:
 	@printf '%s\n' $(BATS_UNIT_FILES)
 
-# `bats -j` needs GNU parallel and exits non-zero rather than degrading when
-# it is missing, so resolve the job count to 1 unless parallel is present.
-BATS_JOBS ?= $(shell command -v parallel >/dev/null 2>&1 && nproc 2>/dev/null || echo 1)
+# `bats -j` needs GNU parallel and exits non-zero rather than degrading when it
+# is missing. moreutils also ships a command named parallel, so identify the GNU
+# implementation from its version output before enabling concurrency.
+BATS_JOBS ?= $(shell parallel --version 2>/dev/null | grep -q '^GNU parallel ' && nproc 2>/dev/null || echo 1)
 
-# JUnit XML so CI annotates the failing test instead of requiring a log read.
-# _out is gitignored.
+print-bats-jobs:
+	@printf '%s\n' "$(BATS_JOBS)"
+
+# JUnit XML is preserved as a CI artifact for inspection. _out is gitignored.
 BATS_REPORT_DIR ?= _out/test-reports
 
 bats-unit-tests:
@@ -193,6 +196,23 @@ bats-unit-tests:
 	}
 	@mkdir -p "$(BATS_REPORT_DIR)"
 	bats -j $(BATS_JOBS) --report-formatter junit -o "$(BATS_REPORT_DIR)" $(BATS_UNIT_FILES)
+
+# Real Bats is authoritative. These files also source production code whose
+# contract is POSIX sh, so retain a narrow pass through cozytest.sh's /bin/sh
+# translator. This catches a Bash-only regression without running the entire
+# unit suite twice.
+BATS_POSIX_COMPAT_FILES := \
+	hack/nightly-mirror_test.bats \
+	hack/cozystack-version-stamp.bats \
+	hack/pod-label-census_test.bats \
+	hack/seaweedfs-naming-audit.bats \
+	hack/runner-identity.bats
+
+bats-posix-compat-tests:
+	@for f in $(BATS_POSIX_COMPAT_FILES); do \
+		echo "--- running POSIX compatibility: $$f ---"; \
+		hack/cozytest.sh "$$f" || exit 1; \
+	done
 
 # Operator-facing host preflight check. Warns about a standalone
 # containerd.service or docker.service running alongside the embedded
