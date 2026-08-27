@@ -85,8 +85,10 @@ test-openapi:
 # job uploads. CHAINSAW_SUITES restricts the run to the named suite dirs
 # (space-separated, e.g. "postgres bucket"); empty runs the whole suite. The
 # CI Test-Impact-Analysis step (hack/select-e2e.sh) sets it from the PR diff.
+# COZY_E2E_STORAGE_CLASS is passed both to script operations and as a Chainsaw
+# value for templated resource files; empty keeps the QEMU default, replicated.
 test-chainsaw:
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && chainsaw test ${CHAINSAW_SUITES}'
+	docker exec -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && chainsaw test --set-string storageClass="$${COZY_E2E_STORAGE_CLASS:-replicated}" ${CHAINSAW_SUITES}'
 
 collect-report: ## Collect the test report from the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'

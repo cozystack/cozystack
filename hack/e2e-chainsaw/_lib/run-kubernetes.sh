@@ -4,6 +4,20 @@
 . hack/e2e-chainsaw/_lib/talos-image-cache.sh
 . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
 
+# The QEMU lane exercises replicated DRBD storage. The container lane cannot
+# represent three DRBD nodes on one shared kernel, so its otherwise-identical
+# suites use the production local class instead. Keep the accepted values
+# narrow because this result is interpolated into Kubernetes YAML below.
+cozy_e2e_storage_class() {
+  case "${COZY_E2E_STORAGE_CLASS:-replicated}" in
+    local | replicated) printf '%s\n' "${COZY_E2E_STORAGE_CLASS:-replicated}" ;;
+    *)
+      echo "COZY_E2E_STORAGE_CLASS must be local or replicated, got '${COZY_E2E_STORAGE_CLASS}'" >&2
+      return 1
+      ;;
+  esac
+}
+
 # talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block combining the
 # Talos OS image cache (imageFactoryURL) and the ghcr.io worker image-pull mirror
 # (registryMirrors), each included only when its in-sandbox mirror is up. Prints
@@ -4632,6 +4646,8 @@ run_kubernetes_test() {
     # to flip one addon flag — kubernetes-latest passes "true", kubernetes-
     # previous leaves it empty.
     local enable_ouroboros="${4:-}"
+    local storage_class
+    storage_class=$(cozy_e2e_storage_class) || return 1
     local k8s_version
     k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
@@ -4729,7 +4745,7 @@ ${ouroboros_addon}
       resources: {}
       resourcesPreset: micro
   host: ""
-  storageClass: replicated
+  storageClass: "${storage_class}"
   version: "${k8s_version}"
 EOF
 
@@ -4786,7 +4802,7 @@ ${talos_block}
     memory: 4Gi
   roles:
   - ingress-nginx
-  storageClass: replicated
+  storageClass: "${storage_class}"
   version: "${k8s_version}"
 EOF
   # Wait for the tenant-test namespace to be active
@@ -5218,6 +5234,9 @@ EOF
   # the 5m pod-Succeeded budget when containerd's CreateContainer stalls.
   kubectl wait hr -n tenant-test "kubernetes-${test_name}-csi" --timeout=10m --for=condition=ready
 
+  if [ "$storage_class" = local ]; then
+    echo "Skipping remote StorageClass propagation and RWX NFS assertions for local-only E2E storage"
+  else
   # ----------------------------------------------------------------------
   # StorageClass propagation (issue #2094). Remote-accessible LINSTOR infra
   # classes propagate to the tenant under the same name; node-local classes
@@ -5329,6 +5348,7 @@ EOF
   # Cleanup NFS test resources in tenant cluster
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod -n tenant-test --wait
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc -n tenant-test
+  fi
 
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
@@ -5676,6 +5696,9 @@ EOF
 verify_storageclass_fallback_default() {
   echo "Verifying tenant default StorageClass selection with no 'replicated' class (PR #2872 B1 regression)..."
 
+  local storage_class
+  storage_class=$(cozy_e2e_storage_class) || return 1
+
   # Pre-cleanup: drop probe classes leaked by a previous failed run.
   kubectl delete sc nvme ssd --ignore-not-found
 
@@ -5720,11 +5743,12 @@ EOF
     -f packages/apps/kubernetes/tests/values/common.yaml -o json 2>/tmp/sc-fallback-render.err)
   rc=$?
 
-  # Restore management-cluster StorageClasses (inline, unconditional). This MUST
-  # run before any assertion `exit 1` below, so no EXIT/RETURN trap is used
-  # (per docs/agents/e2e-testing.md). The "replicated" manifest mirrors
-  # hack/e2e-post-install-prep.sh.
-  kubectl apply -f - <<'EOF'
+  # Restore the QEMU lane's management-cluster StorageClass inline before any
+  # assertion exit. The local-only container lane had no replicated class to
+  # restore. No EXIT/RETURN trap is used (docs/agents/e2e-testing.md), and the
+  # manifest mirrors hack/e2e-post-install-prep.sh.
+  if [ "$storage_class" = replicated ]; then
+    kubectl apply -f - <<'EOF'
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -5742,6 +5766,7 @@ parameters:
 volumeBindingMode: Immediate
 allowVolumeExpansion: true
 EOF
+  fi
   kubectl delete sc nvme ssd --ignore-not-found
 
   if [ "$rc" -ne 0 ] || [ -z "$raw" ]; then

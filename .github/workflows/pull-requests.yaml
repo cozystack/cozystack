@@ -1308,8 +1308,8 @@ jobs:
         env:
           COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
           # Talos containers share the runner kernel and cannot load DRBD.
-          # This only suppresses the DRBD-dependent logger sidecar; LINSTOR's
-          # file-backed storage path remains available to the E2E suites.
+          # The E2E harness suppresses DRBD-dependent chart content, registers
+          # the host's pre-created zpools, and keeps LINSTOR's local ZFS path.
           COZY_LINSTOR_DRBD_ENABLED: "false"
         run: |
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
@@ -1346,6 +1346,10 @@ jobs:
         id: e2e_tests
         if: ${{ steps.select.outputs.skip != 'true' }}
         env:
+          # No DRBD-backed class exists in this lane. Chainsaw templates the
+          # storage fixtures with local, and the Kubernetes helper omits only
+          # the remote-propagation/RWX assertions while running the same suites.
+          COZY_E2E_STORAGE_CLASS: local
           SELECTED_APPS: ${{ steps.select.outputs.apps }}
           FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
         run: |
