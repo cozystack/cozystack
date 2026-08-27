@@ -153,6 +153,36 @@ function wildcardArrayLengthChanged(
   return false
 }
 
+/**
+ * Whether source still holds a value at the end of the remaining path.
+ * Materialising a missing intermediate object is only justified when there is
+ * a leaf to restore into it — keyed on the ancestor merely existing, an
+ * explicit null the user parked at that ancestor would be replaced by an empty
+ * object with nothing put back.
+ */
+function sourceHasLeaf(
+  source: unknown,
+  path: ImmutablePath,
+  depth: number,
+): boolean {
+  if (depth === path.length) return source !== undefined
+  const seg = path[depth]
+  if (seg === "*") {
+    // A trailing wildcard freezes the whole collection, so the collection
+    // being present is itself the value to restore.
+    if (depth === path.length - 1) return source !== undefined
+    if (Array.isArray(source)) {
+      return source.some((v) => sourceHasLeaf(v, path, depth + 1))
+    }
+    if (isPlainObject(source)) {
+      return Object.values(source).some((v) => sourceHasLeaf(v, path, depth + 1))
+    }
+    return false
+  }
+  if (!isPlainObject(source)) return false
+  return sourceHasLeaf(source[seg], path, depth + 1)
+}
+
 function overlayPath(
   target: unknown,
   source: unknown,
@@ -175,8 +205,11 @@ function overlayPath(
   const targetObj = isPlainObject(target)
     ? (target as Record<string, unknown>)
     : // A YAML edit can drop the whole intermediate object; materialise it so
-      // the immutable leaf underneath is still restored from source.
-      sourceVal !== undefined && (target === undefined || target === null)
+      // the immutable leaf underneath is still restored from source. Only when
+      // source actually has that leaf, so a null the user parked here is not
+      // traded for an empty object holding nothing.
+      (target === undefined || target === null) &&
+        sourceHasLeaf(sourceVal, path, depth + 1)
       ? {}
       : null
   if (!targetObj) return target
