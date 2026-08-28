@@ -147,7 +147,7 @@ func main() {
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
-	flag.StringVar(&systemNamespaceMemoryLimit, "system-namespace-memory-limit", "32Gi",
+	flag.StringVar(&systemNamespaceMemoryLimit, "system-namespace-memory-limit", DefaultSystemNamespaceMemoryLimit,
 		"Default container memory limit applied through a LimitRange in every system namespace. "+
 			"Keeps system components out of the Talos userspace OOM handler's victim set, which only "+
 			"considers cgroups with no memory.max. The default is deliberately far above any real "+
@@ -170,7 +170,7 @@ func main() {
 			"already defaults or caps container memory is left alone, because two defaults leave the "+
 			"effective ceiling to the order LimitRanger iterates them. Empty or 0 disables the "+
 			"LimitRange and removes any previously created one.")
-	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", "32Mi",
+	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
 		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+
 			"explicitly: Kubernetes defaults an unset request to the limit, which would reserve the full "+
 			"limit for every system container at schedule time. 0 is supported and means the opposite "+
@@ -508,6 +508,15 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 // A request of 0 against a non-zero limit passes deliberately: it is the supported way to
 // take the memory.max without reserving anything at schedule time, not a broken value.
 // Both zero is the disabled case and never reaches the comparison.
+// The shipped defaults for the two system-namespace memory knobs. Named rather than written
+// into flag.StringVar directly so the flag registration and the test that pins them read the
+// same constant: the previous form duplicated the literal, and a change to the flag left the
+// test asserting a value the operator no longer shipped.
+const (
+	DefaultSystemNamespaceMemoryLimit   = "32Gi"
+	DefaultSystemNamespaceMemoryRequest = "32Mi"
+)
+
 func parseSystemNamespaceMemory(rawLimit, rawRequest string) (limit, request resource.Quantity, err error) {
 	parse := func(flagName, raw string) (resource.Quantity, error) {
 		if raw == "" {

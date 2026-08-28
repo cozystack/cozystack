@@ -1577,8 +1577,9 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 	terminated := systemPod("migrate-once", "8Gi", "")
 	terminated.Status.Phase = corev1.PodSucceeded
 
-	// The other terminal phase. Both halves of the skip need a fixture of their own,
-	// or either half can be deleted with the suite still green.
+	// Failed is NOT skipped, and needs its own fixture to pin that. An eviction or a
+	// node crash leaves one of these holding the oversized request, its controller
+	// recreates it, and dropping the ceiling meanwhile rejects the replacement for good.
 	crashed := systemPod("crashed-once", "9Gi", "")
 	crashed.Status.Phase = corev1.PodFailed
 
@@ -1614,10 +1615,23 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 			objects: []client.Object{systemPod("exactly-at", "4Gi", "")},
 		},
 		{
-			// A finished pod is never recreated from this spec, so it cannot
-			// block admission of anything — in either terminal phase.
-			name:    "a terminated pod does not count",
-			objects: []client.Object{terminated, crashed},
+			// A pod that ran to completion is never recreated from this spec,
+			// so it cannot block admission of anything.
+			name:    "a succeeded pod does not count",
+			objects: []client.Object{terminated},
+		},
+		{
+			// A Failed pod does count. It is frequently the only surviving
+			// evidence that the namespace needs a raised ceiling, because the
+			// shape this scan looks for cannot be admitted once the namespace
+			// has settled, so an evicted carcass is all that is left to find.
+			name:    "a failed pod still counts",
+			objects: []client.Object{crashed},
+			want: &memoryRequestBlocker{
+				workload:  "Pod/crashed-once",
+				container: "crashed-once-app",
+				request:   resource.MustParse("9Gi"),
+			},
 		},
 		{
 			// LimitRanger defaults init containers on the same terms as
@@ -1821,8 +1835,14 @@ func foreignLimitRange(name string, limitType corev1.LimitType, field, resourceN
 	switch field {
 	case "default":
 		item.Default = quantities
+	case "defaultRequest":
+		item.DefaultRequest = quantities
 	case "max":
 		item.Max = quantities
+	case "min":
+		item.Min = quantities
+	case "ratio":
+		item.MaxLimitRequestRatio = quantities
 	}
 	return &corev1.LimitRange{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cozy-monitoring"},
@@ -1938,10 +1958,10 @@ func TestReconcileSystemDefaultsLimitRangeWithdrawsWhenAForeignPolicyAppears(t *
 	}
 }
 
-// Read too widely the guard becomes a blanket opt-out that any unrelated LimitRange trips,
-// and a namespace loses its memory default over a cpu policy. Only a container memory
-// default or max collides with what this reconciler writes.
-func TestReconcileSystemDefaultsLimitRangeIgnoresLimitRangesThatDoNotTouchContainerMemory(t *testing.T) {
+// The guard is narrow on the resource and broad on everything else, and both halves need
+// pinning. A LimitRange bounding cpu is no business of this reconciler and must coexist,
+// or the guard becomes a blanket opt-out any unrelated policy can trip.
+func TestReconcileSystemDefaultsLimitRangeIgnoresLimitRangesThatDoNotTouchMemory(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
 	for _, tc := range []struct {
@@ -1950,7 +1970,7 @@ func TestReconcileSystemDefaultsLimitRangeIgnoresLimitRangesThatDoNotTouchContai
 	}{
 		{"container cpu default", foreignLimitRange("cpu-policy", corev1.LimitTypeContainer, "default", "cpu", "500m")},
 		{"container cpu max", foreignLimitRange("cpu-ceiling", corev1.LimitTypeContainer, "max", "cpu", "2")},
-		{"pod-scoped memory max", foreignLimitRange("pod-policy", corev1.LimitTypePod, "max", "memory", "2Gi")},
+		{"pod cpu max", foreignLimitRange("pod-cpu", corev1.LimitTypePod, "max", "cpu", "4")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.foreign).Build()
@@ -1968,9 +1988,141 @@ func TestReconcileSystemDefaultsLimitRangeIgnoresLimitRangesThatDoNotTouchContai
 			}
 
 			if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("32Gi")) != 0 {
-				t.Errorf("default memory = %s, want the configured 32Gi; %q constrains neither container "+
-					"memory default nor max and must not withhold it", got.String(), tc.foreign.Name)
+				t.Errorf("default memory = %s, want the configured 32Gi; %q says nothing about memory "+
+					"and must not withhold it", got.String(), tc.foreign.Name)
 			}
 		})
+	}
+}
+
+// The other half. Every memory-bearing field withholds, at either scope, because each one
+// can reject the pods this reconciler's own default and defaultRequest would produce:
+//
+//   - a container max below the default, or a min above the defaultRequest, rejects directly;
+//   - a maxLimitRequestRatio rejects because 32Gi against 32Mi is a ratio of 1024:1;
+//   - a Pod-scoped bound cannot even be evaluated here, since whether a per-container default
+//     breaches it depends on how many containers a pod that does not exist yet will have.
+//
+// The last one is why this is an ownership rule and not arithmetic. Checking only the fields
+// whose collision is computable leaves the namespace-wide rejection reachable through the
+// fields whose collision is not.
+func TestReconcileSystemDefaultsLimitRangeWithholdsForAnyForeignMemoryPolicy(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	for _, tc := range []struct {
+		name    string
+		foreign *corev1.LimitRange
+	}{
+		{"container memory default", foreignLimitRange("mem-default", corev1.LimitTypeContainer, "default", "memory", "512Mi")},
+		{"container memory defaultRequest", foreignLimitRange("mem-defreq", corev1.LimitTypeContainer, "defaultRequest", "memory", "64Mi")},
+		{"container memory max", foreignLimitRange("mem-max", corev1.LimitTypeContainer, "max", "memory", "2Gi")},
+		{"container memory min", foreignLimitRange("mem-min", corev1.LimitTypeContainer, "min", "memory", "128Mi")},
+		{"container memory ratio", foreignLimitRange("mem-ratio", corev1.LimitTypeContainer, "ratio", "memory", "4")},
+		{"pod memory max", foreignLimitRange("pod-mem-max", corev1.LimitTypePod, "max", "memory", "2Gi")},
+		{"pod memory min", foreignLimitRange("pod-mem-min", corev1.LimitTypePod, "min", "memory", "1Gi")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.foreign).Build()
+
+			r := &PackageReconciler{
+				Client:                       cl,
+				APIReader:                    cl,
+				Scheme:                       scheme,
+				SystemNamespaceMemoryLimit:   resource.MustParse("32Gi"),
+				SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+			}
+
+			if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+
+			err := cl.Get(t.Context(), types.NamespacedName{
+				Name:      SystemDefaultsLimitRangeName,
+				Namespace: "cozy-monitoring",
+			}, &corev1.LimitRange{})
+			if !apierrors.IsNotFound(err) {
+				t.Errorf("wrote a container memory default beside %q, which already constrains memory (err = %v)",
+					tc.foreign.Name, err)
+			}
+		})
+	}
+}
+
+// A stamp dated ahead of the clock must not buy the ceiling extra time. Left unclamped it
+// held the raise for the skew plus the grace period, and held it with no log line, so a
+// GitOps re-apply of an object carrying an old future stamp froze the ceiling instead of
+// merely delaying it.
+func TestMemoryCeilingClearSinceClampsAFutureStamp(t *testing.T) {
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		name     string
+		raw      string
+		wantOK   bool
+		wantTime time.Time
+	}{
+		{"past stamp is taken as written", "2026-08-28T11:00:00Z", true, now.Add(-time.Hour)},
+		{"now is taken as written", "2026-08-28T12:00:00Z", true, now},
+		{"future stamp is clamped to now", "2026-08-28T18:00:00Z", true, now},
+		{"unparseable is absent, which restarts the wait", "tomorrow", false, time.Time{}},
+		{"absent is absent", "", false, time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lr := &corev1.LimitRange{}
+			if tc.raw != "" {
+				lr.Annotations = map[string]string{memoryCeilingClearSinceAnnotation: tc.raw}
+			}
+			got, ok := memoryCeilingClearSince(lr, now)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if ok && !got.Equal(tc.wantTime) {
+				t.Errorf("stamp = %s, want %s", got.Format(time.RFC3339), tc.wantTime.Format(time.RFC3339))
+			}
+		})
+	}
+}
+
+// The whole point of the clamp, at the reconcile level: a future-dated stamp cannot make the
+// hold outlast one grace period. Unclamped it lasted the skew plus the grace period, so an
+// hour of skew bought the ceiling ninety minutes instead of thirty.
+func TestReconcileSystemDefaultsLimitRangeBoundsAFutureStampToOneGracePeriod(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	clock := testClockAt(t, "2026-08-28T12:00:00Z")
+	// Stamped an hour ahead by something with a skewed clock.
+	raised := raisedFixture(t, "8Gi", "2026-08-28T13:00:00Z")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(raised).Build()
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+		Now:                          clock.now,
+	}
+
+	// First reconcile: the stamp is ahead of the clock, so it is clamped to now and written
+	// back. The ceiling is still held, which is correct - clamping must never shorten the
+	// wait, only stop it being extended.
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Fatalf("default memory = %s on the clamping reconcile, want the raise still held", got.String())
+	}
+	if got := clearSinceAnnotation(t, cl, "cozy-monitoring"); got != "2026-08-28T12:00:00Z" {
+		t.Fatalf("stamp = %q, want it clamped back to now (2026-08-28T12:00:00Z)", got)
+	}
+
+	// One grace period after that, and not one plus the hour of skew, the ceiling drops.
+	clock.advance(memoryCeilingDropGrace + time.Minute)
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
+		t.Errorf("default memory = %s a grace period after the clamp, want the configured 4Gi; "+
+			"an hour of skew must not buy the ceiling an extra hour", got.String())
 	}
 }

@@ -104,14 +104,18 @@ cozystackOperator:
   # that needs a ceiling other than this one states a limit in its own chart rather than
   # relying on the knob.
   #
-  # A system namespace where another LimitRange already defaults or caps container memory
-  # is left alone entirely, and anything the operator wrote there earlier is withdrawn.
-  # Two defaults in one namespace leave the effective ceiling to the order LimitRanger
-  # happens to iterate them, and a foreign container memory max below this default would
-  # have every container that declares no limit of its own rejected at admission.
+  # A system namespace where another LimitRange already says anything about memory is left
+  # alone entirely, and anything the operator wrote there earlier is withdrawn. Any
+  # memory-bearing field counts, at either the Container or the Pod scope: a second default
+  # leaves the effective ceiling to the order LimitRanger iterates them, while a max below
+  # this default, a min above the default request, or a maxLimitRequestRatio each reject the
+  # pod at admission. The Pod scope is in because the collision there cannot be decided in
+  # advance, it depends on how many containers a pod that does not exist yet will have.
+  # A LimitRange bounding only cpu or storage coexists normally.
   #
-  # Set to 0 to disable, which also removes the LimitRanges the operator previously
-  # created.
+  # Set to 0 to disable. Removal is lazy: it reaches every namespace an active Package still
+  # targets, and leaves the LimitRange behind in a namespace whose Package has since been
+  # removed. Leftovers carry app.kubernetes.io/managed-by: cozystack-package-controller.
   systemNamespaceMemoryLimit: ""
   # When non-empty, overrides the operator's --system-namespace-memory-request flag
   # (operator default: 32Mi). Deliberately small and always set: Kubernetes defaults
