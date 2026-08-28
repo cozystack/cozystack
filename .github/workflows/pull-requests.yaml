@@ -1298,7 +1298,7 @@ jobs:
               exit 1
             fi
             echo "Attempt $attempt failed, retrying..."
-            make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || true
+            make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container
           done
           echo "Prepare environment completed after $((attempt + 1)) attempts"
 
@@ -1414,10 +1414,10 @@ jobs:
       - name: Tear down sandbox
         if: always()
         run: |
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || true
+          cleanup_rc=0
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-          for n in 1 2 3; do sudo zpool destroy "data-srv${n}" 2>/dev/null || true; done
-          sudo rm -rf /var/lib/cozy-e2e-zpools
+          exit "$cleanup_rc"
 
   # Report the required "E2E Tests" gate as a commit status rather than relying
   # on a job named "E2E Tests". A required *job* that is skipped counts

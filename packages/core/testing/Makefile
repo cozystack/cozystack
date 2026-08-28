@@ -9,6 +9,7 @@ COZY_E2E_NODE_MEMORY_MIB ?= 24576
 ROOT_DIR = $(dir $(abspath $(firstword $(MAKEFILE_LIST))/../../..))
 COMPOSE_PROJECT ?= cozy-e2e
 COMPOSE_FILE ?= $(ROOT_DIR)hack/e2e-compose.yaml
+ZPOOL_BACKING_DIR ?= /var/lib/cozy-e2e-zpools
 
 include ../../../hack/common-envs.mk
 
@@ -55,13 +56,13 @@ prepare-cluster: copy-nocloud-image
 # No copy-nocloud-image dependency: containers boot from the Talos image
 # directly and need no nocloud asset, which also means this lane does not wait
 # on `make -C packages/core/talos assets`.
-prepare-cluster-container:
-	SANDBOX_NAME="${SANDBOX_NAME}" COMPOSE_PROJECT="${COMPOSE_PROJECT}" COMPOSE_FILE="${COMPOSE_FILE}" COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS}" COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB}" $(ROOT_DIR)hack/e2e-container-up.sh
+prepare-cluster-container: delete-cluster-container
+	SANDBOX_NAME="${SANDBOX_NAME}" COMPOSE_PROJECT="${COMPOSE_PROJECT}" COMPOSE_FILE="${COMPOSE_FILE}" ZPOOL_BACKING_DIR="${ZPOOL_BACKING_DIR}" COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS}" COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB}" $(ROOT_DIR)hack/e2e-container-up.sh
 	docker exec -e COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS}" -e COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster-container.bats'
 
-# Tear the container lane down. Volumes included: the node /var volumes hold
-# etcd and the kubelet state, so leaving them behind makes the next run adopt a
-# half-dead cluster instead of building a new one.
+# Tear the container lane down. Docker volumes hold etcd and kubelet state, and
+# the host zpools hold LINSTOR data, so both halves must disappear before a
+# retry or the next run can adopt a half-dead cluster.
 # USERDATA is set to a placeholder because compose interpolates the whole file
 # before it decides what the subcommand needs, so the `${USERDATA:?}` guard that
 # makes a missing machine config fail loudly on `up` also fails `down`, where no
@@ -71,6 +72,19 @@ prepare-cluster-container:
 # -- the exact half-dead cluster this target exists to prevent.
 delete-cluster-container:
 	USERDATA=teardown docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down -v || true
+	@set -eu; \
+		if [ -z "${ZPOOL_BACKING_DIR}" ] || [ "${ZPOOL_BACKING_DIR}" = / ]; then \
+			echo "refusing unsafe ZPOOL_BACKING_DIR '${ZPOOL_BACKING_DIR}'" >&2; \
+			exit 1; \
+		fi; \
+		if [ "$$(id -u)" -eq 0 ]; then sudo_cmd=; else sudo_cmd=sudo; fi; \
+		for n in 1 2 3; do \
+			if $$sudo_cmd zpool list "data-srv$${n}" >/dev/null 2>&1; then \
+				$$sudo_cmd zpool destroy "data-srv$${n}"; \
+			fi; \
+			$$sudo_cmd rm -f "${ZPOOL_BACKING_DIR}/srv$${n}.img"; \
+		done; \
+		$$sudo_cmd rmdir "${ZPOOL_BACKING_DIR}" 2>/dev/null || true
 
 # The API endpoint and E2E-only storage mode cross into the sandbox explicitly:
 # docker exec starts a fresh environment, so values exported by the caller do

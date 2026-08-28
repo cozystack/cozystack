@@ -91,6 +91,7 @@ E2E_CONTAINER_UP_LIB=true . "$CONTAINER_UP"
     SANDBOX_NAME=test \
     COMPOSE_PROJECT=cozy-custom \
     COMPOSE_FILE="$compose_file" \
+    ZPOOL_BACKING_DIR=/tmp/cozy-custom-zpools \
     prepare-cluster-container \
     delete-cluster-container)
 
@@ -102,6 +103,26 @@ E2E_CONTAINER_UP_LIB=true . "$CONTAINER_UP"
   if ! printf '%s\n' "$make_command" | grep -Fq \
     "docker compose -p \"cozy-custom\" -f \"$compose_file\" down -v"; then
     echo "container teardown does not reuse compose overrides" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$make_command" | grep -Fq \
+    'ZPOOL_BACKING_DIR="/tmp/cozy-custom-zpools"'; then
+    echo "container startup does not receive the backing-directory override" >&2
+    return 1
+  fi
+  for expected in \
+    'zpool destroy "data-srv${n}"' \
+    'rm -f "/tmp/cozy-custom-zpools/srv${n}.img"' \
+    'rmdir "/tmp/cozy-custom-zpools"'; do
+    if ! printf '%s\n' "$make_command" | grep -Fq "$expected"; then
+      echo "container teardown does not remove its host storage: $expected" >&2
+      return 1
+    fi
+  done
+  cleanup_line=$(printf '%s\n' "$make_command" | grep -n 'zpool destroy' | cut -d: -f1)
+  startup_line=$(printf '%s\n' "$make_command" | grep -n 'e2e-container-up.sh' | cut -d: -f1)
+  if [ -z "$cleanup_line" ] || [ -z "$startup_line" ] || [ "$cleanup_line" -ge "$startup_line" ]; then
+    echo "container storage cleanup does not run before startup" >&2
     return 1
   fi
 }
