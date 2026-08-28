@@ -279,6 +279,70 @@ func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPListenerAllowedRoutes_CDIRequiresHTTP01Exposure(t *testing.T) {
+	tests := []struct {
+		name        string
+		certMode    gatewayv1alpha1.CertMode
+		attached    []string
+		passthrough []string
+		wantCDI     bool
+	}{
+		{
+			name:        "default HTTP-01 mode",
+			attached:    []string{cdiUploadProxyNamespace},
+			passthrough: []string{cdiUploadProxyService},
+			wantCDI:     true,
+		},
+		{
+			name:        "explicit HTTP-01 mode",
+			certMode:    gatewayv1alpha1.CertModeHTTP01,
+			attached:    []string{cdiUploadProxyNamespace},
+			passthrough: []string{cdiUploadProxyService},
+			wantCDI:     true,
+		},
+		{
+			name:        "DNS-01 mode",
+			certMode:    gatewayv1alpha1.CertModeDNS01,
+			attached:    []string{cdiUploadProxyNamespace},
+			passthrough: []string{cdiUploadProxyService},
+		},
+		{
+			name:        "existing Secret mode",
+			certMode:    gatewayv1alpha1.CertModeExistingSecret,
+			attached:    []string{cdiUploadProxyNamespace},
+			passthrough: []string{cdiUploadProxyService},
+		},
+		{
+			name:        "namespace not attached",
+			certMode:    gatewayv1alpha1.CertModeHTTP01,
+			passthrough: []string{cdiUploadProxyService},
+		},
+		{
+			name:     "proxy not exposed",
+			certMode: gatewayv1alpha1.CertModeHTTP01,
+			attached: []string{cdiUploadProxyNamespace},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-root"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					CertMode:               tt.certMode,
+					AttachedNamespaces:     tt.attached,
+					TLSPassthroughServices: tt.passthrough,
+				},
+			}
+			allowed := buildHTTPListenerAllowedRoutes(tgw)
+			values := allowed.Namespaces.Selector.MatchExpressions[0].Values
+			if got := containsString(values, cdiUploadProxyNamespace); got != tt.wantCDI {
+				t.Fatalf("CDI namespace allowed=%v, want %v (values=%v)", got, tt.wantCDI, values)
+			}
+		})
+	}
+}
+
 func containsString(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {

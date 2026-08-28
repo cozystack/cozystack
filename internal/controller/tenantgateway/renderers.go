@@ -128,8 +128,9 @@ func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRo
 // allowedRoutes for the port-80 listener: only the tenant namespace
 // (the controller-owned http→https redirect HTTPRoute lives there)
 // and namespaces that legitimately publish HTTP-01 solver routes. That is
-// cert-manager's platform namespace plus the CDI namespace when its TLS-
-// passthrough listener is configured and CDI is an attached namespace.
+// cert-manager's platform namespace plus the CDI namespace when the Gateway
+// uses HTTP-01, its TLS-passthrough listener is configured, and CDI is an
+// attached namespace.
 //
 // Why: app HTTPRoutes (harbor, keycloak, dashboard, bucket) attach
 // by hostname with no sectionName, so without this narrower filter
@@ -137,15 +138,16 @@ func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRo
 // tie-breaks merged routes by creationTimestamp, so an app route
 // created before the controller's redirect would silently serve
 // plaintext on port 80 and leak credentials. Restricting the HTTP
-// listener's allowedRoutes namespaces excludes the cozy-* / tenant-*
-// namespaces apps live in, while keeping cert-manager's challenge
-// namespace open so ACME still completes.
+// listener's allowedRoutes namespaces excludes unrelated cozy-* / tenant-*
+// app namespaces, while keeping the required ACME solver namespaces open.
 func buildHTTPListenerAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRoutes {
 	values := []string{tgw.Namespace}
 	if acmeChallengeNamespace != tgw.Namespace {
 		values = append(values, acmeChallengeNamespace)
 	}
-	if stringInList(tgw.Spec.TLSPassthroughServices, cdiUploadProxyService) &&
+	usesHTTP01 := tgw.Spec.CertMode == "" || tgw.Spec.CertMode == gatewayv1alpha1.CertModeHTTP01
+	if usesHTTP01 &&
+		stringInList(tgw.Spec.TLSPassthroughServices, cdiUploadProxyService) &&
 		stringInList(tgw.Spec.AttachedNamespaces, cdiUploadProxyNamespace) &&
 		cdiUploadProxyNamespace != tgw.Namespace {
 		values = append(values, cdiUploadProxyNamespace)
