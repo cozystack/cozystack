@@ -153,7 +153,9 @@ func buildHTTPListenerAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gateway
 	if acmeChallengeNamespace != tgw.Namespace {
 		values = append(values, acmeChallengeNamespace)
 	}
-	if stringInList(tgw.Spec.TLSPassthroughServices, cdiUploadProxyService) &&
+	usesHTTP01 := tgw.Spec.CertMode == "" || tgw.Spec.CertMode == gatewayv1alpha1.CertModeHTTP01
+	if usesHTTP01 &&
+		stringInList(tgw.Spec.TLSPassthroughServices, cdiUploadProxyService) &&
 		stringInList(tgw.Spec.AttachedNamespaces, cdiUploadProxyNamespace) &&
 		cdiUploadProxyNamespace != tgw.Namespace {
 		values = append(values, cdiUploadProxyNamespace)
