@@ -15,6 +15,7 @@ suite: satellite pod resource limits
 
 templates:
   - templates/satellites-cozy.yaml
+  - templates/satellites-no-drbd.yaml
   - templates/satellites-plunger.yaml
 
 tests:
@@ -76,3 +77,30 @@ tests:
       - equal:
           path: spec.podTemplate.spec.containers[0].resources.limits.memory
           value: 128Mi
+
+  - it: no DaemonSet deletion patch is emitted on a DRBD-capable substrate
+    template: templates/satellites-no-drbd.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: drbd-logger is deleted from the effective DaemonSet without DRBD
+    template: templates/satellites-no-drbd.yaml
+    set:
+      drbd.enabled: false
+    asserts:
+      - isKind:
+          of: LinstorSatelliteConfiguration
+      - equal:
+          path: metadata.name
+          value: cozystack-no-drbd
+      - equal:
+          path: spec.patches[0].target
+          value:
+            group: apps
+            version: v1
+            kind: DaemonSet
+            name: linstor-satellite
+      - matchRegex:
+          path: spec.patches[0].patch
+          pattern: '(?s)containers:\s*- name: drbd-logger\s*\$patch: delete'
