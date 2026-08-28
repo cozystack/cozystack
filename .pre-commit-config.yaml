@@ -37,15 +37,13 @@ repos:
     # Requires bats-core on PATH; the make target says so explicitly when it is
     # missing.
     #
-    # The path filter covers the cross-tree inputs the suite audits, not just
-    # the scripts under test: those contracts reach into packages/, .github/,
-    # docs/, and .claude/hooks/, so narrowing this to hack/ would let exactly
-    # the regressions they exist to catch through.
+    # The hook is unconditional because the suite audits cross-tree inputs under
+    # packages/, .github/, docs/, and .claude/hooks/, and because a deletion-only
+    # commit still has to run the filesystem-derived discovery guards.
     - id: bats-unit-tests
       name: Run hack/*.bats unit tests
       entry: make bats-unit-tests bats-posix-compat-tests
       language: system
-      files: ^.*$
       always_run: true
       pass_filenames: false
 # Lints changed GitHub Actions workflows for unpinned actions and excessive token

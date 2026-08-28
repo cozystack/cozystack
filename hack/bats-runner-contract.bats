@@ -28,21 +28,19 @@ brc_write_parallel_stub() {
   return 0
 }
 
-@test "CI installs the exact checksum-verified Bats commit" {
+@test "CI installs the exact commit behind the Bats release tag" {
   version=$(yq -r '.jobs.checks.steps[] | select(.name == "Set up test toolchain") | .env.BATS_VERSION' "$BRC_WORKFLOW")
   commit=$(yq -r '.jobs.checks.steps[] | select(.name == "Set up test toolchain") | .env.BATS_COMMIT' "$BRC_WORKFLOW")
-  digest=$(yq -r '.jobs.checks.steps[] | select(.name == "Set up test toolchain") | .env.BATS_SHA256' "$BRC_WORKFLOW")
   [ "$version" = "1.14.0" ]
   [ "$commit" = "eb7f42f8d608ac693d7a4b67474f6714ea68cfc5" ]
-  [ "$digest" = "845574549f4c9777bf02fcdf307f1bf347d40c66920fb6b47dcc8fdfa065ac39" ]
 
   script=$(brc_toolchain_script)
-  printf '%s\n' "$script" | grep -Fq 'https://github.com/bats-core/bats-core/archive/$BATS_COMMIT.tar.gz'
-  printf '%s\n' "$script" | grep -Fq 'sha256sum -c -'
+  printf '%s\n' "$script" | grep -Fq 'git clone --quiet --depth=1 --branch "v$BATS_VERSION"'
+  printf '%s\n' "$script" | grep -Fq 'test "$(git -C "$bats_source" rev-parse HEAD)" = "$BATS_COMMIT"'
   gates=$(printf '%s\n' "$script" | grep -Fc 'grep -qx "Bats $BATS_VERSION"' || :)
   [ "$gates" -eq 2 ]
-  if printf '%s\n' "$script" | grep -q 'git clone'; then
-    echo "FAIL: the Bats installer still trusts a movable git ref"
+  if printf '%s\n' "$script" | grep -q '/archive/'; then
+    echo "FAIL: the Bats installer pins a byte-unstable generated archive"
     false
   fi
 }
@@ -63,20 +61,22 @@ brc_write_parallel_stub() {
   rm -rf "$tmp"
 }
 
-@test "the local hook covers the tree and documents its prerequisite" {
-  hook_filter=$(yq -r '.repos[].hooks[] | select(.id == "bats-unit-tests") | .files' "$BRC_REPO_ROOT/.pre-commit-config.yaml")
+@test "the local hook is unconditional and documents its prerequisite" {
   hook_entry=$(yq -r '.repos[].hooks[] | select(.id == "bats-unit-tests") | .entry' "$BRC_REPO_ROOT/.pre-commit-config.yaml")
   hook_always_run=$(yq -r '.repos[].hooks[] | select(.id == "bats-unit-tests") | .always_run' "$BRC_REPO_ROOT/.pre-commit-config.yaml")
-  [ "$hook_filter" = '^.*$' ]
   [ "$hook_entry" = 'make bats-unit-tests bats-posix-compat-tests' ]
   [ "$hook_always_run" = 'true' ]
   grep -Fq 'bats-core 1.5 or newer' "$BRC_REPO_ROOT/docs/agents/overview.md"
   grep -Fq 'SKIP=bats-unit-tests git commit' "$BRC_REPO_ROOT/docs/agents/overview.md"
 }
 
-@test "the POSIX compatibility lane retains every reviewed shell-facing file" {
+@test "the POSIX compatibility lane retains reviewed and sourced shell-facing files" {
   recipe=$(cd "$BRC_REPO_ROOT" && MAKEFLAGS= MAKELEVEL= make --no-print-directory -n bats-posix-compat-tests)
+  unit_files=$(cd "$BRC_REPO_ROOT" && MAKEFLAGS= MAKELEVEL= make --no-print-directory -s print-bats-unit-files)
+  sourced_chain_tests=$(cd "$BRC_REPO_ROOT" && grep -El '^[[:space:]]*\.[[:space:]]+.*e2e-chainsaw/_lib/.*\.sh' $unit_files)
+  [ -n "$sourced_chain_tests" ]
   for file in \
+    $sourced_chain_tests \
     hack/capture-dataplane.bats \
     hack/capture-previous-logs.bats \
     hack/cilium-leak-healer_test.bats \

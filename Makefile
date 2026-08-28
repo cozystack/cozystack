@@ -176,8 +176,12 @@ print-bats-unit-files:
 
 # `bats -j` needs GNU parallel and exits non-zero rather than degrading when it
 # is missing. moreutils also ships a command named parallel, so identify the GNU
-# implementation from its version output before enabling concurrency.
-BATS_JOBS ?= $(shell parallel --version 2>/dev/null | grep -q '^GNU parallel ' && nproc 2>/dev/null || echo 1)
+# implementation from its version output before enabling concurrency. Resolve
+# the probe once per make process; `?=` would keep the `$(shell ...)` recursive
+# and rerun it at every expansion.
+ifndef BATS_JOBS
+BATS_JOBS := $(shell parallel --version 2>/dev/null | grep -q '^GNU parallel ' && nproc 2>/dev/null || echo 1)
+endif
 
 print-bats-jobs:
 	@printf '%s\n' "$(BATS_JOBS)"
@@ -199,9 +203,13 @@ bats-unit-tests:
 
 # Real Bats is authoritative. These files also source production code whose
 # contract is POSIX sh, so retain a narrow pass through cozytest.sh's /bin/sh
-# translator. This catches a Bash-only regression without running the entire
-# unit suite twice.
-BATS_POSIX_COMPAT_FILES := \
+# translator. Chainsaw script steps run in the sandbox's dash, so discover every
+# unit file that dot-sources a Chainsaw library instead of maintaining a list
+# that goes stale as main adds tests. The explicit entries cover reviewed
+# shell-facing tests whose production path is held in a variable.
+BATS_SOURCED_CHAINSAW_FILES := $(shell grep -El '^[[:space:]]*\.[[:space:]]+.*e2e-chainsaw/_lib/.*\.sh' $(BATS_UNIT_FILES))
+BATS_POSIX_COMPAT_FILES := $(sort \
+	$(BATS_SOURCED_CHAINSAW_FILES) \
 	hack/capture-dataplane.bats \
 	hack/capture-previous-logs.bats \
 	hack/cilium-leak-healer_test.bats \
@@ -212,7 +220,8 @@ BATS_POSIX_COMPAT_FILES := \
 	hack/pod-label-census_test.bats \
 	hack/promote-rewrite-tags_test.bats \
 	hack/runner-identity.bats \
-	hack/seaweedfs-naming-audit.bats
+	hack/seaweedfs-naming-audit.bats \
+)
 
 bats-posix-compat-tests:
 	@for f in $(BATS_POSIX_COMPAT_FILES); do \
