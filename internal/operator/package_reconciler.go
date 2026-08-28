@@ -1112,12 +1112,15 @@ func (r *PackageReconciler) foreignContainerMemoryPolicy(ctx context.Context, ns
 
 // constrainsMemory reports whether a LimitRange item expresses any policy about memory.
 //
-// Every field is read, at every scope. The list below is the complete set of quantity maps a
-// LimitRangeItem carries today, which also means a field added upstream has to be added here
-// or it becomes a hole. That is exactly why this is its own function with its own table test
-// rather than a few conditions inline: the test enumerates the fields, so a new one shows up
-// as a gap in a list somebody is already reading.
+// Only Container and Pod items can constrain pod admission. Kubernetes accepts other scopes,
+// including a PersistentVolumeClaim item that mentions memory alongside its required storage
+// bound, but those quantities are not applied to pods. Within the pod-affecting scopes, every
+// field is read: the list below is the complete set of quantity maps a LimitRangeItem carries.
 func constrainsMemory(item corev1.LimitRangeItem) bool {
+	if item.Type != corev1.LimitTypeContainer && item.Type != corev1.LimitTypePod {
+		return false
+	}
+
 	for _, quantities := range []corev1.ResourceList{
 		item.Default, item.DefaultRequest, item.Max, item.Min, item.MaxLimitRequestRatio,
 	} {
