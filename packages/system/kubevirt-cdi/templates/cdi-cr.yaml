@@ -1,8 +1,11 @@
 {{- $cluster := .Values._cluster | default dict -}}
 {{- $rootHost := (index $cluster "root-host") | default "" -}}
 {{- $exposeServices := splitList "," ((index $cluster "expose-services") | default "") -}}
+{{- $wildcardSecret := (index $cluster "wildcard-secret-name") | default "" -}}
+{{- $proxyExposed := and $rootHost (has "cdi-uploadproxy" $exposeServices) -}}
+{{- $publicCertSecret := $wildcardSecret | default "cdi-uploadproxy-public-cert" -}}
 {{- $uploadProxyURL := .Values.uploadProxyURL | default "" -}}
-{{- if and (not $uploadProxyURL) $rootHost (has "cdi-uploadproxy" $exposeServices) -}}
+{{- if and (not $uploadProxyURL) $proxyExposed -}}
 {{- $uploadProxyURL = printf "https://cdi-uploadproxy.%s" $rootHost -}}
 {{- end -}}
 apiVersion: cdi.kubevirt.io/v1beta1
@@ -18,6 +21,18 @@ spec:
     featureGates:
     - HonorWaitForFirstConsumer
     - ExpandDisks
+  {{- if $proxyExposed }}
+  # CDI supports replacing the upload proxy's serving certificate. Keep the
+  # operator-managed service certificate intact and patch only the Deployment
+  # mount so CDI's rotation controller cannot overwrite the public certificate.
+  customizeComponents:
+    patches:
+    - resourceName: cdi-uploadproxy
+      resourceType: Deployment
+      type: strategic
+      patch: |
+        {"spec":{"template":{"spec":{"volumes":[{"name":"server-cert","secret":{"secretName":{{ $publicCertSecret | quote }}}}]}}}}
+  {{- end }}
   imagePullPolicy: IfNotPresent
   infra:
     nodeSelector:

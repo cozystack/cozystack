@@ -15,9 +15,9 @@ limitations under the License.
 */
 
 // Package wildcardsecret replicates the operator-provided wildcard TLS
-// Secret into the tenant namespaces that terminate TLS, so per-tenant
-// ingress controllers and Gateways can serve it from their own namespace
-// without any cross-namespace Secret read.
+// Secret into namespaces that terminate public TLS, so per-tenant ingress
+// controllers, Gateways, and the CDI upload proxy can serve it from their own
+// namespace without any cross-namespace Secret read.
 //
 // The root-tenant MVP wired the root tenant to an operator-supplied
 // wildcard Secret: only the Secret NAME rides the platform values channel
@@ -33,15 +33,16 @@ limitations under the License.
 // (cozy-system/cozystack-values), takes the wildcard Secret name from
 // _cluster.wildcard-secret-name and the publishing namespace from
 // _cluster.expose-ingress, and mirrors that Secret into every tenant
-// namespace that owns a termination point. Because the source is derived
-// from the same value that makes the consumers reference it, the replica
-// is created whenever the consumers expect it — no manual labelling, and
-// no window where a child controller references a Secret that will never
-// exist. Clearing _cluster.wildcard-secret-name (disabling the feature) is
-// the only path that prunes every replica. A values channel that is absent
-// or unreadable, or a source Secret that is merely missing or mistyped,
-// leaves existing replicas in place — so a transient gap, a delete+recreate
-// rotation, or a misconfiguration never drops tenant TLS.
+// namespace that owns a termination point and into the CDI namespace while
+// its upload proxy is exposed. Because the source is derived from the same
+// values that make the consumers reference it, the replica is created whenever
+// the consumers expect it — no manual labelling, and no window where a child
+// controller references a Secret that will never exist. Clearing
+// _cluster.wildcard-secret-name (disabling the feature) is the only path that
+// prunes every replica. A values channel that is absent or unreadable, or a
+// source Secret that is merely missing or mistyped, leaves existing replicas
+// in place — so a transient gap, a delete+recreate rotation, or a
+// misconfiguration never drops public TLS.
 //
 // Cache footprint: the manager's Secret informer is scoped (see
 // SecretCacheByObject, wired in cmd/cozystack-controller/main.go) to the
@@ -68,6 +69,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -118,6 +120,8 @@ const (
 	// defaultPublishingNamespace is the fallback publishing namespace when
 	// the values channel does not carry expose-ingress.
 	defaultPublishingNamespace = "tenant-root"
+	uploadProxyNamespace       = "cozy-kubevirt-cdi"
+	uploadProxyService         = "cdi-uploadproxy"
 
 	// sourceResyncInterval bounds how stale a tenant replica can be after
 	// the operator rotates the source Secret in place. The source is not
@@ -143,8 +147,8 @@ var (
 	errForeignCollision = errors.New("a non-managed Secret of the same name exists")
 )
 
-// Reconciler replicates the operator wildcard Secret into tenant
-// termination namespaces.
+// Reconciler replicates the operator wildcard Secret into namespaces that
+// terminate public TLS.
 type Reconciler struct {
 	client.Client
 	// Reader is the manager's uncached APIReader. It is used only for the two
@@ -167,9 +171,9 @@ type Reconciler struct {
 	Recorder record.EventRecorder
 }
 
-// platformValues is the subset of the _cluster channel this controller
-// needs: which Secret is the operator wildcard, and which namespace
-// publishes it.
+// platformValues is the subset of the _cluster channel this controller needs:
+// which Secret is the operator wildcard, which namespace publishes it, and
+// whether CDI's upload proxy is exposed.
 type platformValues struct {
 	Cluster struct {
 		// WildcardSecretName is a pointer so an ABSENT key (nil) — a
@@ -178,24 +182,25 @@ type platformValues struct {
 		// empty prunes; absence keeps replicas.
 		WildcardSecretName *string `json:"wildcard-secret-name"`
 		ExposeIngress      string  `json:"expose-ingress"`
+		ExposeServices     string  `json:"expose-services"`
 	} `json:"_cluster"`
 }
 
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 
-// Reconcile performs a full sync: it reads the wildcard source identity
-// from the platform values channel, mirrors the source into every tenant
-// namespace that owns a termination point, and prunes replicas that no
-// longer belong. Only an explicit disable (channel present, empty wildcard
-// name) prunes everything; an absent channel or an absent/non-TLS source
-// keeps existing replicas. While the feature is active the result requeues
-// on sourceResyncInterval so an in-place source rotation propagates even
-// though the source is not watched.
+// Reconcile performs a full sync: it reads the wildcard source identity from
+// the platform values channel, mirrors the source into every namespace that
+// needs to terminate public TLS, and prunes replicas that no longer belong.
+// Only an explicit disable (channel present, empty wildcard name) prunes
+// everything; an absent channel or an absent/non-TLS source keeps existing
+// replicas. While the feature is active the result requeues on
+// sourceResyncInterval so an in-place source rotation propagates even though
+// the source is not watched.
 func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	name, pubNS, present, err := r.readConfig(ctx)
+	name, pubNS, copyToUploadProxy, present, err := r.readConfig(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -242,7 +247,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 		return ctrl.Result{RequeueAfter: sourceResyncInterval}, nil
 	}
 
-	targets, err := r.terminationNamespaces(ctx, pubNS)
+	targets, err := r.targetNamespaces(ctx, pubNS, copyToUploadProxy)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -272,12 +277,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 }
 
 // readConfig returns the wildcard source name, the publishing namespace,
-// and whether the platform values channel was present and readable. An
-// absent or unreadable channel — or a present channel that omits the
-// wildcard-secret-name key — returns present=false (desired state unknown
-// → the caller keeps existing replicas), which is deliberately distinct
-// from a present channel carrying an explicitly empty name (an explicit
-// disable that prunes).
+// whether the exposed upload proxy needs a replica, and whether the platform
+// values channel was present and readable. An absent or unreadable channel —
+// or a present channel that omits the wildcard-secret-name key — returns
+// present=false (desired state unknown → the caller keeps existing replicas),
+// which is deliberately distinct from a present channel carrying an
+// explicitly empty name (an explicit disable that prunes).
 //
 // The publishing namespace is read from _cluster.expose-ingress. NOTE:
 // packages/core/platform/templates/apps.yaml documents that expose-ingress
@@ -291,43 +296,45 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 // wrong namespace and surface as a NotFound source — which Reconcile
 // handles non-destructively (replicas are kept, never pruned, on absence)
 // and logs a warning naming the namespace it looked in.
-func (r *Reconciler) readConfig(ctx context.Context) (name, namespace string, present bool, err error) {
+func (r *Reconciler) readConfig(ctx context.Context) (name, namespace string, copyToUploadProxy, present bool, err error) {
 	values := &corev1.Secret{}
 	err = r.Get(ctx, configKey, values)
 	if apierrors.IsNotFound(err) {
-		return "", "", false, nil
+		return "", "", false, false, nil
 	}
 	if err != nil {
-		return "", "", false, fmt.Errorf("get platform values: %w", err)
+		return "", "", false, false, fmt.Errorf("get platform values: %w", err)
 	}
 	raw, ok := values.Data[platformValuesKey]
 	if !ok {
-		return "", "", false, nil
+		return "", "", false, false, nil
 	}
 	var pv platformValues
 	if err := sigsyaml.Unmarshal(raw, &pv); err != nil {
 		// A malformed channel is surfaced as an error (Reconcile bails
 		// before any prune and requeues), never as a disable.
-		return "", "", false, fmt.Errorf("parse platform values: %w", err)
+		return "", "", false, false, fmt.Errorf("parse platform values: %w", err)
 	}
 	if pv.Cluster.WildcardSecretName == nil {
 		// The wildcard-secret-name key is absent (a partial or older
 		// values channel). Desired state is unknown → present=false so the
 		// caller keeps existing replicas; this is never a disable. The
 		// platform always writes the key, so this guards a misrender.
-		return "", "", false, nil
+		return "", "", false, false, nil
 	}
 	ns := pv.Cluster.ExposeIngress
 	if ns == "" {
 		ns = defaultPublishingNamespace
 	}
-	return *pv.Cluster.WildcardSecretName, ns, true, nil
+	return *pv.Cluster.WildcardSecretName, ns, serviceIsExposed(pv.Cluster.ExposeServices, uploadProxyService), true, nil
 }
 
-// terminationNamespaces returns every tenant namespace that owns a TLS
-// termination point, excluding the publishing namespace (the operator
-// Secret already lives there and must not be overwritten by a replica).
-func (r *Reconciler) terminationNamespaces(ctx context.Context, sourceNS string) ([]string, error) {
+// targetNamespaces returns every namespace that needs the wildcard locally,
+// excluding the publishing namespace (the operator Secret already lives there
+// and must not be overwritten by a replica). CDI is included only while its
+// upload proxy is exposed because passthrough makes that pod the public TLS
+// termination point.
+func (r *Reconciler) targetNamespaces(ctx context.Context, sourceNS string, copyToUploadProxy bool) ([]string, error) {
 	list := &corev1.NamespaceList{}
 	if err := r.List(ctx, list); err != nil {
 		return nil, fmt.Errorf("list namespaces: %w", err)
@@ -346,11 +353,20 @@ func (r *Reconciler) terminationNamespaces(ctx context.Context, sourceNS string)
 			// forbidden-error requeues.
 			continue
 		}
-		if ownsTerminationPoint(ns) {
+		if ownsTerminationPoint(ns) || copyToUploadProxy && ns.Name == uploadProxyNamespace {
 			out = append(out, ns.Name)
 		}
 	}
 	return out, nil
+}
+
+func serviceIsExposed(exposed, target string) bool {
+	for _, service := range strings.Split(exposed, ",") {
+		if strings.TrimSpace(service) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // ownsTerminationPoint reports whether a namespace runs its own ingress

@@ -49,11 +49,46 @@ func newScheme(t *testing.T) *runtime.Scheme {
 // (cozy-system/cozystack-values) carrying the wildcard source name and the
 // publishing namespace, exactly as packages/core/platform writes it.
 func configSecret(wildcardName, exposeIngress string) *corev1.Secret {
-	values := fmt.Sprintf("_cluster:\n  expose-ingress: %q\n  wildcard-secret-name: %q\n", exposeIngress, wildcardName)
+	return configSecretWithServices(wildcardName, exposeIngress, "")
+}
+
+func configSecretWithServices(wildcardName, exposeIngress, exposeServices string) *corev1.Secret {
+	values := fmt.Sprintf("_cluster:\n  expose-ingress: %q\n  expose-services: %q\n  wildcard-secret-name: %q\n", exposeIngress, exposeServices, wildcardName)
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: platformValuesNamespace, Name: platformValuesName},
 		Type:       corev1.SecretTypeOpaque,
 		Data:       map[string][]byte{platformValuesKey: []byte(values)},
+	}
+}
+
+// TestReconcile_ReplicatesIntoExposedUploadProxyNamespace pins the public TLS
+// contract for CDI passthrough: the pod serves the platform wildcard itself,
+// so its namespace receives a copy only while cdi-uploadproxy is exposed.
+func TestReconcile_ReplicatesIntoExposedUploadProxyNamespace(t *testing.T) {
+	s := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(
+		configSecretWithServices("wildcard-tls", "tenant-root", "dashboard, cdi-uploadproxy"),
+		tlsSecret("tenant-root", "wildcard-tls", map[string][]byte{"tls.crt": []byte("CRT"), "tls.key": []byte("KEY")}),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: uploadProxyNamespace}},
+	).Build()
+	mustReconcile(t, c)
+
+	if _, ok := getSecret(t, c, uploadProxyNamespace, "wildcard-tls"); !ok {
+		t.Fatalf("the exposed upload proxy must receive the wildcard certificate")
+	}
+
+	cfg := &corev1.Secret{}
+	if err := c.Get(context.TODO(), configKey, cfg); err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	cfg.Data[platformValuesKey] = []byte("_cluster:\n  expose-ingress: \"tenant-root\"\n  expose-services: \"dashboard\"\n  wildcard-secret-name: \"wildcard-tls\"\n")
+	if err := c.Update(context.TODO(), cfg); err != nil {
+		t.Fatalf("hide upload proxy: %v", err)
+	}
+	mustReconcile(t, c)
+
+	if _, ok := getSecret(t, c, uploadProxyNamespace, "wildcard-tls"); ok {
+		t.Errorf("the upload proxy copy must be pruned when the service is no longer exposed")
 	}
 }
 
