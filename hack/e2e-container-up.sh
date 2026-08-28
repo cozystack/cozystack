@@ -108,10 +108,13 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
 COMPOSE_FILE="${COMPOSE_FILE:-${REPO_ROOT}/hack/e2e-compose.yaml}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-cozy-e2e}"
-# 60 GB is NOT enough: LINSTOR can place both tenant workers on one node, and
-# 2x20 GiB worker disks + 2x~21 GiB CDI import scratch + etcd is ~86 GiB. The
-# QEMU lane gives each node a 200 GB /dev/vdc; this is the container equivalent.
-ZPOOL_SIZE="${ZPOOL_SIZE:-120G}"
+# A smaller pool is not safe even when its sparse backing file fits physically:
+# root-tenant local PVCs can leave a satellite with less than the ~21 GiB needed
+# by CDI scratch. Once a worker's 20 GiB target PV is bound there, node affinity
+# forces the importer and scratch volume onto that same full satellite. Match the
+# QEMU lane's per-node 200 GB /dev/vdc so placement cannot turn node join into a
+# storage-capacity lottery.
+ZPOOL_SIZE="${ZPOOL_SIZE:-200G}"
 ZPOOL_BACKING_DIR="${ZPOOL_BACKING_DIR:-/var/lib/cozy-e2e-zpools}"
 KUBERNETES_VERSION="${KUBERNETES_VERSION:-v1.33.12}"
 COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS:-8}"
