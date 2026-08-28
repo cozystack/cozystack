@@ -77,3 +77,24 @@ E2E_CONTAINER_UP_LIB=true . "$CONTAINER_UP"
     return 1
   fi
 }
+
+@test "container compose overrides reach both startup and teardown" {
+  compose_file=/tmp/cozy-custom-compose.yaml
+  make_command=$(make -n -C packages/core/testing \
+    SANDBOX_NAME=test \
+    COMPOSE_PROJECT=cozy-custom \
+    COMPOSE_FILE="$compose_file" \
+    prepare-cluster-container \
+    delete-cluster-container)
+
+  if ! printf '%s\n' "$make_command" | grep -Fq \
+    "COMPOSE_PROJECT=\"cozy-custom\" COMPOSE_FILE=\"$compose_file\""; then
+    echo "container startup does not receive compose overrides" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$make_command" | grep -Fq \
+    "docker compose -p \"cozy-custom\" -f \"$compose_file\" down -v"; then
+    echo "container teardown does not reuse compose overrides" >&2
+    return 1
+  fi
+}

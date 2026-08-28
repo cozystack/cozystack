@@ -7,6 +7,8 @@ COZY_E2E_NODE_CPUS ?= 8
 COZY_E2E_NODE_MEMORY_MIB ?= 24576
 
 ROOT_DIR = $(dir $(abspath $(firstword $(MAKEFILE_LIST))/../../..))
+COMPOSE_PROJECT ?= cozy-e2e
+COMPOSE_FILE ?= $(ROOT_DIR)hack/e2e-compose.yaml
 
 include ../../../hack/common-envs.mk
 
@@ -54,7 +56,7 @@ prepare-cluster: copy-nocloud-image
 # directly and need no nocloud asset, which also means this lane does not wait
 # on `make -C packages/core/talos assets`.
 prepare-cluster-container:
-	SANDBOX_NAME="${SANDBOX_NAME}" COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS}" COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB}" $(ROOT_DIR)hack/e2e-container-up.sh
+	SANDBOX_NAME="${SANDBOX_NAME}" COMPOSE_PROJECT="${COMPOSE_PROJECT}" COMPOSE_FILE="${COMPOSE_FILE}" COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS}" COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB}" $(ROOT_DIR)hack/e2e-container-up.sh
 	docker exec -e COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS}" -e COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster-container.bats'
 
 # Tear the container lane down. Volumes included: the node /var volumes hold
@@ -68,7 +70,7 @@ prepare-cluster-container:
 # swallowed it, and the nodes and their /var volumes survived into the next run
 # -- the exact half-dead cluster this target exists to prevent.
 delete-cluster-container:
-	USERDATA=teardown docker compose -p cozy-e2e -f $(ROOT_DIR)hack/e2e-compose.yaml down -v || true
+	USERDATA=teardown docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down -v || true
 
 # The API endpoint and E2E-only storage mode cross into the sandbox explicitly:
 # docker exec starts a fresh environment, so values exported by the caller do
