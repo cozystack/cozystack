@@ -122,6 +122,8 @@ timeout() {
     [ "${1:-}" = -k ] || return 97
     shift 3
     "$@"
+    # cozytest.sh injects `return 0` before a bare closing brace, so this
+    # explicit return is what keeps the wrapped command's status in that lane.
     return $?
 }
 
