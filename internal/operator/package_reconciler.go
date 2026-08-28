@@ -1250,7 +1250,6 @@ func (r *PackageReconciler) raisedCeiling(nsName string, ceiling resource.Quanti
 	return lr
 }
 
-
 // containerMemoryDefault reports the container memory default lr currently sets, if it sets
 // one at all. An absent LimitRange, or one whose spec has been stripped, defaults nothing.
 func containerMemoryDefault(lr *corev1.LimitRange) (resource.Quantity, bool) {

@@ -812,7 +812,6 @@ func TestReconcileSystemDefaultsLimitRangeRestartsTheGraceOnAnUnparseableStamp(t
 	}
 }
 
-
 // The mirror case, and the one that keeps the guard from being a blanket opt-out:
 // LimitRanger never defaults a container that already declares a memory limit, so a
 // large request paired with its own limit cannot be broken by the LimitRange and must
@@ -916,7 +915,6 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.
 				Name:      SystemDefaultsLimitRangeName,
 				Namespace: "cozy-monitoring",
 			}, got)
-
 
 			if err != nil {
 				t.Fatalf("existing LimitRange retracted on the strength of a failed %s read: %v", tt.name, err)
@@ -1037,7 +1035,6 @@ func listedKind(listed []string, kind string) bool {
 	}
 	return false
 }
-
 
 // The regression the "some default is in force" skip caused, and the reason the skip is
 // pinned to the configured limit instead.
@@ -1189,7 +1186,6 @@ func TestReconcileSystemDefaultsLimitRangeHoldsTheCeilingForASmallerBlocker(t *t
 		t.Errorf("default memory = %s a grace period after the larger pod returned, want the 16Gi it requests", got.String())
 	}
 }
-
 
 // The comparison guarding that write has to be semantic rather than structural, or a
 // LimitRange written in a different but equivalent notation would re-apply on every
