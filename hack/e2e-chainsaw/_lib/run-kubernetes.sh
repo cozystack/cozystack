@@ -4794,17 +4794,24 @@ cozy_report_node_join_timing() {
   if command -v timeout >/dev/null 2>&1; then
     event_rows=$(timeout -k 5 25 kubectl -n tenant-test get events.events.k8s.io \
       --request-timeout=20s \
-      -o jsonpath='{range .items[*]}{.eventTime}{"\t"}{.regarding.kind}{"\t"}{.regarding.name}{"\t"}{.reason}{"\t"}{.note}{"\n"}{end}' 2>&1) || event_rc=$?
+      -o jsonpath='{range .items[*]}{.eventTime}{"\t"}{.series.lastObservedTime}{"\t"}{.deprecatedLastTimestamp}{"\t"}{.metadata.creationTimestamp}{"\t"}{.regarding.kind}{"\t"}{.regarding.name}{"\t"}{.reason}{"\t"}{.note}{"\n"}{end}' 2>&1) || event_rc=$?
   else
     event_rows=$(kubectl -n tenant-test get events.events.k8s.io \
       --request-timeout=20s \
-      -o jsonpath='{range .items[*]}{.eventTime}{"\t"}{.regarding.kind}{"\t"}{.regarding.name}{"\t"}{.reason}{"\t"}{.note}{"\n"}{end}' 2>&1) || event_rc=$?
+      -o jsonpath='{range .items[*]}{.eventTime}{"\t"}{.series.lastObservedTime}{"\t"}{.deprecatedLastTimestamp}{"\t"}{.metadata.creationTimestamp}{"\t"}{.regarding.kind}{"\t"}{.regarding.name}{"\t"}{.reason}{"\t"}{.note}{"\n"}{end}' 2>&1) || event_rc=$?
   fi
   echo "worker provisioning milestones (UTC; image-pull durations are kubelet-reported):"
   if [ "$event_rc" -eq 0 ]; then
     printf '%s\n' "$event_rows" | awk -F '\t' -v prefix="$prefix" '
-      index($3, prefix) && $4 ~ /^(SuccessfulCreate|WaitForFirstConsumer|ProvisioningSucceeded|ImportTargetInUse|Scheduled|Pulling|Pulled|ImportScheduled|Unschedulable|ImportInProgress|Completed|ImportSucceeded|Created|Started|SuccessfulSetNodeRef)$/ {
-        print $0
+      BEGIN { OFS = FS }
+      {
+        timestamp = $1
+        if (timestamp == "") timestamp = $2
+        if (timestamp == "") timestamp = $3
+        if (timestamp == "") timestamp = $4
+      }
+      index($6, prefix) && $7 ~ /^(SuccessfulCreate|WaitForFirstConsumer|ProvisioningSucceeded|ImportTargetInUse|Scheduled|Pulling|Pulled|ImportScheduled|Unschedulable|ImportInProgress|Completed|ImportSucceeded|Created|Started|SuccessfulSetNodeRef)$/ {
+        print timestamp, $5, $6, $7, $8
       }
     ' | sort | sed 's/^/  /'
   else

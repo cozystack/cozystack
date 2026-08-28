@@ -6,10 +6,10 @@ kubectl() {
   case "$*" in
     *"get events.events.k8s.io"*)
       printf '%b\n' \
-        '2026-08-27T13:50:07Z\tDataVolume\tkubernetes-test-latest-version-md0-a-worker-disk-system\tImportInProgress\tImport in progress' \
-        '2026-08-27T13:51:02Z\tDataVolume\tkubernetes-test-latest-version-md0-a-worker-disk-system\tCompleted\tImport Complete' \
-        '2026-08-27T13:51:06Z\tPod\tvirt-launcher-kubernetes-test-latest-version-md0-a-worker-abc\tPulled\tSuccessfully pulled image in 3.355s' \
-        '2026-08-27T13:51:54Z\tMachine\tkubernetes-test-latest-version-md0-a-worker\tSuccessfulSetNodeRef\tkubernetes-test-latest-version-md0-a-worker'
+        '\t\t2026-08-27T13:50:07Z\t2026-08-27T13:49:00Z\tDataVolume\tkubernetes-test-latest-version-md0-a-worker-disk-system\tImportInProgress\tImport in progress' \
+        '2026-08-27T13:51:02Z\t\t\t2026-08-27T13:49:00Z\tDataVolume\tkubernetes-test-latest-version-md0-a-worker-disk-system\tCompleted\tImport Complete' \
+        '2026-08-27T13:51:06Z\t\t\t2026-08-27T13:49:00Z\tPod\tvirt-launcher-kubernetes-test-latest-version-md0-a-worker-abc\tPulled\tSuccessfully pulled image in 3.355s' \
+        '2026-08-27T13:51:54Z\t\t\t2026-08-27T13:49:00Z\tMachine\tkubernetes-test-latest-version-md0-a-worker\tSuccessfulSetNodeRef\tkubernetes-test-latest-version-md0-a-worker'
       ;;
     *"get nodes"*)
       printf '%b\n' 'worker-a\tcreated=2026-08-27T13:51:45Z\tReady=2026-08-27T13:52:03Z'
@@ -46,9 +46,13 @@ assert_contains() {
   assert_contains "$output" 'worker-pool request -> Ready wait: 40s'
   assert_contains "$output" 'two-node Ready wait: 205s'
   assert_contains "$output" 'worker-pool request -> two nodes Ready: 245s'
-  assert_contains "$output" $'DataVolume\tkubernetes-test-latest-version-md0-a-worker-disk-system\tImportInProgress'
+  expected=$(printf 'DataVolume\tkubernetes-test-latest-version-md0-a-worker-disk-system\tImportInProgress')
+  assert_contains "$output" "$expected"
+  expected=$(printf '2026-08-27T13:50:07Z\tDataVolume')
+  assert_contains "$output" "$expected"
   assert_contains "$output" 'Successfully pulled image in 3.355s'
-  assert_contains "$output" $'worker-a\tcreated=2026-08-27T13:51:45Z\tReady=2026-08-27T13:52:03Z'
+  expected=$(printf 'worker-a\tcreated=2026-08-27T13:51:45Z\tReady=2026-08-27T13:52:03Z')
+  assert_contains "$output" "$expected"
   assert_contains "$output" 'duration=0.432s'
 }
 
