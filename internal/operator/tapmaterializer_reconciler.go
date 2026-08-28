@@ -209,6 +209,12 @@ func (r *TapMaterializerReconciler) pruneMaterialized(ctx context.Context, sourc
 // operator pod can reach it without CoreDNS. It fails open: any parse/lookup
 // problem (non-cluster host, Service missing, headless/empty ClusterIP) returns
 // the original URL unchanged, so this only ever adds a reachable path.
+//
+// Failing open here is safe ONLY because integrity is enforced downstream:
+// verifyAndExtract rejects an absent or mismatched digest (see
+// tapmaterializer_artifact.go). Resolving to the wrong host therefore yields a
+// digest-mismatch error, never a silent content substitution. If the digest
+// handling is ever relaxed, this fail-open must be revisited.
 func (r *TapMaterializerReconciler) resolveArtifactURL(ctx context.Context, rawURL string) string {
 	logger := log.FromContext(ctx)
 	u, err := neturl.Parse(rawURL)

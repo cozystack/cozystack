@@ -215,6 +215,14 @@ to validate and push. The generated tree passes 'cozypkg validate' as-is.`,
 		if psName == "" {
 			psName = "example." + app
 		}
+		// Reserved namespaces: the tap materializer will rename a community
+		// source under "community.", and "cozystack." is the platform's own.
+		// The index gate rejects these in `validate`; fail early here too.
+		for _, p := range []string{"cozystack.", "community."} {
+			if strings.HasPrefix(psName, p) {
+				return fmt.Errorf("--name %q uses reserved prefix %q; pick a neutral name like <org>.%s", psName, p, app)
+			}
+		}
 
 		files := scaffoldFiles(psName, app)
 		if err := writeScaffold(dir, files); err != nil {
