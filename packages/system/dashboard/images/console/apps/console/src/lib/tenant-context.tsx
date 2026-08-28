@@ -65,43 +65,22 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       .sort((a, b) => displayName(a).localeCompare(displayName(b)))
   }, [list.data])
 
+  useEffect(() => {
+    if (!tenants.length) return
+    if (selectedTenant && tenants.some((t) => displayName(t) === selectedTenant)) return
+    const fallback =
+      tenants.find((t) => displayName(t) === "root") ?? tenants[0]
+    setSelectedTenant(displayName(fallback))
+  }, [tenants, selectedTenant])
 
-  const storeTenant = (name: string | null) => {
+  const selectTenant = (name: string) => {
+    setSelectedTenant(name)
     try {
-      if (name === null) window.localStorage.removeItem(SELECTED_TENANT_KEY)
-      else window.localStorage.setItem(SELECTED_TENANT_KEY, name)
+      window.localStorage.setItem(SELECTED_TENANT_KEY, name)
     } catch {
       // ignore storage quota / private-mode failures
     }
   }
-
-  const selectTenant = (name: string) => {
-    setSelectedTenant(name)
-    storeTenant(name)
-  }
-
-  // The list is scoped by the selection itself, so a tenant that was deleted,
-  // was never visible, or arrived from a URL comes back empty: the fallback
-  // below then has no candidate and the picker nothing to offer, and the
-  // session strands there with storage putting it back on every reload.
-  // Forgetting the selection re-runs the query unscoped. A tenant always
-  // carries its own label, so an empty list means it is gone, never that it
-  // merely has no children.
-  const stranded =
-    !list.isLoading && !tenants.length && selectedTenant !== null
-  const unresolved =
-    !list.isLoading &&
-    tenants.length > 0 &&
-    !(selectedTenant && tenants.some((t) => displayName(t) === selectedTenant))
-
-  useEffect(() => {
-    if (!stranded && !unresolved) return
-    const next = stranded
-      ? null
-      : displayName(tenants.find((t) => displayName(t) === "root") ?? tenants[0])
-    if (next === null) storeTenant(null)
-    setSelectedTenant(next)
-  }, [stranded, unresolved, tenants])
 
   const value: TenantContextValue = {
     tenants,
@@ -131,9 +110,8 @@ export function useTenantContext(): TenantContextValue {
  * Applied once per navigation rather than on every render, so the tenant picker
  * -- which switches the tenant without leaving the page -- is not dragged back
  * to the URL under the user, while returning to the entry through history
- * asserts it again. The value is not validated here: a tenant the user cannot
- * see resolves to an empty list, which the provider treats as a dead selection
- * and forgets.
+ * asserts it again. The provider's own fallback stays free to reject a tenant
+ * the user cannot see.
  */
 export function useTenantFromUrl() {
   const { key } = useLocation()
