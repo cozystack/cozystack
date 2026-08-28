@@ -66,29 +66,45 @@ func configSecretWithServices(wildcardName, exposeIngress, exposeServices string
 // so its namespace receives a copy only while cdi-uploadproxy is exposed.
 func TestReconcile_ReplicatesIntoExposedUploadProxyNamespace(t *testing.T) {
 	s := newScheme(t)
+	internalCert := tlsSecret(uploadProxyNamespace, "cdi-uploadproxy-server-cert", map[string][]byte{
+		"tls.crt": []byte("INTERNAL"),
+		"tls.key": []byte("INTERNAL-KEY"),
+	})
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(
-		configSecretWithServices("wildcard-tls", "tenant-root", "dashboard, cdi-uploadproxy"),
-		tlsSecret("tenant-root", "wildcard-tls", map[string][]byte{"tls.crt": []byte("CRT"), "tls.key": []byte("KEY")}),
+		configSecretWithServices("cdi-uploadproxy-server-cert", "tenant-root", "dashboard, cdi-uploadproxy"),
+		tlsSecret("tenant-root", "cdi-uploadproxy-server-cert", map[string][]byte{"tls.crt": []byte("PUBLIC"), "tls.key": []byte("PUBLIC-KEY")}),
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: uploadProxyNamespace}},
+		internalCert,
 	).Build()
 	mustReconcile(t, c)
 
-	if _, ok := getSecret(t, c, uploadProxyNamespace, "wildcard-tls"); !ok {
+	publicCert, ok := getSecret(t, c, uploadProxyNamespace, uploadProxyWildcardSecret)
+	if !ok {
 		t.Fatalf("the exposed upload proxy must receive the wildcard certificate")
+	}
+	if got := string(publicCert.Data["tls.crt"]); got != "PUBLIC" {
+		t.Errorf("public wildcard copy contains %q, want PUBLIC", got)
+	}
+	gotInternal, ok := getSecret(t, c, uploadProxyNamespace, "cdi-uploadproxy-server-cert")
+	if !ok || string(gotInternal.Data["tls.crt"]) != "INTERNAL" {
+		t.Fatalf("CDI's internal certificate must not be overwritten, got %+v", gotInternal)
 	}
 
 	cfg := &corev1.Secret{}
 	if err := c.Get(context.TODO(), configKey, cfg); err != nil {
 		t.Fatalf("get config: %v", err)
 	}
-	cfg.Data[platformValuesKey] = []byte("_cluster:\n  expose-ingress: \"tenant-root\"\n  expose-services: \"dashboard\"\n  wildcard-secret-name: \"wildcard-tls\"\n")
+	cfg.Data[platformValuesKey] = []byte("_cluster:\n  expose-ingress: \"tenant-root\"\n  expose-services: \"dashboard\"\n  wildcard-secret-name: \"cdi-uploadproxy-server-cert\"\n")
 	if err := c.Update(context.TODO(), cfg); err != nil {
 		t.Fatalf("hide upload proxy: %v", err)
 	}
 	mustReconcile(t, c)
 
-	if _, ok := getSecret(t, c, uploadProxyNamespace, "wildcard-tls"); ok {
+	if _, ok := getSecret(t, c, uploadProxyNamespace, uploadProxyWildcardSecret); ok {
 		t.Errorf("the upload proxy copy must be pruned when the service is no longer exposed")
+	}
+	if got, ok := getSecret(t, c, uploadProxyNamespace, "cdi-uploadproxy-server-cert"); !ok || string(got.Data["tls.crt"]) != "INTERNAL" {
+		t.Errorf("pruning the public copy must leave CDI's internal certificate untouched, got %+v", got)
 	}
 }
 

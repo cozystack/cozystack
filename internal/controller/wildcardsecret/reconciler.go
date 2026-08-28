@@ -122,6 +122,12 @@ const (
 	defaultPublishingNamespace = "tenant-root"
 	uploadProxyNamespace       = "cozy-kubevirt-cdi"
 	uploadProxyService         = "cdi-uploadproxy"
+	// uploadProxyWildcardSecret is deliberately independent of the source
+	// Secret name. CDI already owns cdi-uploadproxy-server-cert in its
+	// namespace; mounting an operator wildcard with that same source name
+	// would otherwise collide with CDI's private serving certificate and
+	// silently leave the public proxy on an untrusted certificate.
+	uploadProxyWildcardSecret = "cdi-uploadproxy-wildcard-cert"
 
 	// sourceResyncInterval bounds how stale a tenant replica can be after
 	// the operator rotates the source Secret in place. The source is not
@@ -247,19 +253,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 		return ctrl.Result{RequeueAfter: sourceResyncInterval}, nil
 	}
 
-	targets, err := r.targetNamespaces(ctx, pubNS, copyToUploadProxy)
+	targets, err := r.copyTargets(ctx, pubNS, name, copyToUploadProxy)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	var errs []error
-	for _, ns := range targets {
-		if err := r.upsertCopy(ctx, src, ns); err != nil {
+	for _, target := range targets {
+		if err := r.upsertCopy(ctx, src, target); err != nil {
 			// A foreign-Secret collision is terminal for that namespace —
 			// skip it, do not requeue on it. Any other error is transient,
 			// so aggregate and return it for a back-off requeue.
 			if errors.Is(err, errForeignCollision) {
-				logger.Info("skipping wildcard replica: a non-managed Secret of the same name exists", "namespace", ns)
+				logger.Info("skipping wildcard replica: a non-managed Secret of the same name exists", "secret", target.String())
 				continue
 			}
 			errs = append(errs, err)
@@ -329,22 +335,19 @@ func (r *Reconciler) readConfig(ctx context.Context) (name, namespace string, co
 	return *pv.Cluster.WildcardSecretName, ns, serviceIsExposed(pv.Cluster.ExposeServices, uploadProxyService), true, nil
 }
 
-// targetNamespaces returns every namespace that needs the wildcard locally,
-// excluding the publishing namespace (the operator Secret already lives there
-// and must not be overwritten by a replica). CDI is included only while its
-// upload proxy is exposed because passthrough makes that pod the public TLS
-// termination point.
-func (r *Reconciler) targetNamespaces(ctx context.Context, sourceNS string, copyToUploadProxy bool) ([]string, error) {
+// copyTargets returns every Secret slot that needs the wildcard locally.
+// Tenant termination points keep the source Secret name, while CDI always
+// receives a fixed, chart-owned destination name. The fixed CDI name prevents
+// an operator source named cdi-uploadproxy-server-cert from colliding with the
+// private certificate CDI already owns under that name.
+func (r *Reconciler) copyTargets(ctx context.Context, sourceNS, sourceName string, copyToUploadProxy bool) ([]types.NamespacedName, error) {
 	list := &corev1.NamespaceList{}
 	if err := r.List(ctx, list); err != nil {
 		return nil, fmt.Errorf("list namespaces: %w", err)
 	}
-	var out []string
+	var out []types.NamespacedName
 	for i := range list.Items {
 		ns := &list.Items[i]
-		if ns.Name == sourceNS {
-			continue
-		}
 		if ns.DeletionTimestamp != nil {
 			// The namespace is terminating (a tenant teardown). Its owner
 			// labels linger until GC completes, but the API server forbids
@@ -353,8 +356,12 @@ func (r *Reconciler) targetNamespaces(ctx context.Context, sourceNS string, copy
 			// forbidden-error requeues.
 			continue
 		}
-		if ownsTerminationPoint(ns) || copyToUploadProxy && ns.Name == uploadProxyNamespace {
-			out = append(out, ns.Name)
+		if ns.Name != sourceNS && ownsTerminationPoint(ns) {
+			out = append(out, types.NamespacedName{Namespace: ns.Name, Name: sourceName})
+		}
+		if copyToUploadProxy && ns.Name == uploadProxyNamespace &&
+			(ns.Name != sourceNS || sourceName != uploadProxyWildcardSecret) {
+			out = append(out, types.NamespacedName{Namespace: ns.Name, Name: uploadProxyWildcardSecret})
 		}
 	}
 	return out, nil
@@ -376,20 +383,20 @@ func ownsTerminationPoint(ns *corev1.Namespace) bool {
 	return ns.Labels[ingressOwnerLabel] == ns.Name || ns.Labels[gatewayOwnerLabel] == ns.Name
 }
 
-// upsertCopy creates or refreshes the replica of src in namespace ns. It
+// upsertCopy creates or refreshes the replica of src at target. It
 // returns errForeignCollision (wrapped) when a Secret of the same name
 // exists that the controller does not own, so a pre-existing user Secret
 // is preserved. The existence check goes through the uncached Reader so a
 // foreign Secret (absent from the replica-scoped cache) is still seen.
-func (r *Reconciler) upsertCopy(ctx context.Context, src *corev1.Secret, ns string) error {
+func (r *Reconciler) upsertCopy(ctx context.Context, src *corev1.Secret, target types.NamespacedName) error {
 	existing := &corev1.Secret{}
-	err := r.Reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: src.Name}, existing)
+	err := r.Reader.Get(ctx, target, existing)
 	switch {
 	case apierrors.IsNotFound(err):
 		replica := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Namespace:   ns,
-				Name:        src.Name,
+				Namespace:   target.Namespace,
+				Name:        target.Name,
 				Labels:      map[string]string{CopyLabel: "true"},
 				Annotations: map[string]string{SourceRefAnnotation: sourceRef(src)},
 			},
@@ -397,11 +404,11 @@ func (r *Reconciler) upsertCopy(ctx context.Context, src *corev1.Secret, ns stri
 			Data: cloneData(src.Data),
 		}
 		if err := r.Create(ctx, replica); err != nil {
-			return fmt.Errorf("create replica in %s: %w", ns, err)
+			return fmt.Errorf("create replica %s: %w", target.String(), err)
 		}
 		return nil
 	case err != nil:
-		return fmt.Errorf("get replica in %s: %w", ns, err)
+		return fmt.Errorf("get replica %s: %w", target.String(), err)
 	}
 
 	if existing.Labels[CopyLabel] != "true" {
@@ -410,9 +417,9 @@ func (r *Reconciler) upsertCopy(ctx context.Context, src *corev1.Secret, ns stri
 		// `kubectl get events -n <ns>` rather than only in controller logs.
 		if r.Recorder != nil {
 			r.Recorder.Eventf(existing, corev1.EventTypeWarning, "WildcardReplicaSkipped",
-				"a Secret named %q already exists and is not managed by the wildcard-secret controller; the operator wildcard certificate is not served in this namespace until that Secret is removed", src.Name)
+				"a Secret named %q already exists and is not managed by the wildcard-secret controller; the operator wildcard certificate is not served in this namespace until that Secret is removed", target.Name)
 		}
-		return fmt.Errorf("%w: %s/%s", errForeignCollision, ns, src.Name)
+		return fmt.Errorf("%w: %s", errForeignCollision, target.String())
 	}
 
 	desired := cloneData(src.Data)
@@ -432,13 +439,13 @@ func (r *Reconciler) upsertCopy(ctx context.Context, src *corev1.Secret, ns stri
 	existing.Annotations[SourceRefAnnotation] = sourceRef(src)
 	existing.Data = desired
 	if err := r.Update(ctx, existing); err != nil {
-		return fmt.Errorf("update replica in %s: %w", ns, err)
+		return fmt.Errorf("update replica %s: %w", target.String(), err)
 	}
 	return nil
 }
 
-// pruneCopies deletes every managed replica that is not the current source
-// name in a kept namespace. With keep == nil (or sourceName == "") it
+// pruneCopies deletes every managed replica whose exact namespace/name slot
+// is not kept. With keep == nil (or sourceName == "") it
 // removes all managed replicas — used when the feature is off or the
 // source is gone. It NEVER deletes the Secret at the source location
 // (sourceNS/sourceName), even if that Secret carries the copy label: the
@@ -446,14 +453,14 @@ func (r *Reconciler) upsertCopy(ctx context.Context, src *corev1.Secret, ns stri
 // replica sitting at the source slot (e.g. after the publishing namespace
 // switched to a former target) would be the very Secret the controller
 // reads as its source, and deleting it would flap the source.
-func (r *Reconciler) pruneCopies(ctx context.Context, keep []string, sourceNS, sourceName string) error {
+func (r *Reconciler) pruneCopies(ctx context.Context, keep []types.NamespacedName, sourceNS, sourceName string) error {
 	list := &corev1.SecretList{}
 	if err := r.List(ctx, list, client.MatchingLabels{CopyLabel: "true"}); err != nil {
 		return fmt.Errorf("list wildcard replicas: %w", err)
 	}
-	keepSet := make(map[string]struct{}, len(keep))
-	for _, ns := range keep {
-		keepSet[ns] = struct{}{}
+	keepSet := make(map[types.NamespacedName]struct{}, len(keep))
+	for _, target := range keep {
+		keepSet[target] = struct{}{}
 	}
 	var errs []error
 	for i := range list.Items {
@@ -461,7 +468,7 @@ func (r *Reconciler) pruneCopies(ctx context.Context, keep []string, sourceNS, s
 		if sourceName != "" && replica.Namespace == sourceNS && replica.Name == sourceName {
 			continue
 		}
-		if _, kept := keepSet[replica.Namespace]; kept && replica.Name == sourceName {
+		if _, kept := keepSet[types.NamespacedName{Namespace: replica.Namespace, Name: replica.Name}]; kept {
 			continue
 		}
 		if err := r.Delete(ctx, replica); err != nil && !apierrors.IsNotFound(err) {

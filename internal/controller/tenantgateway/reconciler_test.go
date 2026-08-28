@@ -209,7 +209,7 @@ func TestReconcile_IsIdempotent(t *testing.T) {
 // TestReconcile_HTTPListenerExcludesAppNamespaces pins the
 // security contract: the HTTP listener (port 80) accepts routes
 // only from the tenant namespace (controller's redirect HTTPRoute)
-// and the cert-manager challenge namespace. App namespaces
+// and namespaces that need HTTP-01 solver routes. App namespaces
 // (cozy-harbor, cozy-keycloak, etc.) are explicitly excluded so
 // app HTTPRoutes that attach by hostname (no sectionName) cannot
 // bind to port 80 and silently serve plaintext.
@@ -218,10 +218,11 @@ func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
 	tgw := &gatewayv1alpha1.TenantGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
 		Spec: gatewayv1alpha1.TenantGatewaySpec{
-			Apex:               "foo.example.com",
-			CertMode:           gatewayv1alpha1.CertModeHTTP01,
-			GatewayClassName:   "cilium",
-			AttachedNamespaces: []string{"cozy-harbor", "cozy-keycloak", "cozy-cert-manager"},
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"cozy-harbor", "cozy-keycloak", "cozy-cert-manager", "cozy-kubevirt-cdi"},
+			TLSPassthroughServices: []string{"cdi-uploadproxy"},
 		},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
@@ -245,7 +246,7 @@ func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
 		case "http":
 			httpListener = &gw.Spec.Listeners[i]
 		}
-		if gw.Spec.Listeners[i].Hostname != nil {
+		if gw.Spec.Listeners[i].Protocol == gatewayv1.HTTPSProtocolType {
 			httpsListener = &gw.Spec.Listeners[i]
 		}
 	}
@@ -259,6 +260,9 @@ func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
 	}
 	if !containsString(httpValues, "cozy-cert-manager") {
 		t.Errorf("http listener missing cozy-cert-manager (HTTP-01 ACME would break): %v", httpValues)
+	}
+	if !containsString(httpValues, "cozy-kubevirt-cdi") {
+		t.Errorf("http listener missing cozy-kubevirt-cdi (upload-proxy HTTP-01 ACME would break): %v", httpValues)
 	}
 	for _, app := range []string{"cozy-harbor", "cozy-keycloak"} {
 		if containsString(httpValues, app) {
