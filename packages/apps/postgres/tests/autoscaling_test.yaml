@@ -371,7 +371,7 @@ tests:
         maxSyncReplicas: 2
     asserts:
       - failedTemplate:
-          errorMessage: "postgres: replicas (2) must be greater than quorum.maxSyncReplicas (2) - CNPG rejects a Cluster whose maxSyncReplicas is not lower than its instance count. When disabling autoscaling on a synchronous-quorum cluster, first raise replicas to at least the live instance count (kubectl scale --subresource=scale with the HelmRelease suspended)."
+          errorMessage: "postgres: replicas (2) must be greater than quorum.maxSyncReplicas (2) - CNPG rejects a Cluster whose maxSyncReplicas is not lower than its instance count. Raise replicas above maxSyncReplicas. (If you are disabling autoscaling on a synchronous-quorum cluster, first set replicas to at least the live instance count via kubectl scale --subresource=scale with the HelmRelease suspended.)"
 
   - it: rejects a non-positive autoscaling target
     templates:

@@ -8,9 +8,24 @@
   "templating": {
     "list": [
       {
+        "current": { "selected": false, "text": "default", "value": "default" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "ds_prometheus",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
         "name": "namespace",
         "type": "query",
-        "datasource": "VictoriaMetrics",
+        "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
         "query": "label_values(kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\"}, namespace)",
         "includeAll": true,
         "multi": true
@@ -22,37 +37,41 @@
       "id": 1,
       "title": "Desired vs current replicas",
       "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
-        { "expr": "kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\",namespace=~\"$namespace\"}", "legendFormat": "current {{namespace}}/{{horizontalpodautoscaler}}" },
-        { "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\",namespace=~\"$namespace\"}", "legendFormat": "desired {{namespace}}/{{horizontalpodautoscaler}}" }
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\",namespace=~\"$namespace\"}", "legendFormat": "current {{namespace}}/{{horizontalpodautoscaler}}" },
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\",namespace=~\"$namespace\"}", "legendFormat": "desired {{namespace}}/{{horizontalpodautoscaler}}" }
       ]
     },
     {
       "id": 2,
       "title": "Active read connections",
       "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "targets": [
-        { "expr": "sum by (namespace) (cnpg_backends_total{state=\"active\",namespace=~\"$namespace\"})", "legendFormat": "{{namespace}}" }
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "sum by (namespace) (cnpg_backends_total{state=\"active\",namespace=~\"$namespace\"})", "legendFormat": "{{namespace}}" }
       ]
     },
     {
       "id": 3,
       "title": "Replication lag (seconds)",
       "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
-        { "expr": "max by (namespace) (cnpg_pg_replication_lag{namespace=~\"$namespace\"})", "legendFormat": "{{namespace}}" }
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "max by (namespace) (cnpg_pg_replication_lag{namespace=~\"$namespace\"})", "legendFormat": "{{namespace}}" }
       ]
     },
     {
       "id": 4,
       "title": "Scaling limited (ScalingLimited=true)",
       "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "targets": [
-        { "expr": "kube_horizontalpodautoscaler_status_condition{horizontalpodautoscaler=~\"keda-hpa-.*\",condition=\"ScalingLimited\",status=\"true\",namespace=~\"$namespace\"}", "legendFormat": "{{namespace}}/{{horizontalpodautoscaler}}" }
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "kube_horizontalpodautoscaler_status_condition{horizontalpodautoscaler=~\"keda-hpa-.*\",condition=\"ScalingLimited\",status=\"true\",namespace=~\"$namespace\"}", "legendFormat": "{{namespace}}/{{horizontalpodautoscaler}}" }
       ]
     }
   ]
