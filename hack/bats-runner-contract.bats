@@ -66,8 +66,10 @@ brc_write_parallel_stub() {
 @test "the local hook covers the tree and documents its prerequisite" {
   hook_filter=$(yq -r '.repos[].hooks[] | select(.id == "bats-unit-tests") | .files' "$BRC_REPO_ROOT/.pre-commit-config.yaml")
   hook_entry=$(yq -r '.repos[].hooks[] | select(.id == "bats-unit-tests") | .entry' "$BRC_REPO_ROOT/.pre-commit-config.yaml")
+  hook_always_run=$(yq -r '.repos[].hooks[] | select(.id == "bats-unit-tests") | .always_run' "$BRC_REPO_ROOT/.pre-commit-config.yaml")
   [ "$hook_filter" = '^.*$' ]
   [ "$hook_entry" = 'make bats-unit-tests bats-posix-compat-tests' ]
+  [ "$hook_always_run" = 'true' ]
   grep -Fq 'bats-core 1.5 or newer' "$BRC_REPO_ROOT/docs/agents/overview.md"
   grep -Fq 'SKIP=bats-unit-tests git commit' "$BRC_REPO_ROOT/docs/agents/overview.md"
 }
@@ -75,11 +77,17 @@ brc_write_parallel_stub() {
 @test "the POSIX compatibility lane retains every reviewed shell-facing file" {
   recipe=$(cd "$BRC_REPO_ROOT" && MAKEFLAGS= MAKELEVEL= make --no-print-directory -n bats-posix-compat-tests)
   for file in \
-    hack/nightly-mirror_test.bats \
+    hack/capture-dataplane.bats \
+    hack/capture-previous-logs.bats \
+    hack/cilium-leak-healer_test.bats \
+    hack/cozyreport-talos.bats \
+    hack/cozyreport.bats \
     hack/cozystack-version-stamp.bats \
+    hack/nightly-mirror_test.bats \
     hack/pod-label-census_test.bats \
-    hack/seaweedfs-naming-audit.bats \
-    hack/runner-identity.bats; do
+    hack/promote-rewrite-tags_test.bats \
+    hack/runner-identity.bats \
+    hack/seaweedfs-naming-audit.bats; do
     printf '%s\n' "$recipe" | grep -Fq "$file"
   done
 }

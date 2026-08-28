@@ -202,11 +202,17 @@ bats-unit-tests:
 # translator. This catches a Bash-only regression without running the entire
 # unit suite twice.
 BATS_POSIX_COMPAT_FILES := \
-	hack/nightly-mirror_test.bats \
+	hack/capture-dataplane.bats \
+	hack/capture-previous-logs.bats \
+	hack/cilium-leak-healer_test.bats \
+	hack/cozyreport-talos.bats \
+	hack/cozyreport.bats \
 	hack/cozystack-version-stamp.bats \
+	hack/nightly-mirror_test.bats \
 	hack/pod-label-census_test.bats \
-	hack/seaweedfs-naming-audit.bats \
-	hack/runner-identity.bats
+	hack/promote-rewrite-tags_test.bats \
+	hack/runner-identity.bats \
+	hack/seaweedfs-naming-audit.bats
 
 bats-posix-compat-tests:
 	@for f in $(BATS_POSIX_COMPAT_FILES); do \
