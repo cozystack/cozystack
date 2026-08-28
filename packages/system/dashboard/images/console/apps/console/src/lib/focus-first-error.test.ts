@@ -1,9 +1,14 @@
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { focusFirstError } from "@/lib/focus-first-error.ts"
 
 describe("focusFirstError", () => {
   beforeEach(() => {
     document.body.innerHTML = ""
+    // jsdom has no layout, so scrollIntoView is absent. Stub it so the call can
+    // be asserted: focus() is passed preventScroll, which disables the
+    // browser's own scroll-on-focus, making this the only thing that brings
+    // the field into view.
+    HTMLElement.prototype.scrollIntoView = vi.fn()
   })
 
   it("focuses the field carrying the generated id", () => {
@@ -119,6 +124,26 @@ describe("focusFirstError", () => {
 
     focusFirstError({ property: ".gpus.0" })
 
+    expect(document.activeElement).toBe(field)
+  })
+
+  it("scrolls the field into view, not only focuses it", () => {
+    document.body.innerHTML = `<input id="root_name" />`
+    const field = document.getElementById("root_name") as HTMLElement
+
+    focusFirstError({ property: ".name" })
+
+    expect(field.scrollIntoView).toHaveBeenCalledWith({ block: "center" })
+  })
+
+  it("escapes a quote in the generated id rather than breaking the selector", () => {
+    // Only the fallback interpolates the id into a quoted attribute selector,
+    // so the exact lookup has to miss for this to bite: an unescaped quote
+    // ends the selector string early and querySelector throws SyntaxError.
+    document.body.innerHTML = `<input id='root_a"b_child' />`
+    const field = document.getElementById('root_a"b_child')
+
+    expect(() => focusFirstError({ property: '.a"b' })).not.toThrow()
     expect(document.activeElement).toBe(field)
   })
 

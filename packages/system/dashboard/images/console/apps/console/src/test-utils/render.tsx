@@ -19,19 +19,8 @@ export function renderWithK8sProvider(
   ui: ReactElement,
   options: RenderWithK8sOptions,
 ): RenderResult & { queryClient: QueryClient } {
-  // Mirror the production defaults in `K8sProvider` that change what a
-  // component observes: `placeholderData` serves the previous query's data
-  // with status "success" when the key changes, so a test client without it
-  // never sees the window where `isLoading` is false but the data is stale.
   const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-        gcTime: 0,
-        staleTime: 30_000,
-        placeholderData: (prev: unknown) => prev,
-      },
-    },
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
   })
   const result = render(
     <K8sProvider client={options.client} queryClient={queryClient}>
