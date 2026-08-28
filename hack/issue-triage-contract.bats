@@ -29,6 +29,8 @@
 # would need a JS runtime, and `checks` runs where none is guaranteed, so a
 # harness would go silently green wherever node is missing.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 WF="$REPO_ROOT/.github/workflows/issue-triage.yaml"
 STALE="$REPO_ROOT/.github/workflows/stale.yaml"

@@ -18,9 +18,9 @@
 # Both runners set -e, so a failed test leaves its stub dir behind, which is what
 # you want to look at anyway.
 #
-# Tests are otherwise self-contained — no shared setup/teardown helpers,
-# because cozytest.sh's awk parser only recognizes @test blocks and treats a
-# bare `}` on its own line as the end of a test function.
+# Fixture setup is otherwise self-contained rather than placed in file-local
+# setup()/teardown() hooks, preserving compatibility with the legacy
+# cozytest.sh translator. Strict setup still comes from `load test_helper`.
 #
 # Title syntax constraints (inherited from cozytest.sh's awk parser):
 #   - Titles must be delimited by ASCII double quotes; embedded literal
@@ -30,10 +30,12 @@
 #     only in punctuation collapse to the same function name. Keep titles
 #     distinctive in their alphanumeric run.
 #
-# Run with: hack/cozytest.sh hack/check-host-runtime.bats
-#           (or `bats hack/check-host-runtime.bats` if the bats binary is
-#           installed; cozytest.sh is the CI path.)
+# Run from the repo root with `make bats-unit-tests`, or directly with
+# `bats hack/check-host-runtime.bats`. The legacy `hack/cozytest.sh` runner
+# remains a supported compatibility path.
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "clean host with no runtime services exits silently" {
   STUB_DIR=$(mktemp -d)

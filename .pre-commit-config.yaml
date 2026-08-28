@@ -26,6 +26,26 @@ repos:
         '
       language: system
       files: ^.*$
+    # The hack/*.bats unit suite, hermetic and parallel-safe (#3453). It is not
+    # cheap for a commit hook: BATS_JOBS uses GNU parallelism when available and
+    # falls back to one job when it is not, so wall time varies materially and
+    # the serial fallback can take several times longer. Much of the floor is
+    # real sleeps in hack/run-kubernetes-node-join_test.bats rather than runner
+    # overhead. `SKIP=bats-unit-tests git commit` is the escape hatch; the CI
+    # `checks` job runs the suite either way.
+    #
+    # Requires bats-core on PATH; the make target says so explicitly when it is
+    # missing.
+    #
+    # The hook is unconditional because the suite audits cross-tree inputs under
+    # packages/, .github/, docs/, and .claude/hooks/, and because a deletion-only
+    # commit still has to run the filesystem-derived discovery guards.
+    - id: bats-unit-tests
+      name: Run hack/*.bats unit tests
+      entry: make bats-unit-tests bats-posix-compat-tests
+      language: system
+      always_run: true
+      pass_filenames: false
 # Lints changed GitHub Actions workflows for unpinned actions and excessive token
 # permissions (audit scope is set in .github/zizmor.yml). Runs offline so it needs
 # no GitHub token locally. The same gate runs tree-wide in .github/workflows/zizmor.yml.

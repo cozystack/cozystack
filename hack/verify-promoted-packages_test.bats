@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 # Behavioural tests for the pre-publication packages artifact verification.
-# Run with: hack/cozytest.sh hack/verify-promoted-packages_test.bats
+# Run with: bats hack/verify-promoted-packages_test.bats
+
+load test_helper
 
 _test_workspace() {
   if [ -n "${BATS_TEST_TMPDIR:-}" ]; then

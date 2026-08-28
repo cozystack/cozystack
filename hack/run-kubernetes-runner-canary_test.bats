@@ -18,17 +18,15 @@
 # ceiling and an arm that ran to the end are three different things, and only
 # the last of them is a rate.
 #
-# Run with: hack/cozytest.sh hack/run-kubernetes-runner-canary_test.bats
+# Run with: bats hack/run-kubernetes-runner-canary_test.bats
 #
-# cozytest.sh is the canonical runner and the CI path: it runs this file under
-# `sh` with `set -eu`, and in CI that `sh` is dash, which is what the collector
-# meets in the sandbox image. `bats` runs the same file under bash without those
-# flags, so it is a convenience rather than an equal alternative: the guards
-# here that exist for dash semantics do not fire under it. Spelling the capture
-# truncation `: >` again -- the regression the guard below is written for --
-# leaves bats green, and leaves cozytest green too wherever /bin/sh is not dash,
-# which includes macOS, where it is bash in POSIX mode. Run `dash
-# hack/cozytest.sh` to exercise those guards off CI.
+# CI runs this file under Bats through `make bats-unit-tests`; nounset comes from
+# test_helper. The collector itself runs under dash in the sandbox image, so the
+# failed-open behavior below is paired with a structural assertion that pins
+# the safe `true >` spelling. Replacing it with the POSIX special builtin `: >`
+# can exit dash before the caller handles the status even when Bash stays green.
+
+load test_helper
 
 timeout_calls=/dev/null
 timeout_rc_override=
@@ -1322,6 +1320,20 @@ STUB
 
   assert_file_lacks_pattern 'STALE-FROM-AN-EARLIER-RUN' "$capture"
   rm -rf "$tmp"
+}
+
+@test "capture truncation avoids a POSIX special builtin under dash" {
+  source_file=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  body=$(awk '
+    /^cozy_capture_runner_canary\(\) \{/ { inside = 1 }
+    inside { print }
+    inside && /^}$/ { exit }
+  ' "$source_file")
+
+  if ! printf '%s\n' "$body" | grep -Fq 'if ! true >"${capture}"; then'; then
+    echo "FAIL: runner canary no longer opens its capture through non-special true" >&2
+    return 1
+  fi
 }
 
 @test "a capture file that cannot be opened reaches the job log rather than ending the shell" {

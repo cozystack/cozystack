@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests bats-posix-compat-tests print-bats-unit-files print-bats-jobs rd-presets-check migrations-target-check test test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -106,7 +106,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests bats-posix-compat-tests go-unit-tests rd-presets-check test-check-readiness migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -149,9 +149,16 @@ test-controllers:
 test-check-readiness:
 	go test ./test/check-readiness/ -count=1
 
-# Discover every hack/*.bats file that is NOT an e2e test and run it
-# through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
-# up automatically on the next `make unit-tests` run.
+# Discover every hack/*.bats file that is NOT an e2e test and run it under
+# bats(1). Drop a new *.bats file in hack/ and it is picked up automatically
+# on the next `make unit-tests` run.
+#
+# These are hermetic unit tests of hack/*.sh, and they run under real bats
+# rather than hack/cozytest.sh (#3453). The live-cluster suite
+# (hack/e2e-*.bats) stays on cozytest, whose streaming trace and snapshot
+# behaviour earn their place over a 15-minute test; bats buffers a test's
+# output until it completes. Filtering by the e2e- prefix is what keeps the
+# two runners apart.
 #
 # Caveat: $(wildcard ...) returns space-separated names, so a filename
 # containing a literal space would split into multiple tokens here. All
@@ -160,13 +167,65 @@ test-check-readiness:
 # (e.g. to use `find ... -print0 | xargs -0`).
 BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
 
+# The same list, one file per line, for hack/bats-strict-setup.bats. Every unit
+# file has to load hack/test_helper.bash to get `set -u` back, and that audit is
+# only worth anything if the set it walks is the set that actually runs -- so it
+# asks here rather than keeping a second copy of the filter above.
+print-bats-unit-files:
+	@printf '%s\n' $(BATS_UNIT_FILES)
+
+# `bats -j` needs GNU parallel and exits non-zero rather than degrading when it
+# is missing. moreutils also ships a command named parallel, so identify the GNU
+# implementation from its version output before enabling concurrency. Resolve
+# the probe once per make process; `?=` would keep the `$(shell ...)` recursive
+# and rerun it at every expansion.
+ifndef BATS_JOBS
+BATS_JOBS := $(shell parallel --version 2>/dev/null | grep -q '^GNU parallel ' && nproc 2>/dev/null || echo 1)
+endif
+
+print-bats-jobs:
+	@printf '%s\n' "$(BATS_JOBS)"
+
+# JUnit XML is preserved as a CI artifact for inspection. _out is gitignored.
+BATS_REPORT_DIR ?= _out/test-reports
+
 bats-unit-tests:
 	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
 		echo "ERROR: no hack/*.bats unit test files found"; \
 		exit 1; \
 	fi
-	@for f in $(BATS_UNIT_FILES); do \
-		echo "--- running $$f ---"; \
+	@command -v bats >/dev/null 2>&1 || { \
+		echo "ERROR: bats not found. Install bats-core >= 1.5 — https://bats-core.readthedocs.io"; \
+		exit 1; \
+	}
+	@mkdir -p "$(BATS_REPORT_DIR)"
+	bats -j $(BATS_JOBS) --report-formatter junit -o "$(BATS_REPORT_DIR)" $(BATS_UNIT_FILES)
+
+# Real Bats is authoritative. These files also source production code whose
+# contract is POSIX sh, so retain a narrow pass through cozytest.sh's /bin/sh
+# translator. Chainsaw script steps run in the sandbox's dash, so discover every
+# unit file that dot-sources a Chainsaw library instead of maintaining a list
+# that goes stale as main adds tests. The explicit entries cover reviewed
+# shell-facing tests whose production path is held in a variable.
+BATS_SOURCED_CHAINSAW_FILES := $(shell grep -El '^[[:space:]]*\.[[:space:]]+.*e2e-chainsaw/_lib/.*\.sh' $(BATS_UNIT_FILES))
+BATS_POSIX_COMPAT_FILES := $(sort \
+	$(BATS_SOURCED_CHAINSAW_FILES) \
+	hack/capture-dataplane.bats \
+	hack/capture-previous-logs.bats \
+	hack/cilium-leak-healer_test.bats \
+	hack/cozyreport-talos.bats \
+	hack/cozyreport.bats \
+	hack/cozystack-version-stamp.bats \
+	hack/nightly-mirror_test.bats \
+	hack/pod-label-census_test.bats \
+	hack/promote-rewrite-tags_test.bats \
+	hack/runner-identity.bats \
+	hack/seaweedfs-naming-audit.bats \
+)
+
+bats-posix-compat-tests:
+	@for f in $(BATS_POSIX_COMPAT_FILES); do \
+		echo "--- running POSIX compatibility: $$f ---"; \
 		hack/cozytest.sh "$$f" || exit 1; \
 	done
 

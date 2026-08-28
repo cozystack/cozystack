@@ -2,11 +2,11 @@
 # -----------------------------------------------------------------------------
 # Unit tests for hack/select-e2e.sh
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Each test runs as a shell
-# function under `set -eu -x`, so assertions are direct shell tests that exit
-# non-zero on failure. setup()/teardown() are not honored — each test creates
-# and cleans its own scratch dir.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, setup(), and teardown() for that compatibility path and use
+# direct shell assertions with inline fixture cleanup.
 #
 # Each fixture test removes its scratch directory at the last reachable cleanup
 # point of the body and never from a `trap ... EXIT`. A handler installed inside
@@ -17,8 +17,10 @@
 # the body, so the scratch directory survives for inspection on failure. See
 # hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 #
-# Run with: hack/cozytest.sh hack/select-e2e_test.bats
+# Run with: bats hack/select-e2e_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 # Assert that a selection is the WHOLE suite list, not merely a long one.
 #
@@ -453,7 +455,7 @@ assert_full_suite() {
 }
 
 @test "a top-level unit bats file selects nothing" {
-    # All 60 non-e2e hack/*.bats files used to escalate to the full suite. The
+    # All non-e2e hack/*.bats files used to escalate to the full suite. The
     # root Makefile is the authority on which of them the e2e sandbox runs:
     # BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
     # keeps exactly these for the unit lane, and packages/core/testing's recipes
@@ -487,8 +489,27 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "the shared unit Bats helper selects nothing" {
+    # test_helper.bash is loaded only by BATS_UNIT_FILES. Enumerate this exact
+    # helper as inert rather than matching hack/*.bash: a future production
+    # helper must still hit the unclassified fail-safe until someone decides
+    # which e2e lane exercises it.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/test_helper.bash" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+    # Inert means this path contributes nothing; it must not mask a real app
+    # path beside it.
+    printf '%s\n' hack/test_helper.bash packages/apps/postgres/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres" ]
+    rm -rf "$tmp"
+}
+
 @test "every hack/*.bats file lands on the lane its name says" {
-    # The rule above is a claim about 63 files, asserted on two of them. This
+    # The rule above is a claim about every top-level BATS file, asserted on two
+    # of them. This
     # pins the claim itself: for every hack/*.bats in the tree, the selector's
     # verdict must agree with the Makefile's split -- e2e-prefixed escalates,
     # everything else selects nothing. A file added with a name that fits neither

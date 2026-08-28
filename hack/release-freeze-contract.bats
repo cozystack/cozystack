@@ -16,6 +16,8 @@
 # line silently, and getting the comparator wrong aims every backport at the
 # wrong branch. Cheap to pin here, expensive to discover there.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CUT="$REPO_ROOT/.github/workflows/cut-prerelease.yaml"
 BACKPORT="$REPO_ROOT/.github/workflows/backport.yaml"

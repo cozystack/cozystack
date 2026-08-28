@@ -23,6 +23,8 @@
 # spelled packets_dropped, and both are invisible to anyone writing the filter
 # from memory.
 
+load test_helper
+
 kubectl_calls=/dev/null
 kubectl_node_names=
 kubectl_list_rc=0
