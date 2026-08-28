@@ -1,3 +1,10 @@
+{{- $cluster := .Values._cluster | default dict -}}
+{{- $rootHost := (index $cluster "root-host") | default "" -}}
+{{- $exposeServices := splitList "," ((index $cluster "expose-services") | default "") -}}
+{{- $uploadProxyURL := .Values.uploadProxyURL | default "" -}}
+{{- if and (not $uploadProxyURL) $rootHost (has "cdi-uploadproxy" $exposeServices) -}}
+{{- $uploadProxyURL = printf "https://cdi-uploadproxy.%s" $rootHost -}}
+{{- end -}}
 apiVersion: cdi.kubevirt.io/v1beta1
 kind: CDI
 metadata:
@@ -5,7 +12,7 @@ metadata:
 spec:
   cloneStrategyOverride: {{ quote .Values.cloneStrategyOverride }}
   config:
-    {{- with .Values.uploadProxyURL }}
+    {{- with $uploadProxyURL }}
     uploadProxyURLOverride: {{ quote . }}
     {{- end }}
     featureGates:

@@ -1,0 +1,45 @@
+suite: tenant admin CDI upload RBAC
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+tests:
+  - it: lets tenant admins inspect upload PVCs and create CDI upload tokens
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["upload.cdi.kubevirt.io"]
+            resources: ["uploadtokenrequests"]
+            verbs: ["create"]
+
+  - it: does not grant CDI upload permissions to the use tier
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:use:base
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["upload.cdi.kubevirt.io"]
+            resources: ["uploadtokenrequests"]
+            verbs: ["create"]

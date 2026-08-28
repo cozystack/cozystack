@@ -18,6 +18,7 @@ metadata:
   labels:
     rbac.cozystack.io/aggregate-to-tenant: "true"
 rules:
+# virtctl reads both the disk PVC and CDI's dynamically named PVC Prime.
 - apiGroups: [""]
   resources: ["pods", "services", "persistentvolumes", "endpoints", "events", "resourcequotas"]
   verbs: ["get", "list", "watch"]
@@ -213,6 +214,16 @@ metadata:
   labels:
     rbac.cozystack.io/aggregate-to-tenant-admin: "true"
 rules:
+- apiGroups: [""]
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - get
+- apiGroups: ["upload.cdi.kubevirt.io"]
+  resources:
+  - uploadtokenrequests
+  verbs:
+  - create
 - apiGroups: [""]
   resources:
   - pods
