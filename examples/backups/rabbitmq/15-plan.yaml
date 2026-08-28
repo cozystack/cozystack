@@ -1,0 +1,18 @@
+# Scheduled backups of the source RabbitMQ. The Plan controller creates a
+# BackupJob on each cron fire, using the same cozy-default routing as the ad-hoc
+# job above. Applied by run-all.sh for completeness; the round-trip below drives
+# the ad-hoc BackupJob directly.
+apiVersion: backups.cozystack.io/v1alpha1
+kind: Plan
+metadata:
+  name: rabbitmq-src-daily
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: RabbitMQ
+    name: rabbitmq-src
+  backupClassName: cozy-default
+  schedule:
+    type: cron
+    # Daily at midnight, matching the Plan name.
+    cron: "0 0 * * *"

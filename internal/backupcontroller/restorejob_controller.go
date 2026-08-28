@@ -166,6 +166,8 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.reconcileFoundationDBRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.EtcdStrategyKind:
 		return r.reconcileEtcdRestore(ctx, restoreJob, backup)
+	case strategyv1alpha1.RabbitmqStrategyKind:
+		return r.reconcileRabbitmqRestore(ctx, restoreJob, backup)
 	default:
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
 	}
@@ -329,7 +331,7 @@ func (r *RestoreJobReconciler) cleanupOnDelete(ctx context.Context, restoreJob *
 	case strategyv1alpha1.VeleroStrategyKind:
 		r.cleanupVeleroRestore(ctx, restoreJob)
 
-	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MongoDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind:
+	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MongoDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind, strategyv1alpha1.RabbitmqStrategyKind:
 		// Nothing to clean up: these drivers don't materialise namespaced
 		// artifacts that outlive the RestoreJob. (Etcd: the operator-side
 		// EtcdCluster is owned by the source HelmRelease, and the

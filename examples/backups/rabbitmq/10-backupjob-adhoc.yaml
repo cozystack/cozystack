@@ -1,0 +1,14 @@
+# Ad-hoc backup of the source RabbitMQ, routed through the platform cozy-default
+# BackupClass. The driver renders the cozy-default-rabbitmq strategy, which
+# exports broker definitions to the system bucket. On success the BackupJob
+# reports status.backupRef.name — the Backup this demo restores from.
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: rabbitmq-src-adhoc
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: RabbitMQ
+    name: rabbitmq-src
+  backupClassName: cozy-default

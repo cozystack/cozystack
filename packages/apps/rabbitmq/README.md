@@ -11,6 +11,12 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 
 > `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
 
+## Backups
+
+RabbitMQ is bound out-of-the-box by the platform `cozy-default` BackupClass, so a `Plan` or an ad-hoc `BackupJob` referencing `cozy-default` backs the instance up with no per-release wiring — see [Backup Classes](../../../docs/operations/backup-classes.md).
+
+The scope is **definitions only** — vhosts, users, permissions, queues, exchanges, bindings, policies and parameters, exported through the management API. **Message payloads are not included**, and there is no point-in-time recovery; back up the messages on disk with a Velero volume snapshot instead if you need them. Restore is a **merge**, not a reset: importing definitions creates or updates what the backup contains and never deletes, so anything created after the backup survives a restore, and a to-copy restore into a separate instance imports the source's users (with their password hashes) into the target.
+
 ## Parameters
 
 ### Common parameters

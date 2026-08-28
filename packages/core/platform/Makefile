@@ -60,4 +60,7 @@ image-migrations:
 	IMAGE="$(REGISTRY)/platform-migrations:$(IMAGE_TAG)@$$(yq -e -o json -r '.["containerimage.digest"]' images/migrations.json)" \
 		yq --inplace '.backupStrategyController.chBackupClientImage = strenv(IMAGE)' \
 		../../system/backupstrategy-controller/values.yaml
+	IMAGE="$(REGISTRY)/platform-migrations:$(IMAGE_TAG)@$$(yq -e -o json -r '.["containerimage.digest"]' images/migrations.json)" \
+		yq --inplace '.backupStrategyController.rabbitmqBackupClientImage = strenv(IMAGE)' \
+		../../system/backupstrategy-controller/values.yaml
 	rm -f images/migrations.json

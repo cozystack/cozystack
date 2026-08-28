@@ -52,6 +52,7 @@ import (
 	"github.com/cozystack/cozystack/internal/backupcontroller/mongodbapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/postgresapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/psmdbtypes"
+	"github.com/cozystack/cozystack/internal/backupcontroller/rabbitmqtypes"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	// +kubebuilder:scaffold:imports
 )
@@ -77,6 +78,7 @@ func init() {
 	utilruntime.Must(foundationdbapp.AddToScheme(scheme))
 	utilruntime.Must(etcdtypes.AddToScheme(scheme))
 	utilruntime.Must(etcdapp.AddToScheme(scheme))
+	utilruntime.Must(rabbitmqtypes.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -262,9 +264,10 @@ func main() {
 	}
 
 	if err = (&backupcontroller.BackupReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("backup-controller"),
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorderFor("backup-controller"),
+		CredentialsConfig: credentialsConfig,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Backup")
 		os.Exit(1)

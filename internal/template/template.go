@@ -38,6 +38,15 @@ func Template[T any](obj *T, templateContext map[string]any) (*T, error) {
 	return &out, nil
 }
 
+// String renders a single template string against the context and surfaces any
+// parse or execute error. Template walks a struct's string leaves and, by
+// design, leaves a leaf unchanged when its template fails; a caller that gates
+// on the rendered value — a strategy precondition, an artifact URI — needs the
+// error instead, so it can fail loud rather than act on a half-rendered string.
+func String(in string, templateContext map[string]any) (string, error) {
+	return template(in, templateContext)
+}
+
 func mapAtStrings(v any, f func(string) string) any {
 	switch x := v.(type) {
 	case map[string]any:

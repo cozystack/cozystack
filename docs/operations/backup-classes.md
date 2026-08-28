@@ -15,6 +15,7 @@ Tenants reference `cozy-default` from `BackupJob`, `Plan`, and `RestoreJob` reso
 | `apps.cozystack.io/ClickHouse`   | Altinity `clickhouse-backup` sidecar | `strategy.backups.cozystack.io/Altinity` `cozy-default-altinity`           |
 | `apps.cozystack.io/MongoDB`      | Percona psmdb operator (pbm) dump    | `strategy.backups.cozystack.io/MongoDB` `cozy-default-mongodb`             |
 | `apps.cozystack.io/Etcd`         | etcd-operator snapshot               | `strategy.backups.cozystack.io/Etcd` `cozy-default-etcd`                   |
+| `apps.cozystack.io/RabbitMQ`     | RabbitMQ definitions (management API) | `strategy.backups.cozystack.io/Rabbitmq` `cozy-default-rabbitmq`          |
 | `apps.cozystack.io/VMInstance`   | Velero + kubevirt-velero-plugin      | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vminstance`    |
 | `apps.cozystack.io/VMDisk`       | Velero                               | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vmdisk`        |
 
@@ -119,7 +120,7 @@ The bucket lives in `tenant-root` and is provisioned through the `apps.cozystack
 
 | Key                                           | Consumer                                  |
 |-----------------------------------------------|-------------------------------------------|
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | CNPG, MariaDB, Etcd                       |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | CNPG, MariaDB, Etcd, RabbitMQ             |
 | `accessKey` / `secretKey` (plus `bucketName`, `endpoint`, `region`) | ClickHouse sidecar  |
 | `cloud`                                       | Velero (AWS credentials file format)      |
 | `blob_credentials.json`                       | FoundationDB backup_agent                 |
@@ -196,7 +197,7 @@ The default-objects gate emits three more:
 
 ## Admin overrides for `cozy-default`
 
-`cozy-default` is rendered by the `backupstrategy-controller` chart and owned by Flux's helm-controller. **Direct `kubectl edit backupclass cozy-default` is overwritten on the next helm reconcile** — the same applies to its companion `strategy.backups.cozystack.io/*` CRs (`cozy-default-cnpg`, `cozy-default-etcd`, `cozy-default-mariadb`, `cozy-default-altinity`, `cozy-default-mongodb`, `cozy-default-foundationdb`, the two `cozy-default-velero-*`). The supported override path is the `backupStorage` block on the **`platform` component** of the `cozystack.cozystack-platform` Package CR:
+`cozy-default` is rendered by the `backupstrategy-controller` chart and owned by Flux's helm-controller. **Direct `kubectl edit backupclass cozy-default` is overwritten on the next helm reconcile** — the same applies to its companion `strategy.backups.cozystack.io/*` CRs (`cozy-default-cnpg`, `cozy-default-etcd`, `cozy-default-mariadb`, `cozy-default-altinity`, `cozy-default-mongodb`, `cozy-default-foundationdb`, `cozy-default-rabbitmq`, the two `cozy-default-velero-*`). The supported override path is the `backupStorage` block on the **`platform` component** of the `cozystack.cozystack-platform` Package CR:
 
 ```yaml
 apiVersion: cozystack.io/v1alpha1
@@ -243,6 +244,7 @@ The defaults aim at a reasonable middle (30-day retention, gzip compression wher
 - **MongoDB strategy**: `storageName` (which `spec.backup.storages` entry on the psmdb cluster to use), `type` (`logical`), `compressionType` / `compressionLevel`. The S3 target itself is tuned via `backup.*` values on the MongoDB release (see [MongoDB: the application owns the backup storage](#mongodb-the-application-owns-the-backup-storage)).
 - **Altinity strategy**: tune the `clickhouse-backup` sidecar via `backup.*` values on the ClickHouse release; the strategy Pod is a thin HTTP client. When the S3 endpoint's certificate is signed by a private CA rather than a publicly-trusted one — SeaweedFS's in-cluster `:8333` being the case in point — point `backup.endpointCA` at a Secret holding that CA bundle; the chart mounts it into the sidecar and adds it to the trust store via `SSL_CERT_DIR`, which supplements the system CA set rather than replacing it.
 - **FoundationDB strategy**: `snapshotPeriodSeconds`, `agentCount`, `urlParameters[]`.
+- **Rabbitmq strategy**: `artifactURITemplate` (the `<namespace>/<application>/<backup-name>/definitions.json` object-key layout) and the pod `template` (image, resources). The backup is a definitions export over the management API — vhosts, users, permissions, queues, exchanges, bindings, policies, parameters — so message payloads are out of scope and there is no point-in-time recovery; a full message-data backup is a Velero volume snapshot instead. **Restore is a merge, not a reset**: importing definitions (`POST /api/definitions`) creates or updates what the export contains and never deletes, so anything created after the backup survives the restore and the broker is not returned to its exact backup-time state. A to-copy restore imports the source's users (with password hashes) into the target, so those source credentials become valid logins there. Unlike the operator-backed strategies (whose engine owns archive retention), the Rabbitmq driver owns its object outright and deletes it from the bucket when its `Backup` is deleted — via a one-shot Job the Backup's removal waits on — so a retention-pruned `Plan` does not normally accumulate objects. The delete is **best-effort**: when it cannot run from here the Backup is released without deleting the object (with a `Warning` Event naming what was left behind), so the Backup — and any namespace being torn down — never wedges. The named give-up conditions are: the namespace is terminating (`CREATE` is forbidden there), the strategy CR or the projected credentials are unavailable, the rendered Job name is invalid, or the skip annotation below is set. Otherwise a genuinely failing delete (object storage unreachable) keeps the `Backup` in `Terminating` (a visible signal to act on) and retries. To release such a stuck `Backup`, annotate it `backups.cozystack.io/skip-artifact-cleanup: "true"` — cleanup then skips the delete and lets the `Backup` go, leaving the object in the bucket to be reclaimed manually or by a bucket lifecycle policy (`kubectl annotate backup <name> -n <namespace> backups.cozystack.io/skip-artifact-cleanup=true`).
 - **Velero strategy (VMInstance / VMDisk)**: `ttl`, `includedResources[]`, `excludedResources[]`.
 - **Etcd strategy**: today the strategy is path-only; combine with `Plan.spec.retentionPolicy` for trim cadence.
 

@@ -1,0 +1,11 @@
+# Separate target application for restore-to-copy. It runs alongside the source
+# and receives the source's definitions without the source being touched.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: RabbitMQ
+metadata:
+  name: rabbitmq-target
+spec:
+  replicas: 1
+  size: 1Gi
+  resourcesPreset: c1.small
+  version: v4.2

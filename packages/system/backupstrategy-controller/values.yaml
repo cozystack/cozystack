@@ -36,6 +36,19 @@ backupStrategyController:
   # hack/promote-retag.sh fails the release. hack/image-pin-consistency.bats
   # asserts no repository is pinned at more than one digest.
   chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
+  # rabbitmqBackupClientImage is the image rendered into the RabbitMQ Job
+  # strategy (strategy-rabbitmq-default.yaml): its script needs only curl +
+  # ca-certificates to call the RabbitMQ management API and push the
+  # definitions export to S3 (curl --aws-sigv4). It is a distinct key from
+  # chBackupClientImage so the RabbitMQ strategy carries its own upgrade
+  # cadence, but it reuses the same platform-migrations image for now — hence
+  # it is stamped in lockstep with the two keys above (packages/core/platform/
+  # Makefile), so the repository stays pinned at a single digest
+  # (hack/image-pin-consistency.bats). Same TODO applies: replace with a
+  # dedicated alpine + curl + ca-certificates image built by this package's
+  # Makefile, which also lets this pin move on its own.
+  # DO NOT hand-edit: stamped by packages/core/platform/Makefile.
+  rabbitmqBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
   replicas: 2
   debug: false
   metrics:

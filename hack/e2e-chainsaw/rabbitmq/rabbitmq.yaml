@@ -1,0 +1,9 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: RabbitMQ
+metadata:
+  name: test
+spec:
+  replicas: 2
+  size: 1Gi
+  resourcesPreset: c1.small
+  version: v4.2

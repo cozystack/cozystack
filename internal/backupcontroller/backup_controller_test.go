@@ -3,16 +3,20 @@ package backupcontroller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -44,7 +48,7 @@ func TestBackupCleanup_CNPG_DeletesUnderlyingCNPGBackup(t *testing.T) {
 	c := newBackupTestClient(t, backup, cnpgBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -75,7 +79,7 @@ func TestBackupCleanup_CNPG_NoMetadataIsNoOp(t *testing.T) {
 	c := newBackupTestClient(t, backup)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned unexpected error %v", err)
 	}
 }
@@ -103,7 +107,7 @@ func TestBackupCleanup_Velero_DispatchUnchanged(t *testing.T) {
 	c := newBackupTestClient(t, backup, veleroBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -152,7 +156,7 @@ func TestBackupCleanup_Altinity_DoesNotFallThroughToVelero(t *testing.T) {
 	c := newBackupTestClient(t, backup, veleroBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -204,7 +208,7 @@ func TestBackupCleanup_MariaDB_DoesNotFallThroughToVelero(t *testing.T) {
 	c := newBackupTestClient(t, backup, veleroBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -252,7 +256,7 @@ func TestBackupCleanup_FoundationDB_DoesNotFallThroughToVelero(t *testing.T) {
 	c := newBackupTestClient(t, backup, veleroBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -300,7 +304,7 @@ func TestBackupCleanup_MongoDB_DoesNotFallThroughToVelero(t *testing.T) {
 	c := newBackupTestClient(t, backup, veleroBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -357,4 +361,120 @@ func newBackupTestClient(t *testing.T, objs ...client.Object) client.Client {
 	_ = velerov1.AddToScheme(s)
 	_ = cnpgtypes.AddToScheme(s)
 	return clientfake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+}
+
+// newRabbitmqBackupReconcilerClient builds a client for the Reconcile-level
+// Rabbitmq cleanup tests: it registers the Rabbitmq strategy CRD and a Job
+// status subresource (so the delete Job's completion can be simulated).
+func newRabbitmqBackupReconcilerClient(objs ...client.Object) (client.Client, *runtime.Scheme) {
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = strategyv1alpha1.AddToScheme(s)
+	return clientfake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&batchv1.Job{}).
+		WithObjects(objs...).Build(), s
+}
+
+// TestBackupReconcile_HoldsFinalizerWhileRabbitmqCleanupRuns pins the
+// deletion-blocking wiring: while the delete Job runs, Reconcile keeps the
+// finalizer (the Backup is not removed until the object is gone), and removes it
+// once the Job completes. Deleting the requeue block in Reconcile turns this red.
+func TestBackupReconcile_HoldsFinalizerWhileRabbitmqCleanupRuns(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+	backup := rabbitmqBackup("rmq-src") // status.artifact.uri set by the fixture
+	backup.Finalizers = []string{backupFinalizer}
+	strategy := newRabbitmqStrategy("cozy-default-rabbitmq")
+	c, s := newRabbitmqBackupReconcilerClient(ns, backup, strategy)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+
+	// Delete the Backup: the finalizer holds it in Terminating.
+	if err := c.Delete(ctx, backup); err != nil {
+		t.Fatalf("delete backup: %v", err)
+	}
+	key := client.ObjectKeyFromObject(backup)
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("expected Reconcile to requeue while the delete Job runs")
+	}
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatalf("Backup must still exist while cleanup runs: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(got, backupFinalizer) {
+		t.Error("expected the finalizer to be retained while the delete Job runs")
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected the cleanup Job, got %d", len(jobs.Items))
+	}
+
+	// Complete the Job; the next reconcile removes the finalizer -> Backup gone.
+	job := jobs.Items[0]
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		t.Fatalf("update job status: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile() second call error = %v", err)
+	}
+	if err := c.Get(ctx, key, got); !apierrors.IsNotFound(err) {
+		t.Errorf("expected the Backup removed after the delete Job completed, got err=%v", err)
+	}
+}
+
+// TestBackupReconcile_ReleasesInTerminatingNamespace pins the teardown fix: a
+// Rabbitmq Backup in a Terminating namespace must release (CREATE is forbidden
+// there, so the delete Job cannot run) rather than wedge the namespace, and must
+// record a Warning Event naming the object left behind.
+func TestBackupReconcile_ReleasesInTerminatingNamespace(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test", Finalizers: []string{"kubernetes"}}}
+	backup := rabbitmqBackup("rmq-src")
+	backup.Finalizers = []string{backupFinalizer}
+	strategy := newRabbitmqStrategy("cozy-default-rabbitmq")
+	rec := record.NewFakeRecorder(10)
+	c, s := newRabbitmqBackupReconcilerClient(ns, backup, strategy)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+	ctx := context.Background()
+
+	// Put both the namespace and the Backup into Terminating.
+	if err := c.Delete(ctx, ns); err != nil {
+		t.Fatalf("delete namespace: %v", err)
+	}
+	if err := c.Delete(ctx, backup); err != nil {
+		t.Fatalf("delete backup: %v", err)
+	}
+	key := client.ObjectKeyFromObject(backup)
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(ctx, key, got); !apierrors.IsNotFound(err) {
+		t.Errorf("expected the Backup released in a terminating namespace (no wedge), got err=%v", err)
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("expected no cleanup Job created in a terminating namespace, got %d", len(jobs.Items))
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "ArtifactNotDeleted") {
+			t.Errorf("expected an ArtifactNotDeleted Warning Event, got %q", ev)
+		}
+	default:
+		t.Error("expected a Warning Event naming the object left behind")
+	}
 }
