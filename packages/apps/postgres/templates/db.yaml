@@ -8,19 +8,20 @@ metadata:
 spec:
   {{- if $autoscaling }}
   {{- if gt (int .Values.quorum.maxSyncReplicas) 0 }}
-  # Synchronous quorum requires instances > maxSyncReplicas at creation, but an
-  # omitted .spec.instances defaults to 1 and CNPG's admission webhook rejects
-  # "maxSyncReplicas must be lower than the number of instances". Seed the quorum
-  # floor (effectiveMin) so a fresh autoscaled + sync-quorum Cluster is admitted.
-  # The chart re-renders this same constant on every reconcile, so Helm's
-  # three-way merge is a no-op on the field and never reverts KEDA's higher live
-  # value written through /scale.
+  {{- /* Synchronous quorum requires instances > maxSyncReplicas at creation, but an
+         omitted .spec.instances defaults to 1 and CNPG's admission webhook rejects
+         "maxSyncReplicas must be lower than the number of instances". Seed the quorum
+         floor (effectiveMin) so a fresh autoscaled + sync-quorum Cluster is admitted.
+         The chart re-renders this same constant on every reconcile, so Helm's
+         three-way merge is a no-op on the field and never reverts KEDA's higher live
+         value written through /scale. (Go-template comment: stripped at render, not
+         shipped into the Cluster manifest.) */}}
   instances: {{ include "postgres.autoscaling.effectiveMin" . }}
   {{- end }}
-  # Without synchronous quorum the field is omitted: CNPG defaults it to 1 and the
-  # KEDA-managed HPA is the sole writer of .spec.instances via the /scale
-  # subresource (design proposal §3). A brief cold-start window at 1 is expected
-  # until KEDA scales up to the floor. See templates/scaledobject.yaml.
+  {{- /* Without synchronous quorum the field is omitted: CNPG defaults it to 1 and the
+         KEDA-managed HPA is the sole writer of .spec.instances via the /scale
+         subresource (design proposal §3). A brief cold-start window at 1 is expected
+         until KEDA scales up to the floor. See templates/scaledobject.yaml. */ -}}
   {{- else }}
   {{- /* When the chart declares the static instance count, CNPG's admission webhook
          rejects the Cluster if maxSyncReplicas >= instances ("maxSyncReplicas must be
@@ -270,6 +271,12 @@ metadata:
   labels:
     workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
 spec:
+  {{- /* Under active autoscaling the expected-replica count tracks the quorum FLOOR
+         (effectiveMin), not KEDA's live autoscaled target, which is unknowable at
+         render time. Consequence: between the floor and the live desired count the
+         monitor will not flag under-provisioning. Health is still sound because
+         minReplicas: 1 gates actual availability; this only affects the "expected"
+         figure. */}}
   replicas: {{ if $autoscaling }}{{ include "postgres.autoscaling.effectiveMin" . }}{{ else }}{{ .Values.replicas }}{{ end }}
   minReplicas: 1
   kind: postgres
