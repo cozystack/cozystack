@@ -18,25 +18,26 @@ import {
   APPS_VERSION,
   type ApplicationInstance,
 } from "@cozystack/types"
-import { useApplicationDefinitions, isTenantModule } from "../../lib/app-definitions.ts"
-import { useTenantContext } from "../../lib/tenant-context.tsx"
 import {
+  useApplicationDefinitions,
+  isTenantModule,
   appDisplayName,
   iconDataUrl,
-} from "../../lib/app-definitions.ts"
-import { readyCondition } from "../../lib/status.ts"
-import { TabBar } from "./tabs.tsx"
-import { OverviewTab } from "./OverviewTab.tsx"
-import { WorkloadsTab } from "./WorkloadsTab.tsx"
-import { ServicesTab } from "./ServicesTab.tsx"
-import { IngressesTab } from "./IngressesTab.tsx"
-import { SecretsTab } from "./SecretsTab.tsx"
-import { EventsTab } from "./EventsTab.tsx"
-import { VncTab } from "./VncTab.tsx"
-import { VMPowerControls } from "./VMPowerControls.tsx"
-import { DiskUploadPanel } from "./DiskUploadPanel.tsx"
-import { useResourceBasePath } from "../../lib/portal.ts"
-import { useResourcePresence } from "./use-resource-presence.ts"
+} from "@/lib/app-definitions.ts"
+import { useTenantContext } from "@/lib/tenant-context.tsx"
+import { readyCondition } from "@/lib/status.ts"
+import { useResourceBasePath } from "@/lib/portal.ts"
+import { TabBar } from "@/routes/detail/tabs.tsx"
+import { OverviewTab } from "@/routes/detail/OverviewTab.tsx"
+import { WorkloadsTab } from "@/routes/detail/WorkloadsTab.tsx"
+import { ServicesTab } from "@/routes/detail/ServicesTab.tsx"
+import { IngressesTab } from "@/routes/detail/IngressesTab.tsx"
+import { SecretsTab } from "@/routes/detail/SecretsTab.tsx"
+import { EventsTab } from "@/routes/detail/EventsTab.tsx"
+import { VncTab } from "@/routes/detail/VncTab.tsx"
+import { VMPowerControls } from "@/routes/detail/VMPowerControls.tsx"
+import { DiskUploadPanel } from "@/routes/detail/DiskUploadPanel.tsx"
+import { useResourcePresence } from "@/routes/detail/use-resource-presence.ts"
 
 export function ApplicationDetailPage() {
   const { plural, name } = useParams<{ plural: string; name: string }>()
@@ -72,7 +73,10 @@ export function ApplicationDetailPage() {
     namespace: tenantNamespace ?? undefined,
   })
 
-  const presence = useResourcePresence(ad, instance)
+  const kind = ad?.spec?.application.kind
+  const presence = useResourcePresence(ad, instance, {
+    enabled: kind !== "VMDisk" && kind !== "VMInstance",
+  })
 
   if (!plural || !name) return <Navigate to="/console" replace />
   // Check the fetch error before the loading guard: on a failed GET, isLoading
@@ -106,8 +110,6 @@ export function ApplicationDetailPage() {
   const ready = readyCondition(instance)
   const icon = iconDataUrl(ad)
   const base = `${basePath}/${plural}/${name}`
-  const kind = ad.spec?.application.kind
-
   // Module singletons are reached from the admin trees (Info from Tenants,
   // every other module from Modules), not from an instance list — send Back
   // where the user came from instead of the meaningless one-item list.
