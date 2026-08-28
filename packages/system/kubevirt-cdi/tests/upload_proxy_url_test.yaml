@@ -1,0 +1,70 @@
+suite: CDI upload proxy URL advertisement
+templates:
+  - templates/cdi-cr.yaml
+
+release:
+  name: kubevirt-cdi
+  namespace: cozy-kubevirt-cdi
+
+tests:
+  - it: derives the exposed ingress proxy URL from the root host
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard,cdi-uploadproxy"
+        gateway-enabled: "false"
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://cdi-uploadproxy.example.org
+
+  - it: derives the same URL for the Gateway TLSRoute path
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        gateway-enabled: "true"
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://cdi-uploadproxy.example.org
+
+  - it: preserves an explicit upload proxy URL
+    set:
+      uploadProxyURL: https://uploads.custom.example.net
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://uploads.custom.example.net
+
+  - it: omits the URL when the proxy is not exposed
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard,api"
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.config.uploadProxyURLOverride
+
+  - it: omits the URL when the root host is blank
+    set:
+      _cluster:
+        root-host: ""
+        expose-services: "cdi-uploadproxy"
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.config.uploadProxyURLOverride
+
+  - it: omits the URL when cluster publication values are absent
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.config.uploadProxyURLOverride

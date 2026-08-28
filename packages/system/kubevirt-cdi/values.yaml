@@ -2,6 +2,7 @@
 # default keeps the chart renderable on its own, outside a cluster.
 _cluster: {}
 
+## @param uploadProxyURL Explicit external CDI upload proxy URL. When empty, the chart derives the standard HTTPS URL only if cdi-uploadproxy is exposed by the platform.
 uploadProxyURL: ""
 
 ## @param cloneStrategyOverride Strategy CDI uses to clone DataVolumes (golden image -> VM disk).
