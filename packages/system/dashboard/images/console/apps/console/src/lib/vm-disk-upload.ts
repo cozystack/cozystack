@@ -105,8 +105,12 @@ function conditionText(condition: DataVolumeCondition | undefined): string | und
 }
 
 function failureMessage(dv: DataVolume): string | undefined {
-  const running = dv.status?.conditions?.find((condition) => condition.type === "Running")
-  const bound = dv.status?.conditions?.find((condition) => condition.type === "Bound")
+  const running = dv.status?.conditions?.find(
+    (condition) => condition.type === "Running" && condition.status === "False",
+  )
+  const bound = dv.status?.conditions?.find(
+    (condition) => condition.type === "Bound" && condition.status === "False",
+  )
   return conditionText(running) || conditionText(bound)
 }
 
@@ -155,7 +159,7 @@ export function dataVolumeCapacity(dv: DataVolume | undefined): string | undefin
   return dv?.spec?.storage?.resources?.requests?.storage?.trim() || undefined
 }
 
-/** Validates an administrator-provided CDI upload proxy as an HTTP(S) URL. */
+/** Validates an administrator-provided CDI upload proxy as a trusted HTTPS URL. */
 export function usableProxyURL(uploadProxyURL: string | undefined): string | undefined {
   const value = uploadProxyURL?.trim()
   if (!value) return undefined
@@ -165,7 +169,7 @@ export function usableProxyURL(uploadProxyURL: string | undefined): string | und
   }
   try {
     const parsed = new URL(value)
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined
+    if (parsed.protocol !== "https:") return undefined
     if (!parsed.hostname || parsed.username || parsed.password) return undefined
   } catch {
     return undefined
@@ -203,6 +207,5 @@ export function virtctlUploadCommand(opts: UploadCommandOptions): string | undef
     shellQuote("./disk.qcow2"),
     "--uploadproxy-url",
     shellQuote(proxy),
-    "--insecure",
   ].join(" ")
 }

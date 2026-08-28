@@ -124,7 +124,7 @@ function UploadPrerequisites({
   })
 
   const checking =
-    cdiConfig.isLoading || canCreateToken.isLoading || canGetPVC.isLoading
+    !cdiConfig.isFetched || !canCreateToken.isFetched || !canGetPVC.isFetched
   if (checking) {
     return <p className="mt-4 text-sm text-slate-600">Checking upload prerequisites…</p>
   }
@@ -187,10 +187,10 @@ function UploadPrerequisites({
   return (
     <div className="mt-4 space-y-2">
       <p className="text-sm text-slate-600">
-        Uploading runs from your machine — the browser cannot use the CDI upload
-        proxy. Point <span className="font-mono text-xs">--image-path</span> at your
-        local image and run the command below. CDI keeps this state while a transfer
-        is active, so do not start a second command if virtctl is already uploading.
+        This workflow runs virtctl on your machine. Point{" "}
+        <span className="font-mono text-xs">--image-path</span> at your local image
+        and run the command below. CDI keeps this state while a transfer is active,
+        so do not start a second command if virtctl is already uploading.
       </p>
       <CopyableCommand command={command} />
     </div>
@@ -211,6 +211,7 @@ function UploadDiskPanel({
 }) {
   const namespace = instance.metadata.namespace ?? ""
   const name = releasePrefix(ad) + instance.metadata.name
+  const desiredUploadSource = isUploadSource(instance)
   const ready = readyCondition(instance)
   const canReadDataVolume = ready?.status === "True"
   const dvQuery = useK8sList<DataVolume>(
@@ -231,11 +232,18 @@ function UploadDiskPanel({
   )
   const dv =
     canReadDataVolume && !dvQuery.isError ? dvQuery.data?.items[0] : undefined
-  const sourceMismatch = !!dv && !isUploadSource(dv)
+  const actualUploadSource = isUploadSource(dv)
+  const sourceMismatch = !!dv && !actualUploadSource
+  const desiredSourceDrift = !!dv && actualUploadSource && !desiredUploadSource
   const state: UploadState = dvQuery.isError || sourceMismatch
     ? { stage: "unknown", phase: dv?.status?.phase ?? "" }
     : currentState(dv)
   const capacity = dataVolumeCapacity(dv)
+
+  // Helm preserves an existing DataVolume spec because its source is
+  // immutable. Query the exact child even when the edited VMDisk values no
+  // longer say upload, then render only if either side still represents one.
+  if (!desiredUploadSource && !actualUploadSource) return null
 
   return (
     <div className="px-6 pt-6">
@@ -298,6 +306,14 @@ function UploadDiskPanel({
           </p>
         )}
 
+        {desiredSourceDrift && (
+          <p className="mt-3 text-sm text-amber-800">
+            This VMDisk no longer selects an upload source, but its preserved
+            DataVolume is still an upload target. Finish the upload, or recreate the
+            disk to change its source.
+          </p>
+        )}
+
         {!sourceMismatch && dv && state.stage === "preparing" && (
           <p className="mt-3 text-sm text-slate-600">
             CDI is provisioning the upload target. The disk accepts an image once it
@@ -351,7 +367,7 @@ function UploadDiskPanel({
   )
 }
 
-/** Shows upload state and safe virtctl handoff for upload-source VMDisk resources. */
+/** Shows upload state and a safe virtctl handoff for a VMDisk's actual DataVolume. */
 export function DiskUploadPanel({
   ad,
   instance,
@@ -359,6 +375,5 @@ export function DiskUploadPanel({
   ad: ApplicationDefinition
   instance: ApplicationInstance
 }) {
-  if (!isUploadSource(instance)) return null
   return <UploadDiskPanel ad={ad} instance={instance} />
 }

@@ -4,7 +4,7 @@ import {
   useQueryClient,
   type UseQueryOptions,
 } from "@tanstack/react-query"
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useK8sClient } from "./provider.tsx"
 import type { K8sList, K8sResource } from "./client.ts"
 
@@ -26,10 +26,32 @@ export function useK8sList<T extends K8sResource>(
   const client = useK8sClient()
   const queryClient = useQueryClient()
   const { labelSelector, fieldSelector, watch: watchOpt, ...queryOptions } = options ?? {}
-  const queryKey = k8sListKey(ref, labelSelector, fieldSelector)
+  const queryKey = useMemo(
+    () =>
+      k8sListKey(
+        {
+          apiGroup: ref.apiGroup,
+          apiVersion: ref.apiVersion,
+          plural: ref.plural,
+          namespace: ref.namespace,
+        },
+        labelSelector,
+        fieldSelector,
+      ),
+    [
+      ref.apiGroup,
+      ref.apiVersion,
+      ref.plural,
+      ref.namespace,
+      labelSelector,
+      fieldSelector,
+    ],
+  )
   const enabled = queryOptions.enabled !== false
   const watchEnabled = watchOpt !== false
   const cleanupRef = useRef<(() => void) | null>(null)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [watchGeneration, setWatchGeneration] = useState(0)
 
   const query = useQuery<K8sList<T>>({
     queryKey,
@@ -44,10 +66,29 @@ export function useK8sList<T extends K8sResource>(
   const resourceVersion = query.data?.metadata?.resourceVersion
 
   useEffect(() => {
+    let active = true
     cleanupRef.current?.()
     cleanupRef.current = null
+    if (reconnectTimerRef.current !== null) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
 
     if (!enabled || !watchEnabled || !resourceVersion) return
+
+    const reconnect = () => {
+      if (!active || reconnectTimerRef.current !== null) return
+      cleanupRef.current?.()
+      cleanupRef.current = null
+      reconnectTimerRef.current = setTimeout(() => {
+        reconnectTimerRef.current = null
+        void queryClient.invalidateQueries({ queryKey }).finally(() => {
+          // A successful relist may return the same resourceVersion. The
+          // generation guarantees that the closed watch still reopens.
+          if (active) setWatchGeneration((generation) => generation + 1)
+        })
+      }, 1000)
+    }
 
     cleanupRef.current = client.watch<T>(
       ref.apiGroup,
@@ -58,7 +99,7 @@ export function useK8sList<T extends K8sResource>(
       (event) => {
         if (event.type === "BOOKMARK") return
         if (event.type === "ERROR") {
-          queryClient.invalidateQueries({ queryKey })
+          reconnect()
           return
         }
         queryClient.setQueryData<K8sList<T>>(queryKey, (old) => {
@@ -85,11 +126,7 @@ export function useK8sList<T extends K8sResource>(
           return { ...old, items }
         })
       },
-      () => {
-        setTimeout(() => {
-          queryClient.invalidateQueries({ queryKey })
-        }, 1000)
-      },
+      reconnect,
       {
         labelSelector,
         fieldSelector,
@@ -97,6 +134,11 @@ export function useK8sList<T extends K8sResource>(
     )
 
     return () => {
+      active = false
+      if (reconnectTimerRef.current !== null) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
       cleanupRef.current?.()
       cleanupRef.current = null
     }
@@ -110,6 +152,10 @@ export function useK8sList<T extends K8sResource>(
     ref.namespace,
     labelSelector,
     fieldSelector,
+    watchGeneration,
+    client,
+    queryClient,
+    queryKey,
   ])
 
   return query

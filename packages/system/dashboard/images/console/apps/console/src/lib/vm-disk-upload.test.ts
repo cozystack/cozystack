@@ -177,8 +177,8 @@ describe("uploadState", () => {
           {
             phase: "Failed",
             conditions: [
-              { type: "Bound", message: "bound failure" },
-              { type: "Running", message: "upload server crashed" },
+              { type: "Bound", status: "False", message: "bound failure" },
+              { type: "Running", status: "False", message: "upload server crashed" },
             ],
           },
         ),
@@ -191,13 +191,29 @@ describe("uploadState", () => {
           {
             phase: "Failed",
             conditions: [
-              { type: "Bound", message: "no capacity" },
-              { type: "Running", message: "" },
+              { type: "Bound", status: "False", message: "no capacity" },
+              { type: "Running", status: "False", message: "" },
             ],
           },
         ),
       ).message,
     ).toBe("no capacity")
+  })
+
+  it("ignores healthy Running text when a failed volume reports a Bound error", () => {
+    const state = uploadState(
+      dv(
+        { upload: {} },
+        {
+          phase: "Failed",
+          conditions: [
+            { type: "Running", status: "True", message: "Pod is running" },
+            { type: "Bound", status: "False", message: "Claim Lost" },
+          ],
+        },
+      ),
+    )
+    expect(state.message).toBe("Claim Lost")
   })
 
   it("carries progress through at UploadReady", () => {
@@ -234,12 +250,9 @@ describe("dataVolumeCapacity", () => {
 })
 
 describe("usableProxyURL", () => {
-  it("accepts trimmed HTTP(S) URLs", () => {
+  it("accepts a trimmed HTTPS URL", () => {
     expect(usableProxyURL("  https://cdi-uploadproxy.example.org  ")).toBe(
       "https://cdi-uploadproxy.example.org",
-    )
-    expect(usableProxyURL("http://127.0.0.1:8443/upload")).toBe(
-      "http://127.0.0.1:8443/upload",
     )
   })
 
@@ -248,6 +261,7 @@ describe("usableProxyURL", () => {
     "",
     "   ",
     "cdi-uploadproxy.example.org",
+    "http://127.0.0.1:8443/upload",
     "ftp://example.org",
     "https://user:secret@example.org",
     "https://example.org/line\nbreak",
@@ -301,7 +315,7 @@ describe("virtctlUploadCommand", () => {
         uploadProxyURL: "https://cdi-uploadproxy.example.org",
       }),
     ).toBe(
-      "virtctl image-upload dv 'vm-disk-demo' --no-create --namespace 'tenant-root' --image-path './disk.qcow2' --uploadproxy-url 'https://cdi-uploadproxy.example.org' --insecure",
+      "virtctl image-upload dv 'vm-disk-demo' --no-create --namespace 'tenant-root' --image-path './disk.qcow2' --uploadproxy-url 'https://cdi-uploadproxy.example.org'",
     )
   })
 
@@ -314,12 +328,12 @@ describe("virtctlUploadCommand", () => {
           "https://proxy.example.org/upload?next=$(touch%20/tmp/pwn)&note=it's;literal`too`",
       }),
     ).toBe(
-      "virtctl image-upload dv 'vm-disk-demo' --no-create --namespace 'tenant-root' --image-path './disk.qcow2' --uploadproxy-url 'https://proxy.example.org/upload?next=$(touch%20/tmp/pwn)&note=it'\"'\"'s;literal`too`' --insecure",
+      "virtctl image-upload dv 'vm-disk-demo' --no-create --namespace 'tenant-root' --image-path './disk.qcow2' --uploadproxy-url 'https://proxy.example.org/upload?next=$(touch%20/tmp/pwn)&note=it'\"'\"'s;literal`too`'",
     )
   })
 
-  it.each([undefined, "", "   ", "not-a-url", "ftp://example.org"])(
-    "withholds the command without a real HTTP(S) proxy URL %#",
+  it.each([undefined, "", "   ", "not-a-url", "http://example.org", "ftp://example.org"])(
+    "withholds the command without a trusted HTTPS proxy URL %#",
     (uploadProxyURL) => {
       expect(
         virtctlUploadCommand({
