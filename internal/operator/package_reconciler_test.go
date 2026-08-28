@@ -899,6 +899,50 @@ func TestReconcileNamespacesDisabledSweepsManagedLimitRanges(t *testing.T) {
 	}
 }
 
+// One failed deletion must not stop the sweep before it reaches the remaining namespaces.
+// The helper returns the aggregate so the caller can log it, while still removing every
+// object the API server lets it remove on this pass.
+func TestDeleteManagedSystemDefaultsLimitRangesContinuesAfterDeleteFailure(t *testing.T) {
+	scheme := limitRangeScheme(t)
+	builder := &PackageReconciler{}
+	first := builder.systemDefaultsLimitRange("cozy-first", resource.MustParse("4Gi"))
+	second := builder.systemDefaultsLimitRange("cozy-second", resource.MustParse("4Gi"))
+
+	var deleteCalls int
+	var failedKey, deletedKey types.NamespacedName
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(first, second).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				deleteCalls++
+				key := client.ObjectKeyFromObject(obj)
+				if deleteCalls == 1 {
+					failedKey = key
+					return apierrors.NewForbidden(corev1.Resource("limitranges"), obj.GetName(), fmt.Errorf("denied by policy"))
+				}
+				deletedKey = key
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+
+	r := &PackageReconciler{Client: cl, APIReader: cl, Scheme: scheme}
+	err := r.deleteManagedSystemDefaultsLimitRanges(t.Context())
+	if err == nil {
+		t.Fatal("sweep returned nil after a managed LimitRange deletion failed")
+	}
+	if deleteCalls != 2 {
+		t.Fatalf("sweep attempted %d deletes, want 2; a failed delete must not stop the loop", deleteCalls)
+	}
+	if failedKey.Name == "" || !strings.Contains(err.Error(), failedKey.Namespace+"/"+failedKey.Name) {
+		t.Errorf("error %q does not identify the LimitRange whose deletion failed", err)
+	}
+	if err := cl.Get(t.Context(), failedKey, &corev1.LimitRange{}); err != nil {
+		t.Fatalf("the object whose deletion failed disappeared: %v", err)
+	}
+	if err := cl.Get(t.Context(), deletedKey, &corev1.LimitRange{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the object after the failed deletion was not removed (err = %v)", err)
+	}
+}
+
 // LimitRange cleanup is opportunistic and must not stop namespace creation when its
 // cluster-wide List is temporarily unavailable.
 func TestReconcileNamespacesSurvivesDisabledLimitRangeSweepFailure(t *testing.T) {
@@ -1020,6 +1064,21 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 		Kind:       "Job",
 		Name:       finishedJob.Name,
 		UID:        finishedJob.UID,
+	}}
+
+	failedJob := systemJob("gave-up", "8Gi", "")
+	failedJob.UID = types.UID("gave-up-uid")
+	failedJob.Status.Conditions = []batchv1.JobCondition{{
+		Type:   batchv1.JobFailed,
+		Status: corev1.ConditionTrue,
+	}}
+	failedFailedJobPod := systemPod("gave-up-failed", "9Gi", "")
+	failedFailedJobPod.Status.Phase = corev1.PodFailed
+	failedFailedJobPod.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "batch/v1",
+		Kind:       "Job",
+		Name:       failedJob.Name,
+		UID:        failedJob.UID,
 	}}
 
 	activeJob := systemJob("retrying-migration", "1Gi", "")
@@ -1177,6 +1236,12 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 			// controller has definitively stopped and will not replace it.
 			name:    "a failed pod owned by a finished job does not count",
 			objects: []client.Object{finishedJob, failedFinishedJobPod},
+		},
+		{
+			// Exhausting the Job's retries is just as terminal as completing it:
+			// neither its template nor its last failed child can create another pod.
+			name:    "a failed pod owned by a job that gave up does not count",
+			objects: []client.Object{failedJob, failedFailedJobPod},
 		},
 		{
 			// A failed child of an unfinished Job is still the only evidence of
