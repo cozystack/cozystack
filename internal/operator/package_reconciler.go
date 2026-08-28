@@ -1092,7 +1092,7 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		// In all three the ceiling is held at what the object already carries, and the
 		// eventual drop lands on needed rather than on the configured limit, so a
 		// smaller blocker that is still there keeps the ceiling it requires.
-		clearSince, dated := memoryCeilingClearSince(existing)
+		clearSince, dated := memoryCeilingClearSince(existing, r.now())
 		switch {
 		case !dated:
 			desired = r.raisedCeiling(nsName, ceiling, r.now())
@@ -1168,11 +1168,25 @@ func systemDefaultsLimitRangeApplyConfiguration(lr *corev1.LimitRange) *corev1ac
 // foreignContainerMemoryPolicy names a LimitRange in the namespace, other than the one this
 // reconciler maintains, that already constrains container memory — or "" when there is none.
 //
-// Deliberately narrow. Only a container memory default or max collides with what this
-// reconciler writes, so a LimitRange bounding cpu, or storage, or setting limits for the Pod
-// rather than the Container type, is left to coexist. Read the other way round this would be
-// a blanket opt-out that any unrelated LimitRange could trigger, and a namespace would lose
-// its memory default over a cpu policy.
+// Narrow on the resource and deliberately broad on everything else. This reconciler writes
+// only container memory, so a LimitRange bounding cpu or storage is no business of its own
+// and coexists; read any wider, the guard would become a blanket opt-out that an unrelated
+// cpu policy could trip, and a namespace would lose its memory default over it.
+//
+// Within memory, though, every field and both scopes count, because the alternative does not
+// work. An earlier version of this checked the container default and max only, on the theory
+// that those are the fields our own default and defaultRequest can collide with. They are not
+// the whole set: a container min above the defaultRequest rejects the pod, and so does a
+// maxLimitRequestRatio, since a 32Gi default against a 32Mi defaultRequest is a ratio of
+// 1024:1 and no sane cap allows it.
+//
+// The Pod scope is what settles the argument, because there the collision is not decidable
+// here at all. Whether a per-container default of 32Gi breaches a Pod-scoped max depends on
+// how many containers the pod has, and the pods in question do not exist yet. Any arithmetic
+// this function does about them is a guess, and a guess in this direction costs a namespace
+// its entire pod admission. So the rule is ownership rather than arithmetic: if something
+// else in this namespace already has an opinion about container memory, the namespace is not
+// ours to default. That is the same rule the tenant-namespace exclusion rests on.
 //
 // The List is cached: a LimitRange informer already backs the Get above, and there is one
 // small object per namespace behind it, so this costs no apiserver call. It is the pod scan
@@ -1188,17 +1202,29 @@ func (r *PackageReconciler) foreignContainerMemoryPolicy(ctx context.Context, ns
 			continue
 		}
 		for _, item := range lr.Spec.Limits {
-			if item.Type != corev1.LimitTypeContainer {
-				continue
-			}
-			_, defaulted := item.Default[corev1.ResourceMemory]
-			_, capped := item.Max[corev1.ResourceMemory]
-			if defaulted || capped {
+			if constrainsMemory(item) {
 				return lr.Name, nil
 			}
 		}
 	}
 	return "", nil
+}
+
+// constrainsMemory reports whether a LimitRange item expresses any policy about memory.
+//
+// Every field is read, at every scope. The list is the complete set of memory-bearing fields
+// a LimitRangeItem has, so a field added upstream would be missed here — hence the switch on
+// the item's own maps rather than a hand-picked few, and hence this being its own function
+// with its own test rather than three conditions inline.
+func constrainsMemory(item corev1.LimitRangeItem) bool {
+	for _, quantities := range []corev1.ResourceList{
+		item.Default, item.DefaultRequest, item.Max, item.Min, item.MaxLimitRequestRatio,
+	} {
+		if _, ok := quantities[corev1.ResourceMemory]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // raisedCeiling builds the LimitRange for a namespace held above the configured limit,
@@ -1268,10 +1294,10 @@ func containerMemoryDefault(lr *corev1.LimitRange) (resource.Quantity, bool) {
 // came back empty.
 //
 // An annotation that cannot be parsed is reported as absent, which restarts the grace
-// period rather than ending it. That is the safe direction: the annotation exists only to
+// period rather than ending it, and one dated in the future is clamped to now. That is the safe direction: the annotation exists only to
 // delay a write that can reject a running component's next pod, so anything ambiguous about
 // it has to mean "wait longer", never "lower now".
-func memoryCeilingClearSince(lr *corev1.LimitRange) (time.Time, bool) {
+func memoryCeilingClearSince(lr *corev1.LimitRange, now time.Time) (time.Time, bool) {
 	raw, ok := lr.Annotations[memoryCeilingClearSinceAnnotation]
 	if !ok {
 		return time.Time{}, false
@@ -1279,6 +1305,16 @@ func memoryCeilingClearSince(lr *corev1.LimitRange) (time.Time, bool) {
 	stamped, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
 		return time.Time{}, false
+	}
+	// A stamp dated ahead of the clock would hold the ceiling for the skew plus the grace
+	// period rather than the grace period, and hold it silently, since this branch logs
+	// nothing. Clock skew on the writer, or a GitOps re-apply of an object carrying an old
+	// future stamp, both reach it. Clamping to now bounds the wait at the documented figure
+	// without ever shortening it: the direction that matters is that a raised ceiling is
+	// never lowered early, and now is the earliest instant this observation can honestly
+	// claim.
+	if stamped.After(now) {
+		return now, true
 	}
 	return stamped, true
 }
@@ -1531,9 +1567,24 @@ func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, ns
 	}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		// A finished pod is never recreated from this spec, so its request cannot
-		// block anything.
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		// A pod that ran to completion is never recreated from this spec, so its
+		// request cannot block anything.
+		//
+		// Failed is not the same and is deliberately still scanned. An eviction or a
+		// node crash leaves a Failed carcass holding the same oversized request, and
+		// its controller will recreate it: that carcass is the standing evidence this
+		// namespace needs a raised ceiling, and it is often the only evidence, since
+		// the shape this scan looks for cannot be admitted once the namespace is
+		// settled. Skipping it dropped the ceiling under a workload that was coming
+		// back, which is the exact outcome memoryCeilingDropGrace exists to prevent -
+		// the grace period reasons about a pod that is absent, and a Failed pod is
+		// present and telling us something.
+		//
+		// The cost is that a bare pod which failed for good holds the ceiling raised
+		// until Kubernetes garbage-collects it, after which the scan stops finding it
+		// and the grace period lowers the ceiling on its own. A ceiling held too long
+		// is loose; a ceiling dropped too early rejects a pod permanently.
+		if pod.Status.Phase == corev1.PodSucceeded {
 			continue
 		}
 		consider(&pod.Spec, "Pod/"+pod.Name)
