@@ -65,6 +65,9 @@ type ConfigSpec struct {
 	// Seed string to generate SMBIOS UUID for the VM.
 	// +kubebuilder:default:=""
 	CloudInitSeed string `json:"cloudInitSeed"`
+	// Seconds the guest is given to shut down cleanly on an ACPI powerdown before the domain is destroyed. Applies to every shutdown path: an explicit stop, a node drain, an eviction, a workload update.
+	// +kubebuilder:default:=30
+	TerminationGracePeriodSeconds int `json:"terminationGracePeriodSeconds"`
 }
 
 type Disk struct {
