@@ -17,6 +17,14 @@ import { CommandPalette } from "./components/command-palette/command-palette.tsx
 import type { AppConfig } from "./lib/config.ts"
 import { DEFAULT_LANDING_PATH } from "./lib/portal.ts"
 
+const CLUSTER_SCOPED_ADMIN = [
+  "/admin/capacity",
+  "/admin/backups/backupclasses",
+  "/admin/external-ips",
+  "/admin/tenants",
+  "/admin/modules",
+]
+
 interface ShellProps {
   config: AppConfig
   username?: string
@@ -26,6 +34,14 @@ function Shell({ config, username }: ShellProps) {
   const { pathname } = useLocation()
   const inMarketplace = pathname.startsWith("/marketplace")
   const inAdmin = pathname.startsWith("/admin")
+  // Only the genuinely cluster-scoped admin pages have no tenant to show. The
+  // rest of /admin mounts the same tenant-scoped resource pages as /console
+  // (see lib/portal.ts), and those resolve their namespace from the tenant
+  // context, so hiding the picker there would leave the active tenant both
+  // invisible and unchangeable.
+  const inClusterScope = CLUSTER_SCOPED_ADMIN.some((prefix) =>
+    pathname.startsWith(prefix),
+  )
   const marketplaceSections = useMarketplaceSidebarSections()
   const consoleSections = useConsoleSidebarSections()
   const adminSections = useAdminSidebarSections()
@@ -47,7 +63,7 @@ function Shell({ config, username }: ShellProps) {
     <AppShell
       tabs={tabs}
       sections={sections}
-      subtitle={inAdmin ? undefined : <Breadcrumb />}
+      subtitle={inClusterScope ? undefined : <Breadcrumb />}
       onSearchClick={toggle}
       version={config.version || import.meta.env.VITE_APP_VERSION}
       logoSvg={config.logoSvg}

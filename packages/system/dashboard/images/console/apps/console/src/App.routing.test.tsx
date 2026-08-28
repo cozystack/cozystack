@@ -94,6 +94,17 @@ describe("shell subtitle", () => {
     expect(screen.queryByText("Tenant", { exact: true })).toBeNull()
   })
 
+  // The rest of /admin mounts the same tenant-scoped resource pages as
+  // /console, and they resolve their namespace from the tenant context, so the
+  // picker has to stay: hiding it there leaves the active tenant invisible and
+  // unchangeable on the page it actually governs.
+  it("keeps the tenant picker on tenant-scoped admin pages", async () => {
+    const client = makeClient(TENANTS)
+    renderWithK8sProvider(<App />, { client, initialRoute: "/admin/virtualmachines" })
+
+    expect(await screen.findByText("Tenant", { exact: true })).toBeTruthy()
+  })
+
   it("still shows the tenant picker outside the admin portal", async () => {
     const client = makeClient(TENANTS)
     renderWithK8sProvider(<App />, { client, initialRoute: "/console" })
