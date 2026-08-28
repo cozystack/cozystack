@@ -208,6 +208,40 @@ describe("SchemaForm validate handle", () => {
     expect(document.activeElement).toBe(document.getElementById("root_name"))
   })
 
+  // #3135's own example lives inside an additionalProperties map, and those
+  // render in a nested form. Until that form continued the outer id namespace
+  // it restarted at "root", so the error named nodeGroups.md0.instanceType
+  // while the DOM held root_instanceType and the submit stayed silent.
+  it("focuses a required field inside an additionalProperties map", () => {
+    const mapSchema = JSON.stringify({
+      type: "object",
+      properties: {
+        nodeGroups: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            required: ["instanceType"],
+            properties: { instanceType: { type: "string" } },
+          },
+        },
+      },
+    })
+    const ref = createRef<SchemaFormHandle>()
+    render(
+      <SchemaForm
+        ref={ref}
+        openAPISchema={mapSchema}
+        formData={{ nodeGroups: { md0: {} } }}
+        onChange={noop}
+      />,
+    )
+
+    expect(validate(ref)).toBe(false)
+    expect(document.activeElement).toBe(
+      document.getElementById("root_nodeGroups_md0_instanceType"),
+    )
+  })
+
   it("reports valid through the ref once the required field is populated", () => {
     const ref = createRef<SchemaFormHandle>()
     render(

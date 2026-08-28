@@ -5,6 +5,7 @@ import { getDefaultFormState } from "@rjsf/utils"
 import type { RJSFSchema, UiSchema, TemplatesType } from "@rjsf/utils"
 import { keysOrderToUiSchema, sanitizeSchema } from "../lib/keys-order.ts"
 import { focusFirstError } from "@/lib/focus-first-error.ts"
+import { RJSF_ID_PREFIX, RJSF_ID_SEPARATOR } from "../lib/rjsf-ids.ts"
 import { addSensitiveStringWidgets } from "../lib/sensitive-fields.ts"
 import {
   IMMUTABLE_HELP_TEXT,
@@ -17,9 +18,6 @@ import { AdditionalPropertiesField } from "./AdditionalPropertiesField.tsx"
 import { ResourceQuotasField } from "./ResourceQuotasField.tsx"
 import { SourceField } from "./SourceField.tsx"
 import "./schema-form.css"
-
-const RJSF_ID_PREFIX = "root"
-const RJSF_ID_SEPARATOR = "_"
 
 /**
  * Recursively find all fields with additionalProperties schema and add widget.
