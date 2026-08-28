@@ -35,11 +35,15 @@ export function focusFirstError(
   const quote = (v: string) => v.replace(/["\\]/g, "\\$&")
   const escaped = quote(id)
   const escapedSeparator = quote(idSeparator)
+  // Not every widget puts the id on a form control, so match any of them
+  // rather than inputs alone.
+  const controls = ["input", "select", "textarea"]
+  const fallback = [
+    ...controls.map((tag) => `${tag}[id^="${escaped}${escapedSeparator}"]`),
+    ...controls.map((tag) => `${tag}[name^="${escaped}-"]`),
+  ].join(", ")
   const field =
-    document.getElementById(id) ??
-    document.querySelector<HTMLElement>(
-      `input[id^="${escaped}${escapedSeparator}"], input[name^="${escaped}-"]`,
-    )
+    document.getElementById(id) ?? document.querySelector<HTMLElement>(fallback)
   field?.scrollIntoView?.({ block: "center" })
   field?.focus?.({ preventScroll: true })
 }
