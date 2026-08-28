@@ -1,0 +1,75 @@
+suite: Redis strategy — CA/TLS wiring, deadline, and fail-loud S3 refs
+
+# These pin the Redis Strategy CR's render-time LOGIC — the decisions the chart
+# makes, not the script text (whose contract is the backup/restore roundtrip
+# e2e). The load-bearing one is TLS: the default must not skip verification, an
+# opt-in must, and a private-CA Secret must be required rather than optional.
+
+templates:
+  - templates/strategy-redis-default.yaml
+
+release:
+  name: t
+  namespace: cozy-backup-controller
+
+set:
+  # a resolvable bucket name so the gated strategy renders at all
+  backupStorage.bucketNameOverride: test-bucket
+
+tests:
+  - it: "default: no CA volume, skip-verify off, deadline set, S3 refs optional"
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_INSECURE_SKIP_VERIFY
+            value: "false"
+      - equal:
+          path: spec.template.spec.activeDeadlineSeconds
+          value: 3600
+      # Every S3 coordinate ref is optional so a missing key fails the script
+      # loudly instead of wedging the Pod in CreateContainerConfigError.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_ENDPOINT
+            valueFrom:
+              secretKeyRef:
+                name: cozy-backups-creds
+                key: endpoint
+                optional: true
+
+  - it: "endpointCASecretName set: CA volume mounted at /etc/s3-ca and REQUIRED (not optional)"
+    set:
+      backupStorage.endpointCASecretName: my-s3-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: s3-ca
+            secret:
+              secretName: my-s3-ca
+      # The Secret must be required: a missing CA has to fail the Pod, never
+      # silently fall through to skip-verify.
+      - notExists:
+          path: spec.template.spec.volumes[0].secret.optional
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: s3-ca
+            mountPath: /etc/s3-ca
+            readOnly: true
+
+  - it: "insecureSkipTLSVerify=true is threaded to the Pod as an explicit opt-in"
+    set:
+      backupStorage.insecureSkipTLSVerify: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_INSECURE_SKIP_VERIFY
+            value: "true"

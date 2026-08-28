@@ -1,0 +1,250 @@
+{{/*
+  Strategy template rendering uses two layers of Go templates:
+   1. Helm renders this file at chart install time. Anything inside
+      `{{ ... }}` is interpreted by Helm.
+   2. The strategy controller renders the resulting Strategy CR
+      per-BackupJob, expanding `{{ .Application | .Release | .Mode |
+      .Backup }}` against the live application object.
+  To emit a literal "{{ .Foo }}" that survives Helm, we pass it as the
+  string argument of `printf` — Helm does not interpret inner template
+  delimiters inside printf's quoted strings. Do NOT inline the literal
+  directly or Helm will try to evaluate the inner expression at chart
+  install time and fail.
+
+  Gate on a resolved $bucketName: an ungated Strategy CR has no RESTMapping
+  on a fresh install, Helm Build() fails "no matches for kind", and the
+  release applies zero objects (including the CRDs). See
+  strategy-mongodb-default.yaml for the full rationale.
+*/}}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Redis
+metadata:
+  name: cozy-default-redis
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      # Bound a wedged run (e.g. redis-cli --rdb blocking on a stalled master)
+      # so it becomes a Failed Job the driver reports, instead of a Pod the cron
+      # Plan keeps stacking behind. The job-in-progress path has no other deadline.
+      activeDeadlineSeconds: {{ .Values.backupStrategyController.redisBackupActiveDeadlineSeconds }}
+      {{- if .Values.backupStorage.endpointCASecretName }}
+      volumes:
+        # Verify the S3 endpoint against this private CA when the admin points
+        # endpointCASecretName at a Secret carrying ca.crt (self-signed SeaweedFS).
+        # The Secret is required, not optional: a missing one must fail the Pod
+        # loudly rather than silently fall through to skip-verify.
+        - name: s3-ca
+          secret:
+            secretName: {{ .Values.backupStorage.endpointCASecretName | quote }}
+      {{- end }}
+      containers:
+        - name: redis-backup
+          image: "{{ .Values.backupStrategyController.redisBackupClientImage }}"
+          imagePullPolicy: IfNotPresent
+          {{- if .Values.backupStorage.endpointCASecretName }}
+          volumeMounts:
+            - name: s3-ca
+              mountPath: /etc/s3-ca
+              readOnly: true
+          {{- end }}
+          env:
+            # Redis password, when the app has authEnabled (the default). The
+            # chart emits the Secret redis-<app>-auth; mount it optionally so a
+            # no-auth app still schedules.
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "redis-{{ .Release.Name }}-auth" | quote }}
+                  key: password
+                  optional: true
+            # S3 coordinates come from cozy-backups-creds, projected into the
+            # app namespace by the backupstrategy-controller before every
+            # BackupJob/RestoreJob. endpoint is a BARE host (no scheme) by
+            # design; the script prepends https:// when unscheme'd. These refs
+            # are optional so a missing/empty key lets the Pod start and the
+            # script fail loudly (a required ref would wedge the Pod in
+            # CreateContainerConfigError, which never becomes a Failed Job).
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: endpoint
+                  optional: true
+            - name: S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: bucketName
+                  optional: true
+            - name: S3_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: region
+                  optional: true
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true
+            # Skip-verify is an explicit opt-in, never a silent fallback. Off by
+            # default: the platform bucket carries a publicly trusted ACME cert
+            # the image's ca-certificates verifies unaided.
+            - name: S3_INSECURE_SKIP_VERIFY
+              value: {{ .Values.backupStorage.insecureSkipTLSVerify | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+
+              # The S3 refs are optional secretKeyRefs (see the container env), so
+              # a missing/empty key fails here with a clear cause rather than
+              # wedging the Pod in CreateContainerConfigError — which never
+              # becomes a Failed Job and leaves the BackupJob stuck at Running.
+              : "${S3_ENDPOINT:?missing endpoint in cozy-backups-creds}"
+              : "${S3_BUCKET:?missing bucketName in cozy-backups-creds}"
+              : "${S3_REGION:?missing region in cozy-backups-creds}"
+              : "${AWS_ACCESS_KEY_ID:?missing AWS_ACCESS_KEY_ID in cozy-backups-creds}"
+              : "${AWS_SECRET_ACCESS_KEY:?missing AWS_SECRET_ACCESS_KEY in cozy-backups-creds}"
+
+              MODE="{{ printf "{{ .Mode }}" }}"
+              # The sentinel Service always belongs to the app we operate on:
+              # the source on backup, the restore TARGET on restore (both are
+              # .Release.Name at driver-render time). The cozystack redis chart
+              # names its RedisFailover redis-<app>, so the operator's sentinel
+              # Service is rfs-redis-<app>; mymaster is its master name.
+              SENTINEL="rfs-redis-{{ printf "{{ .Release.Name }}" }}"
+              # The object name is minted by the controller per BackupJob and
+              # recorded on the Backup, so each backup is a distinct object and a
+              # restore reads back the exact one its Backup points at. Computing
+              # it in-script would collapse a Plan's history onto one object.
+              KEY="{{ printf "{{ .ObjectKey }}" }}"
+
+              # Discover the current master via any sentinel — the RedisFailover
+              # master moves on failover, so a fixed host would break after one.
+              addr=$(redis-cli -h "${SENTINEL}" -p 26379 sentinel get-master-addr-by-name mymaster)
+              MHOST=$(echo "${addr}" | sed -n '1p')
+              MPORT=$(echo "${addr}" | sed -n '2p')
+              if [ -z "${MHOST}" ] || [ -z "${MPORT}" ]; then
+                echo "could not resolve redis master from sentinel ${SENTINEL}" >&2
+                exit 1
+              fi
+
+              # tgt runs redis-cli against the app master. The password reaches
+              # redis-cli through REDISCLI_AUTH, never argv (ps-visible in the
+              # pod); it is set only when the app has auth, because an empty value
+              # makes redis-cli send AUTH to an unauthenticated server and fail.
+              # The throwaway loader below is local and unauthenticated, so it
+              # must NOT inherit this — hence a per-call wrapper, not an export.
+              tgt() {
+                if [ -n "${REDIS_PASSWORD:-}" ]; then
+                  REDISCLI_AUTH="${REDIS_PASSWORD}" redis-cli -h "${MHOST}" -p "${MPORT}" "$@"
+                else
+                  redis-cli -h "${MHOST}" -p "${MPORT}" "$@"
+                fi
+              }
+
+              case "${S3_ENDPOINT}" in
+                http://*|https://*) BASE="${S3_ENDPOINT}" ;;
+                *)                  BASE="https://${S3_ENDPOINT}" ;;
+              esac
+              TLS=""
+              case "${BASE}" in
+                https://*)
+                  # Default: verify against the image's system CA store — the
+                  # platform bucket's ACME cert needs nothing more. A mounted
+                  # private CA (self-signed SeaweedFS) is honoured when present.
+                  # Skip-verify is reached only by explicit opt-in, never as a
+                  # fallback, so an insecure transport is always a choice.
+                  if [ -f /etc/s3-ca/ca.crt ]; then TLS="--cacert /etc/s3-ca/ca.crt";
+                  elif [ -f /etc/s3-ca/tls.crt ]; then TLS="--cacert /etc/s3-ca/tls.crt";
+                  elif [ "${S3_INSECURE_SKIP_VERIFY:-false}" = "true" ]; then TLS="-k";
+                  fi
+                  ;;
+              esac
+              s3() {
+                curl -fsS ${TLS} \
+                  --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"
+              }
+              OBJ="${BASE}/${S3_BUCKET}/${KEY}"
+
+              if [ "${MODE}" = "backup" ]; then
+                echo "dumping RDB from master ${MHOST}:${MPORT}"
+                tgt --rdb /tmp/dump.rdb
+                echo "uploading s3://${S3_BUCKET}/${KEY}"
+                s3 -X PUT --upload-file /tmp/dump.rdb "${OBJ}"
+              else
+                echo "downloading s3://${S3_BUCKET}/${KEY}"
+                s3 -o /tmp/dump.rdb "${OBJ}"
+                # Replay by loading the RDB into a throwaway local redis and
+                # letting a real engine emit the replay stream. A standalone
+                # RDB->RESP converter (hdt3213/rdb) drops the database boundary
+                # (every SELECT gone, so db1+ merge into db0) and stream consumer
+                # groups; a real redis preserves both. It must be at least as new
+                # as the source engine or it cannot read the RDB version.
+                mkdir -p /tmp/restore
+                cp /tmp/dump.rdb /tmp/restore/dump.rdb
+                redis-server --dir /tmp/restore --dbfilename dump.rdb \
+                  --port 6399 --bind 127.0.0.1 --save "" --appendonly no &
+                for _ in $(seq 1 300); do
+                  redis-cli -p 6399 PING >/dev/null 2>&1 && break
+                  sleep 1
+                done
+                if ! redis-cli -p 6399 PING >/dev/null 2>&1; then
+                  echo "throwaway redis failed to load the RDB (version too new for the image?)" >&2
+                  exit 1
+                fi
+                # A RESP base AOF (no RDB preamble) is the faithful, replayable
+                # form: one SELECT per source database, streams with XSETID and
+                # XGROUP. CONFIG SET appendonly yes triggers the initial rewrite.
+                redis-cli -p 6399 CONFIG SET aof-use-rdb-preamble no >/dev/null
+                redis-cli -p 6399 CONFIG SET appendonly yes >/dev/null
+                for _ in $(seq 1 300); do
+                  [ "$(redis-cli -p 6399 INFO persistence | tr -d '\r' | awk -F: '/aof_rewrite_in_progress:/{print $2}')" = "0" ] && break
+                  sleep 1
+                done
+                REPLAY=$(ls /tmp/restore/appendonlydir/*.base.aof 2>/dev/null | head -1)
+                if [ -z "${REPLAY}" ]; then
+                  echo "throwaway redis produced no base AOF to replay" >&2
+                  exit 1
+                fi
+                # FLUSHALL first so an in-place restore is a replacement, not a
+                # merge onto stale keys; the SELECTs in the stream then land each
+                # source database back on its own index.
+                tgt FLUSHALL
+                tgt --pipe < "${REPLAY}"
+                redis-cli -p 6399 SHUTDOWN NOSAVE >/dev/null 2>&1 || true
+                echo "restore complete into ${MHOST}:${MPORT}"
+              fi
+          # On restore the throwaway loader holds the whole dataset in memory and
+          # materialises the RDB plus its AOF rewrite on disk, so memory and
+          # ephemeral-storage must scale with the Redis it restores. These
+          # defaults suit small-to-medium instances; a tenant with a large Redis
+          # raises them on the shipped strategy CR.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+              ephemeral-storage: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+{{- end -}}
