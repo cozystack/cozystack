@@ -3,11 +3,9 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react"
-import { useLocation, useSearchParams } from "react-router"
 import { useK8sList } from "@cozystack/k8s-client"
 import type { TenantNamespace } from "@cozystack/types"
 import { SELECTED_TENANT_KEY, TENANT_NAMESPACE_PREFIX } from "./constants.ts"
@@ -98,34 +96,6 @@ export function useTenantContext(): TenantContextValue {
   const ctx = useContext(TenantContext)
   if (!ctx) throw new Error("useTenantContext must be used inside TenantProvider")
   return ctx
-}
-
-/**
- * The detail routes take the resource name from the URL and the namespace from
- * this context, so a link that crosses tenants has to name its tenant in the
- * URL: the browser-native paths a real anchor enables — middle click, open in
- * new tab, a bookmarked or pasted URL — never run React's onClick, and two
- * tenants under different parents can share a relative CR name, so the name
- * alone would resolve against whichever tenant happened to be selected last.
- * Applied once per navigation rather than on every render, so the tenant picker
- * -- which switches the tenant without leaving the page -- is not dragged back
- * to the URL under the user, while returning to the entry through history
- * asserts it again. The provider's own fallback stays free to reject a tenant
- * the user cannot see.
- */
-export function useTenantFromUrl() {
-  const { key } = useLocation()
-  const [params] = useSearchParams()
-  const wanted = params.get("tenant")
-  const { selectTenant } = useTenantContext()
-  const navigated = useRef<string | null>(null)
-
-  useEffect(() => {
-    const previous = navigated.current
-    navigated.current = key
-    if (!wanted || previous === key) return
-    selectTenant(wanted)
-  }, [key, wanted, selectTenant])
 }
 
 /**

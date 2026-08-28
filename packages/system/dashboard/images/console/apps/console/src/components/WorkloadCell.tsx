@@ -34,13 +34,7 @@ export function WorkloadCell({ namespace, kind, name }: WorkloadCellProps) {
   const tenant = namespace.startsWith(TENANT_NAMESPACE_PREFIX)
     ? namespace.slice(TENANT_NAMESPACE_PREFIX.length)
     : null
-  // These drill-downs list workloads from every namespace, so the tenant has to
-  // travel in the URL: onClick alone leaves middle click and open-in-new-tab
-  // resolving the name against the previously selected tenant.
-  const href =
-    plural && tenant
-      ? `/console/${plural}/${name}/workloads?tenant=${encodeURIComponent(tenant)}`
-      : null
+  const href = plural && tenant ? `/console/${plural}/${name}/workloads` : null
 
   return (
     <>

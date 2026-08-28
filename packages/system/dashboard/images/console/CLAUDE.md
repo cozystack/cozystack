@@ -77,7 +77,9 @@ same paths to `kubernetes.default.svc` using the pod's service-account token.
    to a chunked-encoding WATCH against the same `resourceVersion`. Don't
    poll. Don't add `refetchInterval`. If you need a one-shot, pass
    `{ watch: false }`.
-4. **Tenant scoping.** Most resources live in `tenant-<name>` namespaces. Pull the active tenant from `useTenantContext()` — never read the namespace from a URL param or guess it. A link that crosses tenants is the one exception, and it still does not read the namespace: it names the tenant in `?tenant=`, which `useTenantFromUrl` feeds into the context on each navigation. Without it a real `<a href>` opened by middle click or in a new tab runs no `onClick`, and a relative CR name resolves against whichever tenant was selected last — a different tenant's resource, behind a Delete confirm that shows only that name.
+4. **Tenant scoping.** Most resources live in `tenant-<name>` namespaces.
+   Pull the active tenant from `useTenantContext()` — never read the
+   namespace from a URL param or guess it.
 5. **Auth.** In production the SPA sits behind oauth2-proxy. The client
    relies on cookies forwarded by nginx, and `/oauth2/userinfo` returns the
    logged-in user. There is no token handling in the SPA itself.
