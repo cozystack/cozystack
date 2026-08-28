@@ -39,6 +39,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -777,6 +778,67 @@ func TestReconcileSystemDefaultsLimitRangeDoesNotReapplyEquivalentQuantities(t *
 	}
 }
 
+// ForceOwnership is safe only after the read proved that the object at this key carries our
+// ownership label. The absent case stays non-force so a concurrent foreign create turns into
+// an SSA conflict instead of having its atomic LimitRangeSpec.Limits list overwritten.
+func TestReconcileSystemDefaultsLimitRangeForcesOnlyAnOwnedObject(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	for _, tt := range []struct {
+		name      string
+		seed      client.Object
+		wantForce bool
+	}{
+		{name: "create path is non-force"},
+		{
+			name: "owned update is forced",
+			seed: (&PackageReconciler{
+				SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+			}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4Gi")),
+			wantForce: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			if tt.seed != nil {
+				builder = builder.WithObjects(tt.seed)
+			}
+
+			var applyCalls int
+			var gotOptions client.ApplyOptions
+			cl := builder.WithInterceptorFuncs(interceptor.Funcs{
+				Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+					applyCalls++
+					gotOptions.ApplyOptions(opts)
+					return c.Apply(ctx, obj, opts...)
+				},
+			}).Build()
+
+			r := &PackageReconciler{
+				Client:                       cl,
+				APIReader:                    cl,
+				Scheme:                       scheme,
+				SystemNamespaceMemoryLimit:   resource.MustParse("32Gi"),
+				SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+			}
+			if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+
+			if applyCalls != 1 {
+				t.Fatalf("Apply calls = %d, want 1", applyCalls)
+			}
+			gotForce := gotOptions.Force != nil && *gotOptions.Force
+			if gotForce != tt.wantForce {
+				t.Errorf("ForceOwnership = %v, want %v", gotForce, tt.wantForce)
+			}
+			if gotOptions.FieldManager != packageControllerFieldOwner {
+				t.Errorf("field manager = %q, want %q", gotOptions.FieldManager, packageControllerFieldOwner)
+			}
+		})
+	}
+}
+
 // The tenant boundary. It is one strings.HasPrefix, and everything downstream of it depends
 // on it holding: packages/apps/tenant ships tenant-range-limits, which defaults container
 // memory to 128Mi in every tenant namespace with resourceQuotas. A system LimitRange landing
@@ -989,15 +1051,17 @@ func TestReconcileNamespacesSurvivesLimitRangeFailure(t *testing.T) {
 		t.Fatalf("add cozyv1alpha1 to scheme: %v", err)
 	}
 
+	var rejected int
 	cl := fake.NewClientBuilder().WithScheme(scheme).
 		WithInterceptorFuncs(interceptor.Funcs{
-			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-				if _, ok := obj.(*corev1.LimitRange); ok {
+			Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+				if _, ok := obj.(*corev1ac.LimitRangeApplyConfiguration); ok {
+					rejected++
 					return apierrors.NewForbidden(
 						corev1.Resource("limitranges"), SystemDefaultsLimitRangeName,
 						fmt.Errorf("denied by policy"))
 				}
-				return c.Patch(ctx, obj, patch, opts...)
+				return c.Apply(ctx, obj, opts...)
 			},
 		}).Build()
 
@@ -1021,6 +1085,9 @@ func TestReconcileNamespacesSurvivesLimitRangeFailure(t *testing.T) {
 	if err := r.reconcileNamespaces(t.Context(), pkg, variant); err != nil {
 		t.Fatalf("a rejected LimitRange must not fail namespace reconciliation: %v", err)
 	}
+	if rejected != 1 {
+		t.Fatalf("injected LimitRange Apply failures = %d, want 1", rejected)
+	}
 
 	ns := &corev1.Namespace{}
 	if err := cl.Get(t.Context(), types.NamespacedName{Name: "cozy-metallb"}, ns); err != nil {
@@ -1033,6 +1100,7 @@ func TestReconcileNamespacesSurvivesLimitRangeFailure(t *testing.T) {
 
 func TestFindRequestAboveDefaultLimit(t *testing.T) {
 	scheme := limitRangeScheme(t)
+	controller := true
 
 	terminated := systemPod("migrate-once", "8Gi", "")
 	terminated.Status.Phase = corev1.PodSucceeded
@@ -1064,6 +1132,15 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 		Kind:       "Job",
 		Name:       finishedJob.Name,
 		UID:        finishedJob.UID,
+		Controller: &controller,
+	}}
+	nonControllingFinishedJobPod := systemPod("mentions-migrated-once", "10Gi", "")
+	nonControllingFinishedJobPod.Status.Phase = corev1.PodFailed
+	nonControllingFinishedJobPod.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "batch/v1",
+		Kind:       "Job",
+		Name:       finishedJob.Name,
+		UID:        finishedJob.UID,
 	}}
 
 	failedJob := systemJob("gave-up", "8Gi", "")
@@ -1079,6 +1156,7 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 		Kind:       "Job",
 		Name:       failedJob.Name,
 		UID:        failedJob.UID,
+		Controller: &controller,
 	}}
 
 	activeJob := systemJob("retrying-migration", "1Gi", "")
@@ -1090,6 +1168,7 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 		Kind:       "Job",
 		Name:       activeJob.Name,
 		UID:        activeJob.UID,
+		Controller: &controller,
 	}}
 
 	suspended := true
@@ -1242,6 +1321,17 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 			// neither its template nor its last failed child can create another pod.
 			name:    "a failed pod owned by a job that gave up does not count",
 			objects: []client.Object{failedJob, failedFailedJobPod},
+		},
+		{
+			// An owner reference that does not mark the Job as this pod's controller
+			// says nothing about whether another controller will replace the pod.
+			name:    "a non-controlling finished job reference does not hide a failed pod",
+			objects: []client.Object{finishedJob, nonControllingFinishedJobPod},
+			want: &memoryRequestBlocker{
+				workload:  "Pod/mentions-migrated-once",
+				container: "mentions-migrated-once-app",
+				request:   resource.MustParse("10Gi"),
+			},
 		},
 		{
 			// A failed child of an unfinished Job is still the only evidence of
@@ -1570,10 +1660,10 @@ func TestReconcileSystemDefaultsLimitRangeWithholdsForAnyForeignMemoryPolicy(t *
 }
 
 // Identity is the managed-by label, not the name. The name is not reserved, so an
-// administrator's LimitRange can legitimately be called cozystack-system-defaults; skipping it
-// on the name alone hid it from the coexistence guard and then let the forced apply overwrite
-// it. LimitRangeSpec.Limits is an atomic list, so that replaces every item, taking the
-// administrator's max and cpu policy with it.
+// administrator's LimitRange can legitimately be called cozystack-system-defaults. This
+// fixture deliberately says nothing about memory: a differently named cpu policy coexists,
+// but an object holding this exact name cannot coexist, and the forced apply must not replace
+// its atomic Limits list merely because the memory-policy guard has no reason to notice it.
 func TestReconcileSystemDefaultsLimitRangeDoesNotOverwriteAForeignObjectSharingItsName(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
@@ -1586,7 +1676,6 @@ func TestReconcileSystemDefaultsLimitRangeDoesNotOverwriteAForeignObjectSharingI
 		Spec: corev1.LimitRangeSpec{
 			Limits: []corev1.LimitRangeItem{{
 				Type:    corev1.LimitTypeContainer,
-				Max:     corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
 				Default: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")},
 			}},
 		},
@@ -1615,11 +1704,11 @@ func TestReconcileSystemDefaultsLimitRangeDoesNotOverwriteAForeignObjectSharingI
 	if len(got.Spec.Limits) != 1 {
 		t.Fatalf("len(limits) = %d, want the administrator's single item untouched", len(got.Spec.Limits))
 	}
-	if _, ok := got.Spec.Limits[0].Max[corev1.ResourceMemory]; !ok {
-		t.Errorf("the administrator's container memory max was replaced; spec = %+v", got.Spec.Limits[0])
-	}
 	if _, ok := got.Spec.Limits[0].Default[corev1.ResourceCPU]; !ok {
 		t.Errorf("the administrator's cpu default was replaced; spec = %+v", got.Spec.Limits[0])
+	}
+	if _, ok := got.Spec.Limits[0].Default[corev1.ResourceMemory]; ok {
+		t.Errorf("the operator's memory default was merged into the administrator's object; spec = %+v", got.Spec.Limits[0])
 	}
 	if got.Labels[managedByLabel] == packageControllerFieldOwner {
 		t.Errorf("stamped this reconciler's managed-by label onto an object it did not create, "+
