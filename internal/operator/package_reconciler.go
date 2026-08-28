@@ -952,13 +952,24 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 	}
 
 	// The Get is cached where the scan below deliberately is not. A LimitRange informer
-	// holds one small object per system namespace; the cluster-wide Pod informer that
-	// caching the pod half of the scan would need is what the APIReader there exists to
-	// avoid.
+	// holds one small object per system namespace; routing the six workload Lists through
+	// the cache would start cluster-wide informers for all of them, including Pods, which
+	// is what the APIReader there exists to avoid.
 	existing := &corev1.LimitRange{}
 	err := r.Get(ctx, types.NamespacedName{Name: SystemDefaultsLimitRangeName, Namespace: nsName}, existing)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to read the system defaults LimitRange in namespace %s: %w", nsName, err)
+	}
+	existingOwned := err == nil && existing.Labels[managedByLabel] == packageControllerFieldOwner
+	if err == nil && !existingOwned {
+		// The name itself is occupied by an object we do not own. Its spec does not
+		// have to mention memory: even a cpu-only object cannot coexist with the
+		// desired LimitRange under the same Kubernetes object key, and replacing its
+		// atomic Limits list would destroy the administrator's policy.
+		logger.Info("leaving the system defaults LimitRange unmanaged: its name is already held by an object this reconciler does not own",
+			"namespace", nsName,
+			"limitRange", existing.Name)
+		return nil
 	}
 
 	// Another LimitRange already governing container memory here makes this namespace one
@@ -1069,8 +1080,14 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		return nil
 	}
 
-	return r.Apply(ctx, systemDefaultsLimitRangeApplyConfiguration(desired),
-		client.FieldOwner(packageControllerFieldOwner), client.ForceOwnership)
+	applyOptions := []client.ApplyOption{client.FieldOwner(packageControllerFieldOwner)}
+	if existingOwned {
+		// Force only after the read above proved that the existing object is ours.
+		// On the create path, a stale cache or concurrent foreign create must produce
+		// an apply conflict rather than let this reconciler take the object over.
+		applyOptions = append(applyOptions, client.ForceOwnership)
+	}
+	return r.Apply(ctx, systemDefaultsLimitRangeApplyConfiguration(desired), applyOptions...)
 }
 
 // systemDefaultsLimitRangeApplyConfiguration restates the LimitRange as the apply
@@ -1194,9 +1211,9 @@ func (r *PackageReconciler) deleteSystemDefaultsLimitRange(ctx context.Context, 
 	// its to delete; anything else is left where it is, which is also the right answer if
 	// the name is ever taken over by another component.
 	//
-	// The enabled path follows the same ownership rule. foreignContainerMemoryPolicy sees
-	// an unlabelled same-named memory policy before Apply and treats it as foreign, so
-	// ForceOwnership is never used to adopt or overwrite it.
+	// The enabled path follows the same ownership rule. Its initial Get treats any
+	// unlabelled same-named object as foreign before inspecting the spec, so ForceOwnership
+	// is never used to adopt or overwrite it.
 	if stale.Labels[managedByLabel] != packageControllerFieldOwner {
 		// Left alone, and said out loud. This is the right call on an object this
 		// reconciler did not write, but it is also reached when its own object has had the
@@ -1427,8 +1444,10 @@ func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, ns
 		// controller will recreate, and applying the default meanwhile would reject the
 		// replacement. A failed child of a finished Job is the exception: that Job will not
 		// create another pod, so keeping its carcass as evidence would contradict skipping
-		// the finished template above. Match by UID rather than name so a recreated Job with
-		// the same name cannot inherit the old Job's terminal state.
+		// the finished template above. Match the controlling Job by UID rather than name so
+		// a recreated Job with the same name cannot inherit the old Job's terminal state.
+		// A non-controlling owner reference is not enough: another controller may still
+		// replace that pod.
 		//
 		// Ownerless Failed pods still count. Some will never return, so this can withhold
 		// hardening longer than necessary, but there is no definitive controller state to
@@ -1439,13 +1458,10 @@ func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, ns
 		}
 		if pod.Status.Phase == corev1.PodFailed {
 			ownedByFinishedJob := false
-			for _, owner := range pod.OwnerReferences {
-				if owner.UID == "" {
-					continue
-				}
+			owner := metav1.GetControllerOf(pod)
+			if owner != nil && owner.APIVersion == batchv1.SchemeGroupVersion.String() && owner.Kind == "Job" {
 				if _, ok := finishedJobUIDs[owner.UID]; ok {
 					ownedByFinishedJob = true
-					break
 				}
 			}
 			if ownedByFinishedJob {

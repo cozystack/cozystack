@@ -106,7 +106,8 @@ cozystackOperator:
   # Set to 0 to disable. On the next Package reconcile, the operator removes every LimitRange
   # carrying app.kubernetes.io/managed-by: cozystack-package-controller, including objects in
   # namespaces no active Package targets. A same-named object without that ownership label is
-  # left alone.
+  # left alone while disabled and is neither overwritten nor adopted while enabled, even if
+  # it contains only cpu or storage policy.
   systemNamespaceMemoryLimit: ""
   # When non-empty, overrides the operator's --system-namespace-memory-request flag
   # (operator default: 32Mi). Deliberately small and always set: Kubernetes defaults
