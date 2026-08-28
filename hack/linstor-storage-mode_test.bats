@@ -110,6 +110,66 @@ kubectl() { printf '%s\n' "$*"; }
   fi
 }
 
+@test "local storage uses its saved LINSTOR pool baseline" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=local
+  cozy_wait_linstor_pool_free() { printf 'unexpected pool wait\n'; return 99; }
+  cozy_wait_linstor_pool_baseline() { printf 'baseline-wait:%s:%s\n' "$1" "$2"; }
+
+  output=$(cozy_wait_linstor_pool_reclaimed 90 300)
+
+  if printf '%s\n' "$output" | grep -Fq 'unexpected pool wait'; then
+    echo "local storage entered the replicated-capacity wait" >&2
+    return 1
+  fi
+  [ "$output" = 'baseline-wait:300:524288' ]
+}
+
+@test "replicated storage retains the LINSTOR free-capacity barrier" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=replicated
+  cozy_wait_linstor_pool_free() { printf 'pool-wait:%s:%s\n' "$1" "$2"; }
+
+  output=$(cozy_wait_linstor_pool_reclaimed 91 17)
+
+  [ "$output" = 'pool-wait:91:17' ]
+}
+
+@test "local pool baseline comparison is per-node and tolerates only metadata drift" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  baseline=$(printf 'srv1:67108864\nsrv2:20787200\nsrv3:60817408')
+  within_tolerance=$(printf 'srv1:67108864\nsrv2:20262912\nsrv3:60817408')
+  leaked_worker=$(printf 'srv1:67108864\nsrv2:20787200\nsrv3:39845888')
+  missing_node=$(printf 'srv1:67108864\nsrv3:60817408')
+
+  cozy_linstor_pools_at_baseline "$baseline" "$within_tolerance" 524288
+  if cozy_linstor_pools_at_baseline "$baseline" "$leaked_worker" 524288; then
+    echo "a 20 GiB worker leak passed the local-pool baseline" >&2
+    return 1
+  fi
+  if cozy_linstor_pools_at_baseline "$baseline" "$missing_node" 524288; then
+    echo "a missing LINSTOR node passed the local-pool baseline" >&2
+    return 1
+  fi
+}
+
+@test "local pool baseline capture persists all three numeric satellite rows" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_LINSTOR_POOL_BASELINE_FILE="_out/tmp/linstor-baseline-$$"
+  kubectl() { printf 'srv3:60817408\nsrv1:67108864\nsrv2:20787200\n'; }
+
+  output=$(cozy_capture_linstor_pool_baseline)
+  captured=$(cat "$COZY_LINSTOR_POOL_BASELINE_FILE")
+  rm -f "$COZY_LINSTOR_POOL_BASELINE_FILE"
+
+  [ "$captured" = "$(printf 'srv3:60817408\nsrv1:67108864\nsrv2:20787200')" ]
+  printf '%s\n' "$output" | grep -Fq 'local LINSTOR pool baseline recorded'
+}
+
 @test "container workflow forwards local storage through install and Chainsaw" {
   install_value=$(yq '.jobs.e2e-container.steps[] | select(.name == "Install Cozystack into sandbox") | .env.COZY_E2E_STORAGE_CLASS' .github/workflows/pull-requests.yaml)
   workflow_value=$(yq '.jobs.e2e-container.steps[] | select(.name == "Run E2E tests") | .env.COZY_E2E_STORAGE_CLASS' .github/workflows/pull-requests.yaml)

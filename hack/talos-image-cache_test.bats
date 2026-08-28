@@ -79,6 +79,14 @@
     [ "$kinds" = "CiliumClusterwideNetworkPolicy" ]
 }
 
+@test "range server records transfer outcome, bytes and duration" {
+    script=$(yq 'select(.kind == "ConfigMap") | .data."serve.py"' hack/e2e-talos-image-cache.yaml)
+
+    printf '%s\n' "$script" | python3 -c 'import sys; compile(sys.stdin.read(), "serve.py", "exec")'
+    printf '%s\n' "$script" | grep -Fq 'transfer-finished status=%s path=%s range=%s requested=%d sent=%d duration=%.3fs'
+    printf '%s\n' "$script" | grep -Fq 'time.monotonic() - started'
+}
+
 @test "egress policy selects the importer label and namespace the probe pod uses" {
     manifest=hack/e2e-talos-image-cache.yaml
     helper=hack/e2e-chainsaw/_lib/talos-image-cache.sh

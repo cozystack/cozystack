@@ -2,7 +2,6 @@
 # Sourced by the chainsaw kubernetes-latest/previous Tests after cd to repo root.
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
 . hack/e2e-chainsaw/_lib/talos-image-cache.sh
-. hack/e2e-chainsaw/_lib/ghcr-mirror.sh
 
 # The QEMU lane exercises replicated DRBD storage. The container lane cannot
 # represent three DRBD nodes on one shared kernel, so its otherwise-identical
@@ -18,10 +17,9 @@ cozy_e2e_storage_class() {
   esac
 }
 
-# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block combining the
-# Talos OS image cache (imageFactoryURL) and the ghcr.io worker image-pull mirror
-# (registryMirrors), each included only when its in-sandbox mirror is up. Prints
-# nothing when both fall back to the public defaults, so the chart defaults apply.
+# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block with the Talos
+# OS image cache (imageFactoryURL) when the in-sandbox cache is up. Prints nothing
+# when it falls back to the public default, so the chart default applies.
 # Indented for insertion directly under `spec:` in the heredoc below.
 #
 # No trailing newline, unlike the single-key helper this replaced: the caller reads
@@ -29,14 +27,11 @@ cozy_e2e_storage_class() {
 # of its own in the heredoc, which supplies the break before the next `spec` key.
 # An empty result therefore leaves a blank line, which is valid YAML.
 talos_spec_block() {
-  local url ghcr mirrors
+  local url
   url=$(resolve_talos_image_factory_url)
-  ghcr=$(resolve_ghcr_mirror_endpoint)
-  mirrors=$(ghcr_registry_mirrors_block "$ghcr")
-  [ -n "$url" ] || [ -n "$mirrors" ] || return 0
+  [ -n "$url" ] || return 0
   printf '  talos:\n'
-  [ -n "$url" ] && printf '    imageFactoryURL: %s\n' "$url"
-  [ -n "$mirrors" ] && printf '%s' "$mirrors"
+  printf '    imageFactoryURL: %s\n' "$url"
   return 0
 }
 
@@ -298,6 +293,113 @@ cozy_wait_linstor_pool_free() {
   done
 }
 
+# Capture the local lane's per-node free-capacity baseline after stale tenant
+# cleanup and before creating this suite's workers. Chainsaw executes `try` and
+# `finally` in separate shells, so the small state file is the hand-off between
+# them. An absolute threshold cannot describe this lane: persistent platform
+# PVCs legitimately leave one pool far below 90 GiB, while all three sparse
+# pools also share one runner filesystem beneath ZFS.
+cozy_capture_linstor_pool_baseline() {
+  _baseline_file="${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
+  _baseline_dir=${_baseline_file%/*}
+  [ "$_baseline_dir" != "$_baseline_file" ] || _baseline_dir=.
+  mkdir -p "$_baseline_dir"
+  : >"$_baseline_file"
+
+  _baseline=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
+    linstor --machine-readable sp l 2>/dev/null |
+    jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.node_name):\(.free_capacity)\"" |
+    sort
+  ' 2>/dev/null) || _baseline=""
+  if [ -z "$_baseline" ]; then
+    echo "» WARNING: could not record the local LINSTOR pool baseline; cleanup can verify the tenant API drain but not physical ZFS reclamation" >&2
+    return 1
+  fi
+  _baseline_nodes=$(printf '%s\n' "$_baseline" | awk -F: 'NF == 2 { print $1 }' | sort | tr '\n' ' ')
+  if [ "$_baseline_nodes" != "srv1 srv2 srv3 " ] \
+      || ! cozy_linstor_pools_at_baseline "$_baseline" "$_baseline" 0; then
+    echo "» WARNING: local LINSTOR pool baseline is incomplete or malformed (expected numeric rows for srv1, srv2 and srv3): ${_baseline:-<empty>}" >&2
+    return 1
+  fi
+  printf '%s\n' "$_baseline" >"$_baseline_file"
+  echo "» local LINSTOR pool baseline recorded:"
+  printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /'
+}
+
+# Pure comparison used by the local-pool reclamation loop. Both captures contain
+# `node:free_capacity_kib` rows. Every node present in the baseline must still be
+# present and may fall short only by the small caller-provided metadata tolerance.
+# The 512 MiB default covers the ~0.27 GiB free-capacity drift measured between
+# two otherwise-clean container suites, while still rejecting the smallest known
+# leaked test volume (the 1 GiB ClickHouse keeper PVC).
+cozy_linstor_pools_at_baseline() {
+  _baseline_rows="$1"
+  _current_rows="$2"
+  _tolerance_kib="${3:-524288}"
+  [ -n "$_baseline_rows" ] && [ -n "$_current_rows" ] || return 1
+  case "$_tolerance_kib" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+
+  while IFS=: read -r _baseline_node _baseline_kib; do
+    [ -n "$_baseline_node" ] && [ -n "$_baseline_kib" ] || return 1
+    _current_kib=$(printf '%s\n' "$_current_rows" | awk -F: -v node="$_baseline_node" '$1 == node { print $2; exit }')
+    [ -n "$_current_kib" ] || return 1
+    case "$_baseline_kib" in '' | *[!0-9]*) return 1 ;; esac
+    case "$_current_kib" in '' | *[!0-9]*) return 1 ;; esac
+    if [ "$(( _current_kib + _tolerance_kib ))" -lt "$_baseline_kib" ]; then
+      return 1
+    fi
+  done <<EOF
+$_baseline_rows
+EOF
+  return 0
+}
+
+cozy_wait_linstor_pool_baseline() {
+  _timeout="${1:-300}"
+  _tolerance_kib="${2:-524288}"
+  _baseline_file="${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
+  if [ ! -s "$_baseline_file" ]; then
+    echo "» WARNING: no local LINSTOR pool baseline was recorded; physical ZFS reclamation is unknown" >&2
+    return 1
+  fi
+  _baseline=$(cat "$_baseline_file")
+  _deadline=$(( $(date +%s) + _timeout ))
+  _current=""
+  while :; do
+    _current=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
+      linstor --machine-readable sp l 2>/dev/null |
+      jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.node_name):\(.free_capacity)\"" |
+      sort
+    ' 2>/dev/null) || _current=""
+    if cozy_linstor_pools_at_baseline "$_baseline" "$_current" "$_tolerance_kib"; then
+      echo "» local LINSTOR pools returned to their pre-suite baseline"
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$_deadline" ]; then
+      echo "» WARNING: local LINSTOR pools did not return to their pre-suite baseline within ${_timeout}s; continuing (a worker or CDI scratch volume may still occupy ZFS space)" >&2
+      printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /' >&2
+      printf '%s\n' "${_current:-<the LINSTOR pool probe returned nothing>}" | sed 's/^/  current-free-kib: /' >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+# The absolute 90 GiB threshold describes only the replicated lane's DRBD
+# teardown. The local lane instead waits for the exact capacity it had before
+# this Kubernetes suite, which detects its own leaked worker/scratch volumes
+# without requiring persistent platform volumes to disappear.
+cozy_wait_linstor_pool_reclaimed() {
+  _storage_class=$(cozy_e2e_storage_class) || return 1
+  if [ "$_storage_class" = local ]; then
+    cozy_wait_linstor_pool_baseline "${2:-300}" 524288
+    return $?
+  fi
+  cozy_wait_linstor_pool_free "${1:-90}" "${2:-300}"
+}
+
 # Unconditional cleanup hook, invoked from the kubernetes-* tests' Chainsaw
 # `finally` block (which always runs, after any crust-gather `catch`). The tenant
 # Kubernetes CR is applied imperatively (kubectl) inside run_kubernetes_test, so
@@ -334,10 +436,10 @@ cozy_cleanup() {
   # VMIs (guest RAM) and disk PVCs are actually gone so the next tenant test
   # starts on a freed sandbox -- the root cause of the node-join flake.
   cozy_wait_tenant_drained 300 || true
-  # PVC removal at the API level does not imply the satellite ZFS pool has
-  # reclaimed the space (see comment on cozy_wait_linstor_pool_free above);
-  # wait for FreeCapacity to return before yielding to the next tenant test.
-  cozy_wait_linstor_pool_free 90 300 || true
+  # In the replicated lane, wait for the DRBD-safe absolute threshold. In the
+  # local lane, wait for this suite's saved per-node baseline instead: that still
+  # catches delayed physical teardown without requiring platform PVCs to vanish.
+  cozy_wait_linstor_pool_reclaimed 90 300 || true
 }
 
 # Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
@@ -826,6 +928,56 @@ cozy_assert_guest_console_attached() {
   return 2
 }
 
+# Summarise the kubelet-image leg from one already-captured guest console. Talos
+# does not print a separate "pull complete" line: the next kubelet milestone is
+# Creating service runner, after the image has been fetched and unpacked. Keep
+# that distinction in the label. The source is explicit because e2e deliberately
+# leaves the chart's registryMirrors empty and exercises the public GHCR path.
+_cozy_guest_kubelet_image_timing() {
+  local pod="$1"
+  local console_log="$2"
+  awk -v pod="$pod" '
+    function guest_seconds(line, value) {
+      value = line
+      sub(/^\[[[:space:]]*/, "", value)
+      sub(/\].*$/, "", value)
+      return value + 0
+    }
+    /pulling image ghcr\.io\/siderolabs\/kubelet:/ && !have_start {
+      have_start = 1
+      started = guest_seconds($0)
+      image = $0
+      sub(/^.*pulling image /, "", image)
+      sub(/: starting\.\.\..*$/, "", image)
+      next
+    }
+    have_start && !have_runner && /service\[kubelet\]\(Preparing\): Creating service runner/ {
+      have_runner = 1
+      runner = guest_seconds($0)
+    }
+    have_start && !have_healthy && /service\[kubelet\]\(Running\): Health check successful/ {
+      have_healthy = 1
+      healthy = guest_seconds($0)
+    }
+    END {
+      if (!have_start) {
+        exit
+      }
+      printf "» tenant worker %s guest timing: kubelet image %s", pod, image
+      if (have_runner) {
+        printf " fetch+unpack %.3fs (guest %.3fs -> %.3fs)", runner - started, started, runner
+      } else {
+        printf " fetch+unpack incomplete (started at guest %.3fs)", started
+      }
+      if (have_healthy) {
+        printf "; kubelet healthy at guest %.3fs", healthy
+      }
+      printf "; source=ghcr.io (no e2e registry mirror)"
+      printf "\n"
+    }
+  ' "$console_log"
+}
+
 # Capture each tenant worker's guest serial console from the management
 # cluster. When a node group sets logSerialConsole, KubeVirt streams the
 # console into a guest-console-log container beside virt-launcher, and reading
@@ -1011,6 +1163,10 @@ cozy_capture_tenant_serial_console() {
           >>"${report_dir}/${pod}.log"
       fi
     fi
+    # Reuse the console bytes just read rather than paying for another API/log
+    # call in the successful timing report. Best-effort: a guest that has not
+    # reached the pull yet is already described by the full capture itself.
+    _cozy_guest_kubelet_image_timing "${pod}" "${report_dir}/${pod}.log" || true
     # The wall clock the log's own stamps have to be read against. Every line a
     # guest prints is stamped in seconds since that guest's kernel started, so
     # the file says how far the guest had got and nothing about when that was.
@@ -3758,12 +3914,9 @@ COZY_DIAG_RATE_INTERVAL_DEFAULT=12
 # answers to, and raising the budget without raising the operation moves the
 # snapshot past the end of the window.
 #
-# What a budget of this size gives up first is what is gated last --
-# ghcr_mirror_diagnose and talos_image_cache_diagnose. Neither loses its subject
-# entirely: the mirror's state is partly recoverable from the request counts and
-# response durations the mirror capture records against its own log, and from
-# the kube-system snapshot the host report takes. The image cache's re-probe has
-# no substitute, and it is the collector this budget gives up first.
+# What a budget of this size gives up first is what is gated last -- the
+# talos_image_cache_diagnose re-probe. It has no substitute, but it is also the
+# heaviest late collector because it creates a Pod and waits on curl retries.
 #
 # Only part of what runs ahead of the console is held mechanically, and the
 # boundary is worth naming rather than leaving a reader to trust the whole of
@@ -3919,7 +4072,7 @@ cozy_diag_phase_start() {
   # an unchecked list sitting beside a checked one, drifting from it at whatever
   # rate collectors are added.
   command -v timeout >/dev/null 2>&1 || \
-    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, worker block IO counter, sandbox node CPU time, sandbox kernel KVM counters, runner kernel CPU time, sandbox QEMU per-thread CPU time, runner fixed-work canary, worker per-thread CPU time, ghcr-mirror and talos-image-cache captures -- keep collecting instead, unbounded" >&2
+    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, worker block IO counter, sandbox node CPU time, sandbox kernel KVM counters, runner kernel CPU time, sandbox QEMU per-thread CPU time, runner fixed-work canary, worker per-thread CPU time and talos-image-cache capture -- keep collecting instead, unbounded" >&2
   # Re-checked here, not only at assignment: a value set after this file is sourced
   # -- which is how a test sets it -- would otherwise reach the arithmetic below
   # unvalidated, and that is the one failure that costs the whole block.
@@ -4487,27 +4640,6 @@ cozy_report_node_join_failure() {
     cozy_capture_tenant_talos "${test_name}" || true
   fi
 
-  # The OS-image cache and the ghcr.io mirror fail independently and produce the
-  # same symptom from outside the guest, so both get dumped: this one answers
-  # whether the worker's kubelet-image pull reached the mirror or fell back to
-  # public ghcr.io, which the node-join failure alone cannot distinguish. Gated
-  # like its neighbours, and after the guest captures. Bounded read by read
-  # like the collector at (d2), but five of them at COZY_DIAG_READ_TIMEOUT plus
-  # grace, so it can spend a quarter of the phase budget -- and time is the
-  # only thing the gate rations, so a quarter spent here is a quarter the
-  # guest captures do not get. Cost is not what settles the order, though, or
-  # (d2) would sit here too: what settles it is whether the answer survives
-  # being declined. The console evidence this would starve is irreplaceable
-  # and (d2)'s question has no other answer in the tree, while the mirror's
-  # state is partly recoverable from the reads above -- so those two go first
-  # and this one waits, whichever of them is cheaper. Cheaper than the
-  # talos-image-cache re-probe below, which creates a Pod and waits on curl
-  # retries, so it goes ahead of it.
-  if cozy_diag_phase_has_time 'ghcr-mirror state, access log and warm-up Job'; then
-    echo "--- ghcr-mirror state, access log and warm-up Job ---"
-    ghcr_mirror_diagnose || true
-  fi
-
   # Last, and gated on the phase as well as bounded per read, because it is the
   # collector that most needs both: its reachability re-probe creates a Pod, waits
   # on curl retries, and makes seven unbounded management-cluster calls of its own,
@@ -4636,6 +4768,88 @@ cozy_soft_red_node_join() {
   return 0
 }
 
+# Print the successful worker lifecycle in the job log while all of its objects
+# and Events still exist. The top-level durations distinguish time spent before
+# the Ready poll from the poll itself. The event timeline then exposes PVC
+# placement, CDI scratch provisioning, importer/virt-launcher image pulls, the
+# Talos disk import, VM start and CAPI NodeRef assignment without adding waits to
+# the product path. Finally, the cache log reports how long serving the compressed
+# OS image bytes took; DataVolume ImportInProgress -> Completed includes the
+# separate decompression and block-write work and must not be called pull time.
+cozy_report_node_join_timing() {
+  local test_name="$1"
+  local tenant_kubeconfig="$2"
+  local worker_requested_at="$3"
+  local wait_started_at="$4"
+  local wait_finished_at="$5"
+  local suite_started_at="$6"
+  local prefix="kubernetes-${test_name}-md0"
+  local event_rows event_rc=0 node_rows node_rc=0 cache_rows cache_rc=0
+
+  echo "=== successful tenant worker join timing: ${test_name} ==="
+  printf 'worker-pool request -> Ready wait: %ss\n' "$(( wait_started_at - worker_requested_at ))"
+  printf 'two-node Ready wait: %ss\n' "$(( wait_finished_at - wait_started_at ))"
+  printf 'worker-pool request -> two nodes Ready: %ss\n' "$(( wait_finished_at - worker_requested_at ))"
+
+  if command -v timeout >/dev/null 2>&1; then
+    event_rows=$(timeout -k 5 25 kubectl -n tenant-test get events.events.k8s.io \
+      --request-timeout=20s \
+      -o jsonpath='{range .items[*]}{.eventTime}{"\t"}{.regarding.kind}{"\t"}{.regarding.name}{"\t"}{.reason}{"\t"}{.note}{"\n"}{end}' 2>&1) || event_rc=$?
+  else
+    event_rows=$(kubectl -n tenant-test get events.events.k8s.io \
+      --request-timeout=20s \
+      -o jsonpath='{range .items[*]}{.eventTime}{"\t"}{.regarding.kind}{"\t"}{.regarding.name}{"\t"}{.reason}{"\t"}{.note}{"\n"}{end}' 2>&1) || event_rc=$?
+  fi
+  echo "worker provisioning milestones (UTC; image-pull durations are kubelet-reported):"
+  if [ "$event_rc" -eq 0 ]; then
+    printf '%s\n' "$event_rows" | awk -F '\t' -v prefix="$prefix" '
+      index($3, prefix) && $4 ~ /^(SuccessfulCreate|WaitForFirstConsumer|ProvisioningSucceeded|ImportTargetInUse|Scheduled|Pulling|Pulled|ImportScheduled|Unschedulable|ImportInProgress|Completed|ImportSucceeded|Created|Started|SuccessfulSetNodeRef)$/ {
+        print $0
+      }
+    ' | sort | sed 's/^/  /'
+  else
+    echo "  not collected: management-cluster Event read exited ${event_rc}"
+    printf '%s\n' "$event_rows" | sed 's/^/  event-read: /'
+  fi
+
+  if command -v timeout >/dev/null 2>&1; then
+    node_rows=$(timeout -k 5 25 kubectl --kubeconfig "$tenant_kubeconfig" get nodes \
+      --request-timeout=20s \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\tcreated="}{.metadata.creationTimestamp}{"\tReady="}{.status.conditions[?(@.type=="Ready")].lastTransitionTime}{"\n"}{end}' 2>&1) || node_rc=$?
+  else
+    node_rows=$(kubectl --kubeconfig "$tenant_kubeconfig" get nodes \
+      --request-timeout=20s \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\tcreated="}{.metadata.creationTimestamp}{"\tReady="}{.status.conditions[?(@.type=="Ready")].lastTransitionTime}{"\n"}{end}' 2>&1) || node_rc=$?
+  fi
+  echo "tenant Node timestamps (UTC):"
+  if [ "$node_rc" -eq 0 ]; then
+    printf '%s\n' "$node_rows" | sort | sed 's/^/  /'
+  else
+    echo "  not collected: tenant Node read exited ${node_rc}"
+    printf '%s\n' "$node_rows" | sed 's/^/  node-read: /'
+  fi
+
+  if command -v timeout >/dev/null 2>&1; then
+    cache_rows=$(timeout -k 5 25 kubectl -n kube-system logs deploy/talos-image-cache \
+      -c serve --since-time="$suite_started_at" --timestamps=true \
+      --request-timeout=20s 2>&1) || cache_rc=$?
+  else
+    cache_rows=$(kubectl -n kube-system logs deploy/talos-image-cache \
+      -c serve --since-time="$suite_started_at" --timestamps=true \
+      --request-timeout=20s 2>&1) || cache_rc=$?
+  fi
+  echo "Talos OS cache transfers since suite start (compressed-byte service time, not CDI decompression/write time):"
+  if [ "$cache_rc" -ne 0 ]; then
+    echo "  not collected: talos-image-cache log read exited ${cache_rc}"
+    printf '%s\n' "$cache_rows" | sed 's/^/  cache-log-read: /'
+  elif printf '%s\n' "$cache_rows" | grep -F 'transfer-finished' | grep -Fq 'openstack-amd64.raw.xz'; then
+    printf '%s\n' "$cache_rows" | grep -F 'transfer-finished' | grep -F 'openstack-amd64.raw.xz' | sed 's/^/  /'
+  else
+    echo "  no openstack-amd64.raw.xz transfer outcome was logged (mirror fallback or a pre-instrumentation cache pod)"
+  fi
+  return 0
+}
+
 run_kubernetes_test() {
     local version_expr="$1"
     local test_name="$2"
@@ -4658,6 +4872,8 @@ run_kubernetes_test() {
   # be prevented from turning a green run red is to know how long this has been
   # running. Nothing else reads it.
   _COZY_RUN_STARTED_AT=$(date +%s)
+  local _cozy_run_started_rfc3339
+  _cozy_run_started_rfc3339=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
   # Clean up stale resources from a previous failed retry. Delete the worker
   # pool (KubernetesNodes) before the parent Kubernetes CR so a rerun re-creates
@@ -4666,6 +4882,14 @@ run_kubernetes_test() {
   kubectl -n tenant-test wait kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --for=delete --timeout=2m 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "${test_name}" --for=delete --timeout=2m 2>/dev/null || true
+
+  # The local lane cannot use the replicated lane's absolute free-capacity
+  # threshold because persistent platform volumes already put one pool below it.
+  # Save the post-stale-cleanup state for the separate Chainsaw `finally` shell;
+  # cleanup later verifies that this suite returned every node to these figures.
+  if [ "$storage_class" = local ]; then
+    cozy_capture_linstor_pool_baseline || true
+  fi
 
   # Compose the optional ouroboros addon block. Indentation matches the
   # surrounding addons map (4 spaces).
@@ -4685,11 +4909,10 @@ YAML
 )
   fi
 
-  # Point worker DataVolume imports at the in-sandbox Talos OS image cache and
-  # worker image pulls at the in-sandbox ghcr.io mirror when each is up (falls back
-  # to the public defaults otherwise). Emitted right under spec: as
-  # `talos: { imageFactoryURL: ..., registryMirrors: {...} }`, or nothing when both
-  # defaults apply.
+  # Point worker DataVolume imports at the in-sandbox Talos OS image cache when it
+  # is up, falling back to the public factory otherwise. Worker image pulls use
+  # the chart's public-registry default. Emitted right under spec: as
+  # `talos: { imageFactoryURL: ... }`, or nothing when the default applies.
   local talos_block
   talos_block=$(talos_spec_block)
 
@@ -4754,6 +4977,8 @@ EOF
   # kubernetes-${test_name}-md0 — the same object the pre-split
   # spec.nodeGroups.md0 produced, which the waits below still key on. Carries
   # roles: [ingress-nginx] so the ingress-nginx addon has a node to schedule on.
+  local _worker_pool_requested_at
+  _worker_pool_requested_at=$(date +%s)
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: KubernetesNodes
@@ -4960,11 +5185,14 @@ EOF
   # The status is kept rather than tested in place, because what this branch
   # does next depends on which non-zero it was and `if !` throws that away.
   local _join_rc=0
+  local _join_wait_started_at _join_wait_finished_at
+  _join_wait_started_at=$(date +%s)
   timeout 29m bash -c '
     until [ "$(kubectl --kubeconfig "tenantkubeconfig-'"${test_name}"'" get nodes --no-headers 2>/dev/null | grep -cw Ready)" -ge 2 ]; do
       sleep 5
     done
   ' || _join_rc=$?
+  _join_wait_finished_at=$(date +%s)
   if [ "${_join_rc}" -ne 0 ]; then
     # Node-join failed: fewer than 2 tenant nodes became Ready inside the 29m
     # deadline, or the wait itself could not run. Record which of the two it was,
@@ -5032,6 +5260,13 @@ EOF
     echo "» WARNING: the runner fixed-work canary did not read inside the range its own legend calls healthy after the node-join wait, so this run passed on a machine that was not getting the work done at this layer; which arm it was and what figure it gave is written into the capture" >&2
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
+  cozy_report_node_join_timing \
+    "$test_name" \
+    "tenantkubeconfig-${test_name}" \
+    "$_worker_pool_requested_at" \
+    "$_join_wait_started_at" \
+    "$_join_wait_finished_at" \
+    "$_cozy_run_started_rfc3339" || true
 
   # Verify the kubelet version matches what we expect
   versions=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" \
