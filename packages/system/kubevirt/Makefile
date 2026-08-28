@@ -27,7 +27,7 @@ CR_FILE ?= templates/kubevirt-cr.yaml
 #   1. Operator inspects the new upstream release notes for spec changes
 #      that affect the cozystack-managed fields listed above.
 #   2. Operator hand-merges the new fields into templates/kubevirt-cr.yaml.
-#   3. Operator runs `make update` to re-apply the five cozystack
+#   3. Operator runs `make update` to re-apply the six cozystack
 #      parameterization sed patches in case they were lost during the
 #      hand-merge.
 #
@@ -46,6 +46,9 @@ update:
 	@# sanity-check tail below.
 	grep -q '{{- with .Values.permittedHostDevices }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.permittedHostDevices }}\n    permittedHostDevices:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
 	grep -q '{{- with .Values.mediatedDevicesConfiguration }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.mediatedDevicesConfiguration }}\n    mediatedDevicesConfiguration:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
+	@# vmStateStorageClass keys off the same evictionStrategy: anchor and is
+	@# guarded on its own for the same reason as the two blocks above.
+	grep -q '{{- with .Values.vmStateStorageClass }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.vmStateStorageClass }}\n    vmStateStorageClass: {{ . | quote }}\n    {{- end }}' $(CR_FILE)
 	@# Sanity-check: every cozystack patch MUST end up in the file. If the
 	@# hand-merge step moved or renamed an anchor (developerConfiguration:,
 	@# - VMExport, evictionStrategy:) the sed silently no-ops and the chart
@@ -56,3 +59,4 @@ update:
 	@grep -q '{{- range .Values.extraFeatureGates }}' $(CR_FILE) || { echo "ERROR: directive '{{- range .Values.extraFeatureGates }}' not inserted — restore the '- VMExport' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
 	@grep -q '{{- with .Values.permittedHostDevices }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.permittedHostDevices }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
 	@grep -q '{{- with .Values.mediatedDevicesConfiguration }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.mediatedDevicesConfiguration }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
+	@grep -q '{{- with .Values.vmStateStorageClass }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.vmStateStorageClass }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }

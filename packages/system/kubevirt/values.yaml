@@ -46,3 +46,18 @@ permittedHostDevices: {}
 #     mediatedDeviceTypes:
 #     - nvidia-740
 mediatedDevicesConfiguration: {}
+
+# StorageClass for the backend-storage PVC that carries a VM's persistent EFI
+# vars and TPM state (persistent-state-for-<vm>). Empty by default, which
+# leaves the CR field unset: KubeVirt then reads the CDI StorageProfile of the
+# cluster-default StorageClass. Driven by .Values.vmStateStorageClass at the
+# platform level.
+#
+# The class MUST advertise ReadWriteMany for volumeMode Filesystem.
+# backend-storage only asks for RWX when the StorageProfile offers it for
+# Filesystem, and an RWO backend PVC pins the VM to its node — a VM whose
+# preference sets preferredTPM.persistent / preferredEfi.persistent, which
+# every windows.* preference in kubevirt-instancetypes does, can then neither
+# be live-migrated nor drained. The linstor `replicated` classes advertise RWX
+# for Block only, so on a stock install those VMs are non-migratable (#3005).
+vmStateStorageClass: ""

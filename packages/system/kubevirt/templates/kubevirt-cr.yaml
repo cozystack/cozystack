@@ -32,6 +32,9 @@ spec:
     mediatedDevicesConfiguration:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+    {{- with .Values.vmStateStorageClass }}
+    vmStateStorageClass: {{ . | quote }}
+    {{- end }}
     evictionStrategy: LiveMigrate
     virtualMachineOptions:
       disableSerialConsoleLog: {}
