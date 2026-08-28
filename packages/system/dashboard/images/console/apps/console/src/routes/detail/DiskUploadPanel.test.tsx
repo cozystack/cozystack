@@ -125,6 +125,7 @@ interface ClusterFixture {
 function makeHarness(fixture: ClusterFixture = {}) {
   const client = new K8sClient()
   const handlers: Array<(event: WatchEvent<DataVolume>) => void> = []
+  const watchErrorHandlers: Array<(error: Error) => void> = []
   const stopWatch = vi.fn()
   const listSpy = vi
     .spyOn(client, "list")
@@ -181,8 +182,10 @@ function makeHarness(fixture: ClusterFixture = {}) {
       _namespace,
       _resourceVersion,
       onEvent,
+      onError,
     ) => {
       handlers.push(onEvent as (event: WatchEvent<DataVolume>) => void)
+      if (onError) watchErrorHandlers.push(onError)
       return stopWatch
     },
   )
@@ -197,6 +200,10 @@ function makeHarness(fixture: ClusterFixture = {}) {
     async emit(event: WatchEvent<DataVolume>) {
       await waitFor(() => expect(handlers.length).toBeGreaterThan(0))
       act(() => handlers.at(-1)?.(event))
+    },
+    async failWatch() {
+      await waitFor(() => expect(watchErrorHandlers.length).toBeGreaterThan(0))
+      act(() => watchErrorHandlers.at(-1)?.(new Error("watch ended")))
     },
   }
 }
@@ -254,8 +261,10 @@ describe("DiskUploadPanel query lifecycle", () => {
     )
   })
 
-  it("does no upload work for a non-upload VMDisk", async () => {
-    const h = makeHarness()
+  it("queries only the exact child for a non-upload VMDisk and stays hidden", async () => {
+    const h = makeHarness({
+      items: [makeDV({ source: { http: { url: "https://example.org/i" } } })],
+    })
     const { container } = renderWithK8sProvider(
       <DiskUploadPanel
         ad={ad}
@@ -263,12 +272,26 @@ describe("DiskUploadPanel query lifecycle", () => {
       />,
       { client: h.client },
     )
-    await act(() => Promise.resolve())
+    await waitFor(() => expect(h.watchSpy).toHaveBeenCalled())
     expect(container).toBeEmptyDOMElement()
-    expect(h.listSpy).not.toHaveBeenCalled()
-    expect(h.watchSpy).not.toHaveBeenCalled()
+    expect(h.listSpy).toHaveBeenCalledTimes(1)
+    expect(h.watchSpy).toHaveBeenCalledTimes(1)
     expect(h.getSpy).not.toHaveBeenCalled()
     expect(h.createSpy).not.toHaveBeenCalled()
+  })
+
+  it("surfaces a preserved upload DataVolume after the VMDisk source changes", async () => {
+    const h = makeHarness()
+    renderWithK8sProvider(
+      <DiskUploadPanel
+        ad={ad}
+        instance={makeInstance({ source: { http: { url: "https://example.org/i" } } })}
+      />,
+      { client: h.client },
+    )
+
+    expect(await screen.findByText(/preserved DataVolume is still an upload target/)).toBeInTheDocument()
+    expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
   })
 
   it("shows the intended panel but defers the child query until the VMDisk is Ready", async () => {
@@ -302,6 +325,22 @@ describe("DiskUploadPanel query lifecycle", () => {
 
     unmount()
     expect(h.stopWatch).toHaveBeenCalled()
+  })
+
+  it("reopens a closed watch after a relist returns the same resourceVersion", async () => {
+    const h = makeHarness()
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
+      client: h.client,
+    })
+    expect(await screen.findByText("Upload target ready")).toBeInTheDocument()
+    await waitFor(() => expect(h.watchSpy).toHaveBeenCalledTimes(1))
+
+    await h.failWatch()
+    await waitFor(() => expect(h.listSpy).toHaveBeenCalledTimes(2), { timeout: 2500 })
+    await waitFor(() => expect(h.watchSpy).toHaveBeenCalledTimes(2), { timeout: 2500 })
+
+    await h.emit({ type: "MODIFIED", object: makeDV({ phase: "Succeeded" }) })
+    expect(await screen.findByText("Image uploaded")).toBeInTheDocument()
   })
 
   it("keeps a failed read visible and lets Refresh recover", async () => {
@@ -405,8 +444,9 @@ describe("DiskUploadPanel states and prerequisites", () => {
       "virtctl image-upload dv 'vm-disk-demo' --no-create --namespace 'tenant-root'",
     )
     expect(command).toHaveTextContent(
-      "--uploadproxy-url 'https://cdi-uploadproxy.example.org' --insecure",
+      "--uploadproxy-url 'https://cdi-uploadproxy.example.org'",
     )
+    expect(command).not.toHaveTextContent("--insecure")
     expect(h.getSpy).toHaveBeenCalledWith(
       "cdi.kubevirt.io",
       "v1beta1",
@@ -464,6 +504,7 @@ describe("DiskUploadPanel states and prerequisites", () => {
 
   it.each([
     ["missing", ""],
+    ["insecure", "http://proxy.example.org"],
     ["invalid", "ftp://proxy.example.org"],
   ])("withholds the command for a %s proxy URL", async (_label, uploadProxyURL) => {
     const h = makeHarness({ uploadProxyURL })
@@ -494,6 +535,35 @@ describe("DiskUploadPanel states and prerequisites", () => {
     })
     expect(await screen.findByText(/could not verify your upload permissions/)).toBeInTheDocument()
     expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
+  })
+
+  it("reruns the proxy and both permission checks when Retry recovers", async () => {
+    const h = makeHarness()
+    h.getSpy.mockRejectedValueOnce(new Error("unavailable"))
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
+      client: h.client,
+    })
+    expect(await screen.findByText(/could not verify the upload proxy/)).toBeInTheDocument()
+    expect(h.createSpy).toHaveBeenCalledTimes(2)
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry checks" }))
+
+    expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
+    expect(h.getSpy).toHaveBeenCalledTimes(2)
+    expect(h.createSpy).toHaveBeenCalledTimes(4)
+  })
+
+  it("disables Retry while a prerequisite refresh is in flight", async () => {
+    const h = makeHarness({ cdiConfigError: new Error("unavailable") })
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
+      client: h.client,
+    })
+    const retry = await screen.findByRole("button", { name: "Retry checks" })
+    h.getSpy.mockImplementationOnce(() => new Promise(() => {}))
+
+    fireEvent.click(retry)
+
+    await waitFor(() => expect(retry).toBeDisabled())
   })
 
   it("withholds the command once the image is written", async () => {
@@ -591,7 +661,7 @@ describe("DiskUploadPanel copy feedback", () => {
     fireEvent.click(await screen.findByLabelText("Copy command"))
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(
-        "virtctl image-upload dv 'vm-disk-demo' --no-create --namespace 'tenant-root' --image-path './disk.qcow2' --uploadproxy-url 'https://cdi-uploadproxy.example.org' --insecure",
+        "virtctl image-upload dv 'vm-disk-demo' --no-create --namespace 'tenant-root' --image-path './disk.qcow2' --uploadproxy-url 'https://cdi-uploadproxy.example.org'",
       ),
     )
     expect(screen.getByLabelText("Command copied")).toBeInTheDocument()

@@ -85,6 +85,7 @@ export function useSelfSubjectAccessReview(spec: SelfSubjectAccessReviewSpec) {
   })
   return {
     allowed: query.data?.status?.allowed ?? false,
+    isFetched: query.isFetched,
     isLoading: query.isLoading,
     isFetching: query.isFetching,
     error: (query.error as Error | null) ?? null,
