@@ -1,0 +1,18 @@
+suite: VM disk upload notes
+templates:
+  - templates/NOTES.txt
+
+release:
+  name: vm-disk-demo
+  namespace: tenant-root
+
+tests:
+  - it: reuses the chart-created DataVolume for local image upload
+    set:
+      source:
+        upload: {}
+    asserts:
+      - matchRegexRaw:
+          pattern: 'virtctl image-upload dv vm-disk-demo --no-create --namespace tenant-root --image-path <path_to_image>'
+      - notMatchRegexRaw:
+          pattern: 'virtctl image-upload dv -n'

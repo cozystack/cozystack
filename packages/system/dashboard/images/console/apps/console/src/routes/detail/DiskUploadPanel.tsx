@@ -29,7 +29,7 @@ const UPLOAD_GROUP = "upload.cdi.kubevirt.io"
 
 const STAGE_LABEL: Record<UploadStage, string> = {
   preparing: "Preparing upload target",
-  "awaiting-upload": "Upload target ready",
+  "awaiting-upload": "Upload handoff",
   paused: "Upload paused",
   succeeded: "Image uploaded",
   failed: "Upload failed",
@@ -197,6 +197,56 @@ function UploadPrerequisites({
   )
 }
 
+function reportsUploadProgress(progress: string | undefined): boolean {
+  const value = progress?.trim()
+  if (!value || value === "N/A") return false
+  const percentage = /^(\d+(?:\.\d+)?)%$/.exec(value)
+  return !percentage || Number(percentage[1]) > 0
+}
+
+function UploadReadyHandoff({
+  name,
+  namespace,
+  progress,
+}: {
+  name: string
+  namespace: string
+  progress?: string
+}) {
+  const [confirmedIdle, setConfirmedIdle] = useState(false)
+
+  if (reportsUploadProgress(progress)) {
+    return (
+      <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+        CDI reports progress for this upload target. A transfer may already be
+        active, so the console is withholding a second upload command.
+      </p>
+    )
+  }
+
+  if (!confirmedIdle) {
+    return (
+      <div className="mt-4 space-y-3">
+        <p className="text-sm text-slate-600">
+          CDI reports <span className="font-mono text-xs">UploadReady</span> both
+          before and during a transfer, and this CDI version does not expose upload
+          progress. Verify that no virtctl upload is already running for this disk
+          before revealing another command.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setConfirmedIdle(true)}
+        >
+          Confirm no upload is running
+        </Button>
+      </div>
+    )
+  }
+
+  return <UploadPrerequisites name={name} namespace={namespace} />
+}
+
 function currentState(dv: DataVolume | undefined): UploadState {
   if (!dv) return { stage: "preparing", phase: "" }
   return uploadState(dv)
@@ -360,7 +410,12 @@ function UploadDiskPanel({
         )}
 
         {!sourceMismatch && dv && state.stage === "awaiting-upload" && (
-          <UploadPrerequisites name={name} namespace={namespace} />
+          <UploadReadyHandoff
+            key={`${dv.metadata.uid ?? name}:${dv.metadata.resourceVersion ?? state.progress ?? ""}`}
+            name={name}
+            namespace={namespace}
+            progress={state.progress}
+          />
         )}
       </Section>
     </div>

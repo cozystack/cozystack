@@ -82,6 +82,7 @@ function makeDV({
   progress,
   capacity = "5Gi",
   conditions,
+  resourceVersion = "10",
 }: {
   name?: string
   source?: Record<string, unknown>
@@ -89,11 +90,12 @@ function makeDV({
   progress?: string
   capacity?: string
   conditions?: NonNullable<DataVolume["status"]>["conditions"]
+  resourceVersion?: string
 } = {}): DataVolume {
   return {
     apiVersion: "cdi.kubevirt.io/v1beta1",
     kind: "DataVolume",
-    metadata: { name, namespace: "tenant-root" },
+    metadata: { name, namespace: "tenant-root", resourceVersion },
     spec: {
       source,
       storage: { resources: { requests: { storage: capacity } } },
@@ -208,6 +210,12 @@ function makeHarness(fixture: ClusterFixture = {}) {
   }
 }
 
+async function confirmNoUploadRunning() {
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Confirm no upload is running" }),
+  )
+}
+
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
@@ -291,6 +299,8 @@ describe("DiskUploadPanel query lifecycle", () => {
     )
 
     expect(await screen.findByText(/preserved DataVolume is still an upload target/)).toBeInTheDocument()
+    expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
+    await confirmNoUploadRunning()
     expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
   })
 
@@ -316,7 +326,9 @@ describe("DiskUploadPanel query lifecycle", () => {
     expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
 
     await h.emit({ type: "ADDED", object: makeDV({ phase: "UploadReady" }) })
-    expect(await screen.findByText("Upload target ready")).toBeInTheDocument()
+    expect(await screen.findByText("Upload handoff")).toBeInTheDocument()
+    expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
+    await confirmNoUploadRunning()
     expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
 
     await h.emit({ type: "MODIFIED", object: makeDV({ phase: "Succeeded" }) })
@@ -332,7 +344,7 @@ describe("DiskUploadPanel query lifecycle", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
-    expect(await screen.findByText("Upload target ready")).toBeInTheDocument()
+    expect(await screen.findByText("Upload handoff")).toBeInTheDocument()
     await waitFor(() => expect(h.watchSpy).toHaveBeenCalledTimes(1))
 
     await h.failWatch()
@@ -355,7 +367,7 @@ describe("DiskUploadPanel query lifecycle", () => {
     expect(await screen.findByText(/could not read the upload target/)).toBeInTheDocument()
     expect(screen.getByText("Unknown")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }))
-    expect(await screen.findByText("Upload target ready")).toBeInTheDocument()
+    expect(await screen.findByText("Upload handoff")).toBeInTheDocument()
   })
 
   it("does not call a pending read an absent upload target", async () => {
@@ -409,6 +421,7 @@ describe("DiskUploadPanel query lifecycle", () => {
       </K8sProvider>
     )
     const result = render(tree(makeInstance()))
+    await confirmNoUploadRunning()
     expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
 
     result.rerender(tree(makeInstance({ name: "other" })))
@@ -429,16 +442,22 @@ describe("DiskUploadPanel states and prerequisites", () => {
     expect(h.createSpy).not.toHaveBeenCalled()
   })
 
-  it("shows progress, capacity, and a command only when every prerequisite passes", async () => {
+  it("requires an idle confirmation before checking prerequisites or showing a command", async () => {
     const h = makeHarness({
-      items: [makeDV({ progress: "42.0%", capacity: "20Gi" })],
+      items: [makeDV({ progress: "N/A", capacity: "20Gi" })],
     })
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
-    expect(await screen.findByText("Upload target ready")).toBeInTheDocument()
-    expect(screen.getByText("42.0%")).toBeInTheDocument()
+    expect(await screen.findByText("Upload handoff")).toBeInTheDocument()
     expect(screen.getByText(/Virtual image capacity:/)).toHaveTextContent("20Gi")
+    expect(screen.getByText(/does not expose upload progress/)).toBeInTheDocument()
+    expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
+    expect(h.getSpy).not.toHaveBeenCalled()
+    expect(h.createSpy).not.toHaveBeenCalled()
+
+    await confirmNoUploadRunning()
+
     const command = await screen.findByText(/virtctl image-upload/)
     expect(command).toHaveTextContent(
       "virtctl image-upload dv 'vm-disk-demo' --no-create --namespace 'tenant-root'",
@@ -471,6 +490,42 @@ describe("DiskUploadPanel states and prerequisites", () => {
     )
   })
 
+  it("withholds a second command when UploadReady reports transfer progress", async () => {
+    const h = makeHarness({ items: [makeDV({ progress: "42.0%" })] })
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
+      client: h.client,
+    })
+
+    expect(await screen.findByText("Upload handoff")).toBeInTheDocument()
+    expect(screen.getByText("42.0%")).toBeInTheDocument()
+    expect(screen.getByText(/transfer may already be active/)).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Confirm no upload is running" }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
+    expect(h.getSpy).not.toHaveBeenCalled()
+    expect(h.createSpy).not.toHaveBeenCalled()
+  })
+
+  it("requires a fresh confirmation after the UploadReady target changes", async () => {
+    const h = makeHarness()
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
+      client: h.client,
+    })
+    await confirmNoUploadRunning()
+    expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
+
+    await h.emit({
+      type: "MODIFIED",
+      object: makeDV({ resourceVersion: "11" }),
+    })
+
+    expect(
+      await screen.findByRole("button", { name: "Confirm no upload is running" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
+  })
+
   it("uses CDIConfig spec override precedence", async () => {
     const h = makeHarness({
       uploadProxyURLOverride: "https://override.example.org",
@@ -479,6 +534,7 @@ describe("DiskUploadPanel states and prerequisites", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
+    await confirmNoUploadRunning()
     expect(await screen.findByText(/virtctl image-upload/)).toHaveTextContent(
       "--uploadproxy-url 'https://override.example.org'",
     )
@@ -489,6 +545,7 @@ describe("DiskUploadPanel states and prerequisites", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
+    await confirmNoUploadRunning()
     expect(await screen.findByText("Checking upload prerequisites…")).toBeInTheDocument()
     expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
   })
@@ -498,6 +555,7 @@ describe("DiskUploadPanel states and prerequisites", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
+    await confirmNoUploadRunning()
     expect(await screen.findByText(/could not verify the upload proxy/)).toBeInTheDocument()
     expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
   })
@@ -511,6 +569,7 @@ describe("DiskUploadPanel states and prerequisites", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
+    await confirmNoUploadRunning()
     expect(await screen.findByText(/does not advertise a usable upload proxy/)).toBeInTheDocument()
     expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
   })
@@ -523,6 +582,7 @@ describe("DiskUploadPanel states and prerequisites", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
+    await confirmNoUploadRunning()
     expect(await screen.findByText(/does not have all permissions required/)).toBeInTheDocument()
     expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
     expect(h.createSpy).toHaveBeenCalledTimes(2)
@@ -533,6 +593,7 @@ describe("DiskUploadPanel states and prerequisites", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
+    await confirmNoUploadRunning()
     expect(await screen.findByText(/could not verify your upload permissions/)).toBeInTheDocument()
     expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
   })
@@ -543,6 +604,7 @@ describe("DiskUploadPanel states and prerequisites", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
+    await confirmNoUploadRunning()
     expect(await screen.findByText(/could not verify the upload proxy/)).toBeInTheDocument()
     expect(h.createSpy).toHaveBeenCalledTimes(2)
 
@@ -558,6 +620,7 @@ describe("DiskUploadPanel states and prerequisites", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
+    await confirmNoUploadRunning()
     const retry = await screen.findByRole("button", { name: "Retry checks" })
     h.getSpy.mockImplementationOnce(() => new Promise(() => {}))
 
@@ -644,6 +707,7 @@ describe("DiskUploadPanel copy feedback", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
+    await confirmNoUploadRunning()
     expect(await screen.findByLabelText("Copy command")).toBeDisabled()
     expect(screen.getByText(/virtctl image-upload/).tagName).toBe("PRE")
   })
@@ -658,6 +722,7 @@ describe("DiskUploadPanel copy feedback", () => {
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
       client: h.client,
     })
+    await confirmNoUploadRunning()
     fireEvent.click(await screen.findByLabelText("Copy command"))
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(
