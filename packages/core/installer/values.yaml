@@ -68,7 +68,7 @@ cozystackOperator:
   # other — a static pod declaring a memory request above the ceiling with no limit of its
   # own therefore has its mirror pod rejected, which leaves the container running with no
   # representation in the API rather than taking anything down. The scan covers that case,
-  # since a mirror pod is a live Pod and raises the namespace ceiling like any other.
+  # since a mirror pod is a live Pod and withholds the namespace default like any other.
   #
   # A ceiling, not a reservation, and the default is deliberately far above any real
   # working set. The OOM handler discards a cgroup for having a memory.max at all,
@@ -103,9 +103,10 @@ cozystackOperator:
   # advance, it depends on how many containers a pod that does not exist yet will have.
   # A LimitRange bounding only cpu or storage coexists normally.
   #
-  # Set to 0 to disable. Removal is lazy: it reaches every namespace an active Package still
-  # targets, and leaves the LimitRange behind in a namespace whose Package has since been
-  # removed. Leftovers carry app.kubernetes.io/managed-by: cozystack-package-controller.
+  # Set to 0 to disable. On the next Package reconcile, the operator removes every LimitRange
+  # carrying app.kubernetes.io/managed-by: cozystack-package-controller, including objects in
+  # namespaces no active Package targets. A same-named object without that ownership label is
+  # left alone.
   systemNamespaceMemoryLimit: ""
   # When non-empty, overrides the operator's --system-namespace-memory-request flag
   # (operator default: 32Mi). Deliberately small and always set: Kubernetes defaults
