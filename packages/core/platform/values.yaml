@@ -603,6 +603,18 @@ resources:
   cpuAllocationRatio: 10
   memoryAllocationRatio: 1
   ephemeralStorageAllocationRatio: 40
+# StorageClass for the persistent EFI vars and TPM state of VirtualMachine
+# workloads — KubeVirt's backend-storage PVC, persistent-state-for-<vm>.
+# Forwarded to the KubeVirt CR's spec.configuration.vmStateStorageClass.
+#
+# Empty by default: KubeVirt then reads the CDI StorageProfile of the
+# cluster-default StorageClass, and the linstor classes shipped by cozystack
+# advertise ReadWriteMany for volumeMode Block only. The backend PVC is then
+# created ReadWriteOnce, which pins the VM to its node — every VM using a
+# windows.* preference (persistent TPM/EFI) can neither be live-migrated nor
+# drained. Point this at a class that advertises ReadWriteMany for volumeMode
+# Filesystem to restore live-migration for those VMs (#3005).
+vmStateStorageClass: ""
 # GPU host-device wiring for VirtualMachine workloads. Auto-injected into the
 # KubeVirt CR's permittedHostDevices when bundles.enabledPackages contains
 # cozystack.gpu-operator. Without it the admission webhook rejects any VM

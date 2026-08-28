@@ -27,6 +27,8 @@ tests:
           path: spec.components.kubevirt.values.permittedHostDevices
       - notExists:
           path: spec.components.kubevirt.values.mediatedDevicesConfiguration
+      - notExists:
+          path: spec.components.kubevirt.values.vmStateStorageClass
 
   - it: emits gpu-operator Package at default variant when only the package is enabled (no explicit variant override)
     set:
@@ -385,6 +387,24 @@ tests:
       - equal:
           path: spec.components.kubevirt.values.cpuAllocationRatio
           value: 7
+
+  - it: propagates vmStateStorageClass into the kubevirt component values so persistent EFI/TPM state can land on an RWX-Filesystem class
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      vmStateStorageClass: nfs-csi
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: spec.components.kubevirt.values.vmStateStorageClass
+          value: nfs-csi
 
   - it: appends user-supplied pciHostDevices in vgpu mode so post-kubevirt#16890 SR-IOV vGPU VFs can be advertised alongside the platform mediated defaults
     set:
