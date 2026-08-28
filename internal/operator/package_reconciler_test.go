@@ -1277,6 +1277,8 @@ func TestReconcileSystemDefaultsLimitRangeWithdrawsWhenAForeignPolicyAppears(t *
 // or the guard becomes a blanket opt-out any unrelated policy can trip.
 func TestReconcileSystemDefaultsLimitRangeIgnoresLimitRangesThatDoNotTouchMemory(t *testing.T) {
 	scheme := limitRangeScheme(t)
+	pvcPolicy := foreignLimitRange("pvc-policy", corev1.LimitTypePersistentVolumeClaim, "max", "memory", "2Gi")
+	pvcPolicy.Spec.Limits[0].Max[corev1.ResourceStorage] = resource.MustParse("1Ti")
 
 	for _, tc := range []struct {
 		name    string
@@ -1285,6 +1287,7 @@ func TestReconcileSystemDefaultsLimitRangeIgnoresLimitRangesThatDoNotTouchMemory
 		{"container cpu default", foreignLimitRange("cpu-policy", corev1.LimitTypeContainer, "default", "cpu", "500m")},
 		{"container cpu max", foreignLimitRange("cpu-ceiling", corev1.LimitTypeContainer, "max", "cpu", "2")},
 		{"pod cpu max", foreignLimitRange("pod-cpu", corev1.LimitTypePod, "max", "cpu", "4")},
+		{"persistent volume claim memory max", pvcPolicy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.foreign).Build()
