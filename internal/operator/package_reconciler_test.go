@@ -812,43 +812,6 @@ func TestReconcileSystemDefaultsLimitRangeRestartsTheGraceOnAnUnparseableStamp(t
 	}
 }
 
-// The managed-by label is what deleteSystemDefaultsLimitRange reads to decide whether the
-// object is this reconciler's to remove. Compared on the spec alone, a LimitRange whose
-// label had been stripped was never re-stamped, and turning the knob off then left an object
-// the operator did own sitting in the namespace forever.
-func TestReconcileSystemDefaultsLimitRangeRestampsAStrippedManagedByLabel(t *testing.T) {
-	scheme := limitRangeScheme(t)
-
-	stripped := (&PackageReconciler{
-		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4Gi"))
-	stripped.Labels = nil
-
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(stripped).Build()
-
-	r := &PackageReconciler{
-		Client:                       cl,
-		APIReader:                    cl,
-		Scheme:                       scheme,
-		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
-		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}
-
-	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	lr := &corev1.LimitRange{}
-	if err := cl.Get(t.Context(), types.NamespacedName{
-		Name:      SystemDefaultsLimitRangeName,
-		Namespace: "cozy-monitoring",
-	}, lr); err != nil {
-		t.Fatalf("get LimitRange: %v", err)
-	}
-	if got := lr.Labels[managedByLabel]; got != packageControllerFieldOwner {
-		t.Errorf("managed-by = %q, want it re-stamped as %q", got, packageControllerFieldOwner)
-	}
-}
 
 // The mirror case, and the one that keeps the guard from being a blanket opt-out:
 // LimitRanger never defaults a container that already declares a memory limit, so a
@@ -890,22 +853,18 @@ func TestReconcileSystemDefaultsLimitRangeAppliesWhenLargeRequestCarriesItsOwnLi
 func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
+	// Every one of the six lists is read on every reconcile now that the pod half is no
+	// longer skippable, so every case is seeded the same way and asserts the same thing.
 	unreadable := []struct {
 		name string
 		list client.ObjectList
-		// settled says whether the namespace starts with a memory default already in
-		// force. The template lists are read either way, so they get the sentinel
-		// below and the case asserts it survived. The pod list is only read while no
-		// default holds — a settled namespace deliberately skips it — so its case has
-		// to start from an empty namespace, and asserts nothing was created at all.
-		settled bool
 	}{
 		{name: "pods", list: &corev1.PodList{}},
-		{name: "deployments", list: &appsv1.DeploymentList{}, settled: true},
-		{name: "statefulsets", list: &appsv1.StatefulSetList{}, settled: true},
-		{name: "daemonsets", list: &appsv1.DaemonSetList{}, settled: true},
-		{name: "cronjobs", list: &batchv1.CronJobList{}, settled: true},
-		{name: "jobs", list: &batchv1.JobList{}, settled: true},
+		{name: "deployments", list: &appsv1.DeploymentList{}},
+		{name: "statefulsets", list: &appsv1.StatefulSetList{}},
+		{name: "daemonsets", list: &appsv1.DaemonSetList{}},
+		{name: "cronjobs", list: &batchv1.CronJobList{}},
+		{name: "jobs", list: &batchv1.JobList{}},
 	}
 
 	// A sentinel the operator's own apply would overwrite. Asserting the LimitRange still
@@ -916,9 +875,8 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.
 
 	for _, tt := range unreadable {
 		t.Run(tt.name, func(t *testing.T) {
-			var seed []client.Object
-			if tt.settled {
-				seed = append(seed, &corev1.LimitRange{
+			seed := []client.Object{
+				&corev1.LimitRange{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      SystemDefaultsLimitRangeName,
 						Namespace: "cozy-monitoring",
@@ -929,7 +887,7 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.
 							Default: corev1.ResourceList{corev1.ResourceMemory: sentinel},
 						}},
 					},
-				})
+				},
 			}
 			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(seed...).
 				WithInterceptorFuncs(interceptor.Funcs{
@@ -959,16 +917,6 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.
 				Namespace: "cozy-monitoring",
 			}, got)
 
-			if !tt.settled {
-				if err == nil {
-					t.Fatalf("LimitRange applied on the strength of a failed %s read: spec = %+v, want none created",
-						tt.name, got.Spec.Limits)
-				}
-				if !apierrors.IsNotFound(err) {
-					t.Fatalf("get LimitRange after a failed %s read: %v", tt.name, err)
-				}
-				return
-			}
 
 			if err != nil {
 				t.Fatalf("existing LimitRange retracted on the strength of a failed %s read: %v", tt.name, err)
@@ -1090,100 +1038,6 @@ func listedKind(listed []string, kind string) bool {
 	return false
 }
 
-// The case a settled namespace exists to keep working. LimitRanger gates pods, not
-// Deployments, so a workload added after the namespace settled is admitted exactly as
-// written however large its request; only the pods it goes on to create are rejected. If
-// the reconcile stops scanning once the LimitRange matches, nothing ever raises the ceiling
-// and the rollout has no pods and no log line — a chart bump becomes a component that
-// cannot start, discovered by whoever needed it.
-//
-// This is the reachable shape of the problem, and the one the earlier fast path skipped: an
-// oversized template is the thing that can still appear in a settled namespace, where an
-// oversized pod is the thing that cannot.
-func TestReconcileSystemDefaultsLimitRangeRaisesCeilingForTemplateAddedAfterSettling(t *testing.T) {
-	scheme := limitRangeScheme(t)
-
-	settled := (&PackageReconciler{
-		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4Gi"))
-
-	cl := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(settled, systemDeployment("vmalert", 1, "8Gi", "")).Build()
-
-	r := &PackageReconciler{
-		Client:                       cl,
-		APIReader:                    cl,
-		Scheme:                       scheme,
-		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
-		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}
-
-	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
-		t.Errorf("default memory = %s, want 8Gi raised to clear a workload added after the namespace settled at 4Gi; "+
-			"at 4Gi every pod it creates is rejected and nothing rescans to notice", got.String())
-	}
-}
-
-// The steady-state path, and what it is allowed to cost. This runs for every system
-// namespace on every Package reconcile, and Package reconciles follow HelmRelease status
-// churn, so a settled namespace must not write and must not read the one list that dwarfs
-// the others.
-//
-// Skipping the pod list is safe where the namespace already defaults memory at the
-// configured limit, which is this fixture: from then on LimitRanger fills in a limit for
-// every container admitted without one, so a container with a request and no limit — the
-// only thing the scan looks for — cannot be admitted, and no raise is standing that
-// finding one would keep alive. It is not safe merely because "some default is in force";
-// TestReconcileSystemDefaultsLimitRangeKeepsARaisedCeilingWhileTheLivePodRemains covers the
-// raised namespace, where the pod list has to keep being read.
-//
-// The 8Gi pod is a tripwire, so that a reconcile which did list pods here would raise the
-// ceiling and fail the assertion below rather than pass quietly. It is very nearly
-// unreachable rather than impossible: a pod of that shape has to be admitted while nothing
-// defaults a memory limit in the namespace, so reaching a *settled* 4Gi LimitRange beside it
-// means it landed between this reconciler's scan and its apply. Wider than that window the
-// raise covers it, which is what the tests above and below pin. Closing the window itself
-// would mean never skipping the pod list, which is the cost this test exists to hold down.
-func TestReconcileSystemDefaultsLimitRangeSkipsThePodListWhenTheDefaultHolds(t *testing.T) {
-	scheme := limitRangeScheme(t)
-
-	settled := (&PackageReconciler{
-		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4Gi"))
-
-	var listed []string
-	var writes int
-	cl := scanRecordingClient(scheme, &listed, &writes, settled, systemPod("vmstorage-0", "8Gi", ""))
-
-	r := &PackageReconciler{
-		Client:                       cl,
-		APIReader:                    cl,
-		Scheme:                       scheme,
-		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
-		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}
-
-	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	if listedKind(listed, "PodList") {
-		t.Errorf("listed pods in a namespace whose memory default already holds; no pod the scan looks for can be admitted there")
-	}
-	if !listedKind(listed, "DeploymentList") {
-		t.Errorf("did not list deployments; templates are not gated by LimitRanger and have to be rescanned every time")
-	}
-	if writes != 0 {
-		t.Errorf("%d writes against a LimitRange that already matches; the settled path must not re-apply", writes)
-	}
-	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
-		t.Errorf("default memory = %s, want the settled 4Gi left alone", got.String())
-	}
-}
 
 // The regression the "some default is in force" skip caused, and the reason the skip is
 // pinned to the configured limit instead.
@@ -1336,41 +1190,6 @@ func TestReconcileSystemDefaultsLimitRangeHoldsTheCeilingForASmallerBlocker(t *t
 	}
 }
 
-// The equality that gates the skip is by value, so a namespace settled at the configured
-// limit in different notation is still settled and still skips the pod list. Written the
-// other way round it would read the pod list forever over 4096Mi versus 4Gi — the same
-// wasted list the skip exists to remove, reintroduced by formatting.
-func TestReconcileSystemDefaultsLimitRangeSkipsThePodListAcrossEquivalentNotation(t *testing.T) {
-	scheme := limitRangeScheme(t)
-
-	settled := (&PackageReconciler{
-		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4096Mi"))
-
-	var listed []string
-	var writes int
-	cl := scanRecordingClient(scheme, &listed, &writes, settled)
-
-	r := &PackageReconciler{
-		Client:                       cl,
-		APIReader:                    cl,
-		Scheme:                       scheme,
-		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
-		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}
-
-	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	if listedKind(listed, "PodList") {
-		t.Errorf("listed pods beside a LimitRange defaulting 4096Mi against a configured 4Gi; " +
-			"the two are the same ceiling and the namespace is settled")
-	}
-	if writes != 0 {
-		t.Errorf("%d writes over equivalent notation; the spec comparison is semantic for the same reason", writes)
-	}
-}
 
 // The comparison guarding that write has to be semantic rather than structural, or a
 // LimitRange written in a different but equivalent notation would re-apply on every
@@ -1802,7 +1621,7 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 				SystemNamespaceMemoryLimit: resource.MustParse("4Gi"),
 			}
 
-			got, err := r.findRequestAboveDefaultLimit(t.Context(), "cozy-monitoring", true)
+			got, err := r.findRequestAboveDefaultLimit(t.Context(), "cozy-monitoring")
 			if err != nil {
 				t.Fatalf("findRequestAboveDefaultLimit: %v", err)
 			}
@@ -2124,5 +1943,180 @@ func TestReconcileSystemDefaultsLimitRangeBoundsAFutureStampToOneGracePeriod(t *
 	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
 		t.Errorf("default memory = %s a grace period after the clamp, want the configured 4Gi; "+
 			"an hour of skew must not buy the ceiling an extra hour", got.String())
+	}
+}
+
+// The defect that removing the settled-skip fixes, as a regression test.
+//
+// A namespace defaulting container memory at exactly the configured limit used to stop
+// reading the pod list, on the argument that the shape this scan looks for could no longer be
+// admitted there. That proves such a pod cannot come to exist; it does not prove one cannot be
+// attempted, and a rejected attempt leaves nothing behind. So a workload built from a custom
+// resource whose request grows above the limit after its namespace settled was rejected
+// permanently, with no artefact anywhere that could justify raising the ceiling again.
+func TestReconcileSystemDefaultsLimitRangeRaisesFromASettledNamespace(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	// Settled: default already equals the configured limit.
+	settled := (&PackageReconciler{
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4Gi"))
+
+	var listed []string
+	var writes int
+	cl := scanRecordingClient(scheme, &listed, &writes, settled, systemPod("keycloak-db-1", "8Gi", ""))
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if !listedKind(listed, "PodList") {
+		t.Errorf("did not list pods in a settled namespace; a pod above the ceiling can be attempted there " +
+			"even though it cannot survive admission, and a rejected attempt leaves nothing else to find")
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Errorf("default memory = %s, want the ceiling raised to 8Gi to clear the pod's request", got.String())
+	}
+}
+
+// Identity is the managed-by label, not the name. The name is not reserved, so an
+// administrator's LimitRange can legitimately be called cozystack-system-defaults; skipping it
+// on the name alone hid it from the coexistence guard and then let the forced apply overwrite
+// it. LimitRangeSpec.Limits is an atomic list, so that replaces every item, taking the
+// administrator's max and cpu policy with it.
+func TestReconcileSystemDefaultsLimitRangeDoesNotOverwriteAForeignObjectSharingItsName(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	foreign := &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SystemDefaultsLimitRangeName,
+			Namespace: "kube-system",
+			// No managed-by label: this is not ours.
+		},
+		Spec: corev1.LimitRangeSpec{
+			Limits: []corev1.LimitRangeItem{{
+				Type:    corev1.LimitTypeContainer,
+				Max:     corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+				Default: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")},
+			}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreign).Build()
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("32Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "kube-system"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := &corev1.LimitRange{}
+	if err := cl.Get(t.Context(), types.NamespacedName{
+		Name:      SystemDefaultsLimitRangeName,
+		Namespace: "kube-system",
+	}, got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.Spec.Limits) != 1 {
+		t.Fatalf("len(limits) = %d, want the administrator's single item untouched", len(got.Spec.Limits))
+	}
+	if _, ok := got.Spec.Limits[0].Max[corev1.ResourceMemory]; !ok {
+		t.Errorf("the administrator's container memory max was replaced; spec = %+v", got.Spec.Limits[0])
+	}
+	if _, ok := got.Spec.Limits[0].Default[corev1.ResourceCPU]; !ok {
+		t.Errorf("the administrator's cpu default was replaced; spec = %+v", got.Spec.Limits[0])
+	}
+	if got.Labels[managedByLabel] == packageControllerFieldOwner {
+		t.Errorf("stamped this reconciler's managed-by label onto an object it did not create, "+
+			"which would then let the disable path delete it; labels = %v", got.Labels)
+	}
+}
+
+// containerMemoryDefault has to agree with LimitRanger, which walks every item and lets the
+// last write to a field stand. Reading the first would report a ceiling the cluster is not
+// applying, and every decision built on that read would be made against the wrong number.
+func TestContainerMemoryDefaultTakesTheLastContainerItem(t *testing.T) {
+	lr := &corev1.LimitRange{Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{
+		{Type: corev1.LimitTypePod, Max: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Gi")}},
+		{Type: corev1.LimitTypeContainer, Default: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")}},
+		{Type: corev1.LimitTypeContainer, Default: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")}},
+	}}}
+
+	got, ok := containerMemoryDefault(lr)
+	if !ok {
+		t.Fatal("reported no container memory default, want the last one")
+	}
+	if got.Cmp(resource.MustParse("64Mi")) != 0 {
+		t.Errorf("default = %s, want 64Mi: LimitRanger applies the last item, so reading the first "+
+			"reports a ceiling the cluster is not using", got.String())
+	}
+
+	if _, ok := containerMemoryDefault(&corev1.LimitRange{}); ok {
+		t.Error("reported a default for an empty spec")
+	}
+}
+
+// A same-named LimitRange without this reconciler's label is ambiguous by construction: it is
+// either an administrator's object, or one of ours whose label was removed, and nothing here
+// can tell those apart. The two mistakes are not symmetric. Adopting it means the disable path
+// later deletes an administrator's policy, silently. Leaving it means a namespace keeps a
+// default this reconciler no longer manages, which still carries the memory.max the feature
+// exists to provide and is now said out loud in the log.
+//
+// So the ambiguous object is treated as foreign: not overwritten, not adopted, not deleted.
+// This replaces an earlier case that asserted the label was re-stamped, which was the adopting
+// behaviour, before it was clear that the same code path reaches an administrator's object.
+func TestReconcileSystemDefaultsLimitRangeLeavesAnUnlabelledSameNamedObjectAlone(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	stripped := (&PackageReconciler{
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4Gi"))
+	stripped.Labels = nil
+
+	var listed []string
+	var writes int
+	cl := scanRecordingClient(scheme, &listed, &writes, stripped)
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("32Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := &corev1.LimitRange{}
+	if err := cl.Get(t.Context(), types.NamespacedName{
+		Name:      SystemDefaultsLimitRangeName,
+		Namespace: "cozy-monitoring",
+	}, got); err != nil {
+		t.Fatalf("the ambiguous object was deleted: %v", err)
+	}
+	if d := got.Spec.Limits[0].Default[corev1.ResourceMemory]; d.Cmp(resource.MustParse("4Gi")) != 0 {
+		t.Errorf("default memory = %s, want the object left at its own 4Gi rather than rewritten to 32Gi", d.String())
+	}
+	if got.Labels[managedByLabel] == packageControllerFieldOwner {
+		t.Error("adopted the object by stamping the managed-by label; the disable path would then delete it")
+	}
+	if writes != 0 {
+		t.Errorf("%d writes against an object of ambiguous ownership, want none", writes)
 	}
 }
