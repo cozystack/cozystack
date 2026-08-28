@@ -94,6 +94,8 @@ func httpRedirectRouteName(tgw *gatewayv1alpha1.TenantGateway) string {
 // tenant namespace. That namespace is already on the port-80 allow list
 // on its own account, so this entry is belt and braces.
 const acmeChallengeNamespace = "cozy-cert-manager"
+const cdiUploadProxyNamespace = "cozy-kubevirt-cdi"
+const cdiUploadProxyService = "cdi-uploadproxy"
 
 // buildAllowedRoutes computes the AllowedRoutes block applied to
 // HTTPS / TLS-passthrough listeners: a label selector matching
@@ -151,7 +153,21 @@ func buildHTTPListenerAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gateway
 	if acmeChallengeNamespace != tgw.Namespace {
 		values = append(values, acmeChallengeNamespace)
 	}
+	if stringInList(tgw.Spec.TLSPassthroughServices, cdiUploadProxyService) &&
+		stringInList(tgw.Spec.AttachedNamespaces, cdiUploadProxyNamespace) &&
+		cdiUploadProxyNamespace != tgw.Namespace {
+		values = append(values, cdiUploadProxyNamespace)
+	}
 	return allowedRoutesFromValues(values)
+}
+
+func stringInList(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func allowedRoutesFromValues(values []string) *gatewayv1.AllowedRoutes {

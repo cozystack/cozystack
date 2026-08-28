@@ -57,7 +57,7 @@ tests:
       - documentIndex: 0
         matchRegex:
           path: spec.customizeComponents.patches[0].patch
-          pattern: '"secretName":"wildcard-tls"'
+          pattern: '"secretName":"cdi-uploadproxy-wildcard-cert"'
 
   - it: omits the URL when the proxy is not exposed
     set:
