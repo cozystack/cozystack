@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Every hack/*.bats unit file loads hack/test_helper.bash, and this is what
-# makes that true of the file someone adds next month.
+# Every hack/*.bats unit file loads hack/test_helper.bash exactly once, and this
+# is what makes that true of the file someone adds next month.
 #
 # WHAT THE HELPER IS FOR. Bats enforces `set -e` on a test body but not `set -u`,
 # while hack/cozytest.sh -- the runner this suite used before #3453 -- ran every
@@ -55,10 +55,10 @@
 # that writes a fixture .bats, which would let a file take credit for text it only
 # generates; no file does that today, and the fixtures below assemble the line
 # from printf arguments so this guard does not do it to itself. Finally, a green
-# audit says the load is present, not that `set -u` was in force for a given
-# assertion -- for that, hack/test_helper.bash's own effect is what the mutation
-# check in #3453 covered: remove the load and a test reading an unset variable
-# stops aborting.
+# audit says the load is present exactly once, not that `set -u` was in force for
+# a given assertion -- for that, hack/test_helper.bash's own effect is what the
+# mutation check in #3453 covered: remove the load and a test reading an unset
+# variable stops aborting.
 # -----------------------------------------------------------------------------
 
 load test_helper
@@ -94,16 +94,21 @@ bss_audit() {
   bss_units "$1" | while IFS= read -r _f; do
     [ -e "$_f" ] || continue
     _b=$(basename "$_f")
-    if ! grep -q '^load test_helper$' "$_f"; then
+    _load_count=$(grep -c '^load test_helper$' "$_f" || :)
+    if [ "$_load_count" -eq 0 ]; then
       echo "$_b: does not load the strict-mode helper; add a column-zero \`load test_helper\` line under the file's leading comment block"
       continue
     fi
+    if [ "$_load_count" -ne 1 ]; then
+      echo "$_b: loads the strict-mode helper $_load_count times; keep exactly one column-zero \`load test_helper\` line"
+      continue
+    fi
     # A file-local setup replaces the helper's without a word from either
-    # runner. Recognize the common Bash forms, including indentation and
-    # `function setup {`, then require the suite's one canonical spelling. That
-    # makes an ambiguous nested declaration fail closed instead of guessing
-    # whether Bats will see it at source time.
-    _setup_count=$(grep -cE '^[[:space:]]*(function[[:space:]]+)?setup([[:space:]]*\(\))?[[:space:]]*\{' "$_f" || :)
+    # runner. Recognize the common Bash forms, including indentation,
+    # `function setup {`, and a brace on the following line, then require the
+    # suite's one canonical spelling. That makes an ambiguous nested declaration
+    # fail closed instead of guessing whether Bats will see it at source time.
+    _setup_count=$(grep -cE '^[[:space:]]*(setup[[:space:]]*\(|function[[:space:]]+setup([[:space:]]|\(|[{]|$))' "$_f" || :)
     _canonical_count=$(grep -c '^setup() {$' "$_f" || :)
     if [ "$_setup_count" -gt 0 ] \
       && { [ "$_setup_count" -ne 1 ] || [ "$_canonical_count" -ne 1 ]; }; then
@@ -159,6 +164,16 @@ bss_add_function_own_setup() {
 
 bss_add_indented_own_setup() {
   printf '%s\n' '  setup() {' '    export FIXTURE=1' '  }' >> "$1/subject.bats"
+  return 0
+}
+
+bss_add_next_line_brace_setup() {
+  printf '%s\n' 'setup()' '{' '  export FIXTURE=1' '}' >> "$1/subject.bats"
+  return 0
+}
+
+bss_add_spaced_parens_setup() {
+  printf '%s\n' 'setup ( ) {' '  export FIXTURE=1' '}' >> "$1/subject.bats"
   return 0
 }
 
@@ -243,6 +258,20 @@ bss_rename() {
   rm -rf "$tmp"
 }
 
+@test "duplicate load lines are reported" {
+  tmp=$(mktemp -d)
+  bss_new_fixture "$tmp"
+  bss_add_load "$tmp"
+  bss_add_load "$tmp"
+  report=$(bss_audit "$tmp")
+  if ! echo "$report" | grep -q 'keep exactly one column-zero'; then
+    echo "FAIL: duplicate load lines were accepted; got: $report"
+    rm -rf "$tmp"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
 @test "an indented or commented-out load line does not count" {
   tmp=$(mktemp -d)
   bss_new_fixture "$tmp"
@@ -302,6 +331,34 @@ bss_rename() {
   report=$(bss_audit "$tmp")
   if ! echo "$report" | grep -q 'noncanonical or repeated setup declaration'; then
     echo "FAIL: indented setup was not rejected; got: $report"
+    rm -rf "$tmp"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "a setup declaration with its brace on the next line is rejected" {
+  tmp=$(mktemp -d)
+  bss_new_fixture "$tmp"
+  bss_add_load "$tmp"
+  bss_add_next_line_brace_setup "$tmp"
+  report=$(bss_audit "$tmp")
+  if ! echo "$report" | grep -q 'noncanonical or repeated setup declaration'; then
+    echo "FAIL: a brace-on-next-line setup was not rejected; got: $report"
+    rm -rf "$tmp"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "a setup declaration with spaced parentheses is rejected" {
+  tmp=$(mktemp -d)
+  bss_new_fixture "$tmp"
+  bss_add_load "$tmp"
+  bss_add_spaced_parens_setup "$tmp"
+  report=$(bss_audit "$tmp")
+  if ! echo "$report" | grep -q 'noncanonical or repeated setup declaration'; then
+    echo "FAIL: a spaced-parentheses setup was not rejected; got: $report"
     rm -rf "$tmp"
     false
   fi
