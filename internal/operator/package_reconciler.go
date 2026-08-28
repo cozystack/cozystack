@@ -1006,9 +1006,9 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 	// argument proves such a pod cannot come to EXIST. It does not prove one cannot be
 	// ATTEMPTED, and the difference is the whole problem: an attempt that fails at admission
 	// leaves nothing behind, so for a workload built from a custom resource with no template
-	// this scan can read, there is then no artefact anywhere that could ever justify raising
-	// the ceiling again. A CNPG Cluster resized above the configured limit after its
-	// namespace settled is rejected, permanently and silently, and the skip is what made the
+	// this scan can read, there is then no artefact anywhere that could show the default is
+	// unsafe and justify withdrawing it. A CNPG Cluster resized above the configured limit
+	// after its namespace settled is rejected, permanently and silently, and the skip is what made the
 	// evidence unfindable.
 	//
 	// The premise was not even reliable for existing pods. LimitRanger reads LimitRanges
@@ -1357,7 +1357,7 @@ func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, ns
 	// owns. A live one is a copy of its Deployment's template, already covered above, while
 	// the older revisions a Deployment keeps carry superseded templates that no scale-up
 	// will ever instantiate — only an explicit rollout undo brings one back. Scanning them
-	// would raise a whole namespace's ceiling over a request that was replaced releases ago.
+	// would withhold the default from a whole namespace over a request replaced releases ago.
 	//
 	// An ownerless ReplicaSet is genuinely out of scope rather than covered by that
 	// argument: at replicas 0 it has no pods to be seen through and no Deployment template

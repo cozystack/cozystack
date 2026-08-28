@@ -1058,8 +1058,8 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 		},
 		{
 			// A Failed pod does count. It is frequently the only surviving
-			// evidence that the namespace needs a raised ceiling, because the
-			// shape this scan looks for cannot be admitted once the namespace
+			// evidence that the namespace must keep its default withheld, because
+			// the shape this scan looks for cannot be admitted once the namespace
 			// has settled, so an evicted carcass is all that is left to find.
 			name:    "a failed pod still counts",
 			objects: []client.Object{crashed},
