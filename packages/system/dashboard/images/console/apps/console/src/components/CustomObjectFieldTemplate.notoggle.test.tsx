@@ -48,6 +48,10 @@ describe("addons with no enable switch", () => {
         properties={[prop("valuesOverride")]}
       />,
     )
+    // Anchor on the no-toggle branch: the default renderer also prints the
+    // description and neither forbidden phrase, so without this the assertions
+    // below hold whether or not the branch was taken.
+    expect(screen.getByText(/No enable switch/)).toBeTruthy()
     expect(screen.getByText(/together with addons.monitoringAgents.enabled/)).toBeTruthy()
     expect(screen.queryByText(/cannot be disabled/)).toBeNull()
     expect(screen.queryByText(/Always on/)).toBeNull()
