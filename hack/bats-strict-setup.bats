@@ -76,11 +76,19 @@ BSS_REPO_ROOT="$(cd "$BSS_DIR/.." && pwd)"
 #
 # Non-recursive, and the exclusion is on the basename, because that is what
 # `$(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))` in the Makefile means.
+# A shell glob keeps this portable to the macOS hook instead of relying on
+# GNU find's non-POSIX `-maxdepth` flag.
 # hack/e2e-apps/ holds live-cluster suites the Makefile's wildcard never reaches
 # and that packages/core/testing runs against a real cluster; they are outside
 # this suite and outside this audit.
 bss_units() {
-  find "$1" -maxdepth 1 -name '*.bats' ! -name 'e2e-*' | sort
+  for _f in "$1"/*.bats; do
+    [ -e "$_f" ] || continue
+    case ${_f##*/} in
+      e2e-*) continue ;;
+    esac
+    printf '%s\n' "$_f"
+  done | sort
   return 0
 }
 
@@ -198,6 +206,20 @@ bss_rename() {
     echo "FAIL: enumerated $count unit file(s) under $BSS_DIR; the audit below would be vacuous"
     false
   fi
+}
+
+@test "the unit enumeration is non-recursive without GNU find extensions" {
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/bin" "$tmp/nested"
+  : > "$tmp/root.bats"
+  : > "$tmp/e2e-live.bats"
+  : > "$tmp/nested/child.bats"
+  printf '%s\n' '#!/bin/sh' 'exit 97' > "$tmp/bin/find"
+  chmod +x "$tmp/bin/find"
+
+  units=$(PATH="$tmp/bin:$PATH" bss_units "$tmp")
+  [ "$units" = "$tmp/root.bats" ]
+  rm -rf "$tmp"
 }
 
 @test "the audited set is exactly the set the Makefile hands the runner" {

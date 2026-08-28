@@ -75,7 +75,6 @@ jobs:
       statuses: write
     outputs:
       code: ${{ steps.p.outputs.code }}
-      trigger_map: ${{ steps.p.outputs.trigger_map }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
@@ -161,23 +160,6 @@ jobs:
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
-          # docs/agents/contributing.md carries the downstream trigger map, which
-          # hack/downstream-trigger-map.bats asserts against: every path the map
-          # cites still exists, and its repository list still matches the PR
-          # template. Editing the map alone is a docs-only PR, which would skip the
-          # unit tests and exempt the map from its own guard. This flag lets the
-          # unit-test job opt back in, and only that job: it deliberately does not
-          # feed `code`, so a docs PR still builds nothing.
-          #
-          # Detect the map by its old path too, which is why this reads the
-          # rename-blind list above: a PR that moves the map would otherwise skip
-          # the very test that pins the literal below to it, and break for
-          # whoever pushes next.
-          if grep -qxF 'docs/agents/contributing.md' /tmp/changed_norenames.txt; then
-            echo "trigger_map=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "trigger_map=false" >> "$GITHUB_OUTPUT"
           fi
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
@@ -297,12 +279,12 @@ jobs:
     permissions:
       contents: read
     needs: ["plan"]
-    # trigger_map opts a docs-only PR back in when it edits the downstream trigger
-    # map, so hack/downstream-trigger-map.bats still guards it. No other job reads
-    # that flag: a docs PR runs the unit tests and nothing heavier.
+    # Unit contracts read both code and documentation. Run this job for every
+    # non-release PR: code changes take the complete unit path, while docs-only
+    # changes run the Bats lane that owns those cross-tree contracts. Builds and
+    # E2E remain gated on `code` below.
     if: |
-      (needs.plan.outputs.code == 'true' || needs.plan.outputs.trigger_map == 'true')
-      && !contains(github.event.pull_request.labels.*.name, 'release')
+      !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -312,12 +294,15 @@ jobs:
       # self-hosted runner accreted. Install if absent (idempotent).
       - name: Set up test toolchain
         env:
+          CODE_CHANGED: ${{ needs.plan.outputs.code }}
           BATS_VERSION: "1.14.0"
           BATS_COMMIT: eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
         run: |
           set -euo pipefail
-          helm plugin list 2>/dev/null | grep -q unittest \
-            || helm plugin install https://github.com/helm-unittest/helm-unittest
+          if [ "$CODE_CHANGED" = true ]; then
+            helm plugin list 2>/dev/null | grep -q unittest \
+              || helm plugin install https://github.com/helm-unittest/helm-unittest
+          fi
           # The hack/*.bats unit suite moved from hack/cozytest.sh (an in-repo
           # shell runner with no external dependency) to bats(1) in #3453, so
           # CI now needs bats. The runner image is not the version authority:
@@ -337,7 +322,11 @@ jobs:
           fi
           bats --version | grep -qx "Bats $BATS_VERSION"
       - name: Run unit tests
+        if: needs.plan.outputs.code == 'true'
         run: make unit-tests
+      - name: Run Bats unit tests for docs-only changes
+        if: needs.plan.outputs.code == 'false'
+        run: make bats-unit-tests
       - name: Upload unit test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -346,6 +335,7 @@ jobs:
           path: _out/test-reports/
           if-no-files-found: ignore
       - name: Run controller Go tests
+        if: needs.plan.outputs.code == 'true'
         run: make test-controllers
 
   # One image (package) per job, fanned out across the ephemeral pool. Each job
