@@ -78,27 +78,17 @@ cozystackOperator:
   # from (see the vertical-pod-autoscaler values). Lower it to make it bind once real
   # usage is known; the scan below cannot see real usage, only declared requests.
   #
-  # It should stay above the largest memory request in any system namespace, because a
-  # defaulted limit below a container's own request is rejected at admission. Setting
-  # it too low costs precision rather than availability: before applying, the operator
-  # scans each system namespace for a container that requests more than this and
-  # declares no limit of its own, and where it finds one it raises that namespace's
-  # ceiling to the request instead, logging the namespace, workload, container and both
-  # limits. A raised namespace still gets memory.max on its pod cgroups, which is the
-  # whole point — withholding the LimitRange would leave it with none.
-  #
-  # A raised ceiling drops back to this value once the oversized request has been absent
-  # for a grace period, not on the first scan that misses it: an empty scan is also what
-  # a pod between deletion and recreation looks like, and for a workload visible only as
-  # a live Pod (every CNPG Cluster in a system namespace builds its instance pods
-  # directly) an ordinary node drain produces exactly that. Lowering the ceiling under
-  # such a pod rejects its recreation permanently. Grep the operator log for "raising the
-  # default container memory limit" to find raised namespaces, and for "lowering this
-  # namespace's container memory ceiling" to see one come back down.
-  #
-  # Raising a namespace's ceiling raises it for every container in that namespace, not
-  # only the one that caused it, so it also widens the request-to-limit ratio VPA
-  # preserves when it rescales those containers.
+  # It must stay above the largest memory request in any system namespace, because a
+  # defaulted limit below a container's own request is rejected at admission. Before
+  # applying, the operator scans each system namespace for a container that requests more
+  # than this and declares no limit of its own, and where it finds one that namespace is
+  # left with no default at all rather than one that would stop its pods. That is the safe
+  # direction: no memory.max is how every release before this behaved, while a default
+  # below a request is a namespace whose workload cannot be admitted. The withheld
+  # namespace is logged with the workload and container responsible; grep the operator log
+  # for "withholding the default container memory limit". Fix it by giving that container a
+  # limit of its own, or by raising this value above its request. Nothing is remembered
+  # between reconciles: once the oversized request is gone the default is applied again.
   #
   # A container that declares its own memory limit is never touched, so a component
   # that needs a ceiling other than this one states a limit in its own chart rather than
