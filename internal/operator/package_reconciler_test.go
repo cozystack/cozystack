@@ -906,9 +906,29 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 	}}
 
 	finishedJob := systemJob("migrated-once", "8Gi", "")
+	finishedJob.UID = types.UID("migrated-once-uid")
 	finishedJob.Status.Conditions = []batchv1.JobCondition{{
 		Type:   batchv1.JobComplete,
 		Status: corev1.ConditionTrue,
+	}}
+	failedFinishedJobPod := systemPod("migrated-once-failed", "9Gi", "")
+	failedFinishedJobPod.Status.Phase = corev1.PodFailed
+	failedFinishedJobPod.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "batch/v1",
+		Kind:       "Job",
+		Name:       finishedJob.Name,
+		UID:        finishedJob.UID,
+	}}
+
+	activeJob := systemJob("retrying-migration", "1Gi", "")
+	activeJob.UID = types.UID("retrying-migration-uid")
+	failedActiveJobPod := systemPod("retrying-migration-failed", "9Gi", "")
+	failedActiveJobPod.Status.Phase = corev1.PodFailed
+	failedActiveJobPod.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "batch/v1",
+		Kind:       "Job",
+		Name:       activeJob.Name,
+		UID:        activeJob.UID,
 	}}
 
 	suspended := true
@@ -1049,6 +1069,23 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 			// terminated pod is skipped.
 			name:    "a finished job does not count",
 			objects: []client.Object{finishedJob},
+		},
+		{
+			// The failed child cannot outlive the finished Job as evidence: the
+			// controller has definitively stopped and will not replace it.
+			name:    "a failed pod owned by a finished job does not count",
+			objects: []client.Object{finishedJob, failedFinishedJobPod},
+		},
+		{
+			// A failed child of an unfinished Job is still the only evidence of
+			// admission-time mutation that may recur on the next retry.
+			name:    "a failed pod owned by an unfinished job still counts",
+			objects: []client.Object{activeJob, failedActiveJobPod},
+			want: &memoryRequestBlocker{
+				workload:  "Pod/retrying-migration-failed",
+				container: "retrying-migration-failed-app",
+				request:   resource.MustParse("9Gi"),
+			},
 		},
 		{
 			// A running workload appears twice, as a template and as pods. One

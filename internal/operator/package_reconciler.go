@@ -1373,9 +1373,15 @@ func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, ns
 	if err := reader.List(ctx, jobs, client.InNamespace(nsName)); err != nil {
 		return nil, fmt.Errorf("failed to list jobs in namespace %s: %w", nsName, err)
 	}
+	finishedJobUIDs := make(map[types.UID]struct{})
 	for i := range jobs.Items {
 		j := &jobs.Items[i]
 		if jobFinished(j) {
+			// API-server objects always carry a UID. Ignore an empty one defensively so
+			// malformed test or synthetic objects cannot match empty owner references.
+			if j.UID != "" {
+				finishedJobUIDs[j.UID] = struct{}{}
+			}
 			continue
 		}
 		consider(&j.Spec.Template.Spec, "Job/"+j.Name)
@@ -1392,17 +1398,33 @@ func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, ns
 		//
 		// Failed is not the same and is deliberately still scanned. An eviction or a node
 		// crash leaves a Failed carcass holding the same oversized request that its
-		// controller will recreate, and while that request stands the namespace must keep
-		// being withheld: applying the default over it would reject the replacement. The
-		// carcass is often the only evidence left, because the shape this scan looks for
-		// cannot be admitted into a namespace that already has the default.
+		// controller will recreate, and applying the default meanwhile would reject the
+		// replacement. A failed child of a finished Job is the exception: that Job will not
+		// create another pod, so keeping its carcass as evidence would contradict skipping
+		// the finished template above. Match by UID rather than name so a recreated Job with
+		// the same name cannot inherit the old Job's terminal state.
 		//
-		// The cost is the opposite error. A bare pod that failed for good, or one whose
-		// owning Job has finished, keeps a namespace withheld until Kubernetes collects it,
-		// so that namespace carries no memory.max for longer than it needed to. Withholding
-		// too long costs hardening; applying too early costs the workload.
+		// Ownerless Failed pods still count. Some will never return, so this can withhold
+		// hardening longer than necessary, but there is no definitive controller state to
+		// distinguish those from a bare pod somebody will recreate. Withholding too long
+		// costs hardening; applying too early can reject the workload.
 		if pod.Status.Phase == corev1.PodSucceeded {
 			continue
+		}
+		if pod.Status.Phase == corev1.PodFailed {
+			ownedByFinishedJob := false
+			for _, owner := range pod.OwnerReferences {
+				if owner.UID == "" {
+					continue
+				}
+				if _, ok := finishedJobUIDs[owner.UID]; ok {
+					ownedByFinishedJob = true
+					break
+				}
+			}
+			if ownedByFinishedJob {
+				continue
+			}
 		}
 		consider(&pod.Spec, "Pod/"+pod.Name)
 	}
@@ -1426,9 +1448,8 @@ func jobFinished(job *batchv1.Job) bool {
 
 // systemDefaultsLimitRange builds the LimitRange applied to a system namespace.
 //
-// defaultLimit is a parameter rather than read straight off the reconciler because a
-// namespace holding a memory request above the configured limit gets its ceiling raised to
-// clear that request; see reconcileSystemDefaultsLimitRange.
+// defaultLimit is passed explicitly so callers and tests can state the desired ceiling while
+// the reconciler supplies the independently configured default request.
 func (r *PackageReconciler) systemDefaultsLimitRange(nsName string, defaultLimit resource.Quantity) *corev1.LimitRange {
 	return &corev1.LimitRange{
 		ObjectMeta: metav1.ObjectMeta{
