@@ -167,9 +167,13 @@ func main() {
 			"Scope is every namespace a Package targets that is not a tenant namespace, which "+
 			"includes kube-system - cozystack-scheduler is installed there - so namespaces owned "+
 			"by the underlying distribution are covered too. A namespace where another LimitRange "+
-			"already defaults or caps container memory is left alone, because two defaults leave the "+
-			"effective ceiling to the order LimitRanger iterates them. Empty or 0 disables the "+
-			"LimitRange and removes any previously created one.")
+			"already says anything about memory is left alone, in any field and at either the "+
+			"Container or the Pod scope: a second default leaves the effective ceiling to the order "+
+			"LimitRanger iterates them, while a max below this default, a min above the paired "+
+			"request, or a maxLimitRequestRatio each reject the pod at admission. Empty or 0 "+
+			"disables the LimitRange and removes it from every namespace an active Package still "+
+			"targets; a namespace whose Package has since been removed keeps its LimitRange, "+
+			"labelled app.kubernetes.io/managed-by=cozystack-package-controller.")
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
 		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+
 			"explicitly: Kubernetes defaults an unset request to the limit, which would reserve the full "+
@@ -492,6 +496,15 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	return nil
 }
 
+// The shipped defaults for the two system-namespace memory knobs. Named rather than written
+// into flag.StringVar directly so the flag registration and the test that pins them read the
+// same constant: the previous form duplicated the literal, and a change to the flag left the
+// test asserting a value the operator no longer shipped.
+const (
+	DefaultSystemNamespaceMemoryLimit   = "32Gi"
+	DefaultSystemNamespaceMemoryRequest = "32Mi"
+)
+
 // parseSystemNamespaceMemory turns the --system-namespace-memory-limit and
 // --system-namespace-memory-request flag values into the quantities the Package reconciler
 // takes, rejecting the combinations that would fail later and further away.
@@ -508,15 +521,6 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 // A request of 0 against a non-zero limit passes deliberately: it is the supported way to
 // take the memory.max without reserving anything at schedule time, not a broken value.
 // Both zero is the disabled case and never reaches the comparison.
-// The shipped defaults for the two system-namespace memory knobs. Named rather than written
-// into flag.StringVar directly so the flag registration and the test that pins them read the
-// same constant: the previous form duplicated the literal, and a change to the flag left the
-// test asserting a value the operator no longer shipped.
-const (
-	DefaultSystemNamespaceMemoryLimit   = "32Gi"
-	DefaultSystemNamespaceMemoryRequest = "32Mi"
-)
-
 func parseSystemNamespaceMemory(rawLimit, rawRequest string) (limit, request resource.Quantity, err error) {
 	parse := func(flagName, raw string) (resource.Quantity, error) {
 		if raw == "" {

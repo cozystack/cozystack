@@ -1212,10 +1212,11 @@ func (r *PackageReconciler) foreignContainerMemoryPolicy(ctx context.Context, ns
 
 // constrainsMemory reports whether a LimitRange item expresses any policy about memory.
 //
-// Every field is read, at every scope. The list is the complete set of memory-bearing fields
-// a LimitRangeItem has, so a field added upstream would be missed here — hence the switch on
-// the item's own maps rather than a hand-picked few, and hence this being its own function
-// with its own test rather than three conditions inline.
+// Every field is read, at every scope. The list below is the complete set of quantity maps a
+// LimitRangeItem carries today, which also means a field added upstream has to be added here
+// or it becomes a hole. That is exactly why this is its own function with its own table test
+// rather than a few conditions inline: the test enumerates the fields, so a new one shows up
+// as a gap in a list somebody is already reading.
 func constrainsMemory(item corev1.LimitRangeItem) bool {
 	for _, quantities := range []corev1.ResourceList{
 		item.Default, item.DefaultRequest, item.Max, item.Min, item.MaxLimitRequestRatio,
@@ -1263,8 +1264,13 @@ func (r *PackageReconciler) raisedCeiling(nsName string, ceiling resource.Quanti
 // namespace sits raised, which is what lets the raise be re-justified or dropped on
 // evidence instead of frozen at its high-water mark or forgotten. The cost is that a raised
 // namespace reads the pod list on every reconcile; that is the price of being able to lower
-// the ceiling again, and it is bounded by how many namespaces sit raised, which is none
-// once the oversized requests are gone.
+// the ceiling again, and it is bounded by how many namespaces sit raised.
+//
+// That count normally falls to zero once the oversized requests are gone, with one exception
+// worth naming: the scan deliberately keeps Failed pods (see findRequestAboveDefaultLimit),
+// so a carcass Kubernetes never garbage-collects holds both the raise and this namespace's
+// per-reconcile pod List open indefinitely. Costs precision and a repeated List, not
+// availability, since a looser memory.max is still a memory.max.
 //
 // The comparison is by value rather than by struct, for the same reason the spec comparison
 // further up is semantic: a LimitRange stored as 4096Mi defaults the same 4Gi the configured
