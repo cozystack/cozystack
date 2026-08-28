@@ -351,9 +351,9 @@ func main() {
 	// Setup Package reconciler
 	if err := (&operator.PackageReconciler{
 		Client: mgr.GetClient(),
-		// Non-cached, so the per-namespace Pod scan guarding the system defaults
-		// LimitRange does not start a cluster-wide Pod informer in an operator
-		// whose whole purpose here is to bound memory.
+		// Non-cached, so the per-namespace pod and workload scan guarding the
+		// system defaults LimitRange does not start cluster-wide informers in an
+		// operator whose whole purpose here is to bound memory.
 		APIReader:                 mgr.GetAPIReader(),
 		Scheme:                    mgr.GetScheme(),
 		HelmReleaseInterval:       hrIntervalDuration,

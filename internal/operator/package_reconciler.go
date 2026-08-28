@@ -76,8 +76,8 @@ func parseCRDPolicy(install *cozyv1alpha1.ComponentInstall) helmv2.CRDsPolicy {
 type PackageReconciler struct {
 	client.Client
 	// APIReader reads straight from the API server, bypassing the manager's cache.
-	// Used only for the per-namespace Pod scan behind the system defaults LimitRange:
-	// routing that through the cached client would start a cluster-wide Pod informer
+	// Used only for the per-namespace pod and workload scan behind the system defaults
+	// LimitRange: routing that through the cached client would start cluster-wide informers
 	// and cost the operator far more memory than the LimitRange saves. Optional —
 	// when nil the scan falls back to Client, which is what the unit tests use.
 	APIReader                 client.Reader
@@ -987,8 +987,8 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		return err
 	}
 	if governing != "" {
-		logger.Info("leaving this namespace's container memory default alone: another LimitRange already sets one; "+
-			"a second default would leave the effective ceiling to the order LimitRanger iterates them",
+		logger.Info("leaving this namespace's container memory default alone: another LimitRange already governs memory; "+
+			"adding this default could make admission order-dependent or violate that policy",
 			"namespace", nsName,
 			"limitRange", governing)
 		// Withdraw rather than sit beside it. Anything this reconciler wrote earlier is
@@ -1025,8 +1025,6 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		logger.Error(err, "skipping the system defaults LimitRange: could not read the namespace's pods and workloads", "namespace", nsName)
 		return nil
 	}
-	// needed is the ceiling the evidence in hand justifies: the configured limit, or the
-	// largest oversized request the scan found where that is higher.
 	// A container requesting more than the configured limit with no limit of its own is the
 	// one shape this default cannot be applied over: LimitRanger would write the limit, the
 	// API server would then reject the pod for requesting more than it, and the workload
@@ -1196,19 +1194,9 @@ func (r *PackageReconciler) deleteSystemDefaultsLimitRange(ctx context.Context, 
 	// its to delete; anything else is left where it is, which is also the right answer if
 	// the name is ever taken over by another component.
 	//
-	// The label bounds what disabling can remove; it is not protection from the feature
-	// being enabled. While enabled the apply above takes the name over with ForceOwnership
-	// and stamps the label, so a hand-written cozystack-system-defaults is normally adopted
-	// and then removed here on the way out.
-	//
-	// "Normally", because that apply is skipped when the object already matches what would
-	// be applied, and a foreign LimitRange of this name whose spec happens to be identical
-	// is therefore never stamped and never adopted. It survives the knob, which is the same
-	// answer the guard gives deliberately elsewhere, so the outcome is right either way —
-	// but it is reached by the apply not running, not by the guard.
-	//
-	// What the guard buys is that a LimitRange of that name this reconciler never wrote to
-	// survives the knob.
+	// The enabled path follows the same ownership rule. foreignContainerMemoryPolicy sees
+	// an unlabelled same-named memory policy before Apply and treats it as foreign, so
+	// ForceOwnership is never used to adopt or overwrite it.
 	if stale.Labels[managedByLabel] != packageControllerFieldOwner {
 		// Left alone, and said out loud. This is the right call on an object this
 		// reconciler did not write, but it is also reached when its own object has had the
