@@ -59,39 +59,7 @@ const (
 	// managedByLabel marks the objects this reconciler owns outright, so a same-named
 	// object it did not create can be told apart and left alone.
 	managedByLabel = "app.kubernetes.io/managed-by"
-	// memoryCeilingClearSinceAnnotation records when the scan behind a raised container
-	// memory ceiling first came back with nothing to justify it. See
-	// memoryCeilingDropGrace for why an instant is recorded rather than a count.
-	memoryCeilingClearSinceAnnotation = "operator.cozystack.io/memory-ceiling-clear-since"
 )
-
-// memoryCeilingDropGrace is how long a raised container memory ceiling is held after the
-// scan stops finding the request that justified it, before the ceiling is lowered back to
-// the configured limit.
-//
-// The delay exists because an empty scan is not evidence that the oversized request is
-// gone: it is equally consistent with the pod being between deletion and recreation. For
-// the one class of blocker that appears only as a live Pod — built by a controller from a
-// custom resource no template scan can read, which is a class this repo ships (every CNPG
-// Cluster in a system namespace creates its instance pods directly rather than through a
-// StatefulSet) — a single empty scan used to be enough to lower the ceiling underneath a
-// pod that was merely being rescheduled. Its recreation was then defaulted a limit below
-// its own request and rejected at admission for good: the rejected pod never exists, so
-// the scan can never find it again, and the namespace settles at the configured limit
-// where the pod half of the scan stops running at all.
-//
-// A wall clock rather than a count of consecutive clean scans, because the reconcile rate
-// is not constant and rises exactly when the risk does. Package reconciles follow
-// HelmRelease status churn, and a Talos node upgrade — the scenario this whole feature is
-// for — produces plenty of it, so any small number of consecutive clean scans can be
-// burned inside a single pod's rescheduling window. Elapsed time cannot be.
-//
-// Thirty minutes covers a node drain, reboot and reschedule with room to spare, and the
-// cost of overshooting is only that a namespace whose oversized request is genuinely gone
-// keeps a loose ceiling for another half hour. That ceiling is still a ceiling: memory.max
-// exists on those cgroups, which is the entire point of the feature, so holding it too
-// long costs precision and holding it too briefly costs availability.
-const memoryCeilingDropGrace = 30 * time.Minute
 
 // parseCRDPolicy maps ComponentInstall.UpgradeCRDs to a helmv2.CRDsPolicy.
 // Empty / nil preserves the helm-controller default (Skip on upgrade);
@@ -126,17 +94,6 @@ type PackageReconciler struct {
 	// must be set whenever the limit is, because Kubernetes otherwise defaults each
 	// request to the limit and reserves that much at schedule time.
 	SystemNamespaceMemoryRequest resource.Quantity
-	// Now reads the wall clock, and exists so that the grace period guarding a raised
-	// memory ceiling can be exercised without sleeping. Optional — nil means time.Now.
-	Now func() time.Time
-}
-
-// now reads the injectable clock, defaulting to the wall clock.
-func (r *PackageReconciler) now() time.Time {
-	if r.Now != nil {
-		return r.Now()
-	}
-	return time.Now()
 }
 
 // buildHelmReleaseSpec assembles the Spec applied to every generated
@@ -1032,105 +989,47 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 	}
 	// needed is the ceiling the evidence in hand justifies: the configured limit, or the
 	// largest oversized request the scan found where that is higher.
-	needed := r.SystemNamespaceMemoryLimit
-	if blocker != nil {
-		needed = blocker.request
-	}
-	desired := r.systemDefaultsLimitRange(nsName, needed)
-	ceiling, raised := containerMemoryDefault(existing)
-
-	switch {
-	case !raised || needed.Cmp(ceiling) >= 0:
-		// Level or upward, which is always safe to write immediately: no pod can be
-		// rejected by a ceiling being raised above where it already was. This is also
-		// the path that clears the grace stamp, by building desired without it — a
-		// namespace whose evidence has come back does not get to keep counting down.
-		//
-		// Raise this namespace's ceiling to clear the request instead of withholding the
-		// LimitRange. A looser ceiling still puts memory.max on the pod cgroup, which is
-		// the whole point: the Talos OOM handler discards any cgroup that has one, so
-		// 8Gi protects the pod exactly as well as the configured limit would.
-		// Withholding gives the namespace no memory.max at all, which is the failure
-		// this feature exists to remove — and it would fall on cozy-monitoring in
-		// particular, whose VPAs hold requests above any sane default on precisely the
-		// busy clusters this was written for.
-		//
-		// Withholding was also self-perpetuating there, which is the sharper reason it
-		// had to go. With no LimitRange in the namespace nothing defaults a memory
-		// limit, so the next VPA-sized pod is admitted with a large request and no
-		// limit, the scan finds it again, and the namespace is withheld again: the
-		// feature could never get its foot in the door. Applying at the raised ceiling
-		// breaks that loop, because from then on every new pod is defaulted a limit and
-		// the scan stops finding limitless requests.
-		//
-		// Logged only where the ceiling actually moves up. A namespace holding a
-		// permanently oversized pod re-justifies the same ceiling on every reconcile,
-		// and announcing a raise that changes nothing would put a line in the log for
-		// every system namespace on every HelmRelease status change.
-		if blocker != nil && (!raised || needed.Cmp(ceiling) > 0) {
-			logger.Info("raising the default container memory limit for this namespace to the request below, to clear it; "+
-				"the namespace keeps a memory.max ceiling instead of none, and drops back to the configured limit "+
-				"once the request has been gone for the grace period",
-				"namespace", nsName,
-				"workload", blocker.workload,
-				"container", blocker.container,
-				"request", blocker.request.String(),
-				"configuredLimit", r.SystemNamespaceMemoryLimit.String())
-		}
-
-	default:
-		// Downward, and every downward move goes through the grace period regardless of
-		// what prompted it — see memoryCeilingDropGrace. That covers three cases which
-		// look different and fail identically:
-		//
-		//   - the scan found nothing and the raise looks unnecessary;
-		//   - the scan found a smaller blocker than the one the ceiling was raised for,
-		//     so the larger one is merely unobserved and lowering to the smaller request
-		//     rejects it exactly as lowering to the configured limit would;
-		//   - the configured limit itself was lowered beneath a standing ceiling.
-		//
-		// In all three the ceiling is held at what the object already carries, and the
-		// eventual drop lands on needed rather than on the configured limit, so a
-		// smaller blocker that is still there keeps the ceiling it requires.
-		clearSince, dated := memoryCeilingClearSince(existing, r.now())
-		switch {
-		case !dated:
-			desired = r.raisedCeiling(nsName, ceiling, r.now())
-			logger.Info("this namespace's container memory ceiling is above what the scan now justifies; "+
-				"holding it and starting the grace period, because a scan finding no oversized request is also "+
-				"what a pod between deletion and recreation looks like",
-				"namespace", nsName,
-				"ceiling", ceiling.String(),
-				"justified", needed.String(),
-				"grace", memoryCeilingDropGrace.String())
-		case r.now().Sub(clearSince) < memoryCeilingDropGrace:
-			desired = r.raisedCeiling(nsName, ceiling, clearSince)
-		default:
-			logger.Info("lowering this namespace's container memory ceiling; the request that raised it "+
-				"has been absent for the whole grace period",
-				"namespace", nsName,
-				"ceiling", ceiling.String(),
-				"loweredTo", needed.String(),
-				"clearSince", clearSince.Format(time.RFC3339))
-		}
-	}
-
-	// Steady state, and the only path that writes nothing. The spec comparison is
-	// semantic rather than structural so that a LimitRange written in a different but
-	// equivalent notation does not re-apply forever, and it runs against the spec the
-	// scan actually settled on, so a namespace already sitting at a raised ceiling is
-	// left alone too instead of taking an identical apply on every reconcile.
+	// A container requesting more than the configured limit with no limit of its own is the
+	// one shape this default cannot be applied over: LimitRanger would write the limit, the
+	// API server would then reject the pod for requesting more than it, and the workload
+	// would stop being admissible at all. So the namespace is left without a default and
+	// said out loud, and anything written there earlier is withdrawn, because leaving a
+	// stale default in place is what would keep the workload rejected.
 	//
-	// The two metadata comparisons beside it are the fields this reconciler manages, and
-	// only those: comparing the whole label and annotation maps would re-apply on every
-	// reconcile as soon as anything else annotated the object. The managed-by label has
-	// to be one of them because it is what deleteSystemDefaultsLimitRange reads to decide
-	// whether the object is this reconciler's to remove — compared on the spec alone, a
-	// LimitRange whose label had been stripped was never re-stamped, and turning the knob
-	// off then left an object the operator did own sitting in the namespace.
+	// This used to raise the namespace's ceiling to clear the request instead, on the
+	// grounds that a loose memory.max still takes the pod out of the OOM handler's victim
+	// set where no memory.max does not. That was true, and the mechanism still did not work:
+	// LimitRanger writes the raised limit onto the very container that justified the raise,
+	// so on its next admission the container carries a limit, the scan skips it, and the
+	// raise has erased its own evidence. The ceiling then dropped and the workload was
+	// rejected permanently. A LimitRange default is one number for a whole namespace and
+	// cannot be "the configured limit, or this container's request, whichever is larger";
+	// only per-pod conditional defaulting could do that, which is a mutating webhook and not
+	// this. Withholding is the honest version of the same intent, and it fails in the safe
+	// direction: a namespace with no default is a namespace back to how every release before
+	// this behaved, while a default below a request is a namespace that cannot start pods.
+	if blocker != nil {
+		logger.Info("withholding the default container memory limit from this namespace: a container requests "+
+			"more than the configured limit and declares no limit of its own, so defaulting one would reject it "+
+			"at admission; the namespace keeps no memory.max until this is resolved, by giving that container a "+
+			"limit of its own or by raising the configured limit above its request",
+			"namespace", nsName,
+			"workload", blocker.workload,
+			"container", blocker.container,
+			"request", blocker.request.String(),
+			"configuredLimit", r.SystemNamespaceMemoryLimit.String())
+		return r.deleteSystemDefaultsLimitRange(ctx, nsName)
+	}
+
+	desired := r.systemDefaultsLimitRange(nsName, r.SystemNamespaceMemoryLimit)
+
+	// Steady state, and the only path that writes nothing. The spec comparison is semantic
+	// rather than structural so that a LimitRange written in a different but equivalent
+	// notation does not re-apply forever. The managed-by label is compared beside it because
+	// deleteSystemDefaultsLimitRange reads that label to decide whether the object is this
+	// reconciler's to remove.
 	if apiequality.Semantic.DeepEqual(existing.Spec, desired.Spec) &&
-		existing.Labels[managedByLabel] == desired.Labels[managedByLabel] &&
-		existing.Annotations[memoryCeilingClearSinceAnnotation] == desired.Annotations[memoryCeilingClearSinceAnnotation] {
+		existing.Labels[managedByLabel] == desired.Labels[managedByLabel] {
 		return nil
 	}
 
@@ -1154,14 +1053,8 @@ func systemDefaultsLimitRangeApplyConfiguration(lr *corev1.LimitRange) *corev1ac
 			WithDefault(item.Default).
 			WithDefaultRequest(item.DefaultRequest))
 	}
-	// Annotations are applied from the typed object the same way labels are, and their
-	// absence is meaningful: this reconciler owns the field, so a desired object built
-	// without the clear-since annotation removes the one already there. That is how the
-	// grace period is cancelled when a blocker reappears, and how it is cleaned up when
-	// the ceiling finally comes down.
 	return corev1ac.LimitRange(lr.Name, lr.Namespace).
 		WithLabels(lr.Labels).
-		WithAnnotations(lr.Annotations).
 		WithSpec(corev1ac.LimitRangeSpec().WithLimits(items...))
 }
 
@@ -1233,70 +1126,6 @@ func constrainsMemory(item corev1.LimitRangeItem) bool {
 		}
 	}
 	return false
-}
-
-// raisedCeiling builds the LimitRange for a namespace held above the configured limit,
-// carrying the instant its justifying request was last unobserved.
-//
-// The ceiling is passed in from the object in the cluster rather than recomputed, because
-// this is the path taken when the scan found nothing: there is no blocker left to derive it
-// from, and the whole point of the grace period is that the absence of a blocker is not yet
-// grounds to move.
-func (r *PackageReconciler) raisedCeiling(nsName string, ceiling resource.Quantity, clearSince time.Time) *corev1.LimitRange {
-	lr := r.systemDefaultsLimitRange(nsName, ceiling)
-	lr.Annotations = map[string]string{
-		memoryCeilingClearSinceAnnotation: clearSince.UTC().Format(time.RFC3339),
-	}
-	return lr
-}
-
-// containerMemoryDefault reports the container memory default lr currently sets, if it sets
-// one at all. An absent LimitRange, or one whose spec has been stripped, defaults nothing.
-func containerMemoryDefault(lr *corev1.LimitRange) (resource.Quantity, bool) {
-	var found resource.Quantity
-	var ok bool
-	// Last match wins, because that is what LimitRanger does: its mutation hook walks every
-	// item in the namespace's LimitRanges and the last write to a field is the one the pod
-	// keeps. Reading the first would let a hand-edited two-item spec report a ceiling the
-	// cluster is not actually applying.
-	for _, item := range lr.Spec.Limits {
-		if item.Type != corev1.LimitTypeContainer {
-			continue
-		}
-		if got, present := item.Default[corev1.ResourceMemory]; present {
-			found, ok = got, true
-		}
-	}
-	return found, ok
-}
-
-// memoryCeilingClearSince reads back the instant the scan behind lr's raised ceiling first
-// came back empty.
-//
-// An annotation that cannot be parsed is reported as absent, which restarts the grace
-// period rather than ending it, and one dated in the future is clamped to now. That is the safe direction: the annotation exists only to
-// delay a write that can reject a running component's next pod, so anything ambiguous about
-// it has to mean "wait longer", never "lower now".
-func memoryCeilingClearSince(lr *corev1.LimitRange, now time.Time) (time.Time, bool) {
-	raw, ok := lr.Annotations[memoryCeilingClearSinceAnnotation]
-	if !ok {
-		return time.Time{}, false
-	}
-	stamped, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return time.Time{}, false
-	}
-	// A stamp dated ahead of the clock would hold the ceiling for the skew plus the grace
-	// period rather than the grace period, and hold it silently, since this branch logs
-	// nothing. Clock skew on the writer, or a GitOps re-apply of an object carrying an old
-	// future stamp, both reach it. Clamping to now bounds the wait at the documented figure
-	// without ever shortening it: the direction that matters is that a raised ceiling is
-	// never lowered early, and now is the earliest instant this observation can honestly
-	// claim.
-	if stamped.After(now) {
-		return now, true
-	}
-	return stamped, true
 }
 
 // deleteSystemDefaultsLimitRange removes the LimitRange this reconciler maintains,
@@ -1445,9 +1274,8 @@ type memoryRequestBlocker struct {
 // rejected attempt leaves no artefact for a later scan to find. See
 // reconcileSystemDefaultsLimitRange for the failure that argument used to produce.
 //
-// Nothing here is fatal, by design. A request above the default raises that namespace's
-// ceiling rather than withholding the LimitRange, because a loose memory.max still takes the
-// pod out of the OOM handler's victim set and no memory.max does not; see
+// Nothing here is fatal, by design. A request above the default makes this reconciler
+// withhold the LimitRange from that namespace rather than fail the Package; see
 // reconcileSystemDefaultsLimitRange. A List that fails skips the namespace instead: the scan
 // not running is not evidence about what is in it.
 func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, nsName string) (*memoryRequestBlocker, error) {
@@ -1559,20 +1387,17 @@ func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, ns
 		// A pod that ran to completion is never recreated from this spec, so its
 		// request cannot block anything.
 		//
-		// Failed is not the same and is deliberately still scanned. An eviction or a
-		// node crash leaves a Failed carcass holding the same oversized request, and
-		// its controller will recreate it: that carcass is the standing evidence this
-		// namespace needs a raised ceiling, and it is often the only evidence, since
-		// the shape this scan looks for cannot be admitted once the namespace is
-		// settled. Skipping it dropped the ceiling under a workload that was coming
-		// back, which is the exact outcome memoryCeilingDropGrace exists to prevent -
-		// the grace period reasons about a pod that is absent, and a Failed pod is
-		// present and telling us something.
+		// Failed is not the same and is deliberately still scanned. An eviction or a node
+		// crash leaves a Failed carcass holding the same oversized request that its
+		// controller will recreate, and while that request stands the namespace must keep
+		// being withheld: applying the default over it would reject the replacement. The
+		// carcass is often the only evidence left, because the shape this scan looks for
+		// cannot be admitted into a namespace that already has the default.
 		//
-		// The cost is that a bare pod which failed for good holds the ceiling raised
-		// until Kubernetes garbage-collects it, after which the scan stops finding it
-		// and the grace period lowers the ceiling on its own. A ceiling held too long
-		// is loose; a ceiling dropped too early rejects a pod permanently.
+		// The cost is the opposite error. A bare pod that failed for good, or one whose
+		// owning Job has finished, keeps a namespace withheld until Kubernetes collects it,
+		// so that namespace carries no memory.max for longer than it needed to. Withholding
+		// too long costs hardening; applying too early costs the workload.
 		if pod.Status.Phase == corev1.PodSucceeded {
 			continue
 		}

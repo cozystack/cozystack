@@ -154,26 +154,24 @@ func main() {
 			"working set: the handler discards a cgroup for having a memory.max at all, whatever its "+
 			"value, so what this buys is immunity rather than a fitted ceiling, and a ceiling nothing "+
 			"reaches cannot turn a rare pressure-driven kill into a deterministic one. Lower it to make "+
-			"it bind, per component or fleet-wide, once real usage is known. It should stay above the "+
-			"largest memory request in any system namespace, since a defaulted limit below a "+
-			"container's own request fails admission. "+
-			"Where a namespace does hold such a container, that namespace's ceiling is raised to clear "+
-			"the request rather than the LimitRange being withheld - a loose memory.max still takes the "+
-			"pod out of the victim set where no memory.max does not - and it drops back to this value "+
-			"once the request has been absent for a grace period, since a scan finding nothing is also "+
-			"what a pod between deletion and recreation looks like. Grep the operator log for \"raising "+
-			"the default container memory limit\" to see which namespace, workload and container caused "+
-			"it, and for \"lowering this namespace's container memory ceiling\" to see it come back down. "+
+			"it bind, per component or fleet-wide, once real usage is known. "+
+			"It must stay above the largest memory request in any system namespace: a defaulted limit "+
+			"below a container's own request is rejected at admission, so a namespace holding such a "+
+			"container is left with no default at all rather than one that would stop its pods. Grep "+
+			"the operator log for \"withholding the default container memory limit\" to find those, and "+
+			"fix them by giving the container a limit of its own or by raising this value above its "+
+			"request. "+
 			"Scope is every namespace a Package targets that is not a tenant namespace, which "+
 			"includes kube-system - cozystack-scheduler is installed there - so namespaces owned "+
 			"by the underlying distribution are covered too. A namespace where another LimitRange "+
 			"already says anything about memory is left alone, in any field and at either the "+
-			"Container or the Pod scope: a second default leaves the effective ceiling to the order "+
-			"LimitRanger iterates them, while a max below this default, a min above the paired "+
-			"request, or a maxLimitRequestRatio each reject the pod at admission. Empty or 0 "+
+			"Container or the Pod scope, because two defaults leave the effective ceiling to the "+
+			"order LimitRanger iterates them and a max, min or maxLimitRequestRatio can reject the "+
+			"pods this default would produce. Empty or 0 "+
 			"disables the LimitRange and removes it from every namespace an active Package still "+
 			"targets; a namespace whose Package has since been removed keeps its LimitRange, "+
 			"labelled app.kubernetes.io/managed-by=cozystack-package-controller.")
+
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
 		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+
 			"explicitly: Kubernetes defaults an unset request to the limit, which would reserve the full "+
