@@ -18,6 +18,10 @@ tests:
         equal:
           path: spec.config.uploadProxyURLOverride
           value: https://cdi-uploadproxy.example.org
+      - documentIndex: 0
+        matchRegex:
+          path: spec.customizeComponents.patches[0].patch
+          pattern: '"secretName":"cdi-uploadproxy-public-cert"'
 
   - it: derives the same URL for the Gateway TLSRoute path
     set:
@@ -43,6 +47,18 @@ tests:
           path: spec.config.uploadProxyURLOverride
           value: https://uploads.custom.example.net
 
+  - it: mounts the copied platform wildcard when wildcard mode is active
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.customizeComponents.patches[0].patch
+          pattern: '"secretName":"wildcard-tls"'
+
   - it: omits the URL when the proxy is not exposed
     set:
       _cluster:
@@ -52,6 +68,9 @@ tests:
       - documentIndex: 0
         notExists:
           path: spec.config.uploadProxyURLOverride
+      - documentIndex: 0
+        notExists:
+          path: spec.customizeComponents
 
   - it: omits the URL when the root host is blank
     set:
@@ -62,9 +81,15 @@ tests:
       - documentIndex: 0
         notExists:
           path: spec.config.uploadProxyURLOverride
+      - documentIndex: 0
+        notExists:
+          path: spec.customizeComponents
 
   - it: omits the URL when cluster publication values are absent
     asserts:
       - documentIndex: 0
         notExists:
           path: spec.config.uploadProxyURLOverride
+      - documentIndex: 0
+        notExists:
+          path: spec.customizeComponents
