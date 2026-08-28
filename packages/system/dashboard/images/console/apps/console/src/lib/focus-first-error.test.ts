@@ -102,6 +102,26 @@ describe("focusFirstError", () => {
     expect(document.activeElement).toBe(nested)
   })
 
+  // The x-cozystack-options fields (storageClass, backupClass, VM disks, GPU
+  // names) render through DynamicOptionsWidget as a select, not an input.
+  it("focuses a select carrying the generated id", () => {
+    document.body.innerHTML = `<select id="root_gpus_0_name"></select>`
+    const field = document.getElementById("root_gpus_0_name")
+
+    focusFirstError({ property: ".gpus.0.name" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  it("falls back to a nested select under the errored object", () => {
+    document.body.innerHTML = `<select id="root_gpus_0_name"></select>`
+    const field = document.getElementById("root_gpus_0_name")
+
+    focusFirstError({ property: ".gpus.0" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
   it("does nothing when the field is nowhere in the document", () => {
     document.body.innerHTML = `<input id="root_other" />`
 
