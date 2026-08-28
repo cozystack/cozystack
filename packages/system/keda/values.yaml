@@ -1,10 +1,11 @@
 # cozystack-owned autoscaling observability, rendered by this umbrella chart's
-# own templates (templates/alerts.yaml, templates/dashboard.yaml) — NOT passed to
-# the vendored KEDA subchart.
+# own templates (templates/alerts.yaml) — NOT passed to the vendored KEDA subchart.
+# The Grafana dashboard is NOT shipped from here: cozystack provisions dashboards
+# via grafana-operator from the grafana-dashboards image, so it lives at
+# dashboards/db/database-autoscaling.json and is registered in
+# packages/system/monitoring/dashboards.list like every other db/* dashboard.
 databaseAutoscaling:
   alerts:
-    enabled: true
-  dashboard:
     enabled: true
 
 keda:
