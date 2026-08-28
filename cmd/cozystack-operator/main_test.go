@@ -621,14 +621,14 @@ func TestParseSystemNamespaceMemory(t *testing.T) {
 		wantRequest string
 	}{
 		{
-			// The shipped defaults, read from the same constants the flags are
-			// registered with, so this case cannot drift from what the operator
-			// actually ships the way a duplicated literal did.
+			// Inputs follow the constants registered as flag defaults; literal
+			// expectations pin the shipped contract so changing either constant
+			// requires an intentional test update.
 			name:        "defaults",
 			rawLimit:    DefaultSystemNamespaceMemoryLimit,
 			rawRequest:  DefaultSystemNamespaceMemoryRequest,
-			wantLimit:   DefaultSystemNamespaceMemoryLimit,
-			wantRequest: DefaultSystemNamespaceMemoryRequest,
+			wantLimit:   "32Gi",
+			wantRequest: "32Mi",
 		},
 		{
 			// Empty is the documented off switch, not a missing value: the chart

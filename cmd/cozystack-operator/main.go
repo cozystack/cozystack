@@ -494,10 +494,9 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	return nil
 }
 
-// The shipped defaults for the two system-namespace memory knobs. Named rather than written
-// into flag.StringVar directly so the flag registration and the test that pins them read the
-// same constant: the previous form duplicated the literal, and a change to the flag left the
-// test asserting a value the operator no longer shipped.
+// The shipped defaults for the two system-namespace memory knobs. Constants keep flag
+// registration and the parser test inputs on the same values; the test compares the parsed
+// result with literal contract values so changing a default cannot stay green by construction.
 const (
 	DefaultSystemNamespaceMemoryLimit   = "32Gi"
 	DefaultSystemNamespaceMemoryRequest = "32Mi"
