@@ -35,7 +35,15 @@
   # platform against the new source. Generous budget: the upgrade re-pulls image
   # deltas across three nodes and rolls stateful workloads, and a parent HR that
   # briefly flips InProgress re-reconciles every 1m until it converges.
-  hack/e2e-wait-hr-ready.sh 20m
+  #
+  # EXPECTED_NOT_READY_FILE names the releases this lane already knows about, so
+  # a NEW upgrade regression is still a red rather than one more line in a
+  # permanently red check. The gate fails on anything not in that file, and also
+  # when a listed release is Ready again or is not in the cluster at all, so the
+  # file cannot outlive what it describes. The install gate is not given the
+  # variable and behaves exactly as before.
+  EXPECTED_NOT_READY_FILE=hack/e2e-chainsaw-upgrade/expected-not-ready \
+    hack/e2e-wait-hr-ready.sh 20m
 }
 
 @test "Migration stamp advanced to the current target" {
