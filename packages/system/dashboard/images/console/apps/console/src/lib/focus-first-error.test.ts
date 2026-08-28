@@ -15,22 +15,41 @@ describe("focusFirstError", () => {
     expect(document.activeElement).toBe(field)
   })
 
-  it("resolves a bracketed property path", () => {
-    document.body.innerHTML = `<input id="root_spec_first-name" />`
-    const field = document.getElementById("root_spec_first-name")
+  // RJSF flattens the instance path with dots, so this is the shape a nested
+  // field actually arrives as. A decoy sharing the prefix keeps the assertion
+  // from passing on the descendant fallback alone.
+  it("resolves a nested property path", () => {
+    document.body.innerHTML = `
+      <input id="root_spec_firstname_decoy" />
+      <input id="root_spec_firstname" />
+    `
+    const field = document.getElementById("root_spec_firstname")
 
-    focusFirstError({ property: ".spec['first-name']" })
+    focusFirstError({ property: ".spec.firstname" })
 
     expect(document.activeElement).toBe(field)
   })
 
-  it("preserves a dot inside a bracketed property name", () => {
-    document.body.innerHTML = `<input id="root_spec_foo.bar" />`
-    const field = document.getElementById("root_spec_foo.bar")
+  it("resolves an array item path", () => {
+    document.body.innerHTML = `<input id="root_items_0_name" />`
+    const field = document.getElementById("root_items_0_name")
 
-    focusFirstError({ property: ".spec['foo.bar']" })
+    focusFirstError({ property: ".items.0.name" })
 
     expect(document.activeElement).toBe(field)
+  })
+
+  // Pinned gap: RJSF gives the same dotted path whether the dot separates two
+  // properties or sits inside one name, so a map keyed `ghcr.io` cannot be told
+  // apart from a nested `ghcr` -> `io` and its field is never focused. The
+  // submit still blocks and the inline error still renders; only the scroll is
+  // lost. Fixing it needs the schema, not the error.
+  it("does not resolve a property whose own name contains a dot", () => {
+    document.body.innerHTML = `<input id="root_talos_registryMirrors_ghcr.io" />`
+
+    focusFirstError({ property: ".talos.registryMirrors.ghcr.io" })
+
+    expect(document.activeElement).toBe(document.body)
   })
 
   it("uses the same custom prefix and separator as the form", () => {

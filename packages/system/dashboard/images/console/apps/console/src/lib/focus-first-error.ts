@@ -1,13 +1,17 @@
 import type { RJSFValidationError } from "@rjsf/utils"
 
+/**
+ * RJSF builds `property` as the JSON-pointer instance path with the slashes
+ * swapped for dots (`processRawValidationErrors.js`), so the path is always
+ * dotted and never bracketed -- an array index arrives as `.items.0.name`.
+ *
+ * The flattening is lossy for a property whose own name contains a dot, which
+ * an additionalProperties map keyed `ghcr.io` produces: the split yields one
+ * segment too many and the generated id does not match the rendered one, so
+ * that field is not brought into view. Pinned in the tests.
+ */
 function propertySegments(property: string): string[] {
-  const segments: string[] = []
-  const pattern = /(?:^|\.)([^.[\]]+)|\[(?:'([^']*)'|"([^"]*)"|([^\]]+))\]/g
-  for (const match of property.matchAll(pattern)) {
-    const segment = match[1] ?? match[2] ?? match[3] ?? match[4]
-    if (segment) segments.push(segment)
-  }
-  return segments
+  return property.split(".").filter((segment) => segment !== "")
 }
 
 /**
