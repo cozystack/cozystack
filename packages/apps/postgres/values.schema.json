@@ -228,9 +228,9 @@
           "default": 6
         },
         "maxReplicationLagSeconds": {
-          "description": "Freeze scaling while replication lag exceeds this and the primary is writing.",
+          "description": "Freeze scaling while replication lag exceeds this (seconds) and the primary is writing. 0 disables the brake. Default 0: the freeze branch has only been validated on a live cluster in its non-braking (pass-through) form, so the lag brake is opt-in until the braking path is exercised under load; set a positive value (e.g. 30) to enable it.",
           "type": "integer",
-          "default": 30
+          "default": 0
         },
         "metric": {
           "description": "Read-load signal to scale on.",

@@ -22,6 +22,18 @@ spec:
   # subresource (design proposal §3). A brief cold-start window at 1 is expected
   # until KEDA scales up to the floor. See templates/scaledobject.yaml.
   {{- else }}
+  {{- /* When the chart declares the static instance count, CNPG's admission webhook
+         rejects the Cluster if maxSyncReplicas >= instances ("maxSyncReplicas must be
+         lower than the number of instances"). This bites the DISABLE path in
+         particular: an autoscaled + sync-quorum cluster runs with instances seeded
+         from effectiveMin while replicas stays at its default, so flipping autoscaling
+         off would render instances: <replicas> next to the quorum and wedge the
+         HelmRelease upgrade with an opaque webhook error. Fail closed with an
+         actionable message (symmetric to the enable-path guards). Also covers the
+         dryRun/transition modes, which likewise render the static count. */ -}}
+  {{- if le (int .Values.replicas) (int .Values.quorum.maxSyncReplicas) }}
+  {{- fail (printf "postgres: replicas (%d) must be greater than quorum.maxSyncReplicas (%d) - CNPG rejects a Cluster whose maxSyncReplicas is not lower than its instance count. When disabling autoscaling on a synchronous-quorum cluster, first raise replicas to at least the live instance count (kubectl scale --subresource=scale with the HelmRelease suspended)." (int .Values.replicas) (int .Values.quorum.maxSyncReplicas)) }}
+  {{- end }}
   instances: {{ .Values.replicas }}
   {{- end }}
   {{- if and $tlsEnabled .Values.external }}

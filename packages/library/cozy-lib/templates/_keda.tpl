@@ -89,7 +89,10 @@ Parameters:
 {{-   end -}}
 {{-   $labels := merge (dict "app.kubernetes.io/managed-by" "cozystack") (default (dict) .labels) -}}
 {{-   $annotations := default (dict) .annotations -}}
-{{-   if .paused -}}
+{{- /* Coerce rather than truthiness-test: a caller passing the string "false"
+       (easy to produce from an include without an `| eq "true"` guard) must NOT
+       pause. Only a real true / "true" pauses. */ -}}
+{{-   if eq (printf "%v" (default false .paused)) "true" -}}
 {{-     $annotations = merge (dict "autoscaling.keda.sh/paused" "true") $annotations -}}
 {{-   end -}}
 apiVersion: keda.sh/v1alpha1

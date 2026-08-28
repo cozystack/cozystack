@@ -92,6 +92,17 @@ tests:
           path: metadata.annotations["autoscaling.keda.sh/paused"]
           value: "true"
 
+  - it: does not pause when paused is the string "false" (coerced, not truthiness-tested)
+    templates:
+      - templates/tests/keda-scaledobject.yaml
+    values:
+      - keda_scaledobject_values.yaml
+    set:
+      paused: "false"
+    asserts:
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused"]
+
   - it: fails closed when the argument is not a dict
     templates:
       - templates/tests/keda-scaledobject-nondict.yaml

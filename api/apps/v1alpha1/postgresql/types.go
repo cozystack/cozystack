@@ -76,8 +76,8 @@ type Autoscaling struct {
 	// Maximum total instances; raised to the quorum floor if the floor exceeds it.
 	// +kubebuilder:default:=6
 	MaxReplicas int `json:"maxReplicas"`
-	// Freeze scaling while replication lag exceeds this and the primary is writing.
-	// +kubebuilder:default:=30
+	// Freeze scaling while replication lag exceeds this (seconds) and the primary is writing. 0 disables the brake. Default 0: the freeze branch has only been validated on a live cluster in its non-braking (pass-through) form, so the lag brake is opt-in until the braking path is exercised under load; set a positive value (e.g. 30) to enable it.
+	// +kubebuilder:default:=0
 	MaxReplicationLagSeconds int `json:"maxReplicationLagSeconds"`
 	// Read-load signal to scale on.
 	// +kubebuilder:default:="ReadConnections"

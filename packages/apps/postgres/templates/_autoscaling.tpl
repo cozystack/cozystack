@@ -118,7 +118,13 @@ tuned per the proposal's PoC; the base (no-lag) path is validated live.
 {{- $lagHigh := printf "((max(max_over_time(cnpg_pg_replication_lag{namespace=%q}[%s]) %s) > bool %d) or vector(0))" $ns $cooldown $joinCluster $maxLag -}}
 {{- $writing := printf "((max(rate(cnpg_collector_wal_records{namespace=%q}[5m]) %s) > bool 0) or vector(0))" $ns $joinCluster -}}
 {{- $braking := printf "(%s * %s)" $lagHigh $writing -}}
-{{- $frozen := printf "(count(kube_pod_labels{namespace=%q,label_cnpg_io_cluster=%q}) * %v)" $ns $rel $target -}}
+{{- /* currentInstances: count only instance pods. Restrict to pods carrying an
+       instance role (label_cnpg_io_instance_role=~".+") like the read-load term
+       above; CNPG stamps cnpg.io/cluster on its bootstrap/join Job pods too (they
+       carry jobRole, not instanceRole), and kube-state-metrics reports them until
+       GC. Without this filter a lingering join Job pod inflates the frozen count
+       while the brake is engaged, nudging desired up instead of holding it. */ -}}
+{{- $frozen := printf "(count(kube_pod_labels{namespace=%q,label_cnpg_io_cluster=%q,label_cnpg_io_instance_role=~\".+\"}) * %v)" $ns $rel $target -}}
 {{- /* base when not braking, frozen (= currentInstances * target) when braking.
        The frozen summand is floored with `or vector(0)`: PromQL `+` is a set
        intersection, so if count(kube_pod_labels) is momentarily empty (a

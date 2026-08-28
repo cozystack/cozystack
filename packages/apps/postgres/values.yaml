@@ -150,7 +150,7 @@ quorum:
 ## @field {int} maxReplicas - Maximum total instances; raised to the quorum floor if the floor exceeds it.
 ## @field {ReadMetric} metric - Read-load signal to scale on.
 ## @field {int} target - Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores). Dimensionless integer - a resource.Quantity here would accept `150m`, which PromQL reads as 150 minutes and KEDA cannot use as a threshold.
-## @field {int} maxReplicationLagSeconds - Freeze scaling while replication lag exceeds this and the primary is writing.
+## @field {int} maxReplicationLagSeconds - Freeze scaling while replication lag exceeds this (seconds) and the primary is writing. 0 disables the brake. Default 0: the freeze branch has only been validated on a live cluster in its non-braking (pass-through) form, so the lag brake is opt-in until the braking path is exercised under load; set a positive value (e.g. 30) to enable it.
 ## @field {bool} dryRun - Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate). Permanent, unlike `transition`.
 ## @field {bool} transition - Migration phase 1: render `.spec.instances` from `replicas` (which the operator stages to the current live count) AND pause the ScaledObject, so KEDA stands up ready-but-not-actuating. Flip to false (phase 2) to hand the runtime count to KEDA. This shortens the handoff (KEDA is already warm, no cold-start) but does not make it atomic — see the enablement note for the residual dip and how to eliminate it.
 
@@ -183,6 +183,15 @@ quorum:
 ## pin the live count with `kubectl scale --subresource=scale` (or set replicas on the
 ## CNPG Cluster) so KEDA/CNPG holds it, run the phase-2 apply, then resume. Absent that,
 ## expect a brief read-replica disruption during the handoff.
+## The same hazard applies to two other live changes, for the same three-way-merge
+## reason: (1) raising `minReplicas` or `quorum.maxSyncReplicas` on a running autoscaled
+## cluster re-renders the seeded `instances` to the new, higher effectiveMin — harmless
+## (scale-up) — but LOWERING either re-renders a smaller effectiveMin, so if KEDA had
+## scaled above it CNPG decommissions the surplus instances (deleting their PVCs) before
+## the HPA re-clones them; and (2) in the non-quorum case, disabling autoscaling snaps
+## `instances` from the live count back to `.Values.replicas`. Before a floor change or a
+## disable, pin `replicas` to the current live instance count (`kubectl scale
+## --subresource=scale`, HelmRelease suspended) so the re-render is a no-op.
 ## @param {Autoscaling} autoscaling - Read-replica autoscaling configuration.
 autoscaling:
   enabled: false
@@ -190,7 +199,7 @@ autoscaling:
   maxReplicas: 6
   metric: ReadConnections
   target: 150
-  maxReplicationLagSeconds: 30
+  maxReplicationLagSeconds: 0
   dryRun: false
   transition: false
 
