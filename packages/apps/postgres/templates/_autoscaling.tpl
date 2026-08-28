@@ -32,18 +32,25 @@ undercut; both live in this same chart's values, so a tenant raising
 maxSyncReplicas re-renders the floor atomically.
 */}}
 {{- define "postgres.autoscaling.effectiveMin" -}}
-{{- $min := int (default 2 .Values.autoscaling.minReplicas) -}}
-{{- $floor := add (int (default 0 .Values.quorum.maxSyncReplicas)) 1 -}}
+{{- /* Read the values directly - values.yaml/schema already default them (min 2,
+       maxSyncReplicas 0). Do NOT wrap in Sprig `default`: it treats a numeric 0 as
+       empty and would silently substitute the fallback, discarding an explicit 0.
+       An out-of-range value flows into max() and is clamped, never swapped. */ -}}
+{{- $min := int .Values.autoscaling.minReplicas -}}
+{{- $floor := add (int .Values.quorum.maxSyncReplicas) 1 -}}
 {{- max $min $floor 2 -}}
 {{- end -}}
 
 {{/*
 Effective upper bound = max(maxReplicas, effectiveMin). When the quorum floor
-exceeds the configured maxReplicas, quorum wins and the maximum is raised to the
-floor rather than clamping the cluster below a safe quorum.
+exceeds the configured maxReplicas (including a stray maxReplicas <= 0), quorum
+wins and the maximum is raised to the floor rather than clamping the cluster
+below a safe quorum.
 */}}
 {{- define "postgres.autoscaling.effectiveMax" -}}
-{{- $max := int (default 6 .Values.autoscaling.maxReplicas) -}}
+{{- /* Direct read, not Sprig `default`: an explicit maxReplicas: 0 must clamp up to
+       the floor via max(), not be silently coerced to the fallback 6. */ -}}
+{{- $max := int .Values.autoscaling.maxReplicas -}}
 {{- $emin := int (include "postgres.autoscaling.effectiveMin" .) -}}
 {{- max $max $emin -}}
 {{- end -}}
@@ -94,16 +101,23 @@ tuned per the proposal's PoC; the base (no-lag) path is validated live.
 {{- $load = printf "(sum(cnpg_backends_total{namespace=%q,state=\"active\"} %s) or vector(0))" $ns $joinReplica -}}
 {{- end -}}
 {{- $base := printf "%s + %v" $load $target -}}
-{{- $maxLag := int (default 0 .Values.autoscaling.maxReplicationLagSeconds) -}}
+{{- $maxLag := int .Values.autoscaling.maxReplicationLagSeconds -}}
 {{- if le $maxLag 0 -}}
 {{- $base -}}
 {{- else -}}
 {{- /* Cluster-wide join (all instances) for the lag and WAL-write terms. */ -}}
 {{- $joinCluster := printf "* on(namespace,pod) group_left() kube_pod_labels{namespace=%q,label_cnpg_io_cluster=%q}" $ns $rel -}}
 {{- $cooldown := "5m" -}}
-{{- $lagHigh := printf "(max(max_over_time(cnpg_pg_replication_lag{namespace=%q}[%s]) %s) > bool %d)" $ns $cooldown $joinCluster $maxLag -}}
-{{- $writing := printf "(max(rate(cnpg_collector_wal_records{namespace=%q}[5m]) %s) > bool 0)" $ns $joinCluster -}}
-{{- $braking := printf "((%s * %s) or vector(0))" $lagHigh $writing -}}
+{{- /* Each gate is individually floored with `or vector(0)`: if its source series
+       is absent (a CNPG that does not emit cnpg_pg_replication_lag /
+       cnpg_collector_wal_records) the gate resolves to 0 rather than an empty
+       vector. That makes the fail-open decision explicit and per-gate — the brake
+       only engages on positively-observed lag AND writing — instead of leaving it
+       to the emptiness of the product. The brake is a freeze; failing open (scale
+       normally) when a signal is missing is safer than freezing on absent data. */ -}}
+{{- $lagHigh := printf "((max(max_over_time(cnpg_pg_replication_lag{namespace=%q}[%s]) %s) > bool %d) or vector(0))" $ns $cooldown $joinCluster $maxLag -}}
+{{- $writing := printf "((max(rate(cnpg_collector_wal_records{namespace=%q}[5m]) %s) > bool 0) or vector(0))" $ns $joinCluster -}}
+{{- $braking := printf "(%s * %s)" $lagHigh $writing -}}
 {{- $frozen := printf "(count(kube_pod_labels{namespace=%q,label_cnpg_io_cluster=%q}) * %v)" $ns $rel $target -}}
 {{- /* base when not braking, frozen (= currentInstances * target) when braking.
        The frozen summand is floored with `or vector(0)`: PromQL `+` is a set
