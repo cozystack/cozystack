@@ -18,6 +18,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -811,6 +812,18 @@ func (r *PackageReconciler) updateDependentPackagesDependencies(ctx context.Cont
 // component installed in it.
 func (r *PackageReconciler) reconcileNamespaces(ctx context.Context, pkg *cozyv1alpha1.Package, variant *cozyv1alpha1.Variant) error {
 	logger := log.FromContext(ctx)
+	limitRangeDisabled := r.SystemNamespaceMemoryLimit.IsZero()
+	if limitRangeDisabled {
+		// Disabled is global, unlike targetNamespaces below, which belongs only to the
+		// Package currently reconciling. Sweep by the ownership label once here so a
+		// namespace whose component or Package disappeared is still reached, then keep
+		// the per-namespace path out of the way.
+		if err := r.deleteManagedSystemDefaultsLimitRanges(ctx); err != nil {
+			// The LimitRange is opportunistic hardening. Its cleanup must not stop the
+			// Package's namespaces and components from reconciling; retry on the next pass.
+			logger.Error(err, "failed to remove managed system defaults LimitRanges while the feature is disabled")
+		}
+	}
 
 	// Collect namespaces from this Package's components
 	targetNamespaces := make(map[string]struct{})
@@ -864,7 +877,7 @@ func (r *PackageReconciler) reconcileNamespaces(ctx context.Context, pkg *cozyv1
 		}
 		logger.Info("reconciled namespace", "name", nsName, "privileged", privileged[nsName])
 
-		if isSystem {
+		if isSystem && !limitRangeDisabled {
 			// Logged and stepped over rather than returned. The LimitRange is
 			// opportunistic hardening against the Talos OOM handler's victim
 			// selection; a namespace that does not get one is back to the
@@ -878,6 +891,31 @@ func (r *PackageReconciler) reconcileNamespaces(ctx context.Context, pkg *cozyv1
 	}
 
 	return nil
+}
+
+// deleteManagedSystemDefaultsLimitRanges removes every LimitRange owned by this feature,
+// including objects in namespaces no active Package targets anymore. The selector keeps the
+// cluster-wide List narrow; the label check inside the loop is a second guard against a client
+// that does not honor selectors. Delete failures are aggregated so one namespace cannot keep
+// stale defaults in every namespace that follows it in the List.
+func (r *PackageReconciler) deleteManagedSystemDefaultsLimitRanges(ctx context.Context) error {
+	managed := &corev1.LimitRangeList{}
+	selector := client.MatchingLabels{managedByLabel: packageControllerFieldOwner}
+	if err := r.List(ctx, managed, selector); err != nil {
+		return fmt.Errorf("failed to list managed system defaults LimitRanges: %w", err)
+	}
+
+	var deleteErrs []error
+	for i := range managed.Items {
+		lr := &managed.Items[i]
+		if lr.Labels[managedByLabel] != packageControllerFieldOwner {
+			continue
+		}
+		if err := r.Delete(ctx, lr); err != nil && !apierrors.IsNotFound(err) {
+			deleteErrs = append(deleteErrs, fmt.Errorf("failed to delete managed LimitRange %s/%s: %w", lr.Namespace, lr.Name, err))
+		}
+	}
+	return errors.Join(deleteErrs...)
 }
 
 // reconcileSystemDefaultsLimitRange maintains the LimitRange that gives every container

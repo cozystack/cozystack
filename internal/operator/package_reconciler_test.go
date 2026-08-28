@@ -833,6 +833,108 @@ func TestReconcileNamespacesLeavesTenantNamespacesAlone(t *testing.T) {
 	}
 }
 
+// Disable is global even though namespace reconciliation starts from one Package's target
+// set. A stale managed object in a namespace that left that set must be swept, while the
+// managed-by label keeps a same-named administrator object outside the delete boundary.
+func TestReconcileNamespacesDisabledSweepsManagedLimitRanges(t *testing.T) {
+	scheme := limitRangeScheme(t)
+	if err := cozyv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add cozyv1alpha1 to scheme: %v", err)
+	}
+
+	builder := &PackageReconciler{}
+	active := builder.systemDefaultsLimitRange("cozy-active", resource.MustParse("4Gi"))
+	orphaned := builder.systemDefaultsLimitRange("cozy-orphaned", resource.MustParse("4Gi"))
+	foreign := &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SystemDefaultsLimitRangeName,
+			Namespace: "cozy-foreign",
+			Labels:    map[string]string{managedByLabel: "some-admin"},
+		},
+	}
+
+	var deletes int
+	var perNamespaceGets int
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(active, orphaned, foreign).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.LimitRange); ok {
+					perNamespaceGets++
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				deletes++
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+
+	r := &PackageReconciler{Client: cl, APIReader: cl, Scheme: scheme}
+	pkg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Name: "platform"}}
+	variant := &cozyv1alpha1.Variant{
+		Name: "default",
+		Components: []cozyv1alpha1.Component{{
+			Name:    "active",
+			Install: &cozyv1alpha1.ComponentInstall{Namespace: "cozy-active"},
+		}},
+	}
+
+	if err := r.reconcileNamespaces(t.Context(), pkg, variant); err != nil {
+		t.Fatalf("reconcileNamespaces: %v", err)
+	}
+	if perNamespaceGets != 0 {
+		t.Errorf("disabled reconcile made %d per-namespace LimitRange Gets after the global sweep, want 0", perNamespaceGets)
+	}
+	if deletes != 2 {
+		t.Errorf("deleted %d LimitRanges, want the 2 managed objects", deletes)
+	}
+	if limitRangeExists(t, cl, "cozy-active") {
+		t.Error("managed LimitRange in the active target namespace survived disable")
+	}
+	if limitRangeExists(t, cl, "cozy-orphaned") {
+		t.Error("managed LimitRange outside the active target set survived disable")
+	}
+	if !limitRangeExists(t, cl, "cozy-foreign") {
+		t.Error("same-named LimitRange without the operator's ownership label was deleted")
+	}
+}
+
+// LimitRange cleanup is opportunistic and must not stop namespace creation when its
+// cluster-wide List is temporarily unavailable.
+func TestReconcileNamespacesSurvivesDisabledLimitRangeSweepFailure(t *testing.T) {
+	scheme := limitRangeScheme(t)
+	if err := cozyv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add cozyv1alpha1 to scheme: %v", err)
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.LimitRangeList); ok {
+					return apierrors.NewServiceUnavailable("etcd leader changed")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+
+	r := &PackageReconciler{Client: cl, APIReader: cl, Scheme: scheme}
+	pkg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Name: "platform"}}
+	variant := &cozyv1alpha1.Variant{
+		Name: "default",
+		Components: []cozyv1alpha1.Component{{
+			Name:    "active",
+			Install: &cozyv1alpha1.ComponentInstall{Namespace: "cozy-active"},
+		}},
+	}
+
+	if err := r.reconcileNamespaces(t.Context(), pkg, variant); err != nil {
+		t.Fatalf("a failed LimitRange sweep must not fail namespace reconciliation: %v", err)
+	}
+	if err := cl.Get(t.Context(), types.NamespacedName{Name: "cozy-active"}, &corev1.Namespace{}); err != nil {
+		t.Fatalf("namespace was not created after the LimitRange sweep failed: %v", err)
+	}
+}
+
 // The load-bearing containment property: this feature is opportunistic hardening, so no
 // failure inside it may stop a system namespace being reconciled. A namespace that never
 // appears leaves its components uninstalled, which is worse than the unbounded memory the

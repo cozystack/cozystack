@@ -167,10 +167,10 @@ func main() {
 			"already says anything about memory is left alone, in any field and at either the "+
 			"Container or the Pod scope, because two defaults leave the effective ceiling to the "+
 			"order LimitRanger iterates them and a max, min or maxLimitRequestRatio can reject the "+
-			"pods this default would produce. Empty or 0 "+
-			"disables the LimitRange and removes it from every namespace an active Package still "+
-			"targets; a namespace whose Package has since been removed keeps its LimitRange, "+
-			"labelled app.kubernetes.io/managed-by=cozystack-package-controller.")
+			"pods this default would produce. Empty or 0 disables the LimitRange. On the next "+
+			"Package reconcile, the operator removes every LimitRange carrying its "+
+			"app.kubernetes.io/managed-by=cozystack-package-controller ownership label, including "+
+			"objects in namespaces no active Package targets.")
 
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
 		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+
