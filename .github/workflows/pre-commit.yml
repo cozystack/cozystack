@@ -57,12 +57,11 @@ jobs:
           curl -sSL https://github.com/cozystack/cozyvalues-gen/releases/download/v1.6.0/cozyvalues-gen-linux-amd64.tar.gz | tar -xzvf- -C /usr/local/bin/ cozyvalues-gen
 
       - name: Run pre-commit hooks
-        # bats-unit-tests is a local-developer gate, skipped here. This job
-        # lints changed YAML/Markdown, and the hook's path filter covers
-        # .github/workflows/, so a workflow edit would otherwise drag the whole
-        # shell unit suite into a lint lane -- on a runner with no bats, and
-        # duplicating the `checks` job in pull-requests.yaml that already runs
-        # `make unit-tests`.
+        # bats-unit-tests is an unconditional local-developer gate, skipped here.
+        # `pre-commit run --files` still invokes always_run hooks, so this lint
+        # job would otherwise drag the whole shell unit suite onto a runner with
+        # no bats and duplicate pull-requests.yaml's `checks` job, which runs the
+        # full unit path for code or the Bats contracts for docs-only changes.
         env:
           SKIP: bats-unit-tests
         run: |

@@ -2,9 +2,10 @@
 # -----------------------------------------------------------------------------
 # Static and hermetic contracts for the root BATS unit-test lane.
 #
-# The runner crosses four files: the Makefile owns discovery and local
-# execution, pull-requests.yaml provisions the CI toolchain, pre-commit decides
-# when contributors run it, and docs/agents/overview.md tells them what to
+# The runner crosses five surfaces: the Makefile owns discovery and local
+# execution, pull-requests.yaml provisions the CI toolchain, the pre-commit
+# config decides when contributors run it, the pre-commit workflow owns its
+# deliberate CI opt-out, and docs/agents/overview.md tells contributors what to
 # install. A partial edit leaves a lane that is green on one machine and absent
 # or weaker on another, so these assertions hold the shared terms together.
 #
@@ -16,6 +17,7 @@ load test_helper
 BRC_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 BRC_REPO_ROOT="$(cd "$BRC_DIR/.." && pwd)"
 BRC_WORKFLOW="$BRC_REPO_ROOT/.github/workflows/pull-requests.yaml"
+BRC_PRECOMMIT_WORKFLOW="$BRC_REPO_ROOT/.github/workflows/pre-commit.yml"
 
 brc_toolchain_script() {
   yq -r '.jobs.checks.steps[] | select(.name == "Set up test toolchain") | .run' "$BRC_WORKFLOW"
@@ -68,6 +70,11 @@ brc_write_parallel_stub() {
   [ "$hook_always_run" = 'true' ]
   grep -Fq 'bats-core 1.5 or newer' "$BRC_REPO_ROOT/docs/agents/overview.md"
   grep -Fq 'SKIP=bats-unit-tests git commit' "$BRC_REPO_ROOT/docs/agents/overview.md"
+}
+
+@test "the lint workflow skips the unconditional Bats hook" {
+  skipped=$(yq -r '.jobs.pre-commit.steps[] | select(.name == "Run pre-commit hooks") | .env.SKIP' "$BRC_PRECOMMIT_WORKFLOW")
+  [ "$skipped" = 'bats-unit-tests' ]
 }
 
 @test "the POSIX compatibility lane retains reviewed and sourced shell-facing files" {
