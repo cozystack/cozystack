@@ -23,7 +23,7 @@ Invoked with a single dict argument:
        "query"           $promql
        "threshold"       "150"
        "behavior"        $hpaBehavior      # optional; HPA behavior block, carried verbatim
-       "paused"          .Values.autoscaling.dryRun
+       "paused"          $paused           # true to render paused; a caller pauses for BOTH dry-run AND migration transition, not dry-run alone
        "labels"          (dict "app.kubernetes.io/instance" .Release.Name)
   ) }}
 

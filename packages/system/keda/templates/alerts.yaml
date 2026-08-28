@@ -4,6 +4,14 @@ Alerts for cozystack managed-database read-replica autoscaling. KEDA names the
 HPA it generates "keda-hpa-<scaledobject>", so every rule scopes to
 horizontalpodautoscaler=~"keda-hpa-.*". Metric names/labels are calibrated on a
 live cluster per the design proposal's PoC; the rule shapes are what this ships.
+
+Scope caveat: these rules match EVERY KEDA-managed HPA / ScaledObject error, not
+only database ones, because the underlying kube_horizontalpodautoscaler_* and
+keda_scaled_object_errors_total series carry no label identifying the cozystack
+app that owns the ScaledObject. This is correct today because database
+autoscaling is KEDA's sole consumer in cozystack; if a non-database ScaledObject
+is ever added, scope these rules (e.g. by a namespace/label the DB objects carry)
+so they stop mis-attributing unrelated autoscaling to "database".
 */}}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule

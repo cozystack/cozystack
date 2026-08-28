@@ -16,6 +16,14 @@ CNPG collapse the cluster to 1 instance. Stop with an actionable message instead
 {{- if lt (int .Values.autoscaling.target) 1 }}
 {{- fail "postgres: autoscaling.target must be a positive integer (the desired-replica formula divides the read load by it)." }}
 {{- end }}
+{{- /* The trigger query is served from vmselect in the tenant's monitoring namespace.
+       If it is unset the serverAddress would render as the malformed
+       `vmselect-shortterm..svc:8481`, which surfaces late as a KEDA scaler error
+       rather than a clear failure. The platform always injects it; fail closed here
+       (mirroring the guards above) for a hand-rendered / misconfigured tenant. */ -}}
+{{- if not (include "cozy-lib.ns-monitoring" .) }}
+{{- fail "postgres: autoscaling requires a monitoring namespace to reach vmselect, but none is set (_namespace.monitoring is empty). The platform normally injects it; ensure the tenant has monitoring enabled." }}
+{{- end }}
 {{- include "cozy-lib.keda.scaledObject" (dict
      "name" .Release.Name
      "namespace" .Release.Namespace
