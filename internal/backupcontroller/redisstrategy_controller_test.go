@@ -516,6 +516,45 @@ func TestReconcileRedis_RequeuesOnMissingStrategy(t *testing.T) {
 	}
 }
 
+// TestReconcileRedis_FailsOnUnmappableKind mirrors the restore-path test: an
+// applicationRef.kind that passes the Redis gate but has no REST mapping (a CRD
+// that isn't installed) must fail the BackupJob terminally, not requeue forever.
+func TestReconcileRedis_FailsOnUnmappableKind(t *testing.T) {
+	app := newRedisApp("cache", "tenant-test")
+	strategy := newRedisStrategy("redis-strategy")
+	now := metav1.Now()
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef:  newRedisAppRef("cache"),
+			BackupClassName: "cozy-default",
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+
+	r, _ := newRedisTestEnv(t, app, clientfake.NewClientBuilder().WithObjects(backupJob, strategy))
+	r.RESTMapper = &noMatchRESTMapper{
+		mockRESTMapper: &mockRESTMapper{},
+		gk:             schema.GroupKind{Group: backupsv1alpha1.DefaultApplicationAPIGroup, Kind: "Redis"},
+	}
+	ctx := context.Background()
+
+	if _, err := r.reconcileRedis(ctx, backupJob, newRedisResolved("redis-strategy", nil)); err != nil {
+		t.Fatalf("reconcileRedis() should fail terminally for an unmappable kind, not return a requeue error: %v", err)
+	}
+
+	updated := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), updated); err != nil {
+		t.Fatalf("get backupjob: %v", err)
+	}
+	if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("expected phase Failed for unmappable kind, got %q", updated.Status.Phase)
+	}
+	if want := "not found or kind not registered"; !strings.Contains(updated.Status.Message, want) {
+		t.Errorf("expected message to contain %q, got %q", want, updated.Status.Message)
+	}
+}
+
 func TestReconcileRedisRestore_CreatesBatchJobInTargetNamespace(t *testing.T) {
 	targetApp := newRedisApp("cache-copy", "tenant-test")
 	strategy := &strategyv1alpha1.Redis{
