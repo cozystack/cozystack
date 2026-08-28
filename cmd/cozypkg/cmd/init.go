@@ -50,7 +50,6 @@ type scaffoldFile struct {
 // paired -rd chart at packages/system/<app>-rd whose cozyrds/ asset carries an
 // ApplicationDefinition referencing the app component's assembled artifact.
 func scaffoldFiles(psName, app string) []scaffoldFile {
-	art := artifactName(psName, "default", app)
 	return []scaffoldFile{
 		{
 			Path: filepath.Join("packages", "core", "platform", "sources", app+".yaml"),
@@ -99,9 +98,12 @@ data:
 		},
 		{
 			Path: filepath.Join("packages", "system", app+"-rd", "templates", "cozyrd.yaml"),
+			// tpl (not a raw Files.Get) so the cozyrds asset can reference
+			// .Values.cozystackArtifactPrefix — the operator injects it for a
+			// community-tapped source, whose PackageSource is renamed at tap time.
 			Content: `{{- range $path, $_ := .Files.Glob "cozyrds/*" }}
 ---
-{{ $.Files.Get $path }}
+{{ tpl ($.Files.Get $path) $ }}
 {{- end }}
 `,
 		},
@@ -121,13 +123,16 @@ spec:
     prefix: %s-
     chartRef:
       kind: ExternalArtifact
-      name: %s
+      # Templated: the operator injects cozystackArtifactPrefix for the renamed
+      # community source, so this resolves to the actual artifact name whatever
+      # the tap-time PackageSource name turns out to be.
+      name: '{{ .Values.cozystackArtifactPrefix }}-%s'
       namespace: cozy-system
   dashboard:
     singular: %s
     plural: %ss
     category: Other
-`, app, capitalize(app), app, app, app, art, capitalize(app), app),
+`, app, capitalize(app), app, app, app, app, capitalize(app), app),
 		},
 		{
 			Path: "README.md",

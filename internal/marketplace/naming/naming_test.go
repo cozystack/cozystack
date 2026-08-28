@@ -40,3 +40,21 @@ func TestArtifactNameMatchesReconciler(t *testing.T) {
 		}
 	}
 }
+
+func TestArtifactPrefixIsArtifactNameWithoutComponent(t *testing.T) {
+	cases := [][3]string{
+		{"example.hello", "default", "hello"},
+		{"community.org.repo", "v1.0", "my.app"},
+	}
+	for _, c := range cases {
+		prefix := ArtifactPrefix(c[0], c[1])
+		full := ArtifactName(c[0], c[1], c[2])
+		want := prefix + "-" + strings.ReplaceAll(c[2], ".", "-")
+		if full != want {
+			t.Errorf("ArtifactName(%q,%q,%q)=%q, but prefix %q + component != it", c[0], c[1], c[2], full, prefix)
+		}
+		if strings.Contains(prefix, ".") {
+			t.Errorf("ArtifactPrefix(%q,%q)=%q still contains a dot", c[0], c[1], prefix)
+		}
+	}
+}

@@ -269,3 +269,29 @@ func TestPackageSourceCRDHasUpgradeCRDsEnum(t *testing.T) {
 		}
 	}
 }
+
+func TestInjectArtifactPrefix(t *testing.T) {
+	// Empty input: prefix becomes the only key.
+	out := injectArtifactPrefix(nil, "community-acme-demo-default")
+	m := map[string]interface{}{}
+	if err := json.Unmarshal(out.Raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m[ArtifactPrefixValueKey] != "community-acme-demo-default" {
+		t.Errorf("prefix not injected: %v", m)
+	}
+
+	// Existing values are preserved alongside the injected prefix.
+	in := &apiextensionsv1.JSON{Raw: []byte(`{"replicas":3}`)}
+	out = injectArtifactPrefix(in, "community-org-repo-v1")
+	m = map[string]interface{}{}
+	if err := json.Unmarshal(out.Raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["replicas"] != float64(3) {
+		t.Errorf("existing value dropped: %v", m)
+	}
+	if m[ArtifactPrefixValueKey] != "community-org-repo-v1" {
+		t.Errorf("prefix not injected alongside existing values: %v", m)
+	}
+}

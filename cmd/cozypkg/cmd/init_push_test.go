@@ -163,20 +163,26 @@ func TestDeriveSourceAndRevision(t *testing.T) {
 }
 
 func TestScaffoldAppDefArtifactNameLink(t *testing.T) {
-	// The ApplicationDefinition chartRef in the scaffold must name the app
-	// component's assembled artifact exactly, or the dashboard cannot route it.
+	// The scaffold templates chartRef.name from the injected artifact prefix,
+	// so it resolves to the real artifact whatever the tap-time rename produces.
 	files := scaffoldFiles("example.hello", "hello")
-	var rdContent string
+	var rdContent, cozyrdTemplate string
 	for _, f := range files {
 		if strings.Contains(f.Path, filepath.Join("cozyrds", "hello.yaml")) {
 			rdContent = f.Content
+		}
+		if strings.HasSuffix(f.Path, filepath.Join("templates", "cozyrd.yaml")) {
+			cozyrdTemplate = f.Content
 		}
 	}
 	if rdContent == "" {
 		t.Fatal("scaffold has no cozyrds/hello.yaml")
 	}
-	want := artifactName("example.hello", "default", "hello")
-	if !strings.Contains(rdContent, "name: "+want) {
-		t.Fatalf("cozyrds chartRef must reference %q, content:\n%s", want, rdContent)
+	if !strings.Contains(rdContent, "{{ .Values.cozystackArtifactPrefix }}-hello") {
+		t.Fatalf("cozyrds chartRef must template the artifact prefix, content:\n%s", rdContent)
+	}
+	// The -rd chart must render the asset through tpl, or the template is inert.
+	if !strings.Contains(cozyrdTemplate, "tpl ($.Files.Get $path) $") {
+		t.Fatalf("cozyrd.yaml must tpl the cozyrds asset, content:\n%s", cozyrdTemplate)
 	}
 }

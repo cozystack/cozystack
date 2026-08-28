@@ -17,7 +17,16 @@ import "strings"
 // legitimately contain a dot. It must match the reconciler's own naming in
 // internal/operator/packagesource_reconciler.go.
 func ArtifactName(packageSourceName, variant, component string) string {
-	return strings.ReplaceAll(packageSourceName, ".", "-") + "-" +
-		strings.ReplaceAll(variant, ".", "-") + "-" +
+	return ArtifactPrefix(packageSourceName, variant) + "-" +
 		strings.ReplaceAll(component, ".", "-")
+}
+
+// ArtifactPrefix is the per-(packageSource, variant) prefix of ArtifactName,
+// i.e. ArtifactName without the trailing component segment. A community repo's
+// cozyrds ApplicationDefinition templates its chartRef.name as
+// "<prefix>-<component>", so the prefix (which carries the tap-time rename) can
+// be injected as a value while the component segment stays a literal.
+func ArtifactPrefix(packageSourceName, variant string) string {
+	return strings.ReplaceAll(packageSourceName, ".", "-") + "-" +
+		strings.ReplaceAll(variant, ".", "-")
 }

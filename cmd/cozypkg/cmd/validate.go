@@ -426,6 +426,14 @@ func checkAppDefs(ads []loadedAppDef, expected map[string]bool, r *Report) {
 		if ref.Kind != "ExternalArtifact" {
 			continue
 		}
+		// A community repo templates chartRef.name (e.g.
+		// "{{ .Values.cozystackArtifactPrefix }}-app") because the artifact name
+		// depends on the tap-time PackageSource rename, which is unknown at
+		// authoring time. The literal name cannot be cross-checked here; the
+		// operator resolves it at install. Skip the dangling check for it.
+		if strings.Contains(ref.Name, "{{") {
+			continue
+		}
 		if !expected[ref.Name] {
 			r.add(SeverityWarning, "appdef-dangling", l.File, "ApplicationDefinition %s chartRef %q does not match any <packagesource>-<variant>-<component> defined in this repository", l.AD.Name, ref.Name)
 		}
