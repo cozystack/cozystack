@@ -443,6 +443,65 @@ func TestDeleteDryRunReportsPolicyWithoutFinalizerAsInstant(t *testing.T) {
 	}
 }
 
+func TestDeleteDryRunReportsProspectiveAsyncState(t *testing.T) {
+	foreground := metav1.DeletePropagationForeground
+	orphan := metav1.DeletePropagationOrphan
+	tests := []struct {
+		name              string
+		initialFinalizers []string
+		options           *metav1.DeleteOptions
+		wantFinalizer     string
+	}{
+		{
+			name:              "existing membership finalizer",
+			initialFinalizers: []string{sdnv1alpha1.MembershipFinalizer},
+			options:           &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}},
+			wantFinalizer:     sdnv1alpha1.MembershipFinalizer,
+		},
+		{
+			name:          "foreground propagation",
+			options:       &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}, PropagationPolicy: &foreground},
+			wantFinalizer: metav1.FinalizerDeleteDependents,
+		},
+		{
+			name:          "orphan propagation",
+			options:       &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}, PropagationPolicy: &orphan},
+			wantFinalizer: metav1.FinalizerOrphanDependents,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cnp := markedPolicy("sg-db")
+			cnp.Finalizers = append([]string(nil), tt.initialFinalizers...)
+			r := newTestREST(t, cnp)
+
+			obj, deleted, err := r.Delete(ctxNS(), "sg-db", nil, tt.options)
+			if err != nil {
+				t.Fatalf("dry-run Delete returned error: %v", err)
+			}
+			if deleted {
+				t.Fatal("dry-run Delete reported deleted=true for a prospective finalizer-held delete")
+			}
+			sg, ok := obj.(*sdnv1alpha1.SecurityGroup)
+			if !ok {
+				t.Fatalf("dry-run Delete returned %T, want *SecurityGroup", obj)
+			}
+			if sg.DeletionTimestamp == nil || !hasFinalizer(sg.Finalizers, tt.wantFinalizer) {
+				t.Fatalf("prospective result missing deletion state: timestamp=%v finalizers=%v", sg.DeletionTimestamp, sg.Finalizers)
+			}
+
+			stored := &CiliumNetworkPolicy{}
+			if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-db"}, stored); err != nil {
+				t.Fatalf("dry-run changed object existence: %v", err)
+			}
+			if stored.DeletionTimestamp != nil || !reflect.DeepEqual(stored.Finalizers, tt.initialFinalizers) {
+				t.Fatalf("dry-run persisted prospective state: timestamp=%v finalizers=%v", stored.DeletionTimestamp, stored.Finalizers)
+			}
+		})
+	}
+}
+
 func TestCreateOverExistingUnmarkedPolicyFails(t *testing.T) {
 	r := newTestREST(t, unmarkedPolicy("tenant-isolation"))
 

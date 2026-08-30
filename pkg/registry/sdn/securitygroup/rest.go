@@ -332,6 +332,54 @@ func hasFinalizer(list []string, name string) bool {
 	return false
 }
 
+// dryRunDeleteResult derives the object and synchronous-delete result that the
+// backing API would return without re-reading storage. A dry-run leaves the
+// stored object untouched, so a post-delete Get cannot distinguish an
+// immediate delete from one held by existing or garbage-collection finalizers.
+func dryRunDeleteResult(current *CiliumNetworkPolicy, opts *metav1.DeleteOptions) (*CiliumNetworkPolicy, bool) {
+	out := current.DeepCopy()
+	finalizers := make([]string, 0, len(current.Finalizers)+1)
+	for _, finalizer := range current.Finalizers {
+		if finalizer != metav1.FinalizerOrphanDependents && finalizer != metav1.FinalizerDeleteDependents {
+			finalizers = append(finalizers, finalizer)
+		}
+	}
+
+	if opts != nil && opts.OrphanDependents != nil {
+		if *opts.OrphanDependents {
+			finalizers = append(finalizers, metav1.FinalizerOrphanDependents)
+		}
+	} else if opts != nil && opts.PropagationPolicy != nil {
+		switch *opts.PropagationPolicy {
+		case metav1.DeletePropagationOrphan:
+			finalizers = append(finalizers, metav1.FinalizerOrphanDependents)
+		case metav1.DeletePropagationForeground:
+			finalizers = append(finalizers, metav1.FinalizerDeleteDependents)
+		}
+	} else {
+		// With no explicit policy, the backing API preserves an existing GC
+		// finalizer. CiliumNetworkPolicy uses background propagation by default,
+		// so it does not synthesize one when neither is already present.
+		if hasFinalizer(current.Finalizers, metav1.FinalizerOrphanDependents) {
+			finalizers = append(finalizers, metav1.FinalizerOrphanDependents)
+		} else if hasFinalizer(current.Finalizers, metav1.FinalizerDeleteDependents) {
+			finalizers = append(finalizers, metav1.FinalizerDeleteDependents)
+		}
+	}
+
+	out.Finalizers = finalizers
+	if len(finalizers) == 0 && out.DeletionTimestamp == nil {
+		return out, true
+	}
+	if out.DeletionTimestamp == nil {
+		now := metav1.Now()
+		out.DeletionTimestamp = &now
+	}
+	zero := int64(0)
+	out.DeletionGracePeriodSeconds = &zero
+	return out, false
+}
+
 func policyToSecurityGroup(np *CiliumNetworkPolicy) *sdnv1alpha1.SecurityGroup {
 	sg := &sdnv1alpha1.SecurityGroup{
 		TypeMeta: metav1.TypeMeta{
@@ -833,6 +881,10 @@ func (r *REST) Delete(
 	if err = r.c.Delete(ctx, &CiliumNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, registry.ClientDeleteOptions(opts)); err != nil {
 		return nil, false, err
 	}
+	if opts != nil && len(opts.DryRun) > 0 {
+		prospective, deleted := dryRunDeleteResult(current, opts)
+		return policyToSecurityGroup(prospective), deleted, nil
+	}
 	// Report whether the delete completed synchronously, per the
 	// rest.GracefulDeleter contract whose bool means "instantly deleted". Read the
 	// post-delete state through the direct (uncached) client: the storage's
@@ -849,13 +901,8 @@ func (r *REST) Delete(
 	if getErr != nil {
 		return nil, false, getErr
 	}
-	// The object is still present. A dry-run never removes it, so the prospective
-	// result is read from its authoritative finalizers: none means the real delete
-	// would be instant. A non-dry-run delete that left the object means a finalizer
-	// is holding it as Terminating, so it is asynchronous.
-	if opts != nil && len(opts.DryRun) > 0 && len(after.Finalizers) == 0 {
-		return policyToSecurityGroup(after), true, nil
-	}
+	// A non-dry-run delete that left the object means a finalizer is holding it
+	// as Terminating, so it is asynchronous.
 	return policyToSecurityGroup(after), false, nil
 }
 

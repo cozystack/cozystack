@@ -65,6 +65,7 @@ func writeOptionsSecurityGroup() *sdnv1alpha1.SecurityGroup {
 
 func TestSecurityGroupCreatePropagatesWriteOptions(t *testing.T) {
 	want := &metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}, FieldManager: "creator", FieldValidation: "Strict"}
+	expected := want.DeepCopy()
 	var got *metav1.CreateOptions
 	r := newSecurityGroupWriteOptionsREST(t, interceptor.Funcs{
 		Create: func(_ context.Context, _ client.WithWatch, _ client.Object, opts ...client.CreateOption) error {
@@ -75,13 +76,14 @@ func TestSecurityGroupCreatePropagatesWriteOptions(t *testing.T) {
 	if _, err := r.Create(ctxNS(), writeOptionsSecurityGroup(), nil, want); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Create options lost: got %#v, want %#v", got, want)
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("Create options lost: got %#v, want %#v", got, expected)
 	}
 }
 
 func TestSecurityGroupUpdatePropagatesWriteOptions(t *testing.T) {
 	want := &metav1.UpdateOptions{DryRun: []string{metav1.DryRunAll}, FieldManager: "updater", FieldValidation: "Warn"}
+	expected := want.DeepCopy()
 	var got *metav1.UpdateOptions
 	r := newSecurityGroupWriteOptionsREST(t, interceptor.Funcs{
 		Update: func(_ context.Context, _ client.WithWatch, _ client.Object, opts ...client.UpdateOption) error {
@@ -92,14 +94,15 @@ func TestSecurityGroupUpdatePropagatesWriteOptions(t *testing.T) {
 	if _, _, err := r.Update(ctxNS(), "sg-options", rest.DefaultUpdatedObjectInfo(writeOptionsSecurityGroup()), nil, nil, false, want); err != nil {
 		t.Fatalf("Update returned error: %v", err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Update options lost: got %#v, want %#v", got, want)
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("Update options lost: got %#v, want %#v", got, expected)
 	}
 }
 
 func TestSecurityGroupDeletePropagatesWriteOptions(t *testing.T) {
 	propagation := metav1.DeletePropagationForeground
 	want := &metav1.DeleteOptions{PropagationPolicy: &propagation, DryRun: []string{metav1.DryRunAll}}
+	expected := want.DeepCopy()
 	var got *metav1.DeleteOptions
 	r := newSecurityGroupWriteOptionsREST(t, interceptor.Funcs{
 		Delete: func(_ context.Context, _ client.WithWatch, _ client.Object, opts ...client.DeleteOption) error {
@@ -110,7 +113,7 @@ func TestSecurityGroupDeletePropagatesWriteOptions(t *testing.T) {
 	if _, _, err := r.Delete(ctxNS(), "sg-options", nil, want); err != nil {
 		t.Fatalf("Delete returned error: %v", err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Delete options lost: got %#v, want %#v", got, want)
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("Delete options lost: got %#v, want %#v", got, expected)
 	}
 }
