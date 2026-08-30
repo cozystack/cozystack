@@ -10,7 +10,13 @@ alert_severity_rows() {
     return 1
   }
 
-  if ! (cd "$severity_root" && git ls-files 'packages/*/*/alerts/*.yaml' > "$severity_files"); then
+  if ! (
+    cd "$severity_root" &&
+      git grep -Il -E '^[[:space:]]*kind:[[:space:]]*(PrometheusRule|VMRule)[[:space:]]*$' -- \
+        'packages/**/*.yaml' \
+        'packages/**/*.yml' \
+        ':(exclude)packages/**/charts/**'
+  ) > "$severity_files"; then
     rm -f "$severity_files" "$severity_rows"
     return 1
   fi
@@ -34,18 +40,7 @@ alert_severity_rows() {
   rm -f "$severity_files" "$severity_rows"
 }
 
-@test "alert rules are discovered" {
-  rows=$(mktemp) || return 1
-  if ! alert_severity_rows > "$rows"; then
-    rm -f "$rows"
-    return 1
-  fi
-  count=$(wc -l < "$rows" | tr -d ' ')
-  rm -f "$rows"
-  [ "$count" -gt 0 ]
-}
-
-@test "every alert rule carries a severity the alert sink accepts" {
+alert_severity_contract() {
   rows=$(mktemp) || return 1
   if ! alert_severity_rows > "$rows"; then
     rm -f "$rows"
@@ -63,7 +58,22 @@ alert_severity_rows() {
     esac
   done < "$rows"
   rm -f "$rows"
-  [ "$bad" -eq 0 ]
+  [ "$bad" -eq 0 ] || return 1
+}
+
+@test "alert rules are discovered" {
+  rows=$(mktemp) || return 1
+  if ! alert_severity_rows > "$rows"; then
+    rm -f "$rows"
+    return 1
+  fi
+  count=$(wc -l < "$rows" | tr -d ' ')
+  rm -f "$rows"
+  [ "$count" -gt 0 ]
+}
+
+@test "every alert rule carries a severity the alert sink accepts" {
+  alert_severity_contract
 }
 
 @test "a parser failure cannot leave the contract green" {
@@ -92,4 +102,27 @@ alert_severity_rows() {
   ALERT_SEVERITY_ROOT="$fixture" alert_severity_rows >/dev/null 2>&1 || parser_succeeded=$?
   rm -rf "$fixture"
   [ "$parser_succeeded" -ne 0 ]
+}
+
+@test "template rule sources cannot bypass the severity contract" {
+  fixture=$(mktemp -d)
+  mkdir -p "$fixture/packages/extra/example/templates"
+  printf '%s\n' \
+    'apiVersion: monitoring.coreos.com/v1' \
+    'kind: PrometheusRule' \
+    'spec:' \
+    '  groups:' \
+    '  - name: template' \
+    '    rules:' \
+    '    - alert: InvalidTemplateSeverity' \
+    '      labels:' \
+    '        severity: warn' \
+    > "$fixture/packages/extra/example/templates/prometheus-rules.yaml"
+  git -C "$fixture" init -q
+  git -C "$fixture" add packages/extra/example/templates/prometheus-rules.yaml
+
+  contract_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || contract_succeeded=$?
+  rm -rf "$fixture"
+  [ "$contract_succeeded" -ne 0 ]
 }
