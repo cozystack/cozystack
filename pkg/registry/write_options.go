@@ -66,33 +66,6 @@ func ClientUpdateOptions(options *metav1.UpdateOptions) *client.UpdateOptions {
 	}
 }
 
-// ClientUpdateOptionsFromPatch converts patch options for a follow-up update.
-func ClientUpdateOptionsFromPatch(options *metav1.PatchOptions) *client.UpdateOptions {
-	if options == nil {
-		return &client.UpdateOptions{}
-	}
-	return ClientUpdateOptions(&metav1.UpdateOptions{
-		DryRun:          options.DryRun,
-		FieldManager:    options.FieldManager,
-		FieldValidation: options.FieldValidation,
-	})
-}
-
-// ClientPatchOptions converts API patch options for the controller-runtime client.
-func ClientPatchOptions(options *metav1.PatchOptions) *client.PatchOptions {
-	if options == nil {
-		return &client.PatchOptions{}
-	}
-	raw := options.DeepCopy()
-	return &client.PatchOptions{
-		DryRun:          append([]string(nil), raw.DryRun...),
-		Force:           raw.Force,
-		FieldManager:    raw.FieldManager,
-		FieldValidation: raw.FieldValidation,
-		Raw:             raw,
-	}
-}
-
 // ClientDeleteOptions converts API delete options for the controller-runtime client.
 func ClientDeleteOptions(options *metav1.DeleteOptions) *client.DeleteOptions {
 	if options == nil {

@@ -18,13 +18,16 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -108,6 +111,7 @@ func TestCreatePropagatesWriteOptions(t *testing.T) {
 		FieldManager:    "create-manager",
 		FieldValidation: "Strict",
 	}
+	expected := want.DeepCopy()
 	var got *metav1.CreateOptions
 	r := newOptionsTestREST(t, interceptor.Funcs{
 		Create: func(_ context.Context, _ client.WithWatch, _ client.Object, opts ...client.CreateOption) error {
@@ -119,8 +123,8 @@ func TestCreatePropagatesWriteOptions(t *testing.T) {
 	if _, err := r.Create(ctx, optionsTestApplication(), nil, want); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Create options lost in controller-runtime conversion:\n got: %#v\nwant: %#v", got, want)
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("Create options lost in controller-runtime conversion:\n got: %#v\nwant: %#v", got, expected)
 	}
 }
 
@@ -130,6 +134,7 @@ func TestUpdatePropagatesWriteOptions(t *testing.T) {
 		FieldManager:    "update-manager",
 		FieldValidation: "Warn",
 	}
+	expected := want.DeepCopy()
 	var got *metav1.UpdateOptions
 	r := newOptionsTestREST(t, interceptor.Funcs{
 		Update: func(_ context.Context, _ client.WithWatch, _ client.Object, opts ...client.UpdateOption) error {
@@ -141,8 +146,8 @@ func TestUpdatePropagatesWriteOptions(t *testing.T) {
 	if _, _, err := r.Update(ctx, "example", rest.DefaultUpdatedObjectInfo(optionsTestApplication()), nil, nil, false, want); err != nil {
 		t.Fatalf("Update returned error: %v", err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Update options lost in controller-runtime conversion:\n got: %#v\nwant: %#v", got, want)
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("Update options lost in controller-runtime conversion:\n got: %#v\nwant: %#v", got, expected)
 	}
 }
 
@@ -184,6 +189,7 @@ func TestDeletePropagatesWriteOptions(t *testing.T) {
 		PropagationPolicy:  &propagation,
 		DryRun:             []string{metav1.DryRunAll},
 	}
+	expected := want.DeepCopy()
 	var got *metav1.DeleteOptions
 	r := newOptionsTestREST(t, interceptor.Funcs{
 		Delete: func(_ context.Context, _ client.WithWatch, _ client.Object, opts ...client.DeleteOption) error {
@@ -195,7 +201,24 @@ func TestDeletePropagatesWriteOptions(t *testing.T) {
 	if _, _, err := r.Delete(ctx, "example", nil, want); err != nil {
 		t.Fatalf("Delete returned error: %v", err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Delete options lost in controller-runtime conversion:\n got: %#v\nwant: %#v", got, want)
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("Delete options lost in controller-runtime conversion:\n got: %#v\nwant: %#v", got, expected)
+	}
+}
+
+func TestDeletePreservesConflictError(t *testing.T) {
+	conflict := apierrors.NewConflict(
+		schema.GroupResource{Group: helmv2.GroupVersion.Group, Resource: "helmreleases"},
+		"postgresql-example",
+		fmt.Errorf("precondition failed"),
+	)
+	r := newOptionsTestREST(t, interceptor.Funcs{
+		Delete: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.DeleteOption) error {
+			return conflict
+		},
+	}, optionsTestHelmRelease())
+	ctx := request.WithNamespace(context.Background(), optionsTestNamespace)
+	if _, _, err := r.Delete(ctx, "example", nil, &metav1.DeleteOptions{}); !apierrors.IsConflict(err) {
+		t.Fatalf("Delete returned %v, want a preserved Conflict", err)
 	}
 }
