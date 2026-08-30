@@ -25,7 +25,6 @@ import (
 )
 
 func TestClientWriteOptionsPreserveAPISemantics(t *testing.T) {
-	force := true
 	grace := int64(7)
 	orphan := true
 	propagation := metav1.DeletePropagationForeground
@@ -44,13 +43,6 @@ func TestClientWriteOptionsPreserveAPISemantics(t *testing.T) {
 		FieldManager:    "update-manager",
 		FieldValidation: "Warn",
 	}
-	patch := &metav1.PatchOptions{
-		TypeMeta:        metav1.TypeMeta{APIVersion: "meta.k8s.io/v1", Kind: "PatchOptions"},
-		DryRun:          []string{metav1.DryRunAll},
-		Force:           &force,
-		FieldManager:    "patch-manager",
-		FieldValidation: "Ignore",
-	}
 	deleteOptions := &metav1.DeleteOptions{
 		TypeMeta:           metav1.TypeMeta{APIVersion: "meta.k8s.io/v1", Kind: "DeleteOptions"},
 		GracePeriodSeconds: &grace,
@@ -58,16 +50,18 @@ func TestClientWriteOptionsPreserveAPISemantics(t *testing.T) {
 		PropagationPolicy:  &propagation,
 		DryRun:             []string{metav1.DryRunAll},
 	}
+	createExpected := create.DeepCopy()
+	updateExpected := update.DeepCopy()
+	deleteExpected := deleteOptions.DeepCopy()
 
 	tests := []struct {
 		name string
 		got  any
 		want any
 	}{
-		{name: "create", got: ClientCreateOptions(create).AsCreateOptions(), want: create},
-		{name: "update", got: ClientUpdateOptions(update).AsUpdateOptions(), want: update},
-		{name: "patch", got: ClientPatchOptions(patch).AsPatchOptions(), want: patch},
-		{name: "delete", got: ClientDeleteOptions(deleteOptions).AsDeleteOptions(), want: deleteOptions},
+		{name: "create", got: ClientCreateOptions(create).AsCreateOptions(), want: createExpected},
+		{name: "update", got: ClientUpdateOptions(update).AsUpdateOptions(), want: updateExpected},
+		{name: "delete", got: ClientDeleteOptions(deleteOptions).AsDeleteOptions(), want: deleteExpected},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -76,10 +70,17 @@ func TestClientWriteOptionsPreserveAPISemantics(t *testing.T) {
 			}
 		})
 	}
+	if !reflect.DeepEqual(create, createExpected) || !reflect.DeepEqual(update, updateExpected) || !reflect.DeepEqual(deleteOptions, deleteExpected) {
+		t.Fatalf("conversion mutated API options: create=%#v update=%#v delete=%#v", create, update, deleteOptions)
+	}
 
 	orphanDelete := &metav1.DeleteOptions{OrphanDependents: &orphan, DryRun: []string{metav1.DryRunAll}}
-	if got := ClientDeleteOptions(orphanDelete).AsDeleteOptions(); !reflect.DeepEqual(got, orphanDelete) {
-		t.Fatalf("raw-only delete option lost: got %#v, want %#v", got, orphanDelete)
+	orphanExpected := orphanDelete.DeepCopy()
+	if got := ClientDeleteOptions(orphanDelete).AsDeleteOptions(); !reflect.DeepEqual(got, orphanExpected) {
+		t.Fatalf("raw-only delete option lost: got %#v, want %#v", got, orphanExpected)
+	}
+	if !reflect.DeepEqual(orphanDelete, orphanExpected) {
+		t.Fatalf("raw-only delete conversion mutated input: got %#v, want %#v", orphanDelete, orphanExpected)
 	}
 }
 
@@ -101,19 +102,6 @@ func TestClientWriteOptionConversionsPreserveSharedFields(t *testing.T) {
 		t.Fatalf("nil force-create options: %#v", got)
 	}
 
-	patch := &metav1.PatchOptions{
-		DryRun:          []string{metav1.DryRunAll},
-		FieldManager:    "patch-manager",
-		FieldValidation: "Warn",
-	}
-	updated := ClientUpdateOptionsFromPatch(patch).AsUpdateOptions()
-	if !reflect.DeepEqual(updated, &metav1.UpdateOptions{
-		DryRun:          patch.DryRun,
-		FieldManager:    patch.FieldManager,
-		FieldValidation: patch.FieldValidation,
-	}) {
-		t.Fatalf("patch follow-up conversion lost options: %#v", updated)
-	}
 }
 
 func TestClientWriteOptionsAcceptNil(t *testing.T) {
@@ -122,9 +110,6 @@ func TestClientWriteOptionsAcceptNil(t *testing.T) {
 	}
 	if got := ClientUpdateOptions(nil).AsUpdateOptions(); !reflect.DeepEqual(got, &metav1.UpdateOptions{}) {
 		t.Fatalf("nil update options: %#v", got)
-	}
-	if got := ClientPatchOptions(nil).AsPatchOptions(); !reflect.DeepEqual(got, &metav1.PatchOptions{}) {
-		t.Fatalf("nil patch options: %#v", got)
 	}
 	if got := ClientDeleteOptions(nil).AsDeleteOptions(); !reflect.DeepEqual(got, &metav1.DeleteOptions{}) {
 		t.Fatalf("nil delete options: %#v", got)

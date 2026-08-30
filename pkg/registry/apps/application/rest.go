@@ -691,7 +691,7 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	err = r.c.Delete(ctx, helmRelease, registry.ClientDeleteOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
-		return nil, false, fmt.Errorf("failed to delete HelmRelease: %v", err)
+		return nil, false, fmt.Errorf("failed to delete HelmRelease: %w", err)
 	}
 
 	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)
