@@ -33,7 +33,6 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/naming"
-	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	"github.com/spf13/cobra"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
@@ -115,18 +114,7 @@ type ValidateOptions struct {
 	// may reference even though they are not defined inside this repository
 	// (e.g. sources shipped by the platform itself).
 	KnownSources []string
-	// AllowReservedNames disables the reserved-prefix check. It exists only as a
-	// caller-side escape hatch: the index publication gate never sets it, so a
-	// submitter cannot hand it to themselves to claim a platform/marketplace name.
-	AllowReservedNames bool
 }
-
-// reservedNamePrefixes are PackageSource name prefixes a third-party repository
-// may not claim: "cozystack." is the platform's own namespace, and
-// "community." is the namespace the tap materializer reserves for renamed
-// community sources. Forbidding both is the structural guarantee that a
-// third-party package can never shadow an official or already-tapped one.
-var reservedNamePrefixes = []string{"cozystack.", tapconst.Prefix}
 
 type loadedPackageSource struct {
 	File string
@@ -297,13 +285,6 @@ func validatePackageSource(artRoot string, l loadedPackageSource, r *Report, opt
 	ps := l.PS
 	if ps.Name == "" {
 		r.add(SeverityError, "ps-name", l.File, "PackageSource has empty metadata.name")
-	} else if !opts.AllowReservedNames {
-		for _, p := range reservedNamePrefixes {
-			if strings.HasPrefix(ps.Name, p) {
-				r.add(SeverityError, "ps-name-reserved", l.File, "PackageSource %s uses reserved name prefix %q; that namespace is platform/marketplace-managed, pick a neutral name (e.g. <org>.<repo>)", ps.Name, p)
-				break
-			}
-		}
 	}
 	if ps.Spec.SourceRef != nil {
 		k := ps.Spec.SourceRef.Kind
@@ -424,14 +405,6 @@ func checkAppDefs(ads []loadedAppDef, expected map[string]bool, r *Report) {
 			continue
 		}
 		if ref.Kind != "ExternalArtifact" {
-			continue
-		}
-		// A community repo templates chartRef.name (e.g.
-		// "{{ .Values.cozystackArtifactPrefix }}-app") because the artifact name
-		// depends on the tap-time PackageSource rename, which is unknown at
-		// authoring time. The literal name cannot be cross-checked here; the
-		// operator resolves it at install. Skip the dangling check for it.
-		if strings.Contains(ref.Name, "{{") {
 			continue
 		}
 		if !expected[ref.Name] {
@@ -556,12 +529,11 @@ func printReport(r *Report, w io.Writer) {
 }
 
 var validateCmdFlags struct {
-	helmLint           bool
-	requireSignature   bool
-	certIdentity       string
-	certIssuer         string
-	knownSources       []string
-	allowReservedNames bool
+	helmLint         bool
+	requireSignature bool
+	certIdentity     string
+	certIssuer       string
+	knownSources     []string
 }
 
 var digestRe = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
@@ -663,10 +635,9 @@ runs "helm lint" on every component chart.`,
 		}
 
 		rep, err := ValidateRepo(ValidateOptions{
-			RepoRoot:           root,
-			RunHelmLint:        validateCmdFlags.helmLint,
-			KnownSources:       validateCmdFlags.knownSources,
-			AllowReservedNames: validateCmdFlags.allowReservedNames,
+			RepoRoot:     root,
+			RunHelmLint:  validateCmdFlags.helmLint,
+			KnownSources: validateCmdFlags.knownSources,
 		})
 		if err != nil {
 			return err
@@ -687,5 +658,4 @@ func init() {
 	validateCmd.Flags().StringVar(&validateCmdFlags.certIdentity, "certificate-identity", "", "Expected cosign certificate identity for --require-signature")
 	validateCmd.Flags().StringVar(&validateCmdFlags.certIssuer, "certificate-oidc-issuer", "", "Expected cosign certificate OIDC issuer for --require-signature")
 	validateCmd.Flags().StringArrayVar(&validateCmdFlags.knownSources, "known-source", nil, "PackageSource name that dependsOn entries may reference without being defined in the repository (can be repeated)")
-	validateCmd.Flags().BoolVar(&validateCmdFlags.allowReservedNames, "allow-reserved-names", false, "Permit reserved PackageSource name prefixes (cozystack./community.); the index gate never sets this")
 }

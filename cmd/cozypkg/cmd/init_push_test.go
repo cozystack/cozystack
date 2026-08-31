@@ -71,18 +71,6 @@ func TestCapitalizeYieldsValidKind(t *testing.T) {
 	}
 }
 
-func TestInitRejectsReservedName(t *testing.T) {
-	for _, name := range []string{"cozystack.foo", "community.acme.demo"} {
-		initCmdFlags.app = "demo"
-		initCmdFlags.name = name
-		err := initCmd.RunE(initCmd, []string{t.TempDir()})
-		if err == nil || !strings.Contains(err.Error(), "reserved prefix") {
-			t.Errorf("init --name %q should be rejected for reserved prefix, got %v", name, err)
-		}
-	}
-	initCmdFlags.name = ""
-}
-
 func TestDNS1123LabelGuard(t *testing.T) {
 	good := []string{"myapp", "foo-bar", "a", "app123"}
 	bad := []string{"MyApp", "foo_bar", "-foo", "foo-", "foo.bar", ""}
@@ -163,8 +151,10 @@ func TestDeriveSourceAndRevision(t *testing.T) {
 }
 
 func TestScaffoldAppDefArtifactNameLink(t *testing.T) {
-	// The scaffold templates chartRef.name from the injected artifact prefix,
-	// so it resolves to the real artifact whatever the tap-time rename produces.
+	// A tapped repository keeps its declared name, so the scaffold references the
+	// component's assembled artifact by its concrete name (no tap-time
+	// templating). For example.hello/default/hello that name is
+	// example-hello-default-hello.
 	files := scaffoldFiles("example.hello", "hello")
 	var rdContent, cozyrdTemplate string
 	for _, f := range files {
@@ -178,11 +168,14 @@ func TestScaffoldAppDefArtifactNameLink(t *testing.T) {
 	if rdContent == "" {
 		t.Fatal("scaffold has no cozyrds/hello.yaml")
 	}
-	if !strings.Contains(rdContent, "{{ .Values.cozystackArtifactPrefix }}-hello") {
-		t.Fatalf("cozyrds chartRef must template the artifact prefix, content:\n%s", rdContent)
+	if !strings.Contains(rdContent, "name: example-hello-default-hello") {
+		t.Fatalf("cozyrds chartRef must reference the concrete artifact name, content:\n%s", rdContent)
 	}
-	// The -rd chart must render the asset through tpl, or the template is inert.
-	if !strings.Contains(cozyrdTemplate, "tpl ($.Files.Get $path) $") {
-		t.Fatalf("cozyrd.yaml must tpl the cozyrds asset, content:\n%s", cozyrdTemplate)
+	if strings.Contains(rdContent, "{{") {
+		t.Fatalf("cozyrds chartRef must not be templated any more, content:\n%s", rdContent)
+	}
+	// The -rd chart renders the asset directly; no tpl indirection is needed.
+	if !strings.Contains(cozyrdTemplate, "$.Files.Get $path") || strings.Contains(cozyrdTemplate, "tpl ") {
+		t.Fatalf("cozyrd.yaml must render the cozyrds asset with a plain Files.Get, content:\n%s", cozyrdTemplate)
 	}
 }

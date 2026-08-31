@@ -22,10 +22,9 @@ func ArtifactName(packageSourceName, variant, component string) string {
 }
 
 // ArtifactPrefix is the per-(packageSource, variant) prefix of ArtifactName,
-// i.e. ArtifactName without the trailing component segment. A community repo's
-// cozyrds ApplicationDefinition templates its chartRef.name as
-// "<prefix>-<component>", so the prefix (which carries the tap-time rename) can
-// be injected as a value while the component segment stays a literal.
+// i.e. ArtifactName without the trailing component segment. It is the shared
+// helper ArtifactName builds on, and lets a caller resolve the prefix once when
+// it iterates several components of the same variant.
 func ArtifactPrefix(packageSourceName, variant string) string {
 	return strings.ReplaceAll(packageSourceName, ".", "-") + "-" +
 		strings.ReplaceAll(variant, ".", "-")

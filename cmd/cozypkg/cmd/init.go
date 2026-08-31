@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/cozystack/cozystack/internal/marketplace/naming"
 	"github.com/spf13/cobra"
 )
 
@@ -50,6 +51,11 @@ type scaffoldFile struct {
 // paired -rd chart at packages/system/<app>-rd whose cozyrds/ asset carries an
 // ApplicationDefinition referencing the app component's assembled artifact.
 func scaffoldFiles(psName, app string) []scaffoldFile {
+	// The paired ApplicationDefinition references the component's assembled
+	// artifact by its concrete name. A tapped repository keeps its declared
+	// name, so the reconciler emits exactly this artifact name and the chartRef
+	// resolves without any tap-time templating.
+	artifactName := naming.ArtifactName(psName, "default", app)
 	return []scaffoldFile{
 		{
 			Path: filepath.Join("packages", "core", "platform", "sources", app+".yaml"),
@@ -98,12 +104,9 @@ data:
 		},
 		{
 			Path: filepath.Join("packages", "system", app+"-rd", "templates", "cozyrd.yaml"),
-			// tpl (not a raw Files.Get) so the cozyrds asset can reference
-			// .Values.cozystackArtifactPrefix — the operator injects it for a
-			// community-tapped source, whose PackageSource is renamed at tap time.
 			Content: `{{- range $path, $_ := .Files.Glob "cozyrds/*" }}
 ---
-{{ tpl ($.Files.Get $path) $ }}
+{{ $.Files.Get $path }}
 {{- end }}
 `,
 		},
@@ -123,16 +126,13 @@ spec:
     prefix: %s-
     chartRef:
       kind: ExternalArtifact
-      # Templated: the operator injects cozystackArtifactPrefix for the renamed
-      # community source, so this resolves to the actual artifact name whatever
-      # the tap-time PackageSource name turns out to be.
-      name: '{{ .Values.cozystackArtifactPrefix }}-%s'
+      name: %s
       namespace: cozy-system
   dashboard:
     singular: %s
     plural: %ss
     category: Other
-`, app, capitalize(app), app, app, app, app, capitalize(app), app),
+`, app, capitalize(app), app, app, app, artifactName, capitalize(app), app),
 		},
 		{
 			Path: "README.md",
@@ -220,15 +220,6 @@ to validate and push. The generated tree passes 'cozypkg validate' as-is.`,
 		if psName == "" {
 			psName = "example." + app
 		}
-		// Reserved namespaces: the tap materializer will rename a community
-		// source under "community.", and "cozystack." is the platform's own.
-		// The index gate rejects these in `validate`; fail early here too.
-		for _, p := range []string{"cozystack.", "community."} {
-			if strings.HasPrefix(psName, p) {
-				return fmt.Errorf("--name %q uses reserved prefix %q; pick a neutral name like <org>.%s", psName, p, app)
-			}
-		}
-
 		files := scaffoldFiles(psName, app)
 		if err := writeScaffold(dir, files); err != nil {
 			return err

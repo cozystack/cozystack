@@ -319,8 +319,11 @@ spec:
 	}
 }
 
-func TestValidateRepo_ReservedNamePrefix(t *testing.T) {
-	for _, name := range []string{"cozystack.evil", "community.acme.demo"} {
+// Names are unrestricted: a repository picks its own PackageSource name, and a
+// conflict with a core component is caught on-cluster at tap time, not by the
+// offline validator. A formerly-reserved prefix must not raise a finding.
+func TestValidateRepo_NamePrefixesAreUnrestricted(t *testing.T) {
+	for _, name := range []string{"cozystack.evil", "community.acme.demo", "acme.demo"} {
 		root := t.TempDir()
 		writeFile(t, root, "packages/core/platform/sources/p.yaml", `apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
@@ -339,13 +342,8 @@ spec:
 		if err != nil {
 			t.Fatalf("ValidateRepo(%s): %v", name, err)
 		}
-		if codeCounts(rep)["ps-name-reserved"] != 1 {
-			t.Errorf("expected ps-name-reserved for %q, got %+v", name, rep.Findings)
-		}
-		// The escape hatch clears it (caller-side only; the gate never sets it).
-		rep2, _ := ValidateRepo(ValidateOptions{RepoRoot: root, AllowReservedNames: true})
-		if codeCounts(rep2)["ps-name-reserved"] != 0 {
-			t.Errorf("AllowReservedNames should clear the finding for %q", name)
+		if codeCounts(rep)["ps-name-reserved"] != 0 {
+			t.Errorf("names must be unrestricted now, got a reserved finding for %q: %+v", name, rep.Findings)
 		}
 	}
 }

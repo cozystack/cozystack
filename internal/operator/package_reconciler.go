@@ -18,18 +18,14 @@ package operator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
-	"github.com/cozystack/cozystack/internal/marketplace/naming"
-	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	"github.com/cozystack/cozystack/pkg/config"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,30 +66,6 @@ type PackageReconciler struct {
 	HelmReleaseInstallTimeout time.Duration
 	HelmReleaseUpgradeTimeout time.Duration
 	HelmReleaseMaxHistory     int
-}
-
-// ArtifactPrefixValueKey is the Helm value key under which the tap materializer
-// path exposes a community source's derived artifact-name prefix, so its
-// cozyrds ApplicationDefinition can template chartRef.name.
-const ArtifactPrefixValueKey = "cozystackArtifactPrefix"
-
-// injectArtifactPrefix returns values with ArtifactPrefixValueKey set to prefix,
-// preserving any existing values. On a marshal error it returns the input
-// unchanged (the community chart then fails loudly on the missing value rather
-// than silently resolving to a wrong artifact).
-func injectArtifactPrefix(values *apiextensionsv1.JSON, prefix string) *apiextensionsv1.JSON {
-	m := map[string]interface{}{}
-	if values != nil && len(values.Raw) > 0 {
-		if err := json.Unmarshal(values.Raw, &m); err != nil {
-			return values
-		}
-	}
-	m[ArtifactPrefixValueKey] = prefix
-	raw, err := json.Marshal(m)
-	if err != nil {
-		return values
-	}
-	return &apiextensionsv1.JSON{Raw: raw}
 }
 
 // buildHelmReleaseSpec assembles the Spec applied to every generated
@@ -328,16 +300,6 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		// Merge values from Package spec if provided
 		if pkgComponent, ok := pkg.Spec.Components[component.Name]; ok && pkgComponent.Values != nil {
 			hr.Spec.Values = pkgComponent.Values
-		}
-
-		// A community-tapped PackageSource is renamed to community.<org>.<repo>,
-		// so a repo's cozyrds ApplicationDefinition cannot bake the resulting
-		// artifact name (the author does not know the tap-time name). Inject the
-		// derived prefix so the community -rd chart can template chartRef.name as
-		// "<prefix>-<component>". Only community sources are touched, so platform
-		// charts (and their HelmRelease values) are left byte-for-byte unchanged.
-		if strings.HasPrefix(packageSource.Name, tapconst.Prefix) {
-			hr.Spec.Values = injectArtifactPrefix(hr.Spec.Values, naming.ArtifactPrefix(packageSource.Name, variantName))
 		}
 
 		// Build DependsOn from component Install and variant DependsOn
