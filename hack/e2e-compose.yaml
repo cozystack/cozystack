@@ -25,7 +25,7 @@ networks:
           gateway: 192.168.123.1
 
 x-node: &node
-  image: ghcr.io/siderolabs/talos:v1.13.5
+  image: ghcr.io/siderolabs/talos:v1.13.5@sha256:0535cf71b65c8c9fdb0b745e697be174bfe7394ecac7ccb2621caf4a606fc5a6
   privileged: true
   security_opt:
     - seccomp:unconfined

@@ -170,6 +170,52 @@ kubectl() { printf '%s\n' "$*"; }
   printf '%s\n' "$output" | grep -Fq 'local LINSTOR pool baseline recorded'
 }
 
+@test "Kubernetes cleanup fails when local LINSTOR capacity is not reclaimed" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  kubectl() { return 0; }
+  cozy_wait_tenant_drained() { return 0; }
+  cozy_wait_linstor_pool_reclaimed() { return 42; }
+
+  if cozy_cleanup test-latest-version; then
+    echo "cleanup hid the failed LINSTOR reclamation barrier" >&2
+    return 1
+  fi
+}
+
+@test "local Kubernetes suite cannot start without a LINSTOR baseline" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=local
+  yq() { printf 'v1.33.12\n'; }
+  kubectl() { return 0; }
+  cozy_wait_tenant_drained() { return 0; }
+  cozy_capture_linstor_pool_baseline() { return 42; }
+  helm() { printf 'UNEXPECTED_HELM_CALL\n'; return 99; }
+
+  rc=0
+  output=$(run_kubernetes_test '.' test-latest-version 59991) || rc=$?
+
+  if [ "$rc" -eq 0 ]; then
+    echo "suite accepted a failed local LINSTOR baseline capture" >&2
+    return 1
+  fi
+  if printf '%s\n' "$output" | grep -Fq UNEXPECTED_HELM_CALL; then
+    echo "suite continued into Helm after the baseline capture failed" >&2
+    return 1
+  fi
+}
+
+@test "Kubernetes cleanup operations outlive their bounded reclamation stages" {
+  for suite in latest previous; do
+    timeout=$(yq "select(.metadata.name == \"kubernetes-${suite}\") | .spec.steps[0].finally[0].script.timeout" "hack/e2e-chainsaw/kubernetes-${suite}/chainsaw-test.yaml")
+    if [ "$timeout" != 22m ]; then
+      echo "kubernetes-${suite} cleanup timeout is $timeout, expected 22m" >&2
+      return 1
+    fi
+  done
+}
+
 @test "container workflow forwards local storage through install and Chainsaw" {
   install_value=$(yq '.jobs.e2e-container.steps[] | select(.name == "Install Cozystack into sandbox") | .env.COZY_E2E_STORAGE_CLASS' .github/workflows/pull-requests.yaml)
   workflow_value=$(yq '.jobs.e2e-container.steps[] | select(.name == "Run E2E tests") | .env.COZY_E2E_STORAGE_CLASS' .github/workflows/pull-requests.yaml)

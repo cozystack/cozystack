@@ -1720,11 +1720,8 @@ ${carrier}
       cozy_capture_sandbox_qemu_thread_cpu) continue ;;
       # The fourth bracket half, and also not behind the gate.
       cozy_capture_runner_canary) continue ;;
-      # These are outside the failure diagnostics phase: the first records the
-      # local-storage baseline before tenant creation, and the second reports a
-      # completed join. Their `|| true` suffix makes each best-effort; it does
-      # not make either part of the phase spend order documented by Chainsaw.
-      cozy_capture_linstor_pool_baseline) continue ;;
+      # This is outside the failure diagnostics phase and deliberately remains
+      # best-effort: a missing timing report must not turn a completed join red.
       cozy_report_node_join_timing) continue ;;
       *)
         echo "$fn runs in the diagnostics block but this test has no phrase for it; add one here and to both chainsaw comments" >&2

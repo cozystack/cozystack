@@ -93,10 +93,15 @@ spec:
     # Always runs after try/catch — i.e. after the crust-gather snapshots on a
     # failed run. Reclaims the tenant Kubernetes cluster, which run_kubernetes_test
     # applies imperatively (kubectl), so Chainsaw's auto-cleanup does not track it.
-    # On success run_kubernetes_test already tore it down, so this is a no-op then.
+    # This is the single authoritative child -> parent teardown on both success
+    # and failure, followed by the compute/storage reclamation barriers.
     - description: tear down the tenant Kubernetes cluster
       script:
-        timeout: 10m
+        # 30s diagnostic Certificate + 5m child + 5m parent + 5m compute/PVC
+        # drain + 5m LINSTOR reclamation = 20m30s of inner bounds. Keep the op
+        # above that sum so an inner timeout reports its stage instead of a
+        # Chainsaw SIGKILL hiding it; normal cleanup returns immediately.
+        timeout: 22m
         content: |
           set -eu
           cd ../../..

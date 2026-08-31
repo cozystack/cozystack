@@ -159,7 +159,9 @@ log "node limit ${COZY_E2E_NODE_CPUS} CPU/${COZY_E2E_NODE_MEMORY_MIB} MiB; kubel
 # or CNI error with no obvious cause.
 # ---------------------------------------------------------------------------
 for mod in openvswitch zfs; do
-  $SUDO modprobe "$mod" 2>/dev/null || true
+  if ! $SUDO modprobe "$mod" 2>/dev/null; then
+    log "modprobe ${mod} returned non-zero; verifying the loaded-module state"
+  fi
   if ! grep -q "^${mod} " /proc/modules; then
     die "kernel module '${mod}' is not loaded on the host.
      The container lane takes its kernel from the host and Talos cannot load
@@ -288,7 +290,9 @@ export USERDATA
 # ---------------------------------------------------------------------------
 # 4. Start the nodes and put the sandbox on their network.
 # ---------------------------------------------------------------------------
-docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" down -v >/dev/null 2>&1 || true
+if ! docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" down -v; then
+  die "failed to remove a stale ${COMPOSE_PROJECT} compose project before startup"
+fi
 docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" up -d
 log "three Talos containers started"
 

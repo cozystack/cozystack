@@ -272,11 +272,12 @@ cozy_filter_cluster_pvcs() {
 # the previous tenant has not yet vacated -> memory starvation -> a worker VM
 # misses the node-join budget and the test flakes on worker-node-join.
 #
-# Bounded and best-effort: this returns loudly on timeout, so a stuck teardown
-# cannot hang the job past the deadline. Other suites use the same tenant-test
-# namespace and can legitimately leave their own PVCs there while this cleanup
-# runs; VM/VMI probes therefore select the CAPI cluster label, and the unlabeled
-# worker-disk PVCs are filtered by their MachineDeployment name component.
+# Bounded and authoritative: this returns non-zero on timeout, so a stuck
+# teardown cannot be mistaken for a clean sandbox. Other suites use the same
+# tenant-test namespace and can legitimately leave their own PVCs there while
+# this cleanup runs; VM/VMI probes therefore select the CAPI cluster label, and
+# the unlabeled worker-disk PVCs are filtered by their MachineDeployment name
+# component.
 cozy_wait_tenant_drained() {
   local _test_name="$1"
   local _ns=tenant-test
@@ -299,7 +300,7 @@ cozy_wait_tenant_drained() {
       return 0
     fi
     if [ "$(date +%s)" -ge "$_deadline" ]; then
-      echo "» WARNING: ${_cluster} teardown did not drain within ${_timeout}s; continuing (next test may face memory/storage pressure)" >&2
+      echo "» ERROR: ${_cluster} teardown did not drain within ${_timeout}s; the next test would face memory/storage pressure" >&2
       printf '%s\n' "$_vm" "$_vmi" "$_pvc" |
         awk 'NF { print "  drain-leftover: " $0 }' >&2
       return 1
@@ -415,9 +416,9 @@ cozy_wait_schedulable_node() {
 # autoPlace=3 places one replica per node) plus two 21 GiB CDI scratch
 # PVCs (worst case both landing on the same node via the local
 # storageClass) yields a ~82 GiB per-satellite peak footprint; 90 GiB
-# default threshold covers that with margin. Bounded and best-effort like
-# cozy_wait_tenant_drained: caller wraps in `|| true`, timeout returns
-# loudly.
+# default threshold covers that with margin. The wait is bounded and
+# authoritative: cleanup propagates its timeout so the next suite cannot start
+# on storage whose reclamation was never observed.
 cozy_wait_linstor_pool_free() {
   _min_free_gib="${1:-90}"
   _timeout="${2:-300}"
@@ -450,8 +451,13 @@ cozy_wait_linstor_pool_free() {
       return 0
     fi
     if [ "$(date +%s)" -ge "$_deadline" ]; then
-      echo "» WARNING: LINSTOR ZFS pool free did not reach ${_min_free_gib} GiB on every satellite within ${_timeout}s (smallest observed: ${_min_kib:-unknown} KiB on ${_min_node:-unknown}); continuing (next test may face zfs create out-of-space)" >&2
-      kubectl -n cozy-linstor exec deploy/linstor-controller -- linstor --no-color sp l 2>&1 | sed 's/^/  linstor-pool: /' >&2 || true
+      echo "» ERROR: LINSTOR ZFS pool free did not reach ${_min_free_gib} GiB on every satellite within ${_timeout}s (smallest observed: ${_min_kib:-unknown} KiB on ${_min_node:-unknown})" >&2
+      _pool_diag_rc=0
+      _pool_diag=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- linstor --no-color sp l 2>&1) || _pool_diag_rc=$?
+      if [ "$_pool_diag_rc" -ne 0 ]; then
+        echo "  linstor-pool: diagnostic read failed with exit $_pool_diag_rc" >&2
+      fi
+      printf '%s\n' "$_pool_diag" | sed 's/^/  linstor-pool: /' >&2
       return 1
     fi
     sleep 5
@@ -477,13 +483,13 @@ cozy_capture_linstor_pool_baseline() {
     sort
   ' 2>/dev/null) || _baseline=""
   if [ -z "$_baseline" ]; then
-    echo "» WARNING: could not record the local LINSTOR pool baseline; cleanup can verify the tenant API drain but not physical ZFS reclamation" >&2
+    echo "» ERROR: could not record the local LINSTOR pool baseline; physical ZFS reclamation would be unverifiable" >&2
     return 1
   fi
   _baseline_nodes=$(printf '%s\n' "$_baseline" | awk -F: 'NF == 2 { print $1 }' | sort | tr '\n' ' ')
   if [ "$_baseline_nodes" != "srv1 srv2 srv3 " ] \
       || ! cozy_linstor_pools_at_baseline "$_baseline" "$_baseline" 0; then
-    echo "» WARNING: local LINSTOR pool baseline is incomplete or malformed (expected numeric rows for srv1, srv2 and srv3): ${_baseline:-<empty>}" >&2
+    echo "» ERROR: local LINSTOR pool baseline is incomplete or malformed (expected numeric rows for srv1, srv2 and srv3): ${_baseline:-<empty>}" >&2
     return 1
   fi
   printf '%s\n' "$_baseline" >"$_baseline_file"
@@ -526,7 +532,7 @@ cozy_wait_linstor_pool_baseline() {
   _tolerance_kib="${2:-524288}"
   _baseline_file="${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
   if [ ! -s "$_baseline_file" ]; then
-    echo "» WARNING: no local LINSTOR pool baseline was recorded; physical ZFS reclamation is unknown" >&2
+    echo "» ERROR: no local LINSTOR pool baseline was recorded; physical ZFS reclamation is unknown" >&2
     return 1
   fi
   _baseline=$(cat "$_baseline_file")
@@ -543,7 +549,7 @@ cozy_wait_linstor_pool_baseline() {
       return 0
     fi
     if [ "$(date +%s)" -ge "$_deadline" ]; then
-      echo "» WARNING: local LINSTOR pools did not return to their pre-suite baseline within ${_timeout}s; continuing (a worker or CDI scratch volume may still occupy ZFS space)" >&2
+      echo "» ERROR: local LINSTOR pools did not return to their pre-suite baseline within ${_timeout}s; a worker or CDI scratch volume may still occupy ZFS space" >&2
       printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /' >&2
       printf '%s\n' "${_current:-<the LINSTOR pool probe returned nothing>}" | sed 's/^/  current-free-kib: /' >&2
       return 1
@@ -571,47 +577,71 @@ cozy_wait_linstor_pool_reclaimed() {
 # Chainsaw's auto-cleanup does not track it — `finally` is where it gets
 # reclaimed. A failed run otherwise leaves the tenant cluster's worker-VM PVCs
 # (tens of GiB) in tenant-test, exhausting the shared tenant-quota and
-# cascade-failing every storage-heavy suite that runs afterwards. Best-effort
-# (each delete is `|| true`) so a slow teardown never flips a passing test red.
+# cascade-failing every storage-heavy suite that runs afterwards. Cleanup
+# failures are accumulated so every safe reclamation attempt still runs, then
+# returned to Chainsaw: a passing workload on a dirty sandbox is not a pass.
 cozy_cleanup() {
   local test_name="${1:-}"
+  local cleanup_failed=0
   # Delete any test-scoped tenant API LoadBalancer Services left by a failed run
   # so they don't leak MetalLB IPs from the shared host pool. Labeled by the
   # test so a single selector reaps them all.
-  kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null || true
+  if ! kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null; then
+    echo "» ERROR: failed to delete tenant API LoadBalancer Services" >&2
+    cleanup_failed=1
+  fi
   # A failed node-join capture creates a short-lived reader Certificate and a
   # hardened helper Pod. They are labelled separately from the tenant API LB:
   # the Secret contains a Talos client key and must be reaped even if the
   # diagnostic collector itself returned early.
   if ! kubectl -n tenant-test delete certificates.cert-manager.io -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=true --timeout=30s 2>/dev/null; then
-    echo "» WARNING: failed to delete tenant Talos diagnostic Certificates" >&2
+    echo "» ERROR: failed to delete tenant Talos diagnostic Certificates" >&2
+    cleanup_failed=1
   fi
   if ! kubectl -n tenant-test delete pod,secret -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=false 2>/dev/null; then
-    echo "» WARNING: failed to delete tenant Talos diagnostic Pod/Secret" >&2
+    echo "» ERROR: failed to delete tenant Talos diagnostic Pod/Secret" >&2
+    cleanup_failed=1
   fi
   # Delete worker node pools (KubernetesNodes) before the parent Kubernetes CR:
   # the pool owns the workers and its pre-delete hook unpins the adopted objects
   # so uninstall is clean. Chainsaw does not track this imperatively applied CR,
   # so cozy_cleanup must reap it too.
-  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test wait kubernetesnodeses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
-  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
+  local child_drained=0
+  if ! kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io --all --ignore-not-found --wait=true --timeout=5m 2>/dev/null; then
+    echo "» ERROR: tenant KubernetesNodes did not delete within 5m" >&2
+    cleanup_failed=1
+  else
+    child_drained=1
+  fi
+  if [ "$child_drained" -eq 1 ]; then
+    if ! kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=true --timeout=5m 2>/dev/null; then
+      echo "» ERROR: tenant Kubernetes resources did not delete within 5m" >&2
+      cleanup_failed=1
+    fi
+  else
+    echo "» ERROR: refusing to delete parent Kubernetes resources while KubernetesNodes remain" >&2
+  fi
   # The CR delete above finalizes once the Kubernetes CR is gone, which only
   # TRIGGERS KubeVirt VM teardown + PVC release. Block until the worker VMs,
   # VMIs (guest RAM) and disk PVCs are actually gone so the next tenant test
   # starts on a freed sandbox -- the root cause of the node-join flake.
   if [ -n "${test_name}" ]; then
     if ! cozy_wait_tenant_drained "${test_name}" 300; then
-      echo "» WARNING: continuing after the scoped tenant drain deadline" >&2
+      echo "» ERROR: scoped tenant resources did not drain" >&2
+      cleanup_failed=1
     fi
   else
-    echo "» WARNING: cleanup has no test name; skipping the scoped tenant drain wait" >&2
+    echo "» ERROR: cleanup has no test name; scoped tenant drain cannot be verified" >&2
+    cleanup_failed=1
   fi
   # In the replicated lane, wait for the DRBD-safe absolute threshold. In the
   # local lane, wait for this suite's saved per-node baseline instead: that still
   # catches delayed physical teardown without requiring platform PVCs to vanish.
-  cozy_wait_linstor_pool_reclaimed 90 300 || true
+  if ! cozy_wait_linstor_pool_reclaimed 90 300; then
+    echo "» ERROR: LINSTOR capacity did not return to the pre-suite level" >&2
+    cleanup_failed=1
+  fi
+  return "$cleanup_failed"
 }
 
 # Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
@@ -5058,20 +5088,33 @@ run_kubernetes_test() {
   local _cozy_run_started_rfc3339
   _cozy_run_started_rfc3339=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-  # Clean up stale resources from a previous failed retry. Delete the worker
-  # pool (KubernetesNodes) before the parent Kubernetes CR so a rerun re-creates
-  # the MachineDeployment instead of no-op'ing on a surviving child HelmRelease.
-  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test wait kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --for=delete --timeout=2m 2>/dev/null || true
-  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "${test_name}" --for=delete --timeout=2m 2>/dev/null || true
+  # Clean up stale resources from a previous failed run. Delete the worker pool
+  # (KubernetesNodes) before the parent Kubernetes CR so a rerun re-creates the
+  # MachineDeployment instead of no-op'ing on a surviving child HelmRelease.
+  # These are blocking deletes because recording a baseline while old workers
+  # still own their disks would bless the leftover capacity as the new normal.
+  if ! kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=true --timeout=2m; then
+    echo "failed to delete stale KubernetesNodes ${test_name}-md0" >&2
+    return 1
+  fi
+  if ! kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=true --timeout=2m; then
+    echo "failed to delete stale Kubernetes ${test_name}" >&2
+    return 1
+  fi
+  if ! cozy_wait_tenant_drained "${test_name}" 300; then
+    echo "stale tenant compute or storage remains for ${test_name}" >&2
+    return 1
+  fi
 
   # The local lane cannot use the replicated lane's absolute free-capacity
   # threshold because persistent platform volumes already put one pool below it.
   # Save the post-stale-cleanup state for the separate Chainsaw `finally` shell;
   # cleanup later verifies that this suite returned every node to these figures.
   if [ "$storage_class" = local ]; then
-    cozy_capture_linstor_pool_baseline || true
+    if ! cozy_capture_linstor_pool_baseline; then
+      echo "cannot verify local LINSTOR reclamation without a complete baseline" >&2
+      return 1
+    fi
   fi
 
   # Compose the optional ouroboros addon block. Indentation matches the
@@ -5293,7 +5336,8 @@ EOF
   # additive — no change to the product Kamaji/Kubernetes chart.
   #
   # Clean up a stale LB from a previous failed retry of this same test first.
-  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" \
+    --ignore-not-found --wait=true --timeout=60s
   kubectl apply -n tenant-test -f - <<EOF
 apiVersion: v1
 kind: Service
@@ -5499,9 +5543,9 @@ EOF
 
   # Clean up backend resources from any previous failed attempt
   kubectl delete deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
-    -n tenant-test --ignore-not-found --timeout=60s || true
+    -n tenant-test --ignore-not-found --timeout=60s
   kubectl delete service --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
-    -n tenant-test --ignore-not-found --timeout=60s || true
+    -n tenant-test --ignore-not-found --timeout=60s
 
   # Start the workload's clock from a node that accepts Pods, not from a node
   # that is merely Ready. Both instances of run 31020254620 spent 2m18s and
@@ -5716,9 +5760,9 @@ EOF
 
   # Clean up NFS test resources from any previous failed attempt
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod \
-    -n tenant-test --ignore-not-found --timeout=60s || true
+    -n tenant-test --ignore-not-found --timeout=60s
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc \
-    -n tenant-test --ignore-not-found --timeout=60s || true
+    -n tenant-test --ignore-not-found --timeout=60s
 
   # Test RWX NFS mount in tenant cluster (uses kubevirt CSI driver with RWX support)
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" apply -f - <<EOF
@@ -5773,8 +5817,12 @@ EOF
   nfs_result=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" logs nfs-test-pod -n tenant-test)
   if [ "$nfs_result" != "nfs-mount-ok" ]; then
     echo "NFS mount test failed: expected 'nfs-mount-ok', got '$nfs_result'" >&2
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod -n tenant-test --wait=false 2>/dev/null || true
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc -n tenant-test --wait=false 2>/dev/null || true
+    if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod -n tenant-test --wait=false 2>/dev/null; then
+      echo "failed to start NFS test Pod cleanup after the data-integrity failure" >&2
+    fi
+    if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc -n tenant-test --wait=false 2>/dev/null; then
+      echo "failed to start NFS test PVC cleanup after the data-integrity failure" >&2
+    fi
     exit 1
   fi
 
@@ -5901,7 +5949,7 @@ EOF
       # delete defaults to --wait=true, so it returns only once any stale Pod is
       # fully gone; the subsequent run cannot race an AlreadyExists.
       kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
-        delete pod dnscheck --ignore-not-found 2>/dev/null || true
+        delete pod dnscheck --ignore-not-found --timeout=60s
       kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
         run dnscheck --image=nicolaka/netshoot:v0.13 --restart=Never \
         --command -- sh -c "
@@ -5994,9 +6042,9 @@ EOF
     fi
 
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
-      delete pod dnscheck --ignore-not-found 2>/dev/null || true
+      delete pod dnscheck --ignore-not-found --timeout=60s
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
-      delete ingress hairpin-probe --ignore-not-found 2>/dev/null || true
+      delete ingress hairpin-probe --ignore-not-found --timeout=60s
   fi
 
   # Wait for the parent kubernetes-${test_name} HR to be Ready before the
@@ -6112,12 +6160,11 @@ EOF
   trap - EXIT
   # Clean up: delete the test-scoped tenant API LoadBalancer (frees its MetalLB
   # IP) and the local kubeconfig.
-  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false
   rm -f "tenantkubeconfig-${test_name}"
-  # Delete the worker pool (KubernetesNodes) before the parent Kubernetes CR so
-  # its pre-delete unpin hook runs and the child HelmRelease does not leak.
-  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
+  # The Chainsaw finally block owns the authoritative child -> parent teardown
+  # and the physical-storage barrier. Keeping it in one place prevents an
+  # asynchronous success-path delete from hiding which stage failed.
 
 }
 

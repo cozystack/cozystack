@@ -67,24 +67,71 @@ prepare-cluster-container: delete-cluster-container
 # before it decides what the subcommand needs, so the `${USERDATA:?}` guard that
 # makes a missing machine config fail loudly on `up` also fails `down`, where no
 # machine config is required. The value is never read: `down` matches containers
-# by project and service name. Without it teardown always errored, `|| true`
-# swallowed it, and the nodes and their /var volumes survived into the next run
-# -- the exact half-dead cluster this target exists to prevent.
+# by project and service name. Without it teardown always errored, and ignoring
+# that error left the nodes and their /var volumes alive for the next run -- the
+# exact half-dead cluster this target exists to prevent.
 delete-cluster-container:
-	USERDATA=teardown docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down -v || true
-	@set -eu; \
+	@set -u; \
+		cleanup_rc=0; \
+		if USERDATA=teardown docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down -v; then \
+			:; \
+		else \
+			step_rc=$$?; \
+			echo "container compose teardown failed with exit $$step_rc; continuing host-storage cleanup" >&2; \
+			cleanup_rc=$$step_rc; \
+		fi; \
 		if [ -z "${ZPOOL_BACKING_DIR}" ] || [ "${ZPOOL_BACKING_DIR}" = / ]; then \
 			echo "refusing unsafe ZPOOL_BACKING_DIR '${ZPOOL_BACKING_DIR}'" >&2; \
 			exit 1; \
 		fi; \
 		if [ "$$(id -u)" -eq 0 ]; then sudo_cmd=; else sudo_cmd=sudo; fi; \
 		for n in 1 2 3; do \
+			pool_detached=1; \
 			if $$sudo_cmd zpool list "data-srv$${n}" >/dev/null 2>&1; then \
-				$$sudo_cmd zpool destroy "data-srv$${n}"; \
+				if $$sudo_cmd zpool destroy "data-srv$${n}"; then \
+					:; \
+				else \
+					step_rc=$$?; \
+					echo "failed to destroy zpool data-srv$${n} (exit $$step_rc)" >&2; \
+					if [ "$$cleanup_rc" -eq 0 ]; then cleanup_rc=$$step_rc; fi; \
+					pool_detached=0; \
+				fi; \
+			else \
+				direct_list_rc=$$?; \
+				inventory_rc=0; \
+				pool_names=$$($$sudo_cmd zpool list -H -o name 2>/dev/null) || inventory_rc=$$?; \
+				if [ "$$inventory_rc" -ne 0 ]; then \
+					echo "failed to inventory zpools after data-srv$${n} lookup returned exit $$direct_list_rc (inventory exit $$inventory_rc); keeping its backing file" >&2; \
+					if [ "$$cleanup_rc" -eq 0 ]; then cleanup_rc=$$inventory_rc; fi; \
+					pool_detached=0; \
+				elif printf '%s\n' "$$pool_names" | grep -Fxq "data-srv$${n}"; then \
+					echo "zpool inventory still lists data-srv$${n} after its direct lookup returned exit $$direct_list_rc; keeping its backing file" >&2; \
+					if [ "$$cleanup_rc" -eq 0 ]; then cleanup_rc=$$direct_list_rc; fi; \
+					pool_detached=0; \
+				fi; \
 			fi; \
-			$$sudo_cmd rm -f "${ZPOOL_BACKING_DIR}/srv$${n}.img"; \
+			if [ "$$pool_detached" -eq 0 ]; then \
+				echo "keeping ${ZPOOL_BACKING_DIR}/srv$${n}.img because data-srv$${n} is still imported" >&2; \
+			else \
+				if $$sudo_cmd rm -f "${ZPOOL_BACKING_DIR}/srv$${n}.img"; then \
+					:; \
+				else \
+					step_rc=$$?; \
+					echo "failed to remove ${ZPOOL_BACKING_DIR}/srv$${n}.img (exit $$step_rc)" >&2; \
+					if [ "$$cleanup_rc" -eq 0 ]; then cleanup_rc=$$step_rc; fi; \
+				fi; \
+			fi; \
 		done; \
-		$$sudo_cmd rmdir "${ZPOOL_BACKING_DIR}" 2>/dev/null || true
+		if [ -d "${ZPOOL_BACKING_DIR}" ]; then \
+			if $$sudo_cmd rmdir "${ZPOOL_BACKING_DIR}"; then \
+				:; \
+			else \
+				step_rc=$$?; \
+				echo "failed to remove backing directory ${ZPOOL_BACKING_DIR} (exit $$step_rc)" >&2; \
+				if [ "$$cleanup_rc" -eq 0 ]; then cleanup_rc=$$step_rc; fi; \
+			fi; \
+		fi; \
+		exit "$$cleanup_rc"
 
 # The API endpoint and E2E-only storage mode cross into the sandbox explicitly:
 # docker exec starts a fresh environment, so values exported by the caller do
