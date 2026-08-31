@@ -14,11 +14,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	migrationv1alpha1 "github.com/cozystack/cozystack/api/migration/v1alpha1"
@@ -61,6 +63,21 @@ func (r *VMImportTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+
+	if !task.DeletionTimestamp.IsZero() {
+		return r.finalize(ctx, task)
+	}
+	// Claimed before any scaffolding is created, so a task deleted mid-transfer
+	// still gets its volumes cleaned up.
+	if !controllerutil.ContainsFinalizer(task, migrationv1alpha1.TaskFinalizer) {
+		controllerutil.AddFinalizer(task, migrationv1alpha1.TaskFinalizer)
+		if err := r.Update(ctx, task); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
+			return ctrl.Result{}, err
+		}
 	}
 
 	// A finished task is a record, not a workload. Re-running validation or
@@ -393,6 +410,82 @@ func (r *VMImportTaskReconciler) pending(ctx context.Context, task *migrationv1a
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: ConnectionRequeue}, nil
+}
+
+// finalize removes the transfer volumes the engine created for this task, then
+// releases the task for deletion.
+//
+// The engine creates its DataVolumes with no owner references — it tracks them
+// by label instead — so deleting the task takes the Plan with it and leaves the
+// volume behind, still retrying the transfer against the source. Nothing else
+// ever collects it.
+//
+// Only the engine's own volumes match: they carry its `plan` label, while the
+// disks an import produces are created by this controller with Helm metadata
+// and no such label. A failure here releases the task anyway, because a task
+// that cannot be deleted is worse than a volume that has to be removed by hand,
+// and the leftover is named in the log either way.
+func (r *VMImportTaskReconciler) finalize(ctx context.Context, task *migrationv1alpha1.VMImportTask) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if controllerutil.ContainsFinalizer(task, migrationv1alpha1.TaskFinalizer) {
+		if err := r.deleteTransferVolumes(ctx, task); err != nil {
+			logger.Error(err, "could not remove every transfer volume; releasing the task regardless",
+				"task", task.Name, "namespace", task.Namespace)
+		}
+		controllerutil.RemoveFinalizer(task, migrationv1alpha1.TaskFinalizer)
+		if err := r.Update(ctx, task); err != nil {
+			if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{}, nil
+}
+
+// deleteTransferVolumes removes the DataVolumes the engine created for this
+// task's Plans. The Plans are still present: they are owned by the task, and
+// garbage collection only reaches them once the task itself is gone.
+func (r *VMImportTaskReconciler) deleteTransferVolumes(ctx context.Context, task *migrationv1alpha1.VMImportTask) error {
+	logger := log.FromContext(ctx)
+
+	for i := range task.Spec.VMs {
+		plan := newObject(planGVK)
+		err := r.Get(ctx, types.NamespacedName{
+			Namespace: task.Namespace, Name: planName(task.Name, task.Spec.VMs[i].ID),
+		}, plan)
+		if err != nil {
+			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+				continue
+			}
+			return err
+		}
+		uid := string(plan.GetUID())
+		if uid == "" {
+			continue
+		}
+
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(dataVolumeGVK.GroupVersion().WithKind("DataVolumeList"))
+		if err := r.List(ctx, list,
+			client.InNamespace(task.Namespace),
+			client.MatchingLabels{"plan": uid},
+		); err != nil {
+			if meta.IsNoMatchError(err) {
+				return nil
+			}
+			return err
+		}
+		for j := range list.Items {
+			dv := &list.Items[j]
+			if err := r.Delete(ctx, dv); err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+			logger.Info("removed the engine's transfer volume", "dataVolume", dv.GetName(), "vm", task.Spec.VMs[i].ID)
+		}
+	}
+	return nil
 }
 
 func (r *VMImportTaskReconciler) terminalFail(ctx context.Context, task *migrationv1alpha1.VMImportTask, reason, message string) (ctrl.Result, error) {

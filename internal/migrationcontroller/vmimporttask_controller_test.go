@@ -10,12 +10,14 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	migrationv1alpha1 "github.com/cozystack/cozystack/api/migration/v1alpha1"
@@ -782,6 +784,66 @@ func TestAdoptVolumeRefusesAnotherTasksOutput(t *testing.T) {
 
 	if err := r.adoptVolume(context.Background(), tk, "vm-1", "forklift-claim", "web-01-disk-0"); err == nil {
 		t.Fatal("adoptVolume adopted an output belonging to a different task")
+	}
+}
+
+// A deleted task must take the engine's transfer volumes with it. They carry no
+// owner reference — the engine tracks them by label — so deleting the task
+// removes the Plan and leaves the volume behind, still retrying the transfer
+// against the source with nothing left to collect it. Observed live: 37 minutes
+// and 8 restarts after its task was gone.
+//
+// The outputs must survive the same sweep, which is the other half of the test:
+// they are what the tenant keeps.
+func TestFinalizerRemovesTransferVolumesButNotOutputs(t *testing.T) {
+	s := testScheme(t)
+	tk := task("import", "tenant-foo", "vcenter", "replicated",
+		migrationv1alpha1.VMImportRequest{ID: "vm-1", Name: "web-01"})
+	tk.Finalizers = []string{migrationv1alpha1.TaskFinalizer}
+	now := metav1.Now()
+	tk.DeletionTimestamp = &now
+
+	plan := newObject(planGVK)
+	plan.SetName(planName("import", "vm-1"))
+	plan.SetNamespace("tenant-foo")
+	plan.SetUID(types.UID("plan-uid-1"))
+
+	transfer := newObject(dataVolumeGVK)
+	transfer.SetName("import-vm-1-abcde")
+	transfer.SetNamespace("tenant-foo")
+	transfer.SetLabels(map[string]string{"plan": "plan-uid-1", "vmID": "vm-1"})
+
+	// The imported disk: created by this controller, carries Helm metadata and
+	// no engine label, and must be left alone.
+	output := newObject(dataVolumeGVK)
+	output.SetName("vm-disk-web-01-disk-0")
+	output.SetNamespace("tenant-foo")
+	output.SetLabels(map[string]string{"app.kubernetes.io/instance": "vm-disk-web-01-disk-0"})
+
+	c := clientfake.NewClientBuilder().WithScheme(s).
+		WithObjects(tk, plan, transfer, output).Build()
+	r := &VMImportTaskReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.finalize(context.Background(), tk); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	got := newObject(dataVolumeGVK)
+	err := c.Get(context.Background(), types.NamespacedName{
+		Namespace: "tenant-foo", Name: "import-vm-1-abcde",
+	}, got)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("the engine's transfer volume survived the task, got err %v — it would keep retrying forever", err)
+	}
+
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Namespace: "tenant-foo", Name: "vm-disk-web-01-disk-0",
+	}, newObject(dataVolumeGVK)); err != nil {
+		t.Errorf("the imported disk was removed with the task: %v", err)
+	}
+
+	if controllerutil.ContainsFinalizer(tk, migrationv1alpha1.TaskFinalizer) {
+		t.Error("the finalizer was not released; the task would never delete")
 	}
 }
 

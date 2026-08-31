@@ -43,6 +43,21 @@ const (
 	OutputTaskUIDLabel = thisGroup + "/output-of.TaskUID"
 	OutputVMIDLabel    = thisGroup + "/output-of.VMID"
 
+	// TaskFinalizer holds a deleted task open long enough to remove the
+	// transfer volumes the engine created for it.
+	//
+	// Everything else a task owns goes with it through owner references, but
+	// the engine's own DataVolumes carry none: it manages them by label, and
+	// when the Plan they name is deleted there is nothing left to collect them.
+	// A failed import that is then deleted therefore leaves a DataVolume
+	// retrying the transfer against the source forever — observed live, still
+	// running 37 minutes and 8 restarts after its task was gone.
+	//
+	// This finalizer does not contradict the outputs-outlive-the-task property:
+	// it removes scaffolding, and never touches a VMDisk, VMInstance or the
+	// claims behind them.
+	TaskFinalizer = thisGroup + "/cleanup-transfer-volumes"
+
 	// TaskValidatedCondition reports whether the task's inputs resolved: the
 	// source is ready, every named VM exists in the inventory, and the storage
 	// class can actually complete an import.
