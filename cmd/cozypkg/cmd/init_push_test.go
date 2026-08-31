@@ -71,6 +71,18 @@ func TestCapitalizeYieldsValidKind(t *testing.T) {
 	}
 }
 
+func TestInitRejectsReservedName(t *testing.T) {
+	for _, name := range []string{"cozystack.foo", "community.acme.demo"} {
+		initCmdFlags.app = "demo"
+		initCmdFlags.name = name
+		err := initCmd.RunE(initCmd, []string{t.TempDir()})
+		if err == nil || !strings.Contains(err.Error(), "reserved prefix") {
+			t.Errorf("init --name %q should be rejected for reserved prefix, got %v", name, err)
+		}
+	}
+	initCmdFlags.name = ""
+}
+
 func TestDNS1123LabelGuard(t *testing.T) {
 	good := []string{"myapp", "foo-bar", "a", "app123"}
 	bad := []string{"MyApp", "foo_bar", "-foo", "foo-", "foo.bar", ""}

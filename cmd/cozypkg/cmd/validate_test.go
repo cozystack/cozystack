@@ -319,11 +319,11 @@ spec:
 	}
 }
 
-// Names are unrestricted: a repository picks its own PackageSource name, and a
-// conflict with a core component is caught on-cluster at tap time, not by the
-// offline validator. A formerly-reserved prefix must not raise a finding.
-func TestValidateRepo_NamePrefixesAreUnrestricted(t *testing.T) {
-	for _, name := range []string{"cozystack.evil", "community.acme.demo", "acme.demo"} {
+// Reserved prefixes (cozystack./community.) are flagged as a usability hint so
+// an author learns at authoring time; a neutral name is not, and the caller-side
+// escape hatch clears the finding (the index gate never sets it).
+func TestValidateRepo_ReservedNamePrefix(t *testing.T) {
+	writeRepo := func(t *testing.T, name string) string {
 		root := t.TempDir()
 		writeFile(t, root, "packages/core/platform/sources/p.yaml", `apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
@@ -337,14 +337,33 @@ spec:
           path: apps/app
 `)
 		writeFile(t, root, "packages/apps/app/Chart.yaml", "apiVersion: v2\nname: app\nversion: 0.1.0\n")
+		return root
+	}
 
+	for _, name := range []string{"cozystack.evil", "community.acme.demo"} {
+		root := writeRepo(t, name)
 		rep, err := ValidateRepo(ValidateOptions{RepoRoot: root})
 		if err != nil {
 			t.Fatalf("ValidateRepo(%s): %v", name, err)
 		}
-		if codeCounts(rep)["ps-name-reserved"] != 0 {
-			t.Errorf("names must be unrestricted now, got a reserved finding for %q: %+v", name, rep.Findings)
+		if codeCounts(rep)["ps-name-reserved"] != 1 {
+			t.Errorf("expected ps-name-reserved for %q, got %+v", name, rep.Findings)
 		}
+		// The escape hatch clears it (caller-side only; the gate never sets it).
+		rep2, _ := ValidateRepo(ValidateOptions{RepoRoot: root, AllowReservedNames: true})
+		if codeCounts(rep2)["ps-name-reserved"] != 0 {
+			t.Errorf("AllowReservedNames should clear the finding for %q", name)
+		}
+	}
+
+	// A neutral name raises no reserved finding.
+	root := writeRepo(t, "acme.demo")
+	rep, err := ValidateRepo(ValidateOptions{RepoRoot: root})
+	if err != nil {
+		t.Fatalf("ValidateRepo(acme.demo): %v", err)
+	}
+	if codeCounts(rep)["ps-name-reserved"] != 0 {
+		t.Errorf("a neutral name must not be flagged reserved: %+v", rep.Findings)
 	}
 }
 
