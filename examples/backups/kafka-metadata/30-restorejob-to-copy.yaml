@@ -1,0 +1,17 @@
+# To-copy restore: apply the source's backed-up topic metadata onto a separate
+# target application, leaving the source running. This is the "bootstrap an empty
+# cluster, then apply the metadata state" flow. The strategy renders against the
+# target (its bootstrap) but reads the S3 object keyed by the SOURCE, via
+# .Backup.ApplicationRef.
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: kafka-meta-src-to-target
+  namespace: tenant-root
+spec:
+  backupRef:
+    name: kafka-meta-src-adhoc
+  targetApplicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Kafka
+    name: kafka-meta-target

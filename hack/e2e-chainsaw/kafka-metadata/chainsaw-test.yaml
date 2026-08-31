@@ -1,0 +1,93 @@
+# Full topic-metadata backup -> in-place + to-copy restore round-trip, driving
+# the validated example scripts (examples/backups/kafka-metadata) as the harness
+# so the test and the documented flow cannot drift. run-all.sh seeds topic
+# `orders` with a per-run retention.ms sentinel, submits an ad-hoc BackupJob
+# against the cozy-default BackupClass (the Kafka strategy exports topic
+# metadata through the Admin API to the system bucket), drops the topic and
+# restores it in place, then restores the metadata onto a fresh empty target —
+# asserting at each step that the topic came back with the exact partitions and
+# retention sentinel, and that the source is left intact. This proves the
+# metadata (not just liveness) round-tripped through object storage.
+#
+# Same harness-driving shape as mongodb-2-backup-roundtrip: a single run step
+# pre-cleans leftover state, drives run-all.sh, and drains in an always-reached
+# finally. Runs in tenant-root (the strategy's backup Job is an in-tenant S3
+# client, and the isolated e2e tenant-test cannot egress to tenant-root's
+# seaweedfs). The system-bucket coordinates and endpoint come from the
+# cozy-default-kafka strategy, so no S3_ENDPOINT override is needed here.
+# KAFKA_IMAGE for the host-side seed/verify pods is resolved from the running
+# operator so it reuses the cached broker image (the backup/restore Jobs use the
+# image pinned in the strategy regardless).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kafka-3-metadata-roundtrip
+spec:
+  namespace: tenant-root
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: kafka-kafka-meta-src
+  - describe:
+      apiVersion: kafka.strimzi.io/v1beta2
+      kind: Kafka
+      name: kafka-kafka-meta-src
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  # The export/import runs in backupstrategy-controller-created Jobs; their pods
+  # carry the kafka.strategy.backups.cozystack.io/mode label.
+  - podLogs:
+      selector: kafka.strategy.backups.cozystack.io/mode
+      tail: 200
+  - podLogs:
+      selector: app.kubernetes.io/instance=kafka-kafka-meta-src
+      tail: 100
+  steps:
+  - name: run
+    try:
+    # Pre-clean: tenant-root is shared and persistent with fixed resource names,
+    # so a run killed before the finally leaves stale state. A leftover
+    # Succeeded BackupJob would satisfy the wait instantly and pass without a
+    # real backup. cleanup.sh is idempotent, so this is a no-op when clean.
+    - script:
+        timeout: 10m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/kafka-metadata/cleanup.sh
+        check:
+          ($error == null): true
+    # 40m budget: two single-broker Strimzi clusters (source + to-copy target,
+    # each boots ZooKeeper then the broker and passes readiness), the metadata
+    # backup, and the in-place + to-copy restores with their verifications.
+    # run-all.sh fails fast on terminal BackupJob/RestoreJob phases and stalled
+    # HelmReleases rather than polling out the budget.
+    - script:
+        timeout: 40m
+        content: |
+          set -eu
+          cd ../../..
+          [ -x examples/backups/kafka-metadata/run-all.sh ] || { echo "kafka-metadata example scripts not found" >&2; exit 1; }
+          KAFKA_IMAGE=$(kubectl -n cozy-kafka-operator get deploy strimzi-cluster-operator \
+            -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="STRIMZI_KAFKA_IMAGES")].value}' \
+            | tr '[:space:]' '\n' | grep '=.*/kafka:' | sed 's/.*=//' | tail -n1)
+          [ -n "$KAFKA_IMAGE" ] || { echo "could not resolve Kafka image from strimzi-cluster-operator" >&2; exit 1; }
+          NAMESPACE="$NAMESPACE" KAFKA_IMAGE="$KAFKA_IMAGE" \
+            examples/backups/kafka-metadata/run-all.sh
+        check:
+          ($error == null): true
+    finally:
+    - description: backup-flow cleanup
+      script:
+        timeout: 10m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/kafka-metadata/cleanup.sh

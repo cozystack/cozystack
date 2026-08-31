@@ -1,0 +1,21 @@
+# Source Kafka application. No backup: block — the platform cozy-default flow
+# carries the storage coordinates; the driver reads topic metadata through the
+# Kafka Admin API and needs nothing from the app spec. The demo topic is seeded
+# via the CLI in run-all.sh (with a retention.ms sentinel), so no chart topics
+# are declared here.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Kafka
+metadata:
+  name: kafka-meta-src
+  namespace: tenant-root
+spec:
+  external: false
+  kafka:
+    replicas: 1
+    size: 2Gi
+    resourcesPreset: "small"
+  zookeeper:
+    replicas: 1
+    size: 1Gi
+    resourcesPreset: "small"
+  topics: []

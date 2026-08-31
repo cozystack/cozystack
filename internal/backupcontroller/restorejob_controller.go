@@ -170,6 +170,8 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.reconcileRabbitmqRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.RedisStrategyKind:
 		return r.reconcileRedisRestore(ctx, restoreJob, backup)
+	case strategyv1alpha1.KafkaStrategyKind:
+		return r.reconcileKafkaRestore(ctx, restoreJob, backup)
 	default:
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
 	}

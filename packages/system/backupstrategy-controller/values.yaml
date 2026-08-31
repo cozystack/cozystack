@@ -75,6 +75,16 @@ backupStrategyController:
       cpu: "1"
       memory: 1Gi
       ephemeral-storage: 4Gi
+  # kafkaBackupClientImage is rendered into the Kafka metadata strategy Pod: it
+  # runs the kafka-*.sh Admin-API CLI (kafka-topics / kafka-configs) plus curl
+  # to read/write the metadata object in the system bucket. Unlike the Altinity
+  # client above, this genuinely needs the Kafka CLI, so it is the upstream
+  # Strimzi Kafka image — the same one the cluster-operator provisions brokers
+  # with (already cached on the nodes), which also bundles bash, curl and
+  # ca-certificates. Keep the tag in sync with the kafka-operator's
+  # STRIMZI_KAFKA_IMAGES; a dedicated pinned-by-digest client image is a
+  # follow-up.
+  kafkaBackupClientImage: "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.8.0"
   replicas: 2
   debug: false
   metrics:
