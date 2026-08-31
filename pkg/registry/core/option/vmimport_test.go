@@ -44,15 +44,32 @@ func TestImportVMProviderShowsNamesAndWritesRefs(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("got %d items, want 2", len(items))
 	}
-	// Sorted by the label a person reads, not by the reference.
-	if items[0].Label != "db-01" || items[0].Value != "vm-7" {
-		t.Errorf("first item = %+v, want db-01/vm-7", items[0])
+	// Sorted by the label a person reads, not by the reference. The label shows
+	// both, because the reference is all a saved task displays afterwards.
+	if items[0].Label != "db-01 (vm-7)" || items[0].Value != "vm-7" {
+		t.Errorf("first item = %+v, want db-01 (vm-7)/vm-7", items[0])
 	}
-	if items[1].Label != "web-01" || items[1].Value != "vm-52" {
-		t.Errorf("second item = %+v, want web-01/vm-52", items[1])
+	if items[1].Label != "web-01 (vm-52)" || items[1].Value != "vm-52" {
+		t.Errorf("second item = %+v, want web-01 (vm-52)/vm-52", items[1])
 	}
 	if items[1].Description != "/dc/vm/web-01" {
 		t.Errorf("path not carried: %q", items[1].Description)
+	}
+}
+
+// A machine the inventory gave no name for still has to be pickable: an empty
+// label makes the widget fall back to showing the reference itself, where
+// composing one would render a stray "(vm-9)" with nothing in front of it.
+func TestImportVMProviderLeavesANamelessMachineToTheWidget(t *testing.T) {
+	dyn := fakeDynWithConfigMaps(inventoryConfigMap("tenant-a", "vcenter",
+		`[{"id":"vm-9","name":""}]`))
+
+	items, err := DefaultParamProviders(dyn)["vmimportvm"](context.Background(), "tenant-a", "vcenter")
+	if err != nil {
+		t.Fatalf("provider returned %v", err)
+	}
+	if len(items) != 1 || items[0].Label != "" || items[0].Value != "vm-9" {
+		t.Errorf("items = %+v", items)
 	}
 }
 

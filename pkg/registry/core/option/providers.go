@@ -132,12 +132,18 @@ func importVMProvider(dyn dynamic.Interface) paramProviderFunc {
 			if vm.ID == "" {
 				continue
 			}
-			// The machine's name is what a person recognises; the managed-object
-			// reference is what the task has to record. Showing one and writing
-			// the other is the whole point of offering this list at all.
+			// The name is what a person recognises and the reference is what the
+			// task records, so the label carries both. Two machines can share a
+			// name in different folders, and the reference is also the only
+			// thing a saved task shows afterwards -- a list of bare names would
+			// be ambiguous to pick from and impossible to check against.
+			label := vm.Name
+			if label != "" {
+				label = fmt.Sprintf("%s (%s)", vm.Name, vm.ID)
+			}
 			items = append(items, corev1alpha1.OptionItem{
 				Value:       vm.ID,
-				Label:       vm.Name,
+				Label:       label,
 				Description: vm.Path,
 			})
 		}
