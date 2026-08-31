@@ -8,12 +8,6 @@
 package tapconst
 
 const (
-	// Prefix is retained only until the reserved-name check and the apiserver
-	// Tap compute stop referencing it; tapped repositories keep their own
-	// declared names, so nothing renames into this prefix any more.
-	//
-	// Deprecated: tap-ness is identified by Label, not by this name prefix.
-	Prefix = "community."
 	// Label marks a Flux source (and the PackageSources materialized from it) as
 	// belonging to a tap. It is load-bearing: the untap/disconnect guard, the
 	// tapped-vs-official badge, and idempotent re-tap all key on this marker

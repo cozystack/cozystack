@@ -26,14 +26,16 @@ type connectTarget struct {
 	Org  string
 	Repo string
 	Tag  string
-	// PackageSourceName is community.<org>.<repo>; FluxSourceName is its RFC-1123 form.
-	PackageSourceName string
-	FluxSourceName    string
+	// FluxSourceName is the RFC-1123 name of the tap's OCIRepository. The tapped
+	// repository keeps its own declared PackageSource name(s), which are not
+	// known until the artifact is materialized, so the source (this name) is the
+	// tap's stable identity, not a name derived from the artifact.
+	FluxSourceName string
 }
 
 // parseConnectURL parses an oci:// URL (and an optional tag override) into the
-// names a connect creates. It mirrors the CLI's tap parsing so the API and CLI
-// agree on community naming.
+// tap's Flux source name. It mirrors the CLI's fluxSourceName so the API and
+// CLI agree on the source object's identity.
 func parseConnectURL(url, tagOverride string) (connectTarget, error) {
 	if !strings.HasPrefix(url, "oci://") {
 		return connectTarget{}, fmt.Errorf("url %q must start with oci://", url)
@@ -60,16 +62,11 @@ func parseConnectURL(url, tagOverride string) (connectTarget, error) {
 	if t.Tag == "" {
 		t.Tag = "latest"
 	}
-	nameBase := t.Repo
-	if t.Org != "" {
-		nameBase = t.Org + "." + t.Repo
-	}
-	t.PackageSourceName = tapconst.Prefix + nameBase
 	fluxBase := t.Repo
 	if t.Org != "" {
 		fluxBase = t.Org + "-" + t.Repo
 	}
-	t.FluxSourceName = "community-" + sanitizeDNSRe.ReplaceAllString(strings.ToLower(fluxBase), "-")
+	t.FluxSourceName = "tap-" + sanitizeDNSRe.ReplaceAllString(strings.ToLower(fluxBase), "-")
 	return t, nil
 }
 
@@ -131,7 +128,9 @@ func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.Applica
 			ResourceVersion: "0",
 		},
 		Spec: corev1alpha1.TapSpec{
-			Community: strings.HasPrefix(ps.Name, tapconst.Prefix),
+			// Tap-ness is marked by the marketplace-tap label, not a name prefix:
+			// a tapped repository keeps its own declared name.
+			Community: ps.GetLabels()[tapconst.Label] == "true",
 		},
 	}
 	if ps.Spec.SourceRef != nil {
@@ -177,5 +176,32 @@ func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.Applica
 	sort.Slice(tap.Spec.Packages, func(i, j int) bool {
 		return tap.Spec.Packages[i].Name < tap.Spec.Packages[j].Name
 	})
+	return tap
+}
+
+// buildPendingTap represents a tap whose OCIRepository exists but whose
+// PackageSource has not been materialized yet: a connect in progress, or one
+// blocked by a materialization error (e.g. a name collision with a core
+// component). Its identity is the source object's own name, which is stable
+// from connect onward, and it surfaces the block reason so the dashboard shows
+// it rather than the tap silently never appearing.
+func buildPendingTap(sourceName, errMessage string) corev1alpha1.Tap {
+	tap := corev1alpha1.Tap{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+			Kind:       "Tap",
+		},
+		ObjectMeta: metav1.ObjectMeta{Name: sourceName, ResourceVersion: "0"},
+		Spec: corev1alpha1.TapSpec{
+			Community: true,
+			Source:    corev1alpha1.TapSource{Kind: "OCIRepository", Name: sourceName},
+			Ready:     false,
+		},
+	}
+	if errMessage != "" {
+		tap.Spec.Message = errMessage
+	} else {
+		tap.Spec.Message = "connecting: waiting for the artifact to be pulled and materialized"
+	}
 	return tap
 }

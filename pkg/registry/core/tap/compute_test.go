@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 )
 
 func TestArtifactName(t *testing.T) {
@@ -45,9 +46,12 @@ func TestIndexAppDefsByChartRef(t *testing.T) {
 
 func TestBuildTap(t *testing.T) {
 	ps := cozyv1alpha1.PackageSource{
-		ObjectMeta: metav1.ObjectMeta{Name: "community.org.repo"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "acme.repo",
+			Labels: map[string]string{tapconst.Label: "true"},
+		},
 		Spec: cozyv1alpha1.PackageSourceSpec{
-			SourceRef: &cozyv1alpha1.PackageSourceRef{Kind: "OCIRepository", Name: "community-org-repo", Namespace: "cozy-system"},
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Kind: "OCIRepository", Name: "tap-acme-repo", Namespace: "cozy-system"},
 			Variants: []cozyv1alpha1.Variant{
 				{
 					Name: "default",
@@ -72,19 +76,19 @@ func TestBuildTap(t *testing.T) {
 	}
 	// Only the app component "foo" (default variant) has a matching ApplicationDefinition.
 	idx := indexAppDefsByChartRef([]cozyv1alpha1.ApplicationDefinition{
-		appDef("foo", "Foo", artifactName("community.org.repo", "default", "foo"),
+		appDef("foo", "Foo", artifactName("acme.repo", "default", "foo"),
 			&cozyv1alpha1.ApplicationDefinitionDashboard{Description: "A foo", Category: "Storage", Tags: []string{"x"}, Icon: "data:svg"}),
 	})
 
 	tap := buildTap(ps, idx)
 
 	if !tap.Spec.Community {
-		t.Errorf("expected Community=true for community.* source")
+		t.Errorf("expected Community=true for a labeled tap source")
 	}
 	if !tap.Spec.Ready || tap.Spec.Message != "all good" {
 		t.Errorf("ready/message not read from status: %+v", tap.Spec)
 	}
-	if tap.Spec.Source.Kind != "OCIRepository" || tap.Spec.Source.Name != "community-org-repo" {
+	if tap.Spec.Source.Kind != "OCIRepository" || tap.Spec.Source.Name != "tap-acme-repo" {
 		t.Errorf("source not set: %+v", tap.Spec.Source)
 	}
 	if len(tap.Spec.Packages) != 1 {
@@ -112,9 +116,28 @@ func TestBuildTapNoMatchingAppDef(t *testing.T) {
 	}
 	tap := buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{})
 	if tap.Spec.Community {
-		t.Errorf("cozystack.* must not be flagged community")
+		t.Errorf("a source without the tap label must not be flagged community")
 	}
 	if len(tap.Spec.Packages) != 0 {
 		t.Errorf("expected no packages without matching ApplicationDefinitions, got %+v", tap.Spec.Packages)
+	}
+}
+
+func TestBuildPendingTap(t *testing.T) {
+	// No error: a connecting message, not ready, community, identified by source.
+	p := buildPendingTap("tap-acme-repo", "")
+	if p.Name != "tap-acme-repo" || !p.Spec.Community || p.Spec.Ready {
+		t.Errorf("unexpected pending tap: %+v", p)
+	}
+	if p.Spec.Source.Kind != "OCIRepository" || p.Spec.Source.Name != "tap-acme-repo" {
+		t.Errorf("pending tap source not set: %+v", p.Spec.Source)
+	}
+	if p.Spec.Message == "" {
+		t.Error("pending tap must carry a connecting message")
+	}
+	// A materialization error surfaces as the message.
+	e := buildPendingTap("tap-acme-repo", `a PackageSource named "acme.repo" already exists`)
+	if e.Spec.Ready || e.Spec.Message != `a PackageSource named "acme.repo" already exists` {
+		t.Errorf("expected the error surfaced as the message, got %+v", e.Spec)
 	}
 }

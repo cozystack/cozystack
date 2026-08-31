@@ -42,6 +42,15 @@ func psObj(name, srcName string) *unstructured.Unstructured {
 	}}
 }
 
+// tapPsObj is a materialized tap's PackageSource: like psObj but stamped with
+// the marketplace-tap marker label, so the label-based disconnect guard permits
+// it.
+func tapPsObj(name, srcName string) *unstructured.Unstructured {
+	u := psObj(name, srcName)
+	u.SetLabels(map[string]string{"apps.cozystack.io/marketplace-tap": "true"})
+	return u
+}
+
 func ociRepoObj(name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "source.toolkit.fluxcd.io/v1",
@@ -63,25 +72,27 @@ func fakeREST(objs ...runtime.Object) *REST {
 }
 
 func TestDeleteRefusesOfficialTap(t *testing.T) {
-	r := fakeREST()
+	// An existing PackageSource without the tap marker label is official and
+	// protected from disconnect.
+	r := fakeREST(psObj("cozystack.postgres-application", "cozystack-source"))
 	_, _, err := r.Delete(context.Background(), "cozystack.postgres-application", nil, nil)
 	if err == nil || !apierrors.IsForbidden(err) {
-		t.Fatalf("expected Forbidden deleting an official tap, got %v", err)
+		t.Fatalf("expected Forbidden deleting an official (unlabeled) source, got %v", err)
 	}
 }
 
 func TestDeleteCommunityTapRemovesSource(t *testing.T) {
-	r := fakeREST(psObj("community.a.b", "community-a-b"), ociRepoObj("community-a-b"))
-	obj, ok, err := r.Delete(context.Background(), "community.a.b", nil, nil)
+	r := fakeREST(tapPsObj("a.b", "tap-a-b"), ociRepoObj("tap-a-b"))
+	obj, ok, err := r.Delete(context.Background(), "a.b", nil, nil)
 	if err != nil || !ok || obj == nil {
 		t.Fatalf("delete failed: ok=%v err=%v", ok, err)
 	}
 	// PackageSource is gone.
-	if _, err := r.dyn.Resource(gvrPackageSources).Get(context.Background(), "community.a.b", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := r.dyn.Resource(gvrPackageSources).Get(context.Background(), "a.b", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("expected PackageSource deleted, got err=%v", err)
 	}
 	// The unreferenced OCIRepository is gone too.
-	if _, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-a-b", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-a-b", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("expected OCIRepository deleted, got err=%v", err)
 	}
 }
@@ -89,11 +100,11 @@ func TestDeleteCommunityTapRemovesSource(t *testing.T) {
 func TestDeleteKeepsSharedSource(t *testing.T) {
 	// Two PackageSources reference the same Flux source; deleting one must keep it.
 	r := fakeREST(
-		psObj("community.a.b", "shared-src"),
-		psObj("community.c.d", "shared-src"),
+		tapPsObj("a.b", "shared-src"),
+		tapPsObj("c.d", "shared-src"),
 		ociRepoObj("shared-src"),
 	)
-	if _, ok, err := r.Delete(context.Background(), "community.a.b", nil, nil); err != nil || !ok {
+	if _, ok, err := r.Delete(context.Background(), "a.b", nil, nil); err != nil || !ok {
 		t.Fatalf("delete failed: ok=%v err=%v", ok, err)
 	}
 	if _, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "shared-src", metav1.GetOptions{}); err != nil {
@@ -103,37 +114,38 @@ func TestDeleteKeepsSharedSource(t *testing.T) {
 
 func TestDeleteNotFound(t *testing.T) {
 	r := fakeREST()
-	_, _, err := r.Delete(context.Background(), "community.missing.x", nil, nil)
+	_, _, err := r.Delete(context.Background(), "missing.x", nil, nil)
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("expected NotFound, got %v", err)
 	}
 }
 
 // orphanOciRepo is a tap OCIRepository with no materialized PackageSource yet
-// (a pending or failed connect).
-func orphanOciRepo(fluxName, tapName string) *unstructured.Unstructured {
+// (a pending or failed connect). Its tap-name annotation records its own object
+// name, which is the tap's identity before materialization.
+func orphanOciRepo(fluxName string) *unstructured.Unstructured {
 	u := ociRepoObj(fluxName)
 	u.SetLabels(map[string]string{"apps.cozystack.io/marketplace-tap": "true"})
-	u.SetAnnotations(map[string]string{"apps.cozystack.io/tap-name": tapName})
+	u.SetAnnotations(map[string]string{"apps.cozystack.io/tap-name": fluxName})
 	return u
 }
 
 func TestDeleteOrphanTapSource(t *testing.T) {
 	// No PackageSource exists, only the labeled OCIRepository from a pending connect.
-	r := fakeREST(orphanOciRepo("community-a-b", "community.a.b"))
-	obj, ok, err := r.Delete(context.Background(), "community.a.b", nil, nil)
+	r := fakeREST(orphanOciRepo("tap-a-b"))
+	obj, ok, err := r.Delete(context.Background(), "tap-a-b", nil, nil)
 	if err != nil || !ok || obj == nil {
 		t.Fatalf("expected orphan tap source removed: ok=%v err=%v", ok, err)
 	}
-	if _, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-a-b", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-a-b", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("expected orphan OCIRepository deleted, got %v", err)
 	}
 }
 
 func TestDeleteOrphanNoMatch(t *testing.T) {
 	// A labeled source exists but for a different tap name -> still NotFound.
-	r := fakeREST(orphanOciRepo("community-a-b", "community.a.b"))
-	if _, _, err := r.Delete(context.Background(), "community.other.x", nil, nil); !apierrors.IsNotFound(err) {
+	r := fakeREST(orphanOciRepo("tap-a-b"))
+	if _, _, err := r.Delete(context.Background(), "tap-other-x", nil, nil); !apierrors.IsNotFound(err) {
 		t.Fatalf("expected NotFound for a non-matching orphan, got %v", err)
 	}
 }
@@ -143,7 +155,7 @@ func TestParseConnectURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if got.URL != "oci://ghcr.io/foo/bar" || got.Tag != "v2" || got.PackageSourceName != "community.foo.bar" || got.FluxSourceName != "community-foo-bar" {
+	if got.URL != "oci://ghcr.io/foo/bar" || got.Tag != "v2" || got.FluxSourceName != "tap-foo-bar" {
 		t.Fatalf("unexpected parse: %+v", got)
 	}
 	// tag override wins over the URL tag.
@@ -176,7 +188,7 @@ func TestCreateRepeatPreservesFinalizerAndRevision(t *testing.T) {
 	// A source already connected and materialized carries the operator's
 	// finalizer and materialized-revision annotation; a repeat connect must
 	// update the tag without stripping them.
-	existing := ociRepoObj("community-foo-bar")
+	existing := ociRepoObj("tap-foo-bar")
 	// Same repository, connected earlier at a different tag.
 	_ = unstructured.SetNestedField(existing.Object, "oci://ghcr.io/foo/bar", "spec", "url")
 	existing.SetFinalizers([]string{"apps.cozystack.io/tap-materializer"})
@@ -187,7 +199,7 @@ func TestCreateRepeatPreservesFinalizerAndRevision(t *testing.T) {
 	if _, err := r.Create(context.Background(), in, nil, nil); err != nil {
 		t.Fatalf("repeat create: %v", err)
 	}
-	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-foo-bar", metav1.GetOptions{})
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-foo-bar", metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +212,7 @@ func TestCreateRepeatPreservesFinalizerAndRevision(t *testing.T) {
 	if tag, _, _ := unstructured.NestedString(u.Object, "spec", "ref", "tag"); tag != "v2" {
 		t.Errorf("repeat connect did not update the tag, got %q", tag)
 	}
-	if u.GetAnnotations()["apps.cozystack.io/tap-name"] != "community.foo.bar" {
+	if u.GetAnnotations()["apps.cozystack.io/tap-name"] != "tap-foo-bar" {
 		t.Error("repeat connect did not set the tap-name annotation")
 	}
 }
@@ -208,7 +220,7 @@ func TestCreateRepeatPreservesFinalizerAndRevision(t *testing.T) {
 func TestCreateRefusesConflictingURL(t *testing.T) {
 	// A source with the same derived name but a different registry host must not
 	// be silently retargeted.
-	existing := ociRepoObj("community-foo-bar")
+	existing := ociRepoObj("tap-foo-bar")
 	_ = unstructured.SetNestedField(existing.Object, "oci://other.host/foo/bar", "spec", "url")
 	r := fakeREST(existing)
 
@@ -218,7 +230,7 @@ func TestCreateRefusesConflictingURL(t *testing.T) {
 		t.Fatalf("expected Conflict for a different repository at the same name, got %v", err)
 	}
 	// The existing source keeps its original URL.
-	u, _ := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-foo-bar", metav1.GetOptions{})
+	u, _ := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-foo-bar", metav1.GetOptions{})
 	if url, _, _ := unstructured.NestedString(u.Object, "spec", "url"); url != "oci://other.host/foo/bar" {
 		t.Errorf("existing source URL was overwritten: %q", url)
 	}
@@ -232,21 +244,21 @@ func TestCreateMakesLabeledSource(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	tap := out.(*corev1alpha1.Tap)
-	if tap.Name != "community.foo.bar" || tap.Spec.Ready || !tap.Spec.Community {
+	if tap.Name != "tap-foo-bar" || tap.Spec.Ready || !tap.Spec.Community {
 		t.Fatalf("unexpected returned tap: %+v", tap.Spec)
 	}
 	// The returned object must never echo the url or secret back.
 	if tap.Spec.URL != "" || tap.Spec.SecretRef != "" {
 		t.Errorf("create response leaked connect inputs: %+v", tap.Spec)
 	}
-	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "community-foo-bar", metav1.GetOptions{})
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-foo-bar", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("OCIRepository not created: %v", err)
 	}
 	if u.GetLabels()["apps.cozystack.io/marketplace-tap"] != "true" {
 		t.Errorf("OCIRepository missing tap label: %v", u.GetLabels())
 	}
-	if u.GetAnnotations()["apps.cozystack.io/tap-name"] != "community.foo.bar" {
+	if u.GetAnnotations()["apps.cozystack.io/tap-name"] != "tap-foo-bar" {
 		t.Errorf("OCIRepository missing tap-name annotation: %v", u.GetAnnotations())
 	}
 	secretName, _, _ := unstructured.NestedString(u.Object, "spec", "secretRef", "name")

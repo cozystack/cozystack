@@ -667,7 +667,7 @@ func schema_pkg_apis_core_v1alpha1_TapSpec(ref common.ReferenceCallback) common.
 					},
 					"community": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Community is true for community-tapped sources (community.* names), false for official platform sources.",
+							Description: "Community is true for tapped sources (marked with the marketplace-tap label), false for official platform sources.",
 							Type:        []string{"boolean"},
 							Format:      "",
 						},

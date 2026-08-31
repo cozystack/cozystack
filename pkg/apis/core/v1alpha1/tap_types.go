@@ -32,8 +32,8 @@ type Tap struct {
 type TapSpec struct {
 	// Source is where the tap's artifact comes from (no credentials).
 	Source TapSource `json:"source,omitempty"`
-	// Community is true for community-tapped sources (community.* names), false
-	// for official platform sources.
+	// Community is true for tapped sources (marked with the marketplace-tap
+	// label), false for official platform sources.
 	Community bool `json:"community,omitempty"`
 	// Ready reflects the PackageSource's Ready condition.
 	Ready bool `json:"ready,omitempty"`

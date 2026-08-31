@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -93,11 +92,38 @@ func (r *REST) List(ctx context.Context, _ *metainternal.ListOptions) (runtime.O
 		},
 		ListMeta: metav1.ListMeta{ResourceVersion: "0"},
 	}
+	materializedSources := map[string]bool{}
 	for _, ps := range pss {
 		out.Items = append(out.Items, buildTap(ps, idx))
+		if ref := ps.Spec.SourceRef; ref != nil && ref.Kind == "OCIRepository" && ref.Name != "" {
+			materializedSources[ref.Name] = true
+		}
+	}
+	// Surface tap sources with no materialized PackageSource yet (a connect in
+	// progress, or one blocked by a collision) so the pending or errored state
+	// shows in the dashboard instead of the tap silently never appearing.
+	if repos, err := r.listTapSources(ctx); err == nil {
+		for i := range repos {
+			name := repos[i].GetName()
+			if materializedSources[name] {
+				continue
+			}
+			out.Items = append(out.Items, buildPendingTap(name, repos[i].GetAnnotations()[tapconst.MaterializeErrorAnnotation]))
+		}
 	}
 	sort.Slice(out.Items, func(i, j int) bool { return out.Items[i].Name < out.Items[j].Name })
 	return out, nil
+}
+
+// listTapSources lists the labeled tap OCIRepositories in cozy-system.
+func (r *REST) listTapSources(ctx context.Context) ([]unstructured.Unstructured, error) {
+	ul, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").List(ctx, metav1.ListOptions{
+		LabelSelector: tapconst.Label + "=true",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ul.Items, nil
 }
 
 func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
@@ -152,7 +178,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 			"name":        target.FluxSourceName,
 			"namespace":   "cozy-system",
 			"labels":      map[string]interface{}{tapconst.Label: "true"},
-			"annotations": map[string]interface{}{tapconst.NameAnnotation: target.PackageSourceName},
+			"annotations": map[string]interface{}{tapconst.NameAnnotation: target.FluxSourceName},
 		},
 		"spec": map[string]interface{}{
 			"url":      target.URL,
@@ -169,19 +195,19 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	src := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system")
 	if _, err := src.Create(ctx, repo, metav1.CreateOptions{FieldManager: "cozystack-api"}); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
-			return nil, apierrors.NewInternalError(fmt.Errorf("create Flux source for tap %s: %w", target.PackageSourceName, err))
+			return nil, apierrors.NewInternalError(fmt.Errorf("create Flux source for tap %s: %w", target.FluxSourceName, err))
 		}
 		cur, gerr := src.Get(ctx, target.FluxSourceName, metav1.GetOptions{})
 		if gerr != nil {
-			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.PackageSourceName, gerr))
+			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.FluxSourceName, gerr))
 		}
 		// Refuse to silently retarget: two repositories that share an org/repo
 		// path on different registry hosts derive the same name, so a blind
 		// update would repoint the first at the second. Require a disconnect
 		// first when the existing source points at a different URL.
 		if curURL, _, _ := unstructured.NestedString(cur.Object, "spec", "url"); curURL != "" && curURL != target.URL {
-			return nil, apierrors.NewConflict(r.gvr.GroupResource(), target.PackageSourceName,
-				fmt.Errorf("a different repository (%s) is already connected as %q; disconnect it before connecting %s", curURL, target.PackageSourceName, target.URL))
+			return nil, apierrors.NewConflict(r.gvr.GroupResource(), target.FluxSourceName,
+				fmt.Errorf("a different repository (%s) is already connected as %q; disconnect it before connecting %s", curURL, target.FluxSourceName, target.URL))
 		}
 		// Update only the fields this API owns (spec, the tap label and name
 		// annotation) on the FETCHED object, so the operator's finalizer and
@@ -197,17 +223,17 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		if ann == nil {
 			ann = map[string]string{}
 		}
-		ann[tapconst.NameAnnotation] = target.PackageSourceName
+		ann[tapconst.NameAnnotation] = target.FluxSourceName
 		cur.SetAnnotations(ann)
 		if _, err := src.Update(ctx, cur, metav1.UpdateOptions{FieldManager: "cozystack-api"}); err != nil {
-			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.PackageSourceName, err))
+			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.FluxSourceName, err))
 		}
 	}
 
 	// Return catalog metadata only: never the url or the secret reference.
 	return &corev1alpha1.Tap{
 		TypeMeta:   metav1.TypeMeta{APIVersion: corev1alpha1.SchemeGroupVersion.String(), Kind: "Tap"},
-		ObjectMeta: metav1.ObjectMeta{Name: target.PackageSourceName, ResourceVersion: "0"},
+		ObjectMeta: metav1.ObjectMeta{Name: target.FluxSourceName, ResourceVersion: "0"},
 		Spec: corev1alpha1.TapSpec{
 			Source:    corev1alpha1.TapSource{Kind: "OCIRepository", Name: target.FluxSourceName},
 			Community: true,
@@ -222,18 +248,14 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 // -----------------------------------------------------------------------------
 
 func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, _ *metav1.DeleteOptions) (runtime.Object, bool, error) {
-	if !strings.HasPrefix(name, tapconst.Prefix) {
-		return nil, false, apierrors.NewForbidden(r.gvr.GroupResource(), name,
-			fmt.Errorf("only %s* taps can be disconnected; official sources are protected", tapconst.Prefix))
-	}
-
 	u, err := r.dyn.Resource(gvrPackageSources).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// A tap connected but not yet (or never) materialized has an
-			// OCIRepository but no PackageSource. Fall back to removing that
-			// source so a failed or pending connect is still recoverable from
-			// the dashboard rather than orphaning a finalized OCIRepository.
+			// OCIRepository but no PackageSource (name is then the source's own
+			// name). Fall back to removing that source so a pending or
+			// collision-blocked connect is still recoverable from the dashboard
+			// rather than orphaning a finalized OCIRepository.
 			return r.deleteOrphanTapSource(ctx, name)
 		}
 		return nil, false, apierrors.NewInternalError(fmt.Errorf("get PackageSource %q: %w", name, err))
@@ -241,6 +263,12 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	var ps cozyv1alpha1.PackageSource
 	if err := fromUnstructured(u, &ps); err != nil {
 		return nil, false, apierrors.NewInternalError(fmt.Errorf("decode PackageSource %q: %w", name, err))
+	}
+	// A tap is identified by its marker label, not a name prefix; official
+	// PackageSources (no label) are protected from disconnect.
+	if ps.GetLabels()[tapconst.Label] != "true" {
+		return nil, false, apierrors.NewForbidden(r.gvr.GroupResource(), name,
+			fmt.Errorf("%q is not a tapped repository; official sources are protected", name))
 	}
 
 	tap := buildTap(ps, r.appDefIndex(ctx))
