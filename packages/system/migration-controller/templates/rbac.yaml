@@ -3,10 +3,14 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: forklift.cozystack.io:controller
 rules:
-# The API this controller owns.
+# The API this controller owns. `update` covers finalizers and nothing else:
+# a task is held open while the engine's transfer volumes are removed, and
+# releasing it means writing metadata.finalizers, which is a write to the object
+# rather than to its status. Spec fields are never written — every one of them
+# is immutable on admission anyway.
 - apiGroups: ["forklift.cozystack.io"]
   resources: ["vmimportsources", "vmimporttasks"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["get", "list", "watch", "update"]
 - apiGroups: ["forklift.cozystack.io"]
   resources: ["vmimportsources/status", "vmimporttasks/status"]
   verbs: ["get", "update", "patch"]
