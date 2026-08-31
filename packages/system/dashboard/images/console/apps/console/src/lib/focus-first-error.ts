@@ -4,14 +4,39 @@ import type { RJSFValidationError } from "@rjsf/utils"
  * RJSF builds `property` as the JSON-pointer instance path with the slashes
  * swapped for dots (`processRawValidationErrors.js`), so the path is always
  * dotted and never bracketed -- an array index arrives as `.items.0.name`.
- *
- * The flattening is lossy for a property whose own name contains a dot, which
- * an additionalProperties map keyed `ghcr.io` produces: the split yields one
- * segment too many and the generated id does not match the rendered one, so
- * that field is not brought into view. Pinned in the tests.
  */
 function propertySegments(property: string): string[] {
   return property.split(".").filter((segment) => segment !== "")
+}
+
+/**
+ * The flattening is lossy: a dot inside one property name is indistinguishable
+ * from the separator between two, and a map keyed `john.doe` or `ghcr.io`
+ * produces exactly that. So try the plain split first, then every way of
+ * gluing adjacent segments back together with the dot they may have come from.
+ * Bounded, because the count doubles with each segment and only the first
+ * matching id is used.
+ */
+function candidateIds(
+  segments: string[],
+  idPrefix: string,
+  idSeparator: string,
+): string[] {
+  const ids: string[] = []
+  const build = (index: number, parts: string[]) => {
+    if (ids.length >= 64) return
+    if (index === segments.length) {
+      ids.push([idPrefix, ...parts].join(idSeparator))
+      return
+    }
+    build(index + 1, [...parts, segments[index]])
+    if (parts.length > 0) {
+      const glued = `${parts[parts.length - 1]}.${segments[index]}`
+      build(index + 1, [...parts.slice(0, -1), glued])
+    }
+  }
+  build(0, [])
+  return ids
 }
 
 /**
@@ -33,7 +58,12 @@ export function focusFirstError(
   idPrefix = "root",
   idSeparator = "_",
 ) {
-  const id = [idPrefix, ...propertySegments(error.property ?? "")].join(idSeparator)
+  const candidates = candidateIds(
+    propertySegments(error.property ?? ""),
+    idPrefix,
+    idSeparator,
+  )
+  const id = candidates[0]
   const quote = (v: string) => v.replace(/["\\]/g, "\\$&")
   const escaped = quote(id)
   const escapedSeparator = quote(idSeparator)
@@ -44,8 +74,12 @@ export function focusFirstError(
     ...controls.map((tag) => `${tag}[id^="${escaped}${escapedSeparator}"]`),
     ...controls.map((tag) => `${tag}[name^="${escaped}-"]`),
   ].join(", ")
-  const field =
-    document.getElementById(id) ?? document.querySelector<HTMLElement>(fallback)
+  // An exact id is unambiguous, so try every candidate before falling back to
+  // the heuristic descendant match, which only makes sense for the plain split.
+  const exact = candidates
+    .map((candidate) => document.getElementById(candidate))
+    .find((element): element is HTMLElement => element !== null)
+  const field = exact ?? document.querySelector<HTMLElement>(fallback)
   field?.scrollIntoView?.({ block: "center" })
   field?.focus?.({ preventScroll: true })
 }
