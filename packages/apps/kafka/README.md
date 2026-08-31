@@ -98,9 +98,11 @@ Existing ZooKeeper-based instances are migrated automatically on the next chart 
 - Monitor `status.kafkaMetadataState` on the Kafka CR directly.
 - If migration gets stuck before `KRaftPostMigration`, Strimzi's `rollback` annotation stays available as a manual escape hatch: `kubectl annotate kafka <release> strimzi.io/kraft=rollback --overwrite`, then delete the failed Job and retry.
 
-### One Kafka per namespace
+### Multiple Kafka clusters per namespace
 
-This chart runs at most one Kafka cluster per namespace, and fails the render (with a clear message) if you deploy a second one into a namespace that already has one. The reason is upstream: the broker `KafkaNodePool` must be named exactly `kafka` for KRaft (and to adopt an existing ZooKeeper cluster's `<cluster>-kafka-N` brokers and data during migration), but `KafkaNodePool` object names are unique within a namespace, so two clusters cannot both own a `kafka` pool there. This matches Strimzi's own guidance to run one Kafka cluster per namespace — see [strimzi/strimzi-kafka-operator discussions/11120](https://github.com/orgs/strimzi/discussions/11120). Deploy each Kafka in its own namespace.
+Fresh KRaft clusters can coexist in one namespace: each one's node pools are release-scoped (`<release>-broker`, `<release>-controller`), which is unique because `KafkaNodePool` object names are namespace-unique, and every pod/PVC/Service is already prefixed by the (unique) cluster name. So you can deploy any number of new Kafka instances side by side.
+
+The one exception is the ZooKeeper→KRaft migration path. To adopt an existing cluster's `<cluster>-kafka-N` brokers and their data in place, the broker pool must be named exactly `kafka`, and that fixed name is namespace-unique — so only one cluster per namespace can be migrated from ZooKeeper. A second migration in a namespace that already has a `kafka` pool fails the render with a clear message (Strimzi's own guidance is one Kafka per namespace for this reason — [strimzi/strimzi-kafka-operator discussions/11120](https://github.com/orgs/strimzi/discussions/11120)). Fresh KRaft clusters are never affected; migrate co-namespaced ZooKeeper clusters one at a time or in separate namespaces.
 
 ### Deletion and PVC retention
 

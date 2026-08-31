@@ -181,7 +181,7 @@ spec:
               apiVersion: kafka.strimzi.io/v1beta2
               kind: KafkaNodePool
               metadata:
-                name: controller
+                name: ${name}-controller
                 namespace: ${ns}
                 labels:
                   strimzi.io/cluster: ${name}
