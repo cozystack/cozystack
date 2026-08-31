@@ -52,6 +52,13 @@ rules:
 - apiGroups: ["apps.cozystack.io"]
   resources: ["vmdisks"]
   verbs: ["get", "watch", "list"]
+# The sourceRef picker on a VMImportTask is an Option provider, which lists
+# the sources through the dynamic client under this ServiceAccount. Without
+# the group here the provider registers and then answers with an empty list,
+# so the form offers no connection to import from.
+- apiGroups: ["forklift.cozystack.io"]
+  resources: ["vmimportsources"]
+  verbs: ["get", "watch", "list"]
 # The SecurityGroup resource is a projection over CiliumNetworkPolicy: the
 # storage CRUDs these objects with the cozystack-api ServiceAccount.
 - apiGroups: ["cilium.io"]
