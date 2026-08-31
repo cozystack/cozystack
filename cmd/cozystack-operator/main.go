@@ -29,6 +29,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
@@ -716,9 +717,27 @@ func installPlatformPackageSource(ctx context.Context, k8sClient client.Client, 
 
 	logger.Info("Applying platform PackageSource", "name", packageSourceName)
 
+	// Never overwrite a PackageSource the platform does not own. If a marketplace
+	// tap has materialized one under this name (a third party took a name the
+	// platform later ships), fail loudly and leave the object untouched instead
+	// of silently replacing a user's application. The tap marker label identifies
+	// such an object; the field-ownership backstop below catches any other owner.
+	existing := &cozyv1alpha1.PackageSource{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: packageSourceName}, existing); err == nil {
+		if existing.GetLabels()[tapconst.Label] == "true" {
+			return fmt.Errorf("refusing to apply platform PackageSource %s: it is owned by a marketplace tap (source %q); untap it to resolve the name conflict before the platform can manage this name",
+				packageSourceName, existing.GetAnnotations()[tapconst.SourceAnnotation])
+		}
+	} else if client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("failed to check existing PackageSource %s: %w", packageSourceName, err)
+	}
+
+	// Force is deliberately omitted: server-side apply then surfaces a
+	// field-ownership conflict (from any manager other than cozystack-operator)
+	// as an error instead of silently stealing the object. Re-applying the
+	// platform's own PackageSource never conflicts.
 	patchOptions := &client.PatchOptions{
 		FieldManager: "cozystack-operator",
-		Force:        func() *bool { b := true; return &b }(),
 	}
 
 	if err := k8sClient.Patch(ctx, ps, client.Apply, patchOptions); err != nil {

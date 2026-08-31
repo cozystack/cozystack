@@ -18,9 +18,11 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -91,49 +93,90 @@ func TestInstallPlatformPackageSource_Creates(t *testing.T) {
 
 func TestInstallPlatformPackageSource_Updates(t *testing.T) {
 	s := newTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(s).Build()
+	ctx := context.Background()
 
-	existing := &cozyv1alpha1.PackageSource{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            "cozystack.cozystack-platform",
-			ResourceVersion: "1",
-			Labels: map[string]string{
-				"custom-label": "should-be-preserved",
-			},
-		},
-		Spec: cozyv1alpha1.PackageSourceSpec{
-			SourceRef: &cozyv1alpha1.PackageSourceRef{
-				Kind:      "OCIRepository",
-				Name:      "old-name",
-				Namespace: "cozy-system",
-			},
-		},
+	// The first apply establishes the operator as the owner of the object.
+	if err := installPlatformPackageSource(ctx, k8sClient, "cozystack-platform", "OCIRepository"); err != nil {
+		t.Fatalf("first apply: %v", err)
 	}
-
-	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(existing).Build()
-
-	err := installPlatformPackageSource(context.Background(), k8sClient, "cozystack-platform", "OCIRepository")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// Re-applying as the same owner is a legitimate update, so it must not
+	// conflict even though Force is no longer set. (A conflict would only arise
+	// against a different manager, which the refusal tests cover.)
+	if err := installPlatformPackageSource(ctx, k8sClient, "cozystack-platform", "OCIRepository"); err != nil {
+		t.Fatalf("re-apply for the operator's own object must not conflict: %v", err)
 	}
 
 	ps := &cozyv1alpha1.PackageSource{}
-	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "cozystack.cozystack-platform"}, ps); err != nil {
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: "cozystack.cozystack-platform"}, ps); err != nil {
 		t.Fatalf("PackageSource not found: %v", err)
 	}
-
-	// Verify sourceRef was updated
 	if ps.Spec.SourceRef.Name != "cozystack-platform" {
-		t.Errorf("expected updated sourceRef.name %q, got %q", "cozystack-platform", ps.Spec.SourceRef.Name)
+		t.Errorf("expected sourceRef.name %q, got %q", "cozystack-platform", ps.Spec.SourceRef.Name)
 	}
-
-	// Verify all 4 variants are present after update
 	if len(ps.Spec.Variants) != 4 {
-		t.Errorf("expected 4 variants after update, got %d", len(ps.Spec.Variants))
+		t.Errorf("expected 4 variants, got %d", len(ps.Spec.Variants))
 	}
+}
 
-	// Verify that labels set by other controllers are preserved (SSA does not overwrite unmanaged fields)
-	if ps.Labels["custom-label"] != "should-be-preserved" {
-		t.Errorf("expected custom-label to be preserved, got %q", ps.Labels["custom-label"])
+// TestInstallPlatformPackageSource_RefusesTapOwned asserts that when a
+// marketplace tap has materialized a PackageSource under a name the platform
+// later ships, the platform refuses to overwrite it, names the conflict, and
+// leaves the object untouched (kvaps' review point).
+func TestInstallPlatformPackageSource_RefusesTapOwned(t *testing.T) {
+	s := newTestScheme()
+	tapOwned := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "cozystack.cozystack-platform",
+			Labels:      map[string]string{tapconst.Label: "true"},
+			Annotations: map[string]string{tapconst.SourceAnnotation: "tap-acme-platform"},
+		},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Kind: "OCIRepository", Name: "tap-acme-platform", Namespace: "cozy-system"},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(tapOwned).Build()
+
+	err := installPlatformPackageSource(context.Background(), k8sClient, "cozystack-platform", "OCIRepository")
+	if err == nil || !strings.Contains(err.Error(), "owned by a marketplace tap") {
+		t.Fatalf("expected refusal naming the tap owner, got %v", err)
+	}
+	// The tapped object is left exactly as it was.
+	ps := &cozyv1alpha1.PackageSource{}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "cozystack.cozystack-platform"}, ps); err != nil {
+		t.Fatal(err)
+	}
+	if ps.Spec.SourceRef.Name != "tap-acme-platform" {
+		t.Errorf("the tapped PackageSource must be left untouched, sourceRef=%q", ps.Spec.SourceRef.Name)
+	}
+}
+
+// TestInstallPlatformPackageSource_RefusesForeignOwner asserts that a
+// PackageSource owned by any other field manager (no tap label) is not
+// force-overwritten: the server-side apply conflict surfaces as an error and the
+// object is left untouched.
+func TestInstallPlatformPackageSource_RefusesForeignOwner(t *testing.T) {
+	s := newTestScheme()
+	// WithObjects seeds an object owned by a foreign manager (before-first-apply)
+	// with a conflicting sourceRef and no tap label.
+	foreign := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack.cozystack-platform"},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Kind: "OCIRepository", Name: "old-name", Namespace: "cozy-system"},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(foreign).Build()
+
+	err := installPlatformPackageSource(context.Background(), k8sClient, "cozystack-platform", "OCIRepository")
+	if err == nil || !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("expected a field-ownership conflict error, got %v", err)
+	}
+	ps := &cozyv1alpha1.PackageSource{}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "cozystack.cozystack-platform"}, ps); err != nil {
+		t.Fatal(err)
+	}
+	if ps.Spec.SourceRef.Name != "old-name" {
+		t.Errorf("a foreign-owned PackageSource must be left untouched, sourceRef=%q", ps.Spec.SourceRef.Name)
 	}
 }
 
