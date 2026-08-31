@@ -1,19 +1,26 @@
-#!/bin/bash
+#!/bin/sh
 # E2E-only proof that a freshly granted COSI BucketAccess is already usable by
 # the S3 server. accessGranted describes the COSI object state; it does not
 # prove that the backing server has reloaded the new IAM identity.
 
 cozy_backup_access_preflight() (
-  set -euo pipefail
+  set -eu
 
-  local namespace="$1"
-  local access_name="$2"
-  local timeout_seconds="${3:-90}"
-  local s3_namespace="${COZY_E2E_S3_NAMESPACE:-tenant-root}"
-  local s3_service="${COZY_E2E_S3_SERVICE:-seaweedfs-s3}"
-  local local_port="${COZY_E2E_S3_PREFLIGHT_PORT:-18333}"
-  local workdir pf_pid= uploaded=false
-  local access_key secret_key bucket deadline attempt object
+  namespace="$1"
+  access_name="$2"
+  timeout_seconds="${3:-90}"
+  s3_namespace="${COZY_E2E_S3_NAMESPACE:-tenant-root}"
+  s3_service="${COZY_E2E_S3_SERVICE:-seaweedfs-s3}"
+  local_port="${COZY_E2E_S3_PREFLIGHT_PORT:-18333}"
+  workdir=''
+  pf_pid=''
+  uploaded=false
+  access_key=''
+  secret_key=''
+  bucket=''
+  deadline=''
+  attempt=''
+  object=''
 
   case "${timeout_seconds}:${local_port}" in
     *[!0-9:]*)
@@ -22,10 +29,15 @@ cozy_backup_access_preflight() (
       ;;
   esac
 
-  workdir=$(mktemp -d)
+  if ! workdir=$(mktemp -d); then
+    echo "could not create backup access preflight work directory" >&2
+    return 1
+  fi
+  # Invoked indirectly by the exit trap below.
+  # shellcheck disable=SC2329
   cleanup() {
-    local rc=$?
-    trap - EXIT
+    rc=$?
+    trap - 0
     if [ -n "${pf_pid}" ] && kill -0 "${pf_pid}" 2>/dev/null; then
       if ! kill "${pf_pid}" 2>/dev/null; then
         echo "WARNING: could not stop S3 preflight port-forward process ${pf_pid}" >&2
@@ -44,10 +56,21 @@ cozy_backup_access_preflight() (
     rm -rf -- "${workdir}"
     exit "${rc}"
   }
-  trap cleanup EXIT
+  trap cleanup 0
 
-  kubectl -n "${namespace}" get secret "${access_name}" \
-    -o jsonpath='{.data.BucketInfo}' | base64 -d > "${workdir}/bucket-info.json"
+  # Keep the producer and decoder as separate commands. This helper is sourced
+  # by cozytest.sh under /bin/sh, where pipefail is unavailable; a pipeline
+  # would otherwise let a failed Secret read look successful when base64 exits
+  # zero on empty input.
+  if ! kubectl -n "${namespace}" get secret "${access_name}" \
+      -o jsonpath='{.data.BucketInfo}' > "${workdir}/bucket-info.b64"; then
+    echo "failed to read BucketInfo Secret ${namespace}/${access_name}" >&2
+    return 1
+  fi
+  if ! base64 -d < "${workdir}/bucket-info.b64" > "${workdir}/bucket-info.json"; then
+    echo "BucketInfo Secret ${namespace}/${access_name} is not valid base64" >&2
+    return 1
+  fi
   access_key=$(jq -r '.spec.secretS3.accessKeyID // ""' "${workdir}/bucket-info.json")
   secret_key=$(jq -r '.spec.secretS3.accessSecretKey // ""' "${workdir}/bucket-info.json")
   bucket=$(jq -r '.spec.bucketName // ""' "${workdir}/bucket-info.json")
@@ -67,8 +90,11 @@ cozy_backup_access_preflight() (
   fi
 
   export MC_CONFIG_DIR="${workdir}/mc"
-  mc alias set backup-preflight "https://127.0.0.1:${local_port}" \
-    "${access_key}" "${secret_key}" --insecure >/dev/null
+  if ! mc alias set backup-preflight "https://127.0.0.1:${local_port}" \
+      "${access_key}" "${secret_key}" --insecure >/dev/null; then
+    echo "failed to configure S3 client for BucketAccess ${namespace}/${access_name}" >&2
+    return 1
+  fi
 
   object=".cozystack-e2e-preflight/${access_name}-$(date +%s)-$$"
   printf 'cozystack backup access preflight: %s\n' "${access_name}" > "${workdir}/source"

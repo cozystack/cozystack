@@ -2,6 +2,37 @@
 # Unit tests for the E2E-only S3 access gate that runs before expensive backup
 # workloads. All cluster and S3 calls are shell stubs.
 
+@test "preflight helper remains sourceable by the POSIX test runner" {
+    helper=hack/e2e-chainsaw/_lib/backup-access-preflight.sh
+    [ "$(sed -n '1p' "$helper")" = '#!/bin/sh' ]
+    if grep -nE '^[[:space:]]*(set[[:space:]].*pipefail|local([[:space:]]|$))' "$helper"; then
+        echo "backup preflight is sourced by /bin/sh and must not contain Bash-only shell state" >&2
+        exit 1
+    fi
+    sh -n "$helper"
+}
+
+@test "preflight fails closed when the BucketInfo Secret cannot be read" {
+    . hack/e2e-chainsaw/_lib/backup-access-preflight.sh
+    out=$(mktemp)
+    kubectl() {
+        case "$*" in
+            *" get secret bucket-demo-backup "*) return 1 ;;
+            *) echo "preflight continued after the Secret read failed: $*" >&2; return 1 ;;
+        esac
+    }
+
+    if cozy_backup_access_preflight tenant-test bucket-demo-backup 0 >"$out" 2>&1; then
+        echo "failed BucketInfo Secret read passed the S3 preflight" >&2
+        exit 1
+    fi
+    grep -q 'failed to read BucketInfo Secret tenant-test/bucket-demo-backup' "$out"
+    if grep -q 'lacks access key' "$out"; then
+        echo "preflight continued into credential parsing after the Secret read failed" >&2
+        exit 1
+    fi
+}
+
 @test "preflight retries IAM convergence then proves PUT GET compare and DELETE" {
     . hack/e2e-chainsaw/_lib/backup-access-preflight.sh
     attempts=$(mktemp)
