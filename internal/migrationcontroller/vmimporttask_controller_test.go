@@ -417,12 +417,34 @@ func TestSourceVMResources(t *testing.T) {
 		t.Fatalf("set memory: %v", err)
 	}
 
-	cpu, memory := sourceVMResources(vm)
-	if cpu != "4" {
-		t.Errorf("cpu = %q, want 4 (2 cores x 2 sockets)", cpu)
+	// Cores and sockets stay separate. vm-instance maps them to
+	// domain.cpu.cores and domain.cpu.sockets and refuses to render unless both
+	// are present, so multiplying them into one number both loses the topology
+	// and fails the chart — observed live: "Either instanceType or resources
+	// (cpu, sockets, memory) must be specified".
+	cores, sockets, memory := sourceVMResources(vm)
+	if cores != "2" {
+		t.Errorf("cores = %q, want 2", cores)
+	}
+	if sockets != "2" {
+		t.Errorf("sockets = %q, want 2", sockets)
 	}
 	if memory != "8Gi" {
 		t.Errorf("memory = %q, want 8Gi", memory)
+	}
+}
+
+// A source that reports cores but no socket count is single-socket. Saying so
+// explicitly is what lets the chart render at all.
+func TestSourceVMResourcesDefaultsSingleSocket(t *testing.T) {
+	vm := newObject(virtualMachineGVK)
+	if err := unstructured.SetNestedField(vm.Object, int64(4),
+		"spec", "template", "spec", "domain", "cpu", "cores"); err != nil {
+		t.Fatalf("set cores: %v", err)
+	}
+	cores, sockets, _ := sourceVMResources(vm)
+	if cores != "4" || sockets != "1" {
+		t.Errorf("cores/sockets = %q/%q, want 4/1", cores, sockets)
 	}
 }
 

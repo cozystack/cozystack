@@ -586,10 +586,13 @@ func (r *VMImportTaskReconciler) createVMInstance(
 	if req.InstanceType != "" {
 		spec["instanceType"] = req.InstanceType
 	} else {
-		cpu, memory := sourceVMResources(vm)
+		cores, sockets, memory := sourceVMResources(vm)
 		resources := map[string]interface{}{}
-		if cpu != "" {
-			resources["cpu"] = cpu
+		if cores != "" {
+			resources["cpu"] = cores
+		}
+		if sockets != "" {
+			resources["sockets"] = sockets
 		}
 		if memory != "" {
 			resources["memory"] = memory
@@ -624,21 +627,26 @@ func (r *VMImportTaskReconciler) createVMInstance(
 	return nil
 }
 
-// sourceVMResources reads the CPU and memory Forklift derived from the source
-// VM's inventory record. Reading them off the object Forklift already built is
-// why this controller needs no inventory client of its own.
-func sourceVMResources(vm *unstructured.Unstructured) (cpu, memory string) {
-	if cores, found, _ := unstructured.NestedInt64(vm.Object, "spec", "template", "spec", "domain", "cpu", "cores"); found && cores > 0 {
-		sockets, _, _ := unstructured.NestedInt64(vm.Object, "spec", "template", "spec", "domain", "cpu", "sockets")
-		threads, _, _ := unstructured.NestedInt64(vm.Object, "spec", "template", "spec", "domain", "cpu", "threads")
-		total := cores
-		if sockets > 1 {
-			total *= sockets
-		}
-		if threads > 1 {
-			total *= threads
-		}
-		cpu = fmt.Sprintf("%d", total)
+// sourceVMResources reads the CPU topology and memory Forklift derived from the
+// source VM's inventory record.
+//
+// Cores and sockets are carried across separately rather than multiplied into
+// one number: vm-instance maps `resources.cpu` to domain.cpu.cores and
+// `resources.sockets` to domain.cpu.sockets, and refuses to render at all
+// unless both are set alongside memory. Collapsing the topology would both
+// misreport it to the guest and fail the chart.
+func sourceVMResources(vm *unstructured.Unstructured) (cores, sockets, memory string) {
+	base := []string{"spec", "template", "spec", "domain", "cpu"}
+	if n, found, _ := unstructured.NestedInt64(vm.Object, append(base, "cores")...); found && n > 0 {
+		cores = fmt.Sprintf("%d", n)
+	}
+	if n, found, _ := unstructured.NestedInt64(vm.Object, append(base, "sockets")...); found && n > 0 {
+		sockets = fmt.Sprintf("%d", n)
+	}
+	// A source that reports cores but no socket count is a single-socket
+	// machine; saying so explicitly is what lets the chart render.
+	if cores != "" && sockets == "" {
+		sockets = "1"
 	}
 	for _, path := range [][]string{
 		{"spec", "template", "spec", "domain", "memory", "guest"},
@@ -651,5 +659,5 @@ func sourceVMResources(vm *unstructured.Unstructured) (cpu, memory string) {
 			}
 		}
 	}
-	return cpu, memory
+	return cores, sockets, memory
 }

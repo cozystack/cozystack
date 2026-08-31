@@ -14,7 +14,7 @@ rules:
 # graph a transfer needs and reads back the verdicts Forklift publishes on it,
 # which is why it needs no provider client of its own.
 - apiGroups: ["forklift.konveyor.io"]
-  resources: ["providers", "plans", "migrations", "networkmaps", "storagemaps"]
+  resources: ["providers", "plans", "migrations", "networkmaps", "storagemaps", "hosts"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 # The credentials Secret projected for Forklift to consume, plus the CA of
 # Forklift's inventory service, read by name from Forklift's own namespace.
@@ -44,9 +44,17 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 # The KubeVirt VirtualMachine Forklift builds is read for the source VM's shape
 # and then discarded. It is never started.
+#
+# `create` is here even though this controller never creates a VirtualMachine
+# itself. Forklift's Plan admission webhook runs a SubjectAccessReview against
+# whoever creates the Plan and refuses it unless that identity could create
+# VirtualMachines in the Plan's target namespace — Forklift is going to create
+# one on their behalf, and it declines to act with more authority than the
+# requester has. Without this verb every Plan is denied at admission with
+# "Action is forbidden", and the import never starts.
 - apiGroups: ["kubevirt.io"]
   resources: ["virtualmachines"]
-  verbs: ["get", "list", "watch", "delete"]
+  verbs: ["get", "list", "watch", "create", "delete"]
 # The imported objects. Create and read only: an import produces tenant
 # objects, and nothing here may edit or delete a disk or instance a tenant
 # already owns.

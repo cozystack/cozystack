@@ -103,6 +103,47 @@ type VMImportSourceSpec struct {
 	// Credentials is the account used to reach the provider.
 	// +kubebuilder:validation:XValidation:rule="has(self.caCert) || (has(self.insecureSkipVerify) && self.insecureSkipVerify)",message="either caCert must be set or insecureSkipVerify must be true: the migration engine will not open a vSphere connection it can neither verify nor was told to trust"
 	Credentials ProviderCredentials `json:"credentials"`
+
+	// Hosts redirects the disk transfer for individual ESXi hosts.
+	//
+	// Disk data does not travel through vCenter. VDDK opens its connection
+	// straight to the ESXi host holding the VM, at whatever address vCenter
+	// advertises for it — and that address is frequently one the cluster
+	// cannot reach: a management network the workers are not on, or, worse,
+	// one that collides with the cluster's own Service CIDR, where the packet
+	// is swallowed by service routing and never leaves. The transfer then
+	// fails late, after validation has passed, with an NBD error naming
+	// neither the address nor the reason.
+	//
+	// An entry here names the host and the address to use instead. Each
+	// carries its own credentials because the ESXi host authenticates the
+	// connection itself rather than honouring the vCenter session, and the
+	// engine connection-tests them before the transfer starts.
+	//
+	// +optional
+	// +listType=map
+	// +listMapKey=id
+	Hosts []HostOverride `json:"hosts,omitempty"`
+}
+
+// HostOverride redirects the disk transfer for one ESXi host.
+type HostOverride struct {
+	// ID is the host's managed-object reference in the source inventory
+	// (e.g. `host-10`). It is what the VM's inventory record names as its
+	// host, not the hostname.
+	// +kubebuilder:validation:MinLength=1
+	ID string `json:"id"`
+
+	// Address is the address the cluster should use to reach this host for the
+	// disk transfer, replacing the one vCenter advertises.
+	// +kubebuilder:validation:MinLength=1
+	Address string `json:"address"`
+
+	// Credentials is the account on the ESXi host itself. The host
+	// authenticates the transfer connection directly, so the provider's
+	// vCenter account does not carry over.
+	// +kubebuilder:validation:XValidation:rule="has(self.caCert) || (has(self.insecureSkipVerify) && self.insecureSkipVerify)",message="either caCert must be set or insecureSkipVerify must be true: the migration engine will not open a connection to the host it can neither verify nor was told to trust"
+	Credentials ProviderCredentials `json:"credentials"`
 }
 
 // VMImportSourceStatus reports whether the connection is usable.

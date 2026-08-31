@@ -103,7 +103,13 @@ func (r *VMImportTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		task.Status.StartedAt = &now
 	}
 
-	if err := r.ensureMaps(ctx, task, src, storageClass); err != nil {
+	// A conflict here is two passes racing on the same map, not a failure: the
+	// next pass reads the newer object and re-applies. Returning it as an error
+	// re-queues with backoff and logs a stack trace for something that is
+	// ordinary optimistic concurrency.
+	if err := r.ensureMaps(ctx, task, src, storageClass); apierrors.IsConflict(err) {
+		return ctrl.Result{Requeue: true}, nil
+	} else if err != nil {
 		// Forklift's CRDs can vanish under a running task — the operand is
 		// removed, or this is the window before the Source's recheck notices.
 		// reconcileVM already reports that as Pending; without the same here

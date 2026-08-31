@@ -96,6 +96,17 @@ func (r *VMImportSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// Host overrides come after the Provider they attach to: Forklift resolves
+	// a Host against its provider, so creating one first only produces an
+	// object that cannot validate yet.
+	if err := r.ensureHosts(ctx, src); err != nil {
+		var perr *ProjectionError
+		if errors.As(err, &perr) {
+			return r.fail(ctx, src, perr.Reason, perr.Message)
+		}
+		return ctrl.Result{}, err
+	}
+
 	// Mirror Forklift's own verdict. Until its Provider controller has run, the
 	// Source stays not-ready with a reason that says so rather than claiming a
 	// connection nobody has tested.
@@ -148,6 +159,72 @@ func (r *VMImportSourceReconciler) ensureProviders(ctx context.Context, src *mig
 		"secret": map[string]interface{}{},
 	}
 	return r.applyProvider(ctx, src, destinationProviderName(src.Name), destSpec, owner)
+}
+
+// ensureHosts materializes one Forklift Host per spec.hosts entry, redirecting
+// the disk transfer away from the address vCenter advertises.
+//
+// Each host needs its own Secret: the ESXi host authenticates the transfer
+// connection itself rather than honouring the vCenter session, and Forklift
+// connection-tests the pair before any Plan referencing that host can run.
+func (r *VMImportSourceReconciler) ensureHosts(ctx context.Context, src *migrationv1alpha1.VMImportSource) error {
+	owner := ownerRef(migrationv1alpha1.GroupVersion.WithKind("VMImportSource"), src.Name, src.UID)
+
+	for i := range src.Spec.Hosts {
+		h := &src.Spec.Hosts[i]
+		name := hostOverrideName(src.Name, h.ID)
+
+		secretName, err := projectSecret(ctx, r.Client, src, name, h.Credentials)
+		if err != nil {
+			return err
+		}
+
+		spec := map[string]interface{}{
+			"id":        h.ID,
+			"ipAddress": h.Address,
+			"provider": map[string]interface{}{
+				"name":      sourceProviderName(src.Name),
+				"namespace": src.Namespace,
+			},
+			"secret": map[string]interface{}{
+				"name":      secretName,
+				"namespace": src.Namespace,
+			},
+		}
+
+		existing := newObject(hostGVK)
+		err = r.Get(ctx, types.NamespacedName{Namespace: src.Namespace, Name: name}, existing)
+		if apierrors.IsNotFound(err) {
+			obj := newObject(hostGVK)
+			obj.SetName(name)
+			obj.SetNamespace(src.Namespace)
+			obj.SetLabels(map[string]string{
+				migrationv1alpha1.ManagedByLabel: migrationv1alpha1.ManagedByValue,
+			})
+			obj.SetOwnerReferences([]metav1.OwnerReference{owner})
+			if err := unstructured.SetNestedMap(obj.Object, spec, "spec"); err != nil {
+				return err
+			}
+			if err := r.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		current, _, _ := unstructured.NestedMap(existing.Object, "spec")
+		if specEqual(current, spec) {
+			continue
+		}
+		if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
+			return err
+		}
+		if err := r.Update(ctx, existing); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *VMImportSourceReconciler) applyProvider(

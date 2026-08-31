@@ -38,21 +38,33 @@ func (e *ProjectionError) Error() string { return e.Message }
 // pre-existing Secret that is not, so a name collision can never clobber a
 // tenant's own object — it surfaces as a terminal condition instead.
 func projectCredentials(ctx context.Context, c client.Client, src *migrationv1alpha1.VMImportSource) (string, error) {
-	name := credentialsSecretName(src.Name)
+	return projectSecret(ctx, c, src, credentialsSecretName(src.Name), src.Spec.Credentials)
+}
 
+// projectSecret materializes one credential set into a Secret of the given
+// name. Shared by the provider connection and by each host override, which
+// carries its own ESXi account for the same reason: the engine authenticates
+// that connection on the host itself.
+func projectSecret(
+	ctx context.Context,
+	c client.Client,
+	src *migrationv1alpha1.VMImportSource,
+	name string,
+	creds migrationv1alpha1.ProviderCredentials,
+) (string, error) {
 	desired := map[string][]byte{
-		"user":     []byte(src.Spec.Credentials.Username),
-		"password": []byte(src.Spec.Credentials.Password),
+		"user":     []byte(creds.Username),
+		"password": []byte(creds.Password),
 	}
 	// The engine's vSphere validation wants `user`, `password`, and then either
 	// a `cacert` or `insecureSkipVerify` parseable as a boolean. Without one of
 	// the latter two it marks the provider's secret invalid and never attempts
 	// a connection — a state that looks like a credentials problem and is not.
 	// Verified against the vendored engine's own validation on a live cluster.
-	if src.Spec.Credentials.CACert != "" {
-		desired["cacert"] = []byte(src.Spec.Credentials.CACert)
+	if creds.CACert != "" {
+		desired["cacert"] = []byte(creds.CACert)
 	}
-	if src.Spec.Credentials.InsecureSkipVerify {
+	if creds.InsecureSkipVerify {
 		desired["insecureSkipVerify"] = []byte("true")
 	}
 

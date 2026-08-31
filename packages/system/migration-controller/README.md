@@ -12,6 +12,15 @@ bundles:
   - cozystack.migration-controller
 ```
 
+## Before the first import
+
+Four checks, each of which otherwise fails late and obscurely. All were hit on a real cluster.
+
+1. **The storage class must bind `Immediate`.** A `WaitForFirstConsumer` class deadlocks an import: nothing consumes the claim while it is being populated. The task refuses such a class up front rather than hanging, but the *cluster default* is frequently `WaitForFirstConsumer`, so `spec.storageClass` usually has to be named explicitly. Check with `kubectl get storageclass`.
+2. **The ESXi host must be reachable, and must not collide with the Service CIDR.** See [When the cluster cannot reach the ESXi host](#when-the-cluster-cannot-reach-the-esxi-host). This is the one that costs a whole transfer before it announces itself.
+3. **The vCenter account needs its domain.** `mtv-migration` is rejected as an incorrect username; `mtv-migration@vsphere.local` is not. The engine reports it as a credentials failure either way, which reads like the wrong password.
+4. **The engine's own certificates must be current.** Forklift rotates its serving certificates and updates the secret, but does not restart its pods, so a long-lived deployment can serve a certificate its own published CA no longer matches. The controller verifies that CA and will refuse the connection. `kubectl -n cozy-forklift rollout restart deploy/forklift-controller` resolves it; the same staleness eventually expires the certificate outright.
+
 ## Platform configuration
 
 One key, and only for VMware:
@@ -67,6 +76,38 @@ spec:
 Deleting the task removes the migration machinery and leaves `web-01` and its disks in place: they are ordinary Cozystack objects from the moment they exist, and carry no owner reference back to the task. Deleting the source deregisters the connection — its Forklift Provider and projected Secret go with it, and nothing already imported is touched.
 
 Created VMs start `Halted`, not running. A freshly imported guest usually needs its network reconfigured, and booting it the instant the transfer finishes can put a second copy of a still-running production machine on the network.
+
+## When the cluster cannot reach the ESXi host
+
+Disk data does not travel through vCenter. The VDDK opens its connection straight to the ESXi host holding the VM, at whatever address vCenter advertises for that host — and that address is often one the cluster cannot use.
+
+Check it before the first import, because the failure comes late. The address vCenter advertises must be routable from the worker nodes and, critically, **must not fall inside the cluster's Service CIDR**: an address in that range is claimed by service routing, the packets never leave the node, and the transfer dies after validation has already passed. Compare the two:
+
+```sh
+# what vCenter advertises for the host, as the engine sees it
+kubectl -n cozy-forklift exec deploy/forklift-controller -c inventory -- \
+  curl -sk "https://localhost:8443/providers/vsphere/<provider-uid>/hosts"
+
+# the cluster's Service CIDR, via the address of the kubernetes service
+kubectl get svc -n default kubernetes -o jsonpath='{.spec.clusterIP}'
+```
+
+A host that is unreachable, or that collides, gets an entry on the source:
+
+```yaml
+spec:
+  hosts:
+  - id: host-10              # the host's managed-object id, as the VM's inventory record names it
+    address: 10.31.0.29      # an address the cluster can actually reach
+    credentials:
+      username: root
+      password: "..."
+      insecureSkipVerify: true
+```
+
+The credentials are the ESXi host's own account, not the vCenter one: the host authenticates this connection itself rather than honouring the vCenter session, and the engine connection-tests the pair before any transfer starts. That is also why the field takes a full credential rather than a bare address.
+
+Symptom when the override is missing: the task reaches `Transferring`, sits there, and then fails with an NBD error — `nbd_connect_uri: the server has no export named ''` — which names neither the address nor the reason.
 
 ## TLS: caCert or insecureSkipVerify, not a thumbprint
 
@@ -134,7 +175,9 @@ Tenants get read and write on both kinds through the standard aggregation labels
 
 **A task stuck in `Creating` with the transfer finished** usually means the engine reported success without producing anything. A Plan that already has a failed attempt in its history can report `SUCCEEDED` on a retry while creating neither the volume nor the VM; the task surfaces this rather than hanging, and the remedy is a new task (which builds a new Plan) rather than retrying the old one.
 
-**A transfer whose progress sits at 0 for many minutes** is not reported as an error on any of the migration objects. Look at the target namespace's claim events — the usual cause is the VDDK failing to reach an ESXi host, which surfaces there and nowhere else.
+**A transfer whose progress sits at 0 for many minutes** is not reported as an error on any of the migration objects. Look at the target namespace's claim events — the usual cause is the VDDK failing to reach an ESXi host, which surfaces there and nowhere else. When it eventually does fail, the message is `Unable to connect to vddk data source: nbd_connect_uri: the server has no export named ''`, which sounds like a missing disk and is almost always an unreachable host address: see [When the cluster cannot reach the ESXi host](#when-the-cluster-cannot-reach-the-esxi-host).
+
+**A VM that reports `SecretNotValid` or an authentication failure** on a vCenter source is usually the username, not the password: vCenter wants the SSO domain (`user@vsphere.local`), and rejects a bare account name with the same message it uses for a wrong password.
 
 **`server-side dry run does not protect you here.`** `kubectl apply --dry-run=server` is not honoured by Cozystack's aggregated API: for `apps.cozystack.io` resources it really creates the object. That applies to the `VMInstance` and `VMDisk` an import produces, so do not use it as a safety net when experimenting.
 

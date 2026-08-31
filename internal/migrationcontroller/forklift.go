@@ -30,6 +30,7 @@ const (
 // Forklift kinds this controller creates or reads.
 var (
 	providerGVK   = forkliftGVK("Provider")
+	hostGVK       = forkliftGVK("Host")
 	planGVK       = forkliftGVK("Plan")
 	migrationGVK  = forkliftGVK("Migration")
 	networkMapGVK = forkliftGVK("NetworkMap")
@@ -89,6 +90,12 @@ func destinationProviderName(sourceName string) string {
 // Source's credentials into for Forklift to consume.
 func credentialsSecretName(sourceName string) string {
 	return "vmimport-" + sourceName + "-credentials"
+}
+
+// hostOverrideName is the name of the Forklift Host that redirects the disk
+// transfer for one ESXi host, and of the Secret carrying that host's account.
+func hostOverrideName(sourceName, hostID string) string {
+	return "vmimport-" + sourceName + "-host-" + sanitizeName(hostID)
 }
 
 // planName is the name of the Forklift Plan that migrates one source VM for a
