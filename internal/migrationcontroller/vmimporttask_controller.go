@@ -46,6 +46,10 @@ type VMImportTaskReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	// Inventory reads the source's topology from Forklift's inventory service.
+	// The network and datastore IDs a Plan's maps need appear on no Forklift
+	// custom resource, so there is no way to build those maps without it.
+	Inventory *inventoryClient
 }
 
 func (r *VMImportTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -217,14 +221,20 @@ func (r *VMImportTaskReconciler) reconcileVM(
 		return status, false, nil
 	}
 
-	// Unmapped networks and datastores are reported by Forklift with the
-	// offending identifiers attached; adding them to the maps is how the
-	// controller learns the source's topology without an inventory client.
-	if learned, err := r.learnMappings(ctx, task, src, plan); err != nil {
+	// Fill the maps from the source's actual topology, read out of Forklift's
+	// inventory. This cannot be done from the Plan's own conditions: those name
+	// the VMs that are unmapped, never the networks or datastores they use.
+	if learned, err := r.populateMaps(ctx, task, src); err != nil {
+		var nf *notFoundError
+		if errors.As(err, &nf) {
+			status.Phase = migrationv1alpha1.VMImportTaskPhaseFailed
+			status.Message = nf.Error()
+			return status, false, nil
+		}
 		return status, false, err
 	} else if learned {
 		status.Phase = migrationv1alpha1.VMImportTaskPhaseValidating
-		status.Message = "completing the network and storage maps from Forklift's validation"
+		status.Message = "completing the network and storage maps from the source inventory"
 		return status, true, nil
 	}
 

@@ -16,9 +16,10 @@ rules:
 - apiGroups: ["forklift.konveyor.io"]
   resources: ["providers", "plans", "migrations", "networkmaps", "storagemaps"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-# The credentials Secret projected for Forklift to consume. Deliberately no
-# list or watch: the controller reads the Secrets it owns by name, so a
-# cluster-wide Secret informer is neither needed nor granted.
+# The credentials Secret projected for Forklift to consume, plus the CA of
+# Forklift's inventory service, read by name from Forklift's own namespace.
+# Deliberately no list or watch: every Secret this controller touches is read by
+# name, so a cluster-wide Secret informer is neither needed nor granted.
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "create", "update", "patch", "delete"]

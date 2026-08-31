@@ -21,6 +21,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 
 	corev1 "k8s.io/api/core/v1"
@@ -53,6 +54,14 @@ func init() {
 	// CRDs are not installed at all.
 }
 
+// envOr returns the environment variable's value, or a fallback when unset.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func main() {
 	var metricsAddr string
 	var probeAddr string
@@ -60,6 +69,8 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var vddkImage string
+	var forkliftNamespace string
+	var inventoryURL string
 	var tlsOpts []func(*tls.Config)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -78,6 +89,15 @@ func main() {
 			"SDK that Cozystack cannot ship, so an operator who holds a licence builds it "+
 			"and names it here. Empty means the vSphere import path is unavailable, which "+
 			"vSphere sources report on their own status.")
+	flag.StringVar(&forkliftNamespace, "forklift-namespace", envOr("MIGRATION_FORKLIFT_NAMESPACE", "cozy-forklift"),
+		"Namespace Forklift runs in. The controller reads the inventory service's CA "+
+			"from its serving-certificate secret there.")
+	flag.StringVar(&inventoryURL, "inventory-url", os.Getenv("MIGRATION_INVENTORY_URL"),
+		"Base URL of Forklift's inventory REST service. Defaults to "+
+			"https://forklift-inventory.<forklift-namespace>.svc:8443. The controller "+
+			"reads the source's networks and datastores from it: those identifiers "+
+			"appear on no Forklift custom resource, so the Plan's maps cannot be built "+
+			"without it.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -147,10 +167,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if inventoryURL == "" {
+		inventoryURL = fmt.Sprintf("https://forklift-inventory.%s.svc:8443", forkliftNamespace)
+	}
 	if err = (&migrationcontroller.VMImportTaskReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("migration-controller"),
+		Inventory: migrationcontroller.NewInventoryClient(
+			inventoryURL, forkliftNamespace, mgr.GetAPIReader()),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VMImportTask")
 		os.Exit(1)

@@ -3,6 +3,8 @@ package migrationcontroller
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -592,38 +594,43 @@ func TestMigrationProgressSurfacesForkliftErrors(t *testing.T) {
 	}
 }
 
-// TestUnmappedRefsReadsForkliftValidation covers how the controller learns the
-// source topology: from Forklift's own validation, not from an inventory query.
-func TestUnmappedRefsReadsForkliftValidation(t *testing.T) {
-	plan := newObject(planGVK)
-	if err := unstructured.SetNestedSlice(plan.Object, []interface{}{
-		map[string]interface{}{
-			"type":     "VMNetworksNotMapped",
-			"status":   "True",
-			"category": "Critical",
-			"items":    []interface{}{"network-31", "network-42"},
-		},
-		map[string]interface{}{
-			"type":     "VMStorageNotMapped",
-			"status":   "True",
-			"category": "Critical",
-			"items":    []interface{}{"datastore-12"},
-		},
-	}, "status", "conditions"); err != nil {
-		t.Fatalf("set conditions: %v", err)
-	}
+// The topology comes out of an inventory record, and this is the shape the
+// inventory actually returns — verified against a live Forklift v2.11.5
+// inventory service on 2026-08-31, where a vSphere VM reported
+// networks:[{kind:Network,id:"HaNetwork-..."}] and
+// disks:[{...,datastore:{kind:Datastore,id:"61f94272-..."}}].
+//
+// An earlier revision read these from the Plan's VMNetworksNotMapped /
+// VMStorageNotMapped conditions instead. That cannot work: those conditions
+// carry the VM's own reference, not the network or datastore, so the map was
+// built from parsed VM names and never resolved. The test that covered it
+// asserted bare IDs Forklift never emits and so locked in the wrong contract.
+func TestInventoryVMYieldsNetworksAndDatastores(t *testing.T) {
+	const record = `{
+	  "id": "86",
+	  "name": "test-matthieu",
+	  "firmware": "efi",
+	  "powerState": "poweredOff",
+	  "networks": [{"kind": "Network", "id": "HaNetwork-Cluster Hidora tools"}],
+	  "disks": [
+	    {"datastore": {"kind": "Datastore", "id": "61f94272-8f3a3584-b45f-3448edf98902"}},
+	    {"datastore": {"kind": "Datastore", "id": "61f94272-8f3a3584-b45f-3448edf98902"}}
+	  ]
+	}`
 
-	networks, datastores := unmappedRefs(plan)
-	if len(networks) != 2 || networks[0] != "network-31" {
-		t.Errorf("networks = %v", networks)
+	vm := &inventoryVM{}
+	if err := json.Unmarshal([]byte(record), vm); err != nil {
+		t.Fatalf("decoding the inventory record: %v", err)
 	}
-	if len(datastores) != 1 || datastores[0] != "datastore-12" {
-		t.Errorf("datastores = %v", datastores)
+	if vm.Firmware != "efi" || vm.PowerState != "poweredOff" {
+		t.Errorf("firmware/power = %q/%q", vm.Firmware, vm.PowerState)
 	}
-
-	// Unmapped references are work to do, not a reason to fail the import.
-	if got := planCriticalCondition(plan); got != "" {
-		t.Errorf("planCriticalCondition = %q, want empty for unmapped refs", got)
+	if got := vm.networkIDs(); len(got) != 1 || got[0] != "HaNetwork-Cluster Hidora tools" {
+		t.Errorf("networkIDs = %v", got)
+	}
+	// Two disks on one datastore yield one map entry, not two.
+	if got := vm.datastoreIDs(); len(got) != 1 || got[0] != "61f94272-8f3a3584-b45f-3448edf98902" {
+		t.Errorf("datastoreIDs = %v", got)
 	}
 }
 
@@ -660,35 +667,39 @@ func TestPlanKeepsTheImportedVMPoweredOff(t *testing.T) {
 	}
 }
 
-// EFI guests must be refused, not imported: the VMInstance has no firmware
-// field until cozystack/cozystack#3002, so the rendered VM boots BIOS and the
-// import would "succeed" with a machine that never comes up.
-func TestEFIBootloaderIsDetected(t *testing.T) {
+// The source's boot mode has to reach the VMInstance. A UEFI guest rendered
+// with a BIOS bootloader imports "successfully" and then does not boot, which
+// is the whole reason the vm-instance firmware field is a merge-order
+// dependency of this controller.
+func TestSourceFirmwareIsCarriedAcross(t *testing.T) {
 	cases := []struct {
 		name string
 		set  func(vm *unstructured.Unstructured)
-		want bool
+		want map[string]interface{}
 	}{
 		{"efi", func(vm *unstructured.Unstructured) {
 			_ = unstructured.SetNestedMap(vm.Object, map[string]interface{}{},
 				"spec", "template", "spec", "domain", "firmware", "bootloader", "efi")
-		}, true},
+		}, map[string]interface{}{"bootloader": "uefi"}},
 		{"efi with secureBoot", func(vm *unstructured.Unstructured) {
 			_ = unstructured.SetNestedField(vm.Object, true,
 				"spec", "template", "spec", "domain", "firmware", "bootloader", "efi", "secureBoot")
-		}, true},
+		}, map[string]interface{}{"bootloader": "uefi", "secureBoot": true}},
 		{"bios", func(vm *unstructured.Unstructured) {
 			_ = unstructured.SetNestedMap(vm.Object, map[string]interface{}{},
 				"spec", "template", "spec", "domain", "firmware", "bootloader", "bios")
-		}, false},
-		{"no firmware at all", func(vm *unstructured.Unstructured) {}, false},
+		}, map[string]interface{}{"bootloader": "bios"}},
+		// Nothing on the source means nothing written: the instance profile's
+		// own default stands rather than being overridden with a guess.
+		{"no firmware at all", func(vm *unstructured.Unstructured) {}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			vm := newObject(virtualMachineGVK)
 			tc.set(vm)
-			if got := efiBootloader(vm); got != tc.want {
-				t.Errorf("efiBootloader = %v, want %v", got, tc.want)
+			got := sourceFirmware(vm)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("sourceFirmware = %v, want %v", got, tc.want)
 			}
 		})
 	}

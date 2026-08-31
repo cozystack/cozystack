@@ -89,22 +89,6 @@ func (r *VMImportTaskReconciler) fulfill(
 		}
 	}
 
-	// Refuse an EFI guest rather than import one that cannot boot. Forklift
-	// records the source's firmware on the VM it builds; the VMInstance this
-	// controller creates has no firmware field until cozystack/cozystack#3002,
-	// so a UEFI guest would be rendered with a BIOS bootloader and the import
-	// would "succeed" with a machine that never comes up. Failing here keeps
-	// the promise the rest of the validation makes: say so before creating
-	// anything, not after.
-	if efiBootloader(vm) {
-		return nil, &validationError{
-			reason: migrationv1alpha1.ReasonFirmwareUnsupported,
-			message: fmt.Sprintf(
-				"VM %s boots through EFI, which this import cannot reproduce yet: the imported instance would be created with a BIOS bootloader and would not boot. Support arrives with the vm-instance firmware field (cozystack/cozystack#3002).",
-				req.ID),
-		}
-	}
-
 	name := req.Name
 	if name == "" {
 		name = sanitizeName(vm.GetName())
@@ -211,24 +195,38 @@ func forkliftVMClaims(vm *unstructured.Unstructured) []string {
 	return claims
 }
 
-// efiBootloader reports whether the VM Forklift built boots through EFI.
+// sourceFirmware translates the boot configuration of the VM Forklift built
+// into the vm-instance `firmware` block, or returns nil when the source says
+// nothing and the instance profile's own default should stand.
 //
 // Forklift copies the source's firmware onto the VirtualMachine it creates, so
-// this is the source's own boot mode as the migration engine understood it —
-// read from the object the handoff already has in hand rather than from a
-// second inventory lookup. An absent bootloader means BIOS, which is what a
-// VMInstance renders today.
-func efiBootloader(vm *unstructured.Unstructured) bool {
-	_, found, err := unstructured.NestedMap(
-		vm.Object, "spec", "template", "spec", "domain", "firmware", "bootloader", "efi")
-	if err != nil {
-		// `efi: {}` is the common spelling and parses as an empty map; a
-		// non-map value under that key still means EFI was requested.
-		_, present, _ := unstructured.NestedFieldNoCopy(
-			vm.Object, "spec", "template", "spec", "domain", "firmware", "bootloader", "efi")
-		return present
+// this is the source's boot mode as the migration engine understood it — read
+// from the object the handoff already holds rather than from a second inventory
+// lookup. Carrying it across is not cosmetic: a UEFI guest rendered with a BIOS
+// bootloader imports "successfully" and then does not boot, which is why the
+// vm-instance firmware field (cozystack/cozystack#3002) is a merge-order
+// dependency of this controller.
+func sourceFirmware(vm *unstructured.Unstructured) map[string]interface{} {
+	base := []string{"spec", "template", "spec", "domain", "firmware", "bootloader"}
+
+	if efi, found, _ := unstructured.NestedMap(vm.Object, append(base, "efi")...); found {
+		fw := map[string]interface{}{"bootloader": "uefi"}
+		// secureBoot is reported by the source; persistent NVRAM is not, and is
+		// deliberately left to the tenant — it pins the VM to a node.
+		if sb, ok := efi["secureBoot"].(bool); ok && sb {
+			fw["secureBoot"] = true
+		}
+		return fw
 	}
-	return found
+	// `efi: {}` renders as an empty map, but a malformed value under the key
+	// still means EFI was asked for; treat presence as the answer.
+	if _, present, _ := unstructured.NestedFieldNoCopy(vm.Object, append(base, "efi")...); present {
+		return map[string]interface{}{"bootloader": "uefi"}
+	}
+	if _, present, _ := unstructured.NestedFieldNoCopy(vm.Object, append(base, "bios")...); present {
+		return map[string]interface{}{"bootloader": "bios"}
+	}
+	return nil
 }
 
 // adoptVolume moves one transferred volume under the name a VMDisk expects,
@@ -605,6 +603,12 @@ func (r *VMImportTaskReconciler) createVMInstance(
 	}
 	if req.InstanceProfile != "" {
 		spec["instanceProfile"] = req.InstanceProfile
+	}
+
+	// Carry the source's boot mode across. Without it a UEFI guest is rendered
+	// with the profile's default bootloader and does not boot.
+	if fw := sourceFirmware(vm); fw != nil {
+		spec["firmware"] = fw
 	}
 
 	obj := newObject(vmInstanceGVK)

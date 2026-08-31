@@ -269,13 +269,15 @@ func (r *VMImportTaskReconciler) ensureMigration(
 //
 // Returns true when it changed something, so the caller waits for Forklift to
 // re-validate rather than racing ahead.
-func (r *VMImportTaskReconciler) learnMappings(
+func (r *VMImportTaskReconciler) populateMaps(
 	ctx context.Context,
 	task *migrationv1alpha1.VMImportTask,
 	src *migrationv1alpha1.VMImportSource,
-	plan *unstructured.Unstructured,
 ) (bool, error) {
-	networks, datastores := unmappedRefs(plan)
+	networks, datastores, err := r.sourceTopology(ctx, task, src)
+	if err != nil {
+		return false, err
+	}
 	if len(networks) == 0 && len(datastores) == 0 {
 		return false, nil
 	}
@@ -347,42 +349,56 @@ func (r *VMImportTaskReconciler) learnMappings(
 	return changed, nil
 }
 
-// unmappedRefs extracts the identifiers Forklift reports as unmapped. Its
-// condition types for this are VMNetworksNotMapped and VMStorageNotMapped, each
-// carrying the offending references in `items`.
-func unmappedRefs(plan *unstructured.Unstructured) (networks, datastores []string) {
-	conditions, _, _ := unstructured.NestedSlice(plan.Object, "status", "conditions")
-	for _, raw := range conditions {
-		cond, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
+// sourceTopology asks Forklift's inventory which networks and datastores the
+// task's VMs actually use.
+//
+// This is the only place the answer exists. Forklift's Plan conditions name the
+// VMs that are unmapped, not what they are unmapped to, and no Forklift custom
+// resource carries a VM's network or datastore IDs — see the comment on
+// inventoryClient for the source references.
+func (r *VMImportTaskReconciler) sourceTopology(
+	ctx context.Context,
+	task *migrationv1alpha1.VMImportTask,
+	src *migrationv1alpha1.VMImportSource,
+) (networks, datastores []string, err error) {
+	if r.Inventory == nil {
+		return nil, nil, fmt.Errorf("no inventory client configured; the network and storage maps cannot be built")
+	}
+
+	// The inventory addresses providers by UID, so the Provider object this
+	// task's Source produced has to be read for it.
+	provider := newObject(providerGVK)
+	if err := r.Get(ctx, types.NamespacedName{
+		Namespace: task.Namespace, Name: sourceProviderName(src.Name),
+	}, provider); err != nil {
+		return nil, nil, err
+	}
+	uid := string(provider.GetUID())
+	if uid == "" {
+		return nil, nil, fmt.Errorf("source Provider %s/%s has no UID yet", task.Namespace, sourceProviderName(src.Name))
+	}
+
+	seenNet := map[string]bool{}
+	seenDS := map[string]bool{}
+	for i := range task.Spec.VMs {
+		vm, err := r.Inventory.VM(ctx, uid, task.Spec.VMs[i].ID)
+		if err != nil {
+			return nil, nil, err
 		}
-		status, _, _ := unstructured.NestedString(cond, "status")
-		if status != "True" {
-			continue
-		}
-		ctype, _, _ := unstructured.NestedString(cond, "type")
-		if !strings.Contains(ctype, "NotMapped") {
-			continue
-		}
-		items, _, _ := unstructured.NestedStringSlice(cond, "items")
-		refs := make([]string, 0, len(items))
-		for _, item := range items {
-			// Items arrive as human-readable references; the identifier is the
-			// last whitespace-separated token when Forklift decorates them.
-			fields := strings.Fields(item)
-			if len(fields) == 0 {
-				continue
+		for _, id := range vm.networkIDs() {
+			if !seenNet[id] {
+				seenNet[id] = true
+				networks = append(networks, id)
 			}
-			refs = append(refs, strings.Trim(fields[len(fields)-1], "\"'"))
 		}
-		if strings.Contains(ctype, "Network") {
-			networks = append(networks, refs...)
-		} else {
-			datastores = append(datastores, refs...)
+		for _, id := range vm.datastoreIDs() {
+			if !seenDS[id] {
+				seenDS[id] = true
+				datastores = append(datastores, id)
+			}
 		}
 	}
-	return networks, datastores
+	return networks, datastores, nil
 }
 
 func hasSourceID(entries []interface{}, id string) bool {
