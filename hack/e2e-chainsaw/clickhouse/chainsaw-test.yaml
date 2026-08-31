@@ -336,13 +336,13 @@ spec:
     # Inner budgets, sized against what CI actually takes rather than guessed
     # generously — the whole bucket suite completes in ~37s and a backup-enabled
     # ClickHouse plus Keeper reaches Ready in ~98s (measured on run 30353894332):
-    #   03  660s = 300 bucket HR + 180 claim + 180 access
+    #   03  750s = 300 bucket HR + 180 claim + 180 access + 90 S3 preflight
     #   04  600s = 300 HR + 300 StatefulSet
     #   05  480s = BackupJob to Succeeded
     #   06  480s = in-place RestoreJob
     #   07 1080s = 300 HR + 300 StatefulSet + 480 to-copy RestoreJob
-    #        sum = 3300s (55m)
-    # 60m therefore leaves ~5m of headroom for the kubectl apply / exec SQL
+    #        sum = 3390s (56m30s)
+    # 60m therefore leaves ~3m30s of headroom for the kubectl apply / exec SQL
     # calls interleaved between those waits (convention 6: justified in-line).
     #
     # Reaching the ceiling at all takes a pathological hang: every wait fails
@@ -355,7 +355,7 @@ spec:
           set -eu
           cd ../../..
           [ -x examples/backups/clickhouse/run-all.sh ] || { echo "clickhouse backup example scripts not found at examples/backups/clickhouse" >&2; exit 1; }
-          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+          COZY_E2E_BACKUP_PREFLIGHT=1 NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
             examples/backups/clickhouse/run-all.sh
         check:
           ($error == null): true
