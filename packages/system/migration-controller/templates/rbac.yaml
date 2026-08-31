@@ -27,6 +27,12 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "create", "update", "patch", "delete"]
+# The machine list a Source publishes for the console's VM picker. It is written
+# to a ConfigMap owned by the Source rather than onto its status, so refreshing
+# thousands of entries does not wake everything watching the Source.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
 # The copy-free handoff: a transferred volume is retained and re-bound into the
 # claim a VMDisk expects. Volumes are cluster-scoped, which is why this role is
 # cluster-wide rather than namespaced.

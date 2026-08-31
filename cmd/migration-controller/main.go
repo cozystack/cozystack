@@ -157,25 +157,30 @@ func main() {
 		setupLog.Info("no VDDK image configured; the vSphere import path will report itself unavailable")
 	}
 
+	if inventoryURL == "" {
+		inventoryURL = fmt.Sprintf("https://forklift-inventory.%s.svc:8443", forkliftNamespace)
+	}
+	// One client for both reconcilers: the task reads a VM's topology, the
+	// source publishes the machine list the console's picker offers.
+	inventory := migrationcontroller.NewInventoryClient(
+		inventoryURL, forkliftNamespace, mgr.GetAPIReader())
+
 	if err = (&migrationcontroller.VMImportSourceReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorderFor("migration-controller"),
 		VDDKImage: vddkImage,
+		Inventory: inventory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VMImportSource")
 		os.Exit(1)
 	}
 
-	if inventoryURL == "" {
-		inventoryURL = fmt.Sprintf("https://forklift-inventory.%s.svc:8443", forkliftNamespace)
-	}
 	if err = (&migrationcontroller.VMImportTaskReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("migration-controller"),
-		Inventory: migrationcontroller.NewInventoryClient(
-			inventoryURL, forkliftNamespace, mgr.GetAPIReader()),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("migration-controller"),
+		Inventory: inventory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VMImportTask")
 		os.Exit(1)

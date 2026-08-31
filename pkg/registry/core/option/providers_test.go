@@ -35,6 +35,8 @@ func listKinds() map[schema.GroupVersionResource]string {
 		gvrHelmReleases: "HelmReleaseList",
 		gvrStorageClass: "StorageClassList",
 		gvrVMDisks:      "VMDiskList",
+		gvrImportSource: "VMImportSourceList",
+		gvrConfigMaps:   "ConfigMapList",
 	}
 }
 

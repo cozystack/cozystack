@@ -6,6 +6,7 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.16.4
     options.cozystack.io/source.sourceRef.name: vmimportsource
     options.cozystack.io/source.storageClass: storageclass
+    options.cozystack.io/source.vms.id: vmimportvm.{sourceRef.name}
     options.cozystack.io/source.vms.instanceProfile: instanceprofile
     options.cozystack.io/source.vms.instanceType: instancetype
   name: vmimporttasks.forklift.cozystack.io

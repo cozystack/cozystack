@@ -7,16 +7,20 @@ package option
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
 
+	migrationv1alpha1 "github.com/cozystack/cozystack/api/migration/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
@@ -34,6 +38,11 @@ const (
 // it.
 type providerFunc func(ctx context.Context, namespace string) ([]corev1alpha1.OptionItem, error)
 
+// paramProviderFunc computes the items for a source whose contents depend on a
+// choice already made elsewhere in the form — the machines of one import
+// source, say, which are meaningless until that source is picked.
+type paramProviderFunc func(ctx context.Context, namespace, arg string) ([]corev1alpha1.OptionItem, error)
+
 var (
 	gvrNodes        = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "nodes"}
 	gvrPVCs         = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
@@ -48,6 +57,7 @@ var (
 	gvrPlans        = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "plans"}
 	gvrBackups      = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "backups"}
 	gvrImportSource = schema.GroupVersionResource{Group: "forklift.cozystack.io", Version: "v1alpha1", Resource: "vmimportsources"}
+	gvrConfigMaps   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 	gvrAppDefs      = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "applicationdefinitions"}
 )
 
@@ -69,10 +79,70 @@ func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
 		"backup":          nameListNamespacedProvider(dyn, gvrBackups),
 		"appkind":         appKindProvider(dyn),
 		// Source connections a VMImportTask can reference. Namespaced, so a
-		// tenant only ever sees their own — and a vCenter VM list deliberately
-		// is not offered here: providers run in the browser under the tenant's
-		// own Kubernetes identity and can only list Kubernetes objects.
+		// tenant only ever sees their own.
 		"vmimportsource": nameListNamespacedProvider(dyn, gvrImportSource),
+	}
+}
+
+// DefaultParamProviders returns the sources that need an argument. They are
+// addressed as `<name>.<argument>` and never appear in a List, because without
+// the argument they describe nothing.
+func DefaultParamProviders(dyn dynamic.Interface) map[string]paramProviderFunc {
+	return map[string]paramProviderFunc{
+		"vmimportvm": importVMProvider(dyn),
+	}
+}
+
+// importVMProvider offers the machines of one import source.
+//
+// The list is not read from vCenter here. This process has no route to a
+// provider's inventory and should not grow one — that would put the source's
+// credentials in a second component. Instead the migration controller, which
+// already holds an inventory client, publishes what it found into a ConfigMap
+// owned by the source, and this reads it back as an ordinary object.
+//
+// An absent or empty ConfigMap yields no items rather than an error: a source
+// that was just created has not published yet, and an empty dropdown says that
+// more usefully than a failure does.
+func importVMProvider(dyn dynamic.Interface) paramProviderFunc {
+	return func(ctx context.Context, namespace, source string) ([]corev1alpha1.OptionItem, error) {
+		if namespace == "" || source == "" {
+			return nil, nil
+		}
+		cm, err := dyn.Resource(gvrConfigMaps).Namespace(namespace).
+			Get(ctx, migrationv1alpha1.InventoryConfigMapName(source), metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+
+		raw, found, err := unstructured.NestedString(cm.Object, "data", migrationv1alpha1.InventoryVMsKey)
+		if err != nil || !found || raw == "" {
+			return nil, nil
+		}
+		var vms []migrationv1alpha1.PublishedVM
+		if err := json.Unmarshal([]byte(raw), &vms); err != nil {
+			return nil, fmt.Errorf("decoding the published VM list for source %q: %w", source, err)
+		}
+
+		items := make([]corev1alpha1.OptionItem, 0, len(vms))
+		for _, vm := range vms {
+			if vm.ID == "" {
+				continue
+			}
+			// The machine's name is what a person recognises; the managed-object
+			// reference is what the task has to record. Showing one and writing
+			// the other is the whole point of offering this list at all.
+			items = append(items, corev1alpha1.OptionItem{
+				Value:       vm.ID,
+				Label:       vm.Name,
+				Description: vm.Path,
+			})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+		return items, nil
 	}
 }
 

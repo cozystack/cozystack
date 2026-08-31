@@ -242,7 +242,7 @@ type VMImportTaskStatus struct {
 // +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.message",priority=1
 // +kubebuilder:selectablefield:JSONPath=`.spec.sourceRef.name`
 // +kubebuilder:selectablefield:JSONPath=`.status.phase`
-// +kubebuilder:metadata:annotations={"options.cozystack.io/source.sourceRef.name=vmimportsource","options.cozystack.io/source.storageClass=storageclass","options.cozystack.io/source.vms.instanceType=instancetype","options.cozystack.io/source.vms.instanceProfile=instanceprofile"}
+// +kubebuilder:metadata:annotations={"options.cozystack.io/source.sourceRef.name=vmimportsource","options.cozystack.io/source.storageClass=storageclass","options.cozystack.io/source.vms.instanceType=instancetype","options.cozystack.io/source.vms.instanceProfile=instanceprofile","options.cozystack.io/source.vms.id=vmimportvm.{sourceRef.name}"}
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="metadata.name must be at most 63 characters: the task's name is carried as a label value on the Forklift objects it owns, and Kubernetes limits label values to 63"
 
 // VMImportTask runs a one-shot import of VMs from a registered source. It

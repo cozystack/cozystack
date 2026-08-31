@@ -124,8 +124,39 @@ func (e *notFoundError) Error() string {
 	return fmt.Sprintf("VM %q is not present in the source inventory", e.vmID)
 }
 
-// VM fetches one VM record by the provider's UID and the VM's managed-object ID.
-func (c *inventoryClient) VM(ctx context.Context, providerUID, vmID string) (*inventoryVM, error) {
+// inventoryVMRef is the abbreviated record the list endpoint returns: enough to
+// name a machine in a picker, without paying for the full record of every VM in
+// the source.
+type inventoryVMRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Path is the VM's inventory path, which is what distinguishes two machines
+	// that share a name in different folders.
+	Path string `json:"path"`
+}
+
+// VMs lists every VM the provider's inventory holds.
+func (c *inventoryClient) VMs(ctx context.Context, providerUID string) ([]inventoryVMRef, error) {
+	resp, err := c.get(ctx, fmt.Sprintf("%s/providers/vsphere/%s/vms", c.BaseURL, providerUID))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Forklift inventory returned %s listing VMs", resp.Status)
+	}
+
+	var vms []inventoryVMRef
+	if err := json.NewDecoder(resp.Body).Decode(&vms); err != nil {
+		return nil, fmt.Errorf("decoding the inventory VM list: %w", err)
+	}
+	return vms, nil
+}
+
+// get issues an authenticated GET. The token is read per call because it
+// rotates, and the caller owns the response body.
+func (c *inventoryClient) get(ctx context.Context, url string) (*http.Response, error) {
 	httpClient, err := c.client(ctx)
 	if err != nil {
 		return nil, err
@@ -135,7 +166,6 @@ func (c *inventoryClient) VM(ctx context.Context, providerUID, vmID string) (*in
 		return nil, err
 	}
 
-	url := fmt.Sprintf("%s/providers/vsphere/%s/vms/%s", c.BaseURL, providerUID, vmID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -146,6 +176,15 @@ func (c *inventoryClient) VM(ctx context.Context, providerUID, vmID string) (*in
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("querying Forklift inventory: %w", err)
+	}
+	return resp, nil
+}
+
+// VM fetches one VM record by the provider's UID and the VM's managed-object ID.
+func (c *inventoryClient) VM(ctx context.Context, providerUID, vmID string) (*inventoryVM, error) {
+	resp, err := c.get(ctx, fmt.Sprintf("%s/providers/vsphere/%s/vms/%s", c.BaseURL, providerUID, vmID))
+	if err != nil {
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 

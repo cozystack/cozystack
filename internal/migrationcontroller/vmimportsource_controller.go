@@ -48,6 +48,12 @@ type VMImportSourceReconciler struct {
 	// means the VMware path is unavailable, which a vSphere Source reports on
 	// its own status instead of failing somewhere deep in a transfer.
 	VDDKImage string
+
+	// Inventory reads Forklift's view of the source so the machine list can be
+	// published for the console's VM picker. This is still not a second vSphere
+	// client: it asks Forklift what Forklift already discovered. Nil disables
+	// publishing, and the picker then simply offers nothing.
+	Inventory *inventoryClient
 }
 
 func (r *VMImportSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -119,6 +125,13 @@ func (r *VMImportSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{}, err
 		}
 		logger.V(1).Info("VMImportSource ready", "name", src.Name)
+		// Refresh the machine list on the same beat. A failure is logged and
+		// dropped rather than returned: the Source reports on the connection,
+		// and an inventory that is briefly unavailable should cost the picker
+		// its contents, not turn a working source not-ready.
+		if err := r.publishInventory(ctx, src); err != nil {
+			logger.V(1).Info("could not publish the source inventory", "name", src.Name, "error", err.Error())
+		}
 		// Re-check periodically: a connection that worked at registration can
 		// stop working, and a task that starts then would fail confusingly.
 		return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil

@@ -50,6 +50,39 @@ const (
 	ReasonForkliftNotInstalled = "ForkliftNotInstalled"
 )
 
+// InventoryTruncatedAnnotation marks a published VM list that was cut short
+// because the source holds more machines than one object should carry. A picker
+// missing an entry then has a visible reason rather than looking broken.
+const InventoryTruncatedAnnotation = thisGroup + "/inventory-truncated"
+
+// The contract between the controller that publishes a source's machine list
+// and the aggregated API that serves it to the console's picker. It lives here
+// because both sides must agree on it and neither owns the other.
+const (
+	// inventoryConfigMapPrefix makes the object's name derivable from the
+	// source alone, so a reader addresses it without a lookup.
+	inventoryConfigMapPrefix = "vmimport-inventory-"
+
+	// InventoryVMsKey holds the JSON array of PublishedVM.
+	InventoryVMsKey = "vms"
+)
+
+// InventoryConfigMapName is where a source's published machine list lives.
+func InventoryConfigMapName(source string) string {
+	return inventoryConfigMapPrefix + source
+}
+
+// PublishedVM is one entry of that list: deliberately the smallest thing a
+// picker needs, a value to write and a name to show.
+type PublishedVM struct {
+	// ID is the managed-object reference, which is what a task records.
+	ID string `json:"id"`
+	// Name is the machine's name as the source knows it.
+	Name string `json:"name"`
+	// Path distinguishes two machines sharing a name in different folders.
+	Path string `json:"path,omitempty"`
+}
+
 // ProviderType names a source virtualization platform.
 // +kubebuilder:validation:Enum=vsphere
 type ProviderType string

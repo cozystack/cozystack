@@ -59,6 +59,12 @@ rules:
 - apiGroups: ["forklift.cozystack.io"]
   resources: ["vmimportsources"]
   verbs: ["get", "watch", "list"]
+# The VM picker reads the machine list the migration controller publishes for
+# each source. Read-only, and only ever fetched by a name derived from the
+# source the tenant already chose.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "watch", "list"]
 # The SecurityGroup resource is a projection over CiliumNetworkPolicy: the
 # storage CRUDs these objects with the cozystack-api ServiceAccount.
 - apiGroups: ["cilium.io"]

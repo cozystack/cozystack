@@ -342,6 +342,11 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
         templates={templatesWithoutSubmit}
         widgets={customWidgets}
         fields={customFields}
+        // A widget sees only its own value, but a dropdown may be scoped by a
+        // choice made elsewhere in the form — the VMs of the import source the
+        // user just picked. Handing the whole object down is what lets an
+        // option source name reference a sibling field.
+        formContext={{ rootFormData: formData }}
         onChange={(e) => onChange(e.formData)}
         liveValidate={false}
         showErrorList={false}
