@@ -11,6 +11,7 @@ import { BackupCreatePage } from "./BackupCreatePage.tsx"
 import { BackupRestoreJobCreatePage } from "./BackupRestoreJobCreatePage.tsx"
 import { MigrationResourceListPage } from "./MigrationResourceListPage.tsx"
 import { MigrationSourceCreatePage } from "./MigrationSourceCreatePage.tsx"
+import { MigrationSourceEditPage } from "./MigrationSourceEditPage.tsx"
 import { MigrationTaskCreatePage } from "./MigrationTaskCreatePage.tsx"
 import { MigrationTaskDetailPage } from "./MigrationTaskDetailPage.tsx"
 import { ApplicationOrderPage } from "./ApplicationOrderPage.tsx"
@@ -76,6 +77,12 @@ export function ConsolePage() {
       <Route
         path="migration/vmimportsources/create"
         element={<MigrationSourceCreatePage />}
+      />
+      {/* Sources are editable, tasks are not: a task's spec is immutable on
+          admission, so an edit form would only offer rejected changes. */}
+      <Route
+        path="migration/vmimportsources/:name/edit"
+        element={<MigrationSourceEditPage />}
       />
       <Route
         path="migration/vmimporttasks"

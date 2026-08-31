@@ -1,5 +1,5 @@
-import { Link } from "react-router"
-import { Plus, Trash2, Import, Plug } from "lucide-react"
+import { Link, useNavigate } from "react-router"
+import { Plus, Trash2, Import, Plug, Pencil } from "lucide-react"
 import { Button, Section, Spinner } from "@cozystack/ui"
 import { useK8sList, useK8sDelete } from "@cozystack/k8s-client"
 import { useTenantContext } from "../lib/tenant-context.tsx"
@@ -20,6 +20,7 @@ interface MigrationResourceListPageProps {
 
 export function MigrationResourceListPage({ resourceType, title }: MigrationResourceListPageProps) {
   const { tenantNamespace } = useTenantContext()
+  const navigate = useNavigate()
   const isTask = resourceType === "vmimporttasks"
 
   const { data, isLoading, error, refetch } = useK8sList<MigrationResource>({
@@ -177,14 +178,33 @@ export function MigrationResourceListPage({ resourceType, title }: MigrationReso
                           : "-"}
                       </td>
                       <td className="px-5 py-3 text-right">
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => handleDelete(item.metadata.name)}
-                          disabled={deleteMutation.isPending}
-                        >
-                          <Trash2 className="size-3.5" /> Delete
-                        </Button>
+                        <div className="flex items-center justify-end gap-2">
+                          {/* Connections are long-lived and their credentials
+                              rotate, so they are editable. An import task is a
+                              finished record whose spec the API server refuses
+                              to change, so it gets no edit action. */}
+                          {resourceType === "vmimportsources" && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                navigate(
+                                  `/console/migration/vmimportsources/${item.metadata.name}/edit`,
+                                )
+                              }
+                            >
+                              <Pencil className="size-3.5" /> Edit
+                            </Button>
+                          )}
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleDelete(item.metadata.name)}
+                            disabled={deleteMutation.isPending}
+                          >
+                            <Trash2 className="size-3.5" /> Delete
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   )
