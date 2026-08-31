@@ -729,6 +729,23 @@ func TestSourceFirmwareIsCarriedAcross(t *testing.T) {
 	}
 }
 
+// The boot disk of a guest copied verbatim out of VMware has to sit on a bus
+// that guest can already read, or the import "succeeds" into a VM that stalls
+// in its initramfs with no root device.
+func TestImportedDisksPreferTheInboxBus(t *testing.T) {
+	for i := 0; i < ahciPorts; i++ {
+		if got := importedDiskBus(i); got != "sata" {
+			t.Errorf("disk %d: bus = %q, want sata", i, got)
+		}
+	}
+	// Past the controller's port count SATA has nowhere to put the disk, and a
+	// data disk may fall back: by then the guest is running off its own root
+	// and can load the driver itself.
+	if got := importedDiskBus(ahciPorts); got != "virtio" {
+		t.Errorf("disk %d: bus = %q, want virtio", ahciPorts, got)
+	}
+}
+
 // The failure this marker exists to stop: a first import half-succeeds, the
 // tenant deletes the VMInstance but keeps the disks, and retries under the same
 // name. Without an identity check the leftover claim reads as this task's own

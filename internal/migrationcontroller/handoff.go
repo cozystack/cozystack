@@ -229,6 +229,34 @@ func sourceFirmware(vm *unstructured.Unstructured) map[string]interface{} {
 	return nil
 }
 
+// ahciPorts is how many disks the SATA bus can carry: the q35 machine type
+// KubeVirt renders gives its AHCI controller six ports, no more.
+const ahciPorts = 6
+
+// importedDiskBus picks the bus for one imported disk by its position.
+//
+// The import copies the guest verbatim (skipGuestConversion in createPlan), so
+// it arrives with the drivers it had under VMware and no virtio among them. On
+// a virtio disk such a guest does not boot at all: Linux stalls in the initramfs
+// with no root device, Windows stops at 0x7B. AHCI is inbox everywhere, so the
+// disk that has to be readable before the guest's own modules are available
+// goes on SATA.
+//
+// Past the AHCI port count the rest fall back to virtio. That is a deliberate
+// trade rather than a failure: only the boot disk must be reachable from the
+// initramfs, and once Linux has mounted the root it loads virtio_blk like any
+// other module. A Windows guest instead sees those disks appear once virtio-win
+// is installed, which is recoverable, where an unbootable import is not.
+//
+// When guest conversion arrives as its own option it should hand back virtio
+// for converted VMs, since virt-v2v installs the very drivers this works around.
+func importedDiskBus(index int) string {
+	if index < ahciPorts {
+		return "sata"
+	}
+	return "virtio"
+}
+
 // adoptVolume moves one transferred volume under the name a VMDisk expects,
 // then creates the VMDisk over it. No data is copied: the PersistentVolume is
 // retained and re-bound, which is the whole point of the exercise.
@@ -571,8 +599,8 @@ func (r *VMImportTaskReconciler) createVMInstance(
 	}
 
 	disks := make([]interface{}, 0, len(diskNames))
-	for _, d := range diskNames {
-		disks = append(disks, map[string]interface{}{"name": d})
+	for i, d := range diskNames {
+		disks = append(disks, map[string]interface{}{"name": d, "bus": importedDiskBus(i)})
 	}
 
 	spec := map[string]interface{}{
