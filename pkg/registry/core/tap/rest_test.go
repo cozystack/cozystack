@@ -150,6 +150,36 @@ func TestDeleteOrphanNoMatch(t *testing.T) {
 	}
 }
 
+// TestGetPendingTap covers a collision-blocked or connecting tap: its
+// OCIRepository exists but no PackageSource does. Get must surface it as a
+// pending Tap (mirroring List), not 404, so a dashboard detail view can show the
+// block reason.
+func TestGetPendingTap(t *testing.T) {
+	repo := orphanOciRepo("tap-a-b")
+	repo.SetAnnotations(map[string]string{
+		"apps.cozystack.io/tap-name":  "tap-a-b",
+		"apps.cozystack.io/tap-error": `a PackageSource named "acme.demo" already exists`,
+	})
+	r := fakeREST(repo)
+
+	obj, err := r.Get(context.Background(), "tap-a-b", &metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get on a pending tap must not 404: %v", err)
+	}
+	tap := obj.(*corev1alpha1.Tap)
+	if tap.Name != "tap-a-b" || tap.Spec.Ready || !tap.Spec.Community {
+		t.Errorf("unexpected pending tap from Get: %+v", tap.Spec)
+	}
+	if tap.Spec.Message != `a PackageSource named "acme.demo" already exists` {
+		t.Errorf("Get did not surface the collision message: %q", tap.Spec.Message)
+	}
+
+	// A name with neither a PackageSource nor a matching tap source is NotFound.
+	if _, err := r.Get(context.Background(), "tap-missing", &metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected NotFound for an unknown name, got %v", err)
+	}
+}
+
 func TestParseConnectURL(t *testing.T) {
 	got, err := parseConnectURL("oci://ghcr.io/foo/bar:v2", "")
 	if err != nil {

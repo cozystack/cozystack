@@ -130,6 +130,13 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 	u, err := r.dyn.Resource(gvrPackageSources).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			// A tap connected but not yet materialized (a connect in progress, or
+			// one blocked by a collision) has an OCIRepository but no
+			// PackageSource. Surface it as a pending Tap so a detail view mirrors
+			// what List shows, instead of a 404 that hides the block reason.
+			if pending, ok := r.pendingTapByName(ctx, name); ok {
+				return pending, nil
+			}
 			return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 		}
 		return nil, apierrors.NewInternalError(fmt.Errorf("get PackageSource %q: %w", name, err))
@@ -141,6 +148,25 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 	idx := r.appDefIndex(ctx)
 	tap := buildTap(ps, idx)
 	return &tap, nil
+}
+
+// pendingTapByName finds a tap source (a labeled OCIRepository) whose own name
+// is name and which has not materialized a PackageSource yet, returning it as a
+// pending Tap. It mirrors the pending entries List emits and the orphan lookup
+// Delete uses, so Get, List, and Delete agree on what a pending tap is.
+func (r *REST) pendingTapByName(ctx context.Context, name string) (*corev1alpha1.Tap, bool) {
+	repos, err := r.listTapSources(ctx)
+	if err != nil {
+		return nil, false
+	}
+	for i := range repos {
+		if repos[i].GetName() != name {
+			continue
+		}
+		tap := buildPendingTap(name, repos[i].GetAnnotations()[tapconst.MaterializeErrorAnnotation])
+		return &tap, true
+	}
+	return nil, false
 }
 
 // -----------------------------------------------------------------------------
