@@ -190,48 +190,29 @@
   kubectl apply -f "$platform_packages"
   rm -f "$platform_packages"
 
-  # Launch storage + LB configuration in the background. It waits for its
-  # own prerequisites (linstor-controller deploy, MetalLB CRDs) and finishes
-  # while the parallel HR wait below is still running, so the cost overlaps
-  # with the platform reconcile instead of compounding it.
+  # Launch storage + LB configuration in the background. It waits for its own
+  # prerequisites while the platform controllers reconcile HelmReleases, so
+  # the costs overlap even though the authoritative readiness gate starts only
+  # after prep has finished.
   hack/e2e-post-install-prep.sh > /tmp/post-install-prep.log 2>&1 &
   POST_PREP_PID=$!
 
-  # Wait until HelmReleases appear & reconcile them
-  timeout 180 sh -ec 'until [ $(kubectl get hr -A --no-headers 2>/dev/null | wc -l) -gt 10 ]; do sleep 1; done'
-  # TODO(e2e-replace-fixed-timeouts): genuine sleep. The threshold of 10 is a
-  # heuristic for "enough HRs visible to start waiting"; the snapshot below
-  # uses whatever HRs have appeared by then. There is no objective k8s API
-  # signal for "all platform HRs have been emitted" without hard-coding the
-  # expected list, so the 5s pad lets a few late-arrivals join the snapshot.
-  sleep 5
-  # Pacing only: names every HR that timed out in the trace; the authoritative
-  # gate re-lists below, covering HRs created after this snapshot (#2822).
-  kubectl wait hr --all -A --timeout=15m --for=condition=ready || true
-
   echo "Waiting for post-install-prep to complete"
-  if ! wait $POST_PREP_PID; then
+  if ! wait "$POST_PREP_PID"; then
     cat /tmp/post-install-prep.log >&2
     echo "post-install-prep failed" >&2
     exit 1
   fi
   cat /tmp/post-install-prep.log
 
-  # Fail the test if any HelmRelease is not Ready. Wait again on a fresh
-  # listing so HelmReleases created after the snapshot above are gated too;
-  # the window absorbs momentary Unknown flaps from drift reconciles.
-  if ! kubectl wait hr --all -A --timeout=15m --for=condition=ready; then
-    kubectl get hr -A || true
-    # kubectl's STATUS column truncates long messages; dump the full Ready
-    # condition per non-ready HR so the real error (e.g. a rejected CRD) is
-    # visible in the test output instead of only inside the cozyreport.
-    kubectl get hr -A --no-headers | awk '$4 != "True"' | while read -r ns name _; do
-      echo "--- Non-ready HelmRelease: $ns/$name" >&2
-      kubectl get hr -n "$ns" "$name" -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' >&2 || true
-    done
-    echo "Some HelmReleases failed to reconcile" >&2
-    exit 1
-  fi
+  # One authoritative gate, on fresh lists. A bare `kubectl wait --all` takes
+  # one snapshot and can miss releases created a moment later; it also waits
+  # the full timeout after Flux has already declared Stalled=True. The helper
+  # re-lists, requires the all-Ready name set to stay stable for 5s, and fails
+  # immediately on Stalled. The 11-release floor preserves the old >10
+  # existence backstop without the masked pacing wait.
+  . hack/e2e-wait-helmreleases.sh
+  cozy_wait_all_helmreleases_ready 900 11 5 2
 }
 
 @test "Wait for Cluster‑API provider deployments" {
@@ -405,8 +386,8 @@
 
   # Enabling OIDC swaps the dashboard's token-proxy container for oauth2-proxy,
   # so the dashboard is the consumer that proves the internal-URL default works.
-  # The install-time `kubectl wait hr --all -A` ran before this test flipped the
-  # flag and only ever saw the token-proxy shape, so nothing has re-checked the
+  # The install-time all-HelmRelease gate ran before this test flipped the flag
+  # and only ever saw the token-proxy shape, so nothing has re-checked the
   # dashboard on the OIDC path.
   #
   # Waiting on hr/dashboard directly would be vacuous: it is still Ready=True
