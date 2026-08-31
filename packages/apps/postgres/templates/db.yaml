@@ -18,7 +18,7 @@ spec:
          merge a no-op on the field (it never reverts KEDA's higher live value) and
          caps the enable dip at the floor (>=2) instead of collapsing to 1. This
          relies on helm-controller's client-side 3-way merge (not SSA), confirmed in
-         internal/controller/applicationdefinition_helmreconciler.go (no Force/SSA,
+         internal/operator/package_reconciler.go buildHelmReleaseSpec (no Upgrade.Force,
          driftDetection off). (Go-template comment, stripped at render.) */}}
   instances: {{ include "postgres.autoscaling.effectiveMin" . }}
   {{- else }}
