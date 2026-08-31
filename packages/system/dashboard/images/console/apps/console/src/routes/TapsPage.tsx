@@ -161,7 +161,7 @@ function TapCard({ tap, onDisconnect }: { tap: Tap; onDisconnect: (name: string)
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold text-slate-900">{name}</h3>
             <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
-              {spec.community ? "community" : "official"}
+              {spec.community ? "external" : "official"}
             </span>
             <StatusBadge tone={spec.ready ? "ok" : "warn"}>
               {spec.ready ? "Ready" : "Pending"}
