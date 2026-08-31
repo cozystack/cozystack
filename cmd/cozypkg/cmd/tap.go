@@ -24,6 +24,7 @@ import (
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
@@ -100,29 +101,17 @@ func parseOCIRef(ref string) (ociRef, error) {
 	return ociRef{URL: "oci://" + body, Org: org, Repo: repo, Tag: tag}, nil
 }
 
-// fluxSourceName is the RFC-1123 name of the OCIRepository tap creates.
+// fluxSourceName is the RFC-1123 name of the OCIRepository tap creates. It
+// names the Flux source object in cozy-system, not the app-facing PackageSource:
+// a tapped repository keeps its own declared PackageSource name(s). The neutral
+// "tap-" prefix distinguishes it from platform sources without namespacing the
+// packages under "community.".
 func fluxSourceName(r ociRef) string {
 	base := r.Repo
 	if r.Org != "" {
 		base = r.Org + "-" + r.Repo
 	}
-	return "community-" + sanitizeName.ReplaceAllString(strings.ToLower(base), "-")
-}
-
-// tapPackageSourceName derives the cluster-scoped PackageSource name. When a
-// repository carries a single PackageSource the name is community.<org>.<repo>;
-// with several, the original name is appended to keep them distinct.
-func tapPackageSourceName(r ociRef, originalName string, single bool) string {
-	base := tapconst.Prefix
-	if r.Org != "" {
-		base += r.Org + "."
-	}
-	base += r.Repo
-	if single {
-		return base
-	}
-	orig := strings.TrimPrefix(originalName, tapconst.Prefix)
-	return base + "." + orig
+	return "tap-" + sanitizeName.ReplaceAllString(strings.ToLower(base), "-")
 }
 
 // buildTapOCIRepository mirrors the operator's generateOCIRepository: an
@@ -137,11 +126,11 @@ func buildTapOCIRepository(name string, r ociRef, secret string) *sourcev1.OCIRe
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: cozySystemNamespace,
-			// Mark the source as a community tap and record its base name, so
-			// the dashboard's orphan-disconnect (deleteOrphanTapSource) and the
+			// Mark the source as a tap and record its own object name, so the
+			// dashboard's orphan-disconnect (deleteOrphanTapSource) and the
 			// operator's materializer recognise a CLI-created source too.
 			Labels:      map[string]string{tapconst.Label: "true"},
-			Annotations: map[string]string{tapconst.NameAnnotation: tapPackageSourceName(r, "", true)},
+			Annotations: map[string]string{tapconst.NameAnnotation: name},
 		},
 		Spec: sourcev1.OCIRepositorySpec{
 			URL:      r.URL,
@@ -157,13 +146,29 @@ func buildTapOCIRepository(name string, r ociRef, secret string) *sourcev1.OCIRe
 	return obj
 }
 
-// rewritePackageSourceForTap renames a PackageSource with the community-scoped
-// name and repoints its sourceRef at the OCIRepository tap created, preserving
-// the variants/components that came from the artifact.
-func rewritePackageSourceForTap(ps *cozyv1alpha1.PackageSource, newName, sourceName, sourcePath string) {
-	ps.SetName(newName)
+// rewritePackageSourceForTap prepares a PackageSource read from the artifact for
+// apply: it keeps the repository's own declared name (no community rename),
+// clears server-set metadata, stamps the tap marker (label + source annotation)
+// so the source is identifiable without a name prefix, and repoints its
+// sourceRef at the OCIRepository tap created. Variants/components are preserved.
+func rewritePackageSourceForTap(ps *cozyv1alpha1.PackageSource, sourceName, sourcePath string) {
 	ps.SetResourceVersion("")
 	ps.SetUID("")
+
+	labels := ps.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[tapconst.Label] = "true"
+	ps.SetLabels(labels)
+
+	anns := ps.GetAnnotations()
+	if anns == nil {
+		anns = map[string]string{}
+	}
+	anns[tapconst.SourceAnnotation] = sourceName
+	ps.SetAnnotations(anns)
+
 	if sourcePath == "" {
 		sourcePath = "/"
 	}
@@ -202,9 +207,11 @@ var tapCmd = &cobra.Command{
 	Short: "Register an external External-Apps repository as a PackageSource",
 	Long: `Tap registers an external repository published as an OCI artifact: it
 creates a Flux OCIRepository pointing at the artifact and the PackageSource(s)
-the artifact carries, named under the community. prefix so they cannot shadow
-official packages. Nothing is installed until 'cozypkg add'. Tapping is
-idempotent. Creating cluster-scoped resources requires cluster-admin.
+the artifact carries, under the names the repository declares. A name that
+clashes with a core component (or another tap) is rejected, so an external
+package can never silently shadow an official one. Nothing is installed until
+'cozypkg add'. Tapping is idempotent. Creating cluster-scoped resources
+requires cluster-admin.
 
 With --secret the OCIRepository is given a pull-credential secretRef (the
 admin pre-creates the Secret in cozy-system), so a private repository taps in
@@ -261,20 +268,18 @@ charts in your management cluster: tap only sources you trust.`,
 		srcName := fluxSourceName(ref)
 		ociRepo := buildTapOCIRepository(srcName, ref, tapCmdFlags.secret)
 
-		single := len(sources) == 1
 		toApply := make([]client.Object, 0, len(sources)+1)
 		toApply = append(toApply, ociRepo)
 		names := make([]string, 0, len(sources))
 		for i := range sources {
 			ps := sources[i].PS.DeepCopy()
-			newName := tapPackageSourceName(ref, ps.GetName(), single)
 			origPath := ""
 			if ps.Spec.SourceRef != nil {
 				origPath = ps.Spec.SourceRef.Path
 			}
-			rewritePackageSourceForTap(ps, newName, srcName, origPath)
+			rewritePackageSourceForTap(ps, srcName, origPath)
 			toApply = append(toApply, ps)
-			names = append(names, newName)
+			names = append(names, ps.GetName())
 		}
 
 		k8sClient, err := newClusterClient(tapCmdFlags.kubeconfig)
@@ -289,6 +294,15 @@ charts in your management cluster: tap only sources you trust.`,
 		if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, existing); err == nil {
 			if existing.Spec.URL != "" && existing.Spec.URL != ref.URL {
 				return fmt.Errorf("a different repository (%s) is already tapped as %q; run 'cozypkg untap %s' before tapping %s", existing.Spec.URL, srcName, names[0], ref.URL)
+			}
+		}
+
+		// A tapped repository keeps its own declared name. Refuse the whole tap
+		// if any declared name clashes with an existing core component or a
+		// different tap, rather than silently overwriting it on apply.
+		for _, n := range names {
+			if err := collision.PackageSourceName(ctx, k8sClient, n, srcName); err != nil {
+				return err
 			}
 		}
 
@@ -321,17 +335,14 @@ charts in your management cluster: tap only sources you trust.`,
 var untapCmd = &cobra.Command{
 	Use:   "untap <packagesource-name>",
 	Short: "Remove a tapped repository",
-	Long: `Untap removes a community-tapped PackageSource and its Flux source.
+	Long: `Untap removes a tapped PackageSource and its Flux source.
 Already-installed Packages are left untouched (delete them explicitly with
-cozypkg del). Only community.* sources can be untapped; official sources are
-refused.`,
+cozypkg del). Only tapped sources (marked with the marketplace-tap label) can
+be untapped; official sources are refused.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 		name := args[0]
-		if !strings.HasPrefix(name, tapconst.Prefix) {
-			return fmt.Errorf("refusing to untap %q: only community.* sources can be untapped", name)
-		}
 
 		k8sClient, err := newClusterClient(tapCmdFlags.kubeconfig)
 		if err != nil {
@@ -341,6 +352,10 @@ refused.`,
 		ps := &cozyv1alpha1.PackageSource{}
 		if err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, ps); err != nil {
 			return fmt.Errorf("failed to get PackageSource %s: %w", name, err)
+		}
+		// A tap is identified by its marker label, not by a name prefix.
+		if ps.GetLabels()[tapconst.Label] != "true" {
+			return fmt.Errorf("refusing to untap %q: not a tapped repository (missing the %s label); official sources cannot be untapped", name, tapconst.Label)
 		}
 
 		// Warn if a Package by this name is installed (add.go names the Package
@@ -360,10 +375,11 @@ refused.`,
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Removed PackageSource/%s\n", name)
 
-		// Delete the Flux source only if no other PackageSource references it.
-		if srcName != "" && strings.HasPrefix(srcName, "community-") {
-			if !sourceStillReferenced(ctx, k8sClient, srcName, name) {
-				oci := &sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{Name: srcName, Namespace: cozySystemNamespace}}
+		// Delete the Flux source only if it is a tap we own (marker label) and
+		// no other PackageSource still references it.
+		if srcName != "" && !sourceStillReferenced(ctx, k8sClient, srcName, name) {
+			oci := &sourcev1.OCIRepository{}
+			if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, oci); err == nil && oci.GetLabels()[tapconst.Label] == "true" {
 				if err := k8sClient.Delete(ctx, oci); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not delete OCIRepository/%s: %v\n", srcName, err)
 				} else {

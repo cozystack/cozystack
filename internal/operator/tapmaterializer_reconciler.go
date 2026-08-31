@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 )
 
@@ -54,6 +56,9 @@ const (
 type TapMaterializerReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// Recorder surfaces materialization failures (e.g. a name collision with a
+	// core component) as Events on the tap source. Optional; nil disables Events.
+	Recorder record.EventRecorder
 	// Fetch downloads a Flux artifact tarball. Defaults to HTTP; overridable in tests.
 	Fetch func(ctx context.Context, url string) ([]byte, error)
 }
@@ -129,11 +134,16 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, fmt.Errorf("parse artifact for tap %s: %w", repo.Name, err)
 	}
 
-	base := repo.Annotations[tapconst.NameAnnotation]
-	if base == "" {
-		base = communityBaseFromURL(repo.Spec.URL)
+	// A tapped repository keeps its own declared name. Refuse the whole
+	// materialization if any declared name clashes with a core component (or
+	// another tap), surfacing the reason on the source instead of silently
+	// overwriting an official PackageSource via ForceOwnership.
+	for i := range sources {
+		if err := collision.PackageSourceName(ctx, r.Client, sources[i].GetName(), repo.Name); err != nil {
+			return r.failMaterialize(ctx, &repo, err)
+		}
 	}
-	single := len(sources) == 1
+
 	applied := make(map[string]bool, len(sources))
 	for i := range sources {
 		ps := sources[i].DeepCopy()
@@ -141,7 +151,7 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if ps.Spec.SourceRef != nil && ps.Spec.SourceRef.Path != "" {
 			origPath = ps.Spec.SourceRef.Path
 		}
-		rewriteForMaterialize(ps, materializedName(base, ps.GetName(), single), repo.Name, repo.Namespace, origPath)
+		rewriteForMaterialize(ps, repo.Name, repo.Namespace, origPath)
 		if ps.Labels == nil {
 			ps.Labels = map[string]string{}
 		}
@@ -159,6 +169,8 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if len(sources) == 0 {
 		logger.Info("tap artifact carried no PackageSource", "tap", repo.Name, "revision", art.Revision)
 	}
+	// Materialization succeeded: clear any collision error from a prior revision.
+	delete(repo.Annotations, tapconst.MaterializeErrorAnnotation)
 
 	// Prune PackageSources this tap materialized from an earlier revision that
 	// the current artifact no longer contains (including a rename when the
@@ -176,6 +188,27 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.Update(ctx, &repo); err != nil {
 		return ctrl.Result{}, err
 	}
+	return ctrl.Result{}, nil
+}
+
+// failMaterialize records a materialization failure (e.g. a name collision with
+// a core component) on the tap source so it surfaces on the Tap resource and the
+// dashboard, and emits a warning Event. It deliberately does not stamp the
+// materialized revision, so a corrected artifact (which carries a new revision)
+// is retried; a collision does not otherwise self-resolve, so it returns without
+// requeueing to avoid a hot loop.
+func (r *TapMaterializerReconciler) failMaterialize(ctx context.Context, repo *sourcev1.OCIRepository, cause error) (ctrl.Result, error) {
+	if repo.Annotations == nil {
+		repo.Annotations = map[string]string{}
+	}
+	repo.Annotations[tapconst.MaterializeErrorAnnotation] = cause.Error()
+	if r.Recorder != nil {
+		r.Recorder.Event(repo, corev1.EventTypeWarning, "MaterializeFailed", cause.Error())
+	}
+	if err := r.Update(ctx, repo); err != nil {
+		return ctrl.Result{}, err
+	}
+	log.FromContext(ctx).Info("tap materialization blocked", "tap", repo.Name, "reason", cause.Error())
 	return ctrl.Result{}, nil
 }
 

@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 )
 
 func TestParseOCIRef(t *testing.T) {
@@ -65,32 +66,18 @@ func TestParseOCIRef(t *testing.T) {
 	}
 }
 
+// fluxSourceName names the OCIRepository (a Flux source object in cozy-system),
+// not the app-facing PackageSource. It carries a neutral "tap-" prefix, not
+// "community-": tapped repositories keep their own declared PackageSource names.
 func TestFluxSourceName(t *testing.T) {
-	if got := fluxSourceName(ociRef{Org: "foo", Repo: "bar"}); got != "community-foo-bar" {
+	if got := fluxSourceName(ociRef{Org: "foo", Repo: "bar"}); got != "tap-foo-bar" {
 		t.Errorf("fluxSourceName = %q", got)
 	}
-	if got := fluxSourceName(ociRef{Repo: "solo"}); got != "community-solo" {
+	if got := fluxSourceName(ociRef{Repo: "solo"}); got != "tap-solo" {
 		t.Errorf("fluxSourceName (no org) = %q", got)
 	}
-	if got := fluxSourceName(ociRef{Org: "Foo_X", Repo: "Bar.Y"}); got != "community-foo-x-bar-y" {
+	if got := fluxSourceName(ociRef{Org: "Foo_X", Repo: "Bar.Y"}); got != "tap-foo-x-bar-y" {
 		t.Errorf("fluxSourceName sanitized = %q", got)
-	}
-}
-
-func TestTapPackageSourceName(t *testing.T) {
-	r := ociRef{Org: "foo", Repo: "bar"}
-	if got := tapPackageSourceName(r, "example.hello", true); got != "community.foo.bar" {
-		t.Errorf("single = %q", got)
-	}
-	if got := tapPackageSourceName(r, "example.hello", false); got != "community.foo.bar.example.hello" {
-		t.Errorf("multiple = %q", got)
-	}
-	// An already community-prefixed original name must not double the prefix.
-	if got := tapPackageSourceName(r, "community.hello", false); got != "community.foo.bar.hello" {
-		t.Errorf("multiple with community-prefixed original = %q", got)
-	}
-	if got := tapPackageSourceName(ociRef{Repo: "solo"}, "x", true); got != "community.solo" {
-		t.Errorf("no org = %q", got)
 	}
 }
 
@@ -130,18 +117,20 @@ func TestObjectExists(t *testing.T) {
 
 func TestBuildTapOCIRepository(t *testing.T) {
 	r := ociRef{URL: "oci://ghcr.io/foo/bar", Org: "foo", Repo: "bar", Tag: "v1"}
-	obj := buildTapOCIRepository("community-foo-bar", r, "")
+	obj := buildTapOCIRepository("tap-foo-bar", r, "")
 	if obj.Namespace != "cozy-system" || obj.Spec.URL != "oci://ghcr.io/foo/bar" {
 		t.Fatalf("unexpected OCIRepository: %+v", obj.Spec)
 	}
 	if obj.Spec.Reference == nil || obj.Spec.Reference.Tag != "v1" {
 		t.Fatalf("expected tag v1, got %+v", obj.Spec.Reference)
 	}
-	if obj.Labels["apps.cozystack.io/marketplace-tap"] != "true" {
+	if obj.Labels[tapconst.Label] != "true" {
 		t.Errorf("expected marketplace-tap label, got %v", obj.Labels)
 	}
-	if obj.Annotations["apps.cozystack.io/tap-name"] != "community.foo.bar" {
-		t.Errorf("expected tap-name annotation community.foo.bar, got %v", obj.Annotations)
+	// The tap-name annotation records the source's own object name (used by the
+	// dashboard orphan-disconnect), not a derived community.* PackageSource name.
+	if obj.Annotations[tapconst.NameAnnotation] != "tap-foo-bar" {
+		t.Errorf("expected tap-name annotation tap-foo-bar, got %v", obj.Annotations)
 	}
 	if obj.Spec.Interval.Minutes() != 5 {
 		t.Fatalf("expected 5m interval, got %v", obj.Spec.Interval)
@@ -155,23 +144,32 @@ func TestBuildTapOCIRepository(t *testing.T) {
 	}
 }
 
+// rewritePackageSourceForTap must NOT rename the PackageSource: a tapped
+// repository keeps its own declared name. It only clears server-set metadata,
+// stamps the tap marker (label + source annotation), and repoints the sourceRef.
 func TestRewritePackageSourceForTap(t *testing.T) {
 	ps := &cozyv1alpha1.PackageSource{}
-	ps.SetName("example.hello")
+	ps.SetName("acme.hello")
 	ps.SetResourceVersion("12345")
 	ps.SetUID("some-uid")
 	ps.Spec.SourceRef = &cozyv1alpha1.PackageSourceRef{Kind: "OCIRepository", Name: "hello-packages", Namespace: "cozy-system", Path: "/"}
 	ps.Spec.Variants = []cozyv1alpha1.Variant{{Name: "default", Components: []cozyv1alpha1.Component{{Name: "hello", Path: "apps/hello"}}}}
 
-	rewritePackageSourceForTap(ps, "community.foo.bar", "community-foo-bar", "/")
+	rewritePackageSourceForTap(ps, "tap-acme-hello", "/")
 
-	if ps.GetName() != "community.foo.bar" {
-		t.Errorf("name = %q", ps.GetName())
+	if ps.GetName() != "acme.hello" {
+		t.Errorf("name must be preserved (no community rename), got %q", ps.GetName())
 	}
 	if ps.GetResourceVersion() != "" || ps.GetUID() != "" {
 		t.Errorf("resourceVersion/uid must be cleared for a fresh apply")
 	}
-	if ps.Spec.SourceRef.Name != "community-foo-bar" || ps.Spec.SourceRef.Namespace != "cozy-system" || ps.Spec.SourceRef.Kind != "OCIRepository" {
+	if ps.GetLabels()[tapconst.Label] != "true" {
+		t.Errorf("tap label must be stamped so the source is identifiable without a name prefix, got %v", ps.GetLabels())
+	}
+	if ps.GetAnnotations()[tapconst.SourceAnnotation] != "tap-acme-hello" {
+		t.Errorf("source annotation must record the owning OCIRepository, got %v", ps.GetAnnotations())
+	}
+	if ps.Spec.SourceRef.Name != "tap-acme-hello" || ps.Spec.SourceRef.Namespace != "cozy-system" || ps.Spec.SourceRef.Kind != "OCIRepository" {
 		t.Errorf("sourceRef not repointed: %+v", ps.Spec.SourceRef)
 	}
 	if len(ps.Spec.Variants) != 1 || ps.Spec.Variants[0].Components[0].Path != "apps/hello" {
@@ -179,7 +177,7 @@ func TestRewritePackageSourceForTap(t *testing.T) {
 	}
 	// An empty source path defaults to "/".
 	ps2 := &cozyv1alpha1.PackageSource{}
-	rewritePackageSourceForTap(ps2, "community.x", "src", "")
+	rewritePackageSourceForTap(ps2, "src", "")
 	if ps2.Spec.SourceRef.Path != "/" {
 		t.Errorf("empty path should default to /, got %q", ps2.Spec.SourceRef.Path)
 	}

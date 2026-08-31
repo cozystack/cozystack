@@ -147,26 +147,3 @@ func TestParsePackageSourcesRejectsMalformed(t *testing.T) {
 		t.Fatal("expected strict-decode error for unknown field")
 	}
 }
-
-func TestMaterializedName(t *testing.T) {
-	if got := materializedName("community.org.repo", "example.hello", true); got != "community.org.repo" {
-		t.Errorf("single = %q", got)
-	}
-	if got := materializedName("community.org.repo", "community.hello", false); got != "community.org.repo.hello" {
-		t.Errorf("multiple = %q", got)
-	}
-}
-
-func TestCommunityBaseFromURL(t *testing.T) {
-	cases := map[string]string{
-		"oci://ghcr.io/foo/bar":           "community.foo.bar",
-		"oci://ghcr.io/foo/bar:v1":        "community.foo.bar",
-		"oci://registry.example.com/solo": "community.solo",
-		"oci://ghcr.io/a/b/c:2.0":         "community.b.c",
-	}
-	for in, want := range cases {
-		if got := communityBaseFromURL(in); got != want {
-			t.Errorf("communityBaseFromURL(%q) = %q, want %q", in, got, want)
-		}
-	}
-}

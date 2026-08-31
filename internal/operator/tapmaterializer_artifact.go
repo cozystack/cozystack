@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/yaml"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
-	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 )
 
 // maxArtifactBytes bounds the decompressed size of a tapped artifact so a
@@ -165,39 +164,11 @@ func parsePackageSourcesFromTree(root string) ([]cozyv1alpha1.PackageSource, err
 	return out, err
 }
 
-// materializedName derives the cluster-scoped name for a PackageSource pulled
-// from a tapped artifact. base is the community.<org>.<repo> name recorded on
-// the tap; single indicates the artifact carries exactly one PackageSource.
-func materializedName(base, originalName string, single bool) string {
-	if single {
-		return base
-	}
-	return base + "." + strings.TrimPrefix(originalName, tapconst.Prefix)
-}
-
-// communityBaseFromURL derives a community.<org>.<repo> base name from an OCI
-// URL, a fallback for when the tap-name annotation is absent.
-func communityBaseFromURL(url string) string {
-	body := strings.TrimPrefix(url, "oci://")
-	if i := strings.LastIndex(body, "@"); i >= 0 {
-		body = body[:i]
-	}
-	if i := strings.LastIndex(body, ":"); i >= 0 && !strings.Contains(body[i:], "/") {
-		body = body[:i]
-	}
-	segs := strings.Split(strings.Trim(body, "/"), "/")
-	base := tapconst.Prefix
-	if len(segs) >= 3 {
-		base += segs[len(segs)-2] + "."
-	}
-	base += segs[len(segs)-1]
-	return base
-}
-
-// rewriteForMaterialize renames a PackageSource and repoints its sourceRef at
-// the tap's Flux source, clearing server-set metadata for a clean apply.
-func rewriteForMaterialize(ps *cozyv1alpha1.PackageSource, newName, sourceName, sourceNamespace, sourcePath string) {
-	ps.SetName(newName)
+// rewriteForMaterialize prepares a PackageSource pulled from a tapped artifact
+// for apply: it keeps the repository's own declared name (no community rename)
+// and repoints its sourceRef at the tap's Flux source, clearing server-set
+// metadata for a clean apply. The caller stamps the tap marker label/annotation.
+func rewriteForMaterialize(ps *cozyv1alpha1.PackageSource, sourceName, sourceNamespace, sourcePath string) {
 	ps.SetResourceVersion("")
 	ps.SetUID("")
 	if sourcePath == "" {
