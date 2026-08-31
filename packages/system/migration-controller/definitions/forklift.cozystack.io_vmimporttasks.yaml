@@ -281,6 +281,12 @@ spec:
                       maximum: 100
                       minimum: 0
                       type: integer
+                    reason:
+                      description: |-
+                        Reason is a machine-readable cause for this VM's phase, from the same set
+                        the task's conditions use. Message says the same thing to a person; a
+                        caller deciding whether a failure is worth retrying should read this.
+                      type: string
                     vmInstance:
                       description: VMInstance is the name of the created VMInstance,
                         once it exists.

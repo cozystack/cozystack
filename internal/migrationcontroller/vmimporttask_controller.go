@@ -251,6 +251,7 @@ func (r *VMImportTaskReconciler) reconcileVM(
 		var nf *notFoundError
 		if errors.As(err, &nf) {
 			status.Phase = migrationv1alpha1.VMImportTaskPhaseFailed
+			status.Reason = migrationv1alpha1.ReasonVMNotFound
 			status.Message = nf.Error()
 			return status, false, nil
 		}
@@ -294,6 +295,7 @@ func (r *VMImportTaskReconciler) reconcileVM(
 		var verr *validationError
 		if asValidationError(err, &verr) {
 			status.Phase = migrationv1alpha1.VMImportTaskPhaseFailed
+			status.Reason = verr.reason
 			status.Message = verr.message
 			return status, false, nil
 		}

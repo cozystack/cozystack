@@ -197,6 +197,12 @@ type VMImportStatus struct {
 	// +optional
 	Disks []string `json:"disks,omitempty"`
 
+	// Reason is a machine-readable cause for this VM's phase, from the same set
+	// the task's conditions use. Message says the same thing to a person; a
+	// caller deciding whether a failure is worth retrying should read this.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
 	// Message explains this VM's current phase when it needs explaining.
 	// +optional
 	Message string `json:"message,omitempty"`
