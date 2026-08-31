@@ -83,9 +83,10 @@ spec:
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-          # 4th arg "true" folds the ouroboros hairpin-NAT assertions onto this
-          # cluster instead of a second ~25m bringup.
-          run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true'
+          # 4th arg folds the ouroboros hairpin-NAT assertions onto this cluster;
+          # the 5th folds the System -> CustomConfig OIDC lifecycle onto the same
+          # ready workers. Neither feature needs another tenant-cluster bringup.
+          run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true' 'true'
         check:
           ($error == null): true
     finally:
@@ -100,7 +101,7 @@ spec:
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-          cozy_cleanup
+          cozy_cleanup test-latest-version
 ---
 # Version-independent regression guard for PR #2872 B1 (runs once, here, not
 # in kubernetes-previous): with the `replicated` StorageClass absent on the

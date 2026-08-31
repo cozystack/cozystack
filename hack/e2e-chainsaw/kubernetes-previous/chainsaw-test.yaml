@@ -85,4 +85,4 @@ spec:
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-          cozy_cleanup
+          cozy_cleanup test-previous-version
