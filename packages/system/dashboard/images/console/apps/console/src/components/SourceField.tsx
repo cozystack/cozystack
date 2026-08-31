@@ -1,6 +1,7 @@
 import { useState } from "react"
 import type { FieldProps } from "@rjsf/utils"
 import { useK8sList } from "@cozystack/k8s-client"
+import { RJSF_ID_SEPARATOR } from "../lib/rjsf-ids.ts"
 import { APPS_GROUP, APPS_VERSION } from "@cozystack/types"
 import { useTenantContext } from "../lib/tenant-context.tsx"
 
@@ -116,10 +117,14 @@ export function SourceField(props: FieldProps) {
 
           const isDiskName = option === "disk" && key === "name"
           const isImageName = option === "image" && key === "name"
+          // RJSF's id for this control. Its required sub-fields are what
+          // validation reports (source.http.url, not source), so the focus
+          // helper resolves the field by this id and finds nothing without it.
+          const fieldId = [idSchema.$id, option, key].join(RJSF_ID_SEPARATOR)
 
           return (
             <div key={key} className="flex flex-col gap-1">
-              <label className="text-sm font-medium text-slate-700">
+              <label htmlFor={fieldId} className="text-sm font-medium text-slate-700">
                 {subProp.title || key}
                 {prop.required?.includes(key) && <span className="text-red-500 ml-1">*</span>}
               </label>
@@ -128,6 +133,7 @@ export function SourceField(props: FieldProps) {
               )}
               {isDiskName ? (
                 <select
+                  id={fieldId}
                   value={currentValue}
                   onChange={(e) => handleChange(e.target.value)}
                   disabled={disksLoading}
@@ -148,6 +154,7 @@ export function SourceField(props: FieldProps) {
                 </select>
               ) : isImageName ? (
                 <select
+                  id={fieldId}
                   value={currentValue}
                   onChange={(e) => handleChange(e.target.value)}
                   disabled={imagesLoading}
@@ -166,6 +173,7 @@ export function SourceField(props: FieldProps) {
                 </select>
               ) : (
                 <input
+                  id={fieldId}
                   type="text"
                   value={currentValue}
                   onChange={(e) => handleChange(e.target.value)}

@@ -20,11 +20,13 @@ function propertySegments(property: string): string[] {
  * focus resolves the field through `form.elements`, which the `tagName="div"`
  * form does not have, so resolve it by generated id instead.
  *
- * Not every widget puts that id on an element. `SourceField` and
- * `SourceWidget` render radios carrying only `name="<id>-source"`, so an exact
- * lookup finds nothing and the submit scrolls nowhere. Fall back to a
- * descendant input, matched on a segment boundary: a bare prefix would let an
- * error on `data` grab the sibling `database`, scrolling to the wrong field.
+ * Not every widget puts that id on a control, so fall back to a descendant,
+ * matched on a segment boundary: a bare prefix would let an error on `data`
+ * grab the sibling `database`, scrolling to the wrong field. The `name` half
+ * catches a radio group, which carries `name="<id>-source"` and no id.
+ *
+ * A widget that renders neither is unreachable, which is why the widgets this
+ * console binds set the generated id themselves rather than relying on this.
  */
 export function focusFirstError(
   error: Pick<RJSFValidationError, "property">,

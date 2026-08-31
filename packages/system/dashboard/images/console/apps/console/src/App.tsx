@@ -17,11 +17,14 @@ import { CommandPalette } from "./components/command-palette/command-palette.tsx
 import type { AppConfig } from "./lib/config.ts"
 import { DEFAULT_LANDING_PATH } from "./lib/portal.ts"
 
+// Admin pages whose content does not depend on the selected tenant, so the
+// picker has nothing to say on them. /admin/tenants is deliberately absent:
+// its rows come from the picker-filtered context list, unlike Modules and
+// External IPs which list tenant namespaces themselves.
 const CLUSTER_SCOPED_ADMIN = [
   "/admin/capacity",
   "/admin/backups/backupclasses",
   "/admin/external-ips",
-  "/admin/tenants",
   "/admin/modules",
 ]
 
@@ -39,8 +42,10 @@ function Shell({ config, username }: ShellProps) {
   // (see lib/portal.ts), and those resolve their namespace from the tenant
   // context, so hiding the picker there would leave the active tenant both
   // invisible and unchangeable.
-  const inClusterScope = CLUSTER_SCOPED_ADMIN.some((prefix) =>
-    pathname.startsWith(prefix),
+  // Anchored on a segment boundary: an unanchored prefix would also swallow a
+  // sibling route that merely starts with the same characters.
+  const inClusterScope = CLUSTER_SCOPED_ADMIN.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   )
   const marketplaceSections = useMarketplaceSidebarSections()
   const consoleSections = useConsoleSidebarSections()

@@ -84,31 +84,41 @@ describe("shell subtitle", () => {
     metadata: { name, labels: {} },
   }))
 
-  it("hides the tenant picker in the admin portal", async () => {
-    const client = makeClient(TENANTS)
-    renderWithK8sProvider(<App />, { client, initialRoute: "/admin/modules" })
+  // Every cluster-scoped prefix, and a deeper path under each, so dropping one
+  // from the list fails here instead of passing quietly.
+  const CLUSTER_SCOPED = [
+    "/admin/capacity/cluster",
+    "/admin/backups/backupclasses",
+    "/admin/external-ips",
+    "/admin/modules",
+  ]
 
-    // The picker's first render says "Loading tenants…"; wait that out, or the
-    // absence below passes only because the list had not arrived yet.
+  it.each(CLUSTER_SCOPED)("hides the tenant picker on %s", async (route) => {
+    const client = makeClient(TENANTS)
+    renderWithK8sProvider(<App />, { client, initialRoute: route })
+
+    // The marker is on every Breadcrumb branch, so absence means the subtitle
+    // was not rendered at all rather than that the list had not arrived.
     await waitFor(() => expect(screen.queryByText("Loading tenants…")).toBeNull())
-    expect(screen.queryByText("Tenant", { exact: true })).toBeNull()
+    expect(screen.queryByTestId("tenant-picker")).toBeNull()
   })
 
-  // The rest of /admin mounts the same tenant-scoped resource pages as
-  // /console, and they resolve their namespace from the tenant context, so the
-  // picker has to stay: hiding it there leaves the active tenant invisible and
-  // unchangeable on the page it actually governs.
-  it("keeps the tenant picker on tenant-scoped admin pages", async () => {
-    const client = makeClient(TENANTS)
-    renderWithK8sProvider(<App />, { client, initialRoute: "/admin/virtualmachines" })
+  // The tenant list is scoped by the picker's own selection, so it needs the
+  // picker even though it lives under /admin.
+  it.each(["/admin/tenants", "/admin/vminstances", "/admin/vminstances/db1"])(
+    "keeps the tenant picker on %s",
+    async (route) => {
+      const client = makeClient(TENANTS)
+      renderWithK8sProvider(<App />, { client, initialRoute: route })
 
-    expect(await screen.findByText("Tenant", { exact: true })).toBeTruthy()
-  })
+      expect(await screen.findByTestId("tenant-picker")).toBeTruthy()
+    },
+  )
 
   it("still shows the tenant picker outside the admin portal", async () => {
     const client = makeClient(TENANTS)
     renderWithK8sProvider(<App />, { client, initialRoute: "/console" })
 
-    expect(await screen.findByText("Tenant", { exact: true })).toBeTruthy()
+    expect(await screen.findByTestId("tenant-picker")).toBeTruthy()
   })
 })

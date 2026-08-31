@@ -66,15 +66,27 @@ describe("focusFirstError", () => {
     expect(document.activeElement).toBe(field)
   })
 
-  // SourceField and SourceWidget render no element carrying the generated id,
-  // only radios named `<id>-source`, so the exact lookup misses and a blocked
-  // submit used to scroll nowhere.
-  it("falls back to the name attribute when no element carries the id", () => {
+  // vm-disk marks source.http.url required, not source, so this is the shape
+  // validation actually reports for a SourceField. The widget sets the id on
+  // its own control; the exact lookup is what has to find it.
+  it("focuses a SourceField sub-control by its generated id", () => {
     document.body.innerHTML = `
-      <div id="root_source-help" class="field">
-        <input type="radio" name="root_source-source" value="http" />
-        <input type="radio" name="root_source-source" value="pvc" />
-      </div>
+      <input type="radio" name="root_source-source" value="http" />
+      <input id="root_source_http_url" />
+    `
+    const field = document.getElementById("root_source_http_url")
+
+    focusFirstError({ property: ".source.http.url" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  // A radio group carries only `name="<id>-source"`, so the name half of the
+  // fallback is the only thing that can reach it.
+  it("falls back to the name attribute for a radio group with no id", () => {
+    document.body.innerHTML = `
+      <input type="radio" name="root_source-source" value="http" />
+      <input type="radio" name="root_source-source" value="pvc" />
     `
     const first = document.querySelector<HTMLInputElement>('input[value="http"]')
 
