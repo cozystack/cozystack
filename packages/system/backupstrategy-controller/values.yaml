@@ -49,6 +49,16 @@ backupStrategyController:
   # Makefile, which also lets this pin move on its own.
   # DO NOT hand-edit: stamped by packages/core/platform/Makefile.
   rabbitmqBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
+  # kafkaBackupClientImage is rendered into the Kafka metadata strategy Pod: it
+  # runs the kafka-*.sh Admin-API CLI (kafka-topics / kafka-configs) plus curl
+  # to read/write the metadata object in the system bucket. Unlike the Altinity
+  # client above, this genuinely needs the Kafka CLI, so it is the upstream
+  # Strimzi Kafka image — the same one the cluster-operator provisions brokers
+  # with (already cached on the nodes), which also bundles bash, curl and
+  # ca-certificates. Keep the tag in sync with the kafka-operator's
+  # STRIMZI_KAFKA_IMAGES; a dedicated pinned-by-digest client image is a
+  # follow-up.
+  kafkaBackupClientImage: "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.8.0"
   replicas: 2
   debug: false
   metrics:

@@ -17,6 +17,7 @@ templates:
   - templates/strategy-altinity-default.yaml
   - templates/strategy-mongodb-default.yaml
   - templates/strategy-rabbitmq-default.yaml
+  - templates/strategy-kafka-default.yaml
   - templates/strategy-foundationdb-default.yaml
   - templates/strategy-velero-vminstance-default.yaml
   - templates/strategy-velero-vmdisk-default.yaml
@@ -70,6 +71,11 @@ tests:
       - hasDocuments:
           count: 0
         template: templates/strategy-rabbitmq-default.yaml
+      # Kafka metadata Job strategy carries bucket coordinates too, so it stays
+      # off the first render for the same ordering reason as its siblings.
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-kafka-default.yaml
       - hasDocuments:
           count: 0
         template: templates/strategy-foundationdb-default.yaml
@@ -83,7 +89,7 @@ tests:
           count: 0
         template: templates/velero-bsl.yaml
 
-  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all eight routes (FoundationDB intentionally unbound)"
+  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all nine routes (FoundationDB intentionally unbound)"
     asserts:
       - hasDocuments:
           count: 1
@@ -94,7 +100,7 @@ tests:
         template: templates/backupclass-default.yaml
       - lengthEqual:
           path: spec.strategies
-          count: 8
+          count: 9
         template: templates/backupclass-default.yaml
       - contains:
           path: spec.strategies
@@ -106,6 +112,17 @@ tests:
               apiGroup: strategy.backups.cozystack.io
               kind: Rabbitmq
               name: cozy-default-rabbitmq
+        template: templates/backupclass-default.yaml
+      - contains:
+          path: spec.strategies
+          content:
+            application:
+              apiGroup: apps.cozystack.io
+              kind: Kafka
+            strategyRef:
+              apiGroup: strategy.backups.cozystack.io
+              kind: Kafka
+              name: cozy-default-kafka
         template: templates/backupclass-default.yaml
 
   - it: "all Strategy CRs and the Velero BSL render once a bucket name resolves"
@@ -130,6 +147,9 @@ tests:
       - hasDocuments:
           count: 1
         template: templates/strategy-rabbitmq-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-kafka-default.yaml
       - hasDocuments:
           count: 1
         template: templates/strategy-foundationdb-default.yaml

@@ -204,3 +204,10 @@ rules:
 - apiGroups: ["rabbitmq.com"]
   resources: ["rabbitmqclusters"]
   verbs: ["get", "list", "watch"]
+# Kafka strategy: read the Strimzi Kafka cluster CR only, as a Ready
+# precondition before the metadata backup/restore Job runs. The driver never
+# mutates it; the export/import runs entirely in the batch/jobs granted above
+# via the Kafka Admin API, so no kafkatopics access is needed here.
+- apiGroups: ["kafka.strimzi.io"]
+  resources: ["kafkas"]
+  verbs: ["get", "list", "watch"]

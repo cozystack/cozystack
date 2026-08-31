@@ -1,0 +1,19 @@
+# A separate, empty Kafka application for the to-copy restore — the "bootstrap a
+# fresh cluster and apply the metadata onto it" scenario. No topics: the restore
+# recreates them from the backup.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Kafka
+metadata:
+  name: kafka-meta-target
+  namespace: tenant-root
+spec:
+  external: false
+  kafka:
+    replicas: 1
+    size: 2Gi
+    resourcesPreset: "small"
+  zookeeper:
+    replicas: 1
+    size: 1Gi
+    resourcesPreset: "small"
+  topics: []

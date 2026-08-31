@@ -1,0 +1,136 @@
+{{/*
+  Two-layer templating (see strategy-rabbitmq-default.yaml for the rationale):
+  Helm renders this file at chart install time (the $bucketName gate, the
+  endpoint/bucket/region, the credentials Secret name); the
+  backupstrategy-controller re-renders the resulting Kafka Strategy CR per
+  BackupJob/RestoreJob, expanding `{{ .Application | .Release | .Mode |
+  .BackupName | .Backup }}`. A literal `{{ .Foo }}` that must survive Helm is
+  passed as the string argument of `printf`.
+
+  This is the Kafka topic-METADATA backup. Strimzi ships no backup CR and this
+  strategy deliberately does not touch message data: it exports every
+  non-internal topic's definition (partition count, replication factor,
+  non-default topic configs) through the Kafka Admin API and restores it with
+  `kafka-topics --create` + `kafka-configs --alter`. Consumer offsets, ACLs,
+  quotas and KafkaUsers are out of scope; message data is a volume-snapshot
+  strategy, not this one. Restored topics are created directly (unmanaged — no
+  KafkaTopic CR), which is the accepted tradeoff for an Admin-API-only driver.
+*/}}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Kafka
+metadata:
+  name: cozy-default-kafka
+spec:
+  # Record the stored object's location on the produced Backup, keyed by the
+  # SOURCE namespace/name and the per-run BackupName so distinct backups of one
+  # application do not overwrite each other.
+  artifactURITemplate: {{ printf "s3://%s/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-metadata.txt" $bucketName | quote }}
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: kafka-backup
+          image: "{{ .Values.backupStrategyController.kafkaBackupClientImage }}"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MODE
+              value: {{ printf "{{ .Mode }}" | quote }}
+            # The Cozystack chart names the Strimzi cluster "kafka-<app>", so
+            # its plaintext bootstrap Service is "kafka-<app>-kafka-bootstrap"
+            # on 9092 (no TLS/auth on the internal plain listener). On restore
+            # .Release is the TARGET, so the bootstrap points at the broker
+            # being restored into.
+            - name: BOOTSTRAP
+              value: {{ printf "kafka-{{ .Release.Name }}-kafka-bootstrap.{{ .Release.Namespace }}.svc:9092" | quote }}
+            # S3 object key scoped by the SOURCE application AND the per-run
+            # BackupName. On backup the source is .Release and the run is the
+            # BackupJob name; on restore both come from .Backup (set only then).
+            - name: SRC_NAME
+              value: {{ printf "{{ if .Backup }}{{ .Backup.ApplicationRef.Name }}{{ else }}{{ .Release.Name }}{{ end }}" | quote }}
+            - name: SRC_NAMESPACE
+              value: {{ printf "{{ if .Backup }}{{ .Backup.Namespace }}{{ else }}{{ .Release.Namespace }}{{ end }}" | quote }}
+            - name: RUN_NAME
+              value: {{ printf "{{ .BackupName }}" | quote }}
+            # S3 coordinates. Credentials come from cozy-backups-creds, which
+            # the controller projects into the application namespace before
+            # dispatch. The endpoint helper yields a scheme-prefixed URL for
+            # curl --aws-sigv4.
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: S3_ENDPOINT
+              value: {{ include "backupstrategy-controller.endpoint" . | quote }}
+            - name: S3_BUCKET
+              value: {{ $bucketName | quote }}
+            - name: S3_REGION
+              value: {{ .Values.backupStorage.region | quote }}
+          command: ["/usr/bin/bash", "-c"]
+          args:
+            - |
+              set -eu
+              BIN=/opt/kafka/bin
+              key="${SRC_NAMESPACE}/${SRC_NAME}/${RUN_NAME}/kafka-metadata.txt"
+
+              case "${S3_ENDPOINT}" in
+                http://*|https://*) base="${S3_ENDPOINT}" ;;
+                *) base="https://${S3_ENDPOINT}" ;;
+              esac
+              obj_url="${base}/${S3_BUCKET}/${key}"
+              s3() { curl -fsS --aws-sigv4 "aws:amz:${S3_REGION}:s3" --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"; }
+
+              if [ "${MODE}" = backup ]; then
+                echo "exporting Kafka topic metadata from ${BOOTSTRAP}"
+                : > /tmp/kafka-metadata.txt
+                # Every non-internal topic (Kafka's own topics are __-prefixed).
+                topics=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --list | grep -v '^__' || true)
+                for t in ${topics}; do
+                  # The --describe first line carries PartitionCount,
+                  # ReplicationFactor and the non-default Configs (comma-joined
+                  # k=v), which is exactly the --add-config shape on restore.
+                  line=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --describe --topic "${t}" | head -1)
+                  parts=$(printf '%s' "${line}" | grep -oE 'PartitionCount: [0-9]+' | awk '{print $2}')
+                  rf=$(printf '%s' "${line}" | grep -oE 'ReplicationFactor: [0-9]+' | awk '{print $2}')
+                  cfg=$(printf '%s' "${line}" | sed -n 's/.*Configs: //p')
+                  printf '%s\t%s\t%s\t%s\n' "${t}" "${parts}" "${rf}" "${cfg}" >> /tmp/kafka-metadata.txt
+                  echo "  ${t}: partitions=${parts} rf=${rf} configs=[${cfg}]"
+                done
+                s3 -X PUT --upload-file /tmp/kafka-metadata.txt "${obj_url}"
+                echo "uploaded s3://${S3_BUCKET}/${key}"
+              else
+                echo "restoring Kafka topic metadata into ${BOOTSTRAP} from s3://${S3_BUCKET}/${key}"
+                s3 -o /tmp/kafka-metadata.txt "${obj_url}"
+                while IFS="$(printf '\t')" read -r t parts rf cfg; do
+                  [ -n "${t}" ] || continue
+                  "${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --create --if-not-exists \
+                    --topic "${t}" --partitions "${parts}" --replication-factor "${rf}"
+                  if [ -n "${cfg}" ]; then
+                    "${BIN}"/kafka-configs.sh --bootstrap-server "${BOOTSTRAP}" --alter \
+                      --entity-type topics --entity-name "${t}" --add-config "${cfg}"
+                  fi
+                  echo "  restored ${t}: partitions=${parts} rf=${rf}"
+                done < /tmp/kafka-metadata.txt
+                echo "restore complete"
+              fi
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+{{- end -}}
