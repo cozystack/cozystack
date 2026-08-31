@@ -18,5 +18,5 @@ spec:
   rules:
   - backendRefs:
     - name: keycloak-http
-      port: 80
+      port: 8080
 {{- end }}
