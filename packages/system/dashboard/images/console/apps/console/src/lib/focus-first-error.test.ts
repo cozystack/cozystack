@@ -44,17 +44,28 @@ describe("focusFirstError", () => {
     expect(document.activeElement).toBe(field)
   })
 
-  // Pinned gap: RJSF gives the same dotted path whether the dot separates two
-  // properties or sits inside one name, so a map keyed `ghcr.io` cannot be told
-  // apart from a nested `ghcr` -> `io` and its field is never focused. The
-  // submit still blocks and the inline error still renders; only the scroll is
-  // lost. Fixing it needs the schema, not the error.
-  it("does not resolve a property whose own name contains a dot", () => {
-    document.body.innerHTML = `<input id="root_talos_registryMirrors_ghcr.io" />`
+  // A map key can itself contain a dot -- a mariadb user `john.doe`, a registry
+  // mirror `ghcr.io` -- and the flattened path cannot say whether a dot
+  // separates two properties or sits inside one, so both readings are tried.
+  it("resolves a property whose own name contains a dot", () => {
+    document.body.innerHTML = `<input id="root_users_john.doe_maxUserConnections" />`
+    const field = document.getElementById("root_users_john.doe_maxUserConnections")
 
-    focusFirstError({ property: ".talos.registryMirrors.ghcr.io" })
+    focusFirstError({ property: ".users.john.doe.maxUserConnections" })
 
-    expect(document.activeElement).toBe(document.body)
+    expect(document.activeElement).toBe(field)
+  })
+
+  it("prefers the plain split when both readings are present", () => {
+    document.body.innerHTML = `
+      <input id="root_a.b" />
+      <input id="root_a_b" />
+    `
+    const plain = document.getElementById("root_a_b")
+
+    focusFirstError({ property: ".a.b" })
+
+    expect(document.activeElement).toBe(plain)
   })
 
   it("uses the same custom prefix and separator as the form", () => {
