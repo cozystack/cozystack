@@ -9,6 +9,14 @@ databaseAutoscaling:
     enabled: true
 
 keda:
+  # Keep the KEDA CRDs on package uninstall. They render as ordinary templates (not
+  # under Helm's protected crds/ dir), so without this an admin who removes the keda
+  # package would delete the ScaledObject CRD and cascade-delete EVERY tenant's
+  # ScaledObject, wedging every autoscaled database at its next reconcile. resource-policy
+  # keep orphans the CRDs instead; a deliberate CRD cleanup is then a manual step.
+  crds:
+    additionalAnnotations:
+      helm.sh/resource-policy: keep
   # Cozystack's cluster domain, not the upstream chart default "cluster.local".
   # KEDA's metrics-apiserver dials the operator's metrics gRPC service at
   # keda-operator.<ns>.svc.<clusterDomain>:9666 and the operator mints that

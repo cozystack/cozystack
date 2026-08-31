@@ -16,6 +16,13 @@ CNPG collapse the cluster to 1 instance. Stop with an actionable message instead
 {{- if lt (int .Values.autoscaling.target) 1 }}
 {{- fail "postgres: autoscaling.target must be a positive integer (the desired-replica formula divides the read load by it)." }}
 {{- end }}
+{{- /* Reject a contradictory range rather than silently resolving it. effectiveMax
+       raises the ceiling to the quorum floor (which folds in minReplicas), so
+       minReplicas > maxReplicas would render minReplicaCount == maxReplicaCount ==
+       minReplicas, quietly defeating maxReplicas as a cost knob with no signal. */ -}}
+{{- if gt (int .Values.autoscaling.minReplicas) (int .Values.autoscaling.maxReplicas) }}
+{{- fail (printf "postgres: autoscaling.minReplicas (%d) must be <= autoscaling.maxReplicas (%d)." (int .Values.autoscaling.minReplicas) (int .Values.autoscaling.maxReplicas)) }}
+{{- end }}
 {{- /* The trigger query is served from vmselect in the tenant's monitoring namespace.
        If it is unset the serverAddress would render as the malformed
        `vmselect-shortterm..svc:8481`, which surfaces late as a KEDA scaler error

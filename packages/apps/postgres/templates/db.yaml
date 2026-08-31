@@ -7,33 +7,30 @@ metadata:
   name: {{ .Release.Name }}
 spec:
   {{- if $autoscaling }}
-  {{- if gt (int .Values.quorum.maxSyncReplicas) 0 }}
-  {{- /* Synchronous quorum requires instances > maxSyncReplicas at creation, but an
-         omitted .spec.instances defaults to 1 and CNPG's admission webhook rejects
-         "maxSyncReplicas must be lower than the number of instances". Seed the quorum
-         floor (effectiveMin) so a fresh autoscaled + sync-quorum Cluster is admitted.
-         The chart re-renders this same constant on every reconcile, so Helm's
-         three-way merge is a no-op on the field and never reverts KEDA's higher live
-         value written through /scale. (Go-template comment: stripped at render, not
-         shipped into the Cluster manifest.) */}}
+  {{- /* Under active autoscaling KEDA owns the runtime count via the /scale
+         subresource. The chart SEEDS spec.instances at the quorum floor (effectiveMin)
+         rather than omitting it, for two reasons: (1) with synchronous quorum an
+         omitted field defaults to 1 and CNPG's webhook rejects "maxSyncReplicas must
+         be lower than the number of instances"; (2) omitting it on an EXISTING
+         cluster's enable/upgrade makes three-way merge delete the field, CNPG
+         re-defaults to 1, and every replica + its PVC is decommissioned before KEDA
+         re-clones (hours with no read replicas). Seeding a constant floor makes the
+         merge a no-op on the field (it never reverts KEDA's higher live value) and
+         caps the enable dip at the floor (>=2) instead of collapsing to 1. This
+         relies on helm-controller's client-side 3-way merge (not SSA), confirmed in
+         internal/controller/applicationdefinition_helmreconciler.go (no Force/SSA,
+         driftDetection off). (Go-template comment, stripped at render.) */}}
   instances: {{ include "postgres.autoscaling.effectiveMin" . }}
-  {{- end }}
-  {{- /* Without synchronous quorum the field is omitted: CNPG defaults it to 1 and the
-         KEDA-managed HPA is the sole writer of .spec.instances via the /scale
-         subresource (design proposal §3). A brief cold-start window at 1 is expected
-         until KEDA scales up to the floor. See templates/scaledobject.yaml. */ -}}
   {{- else }}
-  {{- /* When the chart declares the static instance count, CNPG's admission webhook
-         rejects the Cluster if maxSyncReplicas >= instances ("maxSyncReplicas must be
-         lower than the number of instances"). This bites the DISABLE path in
-         particular: an autoscaled + sync-quorum cluster runs with instances seeded
-         from effectiveMin while replicas stays at its default, so flipping autoscaling
-         off would render instances: <replicas> next to the quorum and wedge the
-         HelmRelease upgrade with an opaque webhook error. Fail closed with an
-         actionable message (symmetric to the enable-path guards). Also covers the
-         dryRun/transition modes, which likewise render the static count. */ -}}
+  {{- /* Static-count path (autoscaling off / dryRun / transition), which renders
+         instances: <replicas>. CNPG's webhook rejects the Cluster if maxSyncReplicas
+         >= instances; guard the DISABLE case in particular, where an autoscaled +
+         sync-quorum cluster runs with instances seeded from effectiveMin while
+         replicas may sit at its default, so a naive disable would render an invalid
+         count and wedge the HelmRelease. Fail closed with an actionable message.
+         (Stripped at render.) */}}
   {{- if le (int .Values.replicas) (int .Values.quorum.maxSyncReplicas) }}
-  {{- fail (printf "postgres: replicas (%d) must be greater than quorum.maxSyncReplicas (%d) - CNPG rejects a Cluster whose maxSyncReplicas is not lower than its instance count. Raise replicas above maxSyncReplicas. (If you are disabling autoscaling on a synchronous-quorum cluster, first set replicas to at least the live instance count via kubectl scale --subresource=scale with the HelmRelease suspended.)" (int .Values.replicas) (int .Values.quorum.maxSyncReplicas)) }}
+  {{- fail (printf "postgres: replicas (%d) must be greater than quorum.maxSyncReplicas (%d) - CNPG rejects a Cluster whose maxSyncReplicas is not lower than its instance count. Raise replicas above maxSyncReplicas. (If you are disabling autoscaling on a synchronous-quorum cluster, first set replicas to at least the live instance count: kubectl scale cluster.postgresql.cnpg.io/%s --replicas=<live count>, with the HelmRelease suspended.)" (int .Values.replicas) (int .Values.quorum.maxSyncReplicas) .Release.Name) }}
   {{- end }}
   instances: {{ .Values.replicas }}
   {{- end }}

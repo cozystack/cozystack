@@ -168,14 +168,19 @@ tests:
     templates: [templates/tests/keda-scaledobject-arg.yaml]
     set: {omit: minReplicaCount}
     asserts:
-      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: minReplicaCount is required"}
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: minReplicaCount is required and must be a number"}
   - it: fails closed when maxReplicaCount is missing
     templates: [templates/tests/keda-scaledobject-arg.yaml]
     set: {omit: maxReplicaCount}
     asserts:
-      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: maxReplicaCount is required"}
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: maxReplicaCount is required and must be a number"}
   - it: fails closed when scaleTargetRef is not a dict
     templates: [templates/tests/keda-scaledobject-arg.yaml]
     set: {badRef: true}
     asserts:
       - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: scaleTargetRef must be a dict"}
+  - it: fails closed when a bound is a non-numeric string
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {badMin: true}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: minReplicaCount is required and must be a number"}

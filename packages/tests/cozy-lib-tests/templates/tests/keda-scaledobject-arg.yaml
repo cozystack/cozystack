@@ -1,12 +1,14 @@
-{{- if or .Values.omit .Values.badRef -}}
+{{- if or .Values.omit .Values.badRef .Values.badMin -}}
 {{- /* Build a fully-valid argument dict, then either drop exactly one required
-       field named by .Values.omit or replace scaleTargetRef with a non-map
-       (.Values.badRef), to exercise each fail-closed guard in isolation. */ -}}
+       field named by .Values.omit, replace scaleTargetRef with a non-map
+       (.Values.badRef), or set a non-numeric minReplicaCount (.Values.badMin), to
+       exercise each fail-closed guard in isolation. */ -}}
 {{- $ref := dict "apiVersion" "postgresql.cnpg.io/v1" "kind" "Cluster" "name" "db" -}}
 {{- if eq .Values.omit "kind" }}{{- $_ := unset $ref "kind" }}{{- end -}}
 {{- if eq .Values.omit "apiVersion" }}{{- $_ := unset $ref "apiVersion" }}{{- end -}}
 {{- $arg := dict "name" "db" "scaleTargetRef" $ref "minReplicaCount" 2 "maxReplicaCount" 6 "serverAddress" "http://vmselect.example.svc:8481/select/0/prometheus" "query" "sum(x) + 150" "threshold" "150" -}}
 {{- if .Values.omit }}{{- $arg = unset $arg .Values.omit -}}{{- end -}}
 {{- if .Values.badRef }}{{- $arg = set $arg "scaleTargetRef" "not-a-map" -}}{{- end -}}
+{{- if .Values.badMin }}{{- $arg = set $arg "minReplicaCount" "two" -}}{{- end -}}
 {{ include "cozy-lib.keda.scaledObject" $arg }}
 {{- end -}}

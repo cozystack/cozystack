@@ -87,6 +87,15 @@ namespace/pod; the design's cnpg_pg_stat_replication_sent_diff_bytes does not, s
 WAL-record rate is the write signal. The cluster is scoped by joining kube_pod_labels
 on (namespace,pod), same as the read-load term. The exact thresholds/cooldown are
 tuned per the proposal's PoC; the base (no-lag) path is validated live.
+
+Fail-open caveat: the read-load term is floored with `or vector(0)`, so a genuinely
+idle cluster yields `target` (desired 1, clamped to the floor). The same floor also
+makes a BROKEN metrics pipeline (kube-state-metrics not carrying the CNPG pod labels,
+or the join otherwise empty) read as idle: autoscaling then silently sits at the
+floor under real read load. This never scales the wrong way (fail-safe), but it is
+silent — DatabaseAutoscalerScalerErrors cannot catch it (the query never errors).
+Operators enabling autoscaling must ensure the CNPG podMonitor + kube-state-metrics
+pod-label pipeline is healthy; a missing join is indistinguishable from no load here.
 */}}
 {{- define "postgres.autoscaling.query" -}}
 {{- $ns := .Release.Namespace -}}

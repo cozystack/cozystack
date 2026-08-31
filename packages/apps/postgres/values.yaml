@@ -159,39 +159,33 @@ quorum:
 ## @value ReadCPUUtilization - CPU (millicores) of the postgres container on the standby pods.
 
 ## Under active autoscaling the KEDA HPA owns the runtime count via the /scale
-## subresource. Without synchronous quorum (maxSyncReplicas=0) the chart omits
-## `.spec.instances` entirely — the HPA is the sole writer and no field is contested;
-## CNPG starts a fresh Cluster at 1 and KEDA scales it up to the floor (a brief
-## cold-start window at 1 is expected). With synchronous quorum (maxSyncReplicas>=1)
-## omission is impossible — CNPG would default the field to 1 and its admission
-## webhook rejects "maxSyncReplicas must be lower than the number of instances" — so
-## the chart seeds the quorum floor (effectiveMin = max(minReplicas, maxSyncReplicas+1, 2))
-## instead; it re-renders that same constant every reconcile, so three-way merge is a
-## no-op on the field and never reverts KEDA's higher live value.
-## A NEW database can enable autoscaling directly in either case.
-## Enabling on an EXISTING database above the floor is NOT dip-free by chart mechanics
-## alone. helm-controller upgrades with Helm's three-way merge (not SSA), which keys off
-## the old-vs-new manifest diff, not KEDA's live /scale value: when the chart stops
-## rendering the prior static count, the field is deleted (no quorum -> CNPG defaults to
-## 1, so the cluster briefly collapses to 1) or changed (quorum -> rebased to
-## effectiveMin), then the already-warm KEDA restores the load-based count. The
-## two-phase `transition` flow reduces this — phase 1 (`enabled:true, transition:true`,
-## `replicas` staged to the live count) stands KEDA up paused so it actuates
-## immediately at phase 2 (`transition:false`) instead of cold-starting — but it does
-## not eliminate the momentary drop, because the phase-2 apply still deletes/changes the
-## field in the manifest. To make the handoff truly dip-free: suspend the HelmRelease,
-## pin the live count with `kubectl scale --subresource=scale` (or set replicas on the
-## CNPG Cluster) so KEDA/CNPG holds it, run the phase-2 apply, then resume. Absent that,
-## expect a brief read-replica disruption during the handoff.
-## The same hazard applies to two other live changes, for the same three-way-merge
-## reason: (1) raising `minReplicas` or `quorum.maxSyncReplicas` on a running autoscaled
-## cluster re-renders the seeded `instances` to the new, higher effectiveMin — harmless
-## (scale-up) — but LOWERING either re-renders a smaller effectiveMin, so if KEDA had
-## scaled above it CNPG decommissions the surplus instances (deleting their PVCs) before
-## the HPA re-clones them; and (2) in the non-quorum case, disabling autoscaling snaps
-## `instances` from the live count back to `.Values.replicas`. Before a floor change or a
-## disable, pin `replicas` to the current live instance count (`kubectl scale
-## --subresource=scale`, HelmRelease suspended) so the re-render is a no-op.
+## subresource, and the chart SEEDS `.spec.instances` at the quorum floor
+## (effectiveMin = max(minReplicas, maxSyncReplicas+1, 2)) — in BOTH the quorum and
+## non-quorum cases. It re-renders that same constant every reconcile, so
+## helm-controller's client-side three-way merge (not SSA — confirmed:
+## internal/controller/applicationdefinition_helmreconciler.go sets no Force/SSA and
+## driftDetection is off) is a no-op on the field and never reverts KEDA's higher live
+## value written through /scale. Seeding (rather than omitting) is deliberate: an
+## omitted field defaults to 1, which the CNPG webhook rejects under quorum, and — worse
+## — deleting the field on an existing cluster's enable-upgrade collapses it to 1 and
+## decommissions every replica PVC before KEDA re-clones.
+## A NEW database can enable autoscaling directly (it starts at the floor, no dip).
+## On an EXISTING database, three changes cause a momentary drop, because the three-way
+## merge writes the field whenever the rendered value differs from the live one — and
+## KEDA's live count is invisible to it:
+##   (1) Enabling with a live count above the floor rebases `instances` down to
+##       effectiveMin (capped at >=2, not a collapse to 1), decommissioning the surplus
+##       replicas and their PVCs before KEDA re-expands.
+##   (2) RAISING or LOWERING `minReplicas`/`quorum.maxSyncReplicas` re-renders a new
+##       effectiveMin; if it differs from KEDA's live count the merge writes it —
+##       lowering below the live count decommissions surplus replicas+PVCs. Neither
+##       direction is dip-free; do not treat a raise as harmless.
+##   (3) Disabling snaps `instances` back to `.Values.replicas`.
+## To avoid the drop in every case: suspend the HelmRelease, pin the live count with
+## `kubectl scale cluster.postgresql.cnpg.io/<name> --replicas=<live count>` (or stage
+## `.Values.replicas`/use the two-phase `transition` flow), apply, then resume. The
+## `transition` flag additionally lets KEDA come up warm so it actuates immediately at
+## phase 2 instead of cold-starting.
 ## @param {Autoscaling} autoscaling - Read-replica autoscaling configuration.
 autoscaling:
   enabled: false

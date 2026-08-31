@@ -56,3 +56,14 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --kube-api-burst=100
+
+  # An admin removing the keda package must not cascade-delete every tenant's
+  # ScaledObject: the CRDs render as ordinary templates (not under the protected
+  # crds/ dir), so the shim stamps resource-policy: keep to orphan them on uninstall.
+  - it: keeps the KEDA CRDs on package uninstall
+    templates:
+      - charts/keda/templates/crds/crd-scaledobjects.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep

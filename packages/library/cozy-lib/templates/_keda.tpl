@@ -74,13 +74,14 @@ Parameters:
 {{-   if eq (default "" .serverAddress) "" -}}
 {{-     fail "cozy-lib.keda.scaledObject: serverAddress is required" -}}
 {{-   end -}}
-{{- /* Bounds are required integers; the caller has already folded the quorum floor
-       into them, so all this helper enforces is the ordering invariant. */ -}}
-{{-   if kindIs "invalid" .minReplicaCount -}}
-{{-     fail "cozy-lib.keda.scaledObject: minReplicaCount is required" -}}
+{{- /* Bounds are required NUMBERS. A nil is "invalid"; a non-numeric string like
+       "two" must also fail rather than coerce through `int` to 0 (which would sail
+       past the ordering guard and render a scale-to-zero-capable ScaledObject). */ -}}
+{{-   if not (or (kindIs "int" .minReplicaCount) (kindIs "float64" .minReplicaCount)) -}}
+{{-     fail "cozy-lib.keda.scaledObject: minReplicaCount is required and must be a number" -}}
 {{-   end -}}
-{{-   if kindIs "invalid" .maxReplicaCount -}}
-{{-     fail "cozy-lib.keda.scaledObject: maxReplicaCount is required" -}}
+{{-   if not (or (kindIs "int" .maxReplicaCount) (kindIs "float64" .maxReplicaCount)) -}}
+{{-     fail "cozy-lib.keda.scaledObject: maxReplicaCount is required and must be a number" -}}
 {{-   end -}}
 {{-   $min := int .minReplicaCount -}}
 {{-   $max := int .maxReplicaCount -}}
@@ -113,11 +114,13 @@ spec:
     name: {{ $ref.name }}
   minReplicaCount: {{ $min }}
   maxReplicaCount: {{ $max }}
-{{-   with .pollingInterval }}
-  pollingInterval: {{ . }}
+{{- /* `if not kindIs invalid`, not `with`: a legal 0 must render, but `with` treats
+       0 as empty and would silently drop an explicit pollingInterval/cooldownPeriod: 0. */ -}}
+{{-   if not (kindIs "invalid" .pollingInterval) }}
+  pollingInterval: {{ .pollingInterval }}
 {{-   end }}
-{{-   with .cooldownPeriod }}
-  cooldownPeriod: {{ . }}
+{{-   if not (kindIs "invalid" .cooldownPeriod) }}
+  cooldownPeriod: {{ .cooldownPeriod }}
 {{-   end }}
 {{-   with .behavior }}
   advanced:

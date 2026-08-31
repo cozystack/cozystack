@@ -25,19 +25,26 @@ spec:
   groups:
   - name: database-autoscaling.rules
     rules:
-    # Scale-up patched but not converging: quota-rejected standby, unbindable
-    # PVC, or unschedulable pod. There is no automatic rollback (see the design
-    # proposal) — this alert is the operator's signal to resolve it.
+    # Scale-up genuinely stuck: quota-rejected standby, unbindable PVC, or
+    # unschedulable pod. desired > current alone would also fire on every healthy
+    # load-driven scale-up, because a new CNPG standby joins via a full basebackup
+    # that routinely exceeds 15m while the pod is Running (not Ready) — so intersect
+    # with an actually-Pending pod in the namespace, which a healthy clone is not.
+    # There is no automatic rollback (see the design proposal); this is the operator's
+    # signal to resolve it.
     - alert: DatabaseAutoscalerScaleStuck
       expr: |-
-        kube_horizontalpodautoscaler_status_desired_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
-        > kube_horizontalpodautoscaler_status_current_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
+        (
+          kube_horizontalpodautoscaler_status_desired_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
+          > kube_horizontalpodautoscaler_status_current_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
+        )
+        and on(namespace) (max by (namespace) (kube_pod_status_phase{phase="Pending"}) > 0)
       for: 15m
       labels:
         severity: warning
       annotations:
         summary: Database autoscaler cannot reach its desired replica count.
-        description: HPA {{ "{{ $labels.horizontalpodautoscaler }}" }} in namespace {{ "{{ $labels.namespace }}" }} has wanted more replicas than are available for 15m (stuck scale-up — likely quota, unbindable PVC, or unschedulable pod).
+        description: HPA {{ "{{ $labels.horizontalpodautoscaler }}" }} in namespace {{ "{{ $labels.namespace }}" }} has wanted more replicas than are available for 15m while a pod in the namespace is Pending (stuck scale-up — likely quota, unbindable PVC, or unschedulable pod, not a healthy basebackup).
     # Scaling is limited at the (possibly quorum-raised) maximum. Sustained means
     # the configured maxReplicas — or the quorum floor that overrode it — is the
     # ceiling under real load.
@@ -61,4 +68,20 @@ spec:
       annotations:
         summary: KEDA scaler is erroring for a managed database.
         description: KEDA reported scaler errors over the last 15m for a database ScaledObject (metric source unreachable or query invalid); the desired count is not being updated.
+    # KEDA operator down / not reporting: it reconciles ScaledObjects into HPAs, so
+    # while it is unhealthy (e.g. the leader-election crash-loop the package guards
+    # against) a fresh autoscaled database is admitted at CNPG's default of 1 and its
+    # ScaledObject never becomes an HPA — no keda-hpa-* series exist, so neither
+    # ScaleStuck nor ScalerErrors can fire and the tenant's requested floor silently
+    # never materializes. keda_build_info is emitted by the operator; its absence
+    # means the operator is down or unscraped.
+    - alert: DatabaseAutoscalerKedaOperatorDown
+      expr: |-
+        absent(keda_build_info)
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: KEDA operator is not reporting; database autoscaling is not being actuated.
+        description: The KEDA operator has emitted no keda_build_info for 10m (down, crash-looping, or unscraped). ScaledObjects are not being reconciled into HPAs, so autoscaled databases stay pinned at their admitted count and requested floors do not materialize.
 {{- end }}
