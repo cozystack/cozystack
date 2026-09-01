@@ -72,7 +72,13 @@ func TestCapitalizeYieldsValidKind(t *testing.T) {
 }
 
 func TestInitRejectsReservedName(t *testing.T) {
-	for _, name := range []string{"cozystack.foo", "community.acme.demo"} {
+	// Driven off reservedNamePrefixes rather than a literal list, so a prefix
+	// added for `validate` cannot leave `init` quietly letting it through.
+	var names []string
+	for _, p := range reservedNamePrefixes {
+		names = append(names, p+"foo", p+"acme.demo")
+	}
+	for _, name := range names {
 		initCmdFlags.app = "demo"
 		initCmdFlags.name = name
 		err := initCmd.RunE(initCmd, []string{t.TempDir()})

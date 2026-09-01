@@ -223,8 +223,10 @@ to validate and push. The generated tree passes 'cozypkg validate' as-is.`,
 		// Reserved namespaces: "cozystack." is the platform's own and "community."
 		// is the older renamed-source namespace. The on-cluster collision check is
 		// the real boundary; this is a usability hint so the author learns now
-		// rather than at tap time. The index gate rejects these in `validate` too.
-		for _, p := range []string{"cozystack.", "community."} {
+		// rather than at tap time. The index gate rejects these in `validate` too,
+		// off the same list, so adding a prefix cannot close one door and leave
+		// the other open.
+		for _, p := range reservedNamePrefixes {
 			if strings.HasPrefix(psName, p) {
 				return fmt.Errorf("--name %q uses reserved prefix %q; pick a neutral name like <org>.%s", psName, p, app)
 			}
