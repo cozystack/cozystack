@@ -24,15 +24,21 @@ set:
 tests:
   - it: renders no email receiver, email routes or secrets mount by default
     asserts:
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         notMatchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: "name: email"
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         notMatchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: "receiver: email"
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         notMatchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: "notify_email"
@@ -53,11 +59,15 @@ tests:
             authUsername: "mailer@example.org"
             secretName: "alertmanager-smtp"
     asserts:
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         matchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:465"\n    auth_username: "mailer@example\.org"\n    auth_password_file: /etc/vm/secrets/alertmanager-smtp/password\n    send_resolved: true'
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         matchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: email\n    group_by: \[alertname, cluster\]\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".'
@@ -78,15 +88,21 @@ tests:
             from: "alerts@example.org"
             smarthost: "smtp.example.org:25"
     asserts:
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         matchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:25"\n    send_resolved: true'
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         notMatchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: "auth_username"
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         notMatchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: "auth_password_file"
@@ -107,11 +123,15 @@ tests:
             subject: "[{{ .Status }}] {{ .CommonLabels.alertname }}"
             bodyHtml: "<b>{{ .Status }}</b>"
     asserts:
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         matchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: '    headers:\n      Subject: "\[\{\{ \.Status \}\}\] \{\{ \.CommonLabels\.alertname \}\}"'
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         matchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: 'html: "<b>\{\{ \.Status \}\}</b>"'
@@ -125,11 +145,15 @@ tests:
             from: "alerts@example.org"
             smarthost: "smtp.example.org:465"
     asserts:
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         notMatchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: "Subject:"
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         notMatchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: "html:"
@@ -243,7 +267,9 @@ tests:
             smarthost: "smtp.example.org:465"
             repeatInterval: "1h30m"
     asserts:
-      - documentIndex: 5
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
         matchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: '    repeat_interval: "1h30m"\n'
