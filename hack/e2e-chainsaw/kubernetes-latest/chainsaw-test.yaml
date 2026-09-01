@@ -48,7 +48,6 @@ spec:
         #     (those alternate rather than run to completion in turn: each takes
         #     its first reading, one wait passes, each takes its second)
         #   guest Talos capture
-        #   ghcr-mirror state, access log and warm-up Job
         #   talos-image-cache diagnosis
         # The four collectors that bracket the node-join wait -- the sandbox
         # kernel KVM counters, the runner kernel CPU time, the sandbox QEMU

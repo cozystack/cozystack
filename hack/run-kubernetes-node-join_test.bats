@@ -250,11 +250,10 @@ stub_collectors() {
 # reached it outside a `timeout` wrapper. Stubbing a collector there does not
 # make that test pass more easily; it removes the collector from the audit
 # entirely, and the test stays green because there is nothing left to audit.
-# Each of them carries reads the audit is the only instrument that sees:
-# ghcr_mirror_diagnose issues five, and every cadvisor capture issues a Pod
-# listing and a node read apiece. Their own suites substitute a grep over the
-# source, which by construction cannot see a read that was added without a
-# bound.
+# Each of them carries reads the audit is the only instrument that sees: every
+# cAdvisor capture issues a Pod listing and a node read apiece. Their own suites
+# substitute a grep over the source, which by construction cannot see a read
+# that was added without a bound.
 #
 # They are stubbed only where the test is about the phase budget rather than
 # about the reads, which is the one place their real bodies would drown the
@@ -265,7 +264,6 @@ stub_gated_collectors() {
   cozy_capture_tenant_worker_block_io() { printf 'block-io-stub\n'; }
   cozy_capture_sandbox_node_cpu_time() { printf 'sandbox-cpu-time-stub\n'; }
   cozy_capture_tenant_worker_thread_cpu() { printf 'thread-cpu-stub\n'; }
-  ghcr_mirror_diagnose() { printf 'ghcr-mirror-stub\n'; }
 }
 
 assert_file_contains() {
@@ -411,10 +409,6 @@ read_cost_inputs() {
   # listing-keyed pin is satisfied by whichever of them ran, and stays green
   # with the other absent from the audit entirely. The directory is the one
   # thing each produces alone.
-  if ! grep -q 'get deploy ghcr-mirror' "$kubectl_calls"; then
-    echo "FAIL: ghcr_mirror_diagnose did not run, so its reads were not audited" >&2
-    false
-  fi
   # Keyed on the directory having CONTENT, not on the directory existing. Each
   # capture mkdir -p's its report directory before it lists anything, so an
   # empty one is exactly what a capture that issued no read leaves behind -- and
@@ -797,8 +791,7 @@ read_cost_inputs() {
   # A rule written for additions does not catch a removal, so both directions
   # are named here.
   for marker in serial-console-stub talos-stub image-cache-stub cpu-throttle-stub \
-    network-counters-stub block-io-stub sandbox-cpu-time-stub thread-cpu-stub \
-    ghcr-mirror-stub; do
+    network-counters-stub block-io-stub sandbox-cpu-time-stub thread-cpu-stub; do
     if grep -q "$marker" "$tmp/out"; then
       echo "FAIL: $marker ran after the phase ran out of budget" >&2
       false
@@ -810,7 +803,6 @@ read_cost_inputs() {
   assert_file_contains '(d) tenant worker CPU counters, sandbox node CPU time and worker per-thread CPU time: not collected' "$tmp/out"
   assert_file_contains '(d2) tenant worker network counters: not collected' "$tmp/out"
   assert_file_contains '(d3) tenant worker block IO counters: not collected' "$tmp/out"
-  assert_file_contains 'ghcr-mirror state, access log and warm-up Job: not collected' "$tmp/out"
   rm -rf "$tmp"
 }
 
@@ -966,7 +958,6 @@ read_cost_inputs() {
       cozy_capture_runner_kernel_cpu_time() { :; }
       cozy_capture_sandbox_qemu_thread_cpu() { :; }
       cozy_capture_runner_canary() { :; }
-      ghcr_mirror_diagnose() { :; }
       kubectl() { :; }
       cozy_report_node_join_failure test-latest-version
     ' 2>&1) || true
@@ -1037,7 +1028,6 @@ read_cost_inputs() {
     cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_runner_canary() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
-    ghcr_mirror_diagnose() { :; }
     cozy_capture_sandbox_node_cpu_time() { :; }
     cozy_capture_tenant_worker_thread_cpu() { :; }
     kubectl() { printf "KUBECTL_RAN\n" >&2; }
@@ -1116,7 +1106,6 @@ read_cost_inputs() {
     cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_runner_canary() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
-    ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
   printf '%s\n' "$out" >"$tmp/postsource"
@@ -1153,7 +1142,6 @@ read_cost_inputs() {
     cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_runner_canary() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
-    ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
   printf '%s\n' "$out" >"$tmp/empty"
@@ -1252,16 +1240,15 @@ read_cost_inputs() {
   console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
-  mirror=$(grep -n 'ghcr_mirror_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
   cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
-  for v in volumes console cpu talos mirror cache; do
+  for v in volumes console cpu talos cache; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to locate $v in $lib" >&2
       exit 1
     fi
   done
-  for later in console cpu talos mirror cache; do
+  for later in console cpu talos cache; do
     eval "n=\$$later"
     if [ "$volumes" -ge "$n" ]; then
       echo "the volume state read (line $volumes) must precede $later (line $n), or a tight run declines it" >&2
@@ -1284,16 +1271,15 @@ read_cost_inputs() {
   console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
-  mirror=$(grep -n 'ghcr_mirror_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
   cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
-  for v in block console cpu talos mirror cache; do
+  for v in block console cpu talos cache; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to locate $v in $lib" >&2
       exit 1
     fi
   done
-  for later in console cpu talos mirror cache; do
+  for later in console cpu talos cache; do
     eval "n=\$$later"
     if [ "$block" -ge "$n" ]; then
       echo "the block IO counters (line $block) must precede $later (line $n), or a tight run declines them" >&2
@@ -1329,16 +1315,15 @@ read_cost_inputs() {
   console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
-  mirror=$(grep -n 'ghcr_mirror_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
   cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
-  for v in cpu net console talos mirror cache; do
+  for v in cpu net console talos cache; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to locate $v in $lib" >&2
       exit 1
     fi
   done
-  for later in console cpu talos mirror cache; do
+  for later in console cpu talos cache; do
     eval "n=\$$later"
     if [ "$net" -ge "$n" ]; then
       echo "the network counters (line $net) must precede $later (line $n), or a tight run declines them" >&2
@@ -1545,13 +1530,11 @@ read_cost_inputs() {
   # enclosing definition so the name reported is the function's, not the line's.
   #
   # Over the sourced libraries as well as this file, and the list of them is
-  # read from the source rather than written out here. Two of the four captures
-  # the sentence names -- the ghcr-mirror and talos-image-cache diagnoses --
-  # live in libraries this file sources, so a scan of this file alone finds
-  # neither, and their arms in the table below sat unreachable while reading as
-  # coverage. A guarded read added to any sourced library is what this has to
-  # see, and hardcoding today's two would put the next library outside the scan
-  # in exactly the same silent way.
+  # read from the source rather than written out here. The talos-image-cache
+  # diagnosis named by the sentence lives in a library this file sources, so a
+  # scan of this file alone would not find it. A guarded read added to any
+  # sourced library is what this has to see, and hardcoding today's library
+  # would put the next one outside the scan in exactly the same silent way.
   libs="$lib $(awk '/^\. hack\/e2e-chainsaw\/_lib\/[a-z-]+\.sh$/ { print $2 }' "$lib")"
   for f in $libs; do
     if [ ! -f "$f" ]; then
@@ -1599,7 +1582,6 @@ read_cost_inputs() {
     'cozy_capture_sandbox_qemu_thread_cpu:sandbox QEMU per-thread CPU time:cozy_capture_sandbox_qemu_thread_cpu' \
     'cozy_capture_runner_canary:runner fixed-work canary:_cozy_canary_run_arm' \
     'cozy_capture_tenant_worker_thread_cpu:worker per-thread CPU time:cozy_capture_tenant_worker_thread_cpu _cozy_virt_launcher_listing' \
-    'ghcr_mirror_diagnose:ghcr-mirror:ghcr_mirror_diagnose _ghcr_mirror_bounded_read' \
     'talos_image_cache_diagnose:talos-image-cache:talos_image_cache_diagnose _talos_image_cache_bounded_read'; do
     fn=${entry%%:*}
     rest=${entry#*:}
@@ -1644,7 +1626,6 @@ ${carrier}
       # and the arm body is exempted below rather than given a phrase of its own.
       cozy_capture_runner_canary) phrase='runner fixed-work canary' ;;
       cozy_capture_tenant_worker_thread_cpu) phrase='worker per-thread CPU time' ;;
-      ghcr_mirror_diagnose) phrase='ghcr-mirror' ;;
       talos_image_cache_diagnose) phrase='talos-image-cache' ;;
       # The sentence enumerates the CAPTURES. Two other kinds of function guard
       # the same way and are deliberately not in it, each exempt for a stated
@@ -1654,12 +1635,16 @@ ${carrier}
       # them in the sentence too would be a second copy of that claim to keep in
       # step. A function that is neither still fails below, which is what makes
       # this a list of exemptions rather than a list of everything.
-      cozy_diag_read | _ghcr_mirror_bounded_read | _talos_image_cache_bounded_read) continue ;;
+      cozy_diag_read | _talos_image_cache_bounded_read) continue ;;
       _cozy_cadvisor_node_stream | _cozy_virt_launcher_listing) continue ;;
       # The canary carries its guard in the body that runs one arm, the way the
       # cAdvisor captures carry theirs in the stream they share, so the sentence
       # names the capture and the table above names what makes it true of it.
       _cozy_canary_run_arm) continue ;;
+      # This is the successful-path timing report, called only after the join
+      # completed. Its bounds protect optional reads without belonging to the
+      # failure diagnostics phase whose missing-timeout warning is under test.
+      cozy_report_node_join_timing) continue ;;
       cozy_report_node_join_failure | _talos_image_cache_deploy_state) continue ;;
       *)
         echo "$fn guards its call with command -v but this test has no phrase for it; add one here and to the warning" >&2
@@ -1716,7 +1701,6 @@ ${carrier}
       cozy_capture_tenant_worker_block_io) phrase='worker block IO counters' ;;
       cozy_capture_tenant_serial_console) phrase='serial-console family' ;;
       cozy_capture_tenant_talos) phrase='guest Talos capture' ;;
-      ghcr_mirror_diagnose) phrase='ghcr-mirror state' ;;
       talos_image_cache_diagnose) phrase='talos-image-cache diagnosis' ;;
       # Called with the same suffix but not behind the phase gate: it runs ahead
       # of the headline so the console experiment's own failure is named before
@@ -1978,7 +1962,6 @@ EOF
     cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_runner_canary() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
-    ghcr_mirror_diagnose() { :; }
     kubectl() { :; }
     COZY_DIAG_PHASE_BUDGET=0
     cozy_report_node_join_failure test-latest-version
@@ -2318,7 +2301,7 @@ EOF
   # being written anywhere, and every branch below would then agree vacuously.
   # Set just under what the tree carries today, so a copy going out of reach is
   # noticed while a copy legitimately deleted is not a failure.
-  if [ "$count" -lt 18 ]; then
+  if [ "$count" -lt 15 ]; then
     echo "this pattern found the node-join deadline quoted in $count places, and the tree quotes it in more than that; it has stopped matching what it was written to sweep, so the check below would pass over whatever it no longer sees" >&2
     return 1
   fi
