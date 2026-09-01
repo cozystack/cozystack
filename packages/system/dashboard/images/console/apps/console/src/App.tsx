@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from "react-router"
 import { AppShell } from "@cozystack/ui"
 import { TenantProvider } from "./lib/tenant-provider.tsx"
+import { useTenantFromUrl } from "./lib/tenant-context.tsx"
 import { Breadcrumb } from "./components/Breadcrumb.tsx"
 import { MarketplacePage } from "./routes/MarketplacePage.tsx"
 import { ConsolePage } from "./routes/ConsolePage.tsx"
@@ -21,6 +22,7 @@ import { DEFAULT_LANDING_PATH } from "./lib/portal.ts"
 function Shell({ username }: { username?: string }) {
   const config = useAppConfig()
   const { pathname } = useLocation()
+  useTenantFromUrl()
   const inMarketplace = pathname.startsWith("/marketplace")
   const inAdmin = pathname.startsWith("/admin")
   const marketplaceSections = useMarketplaceSidebarSections()
