@@ -5,8 +5,13 @@ ingress-nginx:
     image:
       registry: ghcr.io
       image: cozystack/ingress-nginx-with-protobuf-exporter/controller
+<<<<<<< HEAD
       tag: v1.11.2
       digest: sha256:beba8869ee370599e1f26557a9669ebdc9481c07b34059f348eb3e17b647e7e0
+=======
+      tag: v1.11.5
+      digest: sha256:f51c7ee0968ad542d4b77854fc57f68e17b2f6e498bcd168cd5f42b409bf54e6
+>>>>>>> 127cc2c (fix(ingress-nginx): re-pin to the segfault-free v1.11.5 rebuild)
     allowSnippetAnnotations: true
     replicaCount: 2
     admissionWebhooks:
@@ -16,7 +21,11 @@ ingress-nginx:
       enabled: true
     extraContainers:
     - name: protobuf-exporter
+<<<<<<< HEAD
       image: ghcr.io/kvaps/ingress-nginx-with-protobuf-exporter/protobuf-exporter:v1.11.2@sha256:6d9235a9ee6f2be1921db4687afbdcd85d145b087dd916b5a96455bdb5cff560
+=======
+      image: ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/protobuf-exporter:v1.11.5@sha256:0f981014415e00cfee3bf38f7ca084e6774150d6a57774e73da04acd8b346335
+>>>>>>> 127cc2c (fix(ingress-nginx): re-pin to the segfault-free v1.11.5 rebuild)
       args:
       - --server.telemetry-address=0.0.0.0:9090
       - --server.exporter-address=0.0.0.0:9091
