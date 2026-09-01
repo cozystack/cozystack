@@ -1,0 +1,103 @@
+suite: clickhouse-backup sidecar API contract (port and credential wiring)
+
+# The contract between the chart and the cozy-default-altinity backup strategy:
+# the strategy Pod reaches the in-Pod clickhouse-backup HTTP API on the named
+# port ch-backup-api, authenticating with the credentials in the chart-emitted
+# <release>-backup-api-auth Secret. A chart bump that renames the container,
+# moves the port, or repoints either secretKeyRef breaks every ClickHouse
+# BackupJob, and surfaces only as 401s or a connection refused at backup time.
+#
+# These assertions existed only in the e2e suite
+# (hack/e2e-chainsaw/clickhouse, Test clickhouse-1-backup-contracts), where
+# reaching them costs a live ClickHouse plus Keeper and roughly a hundred
+# seconds, and where they run only when test-impact analysis happens to select
+# that suite. Everything asserted here is a property of the rendered chart -- the
+# Altinity operator copies the podTemplate through unchanged -- so it belongs at
+# this level, where it costs milliseconds and runs on every pull request.
+#
+# The e2e Test keeps its own reason to exist: it proves a backup-enabled
+# ClickHouse actually reaches a ready replica, which no amount of rendering can.
+
+templates:
+  - templates/clickhouse.yaml
+  - templates/backup-api-auth-secret.yaml
+
+release:
+  name: ch-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+
+tests:
+  - it: "sidecar exposes the API on the named port the strategy dials"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=='clickhouse-backup')].ports
+          content:
+            name: ch-backup-api
+            containerPort: 7171
+            protocol: TCP
+
+  - it: "sidecar authenticates from the chart-emitted auth Secret"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=='clickhouse-backup')].env
+          content:
+            name: API_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: ch-test-backup-api-auth
+                key: username
+      - contains:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=='clickhouse-backup')].env
+          content:
+            name: API_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: ch-test-backup-api-auth
+                key: password
+
+  - it: "the auth Secret carries both keys the sidecar reads"
+    template: templates/backup-api-auth-secret.yaml
+    set:
+      backup:
+        enabled: true
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: ch-test-backup-api-auth
+      # stringData, not data: the apiserver converts one to the other on
+      # admission, so the live object the e2e suite inspects has `data` while
+      # the rendered manifest has `stringData`. Asserting the rendered shape is
+      # the point of testing here rather than there.
+      - equal:
+          path: stringData.username
+          value: backup
+      - exists:
+          path: stringData.password
+
+  - it: "no auth Secret when backups are off"
+    template: templates/backup-api-auth-secret.yaml
+    set:
+      backup:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
