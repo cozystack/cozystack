@@ -1047,10 +1047,11 @@ tests:
   # never reads this Secret directly. Only the CA carries the labels — the
   # leaf Secret holds the server private key and must never be published.
   # -------------------------------------------------------------------
-  # The trust anchor is published from the operator's key-free ca-bundle, named
-  # by the ApplicationDefinition, so neither cert-manager Secret may be marked
-  # as a publication source. A publish label here would create a second path,
-  # and it would run right next to the CA private key.
+  # The trust anchor is published from the operator's key-free ca-bundle via
+  # the chart's own TenantProjection (tenant-projection.yaml), so neither
+  # cert-manager Secret may be marked as a publication source. A publish label
+  # here would create a second path, and it would run right next to the CA
+  # private key.
   - it: "no cert-manager Secret is marked as a CA publication source"
     templates:
       - templates/certmanager.yaml
@@ -1135,11 +1136,12 @@ tests:
           count: 0
 
   # -------------------------------------------------------------------
-  # Tenant exposure. The dashboard Role is the tenant-facing grant, so the
-  # key-bearing cert-manager Secrets must not appear in it under any TLS
-  # state. The tenant gets the key-free projection instead.
+  # Tenant exposure. The dashboard Role is the tenant-facing grant, so no CA
+  # Secret — key-bearing or not — may appear in it under any TLS state. The
+  # tenant gets the key-free tenant-ca projection instead (tenant_projection_
+  # test.yaml), never a name grant on an operator Secret.
   # -------------------------------------------------------------------
-  - it: "dashboard Role grants the key-free bundle but never the key-bearing Secrets"
+  - it: "dashboard Role never grants any CA Secret by name"
     templates:
       - templates/dashboard-resourcemap.yaml
     documentIndex: 0
@@ -1153,19 +1155,16 @@ tests:
       - notContains:
           path: rules[1].resourceNames
           content: my-mariadb-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-bundle
       - contains:
           path: rules[1].resourceNames
           content: my-mariadb-credentials
-      # The operator-reconciled bundle holds ca.crt only, so it is the trust
-      # anchor the tenant is allowed to read.
-      - contains:
-          path: rules[1].resourceNames
-          content: my-mariadb-ca-bundle
 
-  # The bundle exists in every configuration, because the chart always asks the
-  # operator to serve TLS. Gating the grant on managed TLS would leave the
-  # default instance serving TLS with no way for the tenant to fetch the CA.
-  - it: "dashboard Role grants the CA bundle even when TLS is unmanaged"
+  # The absence holds regardless of issuer: this is a flat invariant, not a
+  # branch that happens to be untested under the operator issuer.
+  - it: "dashboard Role never grants the CA bundle even when TLS is unmanaged"
     templates:
       - templates/dashboard-resourcemap.yaml
     documentIndex: 0
@@ -1173,7 +1172,7 @@ tests:
       tls:
         issuer: operator
     asserts:
-      - contains:
+      - notContains:
           path: rules[1].resourceNames
           content: my-mariadb-ca-bundle
       - notContains:

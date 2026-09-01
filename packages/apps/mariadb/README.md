@@ -84,7 +84,7 @@ The default is `operator`, and it is not derived from `external`: switching issu
 
 Enforcement is separate. `tls.required: true` sets `require_secure_transport=ON` and refuses plaintext, under either issuer. It defaults to `false` because turning it on disconnects every client not yet using TLS — a decision to make once clients have the CA, not something an upgrade does.
 
-> `tls.required` will default to `true` in a later release, as an announced change, once the trust anchor is published to tenants automatically.
+> `tls.required` will default to `true` in a later release, as an announced change.
 
 Connect with the MariaDB client by supplying the CA and asking for full verification:
 
@@ -96,13 +96,11 @@ mysql -h mariadb-<name> -u <user> -p --ssl-ca=/path/to/ca.crt --ssl-verify-serve
 
 `--ssl-ca` supplies the trust anchor; `--ssl-verify-server-cert` is what checks the server name against the certificate. Whether that second flag defaults to on depends on the version of the *client* you connect with, not the server version selected by `version`: it is off through 10.11 and on from 11.4. Do not read that as "an 11.4 client already verifies". Without `--ssl-ca` it has no trust anchor to verify against, and falls back to an anti-tampering check derived from the password hash, which establishes neither the chain nor the hostname — and cannot be derived at all for a passwordless user. `--ssl-ca` is the load-bearing flag here; pass both and the connection is verified on either client. Note these are MariaDB client options — the MySQL 8 client spells the same intent as `--ssl-mode=VERIFY_IDENTITY`, which the MariaDB client rejects outright.
 
-The trust anchor is available in the instance namespace as the Secret `mariadb-<name>-ca-bundle`, under the key `ca.crt`. It is reconciled by the operator whenever TLS is enabled, contains no private key, and follows CA rollovers, so it is the certificate to distribute to clients:
+The trust anchor is published to tenants as `mariadb-<name>.tenant-ca`, an object holding `ca.crt` and nothing else, delivered through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant. It is lifted from the operator's own key-free `mariadb-<name>-ca-bundle`, which is reconciled whenever TLS is enabled and follows CA rollovers, but that Secret is not itself granted to tenants: a direct grant on the name would convey whatever happens to occupy it, where the projection conveys only what the platform has vouched for.
 
 ```bash
-kubectl get secret mariadb-<name>-ca-bundle -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+kubectl get tenantsecret mariadb-<name>.tenant-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
 ```
-
-Mounting that Secret into a client Pod is the usual in-cluster approach; nothing needs to be copied out of the namespace.
 
 > **Verifying an external connection requires `tls.issuer: cert-manager`.** The operator's certificate does not carry the external hostname, so a client connecting from outside with `--ssl-verify-server-cert` fails hostname verification against an unmanaged instance no matter which CA it trusts. A cert-manager-issued certificate is what puts `mariadb-<name>.<host>` in the certificate.
 >
@@ -114,7 +112,7 @@ An existing instance keeps the operator's CA and its current enforcement whether
 
 The deprecated `backup.*` CronJob also changes: its client now verifies the server it connects to, against `mariadb-<name>-ca-bundle`, where before it connected without checking. That bundle is present on every instance and carries whichever CA is in use — the operator's, and the chart's as well under `issuer: cert-manager` — and the certificate covers the hostname the job dials, so the verification itself needs no action. Note that this job is separately unable to start — it reads the root password from a Secret name the chart does not render — so on current releases the change is to a job that does not run. Use the `BackupClass` / `Plan` flow instead.
 
-Switching issuer does not enforce anything by itself — enforcement is a separate opt-in — but it does change who issues the server certificate. A client that reads `mariadb-<name>-ca-bundle` at connect time follows the change automatically, because the operator keeps both the old and the new CA in the bundle. A client that copied `ca.crt` out and pinned it will fail chain validation once the new certificate is served, and has to re-read the bundle.
+Switching issuer does not enforce anything by itself — enforcement is a separate opt-in — but it does change who issues the server certificate. A client that re-reads `mariadb-<name>.tenant-ca` at connect time follows the change automatically, because the operator keeps both the old and the new CA in `mariadb-<name>-ca-bundle`, which the projection stays in sync with. A client that copied `ca.crt` out and pinned it will fail chain validation once the new certificate is served, and has to re-read the anchor.
 
 > On a fresh instance created with `tls.issuer: cert-manager`, the pods do not start until cert-manager has issued the certificates: the operator needs the server certificate before it creates the StatefulSet. This resolves on its own within a reconcile or two — the chart labels the Secrets so the operator is woken as soon as they appear — but the instance looks stalled in the meantime.
 
@@ -127,7 +125,7 @@ The order that avoids downtime:
      issuer: cert-manager
    ```
 
-2. Distribute `mariadb-<name>-ca-bundle` and move clients onto verified TLS one at a time.
+2. Distribute `mariadb-<name>.tenant-ca` and move clients onto verified TLS one at a time.
 3. Once no plaintext clients remain, require it:
 
    ```yaml

@@ -29,28 +29,10 @@ spec:
   # The operator reconciles <release>-ca-bundle whenever TLS is on. It holds
   # ca.crt alone, never a private key, and it keeps the previous CA alongside
   # the new one across a rollover, so it is the trust anchor to publish from —
-  # a source the CA private key never sits next to at all.
-  #
-  # WARNING: this block does not install until the change that adds spec.caCert
-  # to the ApplicationDefinition CRD lands (#3299). The field is not in the
-  # schema yet, and it is not dropped quietly on the way in: Flux v2.8's
-  # Server-Side Apply enforces the schema at the API server, and an undeclared
-  # field rejects the apply with "field not declared in schema". Under v2.7's
-  # client-side patch it would have been dropped silently and been merely
-  # inert. The HelmRelease fails as a whole, so the result is no install
-  # rather than a degraded one.
-  #
-  # That makes the merge order mechanically forced rather than a sequencing
-  # preference: the CRD change goes first, and only then does anything here
-  # reconcile. The end-to-end suite failing on this branch is that enforcement
-  # working, not a separate defect to chase — it cannot pass until the field
-  # exists, and it starts passing once it does. The CA-extraction controller
-  # and the tenant-ca label are part of the same separate change and make this
-  # block live once they land. Until then the tenant reaches the anchor through
-  # the resourceNames entry below, which needs nothing new.
-  caCert:
-    sourceSecretName: "{{ .release }}-ca-bundle"
-    sourceKey: ca.crt
+  # a source the CA private key never sits next to at all. The chart lifts it
+  # into the tenant-ca projection itself (templates/tenant-projection.yaml);
+  # this ApplicationDefinition only needs to select on the resulting label
+  # below, matching every other converged engine.
   secrets:
     # Backstop for the include selector below. matchLabels carries no name
     # constraint, so any Secret of this instance that acquires the tenant-ca
@@ -94,18 +76,12 @@ spec:
     include:
       - resourceNames:
           - mariadb-{{ .name }}-credentials
-          # The operator's key-free trust bundle, named directly so the tenant
-          # sees it as a tenant resource today. The dashboard Role already
-          # grants read access to it; without this the two disagree and the
-          # Secret the documentation tells clients to fetch never surfaces in
-          # the API. Same shape kafka uses for its CA certificates.
-          - mariadb-{{ .name }}-ca-bundle
-      # The key-free trust anchor the CA-extraction controller will publish;
-      # inert until it lands, see the note above. The selector is deliberately
-      # specific: an empty one compiles to match-everything, and the lineage
-      # webhook evaluates it against every Secret whose ownership resolves to
-      # this instance — which includes -ca-tls and -tls, the two the design
-      # exists to keep away from the tenant.
+      # The key-free trust anchor the CA-extraction controller publishes from
+      # the chart's TenantProjection. The selector is deliberately specific: an
+      # empty one compiles to match-everything, and the lineage webhook
+      # evaluates it against every Secret whose ownership resolves to this
+      # instance — which includes -ca-tls, -tls and the operator's own -ca and
+      # -ca-bundle, none of which are meant to reach the tenant by name.
       - matchLabels:
           internal.cozystack.io/tenant-ca: "true"
   services:
