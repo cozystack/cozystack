@@ -56,19 +56,30 @@
     rm -rf "$tmp"
 }
 
-# Every skipped chart has to carry a reason, so a skip cannot quietly become the
-# way a chart avoids the check.
-@test "every skip names a reason" {
-    output=$(hack/check-render-matrix.sh)
-    printf '%s\n' "$output" | grep '^SKIP' > /tmp/render-skips.$$ || true
-    while read -r line; do
-        [ -n "$line" ] || continue
-        case "$line" in
-            *"("*")"*) ;;
-            *) echo "skip without a reason: $line" >&2; rm -f /tmp/render-skips.$$; exit 1 ;;
-        esac
-    done < /tmp/render-skips.$$
-    rm -f /tmp/render-skips.$$
+# A skip that has stopped being necessary is worse than no skip: it silently
+# drops a chart from the sweep forever. This renders each skipped chart directly
+# and requires it to STILL fail, so a chart that becomes renderable shows up as a
+# red test rather than as permanent invisible exclusion.
+#
+# Replaces an earlier test that asserted every SKIP line contains parentheses.
+# The only line that emits one is `echo "SKIP $name ($reason)"` guarded on a
+# non-empty reason, so that assertion was unreachable by construction: it could
+# not fail for the property it named.
+@test "every skipped chart still genuinely fails to render" {
+    # mktemp, not $BATS_TMPDIR: cozytest.sh is not real bats and defines none of
+    # bats's variables, so under `set -u` that name aborts the suite.
+    skips=$(mktemp)
+    hack/check-render-matrix.sh | grep '^SKIP' | sed 's/^SKIP \([^ ]*\) .*/\1/' > "$skips" || true
+    while read -r name; do
+        [ -n "$name" ] || continue
+        if helm template "$name-render-check" "packages/apps/$name" -n tenant-test \
+             -f hack/testdata/render-fixtures/fresh.yaml >/dev/null 2>&1; then
+            echo "chart '$name' is on the skip list but renders fine now — remove the skip" >&2
+            rm -f "$skips"
+            exit 1
+        fi
+    done < "$skips"
+    rm -f "$skips"
 }
 
 # The sweep must cover the charts that exist rather than a number frozen when
@@ -92,21 +103,31 @@
 # `eq $x "true"`, so a real YAML bool makes helm fail on incompatible types.
 @test "fixtures carry the platform's string-typed values" {
     for f in hack/testdata/render-fixtures/*.yaml; do
-        python3 -c 'import sys,yaml; d=yaml.safe_load(open(sys.argv[1])) or {}; c=d.get("_cluster") or {}; bad=[k for k,v in c.items() if isinstance(v,bool)]; sys.exit(f"{sys.argv[1]}: _cluster keys are YAML booleans, the platform injects strings: {bad}") if bad else None; sys.exit(f"{sys.argv[1]}: no _cluster map") if not c else None' "$f"
+        python3 -c 'import sys,yaml;d=yaml.safe_load(open(sys.argv[1])) or {};bad=[];[bad.append(f"{sec}.{k}") for sec in ("_cluster","_namespace") for k,v in (d.get(sec) or {}).items() if isinstance(v,(bool,int,float)) or v is None];sys.exit(f"{sys.argv[1]}: scalars must be strings, the platform quotes them: {bad}") if bad else None;sys.exit(f"{sys.argv[1]}: no _cluster map") if not (d.get("_cluster") or {}) else None' "$f"
     done
 }
 
-# Each fixture is one cluster state and they must actually differ, or the sweep
-# renders the same shape three times and reports triple the coverage it has.
-@test "the fixtures represent different cluster states" {
-    count=$(find hack/testdata/render-fixtures -name '*.yaml' | wc -l | tr -d ' ')
+# Each fixture is one cluster state, and what matters is that they produce
+# DIFFERENT RENDERS -- otherwise the sweep runs helm three times over the same
+# shape and reports triple the coverage it has.
+#
+# An earlier version compared the fixture FILES on three key names. That passed
+# while the sweep was in fact rendering 19 of 21 charts identically across all
+# three states, which is the exact condition it claimed to prevent. Comparing
+# output is the only form of this test that can fail for the right reason.
+@test "the fixtures produce different renders for at least one chart" {
+    count=$(find hack/testdata/render-fixtures -maxdepth 1 -name '*.yaml' | wc -l | tr -d ' ')
     [ "$count" -ge 2 ]
-    distinct=$(for f in hack/testdata/render-fixtures/*.yaml; do
-        grep -E '^  (oidc-enabled|solver|wildcard-issue):' "$f" | tr -d ' ' | sort | tr '\n' ','
-        echo
-    done | sort -u | wc -l | tr -d ' ')
-    if [ "$distinct" -lt "$count" ]; then
-        echo "fixtures do not differ on the keys charts branch on ($distinct distinct of $count files)" >&2
+
+    # packages/apps/kubernetes is the chart that branches most on these values
+    # (the _namespace.<service> flags gate ~15 manifests). If a future fixture
+    # change stops moving even this one, the states have collapsed.
+    a=$(helm template kubernetes-render-check packages/apps/kubernetes -n tenant-test \
+          -f hack/testdata/render-fixtures/fresh.yaml 2>/dev/null | grep -c '^kind:')
+    b=$(helm template kubernetes-render-check packages/apps/kubernetes -n tenant-test \
+          -f hack/testdata/render-fixtures/configured.yaml 2>/dev/null | grep -c '^kind:')
+    if [ "$a" = "$b" ]; then
+        echo "fresh and configured render the same number of documents ($a) for packages/apps/kubernetes — the fixtures no longer represent different cluster states" >&2
         exit 1
     fi
 }

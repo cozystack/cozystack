@@ -9,9 +9,11 @@
 # What it does NOT cover, so the number is not read as more than it is.
 #
 # `lookup` returns nothing here. Without a cluster helm gives an empty result and
-# charts carry on -- which is why this works at all -- but 46 of the 55 lookup
-# call sites in packages/apps/*/templates/ sit inside a conditional on that
-# result, so this sweep renders one side of each of them and never the other.
+# charts carry on -- which is why this works at all -- but the sweep then renders
+# only the empty-result side. There are 40 template lookup calls under
+# packages/apps/*/templates/ (`grep -rho 'lookup "'`; a plain `grep -c 'lookup '`
+# returns 55 by counting prose in comments), and 13 of them sit inside a
+# conditional on the result, so those 13 branches have a side this never renders.
 # The unrendered side is where a whole class of real bugs has lived: the
 # lookup-preserve pattern that keeps an immutable PVC storageClass across
 # reconciles, and adopt-in-place migrations.
@@ -37,9 +39,11 @@ set -eu
 
 # Cluster states to render each chart under. Each file reproduces the `_cluster`
 # map the platform injects, taken from packages/core/platform/templates/apps.yaml
-# rather than guessed -- including that every value is a STRING, because charts
-# compare them with `eq $oidcEnabled "true"` and a real bool makes helm fail on
-# incompatible types. hack/testdata/render-fixtures/README.md carries the detail.
+# rather than guessed. Every SCALAR there goes through `| quote`, so the booleans
+# arrive as the strings "true"/"false" -- tenant compares one with
+# `eq $oidcEnabled "true"` and a real bool makes helm fail on incompatible types.
+# `scheduling` and `branding` are the exceptions: the platform emits those as
+# maps. hack/testdata/render-fixtures/README.md carries the detail.
 #
 # More than one, and that is the difference between a check and a formality:
 # charts branch on these values, so a single state renders one side of each
@@ -67,9 +71,18 @@ extra_values() {
 #                VirtualMachineClusterInstancetype and fail when it finds
 #                nothing ("specified instanceType u1.medium not found in
 #                cluster"). That check is the point of those templates in
-#                production, so the charts are skipped here rather than weakened
-#                for a test. Covering them needs a cluster holding the
-#                instancetype CRs, which is a different lane, not a fixture.
+#                production, so the charts are skipped rather than weakened.
+#
+#                Worth being precise, because an earlier version of this comment
+#                was not: for kubernetes-nodes that lookup is the THIRD blocker,
+#                not the first. It also needs `--set cluster=<name>` and a
+#                release name starting with `kubernetes-nodes-<cluster>-`, and
+#                both of those are ordinary fixture work that extra_values() and
+#                release_name() below exist for. Only after supplying them does
+#                the chart reach the lookup. vm-instance likewise renders with
+#                explicit resources.* values; the lookup is what stops it on
+#                defaults. So "these need a cluster" is true of the last blocker
+#                in each, not of the charts as a whole.
 #
 # Every skip costs coverage, so keep the list short and say why.
 skip_reason() {
@@ -98,7 +111,10 @@ if [ -z "$charts" ]; then
   exit 1
 fi
 
-if [ -z "$(find "$FIXTURE_DIR" -name '*.yaml' 2>/dev/null)" ]; then
+# -maxdepth 1 so the guard tests exactly what the loop below globs; a recursive
+# find here would pass on a fixture in a subdirectory the glob never reaches, and
+# every chart would then fail on the literal `*.yaml`.
+if [ -z "$(find "$FIXTURE_DIR" -maxdepth 1 -name '*.yaml' 2>/dev/null)" ]; then
   echo "check-render-matrix: no fixtures under $FIXTURE_DIR — every chart would render under nothing and the sweep would report success having checked no state" >&2
   exit 1
 fi
@@ -135,7 +151,6 @@ for dir in $charts; do
   fi
 
   rendered=$((rendered + 1))
-  rm -f "$out" "$out.err"
 done
 
 echo "check-render-matrix: $rendered rendered, $skipped skipped"
