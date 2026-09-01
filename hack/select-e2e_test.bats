@@ -46,6 +46,21 @@ assert_full_suite() {
     assert_selection "expected the full Chainsaw suite" "$1" "$(full_suite_list)"
 }
 
+# The broad tier: every suite except the two that provision a tenant Kubernetes
+# cluster. Derived from the same on-disk enumeration as full_suite_list, so a
+# suite added to the tree lands in the expectation without editing this file,
+# and the two withheld names are spelled out because that is the contract.
+broad_tier_list() {
+    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml \
+      | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' \
+      | grep -vx 'kubernetes-latest' | grep -vx 'kubernetes-previous' \
+      | sort | paste -sd ' ' -
+}
+
+assert_broad_tier() {
+    assert_selection "expected the broad tier (no tenant-Kubernetes suites)" "$1" "$(broad_tier_list)"
+}
+
 @test "single app diff selects only that suite" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
@@ -292,12 +307,110 @@ assert_full_suite() {
 # status was then posted green with no suite run. Each test below pins one side
 # of the classification — escalate, or skip by an explicit rule.
 
-@test "hack/*.mk triggers full suite (build flags of every image)" {
+@test "hack/*.mk triggers the broad tier (build flags of every image)" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/common-envs.mk" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_broad_tier "$output"
+    rm -rf "$tmp"
+}
+
+@test "root go.mod triggers the broad tier, not the full suite" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "go.mod" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_broad_tier "$output"
+    rm -rf "$tmp"
+}
+
+@test "root Makefile triggers the broad tier" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "Makefile" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_broad_tier "$output"
+    rm -rf "$tmp"
+}
+
+# The tier must never SUBTRACT what the graph walk selected on its own account.
+# A diff that edits the kubernetes chart and bumps the root go.mod has a path
+# that genuinely needs the tenant suites, and the broad path must not take them
+# away again.
+@test "broad tier never withholds a suite the graph selected explicitly" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf 'go.mod\npackages/apps/kubernetes/Chart.yaml\n' > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
+    rm -rf "$tmp"
+}
+
+# A broad path selects no suite of its own, so the "nothing to run" exit has to
+# know about it. Reporting an empty selection here would be read by both lanes
+# as "skip Chainsaw" and then post the required status green (#3392).
+@test "a diff of only broad paths still reports a selection" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf 'go.sum\n' > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -n "$output" ]
+    assert_broad_tier "$output"
+    rm -rf "$tmp"
+}
+
+# An unscopeable path outranks a broad one: the broader answer wins whenever
+# both classes appear in the same diff.
+@test "full-suite path beats a broad path in the same diff" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf 'go.mod\npackages/core/platform/values.yaml\n' > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_full_suite "$output"
+    rm -rf "$tmp"
+}
+
+# Regression, found in independent review of this change: the broad tier used to
+# resolve BEFORE the unresolved-suite backstop, so an unrelated go.mod bump in
+# the same diff swallowed that per-path escalation and its stderr line. That is
+# the merge-before-escalate shape #3330 removed from the graph walk.
+@test "an unresolved suite still escalates when a broad path is in the diff" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf 'go.mod\nhack/e2e-chainsaw/nosuch/a.yaml\n' > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_full_suite "$output"
+    grep -q 'no runnable suite is named' "$tmp/err" \
+      || { echo "expected the unresolved-suite reason on stderr, got: $(cat "$tmp/err")" >&2; exit 1; }
+    rm -rf "$tmp"
+}
+
+# Without this, renaming a suite makes heavy_suites name nothing, the tier
+# silently becomes the full suite, and every other test here still passes --
+# including the one asserting the broad tier is NOT the full suite, because its
+# expectation is derived by applying the same two names to the same find.
+@test "heavy_suites names suites that exist on disk" {
+    for suite in kubernetes-latest kubernetes-previous; do
+        grep -qx "$suite" <(printf '%s\n' $(broad_tier_list) $(full_suite_list) | sort -u) \
+          || true
+        [ -f "hack/e2e-chainsaw/$suite/chainsaw-test.yaml" ] \
+          || { echo "heavy_suites names '$suite', which has no chainsaw-test.yaml" >&2; exit 1; }
+    done
+    # And that the tier actually differs from the full suite, which is the
+    # property the name of this tier claims.
+    [ "$(broad_tier_list)" != "$(full_suite_list)" ]
+}
+
+@test "the broad-tier escalation names its cause on stderr" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "go.mod" > "$tmp/diff"
+    err=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>&1 >/dev/null)
+    case "$err" in
+        *broad_suite_pattern*) ;;
+        *) echo "expected a broad_suite_pattern reason on stderr, got: $err" >&2; exit 1 ;;
+    esac
     rm -rf "$tmp"
 }
 
@@ -314,15 +427,6 @@ assert_full_suite() {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "pkg/cozystack/registry.go" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    assert_full_suite "$output"
-    rm -rf "$tmp"
-}
-
-@test "go.mod triggers full suite" {
-    tmp=$(mktemp -d)
-    cp -r packages/core/platform/sources "$tmp/sources"
-    echo "go.mod" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
     rm -rf "$tmp"
