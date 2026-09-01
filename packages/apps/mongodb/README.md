@@ -106,8 +106,15 @@ When `external: true` is enabled:
 
 ### Credentials
 
-On first install, the credentials secret will be empty until the Percona operator initializes the cluster.
-Run `helm upgrade` after MongoDB is ready to populate the credentials secret with the actual password.
+The chart generates the operator's system-user passwords and writes them to
+`<release>-percona-server-mongodb-users` before the operator starts, so
+`<release>-credentials` carries a working `password` and `uri` from the first
+install onwards. An upgrade reuses what the secret already holds and never
+rotates a live password.
+
+A database created before this behaviour landed keeps the secret the operator
+generated for it, and its `<release>-credentials` is filled on the next upgrade
+of the release with the password the operator had already assigned.
 
 ### Data lifecycle
 
