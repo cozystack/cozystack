@@ -1,22 +1,27 @@
 suite: RabbitMQ TLS resolution agreement across templates
 
-# rabbitmq.yaml and certmanager.yaml both branch on whether TLS is on, through
-# the shared rabbitmq.tls.enabled helper. These tests render both templates
-# across every external x tls.enabled combination and assert they reach the SAME
-# answer: the certificate chain must exist exactly when the cluster asks the
-# operator to serve TLS. A chart that issued certificates nobody used, or asked
-# for a Secret that was never created, would pass each template's own suite and
-# fail here.
+# rabbitmq.yaml, certmanager.yaml and tenant-projection.yaml all branch on
+# whether TLS is on, through the shared rabbitmq.tls.enabled helper. These tests
+# render all three templates across every external x tls.enabled combination and
+# assert they reach the SAME answer: the certificate chain and the sentinel that
+# publishes its CA must exist exactly when the cluster asks the operator to
+# serve TLS. A chart that issued certificates nobody used, or asked for a Secret
+# that was never created, would pass each template's own suite and fail here —
+# and so would one that issues the CA but never tells the CA-extraction
+# controller to publish it.
 #
 # The combinations also pin that `external` is not an input to the answer. TLS is
 # opt-in: only tls.enabled turns it on.
 #
 # certmanager.yaml renders 4 documents when TLS is on (selfsigned Issuer, CA
 # Certificate, CA Issuer, leaf Certificate) and 0 when it is off.
+# tenant-projection.yaml renders 1 document (the TenantProjection sentinel) when
+# TLS is on and 0 when it is off.
 
 templates:
   - templates/rabbitmq.yaml
   - templates/certmanager.yaml
+  - templates/tenant-projection.yaml
 
 tests:
   # --- TLS ON: only tls.enabled: true does it ---
@@ -32,6 +37,8 @@ tests:
         documentSelector: {path: kind, value: RabbitmqCluster}
       - hasDocuments: {count: 4}
         template: templates/certmanager.yaml
+      - hasDocuments: {count: 1}
+        template: templates/tenant-projection.yaml
 
   - it: both templates turn TLS on when explicitly enabled alongside external
     release: {name: myrabbitmq, namespace: tenant-test}
@@ -44,6 +51,8 @@ tests:
         documentSelector: {path: kind, value: RabbitmqCluster}
       - hasDocuments: {count: 4}
         template: templates/certmanager.yaml
+      - hasDocuments: {count: 1}
+        template: templates/tenant-projection.yaml
 
   # --- TLS OFF: both templates must agree there is nothing to do ---
 
@@ -57,6 +66,8 @@ tests:
         documentSelector: {path: kind, value: RabbitmqCluster}
       - hasDocuments: {count: 0}
         template: templates/certmanager.yaml
+      - hasDocuments: {count: 0}
+        template: templates/tenant-projection.yaml
 
   - it: explicit false with external true is off in BOTH templates
     release: {name: myrabbitmq, namespace: tenant-test}
@@ -68,6 +79,8 @@ tests:
         documentSelector: {path: kind, value: RabbitmqCluster}
       - hasDocuments: {count: 0}
         template: templates/certmanager.yaml
+      - hasDocuments: {count: 0}
+        template: templates/tenant-projection.yaml
 
   # --- The default is off, and external does not change it. This is the pair
   # that would go red if inheritance from external were reintroduced. ---
@@ -83,6 +96,8 @@ tests:
         documentSelector: {path: kind, value: RabbitmqCluster}
       - hasDocuments: {count: 0}
         template: templates/certmanager.yaml
+      - hasDocuments: {count: 0}
+        template: templates/tenant-projection.yaml
 
   - it: unset tls.enabled leaves BOTH templates off even when external is true
     release: {name: myrabbitmq, namespace: tenant-test}
@@ -95,6 +110,8 @@ tests:
         documentSelector: {path: kind, value: RabbitmqCluster}
       - hasDocuments: {count: 0}
         template: templates/certmanager.yaml
+      - hasDocuments: {count: 0}
+        template: templates/tenant-projection.yaml
 
   # --- null-safety: reachable through a HelmRelease values override, where
   # structural-schema pruning does not apply ---
@@ -109,6 +126,8 @@ tests:
         documentSelector: {path: kind, value: RabbitmqCluster}
       - hasDocuments: {count: 0}
         template: templates/certmanager.yaml
+      - hasDocuments: {count: 0}
+        template: templates/tenant-projection.yaml
 
   - it: tls set to null with external true also resolves to off
     release: {name: myrabbitmq, namespace: tenant-test}
@@ -120,6 +139,8 @@ tests:
         documentSelector: {path: kind, value: RabbitmqCluster}
       - hasDocuments: {count: 0}
         template: templates/certmanager.yaml
+      - hasDocuments: {count: 0}
+        template: templates/tenant-projection.yaml
 
   # A null `enabled` never reaches the template: values.schema.json types it as a
   # boolean, so Helm rejects it first. That is asserted here rather than in the

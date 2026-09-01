@@ -16,21 +16,20 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   secretName: {{ .Release.Name }}-ca
-  # Publish this CA to the tenant: the CA-extraction controller lifts ca.crt alone
-  # into the key-free <release>.tenant-ca Secret. The label goes on the isCA
-  # Certificate rather than the leaf, whose Secret carries the server private key
-  # beside the same ca.crt. The release label is required on this leg because
-  # cert-manager issues the Secret with neither an OwnerReference nor Helm metadata
-  # to attribute it by.
+  # This Secret is the source the tenant-projection.yaml sentinel names as
+  # sourceSecretName: the CA-extraction controller reads ca.crt from HERE (never
+  # from the leaf below, whose Secret carries the server private key beside the
+  # same ca.crt) and lifts it into the key-free <release>.tenant-ca projection it
+  # owns. No label on this Secret drives that — the controller is told the
+  # source by name through the sentinel CR, not by a selector on the Secret.
   #
-  # Turning TLS off does NOT withdraw the anchor: cert-manager keeps the Secret
-  # (enableCertificateOwnerRef=false), so it keeps matching this label for an
-  # endpoint back on plaintext. Helm does not own that Secret, so nothing rendered
-  # here can prevent it — delete it by hand. See README "Turning TLS off again".
-  secretTemplate:
-    labels:
-      internal.cozystack.io/publish-ca-cert: "true"
-      internal.cozystack.io/publish-ca-cert-release: {{ .Release.Name | quote }}
+  # Turning TLS off does NOT withdraw the raw CA material: cert-manager keeps
+  # this Secret (enableCertificateOwnerRef=false), so `rabbitmq-<name>-ca` stays
+  # around for an endpoint back on plaintext. Helm does not own that Secret, so
+  # nothing rendered here can prevent it — delete it by hand. See README
+  # "Turning TLS off again". The tenant-facing projection does NOT have this
+  # problem: it is owned by the sentinel, which Helm does manage, so disabling
+  # TLS removes the sentinel and Kubernetes garbage-collects the projection with it.
   duration: 43800h
   commonName: {{ .Release.Name }}-ca
   issuerRef:
