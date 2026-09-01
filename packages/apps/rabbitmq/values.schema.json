@@ -43,7 +43,7 @@
     "resourcesPreset": {
       "description": "Default sizing preset used when `resources` is omitted.",
       "type": "string",
-      "default": "t1.nano",
+      "default": "s1.nano",
       "enum": [
         "t1.nano",
         "t1.micro",
