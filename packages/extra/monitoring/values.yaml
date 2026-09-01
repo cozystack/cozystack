@@ -118,7 +118,7 @@ logsStorages:
 ## @typedef {struct} Alerts - Alert routing configuration.
 ## @field {TelegramAlerts} [telegram] - Configuration for Telegram alerts.
 ## @field {SlackAlerts} [slack] - Configuration for Slack alerts.
-## @field {EmailAlerts} [email] - Configuration for email alerts.
+## @field {EmailAlerts} [email] - Configuration for email alerts. Only alerts of severity critical or major that carry the label notify_email with the string value true are emailed; a bare YAML boolean does not match.
 
 ## @typedef {struct} Alerta - Configuration for the Alerta service.
 ## @field {string} [storage] - Persistent volume size for the database.

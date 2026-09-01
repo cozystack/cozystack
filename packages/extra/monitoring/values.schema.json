@@ -334,7 +334,7 @@
           "default": {},
           "properties": {
             "email": {
-              "description": "Configuration for email alerts.",
+              "description": "Configuration for email alerts. Only alerts of severity critical or major that carry the label notify_email with the string value true are emailed; a bare YAML boolean does not match.",
               "type": "object",
               "default": {},
               "required": [
