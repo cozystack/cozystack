@@ -30,10 +30,10 @@ const VISIBLE = [
   tn("tenant-whmcs-a-b", ["tenant-root", "tenant-whmcs", "tenant-whmcs-a"]),
 ]
 
-function makeClient(): K8sClient {
+function makeClient(tenants: unknown[] = VISIBLE): K8sClient {
   const client = new K8sClient()
   vi.spyOn(client, "list").mockImplementation(async (_g, _v, plural) => {
-    const items = plural === "tenantnamespaces" ? VISIBLE : []
+    const items = plural === "tenantnamespaces" ? tenants : []
     return {
       apiVersion: "v1",
       kind: `${plural}List`,
@@ -118,5 +118,84 @@ describe("TenantsPage tree", () => {
     expect(screen.queryByText("a-b")).not.toBeInTheDocument()
     await user.click(screen.getByTitle("Expand"))
     expect(await screen.findByText("x")).toBeInTheDocument()
+  })
+})
+
+// Tenants ordered directly in the root are the common case on a normal
+// cluster, and they are the one level the hierarchical namespace naming skips:
+// `acme` created in `tenant-root` owns `tenant-acme`, not `tenant-root-acme`.
+const ROOT_VISIBLE = [
+  tn("tenant-root", []),
+  tn("tenant-acme", ["tenant-root"]),
+  tn("tenant-acme-eu", ["tenant-root", "tenant-acme"]),
+  // A root-level tenant whose own name starts with `root`, which is the case
+  // that makes "strip the parent's prefix" the wrong rule rather than merely
+  // an incomplete one.
+  tn("tenant-root-x", ["tenant-root"]),
+]
+
+describe("TenantsPage under a visible root", () => {
+  it("reaches the Tenant CR of a tenant ordered directly in the root", async () => {
+    // Start on the tenant this fixture actually contains: landing on one it
+    // does not makes the provider fall back and refetch, and the page blinks
+    // back through its spinner mid-assertion.
+    localStorage.setItem(SELECTED_TENANT_KEY, "root")
+    renderWithK8sProvider(
+      <TenantProvider>
+        <TenantsPage />
+      </TenantProvider>,
+      { client: makeClient(ROOT_VISIBLE), initialRoute: "/admin/tenants" },
+    )
+
+    // The root's CR is self-referential: `root` inside its own namespace.
+    expect(await screen.findByRole("link", { name: "root" })).toHaveAttribute(
+      "href",
+      "/admin/tenants/root?tenant=root",
+    )
+
+    // The row that the prefix-only parent rule used to leave as plain text.
+    expect(screen.getByRole("link", { name: "acme" })).toHaveAttribute(
+      "href",
+      "/admin/tenants/acme?tenant=root",
+    )
+    expect(screen.getByTitle("Edit tenant acme")).toBeInTheDocument()
+
+    // A level down the rule applies as before, and the link names the parent
+    // rather than the root.
+    expect(screen.getByRole("link", { name: "eu" })).toHaveAttribute(
+      "href",
+      "/admin/tenants/eu?tenant=acme",
+    )
+
+    // `tenant-root-x` is the tenant `root-x`, not the tenant `x` — the row
+    // label and the CR in the link have to agree on that.
+    expect(screen.getByRole("link", { name: "root-x" })).toHaveAttribute(
+      "href",
+      "/admin/tenants/root-x?tenant=root",
+    )
+  })
+})
+
+// A forest root that carries no ancestor labels is self-referential: its CR
+// lives in its own namespace. The list reaches it the same way it reaches any
+// other row, and deriving the CR name must not subtract the node's own name
+// from itself and leave nothing.
+const SELF_ROOT = [tn("tenant-whmcs", [])]
+
+describe("TenantsPage self-referential root", () => {
+  it("names the CR of a root that is not tenant-root", async () => {
+    localStorage.setItem(SELECTED_TENANT_KEY, "whmcs")
+
+    renderWithK8sProvider(
+      <TenantProvider>
+        <TenantsPage />
+      </TenantProvider>,
+      { client: makeClient(SELF_ROOT), initialRoute: "/admin/tenants" },
+    )
+
+    expect(await screen.findByRole("link", { name: "whmcs" })).toHaveAttribute(
+      "href",
+      "/admin/tenants/whmcs?tenant=whmcs",
+    )
   })
 })
