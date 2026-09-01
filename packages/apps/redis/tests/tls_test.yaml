@@ -359,9 +359,10 @@ tests:
       - equal:
           path: spec.tls.certificateSecret.secretName
           value: my-redis.tls
-      # The name the operator publishes its CA-only Secret under. The dashboard
-      # Role grants exactly this name and the ApplicationDefinition declares it
-      # as the CA source, so all three have to agree.
+      # The name the operator publishes its CA-only Secret under. Pinned so the
+      # name stays predictable rather than falling back to the operator's
+      # "<tls-secret>-ca" default; nothing in the tenant read path depends on
+      # it, which travels through the <release>.tenant-ca projection.
       - equal:
           path: spec.tls.caCertSecretName
           value: my-redis.ca-cert
@@ -385,7 +386,7 @@ tests:
           path: spec.ipAddresses
           content: "::1"
 
-  - it: "dashboard-resourcemap.yaml grants only the CA-only secret in RBAC when authClients defaults to no"
+  - it: "dashboard-resourcemap.yaml grants no TLS secret in RBAC when authClients defaults to no"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
@@ -404,15 +405,23 @@ tests:
       - lengthEqual:
           path: rules
           count: 3
-      # CA-only secret (ca.crt, no key) is always granted when TLS is on.
-      - contains:
+      # The trust anchor reaches the tenant as the <release>.tenant-ca
+      # projection, not as a grant on a Secret name, so the Role lists exactly
+      # the auth Secret and nothing TLS-related.
+      - equal:
+          path: rules[1].resourceNames
+          value:
+            - my-redis-auth
+      # The CA-only Secret the operator publishes. Key-free today, but the name
+      # is the operator's to fill and RBAC cannot filter by key.
+      - notContains:
           path: rules[1].resourceNames
           content: "my-redis.ca-cert"
-      # CA private-key secret is never granted to tenants.
+      # CA certificate and private key.
       - notContains:
           path: rules[1].resourceNames
           content: "my-redis.ca-tls"
-      # Leaf secret is withheld unless clients must authenticate.
+      # Server leaf and private key.
       - notContains:
           path: rules[1].resourceNames
           content: "my-redis.tls"
@@ -437,7 +446,7 @@ tests:
       - lengthEqual:
           path: rules
           count: 3
-      - contains:
+      - notContains:
           path: rules[1].resourceNames
           content: "my-redis.ca-cert"
       # The server leaf carries tls.key. Granting it would let the tenant
@@ -471,7 +480,7 @@ tests:
       - lengthEqual:
           path: rules
           count: 3
-      - contains:
+      - notContains:
           path: rules[1].resourceNames
           content: "my-redis.ca-cert"
       - notContains:
@@ -744,12 +753,11 @@ tests:
       - hasDocuments:
           count: 0
 
-  # The CA-only Secret name appears in three places that must agree: the
-  # operator is told to publish under it (redisfailover.yaml), the tenant is
-  # granted it (dashboard-resourcemap.yaml), and the ApplicationDefinition
-  # declares it as the CA source and includes it as a tenant secret. Renaming
-  # any one of them alone leaves the tenant with no trust anchor and no error.
-  - it: "the operator is told to publish the CA-only secret under the shared name"
+  # The operator publishes a CA-only Secret whenever TLS is on; caCertSecretName
+  # only chooses its name. Nothing in the tenant read path reads it — the anchor
+  # travels as the <release>.tenant-ca projection — so this pins the name for
+  # predictability, and the test below pins that the tenant is NOT granted it.
+  - it: "the operator is told to publish the CA-only secret under a predictable name"
     templates:
       - templates/redisfailover.yaml
     set:
@@ -764,7 +772,7 @@ tests:
           path: spec.tls.caCertSecretName
           value: my-redis.ca-cert
 
-  - it: "the tenant is granted the CA-only secret under the same shared name"
+  - it: "the tenant is not granted the operator's CA-only secret by name"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
@@ -783,7 +791,7 @@ tests:
       - lengthEqual:
           path: rules
           count: 3
-      - contains:
+      - notContains:
           path: rules[1].resourceNames
           content: "my-redis.ca-cert"
 

@@ -74,18 +74,23 @@ Enabling TLS makes the chart issue a per-release cert-manager chain: a self-sign
 
 This means TLS requires cert-manager, which the platform installs in the variant-independent part of the `system` bundle, so `isp-hosted` has it too. On a cluster where the cert-manager controller has been removed but its CRDs remain, `tls.enabled` renders `cert-manager.io/v1` resources that nothing issues, and no certificate is ever produced; with the CRDs gone too, the release fails on an unknown kind instead.
 
-To verify the server, a client needs that CA certificate. The operator publishes it as the Secret `<release>.ca-cert`, which holds only `ca.crt` and no private key, and the release grants tenant read access to it:
+To verify the server, a client needs that CA certificate. It is published as `redis-<name>.tenant-ca`: an object holding `ca.crt` and nothing else, delivered to tenants through the `core.cozystack.io/tenantsecrets` API the base tenant roles already grant. Every object named below follows the Helm release rather than the `Redis` resource, so a `Redis` named `cache` gives `redis-cache.tenant-ca`, `redis-cache.ca-tls`, and so on.
+
+The chart declares where it is lifted from by rendering a `TenantProjection` naming `<release>.ca-tls`, the Secret cert-manager writes the release CA to. Only `ca.crt` is ever published, and the CA-extraction controller refuses to publish anything that parses as private key material, so the CA private key sitting beside it in that Secret is never projected.
 
 ```sh
-kubectl get secret redis-<name>.ca-cert -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
-redis-cli --tls --cacert ca.crt -h <host> -p 6379
+kubectl get tenantsecret redis-<name>.tenant-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+REDISCLI_AUTH=$(kubectl get tenantsecret redis-<name>-auth -o jsonpath='{.data.password}' | base64 -d) \
+  redis-cli --tls --cacert ca.crt -h <host> -p 6379
 ```
+
+It is reached through `tenantsecrets` rather than by reading a Secret directly, and that is deliberate: `tenantsecrets` surfaces only objects the platform has vouched for, whereas a direct grant on a name would convey whatever happens to occupy that name. The operator publishes a CA-only Secret of its own at `<release>.ca-cert` and it is key-free today, but the name is the operator's to fill and RBAC cannot filter by key, so it is not granted to the tenant.
 
 `<host>` has to be a name the certificate covers. In-cluster that is any of the `rfr-`, `rfrm-`, `rfrs-` and `rfs-` service names, and `<release>-external-lb` when `external` is on; all of them resolve normally.
 
 From outside the cluster the only covered name is `<release>.<tenant-host>`, and the chart does not publish DNS for it: the external Service is a plain LoadBalancer with no `external-dns` annotation, so nothing points that name at the LoadBalancer address. Connecting to the LoadBalancer IP instead fails for any client that verifies the hostname, because the only IP addresses in the certificate are the loopback ones the in-pod probes and the metrics sidecar use; `redis-cli` is not such a client, it checks the chain and not the name, so it connects to the IP and hides the mismatch. Until the name is published, an external client has to be pointed at it manually — a DNS record or a hosts entry mapping `<release>.<tenant-host>` to the LoadBalancer address.
 
-Neither the CA private key (`<release>.ca-tls`) nor the server leaf and its private key (`<release>.tls`) is readable by the tenant. The first would allow minting certificates that any client trusting this release accepts; the second would allow impersonating this release's Redis endpoints.
+Neither the CA and its private key (`<release>.ca-tls`) nor the server leaf and its private key (`<release>.tls`) is readable by the tenant. The first would allow minting certificates that any client trusting this release accepts; the second would allow impersonating this release's Redis endpoints. `<release>.tenant-ca` exists precisely so the certificate can be handed over without either key going with it.
 
 Certificate renewal reaches the pods through the operator. Redis and Sentinel read `tls-cert-file` and `tls-key-file` once at startup and never re-read them, so a renewed Secret changes nothing until the pods restart. On every reconcile the operator reads the TLS Secret and stamps a hash of its `tls.crt` and `ca.crt` into the pod template of both the Redis StatefulSet and the Sentinel Deployment, as the annotation `redis-failover.freshworks.com/tls-secret-hash`. When cert-manager renews the leaf, 30 days before the end of its one-year validity, the hash changes: the operator's own roller replaces the Redis pods one at a time, replicas before the master, and the Deployment controller rolls Sentinel. Nothing needs to touch the release for the renewed certificate to be served.
 

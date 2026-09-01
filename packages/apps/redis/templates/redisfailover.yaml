@@ -33,9 +33,12 @@ spec:
   tls:
     enabled: true
     authClients: {{ include "redis.tls.authClients" . | quote }}
-    # Operator publishes an Opaque secret with only ca.crt (no private key) so
-    # clients can verify the server under tightly scoped RBAC. See the secrets
-    # rule in dashboard-resourcemap.yaml.
+    # When TLS is on the operator always publishes an Opaque Secret holding just
+    # ca.crt; this only chooses its name, which otherwise defaults to
+    # "<tls-secret>-ca" — a name that reads as though it belonged to the leaf.
+    # Nothing in the tenant read path consumes it: the trust anchor reaches the
+    # tenant as the <release>.tenant-ca projection declared in
+    # templates/tenant-projection.yaml, sourced from the chart's own CA Secret.
     caCertSecretName: {{ .Release.Name }}.ca-cert
     certificateSecret:
       secretName: {{ .Release.Name }}.tls
