@@ -1,0 +1,18 @@
+# dns01 with a platform-issued wildcard certificate: the path where charts stop
+# doing per-host ACME and point at a shared Secret instead.
+_cluster:
+  root-host: "example.org"
+  bundle-name: "paas-full"
+  solver: "dns01"
+  issuer-name: "letsencrypt-prod"
+  wildcard-secret-name: "wildcard-tls"
+  wildcard-issue: "true"
+  oidc-enabled: "true"
+  oidc-insecure-skip-verify: "false"
+  keycloak-internal-url: "https://keycloak.cozy-keycloak.svc.cluster.local"
+  extra-keycloak-redirect-uri-for-dashboard: ""
+  expose-ingress: "tenant-root"
+  expose-services: "tenant-root"
+  cluster-domain: "cluster.local"
+_namespace:
+  host: "example.org"

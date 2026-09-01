@@ -1,0 +1,17 @@
+# A cluster right after install: nothing configured yet.
+_cluster:
+  root-host: "example.org"
+  bundle-name: "paas-full"
+  solver: ""
+  issuer-name: ""
+  wildcard-secret-name: ""
+  wildcard-issue: "false"
+  oidc-enabled: "false"
+  oidc-insecure-skip-verify: "false"
+  keycloak-internal-url: ""
+  extra-keycloak-redirect-uri-for-dashboard: ""
+  expose-ingress: ""
+  expose-services: ""
+  cluster-domain: "cluster.local"
+_namespace:
+  host: "example.org"
