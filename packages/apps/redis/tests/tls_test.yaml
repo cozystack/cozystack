@@ -830,3 +830,17 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: "my-redis-external-lb"
+
+  # The enum on tls.authClients is a schema constraint with no rendered form
+  # to assert on; pin that an unknown value fails validation before any
+  # template renders.
+  - it: "an unknown tls.authClients value fails schema validation"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      tls:
+        enabled: true
+        authClients: maybe
+    asserts:
+      - failedTemplate:
+          errorPattern: "authClients.*must be one of"
