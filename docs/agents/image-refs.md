@@ -44,7 +44,7 @@ If a package stamps a reference somewhere the two globs do not cover, add that f
 
 - **Every first-party reference is tag+digest.** A bare tag with no digest is not reproducible and must not be committed. `securitygroup-controller:v0.0.0` is a live violation.
 - **Exactly one producer stamps each reference.** A reference no `Makefile` writes will never be refreshed by anything, including release preparation — `chBackupClientImage` in `packages/system/backupstrategy-controller/values.yaml` is a live violation, still pinned to `platform-migrations:v1.4.0-rc.2`.
-- **A package that stamps a reference is in the root `Makefile` `build:` list.** `build-matrix.sh`, the main build and release preparation all iterate that one list, so a package outside it is never rebuilt by any path and its pin freezes permanently. `flux-plunger`, `keycloak-operator`, `kilo` and `redis-operator` are live violations (tracked in #3416).
+- **A package that stamps a reference is in the root `Makefile` `build:` list.** `build-matrix.sh`, the main build and release preparation all iterate that one list, so a package outside it is never rebuilt by any path and its pin freezes permanently. `flux-plunger`, `keycloak-operator` and `kilo` are live violations (tracked in #3416).
 - **Every consumer of references reads all three storage shapes**, via `hack/lib/image-refs.sh`.
 - **Scan wider than you rewrite.** A rewrite is deliberately narrow to avoid corrupting vendored defaults, so the check that follows it must not share that blind spot. `hack/promote-rewrite-tags.sh` rewrites the enumerated files, then greps the whole tree and fails if any reference to the release candidate survives.
 
