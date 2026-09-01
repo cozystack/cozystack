@@ -14,6 +14,7 @@ import {
   type TenantTreeNode,
 } from "../lib/tenant-tree.ts"
 import { ROOT_TENANT_NAMESPACE, TENANT_NAMESPACE_PREFIX } from "../lib/constants.ts"
+import { navigatesThisTab } from "../lib/links.ts"
 import { formatAge } from "../lib/status.ts"
 import { TenantQuotaCompact } from "../components/QuotaDisplay.tsx"
 import type { ResourceQuota } from "../components/QuotaDisplay.tsx"
@@ -233,7 +234,15 @@ export function TenantsPage() {
                           {route ? (
                             <Link
                               to={route.href}
-                              onClick={() => selectTenant(route.parentTenant)}
+                              // The href alone would leave the detail page's
+                              // first render on the previous tenant, flashing
+                              // a not-found before the URL is adopted. Aligning
+                              // the context here is for the tab that navigates
+                              // — a ctrl-click leaves this one where it is.
+                              onClick={(e) => {
+                                if (!navigatesThisTab(e)) return
+                                selectTenant(route.parentTenant)
+                              }}
                               className="block truncate text-sm font-medium text-slate-900 hover:underline"
                             >
                               {relativeTenantName(node)}

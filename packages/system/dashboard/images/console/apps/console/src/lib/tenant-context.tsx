@@ -117,7 +117,7 @@ export function useTenantContext(): TenantContextValue {
  * tenants under different parents can share a relative CR name, so the name
  * alone would resolve against whichever tenant happened to be selected last.
  * Applied once per navigation rather than on every render, so the tenant picker
- * -- which switches the tenant without leaving the page -- is not dragged back
+ * — which switches the tenant without leaving the page — is not dragged back
  * to the URL under the user, while returning to the entry through history
  * asserts it again. The provider's own fallback stays free to reject a tenant
  * the user cannot see.

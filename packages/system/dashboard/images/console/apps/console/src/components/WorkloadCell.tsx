@@ -3,6 +3,7 @@ import { Link } from "react-router"
 import { useApplicationDefinitions } from "../lib/app-definitions.ts"
 import { useTenantContext } from "../lib/tenant-context.tsx"
 import { TENANT_NAMESPACE_PREFIX } from "../lib/constants.ts"
+import { navigatesThisTab } from "../lib/links.ts"
 
 interface WorkloadCellProps {
   /** Namespace the workload lives in (tenant-<name> for tenant workloads). */
@@ -17,8 +18,9 @@ interface WorkloadCellProps {
  * Renders a consuming workload (the owning application) as a deep-link to its
  * Console Workloads tab, with the kind shown as a subtitle. The link is only active for
  * real app instances: the kind must resolve to a plural via ApplicationDefinitions
- * and the workload must live in a tenant namespace (so the Console tenant
- * context can be switched on click). Shared by every per-resource drill-down.
+ * and the workload must live in a tenant namespace, since the link has to name
+ * that tenant for the Console to resolve the instance. Shared by every
+ * per-resource drill-down.
  */
 export function WorkloadCell({ namespace, kind, name }: WorkloadCellProps) {
   const { data: appDefs } = useApplicationDefinitions()
@@ -47,7 +49,10 @@ export function WorkloadCell({ namespace, kind, name }: WorkloadCellProps) {
       {href ? (
         <Link
           to={href}
-          onClick={() => tenant && selectTenant(tenant)}
+          onClick={(e) => {
+            if (!navigatesThisTab(e) || !tenant) return
+            selectTenant(tenant)
+          }}
           className="font-medium text-blue-700 hover:text-blue-800 hover:underline"
         >
           {name}

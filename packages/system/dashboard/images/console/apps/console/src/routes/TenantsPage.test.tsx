@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll } from "vitest"
-import { screen } from "@testing-library/react"
+import { fireEvent, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import {
   K8sClient,
@@ -181,6 +181,35 @@ describe("TenantsPage under a visible root", () => {
 // other row, and deriving the CR name must not subtract the node's own name
 // from itself and leave nothing.
 const SELF_ROOT = [tn("tenant-whmcs", [])]
+
+describe("TenantsPage cross-tenant link", () => {
+  // The href carries the tenant, so the tab that opens resolves on its own.
+  // The click handler exists only to spare the tab that navigates a render
+  // against the previous tenant — a ctrl-click is not that tab.
+  it("does not switch the current tenant on a ctrl-click", async () => {
+    localStorage.setItem(SELECTED_TENANT_KEY, "root")
+
+    renderWithK8sProvider(
+      <TenantProvider>
+        <TenantsPage />
+      </TenantProvider>,
+      { client: makeClient(ROOT_VISIBLE), initialRoute: "/admin/tenants" },
+    )
+
+    // "eu" hangs under acme, so a plain click here would move the selection
+    // off root and the assertion below could not tell the two apart.
+    const link = await screen.findByRole("link", { name: "eu" })
+    // jsdom cannot follow an href, and a ctrl-click is exactly the case
+    // react-router leaves to the browser. Swallow the default so the run does
+    // not carry a "navigation to another Document" line; the handler under
+    // test has already run by then, since React's own listener sits on the
+    // container and this one is on the anchor.
+    link.addEventListener("click", (e) => e.preventDefault())
+    fireEvent.click(link, { ctrlKey: true })
+
+    expect(localStorage.getItem(SELECTED_TENANT_KEY)).toBe("root")
+  })
+})
 
 describe("TenantsPage self-referential root", () => {
   it("names the CR of a root that is not tenant-root", async () => {
