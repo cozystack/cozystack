@@ -30,4 +30,4 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: CONTROLLER_IMAGE
-            value: quay.io/kubev2v/forklift-controller:release-2.11@sha256:f265574b8432d164d4ae4b388825cbb8ef7806b4afe1e87880735a8dc1868754
+            value: quay.io/kubev2v/forklift-controller:release-2.11@sha256:2600e68a235e4c3351a38ce2dd97562206795a733abd8b0cfd8444a541b0db51
