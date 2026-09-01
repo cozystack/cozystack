@@ -72,6 +72,15 @@ func verifyAndExtract(data []byte, expectedDigest, destDir string) error {
 		if err != nil {
 			return fmt.Errorf("read tar: %w", err)
 		}
+		// Fail closed on any ".." anywhere in the entry name, before the name
+		// reaches a path operation. safeJoin below is the authoritative check
+		// (it also resolves the joined path back against destDir), but that
+		// guard lives behind a call boundary and CodeQL's go/zipslip barrier
+		// does not follow it, so the same rejection is spelled out here. A
+		// chart artifact has no legitimate entry with ".." in its name.
+		if strings.Contains(hdr.Name, "..") {
+			return fmt.Errorf("tar entry %q contains a path-traversal segment", hdr.Name)
+		}
 		target, err := safeJoin(destDir, hdr.Name)
 		if err != nil {
 			return err

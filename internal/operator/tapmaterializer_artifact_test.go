@@ -129,9 +129,18 @@ func TestVerifyAndExtractDigestMismatch(t *testing.T) {
 }
 
 func TestVerifyAndExtractRejectsTraversal(t *testing.T) {
-	data, digest := tarGz(t, map[string]string{"../escape.yaml": "a: b\n"})
-	if err := verifyAndExtract(data, digest, t.TempDir()); err == nil {
-		t.Fatal("expected path-traversal rejection")
+	// Both a leading ".." and one buried mid-path have to be rejected: an
+	// entry that walks back out of a subdirectory lands outside destDir just
+	// the same, and filepath.Join collapses it before any escape is visible.
+	for _, name := range []string{
+		"../escape.yaml",
+		"packages/../../escape.yaml",
+		"packages/sub/../../../escape.yaml",
+	} {
+		data, digest := tarGz(t, map[string]string{name: "a: b\n"})
+		if err := verifyAndExtract(data, digest, t.TempDir()); err == nil {
+			t.Fatalf("entry %q: expected path-traversal rejection", name)
+		}
 	}
 }
 
