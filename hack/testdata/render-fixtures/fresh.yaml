@@ -13,5 +13,13 @@ _cluster:
   expose-ingress: ""
   expose-services: ""
   cluster-domain: "cluster.local"
+# Empty string means "this tenant has no such shared service"; the charts test it
+# with a bare `{{- if .Values._namespace.etcd }}`, and "" is false. This is the
+# off side of nine such branches.
 _namespace:
+  etcd: ""
+  ingress: ""
+  gateway: ""
+  monitoring: ""
+  seaweedfs: ""
   host: "example.org"
