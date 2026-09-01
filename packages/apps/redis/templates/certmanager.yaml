@@ -54,7 +54,7 @@ spec:
 ---
 # Leaf server TLS Certificate passed to redis-operator via spec.tls.certificateSecret.
 # The SAN list mirrors what the operator computes for its own Certificate
-# (operator/redisfailover/service/generator.go: redisCertificateDNSNames):
+# (operator/redisfailover/service/generator.go: redisCertificateSANs):
 #   - per-service short, namespace, .svc and .svc.<clusterDomain> forms for
 #     rfr-/rfrm-/rfrs-/rfs- services
 #   - wildcard covering per-pod headless DNS for the redis statefulset
