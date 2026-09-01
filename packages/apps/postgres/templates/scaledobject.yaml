@@ -16,12 +16,16 @@ CNPG collapse the cluster to 1 instance. Stop with an actionable message instead
 {{- if lt (int .Values.autoscaling.target) 1 }}
 {{- fail "postgres: autoscaling.target must be a positive integer (the desired-replica formula divides the read load by it)." }}
 {{- end }}
-{{- /* Reject a contradictory range rather than silently resolving it. effectiveMax
-       raises the ceiling to the quorum floor (which folds in minReplicas), so
-       minReplicas > maxReplicas would render minReplicaCount == maxReplicaCount ==
-       minReplicas, quietly defeating maxReplicas as a cost knob with no signal. */ -}}
-{{- if gt (int .Values.autoscaling.minReplicas) (int .Values.autoscaling.maxReplicas) }}
-{{- fail (printf "postgres: autoscaling.minReplicas (%d) must be <= autoscaling.maxReplicas (%d)." (int .Values.autoscaling.minReplicas) (int .Values.autoscaling.maxReplicas)) }}
+{{- /* Reject a contradictory range rather than silently resolving it. The effective
+       lower bound folds in the quorum floor (maxSyncReplicas+1) and the read floor (2),
+       so if it exceeds maxReplicas the cost ceiling sits below the count the chart is
+       forced to run; effectiveMax would then silently raise the ceiling to that floor —
+       a possibly large, unbounded instance count — with no signal. Fail closed and tell
+       the operator to raise maxReplicas. This covers both minReplicas > maxReplicas and
+       a quorum floor above maxReplicas. */ -}}
+{{- $emin := int (include "postgres.autoscaling.effectiveMin" .) }}
+{{- if gt $emin (int .Values.autoscaling.maxReplicas) }}
+{{- fail (printf "postgres: the effective minimum instance count (%d = max(minReplicas %d, maxSyncReplicas+1 %d, 2)) exceeds autoscaling.maxReplicas (%d); raise maxReplicas to at least the quorum floor." $emin (int .Values.autoscaling.minReplicas) (add (int .Values.quorum.maxSyncReplicas) 1) (int .Values.autoscaling.maxReplicas)) }}
 {{- end }}
 {{- /* The trigger query is served from vmselect in the tenant's monitoring namespace.
        If it is unset the serverAddress would render as the malformed

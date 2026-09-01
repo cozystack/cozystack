@@ -67,13 +67,13 @@ type ConfigSpec struct {
 }
 
 type Autoscaling struct {
-	// Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate). Permanent, unlike `transition`.
+	// Recommendation mode: keep the static count and render the ScaledObject with both scaling directions paused, so KEDA keeps the HPA and keeps serving its trigger metric but actuates neither way. Note both scaling policies are disabled, so the HPA's desiredReplicas is frozen to the current count - read the recommendation from the matching read-load dashboard panel for your metric (connections or CPU): desired = 1 + ceil(read load / target), clamped to [effectiveMin..maxReplicas] where effectiveMin = max(minReplicas, maxSyncReplicas+1, 2), not from the desired-replicas line. Like disabling, flipping a LIVE autoscaled cluster into dryRun re-renders instances from `replicas`; if `replicas` is below the live count, stage it to the live count first (see the enablement note) or the cluster sheds replicas down to max(replicas, floor). Permanent, unlike `transition`.
 	// +kubebuilder:default:=false
 	DryRun bool `json:"dryRun"`
 	// Enable horizontal autoscaling of read replicas. Requires the platform `keda` package to be enabled by an administrator first; the chart fails to render (rather than break the release) if KEDA is not installed.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// Maximum total instances; raised to the quorum floor if the floor exceeds it.
+	// Maximum total instances. Must be >= minReplicas and >= the synchronous-quorum floor (maxSyncReplicas+1); the chart fails to render (rather than silently run an unbounded instance count) if the effective floor exceeds it - raise maxReplicas.
 	// +kubebuilder:default:=6
 	MaxReplicas int `json:"maxReplicas"`
 	// Freeze scaling while replication lag exceeds this (seconds) and the primary is writing. 0 disables the brake. Default 0: the freeze branch has only been validated on a live cluster in its non-braking (pass-through) form, so the lag brake is opt-in until the braking path is exercised under load; set a positive value (e.g. 30) to enable it.
@@ -88,7 +88,7 @@ type Autoscaling struct {
 	// Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores). Dimensionless integer - a resource.Quantity here would accept `150m`, which PromQL reads as 150 minutes and KEDA cannot use as a threshold.
 	// +kubebuilder:default:=150
 	Target int `json:"target"`
-	// Migration phase 1: render `.spec.instances` from `replicas` (which the operator stages to the current live count) AND pause the ScaledObject, so KEDA stands up ready-but-not-actuating. Flip to false (phase 2) to hand the runtime count to KEDA. This shortens the handoff (KEDA is already warm, no cold-start) but does not make it atomic — see the enablement note for the residual dip and how to eliminate it.
+	// Migration phase 1: render `.spec.instances` from `replicas` (which the operator stages to the current live count) AND pause the ScaledObject in both directions, so KEDA stands up with its HPA present but not actuating. Flip to false (phase 2) to hand the runtime count to KEDA. Because the both-direction pause keeps the HPA (not the HPA-deleting full pause), KEDA is genuinely warm at phase 2 — no HPA recreate — and because the active seed is max(replicas, effectiveMin), phase 2 re-renders the same instance count phase 1 did (when `replicas` is staged at/above the floor), so the flip is a merge no-op with no dip. The HPA's scaleUp stabilization window still smooths the first actuation.
 	// +kubebuilder:default:=false
 	Transition bool `json:"transition"`
 }

@@ -42,10 +42,34 @@ maxSyncReplicas re-renders the floor atomically.
 {{- end -}}
 
 {{/*
-Effective upper bound = max(maxReplicas, effectiveMin). When the quorum floor
-exceeds the configured maxReplicas (including a stray maxReplicas <= 0), quorum
-wins and the maximum is raised to the floor rather than clamping the cluster
-below a safe quorum.
+Active-path seed for spec.instances = max(.Values.replicas, effectiveMin). This is
+the CONSTANT the chart writes to spec.instances whenever autoscaling is active. Two
+properties matter and both hold:
+  - it never undercuts the quorum/read floor (it is >= effectiveMin), so CNPG admits
+    the Cluster and a fresh enable lands at a valid count;
+  - it equals .Values.replicas whenever replicas has been staged at/above the floor,
+    so the else-branch (dryRun/transition/off, which renders instances: replicas) and
+    this active branch render the SAME value — the three-way merge is then a no-op
+    across an enable / dryRun / transition-phase-2 flip and the live count does not dip.
+Seeding effectiveMin alone (the old behavior) made the two branches differ, so a
+transition phase-2 flip rebased a staged live count down to the bare floor, shedding
+replicas + PVCs the "warm hand-off" was supposed to preserve. Because the seed is a
+constant, it stays a merge no-op on reconcile and never reverts KEDA's higher live
+value written through /scale.
+*/}}
+{{- define "postgres.autoscaling.activeSeed" -}}
+{{- $replicas := int .Values.replicas -}}
+{{- $emin := int (include "postgres.autoscaling.effectiveMin" .) -}}
+{{- max $replicas $emin -}}
+{{- end -}}
+
+{{/*
+Effective upper bound = max(maxReplicas, effectiveMin). The scaledobject.yaml render
+guard rejects effectiveMin > maxReplicas before this is read, so in a rendered chart
+effectiveMin <= maxReplicas always and this resolves to maxReplicas. The max() is a
+defense-in-depth backstop that cannot actually engage given that guard (even maxReplicas
+<= 0 is already rejected, since effectiveMin >= 2 > 0); it is kept so effectiveMax can
+never render below a safe quorum should the guard ever be relaxed.
 */}}
 {{- define "postgres.autoscaling.effectiveMax" -}}
 {{- /* Direct read, not Sprig `default`: an explicit maxReplicas: 0 must clamp up to
@@ -69,9 +93,11 @@ Read-load metric: Σ(read load over the standby pods) + target, fed to KEDA as a
 AverageValue trigger so stock HPA computes
 desired = ceil((Σ + target) / target) = 1 + ceil(Σ / target) = primaryCount + desiredRead.
 The join restricts the metric to this app's standby pods; the namespace matcher
-scopes it to the tenant. `or vector(0)` floors the read load at zero so that with
-no active connections the query still returns `target` (→ desired 1, clamped up by
-minReplicaCount) rather than an empty result.
+scopes it to the tenant. The read load is floored to zero ONLY when replica pods
+exist, so an idle cluster still returns `target` (→ desired 1, clamped up by
+minReplicaCount) while a cluster whose carrying series are absent returns empty
+(fail-safe hold — see the caveat below), instead of an unconditional `or vector(0)`
+that cannot tell no-load from no-series.
 
 Replication-lag brake (postgres.autoscaling.query, when maxReplicationLagSeconds>0):
 while the max standby lag has exceeded the threshold at any point in the cooldown
@@ -88,26 +114,58 @@ WAL-record rate is the write signal. The cluster is scoped by joining kube_pod_l
 on (namespace,pod), same as the read-load term. The exact thresholds/cooldown are
 tuned per the proposal's PoC; the base (no-lag) path is validated live.
 
-Fail-open caveat: the read-load term is floored with `or vector(0)`, so a genuinely
-idle cluster yields `target` (desired 1, clamped to the floor). The same floor also
-makes a BROKEN metrics pipeline (kube-state-metrics not carrying the CNPG pod labels,
-or the join otherwise empty) read as idle: autoscaling then silently sits at the
-floor under real read load. This never scales the wrong way (fail-safe), but it is
-silent — DatabaseAutoscalerScalerErrors cannot catch it (the query never errors).
-Operators enabling autoscaling must ensure the CNPG podMonitor + kube-state-metrics
-pod-label pipeline is healthy; a missing join is indistinguishable from no load here.
+Fail-safe (per the design proposal, "must not read a missing sample as zero" / "No
+blind scaling"), SCOPED to the kube-state-metrics pod-label join: the read-load floor is
+GATED on the existence of ANY CNPG instance pod (count(kube_pod_labels{...instance_role
+=~".+"}) > 0), so the query separates two empty cases an unconditional `or vector(0)`
+would conflate:
+  - the cluster has instance pods (running idle, or still provisioning its replicas) but
+    no active read connections -> load 0 -> desired 1 (scale to floor);
+  - NO CNPG pod labels exist at all (a broken KSM pod-label pipeline) -> the floor is
+    WITHHELD, the term stays empty. The cozy-lib helper pins ignoreNullValues=false on the
+    trigger, so KEDA treats an empty result as an error (FailedGetExternalMetric) rather
+    than its default of 0, and the HPA HOLDS the current count. (Without
+    ignoreNullValues=false the empty result would read as 0 -> desired 0 -> clamp to the
+    floor, i.e. a silent scale-DOWN — the exact failure this gate exists to prevent.)
+The gate keys on ANY instance role (not replica-only) precisely so initial provisioning /
+large restore — when the only replica-side pod is CNPG's join Job (jobRole, not
+instanceRole) — floors on the primary and does NOT error; a replica-only gate would
+spuriously trip DatabaseAutoscalerScalerErrors on a healthy basebackup that routinely
+exceeds the alert's 15m window.
+LIMIT: the gate keys on kube_pod_labels, not on the load-metric source. If kube_pod_labels
+is healthy but the load series itself vanishes (cnpg_backends_total unscraped/renamed, or
+container_cpu_usage_seconds_total absent for the CPU metric — a separate cAdvisor
+pipeline), the term still floors to 0 and the cluster drifts down toward the floor
+silently (the query returns a valid 0, so ScalerErrors does not fire). That drift is
+bounded (never below the quorum floor, no collapse) and heavily damped (scaleDown
+stabilization 1800s, 1 pod / 600s); operators should still alert on absent load series
+for autoscaled namespaces. NOTE the opt-in lag brake below (maxReplicationLagSeconds > 0):
+gating the floor on any instance role also keeps its base term non-empty during
+provisioning so it no longer errors there; it stays opt-in / not-live-validated.
 */}}
 {{- define "postgres.autoscaling.query" -}}
 {{- $ns := .Release.Namespace -}}
 {{- $rel := .Release.Name -}}
 {{- $target := .Values.autoscaling.target -}}
 {{- $joinReplica := printf "* on(namespace,pod) group_left() kube_pod_labels{namespace=%q,label_cnpg_io_cluster=%q,label_cnpg_io_instance_role=\"replica\"}" $ns $rel -}}
-{{- /* Read-load term Σ, floored at 0 so an idle cluster yields `target`. */ -}}
+{{- /* Read-load term Σ. The floor is GATED on the existence of ANY instance pod
+       (instance_role=~".+", primary OR replica), not replica-only: `or (vector(0) and
+       on() (count(...instance_role=~".+") > 0))` returns 0 whenever the cluster has a
+       labelled CNPG pod (idle or still provisioning -> desired 1), and WITHHOLDS the
+       floor only when NO CNPG pod labels exist at all (a broken KSM pipeline) so the term
+       stays empty (-> KEDA FailedGetExternalMetric -> HPA holds). Gating on replica-only
+       would withhold the floor during initial provisioning/large restore — when the sole
+       replica-side pod is CNPG's join Job (jobRole, not instanceRole) — and, with
+       ignoreNullValues=false, spuriously fire DatabaseAutoscalerScalerErrors on a healthy
+       basebackup that routinely exceeds the alert's 15m window. The primary always exists
+       during provisioning, so gating on any instance role floors correctly there. This is
+       the fail-safe separation of no-load from no-series. */ -}}
+{{- $idleFloor := printf "(vector(0) and on() (count(kube_pod_labels{namespace=%q,label_cnpg_io_cluster=%q,label_cnpg_io_instance_role=~\".+\"}) > 0))" $ns $rel -}}
 {{- $load := "" -}}
 {{- if eq .Values.autoscaling.metric "ReadCPUUtilization" -}}
-{{- $load = printf "((sum(rate(container_cpu_usage_seconds_total{namespace=%q,container=\"postgres\"}[5m]) %s) * 1000) or vector(0))" $ns $joinReplica -}}
+{{- $load = printf "((sum(rate(container_cpu_usage_seconds_total{namespace=%q,container=\"postgres\"}[5m]) %s) * 1000) or %s)" $ns $joinReplica $idleFloor -}}
 {{- else -}}
-{{- $load = printf "(sum(cnpg_backends_total{namespace=%q,state=\"active\"} %s) or vector(0))" $ns $joinReplica -}}
+{{- $load = printf "(sum(cnpg_backends_total{namespace=%q,state=\"active\"} %s) or %s)" $ns $joinReplica $idleFloor -}}
 {{- end -}}
 {{- $base := printf "%s + %v" $load $target -}}
 {{- $maxLag := int .Values.autoscaling.maxReplicationLagSeconds -}}

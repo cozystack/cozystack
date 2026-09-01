@@ -204,6 +204,38 @@ func TestBuildHelmReleaseSpecZeroMaxHistory(t *testing.T) {
 	}
 }
 
+// TestBuildHelmReleaseSpecNoForceOrDriftDetection pins the invariant the postgres
+// read-replica autoscaler depends on. Under active autoscaling the app chart SEEDS a
+// constant spec.instances (the synchronous-quorum floor) instead of omitting the field,
+// and correctness rests on the tenant HelmRelease being applied with Helm's client-side
+// three-way merge and nothing that would let Flux overwrite the higher live value KEDA
+// writes through the /scale subresource. Re-rendering the same constant is a merge no-op
+// ONLY while the release is not force-upgraded and drift detection is off; turning on
+// either would make Flux a writer that walks spec.instances back to the floor on every
+// reconcile, for every autoscaled database. The design proposal (§3 / Appendix finding 4)
+// and the #3954 review both call this out, so enforce it in code rather than trusting a
+// template comment: this fails if buildHelmReleaseSpec ever sets Upgrade.Force or
+// DriftDetection. (Server-side apply is not a HelmRelease knob — the
+// helm-controller applies releases with Helm's own three-way merge — so there is no SSA
+// field to assert here; that merge behavior IS the invariant these fields would break.)
+func TestBuildHelmReleaseSpecNoForceOrDriftDetection(t *testing.T) {
+	r := &PackageReconciler{HelmReleaseMaxHistory: 5}
+	// Exercise both the nil and the populated ComponentInstall paths; neither may
+	// introduce a force-apply or drift-detection strategy.
+	for _, ci := range []*cozyv1alpha1.ComponentInstall{
+		nil,
+		{HealthCheckExprs: []kustomize.CustomHealthCheck{{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster"}}},
+	} {
+		spec := r.buildHelmReleaseSpec(ci, "x")
+		if spec.Upgrade != nil && spec.Upgrade.Force {
+			t.Errorf("Upgrade.Force = true; a force upgrade replaces resources and would overwrite the KEDA-owned spec.instances on every reconcile")
+		}
+		if spec.DriftDetection != nil {
+			t.Errorf("DriftDetection = %+v; must stay nil (disabled). Enabling it makes Flux revert spec.instances to the seeded floor, defeating autoscaling", spec.DriftDetection)
+		}
+	}
+}
+
 // TestPackageSourceCRDHasUpgradeCRDsEnum guards the generated CRD schema: the
 // invalid-value case from the spec is enforced at the API server via a
 // kubebuilder enum marker, not in the reconciler. If someone drops the marker

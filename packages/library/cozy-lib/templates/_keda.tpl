@@ -39,10 +39,16 @@ Parameters:
   - behavior        (optional) HPA behavior block (scale-down pacing etc.), carried verbatim.
   - pollingInterval (optional) KEDA polling interval, seconds.
   - cooldownPeriod  (optional) KEDA cooldown period, seconds.
-  - paused          (optional) when true, stamps autoscaling.keda.sh/paused=true
-                    (dry-run / recommendation mode — KEDA does not actuate).
+  - paused          (optional) when true, stamps autoscaling.keda.sh/paused-scale-in
+                    AND paused-scale-out =true (dry-run / recommendation mode — KEDA
+                    keeps the HPA and keeps serving its metric but actuates in neither
+                    direction). Deliberately not the full paused=true, which in KEDA
+                    2.20.2 deletes the HPA and blinds the dashboard/alerts. Because both
+                    scaling policies are disabled, the HPA's desiredReplicas is frozen to
+                    the current count; read the recommendation from the served metric
+                    (desired = ceil(metric / threshold)), not from desiredReplicas.
   - labels          (optional) extra labels, merged onto the mandatory ones.
-  - annotations     (optional) extra annotations, merged under the pause annotation.
+  - annotations     (optional) extra annotations, merged under the pause annotations.
 */}}
 {{- define "cozy-lib.keda.scaledObject" -}}
 {{-   if not (kindIs "map" .) -}}
@@ -94,7 +100,22 @@ Parameters:
        (easy to produce from an include without an `| eq "true"` guard) must NOT
        pause. Only a real true / "true" pauses. */ -}}
 {{-   if eq (printf "%v" (default false .paused)) "true" -}}
-{{-     $annotations = merge (dict "autoscaling.keda.sh/paused" "true") $annotations -}}
+{{- /* Recommendation / warm-standby pause via the UNIDIRECTIONAL pair, deliberately
+       NOT autoscaling.keda.sh/paused. In KEDA 2.20.2 the full paused annotation runs
+       handlePause -> stopScaleLoop + ensureHPAForScaledObjectIsDeleted, i.e. it DELETES
+       the HPA — which erases the keda-hpa-* series the dashboard and alerts ride on and
+       leaves nothing to observe. Pausing BOTH directions instead keeps KEDA's scale loop
+       running and the HPA in place (verified against v2.20.2 controllers/keda/hpa.go: the
+       pair sets the HPA's ScaleUp AND ScaleDown SelectPolicy to Disabled), so the HPA is
+       retained and KEDA keeps serving/scraping the trigger metric. NOTE: with both
+       directions disabled the k8s HPA normalizes status.desiredReplicas to
+       currentReplicas, so desired does NOT diverge here — the recommendation is read from
+       the served metric (keda_scaler_metrics_value, or the read-load panel: desired =
+       ceil(metric / threshold)), not from the HPA's desiredReplicas. For the migration
+       transition this still makes KEDA genuinely warm: un-pausing hands off without
+       recreating the HPA (the HPA's scaleUp stabilization window still applies to the
+       first move). */ -}}
+{{-     $annotations = merge (dict "autoscaling.keda.sh/paused-scale-in" "true" "autoscaling.keda.sh/paused-scale-out" "true") $annotations -}}
 {{-   end -}}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
@@ -138,4 +159,15 @@ spec:
         serverAddress: {{ .serverAddress | quote }}
         query: {{ .query | quote }}
         threshold: {{ .threshold | quote }}
+        {{- /* Fail-safe: KEDA's prometheus scaler defaults ignoreNullValues=true, which
+               turns an EMPTY query result into metric value 0 (not an error) — the HPA
+               would then compute desired 0 and clamp to minReplicaCount, i.e. silently
+               scale a cluster DOWN to the floor when the metrics pipeline is broken. Set
+               it false so an empty result is an error (FailedGetExternalMetric) and the
+               HPA HOLDS the current count instead. Callers must ensure a HEALTHY query
+               never returns empty — e.g. floor the load term to vector(0) when the target
+               workload exists — so only a genuinely broken pipeline (or no series) trips
+               this. This is what makes the "must not read a missing sample as zero"
+               contract actually hold; without it the idle-floor gymnastics are moot. */}}
+        ignoreNullValues: "false"
 {{- end -}}

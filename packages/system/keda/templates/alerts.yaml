@@ -25,40 +25,71 @@ spec:
   groups:
   - name: database-autoscaling.rules
     rules:
-    # Scale-up genuinely stuck: quota-rejected standby, unbindable PVC, or
-    # unschedulable pod. desired > current alone would also fire on every healthy
-    # load-driven scale-up, because a new CNPG standby joins via a full basebackup
-    # that routinely exceeds 15m while the pod is Running (not Ready) — so intersect
-    # with an actually-Pending pod in the namespace, which a healthy clone is not.
-    # There is no automatic rollback (see the design proposal); this is the operator's
-    # signal to resolve it.
+    {{- /*
+    Scale-up genuinely stuck: quota-rejected standby, unbindable PVC, or
+    unschedulable pod. desired > current alone would also fire on every healthy
+    load-driven scale-up, because a new CNPG standby joins via a full basebackup
+    that routinely exceeds 15m while the pod is Running (not Ready) — so intersect
+    with an actually-Pending CNPG cluster pod, which a healthy clone is not. The
+    Pending term is scoped to CNPG pods via label_cnpg_io_cluster so an unrelated
+    Pending pod co-resident in the tenant namespace does not trip it.
+    There is no automatic rollback (see the design proposal); this is the operator's
+    signal to resolve it.
+
+    NOTE (deliberately no "load metric absent" rule): the ScaledObject pins
+    ignoreNullValues=false, so a broken pod-label pipeline (no CNPG kube_pod_labels at all)
+    empties the query and surfaces as a KEDA scaler error (caught by
+    DatabaseAutoscalerScalerErrors below) with the HPA holding — not a silent drift to the
+    floor. The residual gap (kube_pod_labels healthy but the load series itself gone) has
+    no clean alert: absent(cnpg_backends_total{state="active"})
+    cannot tell a genuinely idle cluster from a broken exporter, and CPU-mode clusters
+    do not use that series at all. Operators should instead alert on the CNPG
+    podMonitor / cadvisor scrape target being down for autoscaled namespaces.
+    */}}
     - alert: DatabaseAutoscalerScaleStuck
       expr: |-
         (
           kube_horizontalpodautoscaler_status_desired_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
           > kube_horizontalpodautoscaler_status_current_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
         )
-        and on(namespace) (max by (namespace) (kube_pod_status_phase{phase="Pending"}) > 0)
+        and on(namespace) (
+          max by (namespace) (
+            kube_pod_status_phase{phase="Pending"}
+            * on(namespace,pod) group_left() kube_pod_labels{label_cnpg_io_cluster!=""}
+          ) > 0
+        )
       for: 15m
       labels:
         severity: warning
       annotations:
         summary: Database autoscaler cannot reach its desired replica count.
         description: HPA {{ "{{ $labels.horizontalpodautoscaler }}" }} in namespace {{ "{{ $labels.namespace }}" }} has wanted more replicas than are available for 15m while a pod in the namespace is Pending (stuck scale-up — likely quota, unbindable PVC, or unschedulable pod, not a healthy basebackup).
-    # Scaling is limited at the (possibly quorum-raised) maximum. Sustained means
-    # the configured maxReplicas — or the quorum floor that overrode it — is the
-    # ceiling under real load.
+    {{- /*
+    Pinned at the configured maximum under sustained load. NOT keyed on the HPA's
+    ScalingLimited condition: that is true in BOTH clamp directions (TooManyReplicas at
+    max AND TooFewReplicas at min), and this autoscaler's idle desired = 1 + ceil(0/target)
+    = 1 clamps UP to the floor, so an idle cluster would report ScalingLimited=true forever
+    and this alert would fire on every quiet DB with the wrong "raise maxReplicas" advice.
+    Instead compare desired to the HPA's own max: it fires only when the cluster is
+    actually at the ceiling. (The render guard rejects a quorum floor above maxReplicas,
+    so maxReplicas is the true ceiling.)
+    */}}
     - alert: DatabaseAutoscalerAtMax
       expr: |-
-        kube_horizontalpodautoscaler_status_condition{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*",condition="ScalingLimited",status="true"} == 1
+        kube_horizontalpodautoscaler_status_desired_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
+        >= on(namespace,horizontalpodautoscaler)
+        kube_horizontalpodautoscaler_spec_max_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
       for: 30m
       labels:
         severity: info
       annotations:
-        summary: Database autoscaler has been scaling-limited for 30m.
-        description: HPA {{ "{{ $labels.horizontalpodautoscaler }}" }} in namespace {{ "{{ $labels.namespace }}" }} reports ScalingLimited=true for 30m (at maxReplicas, or the synchronous-quorum floor raised the effective maximum).
-    # KEDA cannot evaluate the trigger (vmselect unreachable or the query fails):
-    # scaling silently stops. Never scale blind.
+        summary: Database autoscaler has been at maxReplicas for 30m.
+        description: HPA {{ "{{ $labels.horizontalpodautoscaler }}" }} in namespace {{ "{{ $labels.namespace }}" }} has wanted its maximum replica count (autoscaling.maxReplicas) for 30m under sustained load — raise maxReplicas if more read capacity is needed.
+    {{- /*
+    KEDA cannot evaluate the trigger (vmselect unreachable, query invalid, or — with
+    ignoreNullValues=false — an empty result from a broken metrics pipeline): scaling
+    stops and this fires. Never scale blind.
+    */}}
     - alert: DatabaseAutoscalerScalerErrors
       expr: |-
         increase(keda_scaled_object_errors_total[15m]) > 0
@@ -68,13 +99,15 @@ spec:
       annotations:
         summary: KEDA scaler is erroring for a managed database.
         description: KEDA reported scaler errors over the last 15m for a database ScaledObject (metric source unreachable or query invalid); the desired count is not being updated.
-    # KEDA operator down / not reporting: it reconciles ScaledObjects into HPAs, so
-    # while it is unhealthy (e.g. the leader-election crash-loop the package guards
-    # against) a fresh autoscaled database is admitted at CNPG's default of 1 and its
-    # ScaledObject never becomes an HPA — no keda-hpa-* series exist, so neither
-    # ScaleStuck nor ScalerErrors can fire and the tenant's requested floor silently
-    # never materializes. keda_build_info is emitted by the operator; its absence
-    # means the operator is down or unscraped.
+    {{- /*
+    KEDA operator down / not reporting: it reconciles ScaledObjects into HPAs, so
+    while it is unhealthy (e.g. the leader-election crash-loop the package guards
+    against) a fresh autoscaled database is admitted at CNPG's default of 1 and its
+    ScaledObject never becomes an HPA — no keda-hpa-* series exist, so neither
+    ScaleStuck nor ScalerErrors can fire and the tenant's requested floor silently
+    never materializes. keda_build_info is emitted by the operator; its absence
+    means the operator is down or unscraped.
+    */}}
     - alert: DatabaseAutoscalerKedaOperatorDown
       expr: |-
         absent(keda_build_info)

@@ -69,6 +69,11 @@ tests:
       - equal:
           path: spec.triggers[0].metadata.threshold
           value: "150"
+      # Fail-safe: ignoreNullValues MUST be "false" so an empty query errors (HPA holds)
+      # instead of KEDA's default of reading empty as 0 (which scales down to the floor).
+      - equal:
+          path: spec.triggers[0].metadata.ignoreNullValues
+          value: "false"
       # scale-down pacing is carried through verbatim into the HPA behavior
       - equal:
           path: spec.advanced.horizontalPodAutoscalerConfig.behavior.scaleDown.policies[0].type
@@ -76,11 +81,15 @@ tests:
       - equal:
           path: spec.advanced.horizontalPodAutoscalerConfig.behavior.scaleDown.policies[0].value
           value: 1
-      # not paused by default
+      # not paused by default (neither the unidirectional pair nor the full pause)
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-in"]
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-out"]
       - notExists:
           path: metadata.annotations["autoscaling.keda.sh/paused"]
 
-  - it: stamps the KEDA pause annotation in dry-run / recommendation mode
+  - it: stamps the unidirectional pause pair in dry-run / recommendation mode
     templates:
       - templates/tests/keda-scaledobject.yaml
     values:
@@ -88,9 +97,17 @@ tests:
     set:
       paused: true
     asserts:
+      # both directions paused → KEDA keeps the HPA and keeps serving the metric
+      # (desired frozen to current), actuates neither
       - equal:
-          path: metadata.annotations["autoscaling.keda.sh/paused"]
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-in"]
           value: "true"
+      - equal:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-out"]
+          value: "true"
+      # never the full paused annotation, which in KEDA 2.20.2 deletes the HPA
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused"]
 
   - it: does not pause when paused is the string "false" (coerced, not truthiness-tested)
     templates:
@@ -101,7 +118,9 @@ tests:
       paused: "false"
     asserts:
       - notExists:
-          path: metadata.annotations["autoscaling.keda.sh/paused"]
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-in"]
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-out"]
 
   - it: fails closed when the argument is not a dict
     templates:

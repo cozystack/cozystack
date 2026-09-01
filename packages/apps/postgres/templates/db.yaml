@@ -8,19 +8,24 @@ metadata:
 spec:
   {{- if $autoscaling }}
   {{- /* Under active autoscaling KEDA owns the runtime count via the /scale
-         subresource. The chart SEEDS spec.instances at the quorum floor (effectiveMin)
-         rather than omitting it, for two reasons: (1) with synchronous quorum an
-         omitted field defaults to 1 and CNPG's webhook rejects "maxSyncReplicas must
-         be lower than the number of instances"; (2) omitting it on an EXISTING
-         cluster's enable/upgrade makes three-way merge delete the field, CNPG
-         re-defaults to 1, and every replica + its PVC is decommissioned before KEDA
-         re-clones (hours with no read replicas). Seeding a constant floor makes the
-         merge a no-op on the field (it never reverts KEDA's higher live value) and
-         caps the enable dip at the floor (>=2) instead of collapsing to 1. This
-         relies on helm-controller's client-side 3-way merge (not SSA), confirmed in
-         internal/operator/package_reconciler.go buildHelmReleaseSpec (no Upgrade.Force,
-         driftDetection off). (Go-template comment, stripped at render.) */}}
-  instances: {{ include "postgres.autoscaling.effectiveMin" . }}
+         subresource. The chart SEEDS spec.instances at a constant = max(replicas,
+         effectiveMin) (postgres.autoscaling.activeSeed) rather than omitting it, for
+         three reasons: (1) with synchronous quorum an omitted field defaults to 1 and
+         CNPG's webhook rejects "maxSyncReplicas must be lower than the number of
+         instances"; (2) omitting it on an EXISTING cluster's enable/upgrade makes
+         three-way merge delete the field, CNPG re-defaults to 1, and every replica +
+         its PVC is decommissioned before KEDA re-clones (hours with no read replicas);
+         (3) seeding effectiveMin ALONE differs from the else-branch (instances:
+         replicas), so a dryRun/transition flip would rebase a staged live count down to
+         the bare floor. Seeding max(replicas, effectiveMin) equals the else-branch value
+         whenever replicas is staged at/above the floor, so those flips are a merge no-op
+         and the live count does not dip; it still never undercuts the quorum floor.
+         Because the seed is constant, the merge is a no-op on reconcile (it never
+         reverts KEDA's higher live value). This relies on helm-controller's client-side
+         3-way merge (not SSA), confirmed in internal/operator/package_reconciler.go
+         buildHelmReleaseSpec (no Upgrade.Force, driftDetection off). (Go-template
+         comment, stripped at render.) */}}
+  instances: {{ include "postgres.autoscaling.activeSeed" . }}
   {{- else }}
   {{- /* Static-count path (autoscaling off / dryRun / transition), which renders
          instances: <replicas>. CNPG's webhook rejects the Cluster if maxSyncReplicas
