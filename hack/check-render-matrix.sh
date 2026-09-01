@@ -11,12 +11,21 @@
 # `lookup` returns nothing here. Without a cluster helm gives an empty result and
 # charts carry on -- which is why this works at all -- but 46 of the 55 lookup
 # call sites in packages/apps/*/templates/ sit inside a conditional on that
-# result, so this renders one side of each of them and never the other. The
-# unrendered side is where a whole class of real bugs has lived: the
+# result, so this sweep renders one side of each of them and never the other.
+# The unrendered side is where a whole class of real bugs has lived: the
 # lookup-preserve pattern that keeps an immutable PVC storageClass across
-# reconciles, and adopt-in-place migrations. Covering those needs a cluster
-# holding the objects, which is a different lane. Do not read a green sweep as
-# "these charts render correctly", only as "they render".
+# reconciles, and adopt-in-place migrations.
+#
+# That side is NOT out of reach, and it does not need a cluster: helm-unittest
+# can fake the API a chart looks up, via `kubernetesProvider` in a test suite.
+# packages/apps/clickhouse/tests/backup_api_password_persistence_test.yaml is
+# the worked example -- it covers both the mint and the preserve branch of the
+# backup API password, in milliseconds. So lookup branches belong there, per
+# chart, where the fake can be specific about what exists; this sweep stays what
+# it is, a check that every chart still renders at all.
+#
+# Do not read a green sweep as "these charts render correctly", only as "they
+# render, under these cluster states, on the empty-lookup path".
 #
 # Values outside `_cluster`/`_namespace` are chart defaults. Presets, replica
 # counts and feature toggles are not swept; assertions about what the output
