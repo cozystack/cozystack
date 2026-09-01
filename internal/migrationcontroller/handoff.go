@@ -5,6 +5,7 @@ package migrationcontroller
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -82,6 +83,18 @@ func (r *VMImportTaskReconciler) fulfill(
 		// Already cleaned up: the outputs of a previous pass are authoritative.
 		if prev := findVMStatus(task.Status.VMs, req.ID); prev != nil && prev.VMInstance != "" {
 			return &outputs{VMInstance: prev.VMInstance, Disks: prev.Disks}, nil
+		}
+		// Status may be behind the cluster: dying between deleting the
+		// scaffolding VM and writing the status leaves finished outputs with
+		// nothing recording them. They carry this task's markers, so ask the
+		// cluster rather than failing an import that in fact succeeded.
+		reclaimed, err := r.reclaimOutputs(ctx, task, req)
+		if err != nil {
+			return nil, err
+		}
+		if reclaimed != nil {
+			logger.Info("reclaimed outputs recorded by no status", "vm", req.ID, "instance", reclaimed.VMInstance)
+			return reclaimed, nil
 		}
 		return nil, &validationError{
 			reason:  migrationv1alpha1.ReasonTransferFailed,
@@ -255,6 +268,47 @@ func importedDiskBus(index int) string {
 		return "sata"
 	}
 	return "virtio"
+}
+
+// reclaimOutputs finds this task's finished outputs for one VM when its status
+// does not name them, and returns nil when there are none.
+//
+// The window it covers is narrow and real: the scaffolding VirtualMachine is
+// deleted before the status write that records what was produced, so a crash
+// between the two leaves a healthy VMInstance and its disks with nothing
+// pointing at them. Without this the next pass reports Failed on a machine that
+// works. The markers make the lookup exact — the task's UID and the source VM
+// ID — so this can never adopt a tenant's object or another task's.
+func (r *VMImportTaskReconciler) reclaimOutputs(
+	ctx context.Context,
+	task *migrationv1alpha1.VMImportTask,
+	req *migrationv1alpha1.VMImportRequest,
+) (*outputs, error) {
+	markers := client.MatchingLabels(outputMarkers(task, req.ID))
+
+	instances := &unstructured.UnstructuredList{}
+	instances.SetGroupVersionKind(vmInstanceGVK)
+	if err := r.List(ctx, instances, client.InNamespace(task.Namespace), markers); err != nil {
+		return nil, err
+	}
+	if len(instances.Items) == 0 {
+		return nil, nil
+	}
+
+	disks := &unstructured.UnstructuredList{}
+	disks.SetGroupVersionKind(vmDiskGVK)
+	if err := r.List(ctx, disks, client.InNamespace(task.Namespace), markers); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(disks.Items))
+	for i := range disks.Items {
+		names = append(names, disks.Items[i].GetName())
+	}
+	// Disk order is what the VMInstance's own disk list records, and a label
+	// query returns no order at all, so sort for a stable status.
+	sort.Strings(names)
+
+	return &outputs{VMInstance: instances.Items[0].GetName(), Disks: names}, nil
 }
 
 // adoptVolume moves one transferred volume under the name a VMDisk expects,
