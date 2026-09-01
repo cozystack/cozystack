@@ -40,18 +40,27 @@ spec:
     sourceSecretName: "{{ .release }}-ca-cert"
     sourceKey: ca.crt
   secrets:
-    # Backstop for the label-only include below. That selector matches on the
-    # label alone with no name constraint, so any Secret in the namespace that
-    # acquires internal.cozystack.io/tenant-ca would be promoted to the tenant
-    # with its data copied verbatim. These are the release-owned Secrets where
-    # that would hand over private key material.
+    # Backstop for the label-only include below, which matches on the label
+    # alone with no name constraint. These two Secrets are the ones whose
+    # promotion would hand the tenant private key material.
     #
-    # The guarantee this provides is bounded: matching is by exact name and
-    # there is no glob support, so a Secret introduced by a future operator
-    # version, or a transient object an issuer creates mid-renewal, is not
-    # covered by this list. The primary defence remains that the controller
-    # stamps the tenant-ca label only on its own projection; this list closes
-    # the enumerable part of the residual, not the whole vector.
+    # Scope this honestly — it is narrower than it looks, in two ways.
+    # Selection is not namespace-wide: the lineage webhook drops out early for
+    # any object whose ownership does not resolve to this release's app CR
+    # (computeLabels returns nil when there is no owner), so unrelated Secrets
+    # in the namespace are never evaluated against these selectors at all.
+    # And these two specific Secrets do not reach the matcher today either,
+    # because the platform runs cert-manager with enableCertificateOwnerRef
+    # false, which leaves them with no ownerReference and therefore no
+    # resolvable owner.
+    #
+    # So the entries below are defence in depth against a future in which they
+    # do become reachable — ownerRefs enabled, or the operator adopting them —
+    # not a gate that fires today. Matching is by exact name with no globs, so
+    # a Secret a future operator version introduces, or a transient object an
+    # issuer creates mid-renewal, is not covered either. The primary defence
+    # remains that the controller stamps the tenant-ca label only on its own
+    # projection.
     exclude:
       - resourceNames:
           # CA certificate and CA private key, issued by cert-manager.
