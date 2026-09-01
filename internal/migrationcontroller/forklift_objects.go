@@ -81,10 +81,9 @@ func providerRefs(task *migrationv1alpha1.VMImportTask, src *migrationv1alpha1.V
 }
 
 // ensureMaps creates the NetworkMap and StorageMap a Plan requires. Both start
-// empty: Forklift will not validate a Plan without them, but it is also the
-// component that knows which networks and datastores the chosen VMs actually
-// use, and it reports the unmapped ones on the Plan. learnMappings then fills
-// them in. That loop is why this controller needs no inventory client.
+// empty — Forklift will not validate a Plan without them — and populateMaps
+// fills them in from what the inventory says each VM actually uses, one VM at a
+// time as its reconcile reaches this point.
 func (r *VMImportTaskReconciler) ensureMaps(
 	ctx context.Context,
 	task *migrationv1alpha1.VMImportTask,
@@ -252,13 +251,13 @@ func (r *VMImportTaskReconciler) ensureMigration(
 	return obj, nil
 }
 
-// learnMappings completes the task's maps from what Forklift says is missing.
+// populateMaps adds one VM's networks and datastores to the task's maps.
 //
-// Forklift validates a Plan against the source inventory and, when a VM uses a
-// network or datastore the maps do not cover, publishes a condition naming the
-// offenders in its `items` list. Reading that is how the controller discovers
-// the source's topology: it never queries vCenter, and the component that does
-// is the one whose opinion actually governs the migration.
+// The topology comes from Forklift's inventory, because it exists nowhere else:
+// a Plan's validation conditions name the VMs that are unmapped, never what
+// they are unmapped to. The maps accumulate across the task's VMs — each pass
+// adds only what is missing — so the task ends up with one entry per distinct
+// network and datastore however many machines share them.
 //
 // Networks all map to the pod network. That is not a placeholder: the map
 // shapes the interfaces of the KubeVirt VM Forklift creates, and this
@@ -273,8 +272,9 @@ func (r *VMImportTaskReconciler) populateMaps(
 	ctx context.Context,
 	task *migrationv1alpha1.VMImportTask,
 	src *migrationv1alpha1.VMImportSource,
+	req *migrationv1alpha1.VMImportRequest,
 ) (bool, error) {
-	networks, datastores, err := r.sourceTopology(ctx, task, src)
+	networks, datastores, err := r.sourceTopology(ctx, task, src, req)
 	if err != nil {
 		return false, err
 	}
@@ -345,21 +345,29 @@ func (r *VMImportTaskReconciler) populateMaps(
 		}
 	}
 
-	_ = src
 	return changed, nil
 }
 
-// sourceTopology asks Forklift's inventory which networks and datastores the
-// task's VMs actually use.
+// sourceTopology asks Forklift's inventory which networks and datastores one
+// VM actually uses.
 //
 // This is the only place the answer exists. Forklift's Plan conditions name the
 // VMs that are unmapped, not what they are unmapped to, and no Forklift custom
 // resource carries a VM's network or datastore IDs — see the comment on
 // inventoryClient for the source references.
+//
+// Scoped to a single VM on purpose. Reading the whole task here would tie every
+// VM's fate to every other one: a single mistyped managed-object reference — the
+// likeliest error on this API — would fail the VM being reconciled with a
+// message naming a different machine, where a missing VM is meant to fail alone
+// while its siblings proceed. It is also what keeps the cost linear: one GET per
+// VM per pass rather than one per VM *for* every VM, repeated on every requeue
+// while anything is still transferring.
 func (r *VMImportTaskReconciler) sourceTopology(
 	ctx context.Context,
 	task *migrationv1alpha1.VMImportTask,
 	src *migrationv1alpha1.VMImportSource,
+	req *migrationv1alpha1.VMImportRequest,
 ) (networks, datastores []string, err error) {
 	if r.Inventory == nil {
 		return nil, nil, fmt.Errorf("no inventory client configured; the network and storage maps cannot be built")
@@ -378,27 +386,11 @@ func (r *VMImportTaskReconciler) sourceTopology(
 		return nil, nil, fmt.Errorf("source Provider %s/%s has no UID yet", task.Namespace, sourceProviderName(src.Name))
 	}
 
-	seenNet := map[string]bool{}
-	seenDS := map[string]bool{}
-	for i := range task.Spec.VMs {
-		vm, err := r.Inventory.VM(ctx, uid, task.Spec.VMs[i].ID)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, id := range vm.networkIDs() {
-			if !seenNet[id] {
-				seenNet[id] = true
-				networks = append(networks, id)
-			}
-		}
-		for _, id := range vm.datastoreIDs() {
-			if !seenDS[id] {
-				seenDS[id] = true
-				datastores = append(datastores, id)
-			}
-		}
+	vm, err := r.Inventory.VM(ctx, uid, req.ID)
+	if err != nil {
+		return nil, nil, err
 	}
-	return networks, datastores, nil
+	return vm.networkIDs(), vm.datastoreIDs(), nil
 }
 
 func hasSourceID(entries []interface{}, id string) bool {
@@ -421,7 +413,7 @@ func hasSourceID(entries []interface{}, id string) bool {
 
 // planCriticalCondition returns Forklift's own words for why a Plan cannot run,
 // or empty if nothing is critically wrong. Unmapped references are excluded:
-// those are not failures, they are what learnMappings resolves.
+// those are not failures, they are what populateMaps resolves.
 func planCriticalCondition(plan *unstructured.Unstructured) string {
 	conditions, _, _ := unstructured.NestedSlice(plan.Object, "status", "conditions")
 	var critical []string

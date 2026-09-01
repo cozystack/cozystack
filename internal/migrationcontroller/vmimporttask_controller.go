@@ -236,18 +236,19 @@ func (r *VMImportTaskReconciler) reconcileVM(
 
 	// Forklift validates the VM reference, the maps and the provider for us and
 	// says what is wrong in its own words. Surfacing that verbatim beats
-	// re-implementing its checks against an inventory we would have to query
-	// ourselves.
+	// re-implementing its checks: the inventory this controller queries answers
+	// what a VM uses, never whether Forklift will accept the Plan.
 	if critical := planCriticalCondition(plan); critical != "" {
 		status.Phase = migrationv1alpha1.VMImportTaskPhaseFailed
 		status.Message = critical
 		return status, false, nil
 	}
 
-	// Fill the maps from the source's actual topology, read out of Forklift's
+	// Fill the maps from this VM's actual topology, read out of Forklift's
 	// inventory. This cannot be done from the Plan's own conditions: those name
 	// the VMs that are unmapped, never the networks or datastores they use.
-	if learned, err := r.populateMaps(ctx, task, src); err != nil {
+	// Scoped to this VM so a bad reference fails it alone (see sourceTopology).
+	if learned, err := r.populateMaps(ctx, task, src, req); err != nil {
 		var nf *notFoundError
 		if errors.As(err, &nf) {
 			status.Phase = migrationv1alpha1.VMImportTaskPhaseFailed

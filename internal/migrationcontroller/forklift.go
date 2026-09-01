@@ -39,8 +39,9 @@ var (
 
 // KubeVirt and CDI kinds this controller reads and cleans up. The
 // VirtualMachine Forklift creates is never started: it is read for the source
-// VM's shape (CPU, memory, firmware, disk order) and then discarded, which is
-// why this controller needs no inventory client of its own.
+// VM's shape (CPU, memory, firmware, disk order) and then discarded. The one
+// thing it does not carry is which networks and datastores the VM uses, which
+// is why the maps are built from the inventory instead (see sourceTopology).
 var (
 	virtualMachineGVK = schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachine"}
 	dataVolumeGVK     = schema.GroupVersionKind{Group: "cdi.kubevirt.io", Version: "v1beta1", Kind: "DataVolume"}
