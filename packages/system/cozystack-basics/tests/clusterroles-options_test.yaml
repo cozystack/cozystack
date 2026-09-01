@@ -12,7 +12,7 @@ release:
 # read on it so every access level from view upward can populate dropdowns;
 # the apiserver-side grant is moot for human tenants without this.
 tests:
-  - it: cozy:tenant:view:base grants read on core.cozystack.io options
+  - it: cozy:tenant:view:base grants read on core.cozystack.io options and taps
     documentSelector:
       path: metadata.name
       value: cozy:tenant:view:base
@@ -21,7 +21,22 @@ tests:
           path: rules
           content:
             apiGroups: ["core.cozystack.io"]
-            resources: ["options"]
+            resources: ["options", "taps"]
+            verbs: ["get", "list", "watch"]
+
+  # The tenant ServiceAccount role carries its own core.cozystack.io grant, so
+  # the marketplace taps listing has to be added there too or the dashboard's
+  # tap views are empty for the tenant's own controllers.
+  - it: cozy:tenant:base grants read on core.cozystack.io options and taps
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["core.cozystack.io"]
+            resources: ["tenantmodules", "tenantsecrets", "options", "taps"]
             verbs: ["get", "list", "watch"]
 
   - it: cozy:tenant:base grants full access on sdn.cozystack.io securitygroups
