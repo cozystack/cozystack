@@ -17,5 +17,14 @@ _cluster:
   scheduling:
     nodeSelector: {}
     tolerations: []
+# The value is the NAMESPACE providing the service, not a boolean: tenant's
+# namespace.yaml sets `$etcd = $tenantName`. A non-empty value is the on side of
+# the nine `{{- if .Values._namespace.<svc> }}` branches, and it renders 15
+# manifests in packages/apps/kubernetes that the off side does not.
 _namespace:
+  etcd: "tenant-test"
+  ingress: "tenant-test"
+  gateway: "tenant-test"
+  monitoring: "tenant-test"
+  seaweedfs: "tenant-test"
   host: "example.org"
