@@ -4,6 +4,14 @@ import type { TenantNamespace } from "@cozystack/types"
 import { SELECTED_TENANT_KEY, TENANT_NAMESPACE_PREFIX } from "./constants.ts"
 import { TenantContext, tenantDisplayName, type TenantContextValue } from "./tenant-context.tsx"
 
+function persistTenant(name: string) {
+  try {
+    window.localStorage.setItem(SELECTED_TENANT_KEY, name)
+  } catch {
+    // ignore storage quota / private-mode failures
+  }
+}
+
 export function TenantProvider({ children }: { children: ReactNode }) {
   const [selectedTenant, setSelectedTenant] = useState<string | null>(() => {
     if (typeof window === "undefined") return null
@@ -36,17 +44,18 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     if (selectedTenant && tenants.some((t) => tenantDisplayName(t) === selectedTenant)) return
     const fallback =
       tenants.find((t) => tenantDisplayName(t) === "root") ?? tenants[0]
+    // Write the override through to storage, not just to state. Whatever the
+    // stored name was, it is one the user cannot see — a revoked grant, or a
+    // `?tenant=` naming someone else's tenant — and leaving it there makes
+    // every later load open on it and correct itself again.
+    persistTenant(tenantDisplayName(fallback))
     // eslint-disable-next-line react-hooks/set-state-in-effect -- falls back to an existing tenant once the list has loaded
     setSelectedTenant(tenantDisplayName(fallback))
   }, [tenants, selectedTenant])
 
   const selectTenant = (name: string) => {
     setSelectedTenant(name)
-    try {
-      window.localStorage.setItem(SELECTED_TENANT_KEY, name)
-    } catch {
-      // ignore storage quota / private-mode failures
-    }
+    persistTenant(name)
   }
 
   const value: TenantContextValue = {
