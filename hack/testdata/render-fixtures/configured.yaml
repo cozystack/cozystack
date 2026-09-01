@@ -1,0 +1,21 @@
+# OIDC on, per-host ACME through http01, services exposed. The other side of the
+# branches fresh.yaml leaves off.
+_cluster:
+  root-host: "example.org"
+  bundle-name: "paas-full"
+  solver: "http01"
+  issuer-name: "letsencrypt-prod"
+  wildcard-secret-name: ""
+  wildcard-issue: "false"
+  oidc-enabled: "true"
+  oidc-insecure-skip-verify: "false"
+  keycloak-internal-url: "https://keycloak.cozy-keycloak.svc.cluster.local"
+  extra-keycloak-redirect-uri-for-dashboard: ""
+  expose-ingress: "tenant-root"
+  expose-services: "tenant-root"
+  cluster-domain: "cluster.local"
+  scheduling:
+    nodeSelector: {}
+    tolerations: []
+_namespace:
+  host: "example.org"
