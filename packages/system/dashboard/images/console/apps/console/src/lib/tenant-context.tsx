@@ -31,6 +31,14 @@ interface TenantContextValue {
 
 const TenantContext = createContext<TenantContextValue | null>(null)
 
+function persistTenant(name: string) {
+  try {
+    window.localStorage.setItem(SELECTED_TENANT_KEY, name)
+  } catch {
+    // ignore storage quota / private-mode failures
+  }
+}
+
 function displayName(ns: TenantNamespace): string {
   const name = ns.metadata.name
   return name.startsWith(TENANT_NAMESPACE_PREFIX)
@@ -70,16 +78,17 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     if (selectedTenant && tenants.some((t) => displayName(t) === selectedTenant)) return
     const fallback =
       tenants.find((t) => displayName(t) === "root") ?? tenants[0]
+    // Write the override through to storage, not just to state. Whatever the
+    // stored name was, it is one the user cannot see — a revoked grant, or a
+    // `?tenant=` naming someone else's tenant — and leaving it there makes
+    // every later load open on it and correct itself again.
+    persistTenant(displayName(fallback))
     setSelectedTenant(displayName(fallback))
   }, [tenants, selectedTenant])
 
   const selectTenant = (name: string) => {
     setSelectedTenant(name)
-    try {
-      window.localStorage.setItem(SELECTED_TENANT_KEY, name)
-    } catch {
-      // ignore storage quota / private-mode failures
-    }
+    persistTenant(name)
   }
 
   const value: TenantContextValue = {

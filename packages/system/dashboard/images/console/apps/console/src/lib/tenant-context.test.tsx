@@ -110,6 +110,21 @@ describe("useTenantFromUrl", () => {
     expect(await screen.findByText("tenant-acme")).toBeInTheDocument()
   })
 
+  // A pasted or shared URL can name a tenant this user cannot see. The
+  // provider already refuses to select it; the point here is that the refusal
+  // reaches storage too, so the next load does not open on it and correct
+  // itself again.
+  it("does not leave an unreachable tenant from the URL in storage", async () => {
+    window.localStorage.setItem(SELECTED_TENANT_KEY, "acme")
+
+    renderAt("/admin/tenants/x?tenant=initech")
+
+    // "acme" is the first tenant in the list and there is no "root" here, so
+    // the fallback lands on it — the assertion is about storage, not the pick.
+    expect(await screen.findByText("tenant-acme")).toBeInTheDocument()
+    expect(window.localStorage.getItem(SELECTED_TENANT_KEY)).toBe("acme")
+  })
+
   it("leaves the stored tenant alone when the URL names none", async () => {
     window.localStorage.setItem(SELECTED_TENANT_KEY, "globex")
 
