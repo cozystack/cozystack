@@ -319,6 +319,26 @@
   description: Indicates a non-member PR is safe to run CI on
 
 # ──────────────────────────────────────────────
+# e2e/ — manual control over the expensive E2E lane
+#
+# The lane runs on an approving review rather than on every push, so these are
+# how it is reached before one exists (a draft, or a change the author wants
+# exercised early). Both were undeclared until now: `full-e2e` has been read by
+# pull-requests.yaml, e2e-fork.yaml and promote-rc.yaml for months and survived
+# only because the sync runs with `delete-other-labels: false`, so a single
+# change to that flag would have deleted a label three workflows depend on.
+# ──────────────────────────────────────────────
+
+- name: e2e/run
+  color: '1d76db'
+  description: Run the E2E suite now, at the scope this diff selects (one-shot; re-apply to run again)
+
+- name: e2e/full
+  color: '0e4b99'
+  description: Run the whole E2E suite, bypassing test-impact selection
+  aliases: ['full-e2e']
+
+# ──────────────────────────────────────────────
 # size/ — PR size (auto-applied by .github/workflows/pr-size.yaml)
 # ──────────────────────────────────────────────
 

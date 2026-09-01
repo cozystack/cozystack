@@ -6,15 +6,29 @@ env:
 on:
   pull_request:
     # `labeled` makes the promote PR's release-candidate verification and manual
-    # full-e2e opt-in actionable after the bot opens it. The plan/resolve guards
+    # e2e/full opt-in actionable after the bot opens it. The plan/resolve guards
     # below discard every other label event before it can launch work.
     types: [opened, synchronize, reopened, labeled]
+  # The expensive lane (`e2e`) runs on approval rather than on every push. A PR
+  # that reaches `main` is approved by definition -- renovate carries
+  # `automerge: false` and the ruleset requires one approving review -- so this
+  # costs no coverage, it only stops paying for the suite 4.5 times per PR
+  # (measured; one renovate branch accumulated 41 runs). `dismiss_stale_reviews`
+  # is on, so a push after approval invalidates it and the next approval earns a
+  # fresh run against the new head.
+  #
+  # Every review submission lands here, including `commented` and
+  # `changes_requested`; `plan` filters to `approved` below. Draft PRs cannot be
+  # approved and so reach the lane through the `e2e/run` label or by being
+  # marked ready.
+  pull_request_review:
+    types: [submitted]
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
 #
 # A `labeled` event that `plan` discards gets its OWN group, so labelling an
 # open PR cannot cancel a live opened/synchronize run. Any label other than
-# full-e2e/release makes `plan` skip, and `e2e-report` skips with it, so without the
+# e2e/full/release makes `plan` skip, and `e2e-report` skips with it, so without the
 # split the pair "cancel the real run, then skip" left the head SHA with no
 # "E2E Tests" status at all — and an unposted required status stays "Expected",
 # blocking the merge until someone pushes again or re-runs the cancelled run.
@@ -24,16 +38,16 @@ on:
 # default GITHUB_TOKEN, which by design triggers no further workflow runs.)
 #
 # The condition is the exact complement of `plan`'s guard, so only a run that
-# will publish NOTHING is moved aside. A `labeled` run carrying full-e2e or
+# will publish NOTHING is moved aside. A `labeled` run carrying e2e/full or
 # release does publish, so it stays in the main group and supersedes the head
 # run the way a push does. That keeps exactly one publisher of the `E2E Tests`
 # context alive per head SHA, which the status depends on: two live publishers are latest-wins
-# per context, and the full suite is the superset, so a full-e2e run that fails
+# per context, and the full suite is the superset, so a e2e/full run that fails
 # early — a build flake, a suite failing at minute twenty — would finish before
 # the narrower head run it was meant to widen, and that run's later green would
 # erase the failure. Cancelling also means opting into the full suite costs one
 # suite rather than two, and a second label landing afterwards cannot cancel the
-# full-e2e run, because it is no longer in the same group as it.
+# e2e/full run, because it is no longer in the same group as it.
 #
 # `release` publishes on the SAME-REPO lane only, hence the fork term. A promote
 # PR is opened same-repo by the release bot, so the label on a fork PR is always
@@ -48,7 +62,7 @@ on:
 # F)) is (NOT A) AND (NOT B) AND (NOT C OR F), and for a same-repo PR F is false
 # and both sides reduce to exactly what they were.
 concurrency:
-  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-e2e' && (github.event.label.name != 'release' || github.event.pull_request.head.repo.fork)) && '-label' || '' }}
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'e2e/full' && github.event.label.name != 'e2e/run' && (github.event.label.name != 'release' || github.event.pull_request.head.repo.fork)) && '-label' || '' }}
   cancel-in-progress: true
 
 # Top-level token defaults to read-only. A job-level block replaces this one
@@ -65,9 +79,16 @@ jobs:
   plan:
     name: Plan build
     runs-on: ubuntu-latest
-    # Exact complement of the concurrency key above; see the reasoning there,
-    # including why `release` is admitted for same-repo PRs only.
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork)
+    # The label half is the exact complement of the concurrency key above; see
+    # the reasoning there, including why `release` is admitted for same-repo PRs
+    # only. Adding a label name here means adding it there too: the comment on
+    # that key records what a disagreement between the two did on live CI.
+    #
+    # The review half has no counterpart in the key, and does not need one. A
+    # review submission is not a `labeled` action, so the key's expression is
+    # already false for it and it lands in the main group, superseding the
+    # in-flight run for that PR the way a push does.
+    if: (github.event_name != 'pull_request_review' || github.event.review.state == 'approved') && (github.event.action != 'labeled' || github.event.label.name == 'e2e/full' || github.event.label.name == 'e2e/run' || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork))
     permissions:
       contents: read
       # For the opening `E2E Tests` status below; e2e-report writes the terminal
@@ -76,6 +97,22 @@ jobs:
     outputs:
       code: ${{ steps.p.outputs.code }}
       trigger_map: ${{ steps.p.outputs.trigger_map }}
+      # Whether this run earns the expensive `e2e` job. True on an approving
+      # review, and on the moment either e2e label is applied.
+      #
+      # Deliberately keyed on the label EVENT rather than on the label being
+      # present in `labels.*.name`, which makes `e2e/run` a one-shot button with
+      # no code: applying it fires `labeled` and this run goes heavy, while the
+      # next push is a `synchronize` that does not look at the label list at all.
+      # Pressing it again means removing and re-applying the label. The
+      # alternative -- reading the list -- would need a step to strip the label
+      # afterwards, and that needs `pull-requests: write`, which a fork's
+      # read-only token does not have.
+      #
+      # `e2e/full` keeps owning SCOPE through `labels.*.name` further down
+      # (`Select E2E tests` and `FULL_E2E`); this output is only about whether
+      # the lane runs at all.
+      heavy: ${{ github.event_name == 'pull_request_review' || (github.event.action == 'labeled' && (github.event.label.name == 'e2e/run' || github.event.label.name == 'e2e/full')) }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
@@ -84,7 +121,7 @@ jobs:
       # the strength of the last one. Commit statuses are latest-wins per (sha,
       # context) and nothing expires them, so a head SHA that already went green
       # keeps reading green while a newly started run works — re-run all jobs, a
-      # full-e2e label, a reopen — and the PR stays mergeable through a suite
+      # e2e/full label, a reopen — and the PR stays mergeable through a suite
       # that may be about to fail. While the gate was a job, GitHub created a
       # fresh non-success check run each time and that window did not exist.
       # Overwriting with `pending` here restores it: the run that owns the
@@ -218,7 +255,7 @@ jobs:
     if: |
       contains(github.event.pull_request.labels.*.name, 'release')
       && github.event.pull_request.user.login == 'cozystack-ci[bot]'
-      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || github.event.label.name == 'release')
+      && (github.event.action != 'labeled' || github.event.label.name == 'e2e/full' || github.event.label.name == 'e2e/run' || github.event.label.name == 'release')
     permissions:
       contents: read
       packages: read
@@ -734,8 +771,8 @@ jobs:
     # In lockstep with `plan`, fork term included: this job is on `e2e`'s
     # release arm, so a label event `plan` runs for and this job skips for
     # leaves `e2e` with both arms false while `e2e-report` still runs. On a
-    # promote PR already carrying full-e2e that reaches the final `else` — the
-    # "e2e not repeated" branch is bypassed by full-e2e — and posts `E2E Tests`
+    # promote PR already carrying e2e/full that reaches the final `else` — the
+    # "e2e not repeated" branch is bypassed by e2e/full — and posts `E2E Tests`
     # = failure over a green one, unclearable without a push because
     # `unlabeled` is not a trigger. The fork term keeps a `release` label on a
     # fork PR as inert as it was before promotion used the label: without it
@@ -744,7 +781,7 @@ jobs:
     # pre-existing behaviour on a push to such a PR is unchanged.
     if: |
       contains(github.event.pull_request.labels.*.name, 'release')
-      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork))
+      && (github.event.action != 'labeled' || github.event.label.name == 'e2e/full' || github.event.label.name == 'e2e/run' || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork))
     outputs:
       disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
@@ -851,26 +888,34 @@ jobs:
       contents: read
       packages: read
       checks: write
-    needs: ["finalize", "build-talos", "resolve_assets", "verify-release-candidate"]
+    # `plan` is already a transitive dependency through `finalize`; it is named
+    # here so `needs.plan.outputs.heavy` is readable.
+    needs: ["plan", "finalize", "build-talos", "resolve_assets", "verify-release-candidate"]
     # Regular PRs still enter through finalize. A release-labelled promote PR
     # enters through resolve_assets only when a maintainer explicitly adds
-    # full-e2e; without that label the immutable rc's already-green suite is not
+    # e2e/full; without that label the immutable rc's already-green suite is not
     # repeated. The labeled trigger above makes that post-open opt-in start a run.
     #
     # Fork PRs never enter here: their build exports OCI archives instead of
     # pushing images, so there is no closure for this job to test. e2e-fork.yaml
     # runs the suite for them from the privileged workflow_run and concludes the
     # required "E2E Tests" status; for same-repo PRs e2e-report concludes it.
+    #
+    # `heavy` is what moves this lane off "every push". Everything ahead of it
+    # -- build matrix, talos, finalize -- still runs on a push, so a broken build
+    # is still reported in minutes; what waits for an approval or the `e2e/run`
+    # label is the suite itself, which is 176 of the ~180 minutes.
     if: |
       !cancelled()
       && !github.event.pull_request.head.repo.fork
+      && needs.plan.outputs.heavy == 'true'
       && (
         needs.finalize.result == 'success'
         || (
           needs.resolve_assets.result == 'success'
           && needs.verify-release-candidate.result == 'success'
           && contains(github.event.pull_request.labels.*.name, 'release')
-          && contains(github.event.pull_request.labels.*.name, 'full-e2e')
+          && contains(github.event.pull_request.labels.*.name, 'e2e/full')
         )
       )
 
@@ -965,7 +1010,7 @@ jobs:
 
       # Test Impact Analysis (TIA): walk the PackageSource graph for the PR
       # diff and select only the Chainsaw suites affected. Runs by default; opt
-      # out via the `full-e2e` label to run the full suite.
+      # out via the `e2e/full` label to run the full suite.
       #
       # `skip=true` means every changed path was matched by one of select-e2e.sh's
       # rules that select nothing — docs and dashboards, a disabled Chainsaw
@@ -980,7 +1025,7 @@ jobs:
       # sees it.
       - name: Select E2E tests
         id: select
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'e2e/full') }}
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
@@ -1001,7 +1046,7 @@ jobs:
       # ▸ Run E2E tests (Chainsaw, scoped by Test Impact Analysis)
       #
       #   The "Select E2E tests" step above picks the suites impacted by the PR
-      #   diff. With the `full-e2e` label that step is skipped, so FULL_E2E is
+      #   diff. With the `e2e/full` label that step is skipped, so FULL_E2E is
       #   the only way to reach this step with no selection and we run the whole
       #   suite; an all-inert selection skips this step entirely (the
       #   skip != 'true' guard).
@@ -1015,9 +1060,9 @@ jobs:
         if: ${{ steps.select.outputs.skip != 'true' }}
         env:
           SELECTED_APPS: ${{ steps.select.outputs.apps }}
-          FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
+          FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'e2e/full') }}
         run: |
-          # Only the full-e2e label can get here with an empty selection: when
+          # Only the e2e/full label can get here with an empty selection: when
           # `select` runs, an empty result sets skip=true and this step never
           # starts. Testing FULL_E2E alone keeps that invariant visible.
           if [ "$FULL_E2E" = "true" ]; then
@@ -1241,7 +1286,7 @@ jobs:
   # see docs/agents/e2e-testing.md §10.
   #
   # The `labeled` guard must stay in lockstep with `plan`'s: this job runs if and
-  # only if `plan` runs. `labeled` events other than full-e2e/release are
+  # only if `plan` runs. `labeled` events other than e2e/full/release are
   # discarded there, so without the same guard this job would run with plan *skipped*, read
   # PLAN_RESULT != 'success', and post "E2E Tests" = failure — clobbering an
   # already-green required status every time anyone labels an open PR.
@@ -1255,12 +1300,12 @@ jobs:
     # deliberately posts nothing, leaving nothing to flip it back. A cancelled
     # run must report nothing.
     #
-    # Cancellation still reaches this job from a push, from a `full-e2e` label
+    # Cancellation still reaches this job from a push, from a `e2e/full` label
     # run superseding the head run, and from a manual cancel. It no longer
     # reaches it from a label the workflow discards: those run in their own
     # concurrency group (see the key at the top of this file) precisely so they
     # cannot cancel a live run.
-    if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || github.event.label.name == 'release') }}
+    if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || github.event.label.name == 'e2e/full' || github.event.label.name == 'e2e/run' || github.event.label.name == 'release') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1273,14 +1318,15 @@ jobs:
           CODE: ${{ needs.plan.outputs.code }}
           E2E_RESULT: ${{ needs.e2e.result }}
           E2E_SOFT_RED: ${{ needs.e2e.outputs.soft_red }}
+          HEAVY: ${{ needs.plan.outputs.heavy }}
           CANDIDATE_RESULT: ${{ needs.verify-release-candidate.result }}
           IS_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'release') }}
-          IS_FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
+          IS_FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'e2e/full') }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const { PLAN_RESULT, CODE, E2E_RESULT, E2E_SOFT_RED, CANDIDATE_RESULT, IS_RELEASE, IS_FULL_E2E, HEAD_SHA, RUN_URL } = process.env;
+            const { PLAN_RESULT, CODE, E2E_RESULT, E2E_SOFT_RED, CANDIDATE_RESULT, IS_RELEASE, IS_FULL_E2E, HEAVY, HEAD_SHA, RUN_URL } = process.env;
             let state, description;
             if (PLAN_RESULT !== 'success') {
               state = 'failure';
@@ -1300,7 +1346,25 @@ jobs:
               // the skip has to be reported explicitly or every promotion needs a
               // full suite re-run or an admin override.
               state = 'success';
-              description = 'release promotion — verified at rc, e2e not repeated (add full-e2e to force a run)';
+              description = 'release promotion — verified at rc, e2e not repeated (add e2e/full to force a run)';
+            } else if (HEAVY !== 'true') {
+              // The expensive lane has not been earned on this head yet: no
+              // approving review, and neither e2e label applied. Leave the
+              // `pending` the opener in `plan` wrote and post nothing.
+              //
+              // Deliberately not `failure`. Fail-closed would also block the
+              // merge, and the final branch below would in fact produce one
+              // ("in-tree e2e did not pass (result: skipped)") -- but that reads
+              // as a broken suite rather than as a lane waiting for a review,
+              // and a red cross nobody can explain is how a gate stops being
+              // read at all.
+              //
+              // Deliberately not merged with the docs-only branch above either.
+              // Both mean "e2e did not run" and their outcomes are opposites:
+              // docs-only is `success` so the pull request can merge, this is
+              // `pending` so it cannot.
+              core.info('E2E Tests left pending: the suite runs on approval, or on the e2e/run label');
+              return;
             } else if (E2E_RESULT === 'success' && E2E_SOFT_RED === 'true') {
               // The suite did NOT pass: the tenant node-join deadline expired and
               // the lane decided not to block on it. `success` is the decision;
