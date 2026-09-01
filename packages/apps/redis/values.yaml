@@ -93,7 +93,7 @@ version: v8
 
 ## @typedef {struct} TLS - TLS configuration.
 ## @field {*bool} [enabled] - Enable TLS for Redis and Sentinel connections. Disabled unless set. Enabling it moves Redis and Sentinel to a TLS-only listener, so existing plaintext clients must be migrated at the same time. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.
-## @field {AuthClients} [authClients] - Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated. `yes` requires a client certificate signed by this release's CA, which the platform does not issue.
+## @field {AuthClients} [authClients] - Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated. `yes` requires a client certificate signed by this release's CA, which the platform does not issue. Changing it restarts the Redis and Sentinel pods, because the directive is read from the config file once at startup.
 
 ## @param {TLS} [tls] - TLS configuration. TLS is opt-in and is not inferred from `external`.
 # Stays empty on purpose. Spelling out `authClients: "no"` here would make the

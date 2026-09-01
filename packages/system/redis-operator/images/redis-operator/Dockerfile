@@ -9,6 +9,11 @@ WORKDIR /workspace
 
 RUN curl -sSL https://github.com/freshworks-oss/redis-operator/archive/refs/tags/${VERSION}.tar.gz | tar -xzvf- --strip=1
 
+# The carried TLS patch is source only: its CRD half ships as the chart
+# patch, so the tarball's CRD and chart copies stay at v3.3.5 and the tests
+# that read them would fail instead of skipping.
+RUN rm -rf manifests charts example .github
+
 COPY patches /patches
 RUN git apply /patches/*.diff
 

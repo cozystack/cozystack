@@ -15319,7 +15319,188 @@ spec:
                       type: object
                     type: array
                 type: object
+              tls:
+                description: |-
+                  TLSSettings configures TLS for the Redis failover cluster.
+                  When Enabled is true, exactly one of CertManager or CertificateSecret must
+                  be set. The resulting Kubernetes Secret must contain the standard cert-manager
+                  keys (tls.crt, tls.key, ca.crt) and is mounted read-only into both Redis and
+                  Sentinel pods at /tls.
+
+                  TLS is chosen when the RedisFailover is created and cannot be turned on or
+                  off afterwards. Redis replication and Sentinel cannot straddle two wire
+                  protocols: a replica restarted onto the other protocol cannot sync from the
+                  master, and Sentinels restarted onto it declare the master down and fail
+                  over to such a replica while the master still serves writes. The other
+                  fields stay mutable; a renewed certificate reaches the pods through a
+                  restart.
+                properties:
+                  authClients:
+                    description: |-
+                      AuthClients maps to the Redis tls-auth-clients directive.
+                      One of "no", "optional", "yes". Defaults to "no" — server certificate
+                      is presented but client certificates are not validated.
+                      Changing it rolls the Redis and Sentinel pods, because the directive
+                      is read from the config file once at startup.
+                    enum:
+                    - "no"
+                    - optional
+                    - "yes"
+                    type: string
+                  caCertSecretName:
+                    description: |-
+                      CACertSecretName names the Opaque Secret the operator publishes with
+                      only the CA certificate (ca.crt) extracted from the TLS material. It
+                      never contains tls.key, so RBAC can be scoped to it to let clients
+                      verify the server without exposing any private key. When TLS is
+                      enabled the operator always publishes this Secret; this field only
+                      overrides its name. Defaults to "<tls-secret-name>-ca" when empty.
+                    type: string
+                  certManager:
+                    description: |-
+                      CertManager provisions the server certificate by creating a
+                      cert-manager Certificate that references the given Issuer.
+                      Mutually exclusive with CertificateSecret.
+                    properties:
+                      duration:
+                        description: |-
+                          Duration is the requested certificate validity. Optional;
+                          cert-manager uses its own default (typically 90 days) when unset.
+                        type: string
+                      extraSANs:
+                        description: |-
+                          ExtraSANs is a list of additional Subject Alternative Names to add
+                          to the generated certificate. Entries are auto-classified: values
+                          that parse as IPv4 or IPv6 addresses become IP SANs, everything
+                          else becomes a DNS SAN. Extras are appended to — never replace —
+                          the service and per-pod SANs the operator computes, so in-cluster
+                          connectivity is preserved when extras are added.
+                        items:
+                          type: string
+                        type: array
+                      issuerRef:
+                        description: |-
+                          IssuerRef points at an Issuer or ClusterIssuer. The Name field is
+                          required. Kind defaults to "Issuer" and Group defaults to
+                          "cert-manager.io" when empty.
+                        properties:
+                          group:
+                            description: Group of the resource being referred to.
+                            type: string
+                          kind:
+                            description: Kind of the resource being referred to.
+                            type: string
+                          name:
+                            description: Name of the resource being referred to.
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      privateKey:
+                        description: |-
+                          PrivateKey configures the private key algorithm, size and rotation
+                          policy. Optional; cert-manager uses RSA 2048 with rotation policy
+                          "Never" when unset.
+                        properties:
+                          algorithm:
+                            description: |-
+                              Algorithm is the private key algorithm of the corresponding private key
+                              for this certificate.
+
+                              If provided, allowed values are either `RSA`, `ECDSA` or `Ed25519`.
+                              If `algorithm` is specified and `size` is not provided,
+                              key size of 2048 will be used for `RSA` key algorithm and
+                              key size of 256 will be used for `ECDSA` key algorithm.
+                              key size is ignored when using the `Ed25519` key algorithm.
+                            enum:
+                            - RSA
+                            - ECDSA
+                            - Ed25519
+                            type: string
+                          encoding:
+                            description: |-
+                              The private key cryptography standards (PKCS) encoding for this
+                              certificate's private key to be encoded in.
+
+                              If provided, allowed values are `PKCS1` and `PKCS8` standing for PKCS#1
+                              and PKCS#8, respectively.
+                              Defaults to `PKCS1` if not specified.
+                            enum:
+                            - PKCS1
+                            - PKCS8
+                            type: string
+                          rotationPolicy:
+                            description: |-
+                              RotationPolicy controls how private keys should be regenerated when a
+                              re-issuance is being processed.
+
+                              If set to `Never`, a private key will only be generated if one does not
+                              already exist in the target `spec.secretName`. If one does exist but it
+                              does not have the correct algorithm or size, a warning will be raised
+                              to await user intervention.
+                              If set to `Always`, a private key matching the specified requirements
+                              will be generated whenever a re-issuance occurs.
+                              Default is `Always`.
+                              The default was changed from `Never` to `Always` in cert-manager >=v1.18.0.
+                              The new default can be disabled by setting the
+                              `--feature-gates=DefaultPrivateKeyRotationPolicyAlways=false` option on
+                              the controller component.
+                            enum:
+                            - Never
+                            - Always
+                            type: string
+                          size:
+                            description: |-
+                              Size is the key bit size of the corresponding private key for this certificate.
+
+                              If `algorithm` is set to `RSA`, valid values are `2048`, `4096` or `8192`,
+                              and will default to `2048` if not specified.
+                              If `algorithm` is set to `ECDSA`, valid values are `256`, `384` or `521`,
+                              and will default to `256` if not specified.
+                              If `algorithm` is set to `Ed25519`, Size is ignored.
+                              No other values are allowed.
+                            type: integer
+                        type: object
+                      renewBefore:
+                        description: |-
+                          RenewBefore is how long before expiry cert-manager should renew.
+                          Optional; cert-manager uses its own default (typically 2/3 of
+                          Duration) when unset.
+                        type: string
+                      secretName:
+                        description: |-
+                          SecretName overrides the default Secret name (rftls-<rfname>) into
+                          which cert-manager writes the issued certificate.
+                        type: string
+                    required:
+                    - issuerRef
+                    type: object
+                  certificateSecret:
+                    description: |-
+                      CertificateSecret uses an existing Secret managed outside the operator.
+                      Mutually exclusive with CertManager.
+                    properties:
+                      secretName:
+                        description: |-
+                          SecretName is the name of the Secret that contains the TLS material
+                          (tls.crt, tls.key, ca.crt).
+                        type: string
+                    required:
+                    - secretName
+                    type: object
+                  enabled:
+                    description: |-
+                      Enabled toggles TLS. Immutable after creation, together with the
+                      presence of this block: a missing block and Enabled=false are the same
+                      state. Leaving Enabled=false is the default.
+                    type: boolean
+                type: object
             type: object
+            x-kubernetes-validations:
+            - message: TLS cannot be enabled or disabled on an existing RedisFailover;
+                create a new one
+              rule: (has(self.tls) && has(self.tls.enabled) && self.tls.enabled) ==
+                (has(oldSelf.tls) && has(oldSelf.tls.enabled) && oldSelf.tls.enabled)
         required:
         - spec
         type: object
