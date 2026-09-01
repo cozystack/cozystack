@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -113,6 +114,7 @@ type inventoryClient struct {
 	// TokenFile overrides the projected token path in tests.
 	TokenFile string
 
+	mu   sync.Mutex
 	http *http.Client
 }
 
@@ -205,7 +207,17 @@ func (c *inventoryClient) VM(ctx context.Context, providerUID, vmID string) (*in
 
 // client builds the HTTPS client, trusting the CA that signed the inventory's
 // serving certificate. Built once and reused.
+//
+// Guarded because one client is shared by both reconcilers, which run on
+// separate goroutines: an unsynchronized check-then-assign races on the first
+// call, leaking the loser's client and failing under -race. A mutex rather than
+// sync.Once deliberately — construction reads a Secret and can fail while
+// Forklift is still coming up, and Once would latch that failure forever, where
+// this simply builds again on the next call.
 func (c *inventoryClient) client(ctx context.Context) (*http.Client, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.http != nil {
 		return c.http, nil
 	}
