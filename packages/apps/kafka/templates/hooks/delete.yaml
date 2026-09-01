@@ -51,12 +51,25 @@ spec:
             - |
               set -eu
               echo "Deleting KafkaTopics for {{ .Release.Name }} before the topic-operator is removed"
-              kubectl -n {{ .Release.Namespace }} delete kafkatopics.kafka.strimzi.io \
-                -l 'strimzi.io/cluster={{ .Release.Name }}' \
-                --ignore-not-found=true \
-                --wait=true \
-                --timeout=180s \
-                --request-timeout=20s
+              if ! out=$(kubectl -n {{ .Release.Namespace }} delete kafkatopics.kafka.strimzi.io \
+                    -l 'strimzi.io/cluster={{ .Release.Name }}' \
+                    --ignore-not-found=true \
+                    --wait=true \
+                    --timeout=180s \
+                    --request-timeout=20s 2>&1); then
+                printf '%s\n' "${out}"
+                case "${out}" in
+                  *"the server doesn't have a resource type"*|*"no matches for kind"*)
+                    echo "KafkaTopic CRD absent; nothing to delete" ;;
+                  *"timed out waiting for the condition"*)
+                    echo "WARNING: topics still hold the strimzi.io/topic-operator finalizer after 180s." >&2
+                    echo "WARNING: leaving them behind so the uninstall can finish; clear the finalizer by hand." >&2 ;;
+                  *)
+                    echo "ERROR: deleting KafkaTopics failed: ${out}" >&2; exit 1 ;;
+                esac
+              else
+                printf '%s\n' "${out}"
+              fi
           volumeMounts:
             - name: tmp
               mountPath: /tmp

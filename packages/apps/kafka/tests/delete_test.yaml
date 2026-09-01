@@ -1,7 +1,7 @@
 suite: Kafka pre-delete cleanup
 
 templates:
-  - templates/delete.yaml
+  - templates/hooks/delete.yaml
 
 release:
   name: kafka-test
