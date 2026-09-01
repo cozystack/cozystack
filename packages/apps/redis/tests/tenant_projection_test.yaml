@@ -1,0 +1,113 @@
+suite: redis TenantProjection sentinel
+
+# The chart renders one TenantProjection per TLS-enabled release: the declaration
+# that tells the CA-extraction controller to lift ca.crt out of the key-bearing
+# <release>.ca-tls into the tenant-readable <release>.tenant-ca projection.
+#
+# The load-bearing invariant is the ABSENCE of ownerReferences. The sentinel must
+# carry none — it owns the projection, and it is itself owned only through the
+# helm.toolkit.fluxcd.io/name label Flux stamps, which is how the lineage webhook
+# resolves the application. An ownerReference here would short-circuit that walk
+# and silently break the tenant's read path (pkg/lineage/lineage.go).
+
+release:
+  name: my-redis
+  namespace: tenant-test
+
+templates:
+  - templates/tenant-projection.yaml
+
+tests:
+  - it: renders nothing when TLS is off
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The gate is on tls.enabled alone. TLS is not inferred from external access,
+  # so an externally exposed plaintext release must still render no sentinel —
+  # a gate copied from an engine that does derive TLS from `external` would
+  # render one here and leave the controller waiting on a Secret that never
+  # appears.
+  - it: renders nothing when external access is on but TLS is off
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders exactly one TenantProjection named after the release
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: TenantProjection
+      - equal:
+          path: apiVersion
+          value: internal.cozystack.io/v1alpha1
+      - equal:
+          path: metadata.name
+          value: my-redis-ca
+
+  # The source is the chart's cert-manager CA Secret, not the CA-only Secret the
+  # operator publishes at spec.tls.caCertSecretName. This name is only correct
+  # because certmanager.yaml writes the CA Certificate to it; the other half is
+  # pinned in tls_test.yaml, and renaming one without the other leaves the
+  # projection permanently not-ready on a source that does not exist.
+  - it: declares a CACert projection of the chart's cert-manager CA Secret
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.projections[0].type
+          value: CACert
+      - equal:
+          path: spec.projections[0].sourceSecretName
+          value: my-redis.ca-tls
+      - equal:
+          path: spec.projections[0].sourceKey
+          value: ca.crt
+
+  # THE invariant, and the only one here that breaks something. The controller
+  # resolves the owning application by walking to the sentinel's
+  # helm.toolkit.fluxcd.io/name label; an ownerReference short-circuits that
+  # walk, and the tenant silently stops receiving the anchor.
+  - it: carries no ownerReferences, so the lineage walk reaches the release
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notExists:
+          path: metadata.ownerReferences
+
+  # Conformance to the shape Flux and the controller expect, not an invariant:
+  # an explicit namespace or a chart-added label does not break the walk by
+  # itself. Kept separate so the test above keeps its meaning — a single test
+  # named for three unrelated properties reads as though all three were
+  # load-bearing.
+  - it: sets no namespace and adds no labels of its own
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notExists:
+          path: metadata.namespace
+      - notExists:
+          path: metadata.labels
+
+  - it: renders both names from the release, not a fixed string
+    release:
+      name: other-redis
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: other-redis-ca
+      - equal:
+          path: spec.projections[0].sourceSecretName
+          value: other-redis.ca-tls
