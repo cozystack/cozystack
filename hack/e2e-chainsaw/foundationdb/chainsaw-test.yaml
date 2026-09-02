@@ -63,7 +63,6 @@ spec:
             health:
               available: true
               fullReplication: true
-              healthy: true
     # volumeClaimTemplate size is pinned on the CR spec.
     - assert:
         resource:
@@ -128,6 +127,54 @@ spec:
           done
         check:
           ($error == null): true
+
+  - name: refresh-and-assert-full-health
+    try:
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          cl=foundationdb-test
+          pod=$(kubectl -n "$ns" get pods \
+            -l "foundationdb.org/fdb-cluster-name=$cl,foundationdb.org/fdb-process-class=storage" \
+            -o jsonpath='{.items[0].metadata.name}')
+          status_json() {
+            timeout -k 5 20 kubectl -n "$ns" exec "$pod" -c foundationdb -- \
+              fdbcli -C /var/fdb/data/fdb.cluster --exec 'status json' 2>/dev/null
+          }
+          database_healthy() {
+            status_json | jq -e '.client.database_status.healthy == true' >/dev/null
+          }
+          # The v2.30 operator can finish its initial reconciliation from a
+          # transient status_incomplete response, then never requeue solely to
+          # refresh health. Wait on the authoritative machine-readable status
+          # before asking the operator for exactly one fresh read.
+          deadline=$(( $(date +%s) + 270 ))
+          until database_healthy; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "FoundationDB machine status did not become fully healthy" >&2
+              status_json | jq '{databaseStatus: .client.database_status, messages: .cluster.messages}' >&2 || true
+              exit 1
+            fi
+            # TODO(e2e-replace-fixed-timeouts): fdbcli health has no watchable
+            # Kubernetes object; replace this poll when the operator exposes one.
+            sleep 5
+          done
+          kubectl -n "$ns" annotate foundationdbclusters.apps.foundationdb.org "$cl" \
+            "e2e.cozystack.io/health-refresh=$(date +%s)" --overwrite >/dev/null
+        check:
+          ($error == null): true
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: apps.foundationdb.org/v1beta2
+          kind: FoundationDBCluster
+          metadata:
+            name: foundationdb-test
+          status:
+            health:
+              healthy: true
 
   - name: verify-monitoring-and-storage
     try:

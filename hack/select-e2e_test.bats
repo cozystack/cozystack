@@ -194,7 +194,7 @@ assert_full_suite() {
     [ -z "$output" ]
 }
 
-@test "kubernetes-application maps to the four kubernetes suites" {
+@test "kubernetes-application maps to the two kubernetes suites" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -202,10 +202,8 @@ assert_full_suite() {
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     echo "$output" | grep -q "kubernetes-latest"
     echo "$output" | grep -q "kubernetes-previous"
-    # The OIDC render-side suites exercise the same kubernetes app chart, so a
-    # chart-only change must select them too.
-    echo "$output" | grep -q "kubernetes-oidc-system"
-    echo "$output" | grep -q "kubernetes-oidc-customconfig"
+    # OIDC System -> CustomConfig lifecycle coverage is folded into latest.
+    ! echo "$output" | grep -q "kubernetes-oidc-"
 }
 
 @test "dashboards-only diff selects nothing (path is plural)" {

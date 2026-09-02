@@ -54,6 +54,10 @@ wait_for_field bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_NAME}" \
     '{.status.bucketReady}' true "$NAMESPACE" 300
 wait_for_field bucketaccesses.objectstorage.k8s.io "bucket-${BUCKET_NAME}-${BUCKET_USER}" \
     '{.status.accessGranted}' true "$NAMESPACE" 300
+if [[ "${COZY_E2E_BACKUP_PREFLIGHT:-0}" == "1" ]]; then
+    source "$SCRIPT_DIR/../../../hack/e2e-chainsaw/_lib/backup-access-preflight.sh"
+    cozy_backup_access_preflight "$NAMESPACE" "bucket-${BUCKET_NAME}-${BUCKET_USER}" 90
+fi
 
 log_substep "Reading bucket coordinates from BucketInfo Secret..."
 TMP=$(mktemp)

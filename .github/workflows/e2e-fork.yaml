@@ -540,17 +540,12 @@ jobs:
     name: E2E (fork run)
     needs: [resolve, publish]
     if: ${{ needs.resolve.outputs.should_run == 'true' }}
-    # What the gate decided, promoted to a job output because the job's RESULT
-    # can no longer answer it: a red the lane tolerated finishes `success`, so
-    # the status this lane reports would otherwise call that run a pass.
-    outputs:
-      soft_red: ${{ steps.e2e_tests.outputs.soft_red }}
+    # Talos nodes as containers, the same substrate pull-requests.yaml uses; the
+    # per-node 8 CPU / 24 GiB in hack/e2e-compose.yaml is why the class is this
+    # one. See the `e2e` job there for the full sizing note.
     runs-on: oracle-vm-32cpu-128gb-x86-64
     # Sized above what the tenant-Kubernetes pair can spend on a failing run, and
-    # held to one figure across every lane that runs the suite. That bound, the
-    # measured run the rest of the margin comes from, and what neither of them
-    # covers are all in hack/node-join-soft-red_test.bats rather than restated
-    # here in four workflows that would then drift apart.
+    # held to one figure across every lane that runs the suite.
     timeout-minutes: 215
     permissions:
       contents: read
@@ -582,13 +577,6 @@ jobs:
       - name: Set up toolchain (yq)
         run: |
           command -v yq >/dev/null || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
-      - name: Download Talos image
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: talos-image
-          path: _out/assets
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ needs.resolve.outputs.run_id }}
       - name: Download pr.patch
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -606,15 +594,50 @@ jobs:
         run: |
           yq -i ".cozystackOperator.platformSourceUrl = \"oci://${REGISTRY}/cozystack-packages\"" packages/core/installer/values.yaml
           yq -i ".cozystackOperator.platformSourceRef = \"digest=${PACKAGES_DIGEST}\"" packages/core/installer/values.yaml
+      # Mandatory, and up front: the nodes take their kernel from this host and
+      # Talos cannot load modules in container mode, so a module missing here is
+      # missing for the whole run and surfaces later as a CNI or storage failure.
+      # See the same step in pull-requests.yaml for the full rationale.
+      - name: Prepare container-lane host
+        run: |
+          set -eu
+          for m in openvswitch zfs; do
+            if grep -q "^${m} " /proc/modules; then
+              echo "${m}: already loaded"
+              continue
+            fi
+            if [ "${m}" = zfs ]; then
+              sudo apt-get update -qq
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zfsutils-linux
+            fi
+            sudo modprobe "${m}" || echo "${m}: modprobe failed"
+          done
+          missing=''
+          for m in openvswitch zfs; do
+            grep -q "^${m} " /proc/modules || missing="${missing} ${m}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error title=container-lane host::kernel module(s) could not be loaded:${missing}"
+            echo "This is a host problem, not a product failure: openvswitch backs the" >&2
+            echo "kube-ovn dataplane and zfs backs every LINSTOR pool, and container-mode" >&2
+            echo "Talos cannot load either one itself." >&2
+            exit 1
+          fi
+          grep -E '^(openvswitch|zfs) ' /proc/modules
       - name: Prepare environment
         run: |
           attempt=0
-          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env-container; do
             attempt=$((attempt + 1))
             if [ $attempt -ge 3 ]; then echo "Attempt $attempt failed, exiting..."; exit 1; fi
             echo "Attempt $attempt failed, retrying..."
+            make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || true
           done
       - name: Install Cozystack into sandbox
+        env:
+          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          COZY_LINSTOR_DRBD_ENABLED: "false"
+          COZY_E2E_STORAGE_CLASS: local
         run: |
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
             echo "❌ Install failed (no retry — diagnostics below)"
@@ -674,6 +697,10 @@ jobs:
         id: e2e_tests
         if: ${{ steps.select.outputs.skip != 'true' }}
         env:
+          # Must match the install step above: installing on `local` while
+          # templating the Chainsaw fixtures with `replicated` fails deep inside
+          # a suite instead of at the mismatch.
+          COZY_E2E_STORAGE_CLASS: local
           SELECTED_APPS: ${{ steps.select.outputs.apps }}
           FULL_E2E: ${{ needs.resolve.outputs.full_e2e }}
         run: |
@@ -699,19 +726,6 @@ jobs:
               kubectl get bucketaccesses.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,CLAIM:.spec.bucketClaimName" 2>&1
             ' || true
             echo "::endgroup::"
-            # One failure the lane does not block on, and only one: the tenant
-            # node-join deadline. The test itself stays red -- Chainsaw ran its
-            # whole catch above and the report records the failure -- and this
-            # decides only whether the job does. It blocks on anything it cannot
-            # attribute to that deadline, including a report it could not read.
-            if hack/e2e-node-join-soft-red.sh "$SANDBOX_NAME"; then
-              # Recorded because this exit makes the job succeed, and the status
-              # this lane reports back to the pull request is derived from that
-              # result: without this the required check would say the suite
-              # passed on a run where it failed.
-              echo "soft_red=true" >>"$GITHUB_OUTPUT"
-              exit 0
-            fi
             exit 1
           fi
           echo "✅ All selected E2E tests passed"
@@ -739,9 +753,15 @@ jobs:
           name: cozyreport
           path: _out/cozyreport.tgz
           if-no-files-found: warn
+      # Both halves, and in this order: the compose project owns the nodes and
+      # the zpools outlive it.
       - name: Tear down sandbox
         if: always()
-        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+        run: |
+          cleanup_rc=0
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+          exit "$cleanup_rc"
 
   # Flip the pending "E2E Tests" commit status posted by `resolve` to its
   # terminal state. Runs on failure too, so a failed publish or e2e turns the
@@ -769,22 +789,14 @@ jobs:
         env:
           PUBLISH_RESULT: ${{ needs.publish.result }}
           E2E_RESULT:     ${{ needs.e2e.result }}
-          E2E_SOFT_RED:   ${{ needs.e2e.outputs.soft_red }}
           HEAD_SHA:       ${{ needs.resolve.outputs.head_sha }}
           RUN_URL:        ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const { PUBLISH_RESULT, E2E_RESULT, E2E_SOFT_RED, HEAD_SHA, RUN_URL } = process.env;
+            const { PUBLISH_RESULT, E2E_RESULT, HEAD_SHA, RUN_URL } = process.env;
             const { owner, repo } = context.repo;
             let state, description;
-            if (E2E_RESULT === 'success' && E2E_SOFT_RED === 'true') {
-              // The suite did NOT pass: the tenant node-join deadline expired and
-              // the lane decided not to block on it. `success` is the decision;
-              // this text is the only place a reader standing in front of the
-              // merge button learns what it was a decision about.
-              state = 'success';
-              description = 'fork e2e soft: node-join deadline missed, suite failed, merge not blocked';
-            } else if (E2E_RESULT === 'success') {
+            if (E2E_RESULT === 'success') {
               state = 'success';
               description = 'fork e2e passed (privileged run)';
             } else if (PUBLISH_RESULT !== 'success') {
