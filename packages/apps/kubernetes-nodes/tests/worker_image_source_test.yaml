@@ -293,6 +293,21 @@ tests:
           value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
+  # The mirror of the case below, from the pool side: an empty POOL class with no
+  # default class to resolve it against stays unresolvable, so the comparison is
+  # skipped rather than guessed. Without this case the $workerSC presence term can
+  # be deleted and the suite stays green.
+  - it: osImage.builtin clones when an empty pool storageClass cannot be resolved
+    set:
+      storageClass: ""
+      osImage:
+        builtin: {}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
   # A golden with no storageClassName means "the cluster default". With no default
   # class to resolve it against, the comparison stays unresolvable and the guard
   # skips rather than guessing a mismatch.

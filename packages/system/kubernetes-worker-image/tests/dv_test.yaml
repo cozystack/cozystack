@@ -222,6 +222,36 @@ tests:
       - failedTemplate:
           errorPattern: 'source URL "https://factory\.talos\.dev/image/aaa/v1\.13\.6/openstack-amd64\.raw\.xz" -> "https://factory\.internal\.example\.com/image/aaa/v1\.13\.6/openstack-amd64\.raw\.xz"'
 
+  # Each drift comparison is gated on the live value being present, and the gate
+  # is load-bearing rather than defensive: a golden whose spec carries no http
+  # source, no storage request or no class -- one created by hand, or by a CDI
+  # that keeps its source elsewhere -- would otherwise compare "" against the
+  # rendered value, report drift that did not happen, and block every upgrade of
+  # the catalog from then on. Found by mutating each conjunct out and seeing the
+  # suite stay green.
+  - it: reports no drift against a live golden that declares none of the three fields
+    set:
+      images:
+        - schematicID: aaa
+          version: v1.13.6
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: talos-worker-aaa-v1.13.6, namespace: cozy-public}
+          status: {phase: Succeeded}
+    asserts:
+      - equal:
+          path: metadata.name
+          value: talos-worker-aaa-v1.13.6
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 6Gi
+
   # The guard must not fire on an unchanged entry, or every routine upgrade of the
   # catalog fails once its golden exists.
   - it: renders an unchanged entry whose golden already exists

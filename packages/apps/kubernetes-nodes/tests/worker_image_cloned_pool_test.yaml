@@ -100,6 +100,25 @@ kubernetesProvider:
           resources: {requests: {storage: 6Gi}}
           storageClassName: replicated
       status: {phase: Failed}
+    # md0's own disk against a golden that failed only later. This is the case the
+    # gate exists for: the pool is whole, needs nothing from the source, and its
+    # release must not abort on the next reconcile.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: disk-system-kubernetes-myk8s-md0-klmno
+        namespace: tenant-test
+        annotations:
+          kubernetes-worker-image.cozystack.io/golden: talos-worker-brokelater-v1.0.0
+      status: {phase: Succeeded}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-brokelater-v1.0.0, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status: {phase: Failed}
     - kind: DataVolume
       apiVersion: cdi.kubevirt.io/v1beta1
       metadata: {name: talos-worker-pending-v1.0.0, namespace: cozy-public}
@@ -145,3 +164,18 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'golden DataVolume "talos-worker-pending-v1\.0\.0" in cozy-public failed to import'
+
+  # The Failed guard's own gate, which nothing above reaches: the golden is
+  # Failed AND this pool already cloned it, so the render proceeds. Without this
+  # case the (not $poolCloned) conjunct can be deleted and the suite stays green.
+  - it: renders when the golden went Failed after this pool had already cloned it
+    set:
+      osImage:
+        builtin:
+          schematicID: brokelater
+          version: v1.0.0
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-brokelater-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
