@@ -162,3 +162,47 @@ PARENT_VALUES="$REPO_ROOT/packages/apps/kubernetes/values.yaml"
     fi
   done
 }
+
+# -----------------------------------------------------------------------------
+# Fourth guard: the e2e suites must actually take the clone path.
+#
+# Enabling the catalog in the sandbox buys nothing unless the worker pool asks for
+# it. If the `image` block is dropped from the KubernetesNodes heredoc, or lands at
+# the wrong indent, the pool falls back to the HTTP import and every suite still
+# passes -- the catalog imports its golden, nobody clones it, and the path this
+# feature exists for ships with unit coverage alone. That silent-fallback shape is
+# the one this branch already had to fix once, in the block that carried the
+# registry mirror, so it gets a guard rather than a comment.
+
+RUN_KUBERNETES_LIB="$REPO_ROOT/hack/e2e-chainsaw/_lib/run-kubernetes.sh"
+
+@test "the e2e worker pool boots from the golden image rather than an HTTP import" {
+  # Read the KubernetesNodes heredoc rather than the whole file: `image:` appears
+  # in prose and in the Kubernetes CR too, and matching either would pass while the
+  # pool imported over HTTP.
+  block=$(awk '
+    $0 == "kind: KubernetesNodes" { inblock = 1 }
+    inblock && $0 == "EOF" { inblock = 0 }
+    inblock { print }
+  ' "$RUN_KUBERNETES_LIB")
+  if [ -z "$block" ]; then
+    echo "no KubernetesNodes heredoc found in $RUN_KUBERNETES_LIB; this guard has lost its subject" >&2
+    return 1
+  fi
+  case "$block" in
+    *"
+  image:
+    builtin: {}"*) ;;
+    *)
+      echo "the e2e KubernetesNodes pool does not set image.builtin at pool-value indent, so its workers import the OS image over HTTP" >&2
+      echo "the kubernetes-worker-image catalog is then enabled in the sandbox and never exercised, and no test fails" >&2
+      return 1 ;;
+  esac
+
+  # And the golden it clones is waited on before the pool is created, so a factory
+  # stall is reported as itself rather than as a node-join timeout ten minutes later.
+  if ! grep -q 'kubectl -n cozy-public get datavolume' "$RUN_KUBERNETES_LIB"; then
+    echo "nothing waits for the golden import in $RUN_KUBERNETES_LIB before the pool is applied" >&2
+    return 1
+  fi
+}

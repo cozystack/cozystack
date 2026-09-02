@@ -99,3 +99,24 @@ tests:
           path: metadata.name
           value: talos-worker-bbb-v1.14.0
         documentIndex: 1
+
+  # The rejection half of the contract. Both fields are `required` in dv.yaml, and
+  # what that refusal buys is the golden's name: an entry missing either one would
+  # otherwise render `talos-worker--v1.13.6` or `talos-worker-<id>-`, and two such
+  # entries collide on one DataVolume, so the second silently replaces the first
+  # and every pool pinning it clones the wrong OS.
+  - it: rejects a catalog entry with no schematicID
+    set:
+      images:
+        - version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'A valid \.schematicID entry is required'
+
+  - it: rejects a catalog entry with no version
+    set:
+      images:
+        - schematicID: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+    asserts:
+      - failedTemplate:
+          errorPattern: 'A valid \.version entry is required'

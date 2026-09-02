@@ -29,17 +29,32 @@
 ## stops managing that golden rather than deleting it. Deleting one by hand while a
 ## worker pool still clones it fails that pool's render on its next values or chart
 ## change, and leaves an autoscaler scale-up months later with nothing to clone, so
-## check before deleting rather than after. Every cloned worker disk annotates the
-## golden it came from, which makes that one read:
+## check before deleting rather than after.
+##
+## The authority is the pool declarations, NOT the running disks. A pool sits at
+## zero workers whenever the autoscaler has nothing to place — `minReplicas: 0` is
+## the default — and it still pins its golden, so a query over live DataVolumes
+## answers "empty" for exactly the pool that breaks on its next scale-up. Read the
+## declarations first:
+##
+##   kubectl get kubernetesnodes -A -o json | jq -r '.items[]
+##     | select(.spec.image.builtin != null)
+##     | "\(.metadata.namespace)/\(.metadata.name)\tschematic=\(.spec.image.builtin.schematicID // "<talos.schematicID>")\tversion=\(.spec.image.builtin.version // "<talos.version>")"'
+##
+## A pool that leaves either field unset inherits it from its own `talos.*`, which
+## is why the fallbacks print as placeholders rather than as values — resolve those
+## against that pool's `talos` block before concluding it pins a different golden.
+##
+## The live disks are the second read, not the first. Every cloned worker disk
+## annotates the golden it came from, which is what tells you whether a clone is in
+## flight right now:
 ##
 ##   kubectl get datavolume -A -o json | jq -r '.items[]
 ##     | select(.metadata.annotations["kubernetes-worker-image.cozystack.io/golden"]
 ##              == "talos-worker-<schematicID>-<version>")
 ##     | "\(.metadata.namespace)/\(.metadata.name)"'
 ##
-## An empty result is the go-ahead. Reading the `KubernetesNodes` CRs instead is not
-## equivalent: a pool on `image.builtin: {}` names no schematic or version of its
-## own, it inherits them from `talos.*`.
+## Both empty is the go-ahead. The first non-empty on its own is enough to stop.
 ##
 ## Worker pools that do not set `image.builtin` import over HTTP and never touch
 ## this catalog.
