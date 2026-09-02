@@ -412,7 +412,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	if err := r.reconcileHTTPToHTTPSRedirect(ctx, tgw); err != nil {
 		return err
 	}
-	return r.reconcileStatus(ctx, tgw, dynHostnames)
+	return r.reconcileStatus(ctx, tgw)
 }
 
 // markFailed writes a Ready=False condition with Reason=ReconcileError
