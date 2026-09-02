@@ -976,13 +976,19 @@ tests:
               items:
               - key: ca.crt
                 path: ca.crt
-      # The leaf Secret must not be mounted into the backup Pod at all.
+      # The leaf Secret holds the server private key and must never be mounted
+      # into the backup Pod. Written out in full: contains compares each list
+      # element whole, so an element missing optional: true equals nothing the
+      # template can render and the assertion passes against every mutation,
+      # including the one that swaps this exact Secret in. any: true does not
+      # help — its subset matching only reaches the top level of the element.
       - notContains:
           path: spec.jobTemplate.spec.template.spec.volumes
           content:
             name: tls-ca
             secret:
               secretName: my-mariadb-tls
+              optional: true
               items:
               - key: ca.crt
                 path: ca.crt
