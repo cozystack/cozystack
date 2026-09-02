@@ -314,13 +314,14 @@ spec:
     # latest-point to-copy restore, the point-in-time restore (step 45), and
     # the negative unreachable-target restore (step 46, which sets a short
     # restoreTimeoutSeconds and must fail at that deadline with reason
-    # RecoveryTargetUnreachable) (convention 6: justified in-line). The old 25m
-    # budget predated the PITR phases; three restores plus the negative phase
-    # need the larger window. run-all.sh fails fast on terminal
-    # BackupJob/RestoreJob phases and stalled HelmReleases rather than polling
-    # out the budget.
+    # RecoveryTargetUnreachable), and the in-place restore (step 50, the
+    # regression guard for the archive-vs-recovery serverName collision)
+    # (convention 6: justified in-line). The old 25m budget predated the PITR
+    # phases; four restores plus the negative phase need the larger window.
+    # run-all.sh fails fast on terminal BackupJob/RestoreJob phases and stalled
+    # HelmReleases rather than polling out the budget.
     - script:
-        timeout: 40m
+        timeout: 50m
         content: |
           set -eu
           cd ../../..

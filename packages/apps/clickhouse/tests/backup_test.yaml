@@ -54,6 +54,17 @@ tests:
       - equal:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_SECRET_KEY")].valueFrom.secretKeyRef.name
           value: cozy-backups-creds
+      # The projected endpoint is a bare host; clickhouse-backup needs a URI, so
+      # the chart prepends https:// via env-var expansion on this flow.
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ENDPOINT_HOST")].valueFrom.secretKeyRef.name
+          value: cozy-backups-creds
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ENDPOINT_HOST")].valueFrom.secretKeyRef.key
+          value: endpoint
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ENDPOINT")].value
+          value: https://$(S3_ENDPOINT_HOST)
 
   - it: "useSystemBucket=true: S3_FORCE_PATH_STYLE is sourced from cozy-backups-creds, not hardcoded"
     template: templates/clickhouse.yaml
@@ -107,6 +118,21 @@ tests:
           value: ClickHouseInstallation
       - notExists:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")].valueFrom.secretKeyRef.optional
+        template: templates/clickhouse.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      # Legacy endpoint is tenant-supplied (already carries a scheme), read verbatim
+      # from the Secret with no https:// prepend and no S3_ENDPOINT_HOST indirection.
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ENDPOINT")].valueFrom.secretKeyRef.name
+          value: ch-test-backup-s3
+        template: templates/clickhouse.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ENDPOINT_HOST")]
         template: templates/clickhouse.yaml
         documentSelector:
           path: kind

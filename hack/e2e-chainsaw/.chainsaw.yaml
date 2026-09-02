@@ -108,7 +108,11 @@ spec:
           # own pods first, so a broadly degraded cluster cannot spend the cap on
           # unrelated cozy-* restarts); it never restricts it. tenant-test is the
           # namespace every app suite runs in, declared under `namespace.name`
-          # above.
+          # above. Within each namespace group the helper orders by how recently
+          # the previous instance ended, so the install-time restarts that exist
+          # before any app suite runs no longer displace one that happened during
+          # the failing test. Also ordering only -- an install-time restart is
+          # the explanation when the install is what broke.
           if [ -x ../../e2e-capture-previous-logs.sh ]; then
             timeout -k 30 300 ../../e2e-capture-previous-logs.sh \
               "${snap}/previous-logs" "${COZY_TEST_NAMESPACE:-tenant-test}" 2>&1

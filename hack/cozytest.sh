@@ -9,6 +9,45 @@ TEST_FILE=${1:?Usage: ./cozytest.sh <file.bats> [pattern]}
 PATTERN=${2:-*}
 LINE='----------------------------------------------------------------'
 
+# Live per-line streaming of each test's xtrace and command output, prefixed
+# with a timestamp. Default on, because for a long e2e suite that stream is the
+# only progress signal, and the only record at all when a step timeout or a dead
+# runner kills the job before the fail handler below can dump anything.
+#
+# Set COZYTEST_TRACE=0 to keep only the per-test start/end lines. For a test that
+# RETURNS, nothing diagnostic is lost: run_one tees the raw stream to $log and
+# the fail handler prints all of it, so quiet mode drops the output of passing
+# tests only -- which by definition did not establish the result. On the unit
+# lane that is a ~40x cut (1338 tests: 239k lines/15M of which 98% was trace),
+# and it is why the Makefile's bats-unit-tests target sets it.
+#
+# One exception, stated because it is the whole exposure quiet mode adds: the
+# fail handler runs only after the pipeline returns, and there is no INT/TERM
+# trap here, so a test killed rather than failed -- a hang reaped by the job's
+# timeout-minutes, a SIGKILLed process group -- never dumps $log at all. The
+# A start line with no matching end still names which test was in flight, but
+# under quiet mode its trace is gone rather than already printed.
+#
+# An INT/TERM trap that flushed the tail of $log is the obvious repair and it
+# does not work -- built, measured, reverted. POSIX sh defers a trap until the
+# current foreground command returns, so installing one stops the runner from
+# dying on the signal at all: a suite hung on `sleep 30` took 30s to exit with
+# the trap versus 2s under the default disposition. GitHub's cancellation
+# escalates INT, TERM, then KILL, so the deferred handler would be SIGKILLed
+# before it ever ran -- no dump, and the grace period spent waiting. Making it
+# work means running the test pipeline in the background and `wait`ing on it,
+# since `wait` is the interruptible one; that is surgery on the path every
+# suite in the repo takes, for a partial trace in a rare case.
+#
+# So the escape hatch stands instead: re-run that suite with COZYTEST_TRACE=1,
+# which for the unit lane costs 48s and needs no cluster. That asymmetry is
+# also why e2e keeps the stream on by default -- there, re-running is an hour
+# and a live cluster, so the record has to be written as it goes.
+#
+# Anything other than the literal 0 leaves the stream on, so a typo fails
+# open to the verbose behaviour rather than silently swallowing a suite.
+COZYTEST_TRACE=${COZYTEST_TRACE:-1}
+
 cols() { stty size 2>/dev/null | awk '{print $2}' || echo 80; }
 if [ -t 1 ]; then
   MAXW=$(( $(cols) - 12 )); [ "$MAXW" -lt 40 ] && MAXW=70
@@ -38,6 +77,7 @@ run_one() {
     )
     printf '__RC__%s\n' "$?"
   } 2>&1 | tee "$log" | while IFS= read -r line; do
+        if [ "$COZYTEST_TRACE" = 0 ]; then continue; fi
         case "$line" in
           '__RC__'*) : ;;
           '+ '*)   cmd=${line#'+ '}

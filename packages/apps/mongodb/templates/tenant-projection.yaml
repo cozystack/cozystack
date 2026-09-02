@@ -1,0 +1,21 @@
+{{- /*
+Ungated: the PSMDB operator issues the certificate chain unconditionally, so
+the source Secret exists for every release.
+
+The source is the leaf Secret rather than the operator's CA Secret. Both carry
+ca.crt on the cert-manager path, but <release>-ssl is the name this chart sets
+in spec.secrets.ssl, it is also written by the operator's own self-signed
+fallback when cert-manager is absent, and during a CA rotation the operator
+merges the old and new CA into its ca.crt. <release>-ca-cert has none of those
+three properties.
+*/}}
+---
+apiVersion: internal.cozystack.io/v1alpha1
+kind: TenantProjection
+metadata:
+  name: {{ .Release.Name }}-ca
+spec:
+  projections:
+    - type: CACert
+      sourceSecretName: {{ .Release.Name }}-ssl
+      sourceKey: ca.crt

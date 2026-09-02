@@ -67,7 +67,7 @@
       }
     },
     "affinity": {
-      "description": "Affinity rules set verbatim on the EtcdCluster's spec.affinity, replacing the chart default. When left empty the chart applies a soft (preferred) podAntiAffinity that spreads members across nodes by kubernetes.io/hostname on a best-effort basis, so a single node failure is less likely to take out more than one member. The default is intentionally soft: a hard rule would leave a member Pending when there are fewer schedulable nodes than replicas, or when node-local storage pins a member to a node. Set a hard requiredDuringSchedulingIgnoredDuringExecution rule here to forbid co-location outright (only on clusters with enough nodes and non-node-pinned storage).",
+      "description": "Affinity rules set verbatim on the EtcdCluster's spec.affinity, replacing the chart default. When left empty the chart applies a soft (preferred) podAntiAffinity that spreads members across nodes by kubernetes.io/hostname on a best-effort basis, so a single node failure is less likely to take out more than one member. The default is intentionally soft: a hard rule would leave a member Pending when there are fewer schedulable nodes than replicas, or when node-local storage pins a member to a node. Set a hard requiredDuringSchedulingIgnoredDuringExecution rule here to forbid co-location outright (only on clusters with enough nodes and non-node-pinned storage). Note that the operator applies affinity only when it creates or replaces a member Pod and does not reschedule running members, so on a cluster that already has co-located members the rule takes effect only as each member is replaced, not retroactively.",
       "type": "object",
       "default": {},
       "x-kubernetes-preserve-unknown-fields": true

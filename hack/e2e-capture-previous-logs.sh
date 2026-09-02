@@ -33,6 +33,14 @@
 # omitted: an absent capture-notes.txt is indistinguishable from a capture that
 # never ran.
 #
+# Ordering, where the cap binds: the failing test's namespace first, and within
+# each namespace group the most recent restart first (prevlog_sort_recent). The
+# restarts alive on a cluster at any moment span days, and install-time restarts
+# have a head start on every app suite that runs afterwards, so without a time
+# key the cap was routinely spent on containers that had already stopped
+# restarting before the failing test began. Nothing is dropped for being old --
+# an install-time restart is the explanation when the install is what broke.
+#
 # Usage: e2e-capture-previous-logs.sh <output-dir> [preferred-namespace]
 #
 # Environment:
@@ -62,18 +70,21 @@
 # Each takes text on stdin / in args and emits text -- no kubectl, no globals  #
 # -- so hack/capture-previous-logs.bats can source this file (with            #
 # E2E_CAPTURE_PREVLOGS_LIB set, see the guard below) and unit-test the         #
-# restart filtering, namespace prioritisation and capping against mock input   #
+# restart filtering, namespace prioritisation, recency ordering and capping     #
+# against mock input                                                           #
 # without a cluster. Keep them above the guard and free of any runtime state.  #
 # --------------------------------------------------------------------------- #
 
-# prevlog_filter_restarted: stdin = `ns|pod|container|kind|restartCount` rows
-# (one container per line, as emitted by the kubectl go-template in main).
+# prevlog_filter_restarted: stdin = `ns|pod|container|kind|restartCount|finishedAt`
+# rows (one container per line, as emitted by the kubectl go-template in main).
+# finishedAt is when the PREVIOUS instance terminated, and may be empty -- see
+# prevlog_sort_recent.
 # Emits only the rows whose restartCount parses as an integer greater than
 # zero -- i.e. the containers that actually HAVE a previous instance to read.
 # A row whose count is empty, non-numeric or zero is dropped: asking for
 # `--previous` there is guaranteed to fail and would only add noise.
 prevlog_filter_restarted() {
-  while IFS='|' read -r ns pod container kind restarts; do
+  while IFS='|' read -r ns pod container kind restarts finished; do
     [ -n "$ns" ] && [ -n "$pod" ] && [ -n "$container" ] || continue
     # Reject anything that is not a bare non-negative integer before comparing.
     # This is not load-bearing for control flow -- `[ "<none>" -gt 0 ]` exits 2,
@@ -84,20 +95,85 @@ prevlog_filter_restarted() {
       '' | *[!0-9]*) continue ;;
     esac
     [ "$restarts" -gt 0 ] || continue
-    printf '%s|%s|%s|%s|%s\n' "$ns" "$pod" "$container" "$kind" "$restarts"
+    printf '%s|%s|%s|%s|%s|%s\n' "$ns" "$pod" "$container" "$kind" "$restarts" "$finished"
   done
+}
+
+# prevlog_sort_recent: stdin = rows, stdout = the same rows, newest previous
+# instance first, rows carrying no timestamp last, ties left in input order.
+#
+# Why this exists. prevlog_prioritize below keeps the cap from being spent on
+# containers unrelated to the failing test, and until now "unrelated" meant only
+# "in another namespace". Time was not part of it, so a container that restarted
+# once during cluster bring-up competed on equal footing with one that
+# crash-looped during the test -- and won whenever the list happened to reach it
+# first. Measured on a live stand, the restarts present at any moment span days
+# (a nine-day spread, measured on a development cluster), and in CI the
+# install-time restarts have that head start: they exist before the first app
+# suite runs, so every failed test afterwards pays for them. A restart that
+# finished before the test began cannot explain the test's failure.
+#
+# Ordering, not filtering, and deliberately so: an install-time restart IS the
+# explanation when the install is what broke, and this capture has no reference
+# point for "when the test began" that would make a cutoff honest. Sorting costs
+# nothing when the cap does not bind and picks the right dozen when it does.
+#
+# Lexicographic sort over RFC3339 UTC is chronological: kubectl renders these as
+# fixed-width Z-suffixed strings, so no date parsing is needed. Reverse puts the
+# newest first and, because the empty string sorts below every timestamp, leaves
+# the rows whose lastState has already been dropped by the kubelet at the end.
+# -s keeps equal timestamps in input order, which a node reboot produces in
+# bulk; without it the order of a dozen simultaneous restarts would vary between
+# runs. Rows with no timestamp at all therefore pass through untouched, which is
+# also what keeps this a no-op for callers that pass 5-field rows.
+prevlog_sort_recent() {
+  # LC_ALL=C because the key is a fixed-format ASCII timestamp: collation buys
+  # nothing here and a locale that reorders punctuation could only surprise.
+  #
+  # Falls back to the input order rather than to nothing. The caller compares
+  # row counts to report the cap, so a sort that died would otherwise be
+  # indistinguishable from a cap overflow -- it would report "0 of N captured,
+  # N more not captured" and send the reader looking for a cap that never
+  # fired. Ordering is an optimisation over which dozen rows to keep; losing it
+  # must not lose the rows. `sort -s` and the per-key `r` are both extensions
+  # (GNU, BSD and busybox all carry them, which is why this is a fallback and
+  # not a reimplementation), so this is the branch a stricter POSIX sort takes.
+  # Anything in the timestamp column that is not shaped like one is treated as
+  # undated. Two reasons, and the second is why this is not redundant with the
+  # template guard above it: `<no value>` sorts ABOVE every digit, so a single
+  # such row would take the front of the queue from the newest real restart;
+  # and the header prints this field verbatim, so a non-timestamp there becomes
+  # a claim about a time nothing observed. Normalising to empty puts the row
+  # last and prints nothing, which are both already handled paths.
+  #
+  # Only when the field exists: setting $6 on a five-field row would append a
+  # separator and change its shape. The pattern is spelled out character by
+  # character rather than with an interval like {4}, which older mawk does not
+  # support and Ubuntu's default awk is mawk.
+  _psr_rows=$(awk -F'|' -v OFS='|' \
+    '{ if (NF >= 6 && $6 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/) $6 = ""; print }')
+  [ -n "$_psr_rows" ] || return 0
+  if _psr_out=$(printf '%s\n' "$_psr_rows" | LC_ALL=C sort -s -t'|' -k6,6r 2>/dev/null); then
+    printf '%s\n' "$_psr_out"
+  else
+    echo "[capture-previous-logs] sort unavailable for recency ordering; keeping discovery order" >&2
+    printf '%s\n' "$_psr_rows"
+  fi
 }
 
 # prevlog_prioritize: stdin = filtered rows, $1 = the failing test's namespace.
 # Emits the rows whose namespace matches $1 first, then everything else, each
-# group keeping its input order. On a broadly degraded cluster the container cap
-# below would otherwise be spent on unrelated cozy-* restarts while the pod the
-# test actually failed on -- the whole reason we are here -- falls off the end.
-# An empty $1 is a no-op passthrough.
+# group ordered newest-restart-first by prevlog_sort_recent. On a broadly
+# degraded cluster the container cap below would otherwise be spent on unrelated
+# cozy-* restarts while the pod the test actually failed on -- the whole reason
+# we are here -- falls off the end. Namespace stays the primary key and recency
+# only breaks ties within a group: a stale restart in the failing test's own
+# namespace is still likelier to be relevant than a fresh one three namespaces
+# away. An empty $1 orders the whole input by recency.
 prevlog_prioritize() {
   _pp_ns="$1"
   if [ -z "$_pp_ns" ]; then
-    cat
+    prevlog_sort_recent
     return 0
   fi
   # Buffer once, emit twice: stdin is consumable only once, and the two passes
@@ -112,8 +188,8 @@ prevlog_prioritize() {
   # than closed, and a comment claiming otherwise is the kind of thing a later
   # reader trusts instead of rechecking.
   _pp_rows=$(cat)
-  printf '%s\n' "$_pp_rows" | awk -F'|' -v p="$_pp_ns" '$1 == p' || true
-  printf '%s\n' "$_pp_rows" | awk -F'|' -v p="$_pp_ns" 'NF && $1 != p' || true
+  printf '%s\n' "$_pp_rows" | awk -F'|' -v p="$_pp_ns" '$1 == p' | prevlog_sort_recent || true
+  printf '%s\n' "$_pp_rows" | awk -F'|' -v p="$_pp_ns" 'NF && $1 != p' | prevlog_sort_recent || true
 }
 
 # prevlog_cap: stdin = prioritised rows, $1 = max rows to keep. Emits at most $1
@@ -337,6 +413,19 @@ if ! command -v kubectl >/dev/null 2>&1; then
   exit 0
 fi
 
+# The finishedAt guard is three deep, and the innermost one is the load-bearing
+# one: `finishedAt` is a metav1.Time behind `json:",omitempty"`, which cannot
+# omit a struct, and its zero value marshals to `null`. The kubelet does
+# synthesize a terminated state with no time -- ContainerStatusUnknown on a pod
+# deleted mid-run, which also bumps restartCount and so clears the filter above.
+# kubectl renders that leaf as the literal string `<no value>`, and `<` sorts
+# ABOVE every digit, so under the reverse sort that row would land FIRST and
+# displace the most recent real restart: the exact inversion this ordering
+# exists to prevent. It would also print `previous instance ended <no value>`,
+# a claim about a time nothing observed. Guarding the leaf collapses both
+# shapes -- null, and the key absent -- into the empty-timestamp path that
+# sorts last. Covered by the `<no value>` cases in hack/capture-previous-logs.bats.
+#
 # One cluster-wide list call. Both initContainerStatuses and containerStatuses
 # are walked: an interrupted bootstrap that leaves the datadir half-written
 # lives in an init container, and that is exactly the instance whose log gets
@@ -354,10 +443,10 @@ if ROWS=$($PREVLOG_LIST_BOUND kubectl get pods --all-namespaces -o go-template='
 {{- $ns := .metadata.namespace -}}
 {{- $pod := .metadata.name -}}
 {{- range .status.initContainerStatuses -}}
-{{ $ns }}|{{ $pod }}|{{ .name }}|init|{{ .restartCount }}
+{{ $ns }}|{{ $pod }}|{{ .name }}|init|{{ .restartCount }}|{{ if .lastState }}{{ if .lastState.terminated }}{{ if .lastState.terminated.finishedAt }}{{ .lastState.terminated.finishedAt }}{{ end }}{{ end }}{{ end }}
 {{ end -}}
 {{- range .status.containerStatuses -}}
-{{ $ns }}|{{ $pod }}|{{ .name }}|container|{{ .restartCount }}
+{{ $ns }}|{{ $pod }}|{{ .name }}|container|{{ .restartCount }}|{{ if .lastState }}{{ if .lastState.terminated }}{{ if .lastState.terminated.finishedAt }}{{ .lastState.terminated.finishedAt }}{{ end }}{{ end }}{{ end }}
 {{ end -}}
 {{- end -}}' 2>"${LIST_ERR:-/dev/null}"); then
   LIST_RC=0
@@ -430,7 +519,7 @@ if [ "$KEPT" -gt 0 ] && [ "$TAIL" != "-1" ]; then
   log "every previous-instance log in this directory holds at most the last $TAIL lines (COZY_PREVLOG_TAIL=$TAIL); anything earlier was never requested"
 fi
 
-printf '%s\n' "$SELECTED" | while IFS='|' read -r ns pod container kind restarts; do
+printf '%s\n' "$SELECTED" | while IFS='|' read -r ns pod container kind restarts finished; do
   [ -n "$ns" ] || continue
   file="$OUT/$(prevlog_logfile_name "$ns" "$pod" "$container")"
   # --timestamps so these lines can be interleaved with the events and the
@@ -586,11 +675,26 @@ printf '%s\n' "$SELECTED" | while IFS='|' read -r ns pod container kind restarts
   # trailing prose line breaks every parser that could read the file before.
   # Echo as well as archive. The archive is for later; the failing job's log is
   # where whoever is triaging the red run is already looking.
+  #
+  # When the previous instance ended is in the header because it is the first
+  # thing that decides whether this dump is worth reading: an instance that
+  # ended during cluster bring-up cannot explain a test that started afterwards,
+  # and until a reader knows that they have to read 200 lines to find out. It is
+  # also what prevlog_sort_recent ordered on, so the header shows the ordering
+  # rather than leaving it implicit. Omitted rather than guessed when the kubelet
+  # has already dropped the lastState -- "ended unknown" and "ended at 00:00"
+  # are not the same claim.
+  #
   # "last -1 lines" would be nonsense; -1 means the whole log was requested.
-  if [ "$TAIL" = "-1" ]; then
-    echo "----- previous logs: $ns/$pod [$kind $container] (restarts=$restarts, whole log) -----"
+  if [ -n "$finished" ]; then
+    _ended=", previous instance ended $finished"
   else
-    echo "----- previous logs: $ns/$pod [$kind $container] (restarts=$restarts, last $TAIL lines) -----"
+    _ended=""
+  fi
+  if [ "$TAIL" = "-1" ]; then
+    echo "----- previous logs: $ns/$pod [$kind $container] (restarts=$restarts$_ended, whole log) -----"
+  else
+    echo "----- previous logs: $ns/$pod [$kind $container] (restarts=$restarts$_ended, last $TAIL lines) -----"
   fi
   cat "$file"
   echo "----- end $ns/$pod [$container] -----"

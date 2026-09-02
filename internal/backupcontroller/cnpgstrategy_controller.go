@@ -3,6 +3,8 @@ package backupcontroller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -865,7 +867,16 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		if err := r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, true); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA, sourceDatabases, sourceUsers); err != nil {
+		newServerName := restoredServerName(clusterName, restoreJob.UID)
+		if newServerName == sourceServerName {
+			// Practically unreachable (see restoredServerName), but if a digest
+			// ever collides the restored cluster would archive onto the source's
+			// prefix and CNPG would fail with "Expected empty archive" - log so
+			// that recurrence is diagnosable as a hash collision, not a mystery.
+			logger.Info("restored WAL-archive serverName collided with the recovery source",
+				"cluster", clusterName, "serverName", newServerName)
+		}
+		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA, sourceDatabases, sourceUsers); err != nil {
 			// Resume HR before terminal failure so an operator deleting
 			// the failed RestoreJob does not leave the HR stuck.
 			_ = r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, false)
@@ -1064,14 +1075,26 @@ func (r *RestoreJobReconciler) resolveCNPGRestoreTarget(restoreJob *backupsv1alp
 func (r *RestoreJobReconciler) patchPostgresAppForRestore(
 	ctx context.Context,
 	app *postgresapp.Postgres,
-	sourceServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
+	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
 	credsRef *strategyv1alpha1.S3CredentialsTemplate,
 	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
 	sourceUsers map[string]postgresapp.User,
 ) error {
-	patched := buildPostgresAppRestorePatch(app, sourceServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, credsRef, caRef, sourceDatabases, sourceUsers)
+	patched := buildPostgresAppRestorePatch(app, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, credsRef, caRef, sourceDatabases, sourceUsers)
 	return r.Patch(ctx, patched, client.MergeFrom(app), client.FieldOwner(cnpgFieldManager))
+}
+
+// restoredServerName returns the WAL-archive serverName a restored cluster
+// writes to. Keyed by the RestoreJob UID, it is unique per restore and never
+// equals a source serverName, so the re-bootstrapped cluster archives into an
+// empty prefix and barman-cloud-check-wal-archive passes even on an in-place
+// restore (where the target cluster name equals the source's).
+func restoredServerName(clusterName string, uid types.UID) string {
+	// 64 bits of the digest: enough that two RestoreJob UIDs colliding on the
+	// same cluster is not a practical concern, while keeping the prefix short.
+	sum := sha256.Sum256([]byte(uid))
+	return fmt.Sprintf("%s-restore-%s", clusterName, hex.EncodeToString(sum[:])[:16])
 }
 
 // buildPostgresAppRestorePatch returns a deep-copied Postgres application
@@ -1088,7 +1111,7 @@ func (r *RestoreJobReconciler) patchPostgresAppForRestore(
 // anything not in spec) must see the source's exact map.
 func buildPostgresAppRestorePatch(
 	app *postgresapp.Postgres,
-	sourceServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
+	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
 	credsRef *strategyv1alpha1.S3CredentialsTemplate,
 	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
@@ -1098,10 +1121,20 @@ func buildPostgresAppRestorePatch(
 	patched.Spec.Bootstrap.Enabled = true
 	patched.Spec.Bootstrap.OldName = sourceServerName
 	patched.Spec.Bootstrap.ServerName = sourceServerName
+	// Archive under a fresh prefix distinct from the recovery source, or an
+	// in-place restore fails barman-cloud-check-wal-archive ("Expected empty archive").
+	patched.Spec.Bootstrap.NewServerName = newServerName
 	patched.Spec.Bootstrap.RecoveryTime = recoveryTime
 
 	patched.Spec.Backup.DestinationPath = sourceDestinationPath
 	patched.Spec.Backup.EndpointURL = sourceEndpointURL
+	// The restore populates explicit S3 coordinates (destinationPath /
+	// s3CredentialsSecret / endpointCA below), so the app is no longer on the
+	// system-bucket path. Clear useSystemBucket: the chart rejects
+	// bootstrap.enabled together with useSystemBucket (an unset-coordinates
+	// guard), and a system-bucket app restored in place would otherwise wedge
+	// its HelmRelease in that render error instead of re-bootstrapping.
+	patched.Spec.Backup.UseSystemBucket = false
 	// Switching to s3CredentialsSecret means inline keys must not survive
 	// on the CR .spec; otherwise tenants who switch credential modes leave
 	// cleartext keys behind in etcd and audit logs.

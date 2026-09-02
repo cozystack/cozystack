@@ -6,7 +6,7 @@ ingress-nginx:
       registry: ghcr.io
       image: cozystack/ingress-nginx-with-protobuf-exporter/controller
       tag: v1.11.5
-      digest: sha256:09ff83ca891683b23e782873257af2285837d5923965ef5c462be7503bbe991b
+      digest: sha256:f51c7ee0968ad542d4b77854fc57f68e17b2f6e498bcd168cd5f42b409bf54e6
     allowSnippetAnnotations: true
     replicaCount: 2
     admissionWebhooks:
@@ -16,7 +16,7 @@ ingress-nginx:
       enabled: true
     extraContainers:
     - name: protobuf-exporter
-      image: ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/protobuf-exporter:v1.11.5@sha256:cd4a5b7f35afe53baf82da8877417b09b5d77e879846633d42b5820999fe4a14
+      image: ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/protobuf-exporter:v1.11.5@sha256:0f981014415e00cfee3bf38f7ca084e6774150d6a57774e73da04acd8b346335
       args:
       - --server.telemetry-address=0.0.0.0:9090
       - --server.exporter-address=0.0.0.0:9091

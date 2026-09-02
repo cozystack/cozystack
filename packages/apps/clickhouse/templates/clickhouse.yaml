@@ -298,8 +298,23 @@ spec:
                 {{- $secretOptional := .Values.backup.useSystemBucket }}
                 - name: S3_BUCKET
                   valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $bucketKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
+                {{- /*
+                  clickhouse-backup's aws-sdk-go-v2 client rejects a scheme-less
+                  S3_ENDPOINT ("was not a valid URI"). On the useSystemBucket flow
+                  the projected cozy-backups-creds.endpoint is a bare host, so
+                  prepend https:// (the platform's CNPG endpoint helper does the
+                  same). Legacy / BYO-Secret endpoints are tenant-supplied with
+                  their own scheme and are consumed verbatim.
+                */}}
+                {{- if .Values.backup.useSystemBucket }}
+                - name: S3_ENDPOINT_HOST
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $endpointKey | quote }}, optional: true } }
                 - name: S3_ENDPOINT
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $endpointKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
+                  value: "https://$(S3_ENDPOINT_HOST)"
+                {{- else }}
+                - name: S3_ENDPOINT
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $endpointKey | quote }} } }
+                {{- end }}
                 - name: S3_REGION
                   valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $regionKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
                 - name: S3_ACCESS_KEY
