@@ -145,13 +145,17 @@ for raw in $(collect_refs); do
   # a skopeo copy can succeed. Everything else is vendored by digest from a
   # registry this job cannot push to, and a copy there would fail and (under
   # set -e) abort the whole promotion. What this drops today:
-  #   - third-party hosts: docker.io/clastix/kubectl,
-  #     ghcr.io/lexfrei/{kuberture,ouroboros,cloudflare-tunnel-gateway-controller,
-  #     cloudflare-tunnel-gateway-controller-proxy} (deliberately not mirrored
-  #     under ghcr.io/cozystack — see those packages' values.yaml)
+  #   - third-party hosts: docker.io/clastix/kubectl, ghcr.io/lexfrei/ouroboros
+  #     (deliberately not mirrored under ghcr.io/cozystack — see that package's
+  #     values.yaml)
   #   - ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/*, which is a
   #     cozystack-org repo but sits outside $REGISTRY's path
-  #   - non-ref scalars, e.g. a "--migrate-image=..." arg string
+  #   - non-ref scalars, e.g. a "--migrate-image=..." arg string. kuberture and
+  #     both cloudflare-tunnel images land here rather than under the host
+  #     bullet: they override only `tag:` and leave the repository in the
+  #     vendored chart, so the enumeration emits a bare "<ver>@sha256:..." with
+  #     no host for the case below to match. They are equally unmirrored under
+  #     ghcr.io/cozystack, but that is not what drops them.
   # Note kilo, kube-ovn and keycloak-operator are NOT in that list: all three
   # are built and pushed to $REGISTRY, and are selected by shapes 3 and 4. An
   # earlier version of this comment named them as unpushed third parties, which
