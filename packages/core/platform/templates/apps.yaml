@@ -139,6 +139,9 @@ stringData:
       monitoring-enabled: {{ dig "rootEnabled" true (.Values.monitoring | default dict) | quote }}
       cluster-domain: {{ .Values.networking.clusterDomain | quote }}
       api-server-endpoint: {{ .Values.publishing.apiServerEndpoint | quote }}
+      {{- /* Display-only DNS suffix for the dashboard's Services tab
+             (<service>.<suffix>). Empty -> the console shows no hostname. */}}
+      service-domain: {{ .Values.publishing.serviceDomain | default "" | toString | trimAll "." | quote }}
       {{- with .Values.branding }}
       branding:
         {{- . | toYaml | nindent 8 }}
