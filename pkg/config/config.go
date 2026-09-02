@@ -58,6 +58,21 @@ const HelmUpgradeTimeoutAnnotation = "release.cozystack.io/helm-upgrade-timeout"
 // annotation over adding expressions that will never run.
 const HelmInstallDisableWaitAnnotation = "release.cozystack.io/helm-install-disable-wait"
 
+// HelmServerSideApplyAnnotation is the ApplicationDefinition metadata annotation
+// that overrides the Helm apply strategy for every HelmRelease the kind emits.
+// The platform's helm-controller (v1.5.0) defaults to server-side apply, under
+// which Helm force-owns every field it renders and reverts any value a runtime
+// writer (e.g. an HPA writing the engine CR's /scale subresource) later sets.
+// Setting this to "false" forces client-side apply, under which helm-controller
+// patches a CRD from the previous-vs-new rendered manifest and does not consult
+// live state (it leaves Helm's threeWayMergeForUnstructured at the default), so a
+// field rendered as an unchanged constant yields no patch and the co-writer's
+// live value survives.
+// Required by the postgres read-replica autoscaler, whose seeded spec.instances
+// must not be reverted from KEDA's live /scale value. Accepts "true"/"enabled" or
+// "false"/"disabled" (case-insensitive); empty leaves the helm-controller default.
+const HelmServerSideApplyAnnotation = "release.cozystack.io/helm-server-side-apply"
+
 // helmTimeoutPattern mirrors the CRD validation pattern used by Flux
 // helm-controller on HelmReleaseSpec.Install.Timeout (ms/s/m/h units only).
 // time.ParseDuration accepts ns/us/µs, but Flux rejects them - parsing here
@@ -123,6 +138,26 @@ func ParseHelmInstallDisableWaitAnnotation(raw string) (bool, error) {
 		return false, nil
 	default:
 		return false, fmt.Errorf("must be \"true\" or \"false\", got %q", raw)
+	}
+}
+
+// ParseHelmServerSideApplyAnnotation parses the value of the
+// release.cozystack.io/helm-server-side-apply annotation. Returns a pointer to the
+// desired serverSideApply state, or nil for an empty value (leave the helm-controller
+// default). Accepts "true"/"enabled" and "false"/"disabled" (case-insensitive).
+func ParseHelmServerSideApplyAnnotation(raw string) (*bool, error) {
+	raw = strings.TrimSpace(raw)
+	switch {
+	case raw == "":
+		return nil, nil
+	case strings.EqualFold(raw, "true"), strings.EqualFold(raw, "enabled"):
+		v := true
+		return &v, nil
+	case strings.EqualFold(raw, "false"), strings.EqualFold(raw, "disabled"):
+		v := false
+		return &v, nil
+	default:
+		return nil, fmt.Errorf("must be \"true\"/\"enabled\" or \"false\"/\"disabled\", got %q", raw)
 	}
 }
 
@@ -194,6 +229,12 @@ type ReleaseConfig struct {
 	// from the release.cozystack.io/helm-install-disable-wait
 	// annotation on the ApplicationDefinition at start-up.
 	HelmInstallDisableWait bool `yaml:"helmInstallDisableWait,omitempty"`
+	// HelmServerSideApply overrides the Helm apply strategy for this Application
+	// kind: nil leaves the helm-controller default (server-side apply on v1.5.0),
+	// false forces client-side apply. Populated from the
+	// release.cozystack.io/helm-server-side-apply annotation on the
+	// ApplicationDefinition at start-up. See HelmServerSideApplyAnnotation.
+	HelmServerSideApply *bool `yaml:"helmServerSideApply,omitempty"`
 	// WaitStrategy sets HelmReleaseSpec.WaitStrategy.Name (poller|legacy) for
 	// this Application kind. Populated from spec.release.waitStrategy on the
 	// ApplicationDefinition at start-up. Empty leaves the flux default, unless
