@@ -1,10 +1,11 @@
 suite: opensearch tenant RBAC for dashboard resources
 
-# The Role is the direct read grant for tenant subjects. It is a separate leg from
-# the ApplicationDefinition's spec.secrets.include, which only drives the lineage
-# webhook's tenant-resource label — listing a Secret there does not make it readable.
-# kafka wires both legs for its CA Secrets; opensearch does the same for the key-free
-# trust anchor.
+# The Role is the direct read grant for tenant subjects, and the credentials Secret is
+# the only Secret that needs one. The trust anchor takes the other path: the
+# ApplicationDefinition's spec.secrets.include drives the lineage webhook's
+# tenantresource label, and the tenant reads the projection through
+# core.cozystack.io/tenantsecrets, which the base tenant roles grant. Every converged
+# engine delivers it that way and none name-grants it; mongodb's Role says why.
 
 release:
   name: os-test
@@ -19,7 +20,7 @@ templates:
   - templates/dashboard-resourcemap.yaml
 
 tests:
-  - it: grants the tenant the credentials Secret and the key-free trust anchor
+  - it: grants the tenant the credentials Secret and nothing else
     documentIndex: 0
     asserts:
       - isKind:
@@ -27,18 +28,18 @@ tests:
       - contains:
           path: rules[1].resourceNames
           content: os-test-credentials
-      - contains:
-          path: rules[1].resourceNames
-          content: os-test.tenant-ca
       - equal:
           path: rules[1].resources
           value:
             - secrets
 
-  # The anchor is deliberately the key-free projection. Every other Secret in this
-  # chain carries a private key — the cert-manager CA under tls.key, and both leaves
-  # under tls.key — so granting any of them would hand the tenant key material.
-  - it: never grants the tenant a Secret holding a private key
+  # Every Secret of the TLS chain carries a private key — the cert-manager CA under
+  # tls.key, and both leaves the same — so granting any of them would hand the tenant
+  # key material. The count is what makes this exhaustive rather than a list of the
+  # three names someone happened to think of, the projection included: it reaches the
+  # tenant through tenantsecrets, so a name grant for it here would be a bypass of the
+  # webhook's verdict rather than a convenience.
+  - it: never grants the tenant a Secret beyond the credentials
     documentIndex: 0
     asserts:
       - notContains:
@@ -50,9 +51,12 @@ tests:
       - notContains:
           path: rules[1].resourceNames
           content: os-test-dashboards-server
+      - notContains:
+          path: rules[1].resourceNames
+          content: os-test.tenant-ca
       - lengthEqual:
           path: rules[1].resourceNames
-          count: 2
+          count: 1
 
   - it: grants read only, never write
     documentIndex: 0
