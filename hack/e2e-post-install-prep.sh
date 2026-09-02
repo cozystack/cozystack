@@ -192,6 +192,34 @@ if ! timeout 600 sh -ec 'until kubectl get linstorcluster linstorcluster -o json
   exit 1
 fi
 
+# The Available condition above says the operator reached the API. It does
+# NOT say the operator finished a reconcile, and the two come apart in the
+# way that shipped: piraeus-operator probes /v1/controller/version before
+# every LinstorSatellite reconcile, so a probe it cannot complete stops each
+# satellite at Applied=False with its generated DaemonSet frozen at whatever
+# spec it last had — still mounting volumes this chart no longer renders.
+#
+# Nothing else in the install notices. Every HelmRelease reports Ready, the
+# already-running satellite pods keep running, and the frozen spec only
+# surfaces the next time a pod is recreated, on a node that then loses its
+# satellite for good. So the per-satellite condition is asserted here rather
+# than inferred from the cluster-scoped one.
+echo "[post-install-prep] waiting for every LinstorSatellite to report Applied"
+applied_deadline=$(( $(date +%s) + 300 ))
+until [ "$(kubectl get linstorsatellite \
+            -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Applied")].status}{"\n"}{end}' \
+            2>/dev/null | grep -c '^True$')" \
+      -eq "$(kubectl get nodes --no-headers 2>/dev/null | wc -l)" ]; do
+  if [ "$(date +%s)" -ge "$applied_deadline" ]; then
+    echo "[post-install-prep] ERROR: LinstorSatellite objects did not all reach Applied within 300s" >&2
+    kubectl get linstorsatellite -o wide >&2 || true
+    kubectl get linstorsatellite \
+      -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.conditions[?(@.type=="Applied")].message}{"\n"}{end}' >&2 || true
+    exit 1
+  fi
+  sleep 5
+done
+
 echo "[post-install-prep] waiting for 3 blockstor-satellite pods Ready"
 sat_deadline=$(( $(date +%s) + 300 ))
 until [ "$(kubectl -n cozy-linstor get pods -l app=blockstor-satellite \
