@@ -81,7 +81,11 @@ spec:
   # egress-isolated from it. run-all.sh provisions its own Bucket + Rabbitmq
   # strategy + BackupClass; the run step below overrides S3_ENDPOINT to the
   # in-cluster seaweedfs because the Bucket's advertised external ingress URL is
-  # an unroutable placeholder in CI. It still needs the platform backups stack
+  # an unroutable placeholder in CI. The .svc FQDN is load-bearing: the driver's
+  # curl verifies TLS against the copied seaweedfs CA, and the filer serving
+  # cert's SANs are '*.tenant-root.svc' / '*.tenant-root.svc.cluster.local' — the
+  # 2-label 'seaweedfs-s3.tenant-root' matches neither, so it must be
+  # 'seaweedfs-s3.tenant-root.svc'. It still needs the platform backups stack
   # (backupstrategy-controller + the shipped cozy-default-rabbitmq strategy,
   # whose client image the demo reuses).
   namespace: tenant-root
@@ -130,7 +134,7 @@ spec:
           set -eu
           cd ../../..
           [ -x examples/backups/rabbitmq/run-all.sh ] || { echo "examples/backups/rabbitmq/run-all.sh not found or not executable" >&2; exit 1; }
-          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root.svc:8333" \
             examples/backups/rabbitmq/run-all.sh
         check:
           ($error == null): true

@@ -35,4 +35,4 @@ Run the whole round-trip:
 ./cleanup.sh          # remove this demo's objects (idempotent)
 ```
 
-`SKIP_RESTORE=1 ./run-all.sh` stops after a successful backup (backup-only smoke). Override `NAMESPACE` (default `tenant-root`) to run elsewhere. `BucketInfo` advertises the external S3 ingress endpoint, which in-cluster Pods cannot always reach or TLS-validate; set `S3_ENDPOINT=https://seaweedfs-s3.<ns>:8333` to target the in-cluster SeaweedFS instead (the e2e harness does this).
+`SKIP_RESTORE=1 ./run-all.sh` stops after a successful backup (backup-only smoke). Override `NAMESPACE` (default `tenant-root`) to run elsewhere. `BucketInfo` advertises the external S3 ingress endpoint, which in-cluster Pods cannot always reach or TLS-validate; set `S3_ENDPOINT=https://seaweedfs-s3.<ns>.svc:8333` to target the in-cluster SeaweedFS instead — the `.svc` FQDN is the name the SeaweedFS serving cert's SAN covers, so `curl` can verify TLS against the copied CA (the e2e harness does this).

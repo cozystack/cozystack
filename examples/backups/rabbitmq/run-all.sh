@@ -17,9 +17,11 @@
 #   S3_ENDPOINT   override the S3 endpoint the backup Pod uses. BucketInfo
 #                 advertises the EXTERNAL ingress endpoint, which in-cluster
 #                 Pods cannot always reach or TLS-validate; the in-cluster
-#                 alternative is https://seaweedfs-s3.<ns>:8333 (trusted via the
-#                 copied CA below). CI sets this; a real cluster can leave it
-#                 unset to use the advertised endpoint.
+#                 alternative is https://seaweedfs-s3.<ns>.svc:8333 — the .svc
+#                 FQDN is the name the seaweedfs serving cert's SAN covers, so
+#                 curl verifies TLS against the copied CA below (the 2-label
+#                 seaweedfs-s3.<ns> is not in the SAN). CI sets this; a real
+#                 cluster can leave it unset to use the advertised endpoint.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
