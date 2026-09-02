@@ -1,0 +1,49 @@
+suite: CSI provisioner strict topology
+
+# Without --strict-topology, external-provisioner passes every topology segment
+# as `requisite` and only *prefers* the node the scheduler picked, so linstor-csi
+# may legally place a node-pinned volume elsewhere when that node is full. The
+# pod is then unschedulable forever against a PV whose affinity contradicts its
+# other volumes -- a silent, permanent deadlock on a healthy-looking cluster.
+#
+# Reproduced and fixed by measurement 2026-08-25; see values.yaml for the full
+# mechanism and what was measured versus reasoned.
+
+templates:
+  - templates/cluster.yaml
+
+tests:
+  - it: the provisioner is constrained to the scheduler's chosen node by default
+    template: templates/cluster.yaml
+    asserts:
+      - contains:
+          path: spec.csiController.podTemplate.spec.containers[?(@.name=="csi-provisioner")].args
+          content: --strict-topology
+
+  # The whole argument list is restated by the patch because `args` has no
+  # patchMergeKey and a strategic merge replaces it. If a piraeus-operator bump
+  # adds an upstream flag, this list silently drops it -- so pin the count as a
+  # tripwire that forces a re-check rather than letting the loss go unnoticed.
+  - it: the restated argument list is complete
+    template: templates/cluster.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.csiController.podTemplate.spec.containers[?(@.name=="csi-provisioner")].args
+          count: 12
+      - contains:
+          path: spec.csiController.podTemplate.spec.containers[?(@.name=="csi-provisioner")].args
+          content: --enable-capacity=$(ENABLE_CAPACITY)
+
+  # Asserted by container count, not a negated `contains`: a negation against a
+  # path that no longer resolves passes vacuously.
+  - it: the override can be switched off
+    template: templates/cluster.yaml
+    set:
+      linstorCSI.strictTopology: false
+    asserts:
+      - lengthEqual:
+          path: spec.csiController.podTemplate.spec.containers
+          count: 1
+      - equal:
+          path: spec.csiController.podTemplate.spec.containers[0].name
+          value: linstor-csi

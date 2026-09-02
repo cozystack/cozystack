@@ -51,7 +51,7 @@
 
 @test "sandbox cluster CIDR overlaps no platform range" {
   talos_file=hack/e2e-prepare-cluster.bats
-  install_file=hack/e2e-install-cozystack.bats
+  install_file=hack/e2e-platform-packages.sh
 
   # Talos cluster.network.podSubnets: every list item under the key, including
   # ones separated from the first by a comment or a blank line, so a second

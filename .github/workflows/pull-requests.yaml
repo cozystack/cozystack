@@ -314,10 +314,12 @@ jobs:
         run: |
           helm plugin list 2>/dev/null | grep -q unittest \
             || helm plugin install https://github.com/helm-unittest/helm-unittest
-      - name: Run unit tests
-        run: make unit-tests
-      - name: Run controller Go tests
-        run: make test-controllers
+      # One make process owns all four runner CPUs. Each BATS file is a separate
+      # prerequisite, so the long tail no longer runs as one nine-minute shell
+      # loop; Helm and Go targets share the same bounded pool. Output stays
+      # grouped by target instead of four test logs interleaving.
+      - name: Run unit and controller tests
+        run: make unit-tests test-controllers -j4 --output-sync=target
 
   # One image (package) per job, fanned out across the ephemeral pool. Each job
   # gets its own buildx (docker-container driver) so the shared-buildkit
@@ -1209,6 +1211,215 @@ jobs:
       - name: Tear down sandbox
         if: always()
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+
+  # ▸ Container lane — the same suite against Talos nodes running as containers
+  #   instead of QEMU guests, so tenant workloads sit one nesting level
+  #   shallower (L2 rather than L3).
+  #
+  #   INFORMATIONAL, deliberately. It is absent from `e2e-report`'s `needs`, so
+  #   whatever it concludes cannot move the required "E2E Tests" status and a red
+  #   here never blocks a merge. That is the correct posture until the lane has a
+  #   run history: every measurement behind it was taken on hand-built spike
+  #   stands, and none on a CI runner.
+  #
+  #   It runs as its own job rather than a `lane:` matrix leg on `e2e` because
+  #   `e2e-report` reads `needs.e2e.outputs.soft_red`. A matrixed job publishes
+  #   one output map for all legs, so the value would come from whichever leg
+  #   finished last and the node-join soft-red decision would turn
+  #   nondeterministic. Duplicating a few steps is the cheaper mistake.
+  #
+  #   Why a separate runner and not the same one, sequentially: the two lanes
+  #   each claim 24 vCPU and 72 GiB for their nodes, so they cannot overlap, and
+  #   running them back to back doubles a job that already spends ~2h in Chainsaw
+  #   alone. Runner-to-runner variance is real but it is measurable rather than
+  #   uncontrolled -- `Prepare environment` prints `svm features:` on both lanes,
+  #   which is what lets results be compared within the vgif-present and
+  #   vgif-absent strata separately. That stratification, not host identity, is
+  #   what #3513 was established on.
+  e2e-container:
+    name: "E2E (container lane, informational)"
+    needs: ["finalize"]
+    # Same-repo, non-release PRs only. A fork PR has no pushed images to test
+    # (see the `e2e` job), and a release promotion PR deliberately does not
+    # repeat the suite.
+    if: |
+      !cancelled()
+      && !github.event.pull_request.head.repo.fork
+      && needs.finalize.result == 'success'
+      && !contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    timeout-minutes: 215
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      # No talos-image download: the nodes boot from ghcr.io/siderolabs/talos
+      # directly (hack/e2e-compose.yaml), so this lane consumes no nocloud asset.
+      - name: Download PR patch
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pr-patch
+          path: _out/assets
+
+      - name: Apply patch
+        run: git apply _out/assets/pr.patch
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-c$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      # The container lane takes its kernel from the host, and Talos cannot load
+      # modules in container mode -- machine.kernel.modules is a silent no-op
+      # there. hack/e2e-container-up.sh asserts both modules rather than
+      # installing anything, because a contributor running the lane locally
+      # should be told what is missing, not have their host modified. Supplying
+      # them is the caller's job, which on CI is this step.
+      - name: Prepare container-lane host
+        run: |
+          sudo modprobe openvswitch
+          if ! grep -q '^zfs ' /proc/modules; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zfsutils-linux
+            sudo modprobe zfs
+          fi
+          grep -E '^(openvswitch|zfs) ' /proc/modules
+
+      - name: Prepare environment
+        run: |
+          attempt=0
+          until make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME apply \
+             && make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME prepare-cluster-container; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "Attempt $attempt failed, exiting..."
+              exit 1
+            fi
+            echo "Attempt $attempt failed, retrying..."
+            make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container
+          done
+          echo "Prepare environment completed after $((attempt + 1)) attempts"
+
+      # This lane has no VIP: .11 is a plain control-plane node standing in for
+      # the QEMU lane's 192.168.123.10 (hack/e2e-prepare-cluster-container.bats).
+      - name: Install Cozystack into sandbox
+        env:
+          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          # Talos containers share the runner kernel and cannot load DRBD.
+          # The E2E harness suppresses DRBD-dependent chart content, registers
+          # the host's pre-created zpools, and keeps LINSTOR's local ZFS path.
+          COZY_LINSTOR_DRBD_ENABLED: "false"
+          # Root monitoring is the one install-time workload whose chart
+          # explicitly selects replicated instead of using the default class.
+          # Keep that E2E-only override aligned with the Chainsaw fixtures below.
+          COZY_E2E_STORAGE_CLASS: local
+        run: |
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — see diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Select E2E tests
+        id: select
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/changed.txt
+          apps=$(./hack/select-e2e.sh /tmp/changed.txt)
+          echo "Selected apps: ${apps:-<none>}"
+          echo "apps=${apps}" >> $GITHUB_OUTPUT
+          if [ -z "${apps}" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run OpenAPI tests
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+
+      - name: Run E2E tests
+        id: e2e_tests
+        if: ${{ steps.select.outputs.skip != 'true' }}
+        env:
+          # No DRBD-backed class exists in this lane. Chainsaw templates the
+          # storage fixtures with local, and the Kubernetes helper omits only
+          # the remote-propagation/RWX assertions while running the same suites.
+          COZY_E2E_STORAGE_CLASS: local
+          SELECTED_APPS: ${{ steps.select.outputs.apps }}
+          FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
+        run: |
+          if [ "$FULL_E2E" = "true" ]; then
+            suites=""
+            echo "Running full chainsaw suite"
+          else
+            suites="$SELECTED_APPS"
+            echo "Running selected chainsaw suites: $suites"
+          fi
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
+            echo "❌ Chainsaw E2E failed on the container lane"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "✅ All selected E2E tests passed"
+
+      # Artifact names carry the -container suffix: upload-artifact@v4 rejects a
+      # duplicate name within a run, and the `e2e` job claims the unsuffixed ones.
+      - name: Collect chainsaw report
+        if: always()
+        run: |
+          mkdir -p _out
+          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
+            _out/chainsaw-report.xml || true
+
+      - name: Upload chainsaw report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chainsaw-report-container
+          path: _out/chainsaw-report.xml
+          if-no-files-found: ignore
+
+      - name: Collect report
+        id: collect_report
+        if: always()
+        timeout-minutes: 30
+        continue-on-error: true
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cozyreport-container
+          path: _out/cozyreport.tgz
+          if-no-files-found: ignore
+
+      # Both halves, and in this order: the compose project owns the nodes and
+      # the zpools outlive it. A leftover pool makes the next run on a reused
+      # host adopt storage that already carries a dead cluster's volumes.
+      - name: Tear down sandbox
+        if: always()
+        run: |
+          cleanup_rc=0
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+          exit "$cleanup_rc"
 
   # Report the required "E2E Tests" gate as a commit status rather than relying
   # on a job named "E2E Tests". A required *job* that is skipped counts

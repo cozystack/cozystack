@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check rd-presets-check migrations-target-check test test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -136,9 +136,8 @@ go-unit-tests:
 # Go tests for the controllers and supporting packages under ./internal.
 # Excludes ./pkg/... and ./cmd/... — those are run separately by
 # go-unit-tests above (pkg subset) and skipped (cmd) until their tests
-# stabilise. Run as its own step in CI alongside helm/bats unit tests;
-# locally invoke directly (`make test-controllers`) or chain
-# (`make unit-tests test-controllers`).
+# stabilise. CI schedules this target in the same four-slot make invocation as
+# unit-tests; locally invoke it directly or chain the two targets.
 test-controllers:
 	go test ./internal/... -count=1
 
@@ -159,16 +158,20 @@ test-check-readiness:
 # introduces whitespace-bearing filenames this recipe must be rewritten
 # (e.g. to use `find ... -print0 | xargs -0`).
 BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
+BATS_UNIT_TARGETS := $(patsubst hack/%.bats,bats-unit-%,$(BATS_UNIT_FILES))
 
-bats-unit-tests:
+bats-unit-tests: bats-unit-files-check $(BATS_UNIT_TARGETS)
+
+bats-unit-files-check:
 	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
 		echo "ERROR: no hack/*.bats unit test files found"; \
 		exit 1; \
 	fi
-	@for f in $(BATS_UNIT_FILES); do \
-		echo "--- running $$f ---"; \
-		hack/cozytest.sh "$$f" || exit 1; \
-	done
+
+.PHONY: $(BATS_UNIT_TARGETS)
+$(BATS_UNIT_TARGETS): bats-unit-%: hack/%.bats
+	@echo "--- running $< ---"
+	@hack/cozytest.sh "$<"
 
 # Operator-facing host preflight check. Warns about a standalone
 # containerd.service or docker.service running alongside the embedded

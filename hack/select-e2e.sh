@@ -235,7 +235,7 @@ src_to_suites() {
     # not exist, is dropped by intersect_suites(), and a CDI change reaches
     # nothing runnable through it.
     vm-disk-application) echo vminstance ;;
-    kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
+    kubernetes-application) echo "kubernetes-latest kubernetes-previous" ;;
     securitygroup-controller) echo securitygroup ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;

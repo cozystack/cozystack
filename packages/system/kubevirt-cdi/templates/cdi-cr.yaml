@@ -11,6 +11,21 @@ spec:
     featureGates:
     - HonorWaitForFirstConsumer
     - ExpandDisks
+    # CDI's built-in default is 600M, which is not enough to import a tenant
+    # Kubernetes worker disk. The source is a compressed Talos image
+    # (openstack-amd64.raw.xz, see packages/apps/kubernetes/templates/cluster.yaml)
+    # that the importer decompresses and converts onto a block volume, and the
+    # conversion is OOMKilled at 99.8-100% progress -- right at the end. CDI then
+    # retries from scratch, so the DataVolume cycles ImportInProgress 99.98% ->
+    # ImportScheduled 99.97% indefinitely and no worker ever boots. Measured
+    # 2026-08-25 on a three-node cluster; 4Gi completed the same import with zero
+    # restarts.
+    #
+    # A limit is a ceiling, not a reservation, so raising it costs nothing until
+    # an import actually needs the memory. The request is deliberately left small
+    # so concurrent imports still schedule densely.
+    podResourceRequirements:
+      {{- toYaml .Values.importerResources | nindent 6 }}
   imagePullPolicy: IfNotPresent
   infra:
     nodeSelector:

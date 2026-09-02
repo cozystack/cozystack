@@ -3,9 +3,10 @@ apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
 metadata:
   annotations:
-    {{- if hasKey .Values.source "upload" }}
-    cdi.kubevirt.io/storage.bind.immediate.requested: ""
-    {{- end }}
+    # A VMDisk is populated before any VM consumes it. On a
+    # WaitForFirstConsumer StorageClass CDI therefore needs an explicit signal
+    # to schedule its worker and trigger provisioning.
+    cdi.kubevirt.io/storage.bind.immediate.requested: "true"
     vm-disk.cozystack.io/optical: "{{ .Values.optical }}"
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
