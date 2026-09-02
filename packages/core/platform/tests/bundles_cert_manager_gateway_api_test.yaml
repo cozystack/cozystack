@@ -1,0 +1,78 @@
+suite: cert-manager Gateway API solver bundle wiring
+templates:
+  - templates/bundles/system.yaml
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # With the Gateway enabled, the platform's ClusterIssuers and the per-tenant
+  # Issuers both carry an http01.gatewayHTTPRoute solver, and the controller
+  # refuses it unless Gateway API support is on: every challenge fails with
+  # "gateway api is not enabled". The flag rides on the Package's component
+  # values, not on a default of system/cert-manager, because that chart is also
+  # installed into tenant clusters without the CRDs, where the same flag makes
+  # the controller exit at startup. These tests pin the host side of that split.
+  - it: enables the Gateway API solver on the host cert-manager (isp-full)
+    template: templates/bundles/system.yaml
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cert-manager
+    asserts:
+      - equal:
+          path: spec.components.cert-manager.values.cert-manager.config
+          value:
+            apiVersion: controller.config.cert-manager.io/v1alpha1
+            kind: ControllerConfiguration
+            enableGatewayAPI: true
+
+  - it: enables it on the hosted variant too (isp-hosted)
+    template: templates/bundles/system.yaml
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+        iaas:
+          enabled: false
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cert-manager
+    asserts:
+      - equal:
+          path: spec.components.cert-manager.values.cert-manager.config.enableGatewayAPI
+          value: true
+
+  # What makes the flag safe on the host: the CRDs ship on every variant and
+  # cert-manager is ordered after them. Losing either turns the flag into the
+  # tenant failure mode described above.
+  - it: ships the Gateway API CRDs on the hosted variant as well (isp-hosted)
+    template: templates/bundles/system.yaml
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+        iaas:
+          enabled: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-api-crds
+          any: true
+
+  - it: orders cert-manager after the Gateway API CRDs
+    template: templates/sources.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cert-manager
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.gateway-api-crds
