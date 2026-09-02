@@ -52,6 +52,30 @@ tests:
           kind: CiliumClusterwideNetworkPolicy
           name: tenant-ktj-egress-traces-central
 
+  # tenant-root hosts the shared store; central there would suppress its own local
+  # generic backend and black-hole the store every central tenant exports to. So
+  # root always resolves to local, symmetric with the egress rule's ne-tenant-root
+  # guard — even when tracingCentral is (nonsensically) opted in on root.
+  - it: forces backend=local on tenant-root even when tracingCentral is set
+    release:
+      name: tenant-root
+      namespace: tenant-root
+    set:
+      monitoring: true
+      tracingCentral: true
+    asserts:
+      - template: templates/monitoring.yaml
+        equal:
+          path: spec.values.tracingCollector.backend
+          value: local
+      # ...and tenant-root never gets the cross-boundary egress rule.
+      - template: templates/networkpolicy-traces-central.yaml
+        containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-root-egress-traces-central
+        not: true
+
   - it: no monitoring release means no backend to diverge (monitoring off)
     set:
       monitoring: false

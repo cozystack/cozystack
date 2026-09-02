@@ -74,10 +74,14 @@ spec:
          Monitoring app config cannot re-introduce the divergence — central is
          reachable only with the egress rule, and clearing tracingCentral forces
          the collector back to local. Flux deep-merges maps, so only .backend is
-         overridden; enabled/replicas/samplingPercentage from the Secret stay. */}}
+         overridden; enabled/replicas/samplingPercentage from the Secret stay.
+         tenant-root is exempt (like the egress rule's own ne-tenant-root guard):
+         it hosts the shared store, so central there would suppress its local
+         generic backend and black-hole the store every central tenant exports to.
+         Root therefore always resolves to local regardless of tracingCentral. */}}
   values:
     tracingCollector:
-      backend: {{ ternary "central" "local" .Values.tracingCentral }}
+      backend: {{ ternary "central" "local" (and .Values.tracingCentral (ne (include "tenant.name" .) "tenant-root")) }}
   valuesFrom:
   - kind: Secret
     name: cozystack-values
