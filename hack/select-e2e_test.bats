@@ -208,6 +208,19 @@ assert_full_suite() {
     echo "$output" | grep -q "kubernetes-oidc-customconfig"
 }
 
+@test "suite coverage from every owner is unioned and deduplicated" {
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    mkdir -p "$tmp/sources"
+    for source in ingress-application ingress-nginx kubernetes-application; do
+        printf 'metadata:\n  name: cozystack.%s\nspec:\n  variants:\n    - components:\n        - path: system/shared-ingress\n' "$source" > "$tmp/sources/$source.yaml"
+    done
+    echo "packages/system/shared-ingress/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_selection "every suite covering the shared package must be selected once" \
+        "$output" "gateway kubernetes-latest kubernetes-oidc-customconfig kubernetes-oidc-system kubernetes-previous"
+}
+
 @test "dashboards-only diff selects nothing (path is plural)" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
