@@ -30,16 +30,22 @@ Both planes read one Secret, named `cloudflare-tunnel-credentials`, in the packa
 | `tunnel-token` | the proxy, as the `TUNNEL_TOKEN` environment variable | the tunnel's connector token |
 | `account-id` | the controller, optional | account ID, when auto-detection cannot pick one |
 
-Create it before or shortly after enabling the package — the proxy pod cannot start without it:
+Create it before or shortly after enabling the package — the proxy pod cannot start without it. Both tokens go in through files rather than `--from-literal`, because a literal ends up in the `kubectl` process arguments, which any local user can read out of `/proc` while the command runs:
 
 ```bash
+umask 077
+tokens="$(mktemp -d)"
+trap 'rm -rf -- "$tokens"' EXIT
+printf '%s' "$CF_API_TOKEN" > "$tokens/api-token"
+printf '%s' "$CF_TUNNEL_TOKEN" > "$tokens/tunnel-token"
+
 kubectl create namespace cozy-cloudflare-tunnel-gateway-controller \
   --dry-run=client --output yaml | kubectl apply --filename -
 
 kubectl --namespace cozy-cloudflare-tunnel-gateway-controller \
   create secret generic cloudflare-tunnel-credentials \
-  --from-literal=api-token="$CF_API_TOKEN" \
-  --from-literal=tunnel-token="$CF_TUNNEL_TOKEN"
+  --from-file=api-token="$tokens/api-token" \
+  --from-file=tunnel-token="$tokens/tunnel-token"
 ```
 
 ## Enabling the package
