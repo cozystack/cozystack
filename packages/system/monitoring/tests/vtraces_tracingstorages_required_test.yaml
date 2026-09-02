@@ -158,6 +158,28 @@ tests:
           path: spec.datasource.url
           value: http://vtsingle-generic.tenant-root.svc:10428/select/jaeger
 
+  - it: renders no local backend in central mode (no VTCluster/VTSingle)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingCollector:
+        backend: central
+      tracingStorages: []
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no local traces datasource in central mode
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    set:
+      tracingCollector:
+        backend: central
+      tracingStorages: []
+    asserts:
+      - hasDocuments:
+          count: 0
+
   - it: fails the render when mode is neither cluster nor single
     templates:
       - templates/vtraces/vtraces.yaml

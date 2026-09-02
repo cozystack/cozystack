@@ -20,13 +20,13 @@ release:
 # existed, and a null _cluster must not panic. The cases below pin the full
 # contract: enabled, disabled, default, and the nil guard.
 tests:
-  - it: renders all three ExternalName redirects when monitoring-enabled is "true"
+  - it: renders all four ExternalName redirects when monitoring-enabled is "true"
     set:
       _cluster:
         monitoring-enabled: "true"
     asserts:
       - hasDocuments:
-          count: 3
+          count: 4
       - equal:
           path: metadata.name
           value: vlinsert-generic
@@ -43,11 +43,19 @@ tests:
           path: metadata.name
           value: vminsert-longterm
         documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: vtinsert-generic
+        documentIndex: 3
+      - equal:
+          path: spec.externalName
+          value: vtinsert-generic.tenant-root.svc.cluster.local
+        documentIndex: 3
 
   - it: keeps the redirects (default) when monitoring-enabled is absent
     asserts:
       - hasDocuments:
-          count: 3
+          count: 4
 
   - it: omits all redirects when monitoring-enabled is "false"
     set:
@@ -65,7 +73,7 @@ tests:
       _cluster: null
     asserts:
       - hasDocuments:
-          count: 3
+          count: 4
 
   - it: vlinsert-generic still points at tenant-root when rendered
     set:

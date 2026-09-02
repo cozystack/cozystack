@@ -50,7 +50,7 @@ rules:
   - vmalert-{{ .name }}
   {{- break }}
   {{- end }}
-  {{- if and .Values.tracingCollector.enabled (not (empty .Values.tracingStorages)) }}
+  {{- if and .Values.tracingCollector.enabled (or (eq (.Values.tracingCollector.backend | default "local") "central") (not (empty .Values.tracingStorages))) }}
   - otel-traces
   {{- end }}
   verbs: ["get", "list", "watch"]

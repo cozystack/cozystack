@@ -104,6 +104,39 @@ tests:
       - hasDocuments:
           count: 0
 
+  - it: exports to the shared-central vtinsert and stamps the tenant in central mode
+    set:
+      tracingCollector:
+        enabled: true
+        backend: central
+      tracingStorages: []
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "traces_endpoint: http://vtinsert-generic\\.cozy-monitoring\\.svc:10481/insert/opentelemetry/v1/traces"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "resource/tenant:"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "value: tenant-root"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "processors: \\[memory_limiter, resource/tenant, probabilistic_sampler, batch\\]"
+
+  - it: renders the collector in central mode with no local tracingStorages
+    set:
+      tracingCollector:
+        enabled: true
+        backend: central
+      tracingStorages: []
+    asserts:
+      - hasDocuments:
+          count: 3
+
   - it: honours the configured replica count
     set:
       tracingCollector:

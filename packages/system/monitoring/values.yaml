@@ -50,6 +50,7 @@ tracingStorages: []
 
 tracingCollector:
   enabled: true
+  backend: local
   replicas: 1
   samplingPercentage: 10
   image: docker.io/otel/opentelemetry-collector-contrib:0.136.0@sha256:45392d534c1edcc809c2d112394029246bc679d2ae5ea7081414a1fc74f2c621

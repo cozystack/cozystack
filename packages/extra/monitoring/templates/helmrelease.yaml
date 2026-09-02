@@ -57,7 +57,11 @@ spec:
   # trace store" state is intentional and harmless: nothing produces spans until
   # the trace collector ships, so no data is dropped (there is no fail-on-empty
   # guard on tracingStorages, and none is needed yet — contrast the logs #3181
-  # guard, which fires because fluent-bit ships logs unconditionally).
+  # guard, which fires because fluent-bit ships logs unconditionally). In
+  # shared-central mode (tracingCollector.backend=central) there is likewise no
+  # local backend — the collector exports to the shared VictoriaTraces in
+  # tenant-root — so the exprs are a no-op there too and readiness rests on the
+  # VLCluster gate (traces leave the namespace rather than being dropped).
   healthCheckExprs:
     - apiVersion: operator.victoriametrics.com/v1
       kind: VLCluster
