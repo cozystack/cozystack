@@ -251,8 +251,13 @@ YAML
     # Unique metadata.name, not a file count: the script partitions names, and a
     # sources file holding two documents would make a file count disagree for a
     # reason that has nothing to do with the complement.
-    total=$(yq -rN '.metadata.name | select(. != null and . != "")' \
-              packages/core/platform/sources/*.yaml | sort -u | wc -l | tr -d ' ')
+    # Two shapes here are deliberate, both to keep checkbashisms quiet: the yq
+    # program starts with `select(` rather than a bare `.`, and it is held in a
+    # variable rather than inlined. checkbashisms reads a leading or trailing
+    # `.` next to a quote as a POSIX `source`, and sh_posix_gate denies a commit
+    # that adds one.
+    names_q='select(.metadata.name != null and .metadata.name != "") | .metadata.name'
+    total=$(yq -rN "$names_q" packages/core/platform/sources/*.yaml | sort -u | wc -l | tr -d ' ')
     keep=$(hack/select-install.sh "postgres" | wc -w | tr -d ' ')
     drop=$(hack/select-install.sh --disabled "postgres" | wc -w | tr -d ' ')
     sum=$((keep + drop))
@@ -279,8 +284,8 @@ YAML
 # backupstrategy-controller), so the test asserted nothing at all.
 @test "disabled mode: no kept package has a dependency in the complement" {
     deps=$(mktemp)
-    yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "") | $n + " " + .' \
-      packages/core/platform/sources/*.yaml > "$deps"
+    edges_q='select(.metadata.name != null) | .metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(length > 0) | $n + " " + .'
+    yq -rN "$edges_q" packages/core/platform/sources/*.yaml > "$deps"
 
     for suite in $(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml \
                     | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,'); do
