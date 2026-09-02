@@ -57,6 +57,37 @@ tests:
       - notExists:
           path: spec.template.metadata.annotations["ovn.kubernetes.io/ip_address"]
 
+  - it: ignores a Kube-OVN IP object when only the group version is advertised
+    # A guard keyed on the bare "kubeovn.io/v1" group version would pass every
+    # other case in this suite. The lookup must key on the exact IP kind, so a
+    # cluster advertising the group without that kind renders no OVN annotation.
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+    kubernetesProvider:
+      scheme:
+        "kubeovn.io/v1/IP":
+          gvr:
+            group: kubeovn.io
+            version: v1
+            resource: ips
+          namespaced: false
+      objects:
+        - apiVersion: kubeovn.io/v1
+          kind: IP
+          metadata:
+            name: test-vm.tenant-test
+          spec:
+            macAddress: "02:00:00:00:00:04"
+            ipAddress: "10.0.0.13"
+    asserts:
+      - isKind:
+          of: VirtualMachine
+      - notExists:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/mac_address"]
+      - notExists:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/ip_address"]
+
   - it: preserves Kube-OVN annotations when its IP API is available
     capabilities:
       apiVersions:
