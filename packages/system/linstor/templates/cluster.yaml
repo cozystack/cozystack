@@ -83,6 +83,30 @@ spec:
         containers:
         - name: linstor-csi
           image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+        {{- if .Values.linstorCSI.strictTopology }}
+        # See values.yaml linstorCSI.strictTopology for what this prevents.
+        #
+        # The full argument list is restated because `args` has no patchMergeKey,
+        # so a strategic merge REPLACES it rather than appending. That makes this
+        # list a drift hazard: re-check it against the operator's defaults on
+        # every piraeus-operator bump, or a newly added upstream flag is silently
+        # dropped. The $(VAR) references are resolved from the container's env by
+        # Kubernetes and are stable across versions.
+        - name: csi-provisioner
+          args:
+          - --v=$(VERBOSE)
+          - --csi-address=$(ADDRESS)
+          - --timeout=$(TIMEOUT)
+          - --leader-election=$(LEADER_ELECTION)
+          - --leader-election-namespace=$(NAMESPACE)
+          - --worker-threads=$(WORKER_THREADS)
+          - --http-endpoint=$(HTTP_ENDPOINT)
+          - --default-fstype=$(DEFAULT_FS_TYPE)
+          - --enable-capacity=$(ENABLE_CAPACITY)
+          - --extra-create-metadata=$(EXTRA_CREATE_METADATA)
+          - --capacity-ownerref-level=$(CAPACITY_OWNERREF_LEVEL)
+          - --strict-topology
+        {{- end }}
   csiNode:
     podTemplate:
       spec:
