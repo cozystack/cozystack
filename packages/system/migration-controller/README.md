@@ -134,7 +134,7 @@ Warm migration adds `VirtualMachine.State.CreateSnapshot` and `.RemoveSnapshot`;
 
 Two things about that role are worth knowing before you build it. vCenter **silently ignores an unknown privilege**, so a typo produces a role that looks correct and is quietly under-privileged; enumerate the valid identifiers with `govc role.ls Admin` rather than trusting a document. And the identifiers themselves have drifted between versions — what one document calls `Cryptographic.Direct access` is `Cryptographer.Access` on vSphere 7.
 
-Note that the VDDK opens NFC connections to the **ESXi hosts** on TCP 443 and 902, not only to vCenter. That matters more than it sounds: vCenter frequently advertises a host on an address the cluster cannot reach, and the transfer then fails with `VixDiskLib_Open ... The server refused connection` while everything about the provider still looks healthy. This version does not expose per-host transfer overrides, so the hosts must be reachable from the cluster on the addresses vCenter advertises.
+Note that the VDDK opens NFC connections to the **ESXi hosts** on TCP 443 and 902, not only to vCenter. That matters more than it sounds: vCenter frequently advertises a host on an address the cluster cannot reach, and the transfer then fails with `VixDiskLib_Open ... The server refused connection` while everything about the provider still looks healthy. When that address is unusable, list the host under `spec.hosts` with an address the cluster can reach and its own ESXi credentials — the host authenticates that connection itself rather than honouring the vCenter session.
 
 A related trap on the cluster side: if the cluster's Service CIDR overlaps the ESXi network, the VDDK breaks before anything else does.
 

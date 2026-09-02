@@ -94,17 +94,3 @@ func (r *VMImportSourceReconciler) publishInventory(ctx context.Context, src *mi
 	}
 	return nil
 }
-
-// publishedVMs decodes what publishInventory wrote. It lives here so the writer
-// and the reader cannot drift apart.
-func publishedVMs(cm *corev1.ConfigMap) ([]migrationv1alpha1.PublishedVM, error) {
-	raw, ok := cm.Data[migrationv1alpha1.InventoryVMsKey]
-	if !ok || raw == "" {
-		return nil, nil
-	}
-	var vms []migrationv1alpha1.PublishedVM
-	if err := json.Unmarshal([]byte(raw), &vms); err != nil {
-		return nil, err
-	}
-	return vms, nil
-}
