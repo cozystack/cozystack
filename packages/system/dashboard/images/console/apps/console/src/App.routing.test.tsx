@@ -71,3 +71,18 @@ describe("default landing", () => {
     ).toBeTruthy()
   })
 })
+
+describe("runtime config", () => {
+  it("reaches the tree through AppConfigContext", async () => {
+    const client = makeClient()
+    renderWithK8sProvider(<App config={{ version: "v0.0.0-test" }} />, {
+      client,
+      initialRoute: "/",
+    })
+
+    // The header prints config.version verbatim, so it is the cheapest proof
+    // that the loaded config is published to the whole tree (routes read the
+    // same context for serviceDomain).
+    expect(await screen.findByText("v0.0.0-test")).toBeTruthy()
+  })
+})
