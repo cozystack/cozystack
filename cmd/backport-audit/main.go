@@ -69,7 +69,7 @@ Arguments:
 
 Options:
       --remote NAME     Git remote holding the release branches (default: origin)
-      --limit N         Max merged PRs to scan per label (default: 400)
+      --limit N         Max merged PRs to scan per label (default: 1000)
       --no-fetch        Trust the local refs as-is, skipping git fetch
       --json            Machine-readable output
       --no-color        Disable color output (auto-disabled on non-TTY)
@@ -86,6 +86,18 @@ var (
 	// freeze on kind == rc and patch == 0, so alpha, beta and patch-line rcs
 	// deliberately do not match.
 	freezeTagRE = regexp.MustCompile(`^v(\d+)\.(\d+)\.0-rc\.\d+$`)
+)
+
+// Caps on the three listings the audit makes. gh truncates at --limit in
+// silence, so each one is checked against its cap by truncated() and the
+// numbers are set well clear of the current populations rather than close to
+// them: at the time of writing, 290 labelled PRs, 217 releases, and at most 54
+// PRs on any one release branch. Raising a cap costs nothing when it is not
+// reached -- gh stops as soon as the result set is exhausted -- so the reason
+// they are bounded at all is to keep a runaway query from paginating forever.
+const (
+	releaseListCap = 1000
+	branchPRCap    = 1000
 )
 
 // freezeContractLandedAt is when cutting an rc started creating release-X.Y,
@@ -320,7 +332,7 @@ func run() int {
 }
 
 func parseArgs(args []string) (*config, int, bool) {
-	cfg := &config{remote: "origin", limit: 400, fetch: true, useColor: true}
+	cfg := &config{remote: "origin", limit: 1000, fetch: true, useColor: true}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		next := func() (string, bool) {
@@ -424,6 +436,22 @@ func gitOK(args ...string) bool {
 	return exec.Command("git", args...).Run() == nil
 }
 
+// truncated turns a saturated `gh ... --limit N` query into an error instead of
+// a quietly shorter answer.
+//
+// Every list this tool makes is a completeness claim -- these are all the
+// candidates, this is every backport PR on the branch -- and gh stops at
+// --limit without saying so. A saturated query therefore does not make the
+// audit partial, it makes its verdicts wrong: the PRs past the cut are
+// reported nowhere, and the exit code says clean. That is the same failure
+// class the tool exists to catch, so it fails loudly instead.
+func truncated(got, limit int, what, remedy string) error {
+	if got < limit {
+		return nil
+	}
+	return fmt.Errorf("%s hit its cap of %d results, so the list is truncated and the audit would be unsound: %s", what, limit, remedy)
+}
+
 func ghJSON(target any, args ...string) error {
 	out, err := capture("gh", args...)
 	if err != nil {
@@ -489,8 +517,12 @@ func lineOpenDates() ([]lineOpen, error) {
 		IsPrerelease bool      `json:"isPrerelease"`
 		IsDraft      bool      `json:"isDraft"`
 	}
-	if err := ghJSON(&releases, "release", "list", "--limit", "300",
+	if err := ghJSON(&releases, "release", "list", "--limit", strconv.Itoa(releaseListCap),
 		"--json", "tagName,publishedAt,isPrerelease,isDraft"); err != nil {
+		return nil, err
+	}
+	if err := truncated(len(releases), releaseListCap, "the release listing",
+		"raise releaseListCap in cmd/backport-audit"); err != nil {
 		return nil, err
 	}
 
@@ -624,6 +656,10 @@ func candidates(limit int) (map[int]*mainPR, error) {
 				"--json", "number,title,url,mergedAt,mergeCommit,labels,author"); err != nil {
 				return nil, err
 			}
+			if err := truncated(len(prs), limit, "the merged-PR query for label "+spelling,
+				"re-run with a higher --limit"); err != nil {
+				return nil, err
+			}
 			for i := range prs {
 				pr := prs[i]
 				existing, ok := found[pr.Number]
@@ -706,8 +742,12 @@ func (h *branchHistory) hasCherryPickOf(oids []string) bool {
 // hand-written backport carries.
 func backportPRsFor(branch string) (map[int][]backportPR, error) {
 	var prs []backportPR
-	if err := ghJSON(&prs, "pr", "list", "--base", branch, "--state", "all", "--limit", "500",
+	if err := ghJSON(&prs, "pr", "list", "--base", branch, "--state", "all", "--limit", strconv.Itoa(branchPRCap),
 		"--json", "number,title,url,state,headRefName,body,isDraft,comments"); err != nil {
+		return nil, err
+	}
+	if err := truncated(len(prs), branchPRCap, "the PR listing for "+branch,
+		"raise branchPRCap in cmd/backport-audit"); err != nil {
 		return nil, err
 	}
 
