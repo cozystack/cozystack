@@ -12,6 +12,7 @@ release:
   namespace: tenant-ktj
 set:
   tracingCentral: true
+  monitoring: true
 tests:
   - it: targets tenant-root even for a tenant nested below a non-root parent
     documentSelector:

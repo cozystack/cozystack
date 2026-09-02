@@ -1,14 +1,18 @@
-{{- if and (ne (include "tenant.name" .) "tenant-root") .Values.tracingCentral }}
+{{- if and (ne (include "tenant.name" .) "tenant-root") .Values.tracingCentral .Values.monitoring }}
 # Shared-central tracing (opt-in via .Values.tracingCentral): allow ONLY the
 # per-tenant OTLP collector pods to reach the shared VictoriaTraces insert
 # (vtinsert) in tenant-root — the fixed location the vtinsert-generic
 # ExternalName in cozy-monitoring points at, for tenants at any depth. Egress is
 # endpoint-scoped to app.kubernetes.io/name=otel-traces, so no other tenant
 # workload gains this cross-boundary hop. Gated on tracingCentral so the
-# capability exists only for tenants that opted into the shared backend. The
-# same tracingCentral switch also derives the monitoring chart's
-# tracingCollector.backend=central (see templates/monitoring.yaml), so this rule
-# and the collector's cross-boundary export are always rendered in lockstep.
+# capability exists only for tenants that opted into the shared backend, AND on
+# monitoring: the collector this rule exists for is deployed by the tenant's
+# Monitoring release (templates/monitoring.yaml, itself gated on monitoring), so
+# without monitoring there is no collector to grant egress to — rendering the
+# rule then would strand a cross-boundary capability on a namespace with no
+# consumer. The same tracingCentral switch also derives the monitoring chart's
+# tracingCollector.backend=central, so this rule and the collector's
+# cross-boundary export are always rendered in lockstep.
 #
 # Known limitation of the account-0 shared model: selection is by pod label, so
 # a tenant able to create pods could label one otel-traces, obtain this egress,

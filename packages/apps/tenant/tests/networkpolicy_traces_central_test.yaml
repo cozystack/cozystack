@@ -15,6 +15,7 @@ release:
   namespace: tenant-root
 set:
   tracingCentral: true
+  monitoring: true
 tests:
   - it: scopes the cross-boundary egress to only the collector pods
     documentSelector:

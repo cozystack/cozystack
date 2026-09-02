@@ -8,6 +8,7 @@ release:
   namespace: tenant-root
 set:
   tracingCentral: true
+  monitoring: true
 tests:
   - it: is excluded even when tracingCentral is opted in
     asserts:

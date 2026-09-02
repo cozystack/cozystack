@@ -17,3 +17,27 @@ tests:
           kind: CiliumClusterwideNetworkPolicy
           name: tenant-ktj-egress-traces-central
         not: true
+
+  # The collector this egress exists for is deployed by the tenant's Monitoring
+  # release; with monitoring off there is no collector, so the rule must not
+  # render — otherwise it strands a cross-boundary capability with no consumer.
+  - it: does not render the egress rule when monitoring is off (no collector)
+    set:
+      tracingCentral: true
+      monitoring: false
+    asserts:
+      - containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-ktj-egress-traces-central
+        not: true
+
+  - it: renders the egress rule when both tracingCentral and monitoring are on
+    set:
+      tracingCentral: true
+      monitoring: true
+    asserts:
+      - containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-ktj-egress-traces-central
