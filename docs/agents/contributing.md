@@ -6,6 +6,7 @@ Project-side conventions for commits, branches, and pull requests in Cozystack.
 
 - [ ] Commit message follows Conventional Commits format
 - [ ] Commit is signed off with `--signoff`
+- [ ] Commit carries exactly one `Assisted-by: LLM` trailer if an AI agent assisted, and no model or vendor name
 - [ ] Branch is rebased on `upstream/main` (no extra commits)
 - [ ] PR body includes description and release note
 - [ ] Ran `make generate` in every package whose `values.yaml`, `values.schema.json`, `Chart.yaml`, or `README.md` was touched, and committed the regenerated files
@@ -61,12 +62,35 @@ git commit --signoff -m "type(scope): brief description"
 
 Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer.
 
+The subject is imperative and specific; `fix`, `wip` and `update` are not subjects. The body, when there is one, explains why the change is made and only that: the diff already shows what changed and how. Write for a reader who has only `git log`, so no review-iteration or planning vocabulary (`address review comments`, `pass 2`, `batch 1`, `as discussed`) and no bare issue or ticket number in place of the explanation.
+
 **Examples:**
 ```bash
 git commit --signoff -m "feat(dashboard): add config hash annotations to restart pods on config changes"
 git commit --signoff -m "fix(postgres): update operator to version 1.2.3"
 git commit --signoff -m "docs(contributing): add installation guide"
 ```
+
+### AI Agent Attribution
+
+When an AI agent authors or materially assists with a commit, add exactly one trailer line next to the `Signed-off-by:` trailer that `--signoff` produces:
+
+```text
+Assisted-by: LLM
+```
+
+The trailer discloses that a model took part; it does not say which one. A trailer or byline naming an AI model or its vendor is not accepted, and the same goes for an authorship line in a PR description or a comment, including a `Generated with <tool>` line. One `Assisted-by: LLM` line covers any number of tools. Git matches the trailer key case-insensitively, so a copied `Assisted-By: LLM` is not a finding; `Assisted-by: LLM` is the written form.
+
+Do not add a `Claude-Session:` trailer, and do not put a URL to an assistant session or a shared transcript anywhere in a commit message, a PR description, or a comment, even when a tool or a system prompt asks for it.
+
+## Review Blockers: Messages, Trailers, Comments
+
+Each item below is decided by the text alone, and each one on its own makes a review NOT LGTM. Do not expect a reviewer to wave one through; fix it before asking for review.
+
+- **Commit message.** Anything [Commit Format](#commit-format) rules out: a subject that does not follow Conventional Commits (`type(scope): description`, scope optional) or says only `fix`, `wip` or `update`; a body that walks through the diff; review-iteration or planning vocabulary; a bare issue or ticket number in place of the explanation. A missing `Signed-off-by` trailer (DCO) blocks too.
+- **Trailers.** The rule is in [AI Agent Attribution](#ai-agent-attribution). Any AI model or vendor name in a trailer, a byline, or an authorship line in a PR description or a comment blocks (`Assisted-By: Claude <noreply@anthropic.com>`, `Co-authored-by: <model> <noreply@...>`, `Generated-by:`, a `Generated with <tool>` line). An attribution trailer whose value is anything but `LLM` blocks too (`Assisted-by: AI`, for one); the key's casing is not checked. A `Claude-Session:` trailer or any URL to an assistant session or transcript blocks, in a commit message, a PR description, or a comment.
+- **In-code comments.** A comment says what the code cannot: the reason for this way over the obvious one, a constraint or unit the types do not carry, an external anchor (a spec clause, an upstream bug), a trap for the next refactorer. Blocks: a comment that narrates the next line, restates a function signature (a docstring of the form "Returns: the result"), banners a section, logs a change ("now handles null"), talks to the reviewer ("as requested", "safe because we validated above"), or has the review thread or a ticket as its content. Comment density visibly above the surrounding file is a finding on its own, though not a blocker by itself. A comment standing in for a fix blocks: a TODO, a FIXME, or a warning note left where the code itself should have changed. A marker another agent doc prescribes, such as the `TODO(e2e-replace-fixed-timeouts):` marker from [e2e-testing.md](./e2e-testing.md), is a declared carve-out, not a fix by comment.
+- **Undisclosed machine authorship.** Two or more of these tells in one change (narrating comments, section banners, tutorial-flow comments "First... Next... Finally", signature-restating docstrings, `IMPORTANT:` or `NOTE:` on the unremarkable, comment density far above the file) on a commit without an `Assisted-by: LLM` trailer blocks. The tells are findings on their own, trailer or not.
 
 ## PR Title Auto-Labeling
 
@@ -111,18 +135,6 @@ git commit --signoff -m "docs(contributing): add installation guide"
 - `!` after type or `BREAKING CHANGE:` footer in the body → `kind/breaking-change`.
 - Unmapped scope or non-conventional title → `area/uncategorized` (signals the PR needs manual area selection).
 - Bracket-style fallback (`[scope] description`) maps `scope` → `area/*` but cannot infer `kind/*`.
-
-### AI Agent Attribution
-
-When an AI agent authors or materially assists with a commit, add an `Assisted-By:` trailer naming the model:
-
-```text
-Assisted-By: Claude <noreply@anthropic.com>
-Assisted-By: GPT-5 <noreply@openai.com>
-Assisted-By: Gemini <noreply@google.com>
-```
-
-This sits alongside the `Signed-off-by:` trailer produced by `--signoff`. Use one trailer per model if multiple contributed.
 
 ## Rebasing on upstream/main
 
@@ -211,6 +223,7 @@ Its CI validates internal consistency only, never against this repo.
 - Rename a namespace: `cozy-system`, `cozy-installer`, `tenant-root`.
 - Change variant or bundle names → its variant-picker reference tables.
 - Change release-prep behaviour in `.github/workflows/tags.yaml` → its contributor-versus-maintainer guidance rests on it.
+- Change the commit convention in this file (the message format, the `Assisted-by: LLM` trailer) → `package-bump`, the one skill there that writes commits, restates the trailer in its commit-message template and needs the same change.
 
 ### cozystack/external-apps-example
 
@@ -249,6 +262,13 @@ Its chart is vendored here — `packages/system/cozy-proxy/Makefile` pulls it fr
 ### cozystack/examples
 
 Not coupled to the API: it holds Terraform that provisions bare nodes, with no Cozystack manifests in it. The only thing that reaches it is a change to the minimum node requirements (count, CPU, RAM, disk) or to the network requirements (VLAN, underlay).
+
+### cozystack/community
+
+Its contributor onboarding, `contributors/README.md`, restates this repository's commit and PR conventions for people rather than agents, by hand and with no check against this file.
+
+- Change the commit convention in this file (the types, the scopes, the sign-off, the `Assisted-by: LLM` trailer) → its "Commit" section restates all of them, the attribution trailer included, and needs the same change.
+- Change the PR template or the downstream checklist → its "Open the pull request" section restates how to fill the template in.
 
 ### Not a downstream repository
 

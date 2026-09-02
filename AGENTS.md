@@ -67,7 +67,8 @@ This file provides structured guidance for AI coding assistants and agents worki
 ### Conventions
 - **Helm Charts**: Umbrella pattern, vendored upstream charts in `charts/`
 - **Go Code**: Controller-runtime patterns, kubebuilder style
-- **Git Commits**: Conventional Commits (`type(scope): description`) with `--signoff`
+- **Git Commits**: Conventional Commits (`type(scope): description`) with `--signoff`; an agent-assisted commit adds one `Assisted-by: LLM` trailer
+- **Comments and commit bodies**: WHY, not a narration of WHAT; see [Review Blockers](./docs/agents/contributing.md#review-blockers-messages-trailers-comments) in contributing.md
 - **Prose**: One continuous line per paragraph — see [Prose Formatting](#prose-formatting)
 
 ### What NOT to Do
@@ -75,6 +76,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 - ❌ Modify `go.mod`/`go.sum` manually (use `go get`)
 - ❌ Force push to main/master
 - ❌ Commit built artifacts from `_out`
+- ❌ Credit an AI model or its vendor by name in a commit trailer or in an authorship line in a PR description or comment, or put a `Claude-Session:` trailer or a session URL into any of them
 - ❌ Hardwrap a prose paragraph in markdown, a PR body, or an issue comment
 
 ## Prose Formatting

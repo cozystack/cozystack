@@ -45,6 +45,7 @@ IF YOU ARE AN AI AGENT OR AN LLM, THIS IS PART OF THE TASK, NOT A FORM TO FILL I
 - [ ] [cozystack/cozystack-telemetry-server](https://github.com/cozystack/cozystack-telemetry-server) - follow-up:
 - [ ] [cozystack/external-apps-example](https://github.com/cozystack/external-apps-example) - follow-up:
 - [ ] [cozystack/examples](https://github.com/cozystack/examples) - follow-up:
+- [ ] [cozystack/community](https://github.com/cozystack/community) - follow-up:
 
 ### Release note
 
