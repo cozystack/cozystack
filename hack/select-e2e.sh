@@ -359,11 +359,11 @@ while IFS= read -r file || [ -n "$file" ]; do
       # so the suite name comes off the basename exactly as the rule above takes
       # it off the directory.
       #
-      # Deliberately NOT marked inert, even though what remains here is wired to
-      # nothing after the Chainsaw migration: inert would bake that orphan status
-      # into the rule and go quietly wrong the day a lane runs these again. The
-      # mapping is correct either way — a file named after an app selects that
-      # app's suite whether or not anything currently executes it.
+      # Deliberately NOT marked inert. The files formerly kept here were wired to
+      # nothing after the Chainsaw migration, but inert would bake that orphan
+      # status into the rule and go quietly wrong the day a lane runs this layout
+      # again. A file named after an app selects that app's suite whether or not
+      # anything currently executes it.
       #
       # The membership test is what makes this per-path, and it is not optional.
       # Adding an unmatched name to selected_apps and letting the final
