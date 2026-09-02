@@ -58,6 +58,7 @@ spec:
         - mountPath: /scripts
           name: script-volume
           readOnly: true
+{{- if .Values.drbd.enabled }}
       - name: drbd-logger
         image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
         resources:
@@ -87,6 +88,7 @@ spec:
         - mountPath: /scripts
           name: script-volume
           readOnly: true
+{{- end }}
       volumes:
       - name: script-volume
         configMap:

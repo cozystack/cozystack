@@ -1,0 +1,28 @@
+{{- if not .Values.drbd.enabled }}
+apiVersion: piraeus.io/v1
+kind: LinstorSatelliteConfiguration
+metadata:
+  name: cozystack-no-drbd
+spec:
+  # podTemplate is a sparse strategic-merge input. Omitting a container there
+  # does not delete one contributed by another configuration or retained in the
+  # effective Satellite spec, so remove the DRBD-only logger from the generated
+  # DaemonSet explicitly.
+  patches:
+  - target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+      name: linstor-satellite
+    patch: |
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: linstor-satellite
+      spec:
+        template:
+          spec:
+            containers:
+            - name: drbd-logger
+              $patch: delete
+{{- end }}
