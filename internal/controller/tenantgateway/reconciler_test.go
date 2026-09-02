@@ -2490,6 +2490,138 @@ func TestReconcile_HTTPRouteOnPassthroughHostnameTerminatesNothing(t *testing.T)
 	}
 }
 
+// listenerNamesByProtocol splits the rendered listeners carrying one
+// hostname into the terminate names and the passthrough names. Tests
+// assert on what is in each rather than on how many listeners the
+// Gateway has: a render that kept the terminate listener and dropped
+// the passthrough one leaves the count on the hostname unchanged and
+// passes a count-based check.
+func listenerNamesByProtocol(gw *gatewayv1.Gateway, hostname string) (terminate, passthrough []string) {
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname == nil || string(*l.Hostname) != hostname {
+			continue
+		}
+		switch l.Protocol {
+		case gatewayv1.HTTPSProtocolType:
+			terminate = append(terminate, string(l.Name))
+		case gatewayv1.TLSProtocolType:
+			passthrough = append(passthrough, string(l.Name))
+		}
+	}
+	return terminate, passthrough
+}
+
+// certNamesOrdering returns the names of the Certificates whose
+// DNSNames carry the hostname.
+func certNamesOrdering(certs *cmv1.CertificateList, hostname string) []string {
+	var names []string
+	for i := range certs.Items {
+		for _, dns := range certs.Items[i].Spec.DNSNames {
+			if dns == hostname {
+				names = append(names, certs.Items[i].Name)
+			}
+		}
+	}
+	return names
+}
+
+// TestReconcile_PassthroughServiceShedsAnExistingTerminateListenerAndCert
+// pins the upgrade shape, which the three tests above do not reach. Each
+// of those builds a client holding nothing but the TenantGateway and a
+// route, so no terminate listener and no per-listener Certificate ever
+// existed there to withdraw: they prove the suppression renders
+// correctly from empty, not that it takes away what a cluster is
+// already holding. Taking it away is the breaking half of this change.
+// A stock HTTP-01 cluster carries a terminate listener and an ACME
+// Certificate for each hostname a route published, the three shipped
+// tlsPassthroughServices names among them, and both go on the first
+// reconcile after the upgrade.
+//
+// Phase 1 builds that state through the controller, the way
+// TestReconcile_CertModeTransitionHTTP01ToDNS01CleansPerListenerCerts
+// builds its per-listener cert: with tlsPassthroughServices empty, a
+// claimed hostname earns its own terminate listener and Certificate.
+// The claim comes from an HTTPRoute because a hostname only a TLSRoute
+// claims earns neither under this code, so a TLSRoute cannot build the
+// state that has to be shed. Phase 2 adds the service and asserts both
+// are gone while the tls-api passthrough listener stands.
+func TestReconcile_PassthroughServiceShedsAnExistingTerminateListenerAndCert(t *testing.T) {
+	const hostname = "api.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	route := httpRouteAttached("api", "tenant-foo", hostname)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw, route).
+		Build()
+	r := &Reconciler{Client: c, Scheme: s}
+	key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
+
+	// Phase 1: no passthrough service, so the hostname is terminated.
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("phase 1 reconcile: %v", err)
+	}
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), key, gw); err != nil {
+		t.Fatalf("phase 1 get Gateway: %v", err)
+	}
+	terminate, passthrough := listenerNamesByProtocol(gw, hostname)
+	if want := []string{perListenerName(hostname)}; !reflect.DeepEqual(terminate, want) {
+		t.Fatalf("phase 1 terminate listeners for %s = %v, want %v; without one there is nothing for phase 2 to shed", hostname, terminate, want)
+	}
+	if len(passthrough) != 0 {
+		t.Fatalf("phase 1 already carries passthrough listeners %v for %s, so the shed is not what phase 2 would measure", passthrough, hostname)
+	}
+	preCerts := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), preCerts); err != nil {
+		t.Fatalf("phase 1 list Certificates: %v", err)
+	}
+	if got, want := certNamesOrdering(preCerts, hostname), []string{perListenerCertName(tgw, hostname)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phase 1 Certificates ordering %s = %v, want %v; without one there is nothing for phase 2 to collect", hostname, got, want)
+	}
+
+	// Phase 2: the upgrade. The service is declared passthrough, and
+	// the terminate listener and its Certificate must both go.
+	updated := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), key, updated); err != nil {
+		t.Fatalf("get TenantGateway: %v", err)
+	}
+	updated.Spec.TLSPassthroughServices = []string{"api"}
+	if err := c.Update(context.TODO(), updated); err != nil {
+		t.Fatalf("declare api passthrough: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("phase 2 reconcile: %v", err)
+	}
+
+	if err := c.Get(context.TODO(), key, gw); err != nil {
+		t.Fatalf("phase 2 get Gateway: %v", err)
+	}
+	terminate, passthrough = listenerNamesByProtocol(gw, hostname)
+	if len(terminate) != 0 {
+		t.Errorf("terminate listeners %v for %s survived the switch to passthrough: %+v", terminate, hostname, gw.Spec.Listeners)
+	}
+	if want := []string{passthroughListenerPrefix + "api"}; !reflect.DeepEqual(passthrough, want) {
+		t.Errorf("passthrough listeners for %s = %v, want %v; with none the absent terminate listener proves nothing", hostname, passthrough, want)
+	}
+	postCerts := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), postCerts); err != nil {
+		t.Fatalf("phase 2 list Certificates: %v", err)
+	}
+	if got := certNamesOrdering(postCerts, hostname); len(got) != 0 {
+		t.Errorf("Certificates %v still order %s, which a passthrough listener now serves", got, hostname)
+	}
+}
+
 // TestHostnameCovers pins the predicate on its own terms rather than
 // through hostnamesOverlap, which is its only caller today. One leg is
 // reachable only from here: hostnamesOverlap answers identical
