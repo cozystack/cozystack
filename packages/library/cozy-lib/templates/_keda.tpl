@@ -37,8 +37,6 @@ Parameters:
   - threshold       (required) AverageValue target; desired = ceil(query / threshold).
   - namespace       (optional) metadata.namespace.
   - behavior        (optional) HPA behavior block (scale-down pacing etc.), carried verbatim.
-  - pollingInterval (optional) KEDA polling interval, seconds.
-  - cooldownPeriod  (optional) KEDA cooldown period, seconds.
   - paused          (optional) when true, stamps autoscaling.keda.sh/paused-scale-in
                     AND paused-scale-out =true (dry-run / recommendation mode — KEDA
                     keeps the HPA and keeps serving its metric but actuates in neither
@@ -135,14 +133,6 @@ spec:
     name: {{ $ref.name }}
   minReplicaCount: {{ $min }}
   maxReplicaCount: {{ $max }}
-{{- /* `if not kindIs invalid`, not `with`: a legal 0 must render, but `with` treats
-       0 as empty and would silently drop an explicit pollingInterval/cooldownPeriod: 0. */ -}}
-{{-   if not (kindIs "invalid" .pollingInterval) }}
-  pollingInterval: {{ .pollingInterval }}
-{{-   end }}
-{{-   if not (kindIs "invalid" .cooldownPeriod) }}
-  cooldownPeriod: {{ .cooldownPeriod }}
-{{-   end }}
 {{-   with .behavior }}
   advanced:
     horizontalPodAutoscalerConfig:

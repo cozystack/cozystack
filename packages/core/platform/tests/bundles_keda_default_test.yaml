@@ -16,10 +16,14 @@ tests:
           enabled: true
           variant: isp-full
     asserts:
+      # any: true is REQUIRED inside the matcher for the negative to search the whole
+      # document set; without it containsDocument matches nothing and `not: true` is a
+      # vacuous no-op (a package.default regression would pass unnoticed).
       - containsDocument:
           apiVersion: cozystack.io/v1alpha1
           kind: Package
           name: cozystack.keda
+          any: true
         not: true
 
   - it: emits cozystack.keda when listed in enabledPackages
@@ -52,4 +56,5 @@ tests:
           apiVersion: cozystack.io/v1alpha1
           kind: Package
           name: cozystack.keda
+          any: true
         not: true

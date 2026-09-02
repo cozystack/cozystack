@@ -56,6 +56,12 @@ tests:
       - matchRegex:
           path: spec.groups[0].rules[3].expr
           pattern: absent\(keda_build_info\)
+      # ...gated on keda-hpa-* existence so it cannot false-fire in a tenant vmselect that
+      # never scrapes keda_build_info (own-monitoring tenants); fires only where KEDA HPAs
+      # exist. A bare absent() would alert forever in every such tenant.
+      - matchRegex:
+          path: spec.groups[0].rules[3].expr
+          pattern: count\(kube_horizontalpodautoscaler_status_current_replicas\{.*keda-hpa
       # ScaleStuck must intersect with a Pending pod so a healthy long basebackup
       # (Running pod, desired > current for >15m) does not false-fire
       - matchRegex:

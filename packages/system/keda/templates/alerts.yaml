@@ -100,17 +100,26 @@ spec:
         summary: KEDA scaler is erroring for a managed database.
         description: KEDA reported scaler errors over the last 15m for a database ScaledObject (metric source unreachable or query invalid); the desired count is not being updated.
     {{- /*
-    KEDA operator down / not reporting: it reconciles ScaledObjects into HPAs, so
-    while it is unhealthy (e.g. the leader-election crash-loop the package guards
-    against) a fresh autoscaled database is admitted at CNPG's default of 1 and its
-    ScaledObject never becomes an HPA — no keda-hpa-* series exist, so neither
-    ScaleStuck nor ScalerErrors can fire and the tenant's requested floor silently
-    never materializes. keda_build_info is emitted by the operator; its absence
-    means the operator is down or unscraped.
+    KEDA operator down / not reporting: it reconciles ScaledObjects into HPAs, so while
+    it is unhealthy (e.g. the leader-election crash-loop the package guards against) the
+    desired count stops being actuated. keda_build_info is emitted by the operator; its
+    absence means the operator is down or unscraped.
+    Cross-tenant scoping: this PrometheusRule becomes a VMRule that EVERY tenant's VMAlert
+    evaluates (selectAllByDefault), each against its OWN vmselect. keda_build_info is
+    scraped only into the root monitoring stack, so a bare absent(keda_build_info) would
+    fire forever in every tenant that runs its own Monitoring app, about a healthy
+    platform component the tenant does not operate. Gate it on the presence of keda-hpa-*
+    HPA series (kube-state-metrics, root-only, same series the other rules key on): the
+    rule then evaluates to nothing in a datasource that has no KEDA HPAs at all, and only
+    fires where database autoscaling is actually in use but the operator's series vanished.
+    Tradeoff: like ScaleStuck/ScalerErrors it cannot catch "KEDA down with zero HPAs yet"
+    — an inherent limit of keying on keda-hpa-* series, accepted over a permanent
+    cross-tenant false-fire.
     */}}
     - alert: DatabaseAutoscalerKedaOperatorDown
       expr: |-
         absent(keda_build_info)
+        and on() (count(kube_horizontalpodautoscaler_status_current_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}) > 0)
       for: 10m
       labels:
         severity: warning

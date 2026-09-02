@@ -67,3 +67,30 @@ tests:
       - equal:
           path: metadata.annotations["helm.sh/resource-policy"]
           value: keep
+
+  # Least-privilege: the shim narrows scaledRefKinds to CNPG clusters and restricts
+  # secret access, so the operator ClusterRole must NOT carry the upstream wildcard
+  # */scale nor cluster-wide secrets:[list,watch] (which would expose every tenant's
+  # DB credentials/TLS keys).
+  - it: narrows the operator ClusterRole to clusters/scale and drops cluster-wide secret access
+    templates:
+      - charts/keda/templates/manager/clusterrole.yaml
+    documentSelector:
+      path: metadata.name
+      value: keda-operator
+    asserts:
+      - contains:
+          path: rules
+          content:
+            resources: ["clusters/scale"]
+          any: true
+      - notContains:
+          path: rules
+          content:
+            resources: ["*/scale"]
+          any: true
+      - notContains:
+          path: rules
+          content:
+            resources: ["secrets"]
+          any: true

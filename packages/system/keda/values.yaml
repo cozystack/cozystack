@@ -17,6 +17,30 @@ keda:
   crds:
     additionalAnnotations:
       helm.sh/resource-policy: keep
+  # Least-privilege the cluster-wide operator RBAC. Upstream defaults grant the
+  # operator get/list/patch/update/watch on `*/scale` across ALL apiGroups (from the
+  # default scaledRefKinds [{apiGroup: "*", kind: "*"}]) plus cluster-wide
+  # secrets:[list,watch]. cozystack's only ScaledObject target is the CNPG Cluster and
+  # no cozystack ScaledObject uses a TriggerAuthentication, so narrow both:
+  #   - scaledRefKinds -> only clusters.postgresql.cnpg.io/scale (enabledCustomScaledRefKinds
+  #     is already true upstream). Add engines here as MariaDB/Redis/Mongo autoscaling lands.
+  #   - restrict.secret -> operator can read Secrets only in its own namespace, dropping the
+  #     cluster-wide secrets:[list,watch] that could stream every tenant's DB creds/TLS keys.
+  rbac:
+    scaledRefKinds:
+      - apiGroup: postgresql.cnpg.io
+        kind: clusters
+  permissions:
+    operator:
+      restrict:
+        secret: true
+  # NOTE (image digests): the three KEDA images render tag-only
+  # (kedacore/keda{,-metrics-apiserver,-admission-webhooks}:<appVersion>) — the vendored
+  # chart's image helper is `repository:tag` with no digest field, so a @sha256 pin cannot
+  # be set from these shim values without patching the subchart. Version is pinned via the
+  # chart appVersion (2.20.2) + the make-update lockstep assert; a digest pin is a
+  # follow-up that needs an upstream chart change (Renovate's helm-values manager is off
+  # repo-wide, so this is a supply-chain pin, not an automation gap).
   # Cozystack's cluster domain, not the upstream chart default "cluster.local".
   # KEDA's metrics-apiserver dials the operator's metrics gRPC service at
   # keda-operator.<ns>.svc.<clusterDomain>:9666 and the operator mints that
