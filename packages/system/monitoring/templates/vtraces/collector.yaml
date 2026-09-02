@@ -26,6 +26,15 @@
 */ -}}
 {{- define "monitoring.tracingCollectorConfig" -}}
 {{- $c := .Values.tracingCollector -}}
+{{- /* Drop empty redact keys: the schema admits "" (free-form []string, no
+       minLength), and an empty key would render `- key: ""`, which the otel
+       attributes processor rejects at startup — crashlooping the collector on the
+       PII/secret control point. Filtering here also means an all-empty list emits
+       no attributes/redact processor at all, rather than one with empty actions. */}}
+{{- $redact := list -}}
+{{- range ($c.redactAttributes | default list) -}}
+{{- if . }}{{- $redact = append $redact . -}}{{- end -}}
+{{- end -}}
 {{- $backend := index .Values.tracingStorages 0 -}}
 {{- $mode := $backend.mode | default "cluster" -}}
 {{- $endpoint := ternary (printf "http://vtsingle-%s.%s.svc:10428/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (printf "http://vtinsert-%s.%s.svc:10481/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (eq $mode "single") -}}
@@ -44,7 +53,7 @@ processors:
   probabilistic_sampler:
     sampling_percentage: {{ $c.samplingPercentage }}
   batch: {}
-{{- if $c.redactAttributes }}
+{{- if $redact }}
   attributes/redact:
     actions:
 {{- /* quote: redactAttributes is a free-form []string with no schema pattern, so a
@@ -52,7 +61,7 @@ processors:
        config and crashloop the collector, and a key YAML re-types ("true"/"123"/"null")
        would reach the processor as a non-string and silently fail to redact — the
        worse outcome on the PII/secret control point. */}}
-{{- range $c.redactAttributes }}
+{{- range $redact }}
       - key: {{ . | quote }}
         action: delete
 {{- end }}
@@ -70,7 +79,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, probabilistic_sampler, {{ if $c.redactAttributes }}attributes/redact, {{ end }}batch]
+      processors: [memory_limiter, probabilistic_sampler, {{ if $redact }}attributes/redact, {{ end }}batch]
       exporters: [otlphttp/victoriatraces]
 {{- end -}}
 {{- if and .Values.tracingCollector.enabled (not (empty .Values.tracingStorages)) }}

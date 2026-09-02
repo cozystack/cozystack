@@ -214,6 +214,47 @@ tests:
           path: data["config.yaml"]
           pattern: '- key: "123"'
 
+  - it: drops empty redact keys so an empty entry cannot crashloop the collector
+    # The schema admits "" (free-form []string, no minLength); an empty key would
+    # render `- key: ""`, which the otel attributes processor rejects at startup.
+    # Empty entries are filtered: a real key still redacts, the "" is skipped.
+    set:
+      tracingCollector:
+        enabled: true
+        redactAttributes:
+          - db.statement
+          - ""
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '- key: "db.statement"'
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: '- key: ""'
+
+  - it: emits no redaction processor when every redact key is empty
+    # An all-empty list must not render `attributes/redact` with empty actions
+    # (also rejected by the processor) — the stage is dropped from the pipeline.
+    set:
+      tracingCollector:
+        enabled: true
+        redactAttributes:
+          - ""
+          - ""
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "attributes/redact"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "processors: \\[memory_limiter, probabilistic_sampler, batch\\]"
+
   - it: omits the redaction processor by default
     documentSelector:
       path: kind
