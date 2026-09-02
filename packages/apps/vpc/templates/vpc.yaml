@@ -54,7 +54,7 @@ metadata:
   name: {{ $subnetId }}
   namespace: {{ $.Release.Namespace }}
   labels:
-    cozystack.io/subnetName: {{ .name }}
+    cozystack.io/subnetName: {{ .name | quote }}
     cozystack.io/vpcId: {{ $vpcId }}
     cozystack.io/vpcName: {{ $.Release.Name }}
     cozystack.io/tenantName: {{ $.Release.Namespace }}
@@ -68,7 +68,7 @@ metadata:
   name: {{ $subnetId }}
   namespace: {{ $.Release.Namespace }}
   labels:
-    cozystack.io/subnetName: {{ .name }}
+    cozystack.io/subnetName: {{ .name | quote }}
     cozystack.io/vpcId: {{ $vpcId }}
     cozystack.io/vpcName: {{ $.Release.Name }}
     cozystack.io/tenantName: {{ $.Release.Namespace }}
@@ -83,7 +83,7 @@ metadata:
   name: {{ $subnetId }}
   namespace: {{ $.Release.Namespace }}
   labels:
-    cozystack.io/subnetName: {{ .name }}
+    cozystack.io/subnetName: {{ .name | quote }}
     cozystack.io/vpcId: {{ $vpcId }}
     cozystack.io/vpcName: {{ $.Release.Name }}
     cozystack.io/tenantName: {{ $.Release.Namespace }}
