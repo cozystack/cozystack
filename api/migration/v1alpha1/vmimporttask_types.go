@@ -79,6 +79,10 @@ const (
 	ReasonOutputExists = "OutputExists"
 	// ReasonTransferFailed means Forklift reported the migration as failed.
 	ReasonTransferFailed = "TransferFailed"
+	// ReasonPlanRejected means Forklift refused the Plan before any transfer
+	// began — a reference it could not resolve, or a provider it could not use.
+	// The message carries Forklift's own words.
+	ReasonPlanRejected = "PlanRejected"
 	// ReasonCompleted means every VM of the task was imported.
 	ReasonCompleted = "Completed"
 )

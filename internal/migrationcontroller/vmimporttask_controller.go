@@ -210,6 +210,7 @@ func (r *VMImportTaskReconciler) reconcileVM(
 		return status, false, err
 	} else if collision != "" {
 		status.Phase = migrationv1alpha1.VMImportTaskPhaseFailed
+		status.Reason = migrationv1alpha1.ReasonOutputExists
 		status.Message = collision
 		return status, false, nil
 	}
@@ -240,6 +241,7 @@ func (r *VMImportTaskReconciler) reconcileVM(
 	// what a VM uses, never whether Forklift will accept the Plan.
 	if critical := planCriticalCondition(plan); critical != "" {
 		status.Phase = migrationv1alpha1.VMImportTaskPhaseFailed
+		status.Reason = migrationv1alpha1.ReasonPlanRejected
 		status.Message = critical
 		return status, false, nil
 	}
@@ -279,6 +281,7 @@ func (r *VMImportTaskReconciler) reconcileVM(
 	switch {
 	case message != "" && !done:
 		status.Phase = migrationv1alpha1.VMImportTaskPhaseFailed
+		status.Reason = migrationv1alpha1.ReasonTransferFailed
 		status.Message = message
 		return status, false, nil
 	case !done:
