@@ -36,9 +36,12 @@ spec:
     # controller-side Certificate, so the secret this name points at is
     # the operator's to find, not to create.
     #
-    # Left at its default the operator looks for linstor-client-tls,
-    # finds nothing, and falls back to a client with the system roots —
-    # which cannot verify a serving cert signed by blockstor-api-ca. The
+    # Its default names linstor-client-tls. On a cluster switched over
+    # from the LINSTOR backend that secret is still there, issued 46 days
+    # earlier from linstor-api-ca, and the operator validates against the
+    # ca.crt it carries — the OLD CA, which cannot verify a serving cert
+    # signed by blockstor-api-ca. On a fresh install the secret is absent
+    # instead. Either way the probe fails, and it fails the same way. The
     # probe then fails with "certificate signed by unknown authority",
     # and because it runs first, the reconcile stops there: satellite
     # DaemonSets freeze at whatever spec they last had, keeping volumes
