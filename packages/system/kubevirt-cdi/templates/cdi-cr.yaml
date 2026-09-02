@@ -11,6 +11,15 @@ spec:
     featureGates:
     - HonorWaitForFirstConsumer
     - ExpandDisks
+    # Resources for every worker pod CDI creates -- importer, uploader and
+    # host-assisted cloner alike, not only the importer the name suggests. The
+    # default below restates CDI's own built-in values, so an unset
+    # importerResources changes nothing; it exists so a lane or an operator can
+    # raise the ceiling where a specific import needs it. Note this has to be set
+    # here on the CDI CR: the operator reconciles CDIConfig.spec from this
+    # resource, so patching CDIConfig directly is silently reverted.
+    podResourceRequirements:
+      {{- toYaml .Values.importerResources | nindent 6 }}
   imagePullPolicy: IfNotPresent
   infra:
     nodeSelector:
