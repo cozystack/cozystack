@@ -31,6 +31,21 @@ fi
 echo "Pre-pulling ${#images[@]} image(s):"
 printf '  %s\n' "${images[@]}"
 
+# A literal `null` means the caller's yq filter matched a container that has
+# no `image:` field -- typically a strategic-merge pod-template fragment
+# inside a CR, which overrides a few fields and pulls nothing. Catch it here:
+# passed through, it becomes a container with an empty image and `kubectl
+# apply` rejects the DaemonSet by container index, naming neither the filter
+# nor the chart that produced it.
+for image in "${images[@]}"; do
+  if [[ "$image" == "null" ]]; then
+    echo "e2e-prepull-images: refusing a literal 'null' image reference." >&2
+    echo "  Some container in the caller's yq filter has no 'image:' field." >&2
+    echo "  Drop nulls at the source (see hack/e2e-install-cozystack.bats)." >&2
+    exit 1
+  fi
+done
+
 containers=""
 i=0
 for image in "${images[@]}"; do
