@@ -47,8 +47,13 @@ processors:
 {{- if $c.redactAttributes }}
   attributes/redact:
     actions:
+{{- /* quote: redactAttributes is a free-form []string with no schema pattern, so a
+       key with YAML structural chars (e.g. "foo: bar") would otherwise emit invalid
+       config and crashloop the collector, and a key YAML re-types ("true"/"123"/"null")
+       would reach the processor as a non-string and silently fail to redact — the
+       worse outcome on the PII/secret control point. */}}
 {{- range $c.redactAttributes }}
-      - key: {{ . }}
+      - key: {{ . | quote }}
         action: delete
 {{- end }}
 {{- end }}

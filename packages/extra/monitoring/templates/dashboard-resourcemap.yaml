@@ -50,6 +50,9 @@ rules:
   - vmalert-{{ .name }}
   {{- break }}
   {{- end }}
+  {{- if and .Values.tracingCollector.enabled (not (empty .Values.tracingStorages)) }}
+  - otel-traces
+  {{- end }}
   verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding

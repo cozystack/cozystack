@@ -191,6 +191,29 @@ tests:
           path: data["config.yaml"]
           pattern: "processors: \\[memory_limiter, probabilistic_sampler, attributes/redact, batch\\]"
 
+  - it: quotes redaction keys so structural or re-typed YAML cannot corrupt the config
+    # redactAttributes is a free-form []string with no schema pattern, so the
+    # template must survive any admitted string: a key with YAML structural chars
+    # ("foo: bar") would otherwise emit invalid config and crashloop the collector,
+    # and a key YAML re-types ("123") would reach the processor as a non-string and
+    # silently fail to redact — the worse outcome on the PII/secret control point.
+    set:
+      tracingCollector:
+        enabled: true
+        redactAttributes:
+          - "foo: bar"
+          - "123"
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '- key: "foo: bar"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '- key: "123"'
+
   - it: omits the redaction processor by default
     documentSelector:
       path: kind

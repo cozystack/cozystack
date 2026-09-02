@@ -398,7 +398,8 @@
         "replicas": {
           "description": "Number of collector replicas. Head sampling is trace-id-deterministic, so replicas\u003e1 are safe and remove the single-ingest-path SPOF.",
           "type": "integer",
-          "default": 1
+          "default": 1,
+          "minimum": 1
         },
         "resources": {
           "description": "Resource configuration for the collector.",
