@@ -437,7 +437,7 @@ spec:
           set -eu
           cd ../../..
           [ -x examples/backups/mongodb/run-all.sh ] || { echo "mongodb backup example scripts not found at examples/backups/mongodb" >&2; exit 1; }
-          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+          COZY_E2E_BACKUP_PREFLIGHT=1 NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
             SKIP_RESTORE=1 examples/backups/mongodb/run-all.sh
         check:
           ($error == null): true

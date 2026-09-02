@@ -240,7 +240,7 @@ src_to_suites() {
     # mappings their derived names point at suites that do not exist, so an
     # ingress-only package change can omit the suite that exercises it.
     ingress-application|ingress-nginx) echo gateway ;;
-    kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
+    kubernetes-application) echo "kubernetes-latest kubernetes-previous" ;;
     securitygroup-controller) echo securitygroup ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;

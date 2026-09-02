@@ -33,6 +33,10 @@ kubectl -n "$NAMESPACE" wait bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_
 # (the "-backup" suffix is the BucketAccessClass name); the BucketInfo Secret
 # carries the same name.
 kubectl -n "$NAMESPACE" wait bucketaccesses.objectstorage.k8s.io "bucket-${BUCKET_NAME}-backup" --for=jsonpath='{.status.accessGranted}'=true --timeout=180s
+if [[ "${COZY_E2E_BACKUP_PREFLIGHT:-0}" == "1" ]]; then
+    source "$SCRIPT_DIR/../../../hack/e2e-chainsaw/_lib/backup-access-preflight.sh"
+    cozy_backup_access_preflight "$NAMESPACE" "bucket-${BUCKET_NAME}-backup" 90
+fi
 
 log_substep "Reading bucket coordinates from BucketInfo Secret..."
 TMP=$(mktemp)

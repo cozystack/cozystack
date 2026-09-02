@@ -2,12 +2,24 @@
 # Sourced by the chainsaw kubernetes-latest/previous Tests after cd to repo root.
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
 . hack/e2e-chainsaw/_lib/talos-image-cache.sh
-. hack/e2e-chainsaw/_lib/ghcr-mirror.sh
 
-# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block combining the
-# Talos OS image cache (imageFactoryURL) and the ghcr.io worker image-pull mirror
-# (registryMirrors), each included only when its in-sandbox mirror is up. Prints
-# nothing when both fall back to the public defaults, so the chart defaults apply.
+# The QEMU lane exercises replicated DRBD storage. The container lane cannot
+# represent three DRBD nodes on one shared kernel, so its otherwise-identical
+# suites use the production local class instead. Keep the accepted values
+# narrow because this result is interpolated into Kubernetes YAML below.
+cozy_e2e_storage_class() {
+  case "${COZY_E2E_STORAGE_CLASS:-replicated}" in
+    local | replicated) printf '%s\n' "${COZY_E2E_STORAGE_CLASS:-replicated}" ;;
+    *)
+      echo "COZY_E2E_STORAGE_CLASS must be local or replicated, got '${COZY_E2E_STORAGE_CLASS}'" >&2
+      return 1
+      ;;
+  esac
+}
+
+# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block with the Talos
+# OS image cache (imageFactoryURL) when the in-sandbox cache is up. Prints nothing
+# when it falls back to the public default, so the chart default applies.
 # Indented for insertion directly under `spec:` in the heredoc below.
 #
 # No trailing newline, unlike the single-key helper this replaced: the caller reads
@@ -15,14 +27,11 @@
 # of its own in the heredoc, which supplies the break before the next `spec` key.
 # An empty result therefore leaves a blank line, which is valid YAML.
 talos_spec_block() {
-  local url ghcr mirrors
+  local url
   url=$(resolve_talos_image_factory_url)
-  ghcr=$(resolve_ghcr_mirror_endpoint)
-  mirrors=$(ghcr_registry_mirrors_block "$ghcr")
-  [ -n "$url" ] || [ -n "$mirrors" ] || return 0
+  [ -n "$url" ] || return 0
   printf '  talos:\n'
-  [ -n "$url" ] && printf '    imageFactoryURL: %s\n' "$url"
-  [ -n "$mirrors" ] && printf '%s' "$mirrors"
+  printf '    imageFactoryURL: %s\n' "$url"
   return 0
 }
 
@@ -77,6 +86,155 @@ kubectl_wait_retry() {
   return 1
 }
 
+# Wait for a HelmRelease upgrade that has not started yet at the call site.
+# `kubectl wait --for=condition=Ready` alone is unsafe here: the old Ready=True
+# condition remains visible until helm-controller observes the changed spec, so
+# it can return before the upgrade even begins. Require a newer generation and
+# require status.observedGeneration to catch up to it before accepting Ready.
+# A terminal Stalled condition fails immediately instead of burning the whole
+# timeout on work Flux has already declared impossible.
+cozy_wait_helmrelease_upgrade() {
+  local namespace="$1"
+  local name="$2"
+  local previous_generation="$3"
+  local timeout_seconds="${4:-600}"
+  local deadline=$(( $(date +%s) + timeout_seconds ))
+  local state generation observed ready stalled
+
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    state=$(kubectl -n "${namespace}" get helmrelease "${name}" \
+      -o 'jsonpath={.metadata.generation}{"|"}{.status.observedGeneration}{"|"}{.status.conditions[?(@.type=="Ready")].status}{"|"}{.status.conditions[?(@.type=="Stalled")].status}' \
+      2>/dev/null) || state=
+    IFS='|' read -r generation observed ready stalled <<EOF
+${state}
+EOF
+
+    if [ "${stalled}" = True ]; then
+      echo "HelmRelease ${namespace}/${name} stalled while applying generation ${generation:-<unknown>}" >&2
+      if ! kubectl -n "${namespace}" describe helmrelease "${name}" >&2; then
+        echo "The HelmRelease failure diagnostic could not be collected" >&2
+      fi
+      return 1
+    fi
+    case "${generation}:${observed}" in
+      *[!0-9:]* | :* | *:) ;;
+      *)
+        if [ "${generation}" -gt "${previous_generation}" ] \
+          && [ "${observed}" -eq "${generation}" ] \
+          && [ "${ready}" = True ]; then
+          echo "HelmRelease ${namespace}/${name} reconciled generation ${generation}"
+          return 0
+        fi
+        ;;
+    esac
+    sleep 5
+  done
+
+  echo "HelmRelease ${namespace}/${name} did not reconcile a generation newer than ${previous_generation} within ${timeout_seconds}s" >&2
+  if ! kubectl -n "${namespace}" describe helmrelease "${name}" >&2; then
+    echo "The HelmRelease timeout diagnostic could not be collected" >&2
+  fi
+  return 1
+}
+
+cozy_oidc_bindings() {
+  local test_name="$1"
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" get clusterrolebindings \
+    --selector="app.kubernetes.io/managed-by=cozystack-oidc,app.kubernetes.io/instance=kubernetes-${test_name}" \
+    -o 'jsonpath={range .items[*]}{.subjects[0].name}{"\t"}{.roleRef.name}{"\n"}{end}' |
+    sort
+}
+
+cozy_assert_oidc_system() {
+  local test_name="$1"
+  local release="kubernetes-${test_name}"
+  local audience="tenant-test-${release}"
+  local authn_config oidc_kubeconfig bindings
+
+  kubectl -n tenant-test wait job "${release}-oidc-bootstrap" \
+    --for=condition=complete --timeout=1m
+
+  kubectl -n tenant-test get kamajicontrolplane "${release}" \
+    -o jsonpath='{.spec.apiServer.extraArgs}' |
+    grep -qF -- '--authentication-config=/etc/kubernetes/authentication-config/config.yaml'
+
+  authn_config=$(kubectl -n tenant-test get secret "${release}-oidc-authn-config" \
+    -o jsonpath='{.data.config\.yaml}' | base64 -d)
+  printf '%s\n' "${authn_config}" | grep -qE 'url: https://keycloak\.[^/]+/realms/cozy'
+  printf '%s\n' "${authn_config}" | grep -qF -- "- ${audience}"
+
+  [ "$(kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${audience}" \
+    -o jsonpath='{.spec.public}')" = true ]
+  [ "$(kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "${audience}-audience" \
+    -o jsonpath='{.spec.protocolMappers[0].protocolMapper}')" = oidc-audience-mapper ]
+
+  oidc_kubeconfig=$(kubectl -n tenant-test get secret "${release}-oidc-kubeconfig" \
+    -o jsonpath='{.data.kubeconfig}' | base64 -d)
+  printf '%s\n' "${oidc_kubeconfig}" | grep -qF -- '- oidc-login'
+  printf '%s\n' "${oidc_kubeconfig}" | grep -qF -- "--oidc-client-id=${audience}"
+
+  bindings=$(cozy_oidc_bindings "${test_name}")
+  [ "${bindings}" = "$(printf 'e2e-admin@example.test\tcluster-admin\ne2e-viewer@example.test\tview\n' | sort)" ]
+}
+
+cozy_switch_and_assert_oidc_custom_config() {
+  local test_name="$1"
+  local release="kubernetes-${test_name}"
+  local audience="cozystack-byo-${test_name}"
+  local previous_generation authn_config bindings
+
+  previous_generation=$(kubectl -n tenant-test get helmrelease "${release}" \
+    -o jsonpath='{.metadata.generation}')
+  kubectl -n tenant-test patch kuberneteses.apps.cozystack.io "${test_name}" \
+    --type=merge --patch "$(printf '%s' '{
+      "spec": {
+        "oidc": {
+          "mode": "CustomConfig",
+          "customConfig": {
+            "config": "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: https://idp.byo.example.test\n    audiences:\n    - '"${audience}"'\n  claimMappings:\n    username:\n      claim: preferred_username\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n"
+          },
+          "users": [
+            {"email": "byo-admin@example.test", "role": "admin"}
+          ]
+        }
+      }
+    }')"
+
+  cozy_wait_helmrelease_upgrade tenant-test "${release}" \
+    "${previous_generation}" 600
+  kubectl -n tenant-test wait job "${release}-oidc-bootstrap" \
+    --for=condition=complete --timeout=1m
+
+  kubectl -n tenant-test get kamajicontrolplane "${release}" \
+    -o jsonpath='{.spec.apiServer.extraArgs}' |
+    grep -qF -- '--authentication-config=/etc/kubernetes/authentication-config/config.yaml'
+
+  authn_config=$(kubectl -n tenant-test get secret "${release}-oidc-authn-config" \
+    -o jsonpath='{.data.config\.yaml}' | base64 -d)
+  printf '%s\n' "${authn_config}" | grep -qF 'url: https://idp.byo.example.test'
+  printf '%s\n' "${authn_config}" | grep -qF -- "- ${audience}"
+  if printf '%s\n' "${authn_config}" | grep -qE 'url: https://keycloak\.[^/]+/realms/cozy'; then
+    echo "CustomConfig AuthenticationConfiguration still carries the System issuer" >&2
+    return 1
+  fi
+
+  bindings=$(cozy_oidc_bindings "${test_name}")
+  [ "${bindings}" = "$(printf 'byo-admin@example.test\tcluster-admin')" ]
+
+  if kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "tenant-test-${release}" >/dev/null 2>&1; then
+    echo "System-mode KeycloakClient survived the CustomConfig upgrade" >&2
+    return 1
+  fi
+  if kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "tenant-test-${release}-audience" >/dev/null 2>&1; then
+    echo "System-mode KeycloakClientScope survived the CustomConfig upgrade" >&2
+    return 1
+  fi
+  if kubectl -n tenant-test get secret "${release}-oidc-kubeconfig" >/dev/null 2>&1; then
+    echo "System-mode OIDC kubeconfig survived the CustomConfig upgrade" >&2
+    return 1
+  fi
+}
+
 # Pure exit-condition for the inter-test drain loop (cozy_wait_tenant_drained).
 # Each argument is one resource-probe capture: the stdout of a
 # `kubectl get -o name` (empty once the resource is gone) or the literal "err"
@@ -95,7 +253,17 @@ cozy_tenant_drained() {
   return 0
 }
 
-# Block until the tenant cluster's KubeVirt compute and storage are actually
+# Keep only PVC resource names that belong to one Kubernetes worker pool. The
+# worker-disk PVCs carry no cluster label, but CDI preserves the owning
+# MachineDeployment name inside every one of their generated names.
+cozy_filter_cluster_pvcs() {
+  local test_name="$1"
+  local capture="$2"
+  printf '%s\n' "${capture}" |
+    awk -v cluster="kubernetes-${test_name}-md0" 'index($0, cluster) != 0'
+}
+
+# Block until one tenant cluster's KubeVirt compute and storage are actually
 # released, not merely triggered for deletion. Deleting the Kubernetes CR
 # returns as soon as its finalizers clear, but that only TRIGGERS teardown of
 # the CAPK worker VMs and their DataVolume-backed disk PVCs. The virt-launcher
@@ -104,30 +272,37 @@ cozy_tenant_drained() {
 # the previous tenant has not yet vacated -> memory starvation -> a worker VM
 # misses the node-join budget and the test flakes on worker-node-join.
 #
-# Bounded and best-effort: cozytest runs cozy_cleanup wrapped in `|| true`, and
-# this returns (loudly) on timeout, so a stuck teardown can never hang the job
-# past the deadline -- it just leaves the sandbox no worse than before this
-# wait existed. tenant-test is provisioned with etcd/monitoring/seaweedfs
-# disabled (see the Tenant in hack/e2e-install-cozystack.bats), so it carries no
-# baseline PVCs, and the e2e apps run sequentially each cleaning up after
-# itself; at cleanup time the only VMs/VMIs/PVCs in the namespace belong to the
-# tenant cluster being torn down, so a plain namespace-scoped probe is both safe
-# and accurate (the worker-disk PVCs carry no cluster-scoping label to select on).
+# Bounded and authoritative: this returns non-zero on timeout, so a stuck
+# teardown cannot be mistaken for a clean sandbox. Other suites use the same
+# tenant-test namespace and can legitimately leave their own PVCs there while
+# this cleanup runs; VM/VMI probes therefore select the CAPI cluster label, and
+# the unlabeled worker-disk PVCs are filtered by their MachineDeployment name
+# component.
 cozy_wait_tenant_drained() {
-  _ns=tenant-test
-  _timeout="${1:-300}"
-  _deadline=$(( $(date +%s) + _timeout ))
+  local _test_name="$1"
+  local _ns=tenant-test
+  local _timeout="${2:-300}"
+  local _deadline=$(( $(date +%s) + _timeout ))
+  local _cluster="kubernetes-${_test_name}"
+  local _vm _vmi _pvc _pvc_all
   while :; do
-    _vm=$(kubectl -n "$_ns" get virtualmachines.kubevirt.io -o name 2>/dev/null) || _vm=err
-    _vmi=$(kubectl -n "$_ns" get virtualmachineinstances.kubevirt.io -o name 2>/dev/null) || _vmi=err
-    _pvc=$(kubectl -n "$_ns" get pvc -o name 2>/dev/null) || _pvc=err
+    _vm=$(kubectl -n "$_ns" get virtualmachines.kubevirt.io \
+      -l "cluster.x-k8s.io/cluster-name=${_cluster}" -o name 2>/dev/null) || _vm=err
+    _vmi=$(kubectl -n "$_ns" get virtualmachineinstances.kubevirt.io \
+      -l "cluster.x-k8s.io/cluster-name=${_cluster}" -o name 2>/dev/null) || _vmi=err
+    if _pvc_all=$(kubectl -n "$_ns" get pvc -o name 2>/dev/null); then
+      _pvc=$(cozy_filter_cluster_pvcs "$_test_name" "$_pvc_all")
+    else
+      _pvc=err
+    fi
     if cozy_tenant_drained "$_vm" "$_vmi" "$_pvc"; then
-      echo "» tenant VMs/VMIs/PVCs drained from $_ns"
+      echo "» ${_cluster} VMs/VMIs/PVCs drained from $_ns"
       return 0
     fi
     if [ "$(date +%s)" -ge "$_deadline" ]; then
-      echo "» WARNING: tenant teardown did not drain within ${_timeout}s; continuing (next test may face memory/storage pressure)" >&2
-      kubectl -n "$_ns" get virtualmachines.kubevirt.io,virtualmachineinstances.kubevirt.io,pvc 2>&1 | sed 's/^/  drain-leftover: /' >&2 || true
+      echo "» ERROR: ${_cluster} teardown did not drain within ${_timeout}s; the next test would face memory/storage pressure" >&2
+      printf '%s\n' "$_vm" "$_vmi" "$_pvc" |
+        awk 'NF { print "  drain-leftover: " $0 }' >&2
       return 1
     fi
     sleep 5
@@ -241,9 +416,9 @@ cozy_wait_schedulable_node() {
 # autoPlace=3 places one replica per node) plus two 21 GiB CDI scratch
 # PVCs (worst case both landing on the same node via the local
 # storageClass) yields a ~82 GiB per-satellite peak footprint; 90 GiB
-# default threshold covers that with margin. Bounded and best-effort like
-# cozy_wait_tenant_drained: caller wraps in `|| true`, timeout returns
-# loudly.
+# default threshold covers that with margin. The wait is bounded and
+# authoritative: cleanup propagates its timeout so the next suite cannot start
+# on storage whose reclamation was never observed.
 cozy_wait_linstor_pool_free() {
   _min_free_gib="${1:-90}"
   _timeout="${2:-300}"
@@ -276,12 +451,124 @@ cozy_wait_linstor_pool_free() {
       return 0
     fi
     if [ "$(date +%s)" -ge "$_deadline" ]; then
-      echo "» WARNING: LINSTOR ZFS pool free did not reach ${_min_free_gib} GiB on every satellite within ${_timeout}s (smallest observed: ${_min_kib:-unknown} KiB on ${_min_node:-unknown}); continuing (next test may face zfs create out-of-space)" >&2
-      kubectl -n cozy-linstor exec deploy/linstor-controller -- linstor --no-color sp l 2>&1 | sed 's/^/  linstor-pool: /' >&2 || true
+      echo "» ERROR: LINSTOR ZFS pool free did not reach ${_min_free_gib} GiB on every satellite within ${_timeout}s (smallest observed: ${_min_kib:-unknown} KiB on ${_min_node:-unknown})" >&2
+      _pool_diag_rc=0
+      _pool_diag=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- linstor --no-color sp l 2>&1) || _pool_diag_rc=$?
+      if [ "$_pool_diag_rc" -ne 0 ]; then
+        echo "  linstor-pool: diagnostic read failed with exit $_pool_diag_rc" >&2
+      fi
+      printf '%s\n' "$_pool_diag" | sed 's/^/  linstor-pool: /' >&2
       return 1
     fi
     sleep 5
   done
+}
+
+# Capture the local lane's per-node free-capacity baseline after stale tenant
+# cleanup and before creating this suite's workers. Chainsaw executes `try` and
+# `finally` in separate shells, so the small state file is the hand-off between
+# them. An absolute threshold cannot describe this lane: persistent platform
+# PVCs legitimately leave one pool far below 90 GiB, while all three sparse
+# pools also share one runner filesystem beneath ZFS.
+cozy_capture_linstor_pool_baseline() {
+  _baseline_file="${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
+  _baseline_dir=${_baseline_file%/*}
+  [ "$_baseline_dir" != "$_baseline_file" ] || _baseline_dir=.
+  mkdir -p "$_baseline_dir"
+  : >"$_baseline_file"
+
+  _baseline=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
+    linstor --machine-readable sp l 2>/dev/null |
+    jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.node_name):\(.free_capacity)\"" |
+    sort
+  ' 2>/dev/null) || _baseline=""
+  if [ -z "$_baseline" ]; then
+    echo "» ERROR: could not record the local LINSTOR pool baseline; physical ZFS reclamation would be unverifiable" >&2
+    return 1
+  fi
+  _baseline_nodes=$(printf '%s\n' "$_baseline" | awk -F: 'NF == 2 { print $1 }' | sort | tr '\n' ' ')
+  if [ "$_baseline_nodes" != "srv1 srv2 srv3 " ] \
+      || ! cozy_linstor_pools_at_baseline "$_baseline" "$_baseline" 0; then
+    echo "» ERROR: local LINSTOR pool baseline is incomplete or malformed (expected numeric rows for srv1, srv2 and srv3): ${_baseline:-<empty>}" >&2
+    return 1
+  fi
+  printf '%s\n' "$_baseline" >"$_baseline_file"
+  echo "» local LINSTOR pool baseline recorded:"
+  printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /'
+}
+
+# Pure comparison used by the local-pool reclamation loop. Both captures contain
+# `node:free_capacity_kib` rows. Every node present in the baseline must still be
+# present and may fall short only by the small caller-provided metadata tolerance.
+# The 512 MiB default covers the ~0.27 GiB free-capacity drift measured between
+# two otherwise-clean container suites, while still rejecting the smallest known
+# leaked test volume (the 1 GiB ClickHouse keeper PVC).
+cozy_linstor_pools_at_baseline() {
+  _baseline_rows="$1"
+  _current_rows="$2"
+  _tolerance_kib="${3:-524288}"
+  [ -n "$_baseline_rows" ] && [ -n "$_current_rows" ] || return 1
+  case "$_tolerance_kib" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+
+  while IFS=: read -r _baseline_node _baseline_kib; do
+    [ -n "$_baseline_node" ] && [ -n "$_baseline_kib" ] || return 1
+    _current_kib=$(printf '%s\n' "$_current_rows" | awk -F: -v node="$_baseline_node" '$1 == node { print $2; exit }')
+    [ -n "$_current_kib" ] || return 1
+    case "$_baseline_kib" in '' | *[!0-9]*) return 1 ;; esac
+    case "$_current_kib" in '' | *[!0-9]*) return 1 ;; esac
+    if [ "$(( _current_kib + _tolerance_kib ))" -lt "$_baseline_kib" ]; then
+      return 1
+    fi
+  done <<EOF
+$_baseline_rows
+EOF
+  return 0
+}
+
+cozy_wait_linstor_pool_baseline() {
+  _timeout="${1:-300}"
+  _tolerance_kib="${2:-524288}"
+  _baseline_file="${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
+  if [ ! -s "$_baseline_file" ]; then
+    echo "» ERROR: no local LINSTOR pool baseline was recorded; physical ZFS reclamation is unknown" >&2
+    return 1
+  fi
+  _baseline=$(cat "$_baseline_file")
+  _deadline=$(( $(date +%s) + _timeout ))
+  _current=""
+  while :; do
+    _current=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
+      linstor --machine-readable sp l 2>/dev/null |
+      jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.node_name):\(.free_capacity)\"" |
+      sort
+    ' 2>/dev/null) || _current=""
+    if cozy_linstor_pools_at_baseline "$_baseline" "$_current" "$_tolerance_kib"; then
+      echo "» local LINSTOR pools returned to their pre-suite baseline"
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$_deadline" ]; then
+      echo "» ERROR: local LINSTOR pools did not return to their pre-suite baseline within ${_timeout}s; a worker or CDI scratch volume may still occupy ZFS space" >&2
+      printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /' >&2
+      printf '%s\n' "${_current:-<the LINSTOR pool probe returned nothing>}" | sed 's/^/  current-free-kib: /' >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+# The absolute 90 GiB threshold describes only the replicated lane's DRBD
+# teardown. The local lane instead waits for the exact capacity it had before
+# this Kubernetes suite, which detects its own leaked worker/scratch volumes
+# without requiring persistent platform volumes to disappear.
+cozy_wait_linstor_pool_reclaimed() {
+  _storage_class=$(cozy_e2e_storage_class) || return 1
+  if [ "$_storage_class" = local ]; then
+    cozy_wait_linstor_pool_baseline "${2:-300}" 524288
+    return $?
+  fi
+  cozy_wait_linstor_pool_free "${1:-90}" "${2:-300}"
 }
 
 # Unconditional cleanup hook, invoked from the kubernetes-* tests' Chainsaw
@@ -290,40 +577,71 @@ cozy_wait_linstor_pool_free() {
 # Chainsaw's auto-cleanup does not track it — `finally` is where it gets
 # reclaimed. A failed run otherwise leaves the tenant cluster's worker-VM PVCs
 # (tens of GiB) in tenant-test, exhausting the shared tenant-quota and
-# cascade-failing every storage-heavy suite that runs afterwards. Best-effort
-# (each delete is `|| true`) so a slow teardown never flips a passing test red.
+# cascade-failing every storage-heavy suite that runs afterwards. Cleanup
+# failures are accumulated so every safe reclamation attempt still runs, then
+# returned to Chainsaw: a passing workload on a dirty sandbox is not a pass.
 cozy_cleanup() {
+  local test_name="${1:-}"
+  local cleanup_failed=0
   # Delete any test-scoped tenant API LoadBalancer Services left by a failed run
   # so they don't leak MetalLB IPs from the shared host pool. Labeled by the
   # test so a single selector reaps them all.
-  kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null || true
+  if ! kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null; then
+    echo "» ERROR: failed to delete tenant API LoadBalancer Services" >&2
+    cleanup_failed=1
+  fi
   # A failed node-join capture creates a short-lived reader Certificate and a
   # hardened helper Pod. They are labelled separately from the tenant API LB:
   # the Secret contains a Talos client key and must be reaped even if the
   # diagnostic collector itself returned early.
   if ! kubectl -n tenant-test delete certificates.cert-manager.io -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=true --timeout=30s 2>/dev/null; then
-    echo "» WARNING: failed to delete tenant Talos diagnostic Certificates" >&2
+    echo "» ERROR: failed to delete tenant Talos diagnostic Certificates" >&2
+    cleanup_failed=1
   fi
   if ! kubectl -n tenant-test delete pod,secret -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=false 2>/dev/null; then
-    echo "» WARNING: failed to delete tenant Talos diagnostic Pod/Secret" >&2
+    echo "» ERROR: failed to delete tenant Talos diagnostic Pod/Secret" >&2
+    cleanup_failed=1
   fi
   # Delete worker node pools (KubernetesNodes) before the parent Kubernetes CR:
   # the pool owns the workers and its pre-delete hook unpins the adopted objects
   # so uninstall is clean. Chainsaw does not track this imperatively applied CR,
   # so cozy_cleanup must reap it too.
-  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test wait kubernetesnodeses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
-  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
+  local child_drained=0
+  if ! kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io --all --ignore-not-found --wait=true --timeout=5m 2>/dev/null; then
+    echo "» ERROR: tenant KubernetesNodes did not delete within 5m" >&2
+    cleanup_failed=1
+  else
+    child_drained=1
+  fi
+  if [ "$child_drained" -eq 1 ]; then
+    if ! kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=true --timeout=5m 2>/dev/null; then
+      echo "» ERROR: tenant Kubernetes resources did not delete within 5m" >&2
+      cleanup_failed=1
+    fi
+  else
+    echo "» ERROR: refusing to delete parent Kubernetes resources while KubernetesNodes remain" >&2
+  fi
   # The CR delete above finalizes once the Kubernetes CR is gone, which only
   # TRIGGERS KubeVirt VM teardown + PVC release. Block until the worker VMs,
   # VMIs (guest RAM) and disk PVCs are actually gone so the next tenant test
   # starts on a freed sandbox -- the root cause of the node-join flake.
-  cozy_wait_tenant_drained 300 || true
-  # PVC removal at the API level does not imply the satellite ZFS pool has
-  # reclaimed the space (see comment on cozy_wait_linstor_pool_free above);
-  # wait for FreeCapacity to return before yielding to the next tenant test.
-  cozy_wait_linstor_pool_free 90 300 || true
+  if [ -n "${test_name}" ]; then
+    if ! cozy_wait_tenant_drained "${test_name}" 300; then
+      echo "» ERROR: scoped tenant resources did not drain" >&2
+      cleanup_failed=1
+    fi
+  else
+    echo "» ERROR: cleanup has no test name; scoped tenant drain cannot be verified" >&2
+    cleanup_failed=1
+  fi
+  # In the replicated lane, wait for the DRBD-safe absolute threshold. In the
+  # local lane, wait for this suite's saved per-node baseline instead: that still
+  # catches delayed physical teardown without requiring platform PVCs to vanish.
+  if ! cozy_wait_linstor_pool_reclaimed 90 300; then
+    echo "» ERROR: LINSTOR capacity did not return to the pre-suite level" >&2
+    cleanup_failed=1
+  fi
+  return "$cleanup_failed"
 }
 
 # Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
@@ -334,10 +652,8 @@ cozy_cleanup() {
 # in-cluster URL is unreachable from the runner), which is the LB IP and stays
 # routable until teardown. CURRENT_TENANT_KC is a global so the handler can read
 # it regardless of function scope at EXIT-trap time.
-# Where a suite's captures land, spelled once. Two callers reach for the bare
-# directory rather than a subdirectory of it -- this handler and the softened
-# node-join path -- and a marker written beside a directory the snapshot no
-# longer uses is a marker beside nothing.
+# Where a suite's captures land, spelled once, so a handler that writes beside
+# the snapshot cannot drift from where the snapshot actually goes.
 _cozy_suite_snapshot_dir() {
   printf '%s\n' "${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}"
 }
@@ -812,6 +1128,56 @@ cozy_assert_guest_console_attached() {
   return 2
 }
 
+# Summarise the kubelet-image leg from one already-captured guest console. Talos
+# does not print a separate "pull complete" line: the next kubelet milestone is
+# Creating service runner, after the image has been fetched and unpacked. Keep
+# that distinction in the label. The source is explicit because e2e deliberately
+# leaves the chart's registryMirrors empty and exercises the public GHCR path.
+_cozy_guest_kubelet_image_timing() {
+  local pod="$1"
+  local console_log="$2"
+  awk -v pod="$pod" '
+    function guest_seconds(line, value) {
+      value = line
+      sub(/^\[[[:space:]]*/, "", value)
+      sub(/\].*$/, "", value)
+      return value + 0
+    }
+    /pulling image ghcr\.io\/siderolabs\/kubelet:/ && !have_start {
+      have_start = 1
+      started = guest_seconds($0)
+      image = $0
+      sub(/^.*pulling image /, "", image)
+      sub(/: starting\.\.\..*$/, "", image)
+      next
+    }
+    have_start && !have_runner && /service\[kubelet\]\(Preparing\): Creating service runner/ {
+      have_runner = 1
+      runner = guest_seconds($0)
+    }
+    have_start && !have_healthy && /service\[kubelet\]\(Running\): Health check successful/ {
+      have_healthy = 1
+      healthy = guest_seconds($0)
+    }
+    END {
+      if (!have_start) {
+        exit
+      }
+      printf "» tenant worker %s guest timing: kubelet image %s", pod, image
+      if (have_runner) {
+        printf " fetch+unpack %.3fs (guest %.3fs -> %.3fs)", runner - started, started, runner
+      } else {
+        printf " fetch+unpack incomplete (started at guest %.3fs)", started
+      }
+      if (have_healthy) {
+        printf "; kubelet healthy at guest %.3fs", healthy
+      }
+      printf "; source=ghcr.io (no e2e registry mirror)"
+      printf "\n"
+    }
+  ' "$console_log"
+}
+
 # Capture each tenant worker's guest serial console from the management
 # cluster. When a node group sets logSerialConsole, KubeVirt streams the
 # console into a guest-console-log container beside virt-launcher, and reading
@@ -997,6 +1363,10 @@ cozy_capture_tenant_serial_console() {
           >>"${report_dir}/${pod}.log"
       fi
     fi
+    # Reuse the console bytes just read rather than paying for another API/log
+    # call in the successful timing report. Best-effort: a guest that has not
+    # reached the pull yet is already described by the full capture itself.
+    _cozy_guest_kubelet_image_timing "${pod}" "${report_dir}/${pod}.log" || true
     # The wall clock the log's own stamps have to be read against. Every line a
     # guest prints is stamped in seconds since that guest's kernel started, so
     # the file says how far the guest had got and nothing about when that was.
@@ -3744,12 +4114,9 @@ COZY_DIAG_RATE_INTERVAL_DEFAULT=12
 # answers to, and raising the budget without raising the operation moves the
 # snapshot past the end of the window.
 #
-# What a budget of this size gives up first is what is gated last --
-# ghcr_mirror_diagnose and talos_image_cache_diagnose. Neither loses its subject
-# entirely: the mirror's state is partly recoverable from the request counts and
-# response durations the mirror capture records against its own log, and from
-# the kube-system snapshot the host report takes. The image cache's re-probe has
-# no substitute, and it is the collector this budget gives up first.
+# What a budget of this size gives up first is what is gated last -- the
+# talos_image_cache_diagnose re-probe. It has no substitute, but it is also the
+# heaviest late collector because it creates a Pod and waits on curl retries.
 #
 # Only part of what runs ahead of the console is held mechanically, and the
 # boundary is worth naming rather than leaving a reader to trust the whole of
@@ -3905,7 +4272,7 @@ cozy_diag_phase_start() {
   # an unchecked list sitting beside a checked one, drifting from it at whatever
   # rate collectors are added.
   command -v timeout >/dev/null 2>&1 || \
-    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, worker block IO counter, sandbox node CPU time, sandbox kernel KVM counters, runner kernel CPU time, sandbox QEMU per-thread CPU time, runner fixed-work canary, worker per-thread CPU time, ghcr-mirror and talos-image-cache captures -- keep collecting instead, unbounded" >&2
+    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, worker block IO counter, sandbox node CPU time, sandbox kernel KVM counters, runner kernel CPU time, sandbox QEMU per-thread CPU time, runner fixed-work canary, worker per-thread CPU time and talos-image-cache capture -- keep collecting instead, unbounded" >&2
   # Re-checked here, not only at assignment: a value set after this file is sourced
   # -- which is how a test sets it -- would otherwise reach the arithmetic below
   # unvalidated, and that is the one failure that costs the whole block.
@@ -4473,27 +4840,6 @@ cozy_report_node_join_failure() {
     cozy_capture_tenant_talos "${test_name}" || true
   fi
 
-  # The OS-image cache and the ghcr.io mirror fail independently and produce the
-  # same symptom from outside the guest, so both get dumped: this one answers
-  # whether the worker's kubelet-image pull reached the mirror or fell back to
-  # public ghcr.io, which the node-join failure alone cannot distinguish. Gated
-  # like its neighbours, and after the guest captures. Bounded read by read
-  # like the collector at (d2), but five of them at COZY_DIAG_READ_TIMEOUT plus
-  # grace, so it can spend a quarter of the phase budget -- and time is the
-  # only thing the gate rations, so a quarter spent here is a quarter the
-  # guest captures do not get. Cost is not what settles the order, though, or
-  # (d2) would sit here too: what settles it is whether the answer survives
-  # being declined. The console evidence this would starve is irreplaceable
-  # and (d2)'s question has no other answer in the tree, while the mirror's
-  # state is partly recoverable from the reads above -- so those two go first
-  # and this one waits, whichever of them is cheaper. Cheaper than the
-  # talos-image-cache re-probe below, which creates a Pod and waits on curl
-  # retries, so it goes ahead of it.
-  if cozy_diag_phase_has_time 'ghcr-mirror state, access log and warm-up Job'; then
-    echo "--- ghcr-mirror state, access log and warm-up Job ---"
-    ghcr_mirror_diagnose || true
-  fi
-
   # Last, and gated on the phase as well as bounded per read, because it is the
   # collector that most needs both: its reachability re-probe creates a Pod, waits
   # on curl retries, and makes seven unbounded management-cluster calls of its own,
@@ -4532,92 +4878,120 @@ cozy_report_node_join_failure() {
 # Machine history that shows the replacement happened at all.
 #
 # 124 is what `timeout` returns when it fired, and it is the only status that
-# means what the marker below is about. The wrapper's other failures are
-# reported with the same non-zero shape and mean something else entirely: 125 is
-# `timeout` failing, 126 and 127 are the shell it was asked to run being
-# unusable or absent, and 128+n is that shell killed by a signal, the OOM killer
-# on a loaded runner among them. Folding those into the softened branch would
-# report "the workers were slow" for a run where the wait never ran, which is
-# the one claim this change must not start making.
+# means the workers were slow. The wrapper's other failures arrive in the same
+# non-zero shape and mean something else entirely: 125 is `timeout` failing, 126
+# and 127 are the shell it was asked to run being unusable or absent, and 128+n
+# is that shell killed by a signal, the OOM killer on a loaded runner among
+# them. Reporting any of those as an expired deadline sends a reader looking at
+# the cluster for a broken harness.
 #
 # No `-k` is given to that `timeout`, so a 137 here is a kill from outside the
-# wait rather than its own escalation, and it stays hard for that reason.
+# wait rather than its own escalation.
 cozy_node_join_deadline_expired() {
   [ "$1" -eq 124 ]
 }
 
-# Record that the node-join deadline, and not something else, is what ended this
-# run. The suite still fails: the exit below this call is 1, so Chainsaw sees a
-# failed test, its whole catch runs, and the JUnit report says what happened.
-# What this function writes is the evidence one layer up needs to tell this
-# failure apart from every other way the suite can go red.
+# Announce the expired node-join deadline as a GitHub annotation, so the reason
+# the suite went red is legible from the run summary without opening the log.
 #
-# The deadline stopped discriminating. Nested virtualisation on these runners
-# degrades far enough that the guest a worker boots in can miss any deadline
-# this test can afford, which is what the four readings that bracket the wait
-# were added to measure. So a red on this one wait no longer separates a product
-# regression from the machine the run landed on, and a signal that cannot
-# separate those teaches a reader to re-run the job -- which is how the reds
-# that do mean something get re-run too. The lanes that block a merge therefore
-# tolerate this one failure and only this one, and they decide that from the
-# marker below rather than from anything they could infer about the run.
+# The `::warning` has to start the line: an indented workflow command still
+# registers, but anything else before the `::` -- a prefix, a timestamp --
+# silently turns the annotation into a log line nobody sees.
 #
-# Two things are written, and each is for a different reader.
-#
-# The annotation is for the reader who never opens the log: a job-level warning
-# is the one surface that reaches them. It is `::warning` rather than `::error`
-# because an error annotation is what a run that actually broke should carry,
-# and this line has to be distinguishable from those at a glance.
-#
-# It survives the two layers between here and the job log, which is worth
-# knowing before anyone moves it: Chainsaw does not print a script's stdout
-# through, it collects it and re-prints it under an `=== STDOUT` heading with
-# eight spaces of indentation on every line. The Actions runner trims leading
-# whitespace before it looks for the `::` (ActionCommand.TryParseV2), so an
-# indented workflow command still registers -- but a change that put anything
-# else before the `::` on this line, a prefix or a timestamp, would silently
-# turn the annotation into a log line nobody sees.
-#
-# The marker is what the lane reads, and it is also what a reader with the
-# report open finds beside the diagnostics. Both uses want the same file, and
-# the lane's use is why it has to be written before the exit rather than derived
-# from the log afterwards. It is written before the diagnostics rather than
-# after them for a reason of the same kind: the diagnostics phase spends minutes
-# and the job cap can end the run inside it, and a marker written after that
-# point is a marker the lane never sees on exactly the runs that spent longest.
-# What it does not give is a cheap count across runs: it lives inside
-# cozyreport.tgz, and no API lists the contents of an artifact, so answering
-# "how often" means fetching and unpacking every run -- and artifacts expire on
-# a retention of their own, the same as logs do.
-#
-# Nothing in here may fail the caller, and the reason is sharper than tidiness:
-# a marker that could not be written turns this run into an ordinary hard red
-# one layer up, which is the safe direction, and it must not also break the
-# failing exit that gets the diagnostics collected. So the writes are guarded
-# and the function returns zero on every path.
-cozy_soft_red_node_join() {
+# Nothing in here may fail the caller. It runs on a path that ends in exit 1,
+# and that exit is what gets the diagnostics collected.
+cozy_note_node_join_deadline() {
   local test_name="$1"
-  local report_dir marker
-  report_dir=$(_cozy_suite_snapshot_dir)
-  marker="${report_dir}/SOFT-RED-node-join.txt"
 
-  echo "::warning title=node-join::${COZY_SNAPSHOT_NAME:-kubernetes}: fewer than 2 tenant nodes Ready within 29m — this test fails and its diagnostics follow below; whether the job blocks over it is decided one layer up, and only the lanes that block a merge tolerate it, because the deadline cannot separate a product regression from a degraded runner"
+  echo "::warning title=node-join::${COZY_SNAPSHOT_NAME:-kubernetes}: fewer than 2 tenant nodes Ready within 29m for ${test_name} — the suite fails here and its diagnostics follow below"
+  return 0
+}
 
-  if ! mkdir -p "${report_dir}" 2>/dev/null; then
-    echo "» WARNING: could not create ${report_dir}, so this run carries no soft-red marker; the warning annotation above is the only record that the node-join deadline expired" >&2
-    return 0
+# Print the successful worker lifecycle in the job log while all of its objects
+# and Events still exist. The top-level durations distinguish time spent before
+# the Ready poll from the poll itself. The event timeline then exposes PVC
+# placement, CDI scratch provisioning, importer/virt-launcher image pulls, the
+# Talos disk import, VM start and CAPI NodeRef assignment without adding waits to
+# the product path. Finally, the cache log reports how long serving the compressed
+# OS image bytes took; DataVolume ImportInProgress -> Completed includes the
+# separate decompression and block-write work and must not be called pull time.
+cozy_report_node_join_timing() {
+  local test_name="$1"
+  local tenant_kubeconfig="$2"
+  local worker_requested_at="$3"
+  local wait_started_at="$4"
+  local wait_finished_at="$5"
+  local suite_started_at="$6"
+  local prefix="kubernetes-${test_name}-md0"
+  local event_rows event_rc=0 node_rows node_rc=0 cache_rows cache_rc=0
+
+  echo "=== successful tenant worker join timing: ${test_name} ==="
+  printf 'worker-pool request -> Ready wait: %ss\n' "$(( wait_started_at - worker_requested_at ))"
+  printf 'two-node Ready wait: %ss\n' "$(( wait_finished_at - wait_started_at ))"
+  printf 'worker-pool request -> two nodes Ready: %ss\n' "$(( wait_finished_at - worker_requested_at ))"
+
+  if command -v timeout >/dev/null 2>&1; then
+    event_rows=$(timeout -k 5 25 kubectl -n tenant-test get events.events.k8s.io \
+      --request-timeout=20s \
+      -o jsonpath='{range .items[*]}{.eventTime}{"\t"}{.series.lastObservedTime}{"\t"}{.deprecatedLastTimestamp}{"\t"}{.metadata.creationTimestamp}{"\t"}{.regarding.kind}{"\t"}{.regarding.name}{"\t"}{.reason}{"\t"}{.note}{"\n"}{end}' 2>&1) || event_rc=$?
+  else
+    event_rows=$(kubectl -n tenant-test get events.events.k8s.io \
+      --request-timeout=20s \
+      -o jsonpath='{range .items[*]}{.eventTime}{"\t"}{.series.lastObservedTime}{"\t"}{.deprecatedLastTimestamp}{"\t"}{.metadata.creationTimestamp}{"\t"}{.regarding.kind}{"\t"}{.regarding.name}{"\t"}{.reason}{"\t"}{.note}{"\n"}{end}' 2>&1) || event_rc=$?
   fi
-  # The write is tested rather than left to stand on its own: under a live
-  # errexit a bare redirect that fails aborts AT the redirect, and the report
-  # this function exists to leave would then be missing without a word about it.
-  if ! printf '%s\n' \
-    "the node-join wait for ${test_name} ended with fewer than 2 tenant nodes Ready within 29m" \
-    'this test FAILED, which is what gets the rest of the evidence collected: the in-process diagnostics and then the Chainsaw catch both run after this file is written -- previous-instance container logs, the host snapshot, the data-plane capture, the event dump -- and the report records a failure' \
-    'the tenant crust-gather snapshot is attempted after this marker is written; when it ran it lands in this directory with a log saying whether it completed or was truncated, and when it could not start at all -- no crust-gather on PATH, no live kubeconfig -- it leaves nothing here and says nothing, so an absent snapshot beside this marker is unexplained rather than explained' \
-    'what the run did NOT reach is everything after the join: the suite stops at this wait, so it asserted nothing about storage, LoadBalancer, addon or ouroboros hairpin-NAT behaviour' \
-    'what this file is for is the layer above: a lane that tolerates this failure reads it to tell this red apart from every other way the suite can go red, and tolerates only this one; not every lane does, so a job that finished green while this file exists is a job that decided not to block on a deadline it cannot attribute, not a job whose suite passed' \
-    >"${marker}" 2>/dev/null; then
-    echo "» WARNING: could not write ${marker}, so this run carries no soft-red marker; the warning annotation above is the only record that the node-join deadline expired" >&2
+  echo "worker provisioning milestones (UTC; image-pull durations are kubelet-reported):"
+  if [ "$event_rc" -eq 0 ]; then
+    printf '%s\n' "$event_rows" | awk -F '\t' -v prefix="$prefix" '
+      BEGIN { OFS = FS }
+      {
+        timestamp = $1
+        if (timestamp == "") timestamp = $2
+        if (timestamp == "") timestamp = $3
+        if (timestamp == "") timestamp = $4
+      }
+      index($6, prefix) && $7 ~ /^(SuccessfulCreate|WaitForFirstConsumer|ProvisioningSucceeded|ImportTargetInUse|Scheduled|Pulling|Pulled|ImportScheduled|Unschedulable|ImportInProgress|Completed|ImportSucceeded|Created|Started|SuccessfulSetNodeRef)$/ {
+        print timestamp, $5, $6, $7, $8
+      }
+    ' | sort | sed 's/^/  /'
+  else
+    echo "  not collected: management-cluster Event read exited ${event_rc}"
+    printf '%s\n' "$event_rows" | sed 's/^/  event-read: /'
+  fi
+
+  if command -v timeout >/dev/null 2>&1; then
+    node_rows=$(timeout -k 5 25 kubectl --kubeconfig "$tenant_kubeconfig" get nodes \
+      --request-timeout=20s \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\tcreated="}{.metadata.creationTimestamp}{"\tReady="}{.status.conditions[?(@.type=="Ready")].lastTransitionTime}{"\n"}{end}' 2>&1) || node_rc=$?
+  else
+    node_rows=$(kubectl --kubeconfig "$tenant_kubeconfig" get nodes \
+      --request-timeout=20s \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\tcreated="}{.metadata.creationTimestamp}{"\tReady="}{.status.conditions[?(@.type=="Ready")].lastTransitionTime}{"\n"}{end}' 2>&1) || node_rc=$?
+  fi
+  echo "tenant Node timestamps (UTC):"
+  if [ "$node_rc" -eq 0 ]; then
+    printf '%s\n' "$node_rows" | sort | sed 's/^/  /'
+  else
+    echo "  not collected: tenant Node read exited ${node_rc}"
+    printf '%s\n' "$node_rows" | sed 's/^/  node-read: /'
+  fi
+
+  if command -v timeout >/dev/null 2>&1; then
+    cache_rows=$(timeout -k 5 25 kubectl -n kube-system logs deploy/talos-image-cache \
+      -c serve --since-time="$suite_started_at" --timestamps=true \
+      --request-timeout=20s 2>&1) || cache_rc=$?
+  else
+    cache_rows=$(kubectl -n kube-system logs deploy/talos-image-cache \
+      -c serve --since-time="$suite_started_at" --timestamps=true \
+      --request-timeout=20s 2>&1) || cache_rc=$?
+  fi
+  echo "Talos OS cache transfers since suite start (compressed-byte service time, not CDI decompression/write time):"
+  if [ "$cache_rc" -ne 0 ]; then
+    echo "  not collected: talos-image-cache log read exited ${cache_rc}"
+    printf '%s\n' "$cache_rows" | sed 's/^/  cache-log-read: /'
+  elif printf '%s\n' "$cache_rows" | grep -F 'transfer-finished' | grep -Fq 'openstack-amd64.raw.xz'; then
+    printf '%s\n' "$cache_rows" | grep -F 'transfer-finished' | grep -F 'openstack-amd64.raw.xz' | sed 's/^/  /'
+  else
+    echo "  no openstack-amd64.raw.xz transfer outcome was logged (mirror fallback or a pre-instrumentation cache pod)"
   fi
   return 0
 }
@@ -4632,6 +5006,12 @@ run_kubernetes_test() {
     # to flip one addon flag — kubernetes-latest passes "true", kubernetes-
     # previous leaves it empty.
     local enable_ouroboros="${4:-}"
+    # Optional: exercise both OIDC modes on the already-running latest cluster.
+    # The previous-version suite leaves it empty because OIDC is feature
+    # coverage, not a compatibility matrix that justifies another upgrade.
+    local enable_oidc="${5:-}"
+    local storage_class
+    storage_class=$(cozy_e2e_storage_class) || return 1
     local k8s_version
     k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
@@ -4642,14 +5022,37 @@ run_kubernetes_test() {
   # be prevented from turning a green run red is to know how long this has been
   # running. Nothing else reads it.
   _COZY_RUN_STARTED_AT=$(date +%s)
+  local _cozy_run_started_rfc3339
+  _cozy_run_started_rfc3339=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-  # Clean up stale resources from a previous failed retry. Delete the worker
-  # pool (KubernetesNodes) before the parent Kubernetes CR so a rerun re-creates
-  # the MachineDeployment instead of no-op'ing on a surviving child HelmRelease.
-  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test wait kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --for=delete --timeout=2m 2>/dev/null || true
-  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "${test_name}" --for=delete --timeout=2m 2>/dev/null || true
+  # Clean up stale resources from a previous failed run. Delete the worker pool
+  # (KubernetesNodes) before the parent Kubernetes CR so a rerun re-creates the
+  # MachineDeployment instead of no-op'ing on a surviving child HelmRelease.
+  # These are blocking deletes because recording a baseline while old workers
+  # still own their disks would bless the leftover capacity as the new normal.
+  if ! kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=true --timeout=2m; then
+    echo "failed to delete stale KubernetesNodes ${test_name}-md0" >&2
+    return 1
+  fi
+  if ! kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=true --timeout=2m; then
+    echo "failed to delete stale Kubernetes ${test_name}" >&2
+    return 1
+  fi
+  if ! cozy_wait_tenant_drained "${test_name}" 300; then
+    echo "stale tenant compute or storage remains for ${test_name}" >&2
+    return 1
+  fi
+
+  # The local lane cannot use the replicated lane's absolute free-capacity
+  # threshold because persistent platform volumes already put one pool below it.
+  # Save the post-stale-cleanup state for the separate Chainsaw `finally` shell;
+  # cleanup later verifies that this suite returned every node to these figures.
+  if [ "$storage_class" = local ]; then
+    if ! cozy_capture_linstor_pool_baseline; then
+      echo "cannot verify local LINSTOR reclamation without a complete baseline" >&2
+      return 1
+    fi
+  fi
 
   # Compose the optional ouroboros addon block. Indentation matches the
   # surrounding addons map (4 spaces).
@@ -4669,11 +5072,24 @@ YAML
 )
   fi
 
-  # Point worker DataVolume imports at the in-sandbox Talos OS image cache and
-  # worker image pulls at the in-sandbox ghcr.io mirror when each is up (falls back
-  # to the public defaults otherwise). Emitted right under spec: as
-  # `talos: { imageFactoryURL: ..., registryMirrors: {...} }`, or nothing when both
-  # defaults apply.
+  local oidc_block=""
+  if [ "${enable_oidc}" = "true" ]; then
+    oidc_block=$(cat <<'YAML'
+  oidc:
+    mode: System
+    users:
+    - email: e2e-admin@example.test
+      role: admin
+    - email: e2e-viewer@example.test
+      role: view
+YAML
+)
+  fi
+
+  # Point worker DataVolume imports at the in-sandbox Talos OS image cache when it
+  # is up, falling back to the public factory otherwise. Worker image pulls use
+  # the chart's public-registry default. Emitted right under spec: as
+  # `talos: { imageFactoryURL: ... }`, or nothing when the default applies.
   local talos_block
   talos_block=$(talos_spec_block)
 
@@ -4685,6 +5101,7 @@ metadata:
   namespace: tenant-test
 spec:
 ${talos_block}
+${oidc_block}
   addons:
     certManager:
       enabled: false
@@ -4729,7 +5146,7 @@ ${ouroboros_addon}
       resources: {}
       resourcesPreset: micro
   host: ""
-  storageClass: replicated
+  storageClass: "${storage_class}"
   version: "${k8s_version}"
 EOF
 
@@ -4738,6 +5155,8 @@ EOF
   # kubernetes-${test_name}-md0 — the same object the pre-split
   # spec.nodeGroups.md0 produced, which the waits below still key on. Carries
   # roles: [ingress-nginx] so the ingress-nginx addon has a node to schedule on.
+  local _worker_pool_requested_at
+  _worker_pool_requested_at=$(date +%s)
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: KubernetesNodes
@@ -4786,7 +5205,7 @@ ${talos_block}
     memory: 4Gi
   roles:
   - ingress-nginx
-  storageClass: replicated
+  storageClass: "${storage_class}"
   version: "${k8s_version}"
 EOF
   # Wait for the tenant-test namespace to be active
@@ -4854,7 +5273,8 @@ EOF
   # additive — no change to the product Kamaji/Kubernetes chart.
   #
   # Clean up a stale LB from a previous failed retry of this same test first.
-  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" \
+    --ignore-not-found --wait=true --timeout=60s
   kubectl apply -n tenant-test -f - <<EOF
 apiVersion: v1
 kind: Service
@@ -4944,11 +5364,14 @@ EOF
   # The status is kept rather than tested in place, because what this branch
   # does next depends on which non-zero it was and `if !` throws that away.
   local _join_rc=0
+  local _join_wait_started_at _join_wait_finished_at
+  _join_wait_started_at=$(date +%s)
   timeout 29m bash -c '
     until [ "$(kubectl --kubeconfig "tenantkubeconfig-'"${test_name}"'" get nodes --no-headers 2>/dev/null | grep -cw Ready)" -ge 2 ]; do
       sleep 5
     done
   ' || _join_rc=$?
+  _join_wait_finished_at=$(date +%s)
   if [ "${_join_rc}" -ne 0 ]; then
     # Node-join failed: fewer than 2 tenant nodes became Ready inside the 29m
     # deadline, or the wait itself could not run. Record which of the two it was,
@@ -4956,16 +5379,14 @@ EOF
     # checks below need Ready nodes and would report their absence as their own
     # failure.
     #
-    # Both cases exit 1, and that is the point: the suite stays red, so Chainsaw
-    # runs its whole catch and the report says a test failed. What differs is
-    # only whether a marker is left behind, and whether a lane reads that marker
-    # is what decides if this particular red blocks a merge. The marker is written
-    # ahead of the diagnostics rather than behind them because the diagnostics
-    # spend minutes under a job cap that can end the run inside them.
+    # Both cases exit 1: the suite stays red, so Chainsaw runs its whole catch
+    # and the report says a test failed. What differs is only which of the two
+    # the log names, because "the workers were slow" and "the wait never ran"
+    # send a reader to different places.
     if cozy_node_join_deadline_expired "${_join_rc}"; then
-      cozy_soft_red_node_join "${test_name}"
+      cozy_note_node_join_deadline "${test_name}"
     else
-      echo "the node-join wait did not run to its deadline (exit ${_join_rc}); this is the wait failing rather than the nodes, and it is not what the lane tolerates" >&2
+      echo "the node-join wait did not run to its deadline (exit ${_join_rc}); this is the wait failing rather than the nodes" >&2
     fi
     cozy_report_node_join_failure "${test_name}"
     exit 1
@@ -5016,6 +5437,13 @@ EOF
     echo "» WARNING: the runner fixed-work canary did not read inside the range its own legend calls healthy after the node-join wait, so this run passed on a machine that was not getting the work done at this layer; which arm it was and what figure it gave is written into the capture" >&2
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
+  cozy_report_node_join_timing \
+    "$test_name" \
+    "tenantkubeconfig-${test_name}" \
+    "$_worker_pool_requested_at" \
+    "$_join_wait_started_at" \
+    "$_join_wait_finished_at" \
+    "$_cozy_run_started_rfc3339" || true
 
   # Verify the kubelet version matches what we expect
   versions=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" \
@@ -5050,9 +5478,9 @@ EOF
 
   # Clean up backend resources from any previous failed attempt
   kubectl delete deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
-    -n tenant-test --ignore-not-found --timeout=60s || true
+    -n tenant-test --ignore-not-found --timeout=60s
   kubectl delete service --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
-    -n tenant-test --ignore-not-found --timeout=60s || true
+    -n tenant-test --ignore-not-found --timeout=60s
 
   # Start the workload's clock from a node that accepts Pods, not from a node
   # that is merely Ready. Both instances of run 31020254620 spent 2m18s and
@@ -5218,6 +5646,9 @@ EOF
   # the 5m pod-Succeeded budget when containerd's CreateContainer stalls.
   kubectl wait hr -n tenant-test "kubernetes-${test_name}-csi" --timeout=10m --for=condition=ready
 
+  if [ "$storage_class" = local ]; then
+    echo "Skipping remote StorageClass propagation and RWX NFS assertions for local-only E2E storage"
+  else
   # ----------------------------------------------------------------------
   # StorageClass propagation (issue #2094). Remote-accessible LINSTOR infra
   # classes propagate to the tenant under the same name; node-local classes
@@ -5264,9 +5695,9 @@ EOF
 
   # Clean up NFS test resources from any previous failed attempt
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod \
-    -n tenant-test --ignore-not-found --timeout=60s || true
+    -n tenant-test --ignore-not-found --timeout=60s
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc \
-    -n tenant-test --ignore-not-found --timeout=60s || true
+    -n tenant-test --ignore-not-found --timeout=60s
 
   # Test RWX NFS mount in tenant cluster (uses kubevirt CSI driver with RWX support)
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" apply -f - <<EOF
@@ -5321,14 +5752,19 @@ EOF
   nfs_result=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" logs nfs-test-pod -n tenant-test)
   if [ "$nfs_result" != "nfs-mount-ok" ]; then
     echo "NFS mount test failed: expected 'nfs-mount-ok', got '$nfs_result'" >&2
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod -n tenant-test --wait=false 2>/dev/null || true
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc -n tenant-test --wait=false 2>/dev/null || true
+    if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod -n tenant-test --wait=false 2>/dev/null; then
+      echo "failed to start NFS test Pod cleanup after the data-integrity failure" >&2
+    fi
+    if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc -n tenant-test --wait=false 2>/dev/null; then
+      echo "failed to start NFS test PVC cleanup after the data-integrity failure" >&2
+    fi
     exit 1
   fi
 
   # Cleanup NFS test resources in tenant cluster
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod -n tenant-test --wait
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc -n tenant-test
+  fi
 
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
@@ -5448,7 +5884,7 @@ EOF
       # delete defaults to --wait=true, so it returns only once any stale Pod is
       # fully gone; the subsequent run cannot race an AlreadyExists.
       kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
-        delete pod dnscheck --ignore-not-found 2>/dev/null || true
+        delete pod dnscheck --ignore-not-found --timeout=60s
       kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
         run dnscheck --image=nicolaka/netshoot:v0.13 --restart=Never \
         --command -- sh -c "
@@ -5541,9 +5977,9 @@ EOF
     fi
 
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
-      delete pod dnscheck --ignore-not-found 2>/dev/null || true
+      delete pod dnscheck --ignore-not-found --timeout=60s
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
-      delete ingress hairpin-probe --ignore-not-found 2>/dev/null || true
+      delete ingress hairpin-probe --ignore-not-found --timeout=60s
   fi
 
   # Wait for the parent kubernetes-${test_name} HR to be Ready before the
@@ -5554,6 +5990,19 @@ EOF
   # because kstatus walks all applied resources before flipping the parent
   # Ready.
   kubectl wait hr -n tenant-test "kubernetes-${test_name}" --timeout=5m --for=condition=ready
+
+  # The two old OIDC suites created control-plane-only clusters whose useful
+  # assertions took seconds and whose pre-delete hooks then spent two full
+  # 120s waits trying to uninstall child releases without a worker. Reuse the
+  # real latest-version cluster instead: prove System mode after its bootstrap
+  # hook has reached the tenant API, then exercise an actual System ->
+  # CustomConfig upgrade and prove the System-only objects are reaped.
+  if [ "${enable_oidc}" = "true" ]; then
+    echo "Verifying OIDC System mode on the running tenant cluster..."
+    cozy_assert_oidc_system "${test_name}"
+    echo "Switching the running tenant cluster to OIDC CustomConfig mode..."
+    cozy_switch_and_assert_oidc_custom_config "${test_name}"
+  fi
 
   # Guard: parent HelmRelease must not have entered an install/upgrade remediation cycle.
   # A non-zero installFailures/upgradeFailures indicates the helm-wait budget expired while
@@ -5646,12 +6095,11 @@ EOF
   trap - EXIT
   # Clean up: delete the test-scoped tenant API LoadBalancer (frees its MetalLB
   # IP) and the local kubeconfig.
-  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false
   rm -f "tenantkubeconfig-${test_name}"
-  # Delete the worker pool (KubernetesNodes) before the parent Kubernetes CR so
-  # its pre-delete unpin hook runs and the child HelmRelease does not leak.
-  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
+  # The Chainsaw finally block owns the authoritative child -> parent teardown
+  # and the physical-storage barrier. Keeping it in one place prevents an
+  # asynchronous success-path delete from hiding which stage failed.
 
 }
 
@@ -5675,6 +6123,9 @@ EOF
 # storageClasses map.
 verify_storageclass_fallback_default() {
   echo "Verifying tenant default StorageClass selection with no 'replicated' class (PR #2872 B1 regression)..."
+
+  local storage_class
+  storage_class=$(cozy_e2e_storage_class) || return 1
 
   # Pre-cleanup: drop probe classes leaked by a previous failed run.
   kubectl delete sc nvme ssd --ignore-not-found
@@ -5720,11 +6171,12 @@ EOF
     -f packages/apps/kubernetes/tests/values/common.yaml -o json 2>/tmp/sc-fallback-render.err)
   rc=$?
 
-  # Restore management-cluster StorageClasses (inline, unconditional). This MUST
-  # run before any assertion `exit 1` below, so no EXIT/RETURN trap is used
-  # (per docs/agents/e2e-testing.md). The "replicated" manifest mirrors
-  # hack/e2e-post-install-prep.sh.
-  kubectl apply -f - <<'EOF'
+  # Restore the QEMU lane's management-cluster StorageClass inline before any
+  # assertion exit. The local-only container lane had no replicated class to
+  # restore. No EXIT/RETURN trap is used (docs/agents/e2e-testing.md), and the
+  # manifest mirrors hack/e2e-post-install-prep.sh.
+  if [ "$storage_class" = replicated ]; then
+    kubectl apply -f - <<'EOF'
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -5742,6 +6194,7 @@ parameters:
 volumeBindingMode: Immediate
 allowVolumeExpansion: true
 EOF
+  fi
   kubectl delete sc nvme ssd --ignore-not-found
 
   if [ "$rc" -ne 0 ] || [ -z "$raw" ]; then

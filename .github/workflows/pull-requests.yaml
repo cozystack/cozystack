@@ -502,8 +502,6 @@ jobs:
           PUBLISH_FLOATING: '0'
           # Fork PR: export to OCI archive instead of pushing (see build job).
           OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
-      - name: Build Talos nocloud disk
-        run: make -C packages/core/talos talos-nocloud
       - name: Capture Talos patch fragment
         run: |
           mkdir -p _out/fragments
@@ -522,12 +520,6 @@ jobs:
         with:
           name: pr-oci-talos
           path: _out/oci/*.oci.tar
-          if-no-files-found: error
-      - name: Upload Talos image
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: talos-image
-          path: _out/assets/nocloud-amd64.raw.xz
           if-no-files-found: error
 
   # Reassemble the unified pr.patch from every fragment, then build the installer
@@ -811,7 +803,15 @@ jobs:
             core.setOutput('disk_id',     diskId);
 
 
-  # In-tree e2e for SAME-REPO PRs. Deliberately NOT named "E2E Tests": the
+  # In-tree e2e for SAME-REPO PRs, on Talos nodes running as CONTAINERS. The
+  # QEMU substrate this lane used to boot is not wired into any workflow now;
+  # `make -C packages/core/testing prepare-cluster` and hack/e2e-prepare-cluster.bats
+  # stay in the tree for the trimmed nightly lane that will carry the coverage
+  # containers cannot: DRBD, and with it the `replicated` StorageClass, its
+  # Immediate binding mode and the tenant StorageClass propagation that only
+  # applies to remotely-accessible classes.
+  #
+  # Deliberately NOT named "E2E Tests": the
   # required "E2E Tests" context is a commit status posted by the `e2e-report`
   # job (non-fork) or by e2e-fork.yaml (fork). A required *job* that skips
   # counts as PASSED by branch protection, which is exactly how fork PRs used
@@ -821,39 +821,34 @@ jobs:
   # workflow_run instead.
   e2e:
     name: "E2E (in-tree)"
-    # What the gate decided, promoted to a job output because the job's RESULT
-    # can no longer answer it: a red the lane tolerated finishes `success`, so
-    # every consumer downstream that reads the result alone would report this run
-    # as one where the suite passed.
-    outputs:
-      soft_red: ${{ steps.e2e_tests.outputs.soft_red }}
-    # The sandbox boots three QEMU guests (hack/e2e-prepare-cluster.bats), each
-    # with `-smp 8 -m 24576`, so the guests alone demand 24 vCPU and 72 GiB.
-    # On the 24-vCPU runner that is a 1:1 CPU commit with zero host headroom for
-    # QEMU's own emulation/IO threads, vhost-net, the host iptables MASQUERADE
-    # every guest image pull traverses, containerd, the kernel and the runner
-    # agent. During "Install Cozystack" (all platform operators + image pulls
-    # across three nodes at once) the guest vCPUs contend with those host threads
-    # and lose cycles to CPU steal, so in-guest kubelet/apiserver readiness and
-    # liveness probes miss their deadlines ("context deadline exceeded"). A
-    # HelmRelease then flips InProgress -> Failed and its dependents cascade to
-    # DependencyNotReady — on a different component each run, the signature of
-    # resource thrash rather than a product bug. The 32-vCPU / 128 GiB class
-    # keeps the guests' 24 vCPU / 72 GiB unchanged (no slower install) while
-    # leaving 8 vCPU (25%) and 56 GiB of host headroom, which removes the
-    # oversubscription that starves the probes.
+    # hack/e2e-compose.yaml gives each of the three nodes `cpus: 8` and
+    # `mem_limit: 24576m`, matching what the QEMU guests were given, so the nodes
+    # still demand 24 vCPU and 72 GiB between them. The same headroom argument
+    # therefore still decides the class: on a 24-vCPU runner that is a 1:1 commit
+    # with nothing left for containerd, the kernel, the host iptables MASQUERADE
+    # every image pull traverses and the runner agent, and during "Install
+    # Cozystack" the nodes contend with those and lose cycles. Readiness and
+    # liveness probes then miss their deadlines, a HelmRelease flips InProgress ->
+    # Failed and its dependents cascade to DependencyNotReady -- on a different
+    # component each run, the signature of resource thrash rather than a product
+    # bug. The 32-vCPU / 128 GiB class leaves 8 vCPU (25%) and 56 GiB of headroom
+    # and removes that oversubscription.
+    #
+    # One thing this class does NOT fix, and it is worth knowing before reading a
+    # red run: a container node reports the HOST's CPU and memory as its capacity,
+    # and hack/e2e-container-up.sh counterbalances that with kubelet
+    # systemReserved so the scheduler sees 8 CPU / 24 GiB. That corrects the
+    # scheduler and not what a pod reads from /proc, so a workload that sizes
+    # itself from /proc/cpuinfo or /proc/meminfo is configured for the whole host.
     runs-on: oracle-vm-32cpu-128gb-x86-64
     # Sized above what the tenant-Kubernetes pair can spend on a failing run, and
-    # held to one figure across every lane that runs the suite. That bound, the
-    # measured run the rest of the margin comes from, and what neither of them
-    # covers are all in hack/node-join-soft-red_test.bats rather than restated
-    # here in four workflows that would then drift apart.
+    # held to one figure across every lane that runs the suite.
     timeout-minutes: 215
     permissions:
       contents: read
       packages: read
       checks: write
-    needs: ["finalize", "build-talos", "resolve_assets", "verify-release-candidate"]
+    needs: ["finalize", "resolve_assets", "verify-release-candidate"]
     # Regular PRs still enter through finalize. A release-labelled promote PR
     # enters through resolve_assets only when a maintainer explicitly adds
     # full-e2e; without that label the immutable rc's already-green suite is not
@@ -877,17 +872,6 @@ jobs:
       )
 
     steps:
-      - name: Generate GitHub App token
-        if: contains(github.event.pull_request.labels.*.name, 'release')
-        id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
-          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
-          owner: cozystack
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: read
-
       # ▸ Checkout and prepare the codebase
       # fetch-depth: 0 is required by the "Select E2E tests" step so that
       # `git diff origin/${BASE_REF}...HEAD` can resolve the base ref.
@@ -896,14 +880,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ▸ Regular PR path – download the Talos disk from build-talos and pr.patch from finalize
-      - name: "Download Talos image (regular PR)"
-        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: talos-image
-          path: _out/assets
-
+      # ▸ Regular PR path – pr.patch from finalize. No Talos disk: the nodes boot
+      #   from ghcr.io/siderolabs/talos directly (hack/e2e-compose.yaml), so this
+      #   lane consumes no nocloud asset and waits on no Talos build.
       - name: Download PR patch
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -916,36 +895,85 @@ jobs:
         run: |
           git apply _out/assets/pr.patch
 
-      # ▸ Release PR path – fetch artefacts from the corresponding draft release
-      - name: Download assets from draft release (release PR)
-        if: contains(github.event.pull_request.labels.*.name, 'release')
-        run: |
-          mkdir -p _out/assets
-          curl -sSL -H "Authorization: token ${APP_TOKEN}" -H "Accept: application/octet-stream" \
-            -o _out/assets/nocloud-amd64.raw.xz \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.disk_id }}"
-        env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
-
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
 
-      # ▸ Prepare environment
+      # ▸ Host kernel modules. MANDATORY and up front, because nothing later can
+      #   supply them: the nodes take their kernel from this host, and Talos
+      #   cannot load modules in container mode -- `machine.kernel.modules` is a
+      #   silent no-op there, `kernel_module_spec.go` returns early on
+      #   ModeContainer with no error and no event.
+      #
+      #   A module missing here is missing for every node for the whole run, and
+      #   it surfaces in disguise: no `openvswitch` and kube-ovn comes up with no
+      #   dataplane, no `zfs` and every LINSTOR pool creation fails. Both read as
+      #   a CNI or a storage regression an hour later. So this loads both and
+      #   then asserts both, and a failure here names the host rather than the
+      #   product.
+      - name: Prepare container-lane host
+        run: |
+          set -eu
+          echo "::group::Loading kernel modules required by the container lane"
+          for m in openvswitch zfs; do
+            if grep -q "^${m} " /proc/modules; then
+              echo "${m}: already loaded"
+              continue
+            fi
+            if [ "${m}" = zfs ]; then
+              sudo apt-get update -qq
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zfsutils-linux
+            fi
+            echo "${m}: loading"
+            sudo modprobe "${m}" || echo "${m}: modprobe failed"
+          done
+          echo "::endgroup::"
+          missing=''
+          for m in openvswitch zfs; do
+            grep -q "^${m} " /proc/modules || missing="${missing} ${m}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error title=container-lane host::kernel module(s) could not be loaded:${missing}"
+            echo "This is a host problem, not a product failure. The e2e nodes run as" >&2
+            echo "containers on this runner's kernel and Talos cannot load modules in" >&2
+            echo "container mode, so what is not here now is unavailable for the whole" >&2
+            echo "run: openvswitch backs the kube-ovn dataplane, zfs backs every" >&2
+            echo "LINSTOR pool. Failing here rather than an hour later is the point." >&2
+            exit 1
+          fi
+          grep -E '^(openvswitch|zfs) ' /proc/modules
+
+      # ▸ Prepare environment. Two make targets rather than one: the nodes are
+      #   siblings on the runner's docker daemon (the /dev and /run/udev binds in
+      #   hack/e2e-compose.yaml must resolve against the real host devtmpfs, which
+      #   is what lets this lane carry LINSTOR at all), so the host-side half
+      #   needs a docker socket the sandbox does not have.
       - name: Prepare environment
         run: |
           attempt=0
-          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env-container; do
             attempt=$((attempt + 1))
             if [ $attempt -ge 3 ]; then
               echo "Attempt $attempt failed, exiting..."
               exit 1
             fi
             echo "Attempt $attempt failed, retrying..."
+            make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || true
           done
           echo "Prepare environment completed after $((attempt + 1)) attempts"
 
       # ▸ Install Cozystack
       - name: Install Cozystack into sandbox
+        env:
+          # This lane has no ARP VIP: .11 is a plain control-plane node standing
+          # in for the QEMU lane's 192.168.123.10.
+          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          # Talos containers share the runner kernel and cannot load DRBD, so the
+          # harness suppresses DRBD-dependent chart content, registers the host's
+          # pre-created zpools and keeps LINSTOR's local ZFS path.
+          COZY_LINSTOR_DRBD_ENABLED: "false"
+          # Root monitoring is the one install-time workload whose chart selects
+          # `replicated` explicitly instead of inheriting the default class.
+          COZY_E2E_STORAGE_CLASS: local
         run: |
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
             echo "❌ Install failed (no retry — see diagnostics below)"
@@ -1016,6 +1044,10 @@ jobs:
         id: e2e_tests
         if: ${{ steps.select.outputs.skip != 'true' }}
         env:
+          # No DRBD-backed class exists here. Chainsaw templates the storage
+          # fixtures with `local`, and the Kubernetes helper omits only the
+          # remote-propagation and RWX assertions while running the same suites.
+          COZY_E2E_STORAGE_CLASS: local
           SELECTED_APPS: ${{ steps.select.outputs.apps }}
           FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
         run: |
@@ -1048,20 +1080,6 @@ jobs:
               kubectl get bucketaccesses.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,CLAIM:.spec.bucketClaimName" 2>&1
             ' || true
             echo "::endgroup::"
-            # One failure the lane does not block on, and only one: the tenant
-            # node-join deadline. The test itself stays red -- Chainsaw ran its
-            # whole catch above and the report records the failure -- and this
-            # decides only whether the job does. It blocks on anything it cannot
-            # attribute to that deadline, including a report it could not read.
-            if hack/e2e-node-join-soft-red.sh "$SANDBOX_NAME"; then
-              # The breakpoint below opens on `failure()`, which this exit is
-              # about to make false. Record the decision so it can open on this
-              # red too: the sandbox is still up at that point, and a join that
-              # never finished is the failure an interactive session is worth
-              # most on.
-              echo "soft_red=true" >>"$GITHUB_OUTPUT"
-              exit 0
-            fi
             exit 1
           fi
           echo "✅ All selected E2E tests passed"
@@ -1173,14 +1191,13 @@ jobs:
       #   forks cannot reach the self-hosted rendezvous server.
       - name: Breakpoint on E2E failure
         if: |
-          (failure() || steps.e2e_tests.outputs.soft_red == 'true') &&
+          failure() &&
           vars.BREAKPOINT_ENDPOINT != '' &&
           (contains(github.event.pull_request.labels.*.name, 'debug')
             || contains(github.event.pull_request.labels.*.name, 'release'))
-        # A step that fails here fails an otherwise-successful job, which on the
-        # softened path would let a debugging tool overturn a lane that had
-        # decided not to block. Same reason `Collect report` above carries it:
-        # what the job REPORTS must not depend on what a helper did.
+        # A step that fails here would fail the job on its own account. Same
+        # reason `Collect report` above carries it: what the job REPORTS must not
+        # depend on what a helper did.
         continue-on-error: true
         # cozystack/breakpoint-action v2-cozy.1
         # mode: pause-idle defaults: grace-period=20m, idle-timeout=10m
@@ -1208,9 +1225,17 @@ jobs:
             exits 10 minutes after the last SSH session disconnects.
 
       # ▸ Tear down environment (always runs)
+      #
+      #   Both halves, and in this order: the compose project owns the nodes and
+      #   the zpools outlive it. A leftover pool makes the next run on a reused
+      #   host adopt storage that already carries a dead cluster's volumes.
       - name: Tear down sandbox
         if: always()
-        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+        run: |
+          cleanup_rc=0
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+          exit "$cleanup_rc"
 
   # Report the required "E2E Tests" gate as a commit status rather than relying
   # on a job named "E2E Tests". A required *job* that is skipped counts
@@ -1274,7 +1299,6 @@ jobs:
           PLAN_RESULT: ${{ needs.plan.result }}
           CODE: ${{ needs.plan.outputs.code }}
           E2E_RESULT: ${{ needs.e2e.result }}
-          E2E_SOFT_RED: ${{ needs.e2e.outputs.soft_red }}
           CANDIDATE_RESULT: ${{ needs.verify-release-candidate.result }}
           IS_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'release') }}
           IS_FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
@@ -1282,7 +1306,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const { PLAN_RESULT, CODE, E2E_RESULT, E2E_SOFT_RED, CANDIDATE_RESULT, IS_RELEASE, IS_FULL_E2E, HEAD_SHA, RUN_URL } = process.env;
+            const { PLAN_RESULT, CODE, E2E_RESULT, CANDIDATE_RESULT, IS_RELEASE, IS_FULL_E2E, HEAD_SHA, RUN_URL } = process.env;
             let state, description;
             if (PLAN_RESULT !== 'success') {
               state = 'failure';
@@ -1303,13 +1327,6 @@ jobs:
               // full suite re-run or an admin override.
               state = 'success';
               description = 'release promotion — verified at rc, e2e not repeated (add full-e2e to force a run)';
-            } else if (E2E_RESULT === 'success' && E2E_SOFT_RED === 'true') {
-              // The suite did NOT pass: the tenant node-join deadline expired and
-              // the lane decided not to block on it. `success` is the decision;
-              // this text is the only place a reader standing in front of the
-              // merge button learns what it was a decision about.
-              state = 'success';
-              description = 'in-tree e2e soft: node-join deadline missed, suite failed, merge not blocked';
             } else if (E2E_RESULT === 'success') {
               state = 'success';
               description = 'in-tree e2e passed';

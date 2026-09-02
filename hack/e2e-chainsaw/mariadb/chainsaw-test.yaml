@@ -290,7 +290,7 @@ spec:
           set -eu
           cd ../../..
           [ -x examples/backups/mariadb/run-all.sh ] || { echo "mariadb backup example scripts not found at examples/backups/mariadb" >&2; exit 1; }
-          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+          COZY_E2E_BACKUP_PREFLIGHT=1 NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
             examples/backups/mariadb/run-all.sh
         check:
           ($error == null): true
