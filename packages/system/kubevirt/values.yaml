@@ -13,6 +13,22 @@
 # splits them.
 extraFeatureGates: []
 
+# Feature gates appended after the static opt-outs under
+# spec.configuration.developerConfiguration.disabledFeatureGates. The chart
+# always disables Template and ExternalNetResourceInjection, and adds
+# ImageVolume below Kubernetes 1.35, where the apiserver's own gate is off and
+# would strip the launcher's image volumes. KubeVirt enables every Beta gate by
+# default; list a gate here to switch off one this cluster cannot carry, e.g. on
+# a container runtime without image volume support at 1.35 or newer.
+# Naming a gate the chart already disables is a no-op: it renders once.
+#
+# A gate this chart already enables cannot be switched off here, and a gate it
+# disables cannot be switched back on through extraFeatureGates: KubeVirt
+# refuses a CR that names the same gate in both lists, so the template stops
+# the render and names the gate. ImageVolume is therefore rejected in
+# extraFeatureGates below 1.35 and accepted from 1.35 on.
+disabledFeatureGates: []
+
 # Permitted host devices the KubeVirt admission webhook accepts under
 # spec.template.spec.domain.devices.hostDevices / gpus on a VirtualMachine.
 # Empty by default — leaves the CR's permittedHostDevices unset.
