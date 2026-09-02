@@ -57,7 +57,7 @@ maxReplicas: 10
 ## @x-cozystack-options {source: instancetype}
 instanceType: u1.medium
 
-## @param {quantity} diskSize="20Gi" - System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs.
+## @param {quantity} diskSize="20Gi" - System disk size for the worker VM. Carries the Talos OS image, kubelet state, containerd image cache, and any local-path PVCs. How the OS image reaches the disk follows this pool's `image`: the default and `image.factory` stream the Image Factory raw artifact in over HTTP, while `image.builtin` makes the disk a storage-layer CDI clone of a shared golden image, with no HTTP fetch. A `builtin` pool must keep diskSize at or above the golden's storage size (6Gi in the shipped worker image catalog), because a CDI clone target cannot be smaller than its source — the chart rejects a smaller value at render time rather than letting the clone stall.
 diskSize: 20Gi
 
 ## @param {[]string} roles - List of node roles. Each role `r` labels nodes with `node-role.kubernetes.io/<r>`. Use `[ingress-nginx]` for a pool that hosts the tenant ingress-nginx controller.
@@ -112,11 +112,27 @@ version: "v1.35"
 ## @section Talos Worker Image
 ##
 
+## @typedef {struct} WorkerImageBuiltin - Boot this pool's workers by CDI clone of a golden image from the opt-in worker image catalog (packages/system/kubernetes-worker-image) in cozy-public. The catalog package must be enabled (bundles.enabledPackages) and hold a matching (schematicID, version) entry, otherwise the render fails. A clone is a storage-layer CSI copy, so N workers no longer each stream the OS image over HTTP.
+## @field {string} [schematicID] - Talos schematic ID of the golden to clone. Defaults to `talos.schematicID`.
+## @field {string} [version] - Talos version of the golden to clone. Defaults to `talos.version`.
+
+## @typedef {struct} WorkerImageFactory - Boot this pool's workers by importing the Talos OS image over HTTP from an Image Factory (public, self-hosted, or caching mirror). This is the bring-your-own path and the default when `image` is omitted.
+## @field {string} [version] - Talos version. Defaults to `talos.version`.
+## @field {string} [schematicID] - Talos schematic ID. Defaults to `talos.schematicID`.
+## @field {string} [imageFactoryURL] - Base URL of the Image Factory serving the boot raw image. Defaults to `talos.imageFactoryURL`. No trailing slash. NOTE: this redirects only the worker boot-disk import; the in-guest upgrade installer image is always sourced from `talos.installerRepository`, so an air-gapped pool must also have `talos.installerRepository` pointed at a reachable registry.
+
+## @typedef {struct} WorkerImage - Worker OS image source for this pool. Set exactly one of `builtin` or `factory`; when the whole field is omitted the workers import over HTTP using the pool's `talos.*` defaults (equivalent to an empty `factory`). The disk-system source is derived entirely from this field, so a pool with `image` omitted renders identically to a chart without this feature — adopting the feature never rolls existing workers. Editing this field on an existing pool changes the rendered source and therefore re-images (rolls) that pool, the same as changing any other image reference.
+## @field {*WorkerImageBuiltin} [builtin] - Clone a golden image from the worker image catalog.
+## @field {*WorkerImageFactory} [factory] - Import from an Image Factory / mirror (default).
+
+## @param {WorkerImage} [image] - Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `image.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool.
+image: {}
+
 ## @typedef {struct} Talos - Talos worker image configuration.
-## @field {string} version - Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
+## @field {string} version - Default Talos release for this pool's worker OS image and in-guest installer. The pool can pin its own release via `image.builtin.version` or `image.factory.version`; when `image` omits it, this value applies. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version` — the matrix is evaluated against this value only, so an `image.*` override is not checked against it.
 ## @field {string} schematicID - Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
-## @field {string} imageFactoryURL - Base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.
-## @field {string} installerRepository - OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
+## @field {string} imageFactoryURL - Default base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Applies only when this pool imports over HTTP — the default and `image.factory`, which overrides it via `image.factory.imageFactoryURL`. A pool on `image.builtin` clones a golden image from the worker image catalog and does not use this field at all. Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.
+## @field {string} installerRepository - OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>` against whatever this pool's `image` pins, falling back to `talos.schematicID` and `talos.version` — so the installer matches the OS the pool actually booted. The prefix itself has no `image.*` override, so an air-gapped pool needs it pointed at a reachable registry as well. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
 ## @field {object} registryMirrors - Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap. Keep in sync with the parent kubernetes chart.
 
 ## @param {Talos} talos - Talos worker image configuration. Keep in sync with the parent cluster's `talos`.

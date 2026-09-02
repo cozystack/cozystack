@@ -1,0 +1,60 @@
+suite: per-pool worker image — in-guest upgrade installer
+
+# The talos-reconcile Job builds the pool's install.image from the pool's
+# resolved (schematicID, version) — image.builtin / image.factory, or the pool's
+# talos.* when omitted — so an in-guest upgrade reinstalls the OS the pool
+# actually booted rather than flipping it back to the pool default.
+
+templates:
+  - templates/talos-reconcile-job.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 1
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: [ingress-nginx]
+  resources:
+    cpu: "8"
+    memory: 16Gi
+
+tests:
+  - it: install.image pins the pool's own schematicID/version
+    set:
+      image:
+        factory:
+          schematicID: deadbeef
+          version: v1.14.0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: factory\.talos\.dev/installer/deadbeef:v1\.14\.0'
+        documentSelector: {path: kind, value: Job}
+
+  - it: install.image falls back to the pool talos.* when image is omitted
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: factory\.talos\.dev/installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1\.13\.6'
+        documentSelector: {path: kind, value: Job}
+
+  - it: install.image pins a builtin pool's schematicID/version
+    set:
+      image:
+        builtin:
+          schematicID: cafebabe
+          version: v1.15.0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: factory\.talos\.dev/installer/cafebabe:v1\.15\.0'
+        documentSelector: {path: kind, value: Job}

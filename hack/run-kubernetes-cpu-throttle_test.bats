@@ -172,18 +172,20 @@ run_capture() {
     *'exit 127 and collect nothing'*) ;;
     *) echo "expected the warning to still name the 127 class it is contrasting against" >&2; return 1 ;;
   esac
-  # The sentence went through false shapes before this one, including "except
-  # the worker CPU throttling capture", which read as a sole exception even
-  # though talos-image-cache has the same shape. An enumeration of a growing set
-  # is wrong the next time someone adds to it.
+  # The sentence went through two false shapes before this one: "except the
+  # worker CPU throttling capture" (reads as sole exception, and the two mirror
+  # captures had the same shape) and then "the two that carry a fallback" (a
+  # count, which went stale the moment the set changed -- both mirror captures
+  # it counted are gone). Both were enumerations, and an enumeration of a moving
+  # set is wrong the next time someone adds to it.
   # What is pinned now is the DISCRIMINATOR: guarding the call with command -v
   # is what separates the two outcomes, and every collector that guards is
-  # named. A fourth one added without a mention fails this.
+  # named. One added without a mention fails this.
   case "$line" in
     *'guard the call with command -v'*) ;;
     *) echo "expected the warning to state what separates the two outcomes" >&2; return 1 ;;
   esac
-  for c in 'CPU throttling' 'talos-image-cache'; do
+  for c in 'CPU throttling'; do
     case "$line" in
       *"$c"*) ;;
       *) echo "expected the warning to name the guarded collector: $c" >&2; return 1 ;;
@@ -712,8 +714,7 @@ run_capture() {
   # other answer in this tree, so it precedes the legs below. Stated without a
   # count on purpose: the loop below is the enumeration, and a sentence that
   # also counted would go stale the first time a leg is added to it.
-  for leg in 'cozy_capture_tenant_talos "${test_name}" || true' \
-             'talos_image_cache_diagnose || true'; do
+  for leg in 'cozy_capture_tenant_talos "${test_name}" || true'; do
     line=$(grep -n -F -x "    ${leg}" "$lib" | head -n 1 | cut -d: -f1)
     if [ -z "$line" ]; then
       echo "expected the failure block to still call: ${leg}" >&2

@@ -329,7 +329,7 @@ spec:
                               memory.available: "256Mi"
                         install:
                           disk: /dev/vda
-                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}/{{ $.Values.talos.schematicID | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}:{{ .talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}
+                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}/{{ .talosSchematicID | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}:{{ .talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}
                           wipe: false
                         features:
                           rbac: true
@@ -394,6 +394,7 @@ spec:
       "resources" .Values.resources
       "gpus" .Values.gpus
       "kubelet" .Values.kubelet
+      "image" .Values.image
 }}
 {{- /* Mirror the kubelet-reservation computation from nodegroup.yaml so the
        worker machineconfig this Job applies carries the same numbers the
@@ -434,12 +435,34 @@ spec:
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
+{{- /* Resolve this pool's worker image (schematicID, version) from .Values.image
+       — the same selection templates/nodegroup.yaml uses for the boot disk — so the
+       in-guest Talos installer image matches the OS this pool actually booted.
+       Defaults to the pool's talos.*; a pool with image.builtin / image.factory
+       pins its own flavor and version so an in-guest upgrade does not flip it back to
+       the pool default. */}}
+{{- /* hasKey, not truthiness: an empty builtin/factory map means "the pool's
+       talos.* defaults", and Go templates treat an empty map as false. Mirrors
+       the resolution in nodegroup.yaml. */}}
+{{- $grpImg := $group.image | default dict }}
+{{- $grpSchematicID := $.Values.talos.schematicID }}
+{{- $grpVersion := $talosVersion }}
+{{- if hasKey $grpImg "builtin" }}
+{{-   $b := $grpImg.builtin | default dict }}
+{{-   $grpSchematicID = $b.schematicID | default $.Values.talos.schematicID }}
+{{-   $grpVersion = $b.version | default $talosVersion }}
+{{- else if hasKey $grpImg "factory" }}
+{{-   $f := $grpImg.factory | default dict }}
+{{-   $grpSchematicID = $f.schematicID | default $.Values.talos.schematicID }}
+{{-   $grpVersion = $f.version | default $talosVersion }}
+{{- end }}
 {{- $jobContext := deepCopy $ }}
 {{- $_ := set $jobContext "group" $group }}
 {{- $_ := set $jobContext "groupName" $groupName }}
 {{- $_ := set $jobContext "clusterName" $clusterName }}
 {{- $_ := set $jobContext "kubeletVersion" $kubeletVersion }}
-{{- $_ := set $jobContext "talosVersion" $talosVersion }}
+{{- $_ := set $jobContext "talosVersion" $grpVersion }}
+{{- $_ := set $jobContext "talosSchematicID" $grpSchematicID }}
 {{- $_ := set $jobContext "podCIDR" $podCIDR }}
 {{- $_ := set $jobContext "serviceCIDR" $serviceCIDR }}
 {{- $_ := set $jobContext "dnsDomain" $dnsDomain }}

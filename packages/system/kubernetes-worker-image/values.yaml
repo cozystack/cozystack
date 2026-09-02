@@ -1,0 +1,52 @@
+##
+## @section Talos worker image catalog
+##
+## Pre-populates a catalog of Talos worker OS disk images as DataVolumes in the
+## cozy-public namespace, so a tenant Kubernetes worker node group can boot by CDI
+## csi-clone (a storage-layer copy) of a shared golden image instead of each worker
+## independently importing the raw image over HTTP from the Talos Image Factory.
+## One import per (schematicID, version) is then shared by every worker of every
+## tenant node group that clones it — removing the per-worker Factory dependency
+## (and the kubernetes-* e2e node-join flake, cozystack/cozystack#3231) on the hot
+## path. Each images[] entry is one catalog (schematicID, version) flavor.
+##
+## This package is OPT-IN: it is registered through the platform's optional package
+## helper and is disabled by default. Enable it by adding
+## `cozystack.kubernetes-worker-image` to `bundles.enabledPackages` in the Cozystack
+## config; without it no golden is created and every worker imports over HTTP.
+##
+## A tenant node group opts into a clone explicitly by setting
+## `nodeGroups.<name>.image.builtin` (optionally overriding schematicID/version) in
+## a `Kubernetes` resource; the app then clones the golden named deterministically
+## `talos-worker-<schematicID>-<version>` from cozy-public. The tenant render fails
+## rather than degrade silently when the referenced (schematicID, version) has no
+## matching entry in this catalog, when its golden terminally failed to import
+## (`phase: Failed`), or when the node group's storageClass differs from the
+## golden's — so keep the catalog in sync with the (schematicID, version) pairs and
+## StorageClasses that tenant node groups reference. A golden that is merely
+## mid-import is not an error: CDI holds the worker disk until the source populates.
+## Goldens carry `helm.sh/resource-policy: keep`, so removing an `images[]` entry
+## stops managing that golden rather than deleting it — delete it by hand once no
+## node group clones it. Node groups that do not set `image.builtin` import over
+## HTTP and never touch this catalog.
+
+## @param {string} imageFactoryURL - Default base URL of the Talos Image Factory serving the raw worker OS image (`<url>/image/<schematicID>/<version>/openstack-amd64.raw.xz`). Overridable per image. No trailing slash.
+imageFactoryURL: "https://factory.talos.dev"
+
+## @param {string} storageClass - Default StorageClass for the golden image(s). Must match the StorageClass of the worker disks that clone it: CDI cannot CSI-clone across StorageClasses and would silently fall back to a host-assisted copy over the pod network, so the tenant render rejects a mismatch outright. Must also be snapshot-capable (linstor ships the default VolumeSnapshotClass). Overridable per image.
+storageClass: "replicated"
+
+## @param {quantity} storage - Default storage size allocated for each golden image. Must be >= the imported raw image virtual size and <= the smallest worker diskSize that clones it. The Talos v1.13.x openstack raw is ~4.15 GiB, so 6Gi leaves headroom; bump per image if a future Talos version's raw grows. Overridable per image.
+storage: "6Gi"
+
+## @typedef {struct} WorkerImage - A golden Talos worker image entry.
+## @field {string} schematicID - Talos image-factory schematic ID.
+## @field {string} version - Talos version (e.g. "v1.13.6").
+## @field {string} [imageFactoryURL] - Override the global imageFactoryURL for this image.
+## @field {quantity} [storage] - Override the global storage size for this image.
+## @field {string} [storageClass] - Override the global StorageClass for this image.
+
+## @param {[]WorkerImage} images - Catalog of golden Talos worker images to provision in the cozy-public namespace. Each entry is one (schematicID, version) flavor a tenant node group can clone via `image.builtin`.
+images:
+  - schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+    version: "v1.13.6"
