@@ -24,16 +24,34 @@ export RABBITMQ_TARGET_NAME="${RABBITMQ_TARGET_NAME:-rabbitmq-target}"
 # rabbitmq-<app>.
 export RABBITMQ_SRC_CR="rabbitmq-${RABBITMQ_SRC_NAME}"
 export RABBITMQ_TARGET_CR="rabbitmq-${RABBITMQ_TARGET_NAME}"
-# cozy-default routes RabbitMQ to the shipped cozy-default-rabbitmq Job
-# strategy, which exports broker DEFINITIONS to the platform cozy-backups
-# bucket. No demo Bucket and no app backup block are needed: the strategy
-# carries the S3 coordinates and the controller projects cozy-backups-creds
-# into this namespace before each run.
-export BACKUPCLASS_NAME="${BACKUPCLASS_NAME:-cozy-default}"
+# This demo provisions its own Bucket + Rabbitmq strategy + BackupClass rather
+# than reusing the platform cozy-default flow, so the round-trip is
+# self-contained and its S3 objects are torn down with the demo. The Bucket
+# controller materialises the credentials Secret as "bucket-<bucket>-<user>".
+export BUCKET_NAME="${BUCKET_NAME:-rabbitmq-backups}"
+export BUCKET_USER="${BUCKET_USER:-backup}"
+export STRATEGY_NAME="${STRATEGY_NAME:-rabbitmq-strategy-default}"
+export BACKUPCLASS_NAME="${BACKUPCLASS_NAME:-rabbitmq-default}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-rabbitmq-src-adhoc}"
 export RESTOREJOB_INPLACE_NAME="${RESTOREJOB_INPLACE_NAME:-rabbitmq-src-in-place}"
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-rabbitmq-src-to-rabbitmq-target}"
 export PLAN_NAME="${PLAN_NAME:-rabbitmq-src-daily}"
+# The strategy Pod's curl reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from
+# this Secret and trusts the S3 endpoint's CA from ca.crt in the CA Secret;
+# run-all.sh materialises both from the provisioned Bucket before dispatch.
+export CREDS_SECRET="${CREDS_SECRET:-rabbitmq-backup-creds}"
+export CA_SECRET="${CA_SECRET:-rabbitmq-backup-ca}"
+# S3 endpoint CA. cozystack's default seaweedfs serves its S3 endpoint with a
+# self-signed certificate whose CA lives in this Secret; run-all.sh copies its
+# ca.crt into CA_SECRET, which the strategy Pod mounts and points CURL_CA_BUNDLE
+# at. The name follows the seaweedfs chart's fullnameOverride
+# ("seaweedfs" -> "seaweedfs-ca-cert"); run-all.sh auto-discovers the CA
+# Certificate's actual secret when this default is absent. On a cluster whose S3
+# endpoint is signed by a publicly-trusted CA, set S3_CA_SECRET="" to skip the
+# copy and drop the CURL_CA_BUNDLE env + CA volume from 03-rabbitmq-strategy.yaml.
+export S3_CA_SECRET="${S3_CA_SECRET:-seaweedfs-ca-cert}"
+export S3_CA_NAMESPACE="${S3_CA_NAMESPACE:-tenant-root}"
+export S3_CA_KEY="${S3_CA_KEY:-ca.crt}"
 
 log_info()    { echo -e "${BLUE}i${NC} $*" >&2; }
 log_success() { echo -e "${GREEN}OK${NC} $*" >&2; }

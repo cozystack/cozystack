@@ -1,33 +1,129 @@
 #!/bin/bash
-# End-to-end RabbitMQ definitions backup/restore demo against the platform
-# cozy-default flow. It proves DATA INTEGRITY, not liveness: a sentinel vhost
-# (a broker definition) is seeded, backed up, dropped, and must reappear after a
-# restore — first in place, then into a separate copy.
+# End-to-end RabbitMQ definitions backup/restore demo. It proves DATA
+# INTEGRITY, not liveness: a sentinel vhost (a broker definition) is seeded,
+# backed up, dropped, and must reappear after a restore — first in place, then
+# into a separate copy.
 #
-# Requires the platform default backups stack: the backupstrategy-controller,
-# the cozy-backups bucket, and the cozy-default-rabbitmq strategy it ships.
-# No demo Bucket is created — the strategy carries the system-bucket coordinates
-# and the controller projects cozy-backups-creds before each run.
+# The demo provisions its OWN Bucket + Rabbitmq strategy + BackupClass, filling
+# the REPLACE_WITH_* markers in 03-rabbitmq-strategy.yaml from the Bucket, so the
+# round-trip is self-contained and its S3 objects tear down with the demo. The
+# platform-shipped cozy-default-rabbitmq strategy (which writes to the shared
+# cozy-backups system bucket) is left untouched; this demo only reads the client
+# image off it.
 #
-# Env knobs: NAMESPACE (default tenant-root), SKIP_RESTORE=1 to stop after a
-# successful backup (backup-only smoke).
+# Env knobs:
+#   NAMESPACE     (default tenant-root)
+#   SKIP_RESTORE=1  stop after a successful backup (backup-only smoke)
+#   S3_ENDPOINT   override the S3 endpoint the backup Pod uses. BucketInfo
+#                 advertises the EXTERNAL ingress endpoint, which in-cluster
+#                 Pods cannot always reach or TLS-validate; the in-cluster
+#                 alternative is https://seaweedfs-s3.<ns>:8333 (trusted via the
+#                 copied CA below). CI sets this; a real cluster can leave it
+#                 unset to use the advertised endpoint.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/00-helpers.sh"
 
+# Fill the strategy manifest's placeholders from the provisioned Bucket and the
+# platform client image. $BUCKET / $S3_ENDPOINT / $CLIENT_IMAGE are resolved
+# below; using '|' as the sed delimiter keeps the image ref's slashes intact.
+subst() {
+    sed \
+        -e "s|REPLACE_WITH_COSI_BUCKET_NAME|${BUCKET}|g" \
+        -e "s|REPLACE_WITH_S3_ENDPOINT|${S3_ENDPOINT}|g" \
+        -e "s|REPLACE_WITH_BACKUP_CLIENT_IMAGE|${CLIENT_IMAGE}|g" \
+        "$SCRIPT_DIR/$1"
+}
+
 print_header "RabbitMQ definitions backup/restore demo (namespace: $NAMESPACE)"
 
-# --- Precondition: the platform default backups stack is present -------------
-log_step "Checking the cozy-default-rabbitmq strategy is installed"
-# The Strategy CR is gated on a resolved bucket name, so its presence also
-# confirms the cozy-backups bucket has reconciled. Fail fast with a pointed
-# message rather than letting the BackupJob hang if backups are not enabled.
-if ! kubectl get rabbitmqs.strategy.backups.cozystack.io cozy-default-rabbitmq >/dev/null 2>&1; then
-    log_error "cozy-default-rabbitmq strategy not found: enable the platform default backups (backupstrategy-controller + cozy-backups bucket) before running this demo"
-    exit 1
+# --- Bucket ------------------------------------------------------------------
+print_header "Step 00: Provision Bucket '${BUCKET_NAME}' in ${NAMESPACE}"
+kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/00-bucket.yaml"
+wait_hr_ready "bucket-${BUCKET_NAME}" 300
+wait_for_field bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_NAME}" \
+    '{.status.bucketReady}' true "$NAMESPACE" 300
+wait_for_field bucketaccesses.objectstorage.k8s.io "bucket-${BUCKET_NAME}-${BUCKET_USER}" \
+    '{.status.accessGranted}' true "$NAMESPACE" 300
+
+log_substep "Reading bucket coordinates from BucketInfo Secret..."
+TMP=$(mktemp)
+trap 'rm -f "$TMP"' EXIT
+kubectl -n "$NAMESPACE" get secret "bucket-${BUCKET_NAME}-${BUCKET_USER}" \
+    -o jsonpath='{.data.BucketInfo}' | base64 -d > "$TMP"
+S3_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$TMP")
+S3_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$TMP")
+S3_ENDPOINT="${S3_ENDPOINT:-$(jq -r '.spec.secretS3.endpoint' "$TMP")}"
+BUCKET=$(jq -r '.spec.bucketName' "$TMP")
+for v in S3_ACCESS_KEY S3_SECRET_KEY S3_ENDPOINT BUCKET; do
+    [[ -n "${!v}" && "${!v}" != "null" ]] || { log_error "BucketInfo missing required field: ${v}"; exit 1; }
+done
+# The strategy's curl accepts a full URL (http:// or https://), so keep the
+# scheme rather than stripping it as the mariadb-operator path does.
+case "$S3_ENDPOINT" in http://*|https://*) : ;; *) S3_ENDPOINT="https://${S3_ENDPOINT}" ;; esac
+log_success "Bucket '${BUCKET}' at endpoint '${S3_ENDPOINT}'."
+
+# --- Secrets the strategy references -----------------------------------------
+print_header "Step 01: Materialise the Secrets the Rabbitmq strategy references"
+# Resolve the S3 endpoint CA secret. The default name tracks the seaweedfs
+# chart's fullnameOverride (seaweedfs -> seaweedfs-ca-cert), but a downstream
+# fullname change would rename it, so fall back to discovering the cert-manager
+# CA Certificate (the seaweedfs-labelled one with spec.isCA=true) and read its
+# secretName. Leave S3_CA_SECRET empty to skip the copy on a public-CA endpoint.
+if [[ -n "$S3_CA_SECRET" ]] \
+    && ! kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" >/dev/null 2>&1; then
+    log_warning "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} not found; discovering the seaweedfs CA Certificate..."
+    DISCOVERED_CA=$(kubectl -n "$S3_CA_NAMESPACE" get certificates.cert-manager.io \
+        -l app.kubernetes.io/name=seaweedfs \
+        -o jsonpath='{range .items[*]}{.spec.isCA}{" "}{.spec.secretName}{"\n"}{end}' 2>/dev/null \
+        | awk '$1=="true"{print $2; exit}' || true)
+    if [[ -n "$DISCOVERED_CA" ]]; then
+        log_success "Discovered seaweedfs CA secret ${S3_CA_NAMESPACE}/${DISCOVERED_CA}"
+        S3_CA_SECRET="$DISCOVERED_CA"
+    else
+        log_error "No seaweedfs CA Certificate found in ${S3_CA_NAMESPACE}; set S3_CA_SECRET explicitly (or empty for a public-CA endpoint)."
+        exit 1
+    fi
 fi
-log_success "cozy-default-rabbitmq strategy present"
+
+log_substep "Projecting bucket access keys into ${CREDS_SECRET}..."
+kubectl -n "$NAMESPACE" create secret generic "$CREDS_SECRET" \
+    --from-literal="AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY}" \
+    --from-literal="AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY}" \
+    --dry-run=client -o yaml | kubectl -n "$NAMESPACE" apply -f -
+
+if [[ -n "$S3_CA_SECRET" ]]; then
+    log_substep "Copying S3 CA ${S3_CA_NAMESPACE}/${S3_CA_SECRET}[${S3_CA_KEY}] -> ${CA_SECRET}..."
+    CA_PEM=$(kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" \
+        -o jsonpath="{.data.${S3_CA_KEY//./\\.}}" | base64 -d)
+    [[ -n "$CA_PEM" ]] || { log_error "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} has no ${S3_CA_KEY}"; exit 1; }
+    kubectl -n "$NAMESPACE" create secret generic "$CA_SECRET" \
+        --from-literal="ca.crt=${CA_PEM}" \
+        --dry-run=client -o yaml | kubectl -n "$NAMESPACE" apply -f -
+else
+    # The strategy still mounts CA_SECRET; create an empty one so the Pod
+    # schedules, and warn: a public-CA endpoint should have the CURL_CA_BUNDLE
+    # env + CA volume dropped from 03-rabbitmq-strategy.yaml by hand instead.
+    log_warning "S3_CA_SECRET empty: creating an empty ${CA_SECRET} so the Pod schedules."
+    log_warning "Remove the CURL_CA_BUNDLE env + s3-ca volume from 03-rabbitmq-strategy.yaml when the S3 endpoint uses a public CA."
+    kubectl -n "$NAMESPACE" create secret generic "$CA_SECRET" \
+        --from-literal="ca.crt=" \
+        --dry-run=client -o yaml | kubectl -n "$NAMESPACE" apply -f -
+fi
+
+# --- Strategy + BackupClass --------------------------------------------------
+print_header "Step 02: Create the Rabbitmq strategy + BackupClass"
+# Reuse the image the platform's cozy-default-rabbitmq strategy runs, so the demo
+# Pod needs no package install at run time. Its presence also confirms the
+# platform default backups stack (backupstrategy-controller + CRDs) is installed,
+# without which the BackupJob below cannot reconcile at all.
+CLIENT_IMAGE=$(kubectl get rabbitmqs.strategy.backups.cozystack.io cozy-default-rabbitmq \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="rabbitmq-backup")].image}' 2>/dev/null || true)
+[[ -n "$CLIENT_IMAGE" ]] || { log_error "cozy-default-rabbitmq strategy not found: enable the platform default backups (backupstrategy-controller) before running this demo"; exit 1; }
+log_substep "Reusing the platform strategy's client image: ${CLIENT_IMAGE}"
+subst 03-rabbitmq-strategy.yaml | kubectl apply -f -
+kubectl apply -f "$SCRIPT_DIR/04-backupclass.yaml"
 
 # --- Source application + sentinel -------------------------------------------
 log_step "Provisioning source RabbitMQ '$RABBITMQ_SRC_NAME'"

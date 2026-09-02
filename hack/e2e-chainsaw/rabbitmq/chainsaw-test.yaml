@@ -78,10 +78,12 @@ metadata:
 spec:
   # tenant-root, not the suite default tenant-test: the backup Job pushes to the
   # in-cluster seaweedfs in tenant-root, and the e2e tenant-test is Cilium
-  # egress-isolated from it. This also relies on the platform default backups
-  # stack (backupstrategy-controller + cozy-backups bucket + the shipped
-  # cozy-default-rabbitmq strategy) whose endpoint must resolve to a
-  # cluster-reachable S3 endpoint.
+  # egress-isolated from it. run-all.sh provisions its own Bucket + Rabbitmq
+  # strategy + BackupClass; the run step below overrides S3_ENDPOINT to the
+  # in-cluster seaweedfs because the Bucket's advertised external ingress URL is
+  # an unroutable placeholder in CI. It still needs the platform backups stack
+  # (backupstrategy-controller + the shipped cozy-default-rabbitmq strategy,
+  # whose client image the demo reuses).
   namespace: tenant-root
   skipDelete: true
   catch:
@@ -102,7 +104,7 @@ spec:
   - describe:
       apiVersion: strategy.backups.cozystack.io/v1alpha1
       kind: Rabbitmq
-      name: cozy-default-rabbitmq
+      name: rabbitmq-strategy-default
   - podLogs:
       selector: rabbitmq.strategy.backups.cozystack.io/mode
       tail: 200
@@ -128,7 +130,8 @@ spec:
           set -eu
           cd ../../..
           [ -x examples/backups/rabbitmq/run-all.sh ] || { echo "examples/backups/rabbitmq/run-all.sh not found or not executable" >&2; exit 1; }
-          NAMESPACE="$NAMESPACE" examples/backups/rabbitmq/run-all.sh
+          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+            examples/backups/rabbitmq/run-all.sh
         check:
           ($error == null): true
           (contains($stderr, 'definitions round-tripped through object storage')): true

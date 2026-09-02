@@ -1,7 +1,7 @@
-# Source RabbitMQ application. Note there is no `backup:` block: this demo uses
-# the platform cozy-default flow, where the cozy-default-rabbitmq strategy
-# carries the S3 coordinates and the controller projects cozy-backups-creds into
-# this namespace. The application chart is unmodified.
+# Source RabbitMQ application. Note there is no `backup:` block: the S3
+# coordinates live on the Rabbitmq strategy (03-rabbitmq-strategy.yaml), whose
+# Pod does the definitions export, not on the application. The application chart
+# is unmodified.
 apiVersion: apps.cozystack.io/v1alpha1
 kind: RabbitMQ
 metadata:

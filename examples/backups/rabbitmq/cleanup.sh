@@ -2,8 +2,9 @@
 # Idempotent teardown of the RabbitMQ backup demo. Removes only this demo's
 # objects — never a blanket --all — so it is safe to run before a re-run and in
 # a chainsaw finally step. Order: restore/backup jobs and Plan, then this demo's
-# Backup artifacts, then the applications. The platform cozy-backups bucket and
-# cozy-default-rabbitmq strategy are platform-owned and left alone.
+# Backup artifacts, then the applications, then the demo's Bucket + strategy +
+# BackupClass + Secrets. The platform cozy-backups bucket and cozy-default-rabbitmq
+# strategy are platform-owned and left alone.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,5 +28,12 @@ done
 
 kubectl -n "$NAMESPACE" delete rabbitmq.apps.cozystack.io \
     "$RABBITMQ_SRC_NAME" "$RABBITMQ_TARGET_NAME" --ignore-not-found
+
+# The Backup deletions above run their S3 cleanup Job through the strategy and
+# the creds/CA Secrets, so tear those down only now that the Backups are gone.
+kubectl -n "$NAMESPACE" delete secret "$CREDS_SECRET" "$CA_SECRET" --ignore-not-found
+kubectl -n "$NAMESPACE" delete bucket.apps.cozystack.io "$BUCKET_NAME" --ignore-not-found
+kubectl delete backupclass.backups.cozystack.io "$BACKUPCLASS_NAME" --ignore-not-found
+kubectl delete rabbitmqs.strategy.backups.cozystack.io "$STRATEGY_NAME" --ignore-not-found
 
 log_success "cleanup complete"

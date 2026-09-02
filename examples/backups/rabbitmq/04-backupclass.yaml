@@ -1,0 +1,18 @@
+# Maps Kind=RabbitMQ to this demo's Rabbitmq strategy. BackupClass is
+# cluster-scoped, so a single instance covers every namespace. Named
+# rabbitmq-default so it does not collide with the platform cozy-default class,
+# which routes RabbitMQ to the shipped cozy-default-rabbitmq strategy.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupClass
+metadata:
+  name: rabbitmq-default
+spec:
+  strategies:
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: RabbitMQ
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Rabbitmq
+        name: rabbitmq-strategy-default

@@ -1,6 +1,6 @@
 # RabbitMQ backup/restore demo
 
-This demo backs up and restores a Cozystack-managed RabbitMQ instance through the platform **cozy-default** flow, and proves data integrity by round-tripping a sentinel definition through object storage.
+This demo backs up and restores a Cozystack-managed RabbitMQ instance, proving data integrity by round-tripping a sentinel definition through object storage. It provisions its own `Bucket`, `Rabbitmq` strategy and `BackupClass` so the round-trip is self-contained; the platform ships an equivalent `cozy-default-rabbitmq` strategy that writes to the shared `cozy-backups` system bucket, which you can route to from your own `BackupClass` instead.
 
 ## What is backed up
 
@@ -10,7 +10,7 @@ Definitions import is additive: an in-place restore re-creates dropped definitio
 
 ## Prerequisites
 
-The platform default backups stack must be installed: the `backupstrategy-controller`, the `cozy-backups` bucket it provisions, and the `cozy-default-rabbitmq` strategy it ships. No demo `Bucket` is created here — the strategy carries the system-bucket coordinates and the controller projects `cozy-backups-creds` into the namespace before each run.
+The `backupstrategy-controller` and the backup CRDs must be installed (the platform default backups stack). `run-all.sh` provisions its own `Bucket`, reads the S3 coordinates from its `BucketInfo`, projects them into a `rabbitmq-backup-creds` Secret, copies the endpoint's CA into `rabbitmq-backup-ca`, and reuses the container image the shipped `cozy-default-rabbitmq` strategy runs — so that strategy must be present, but this demo does not write to the system bucket.
 
 To-copy restore imports the source's definitions into a separate broker via `POST /api/definitions`, which merges the source's users, permissions and vhosts into the target. It does not clobber the target's own operator-generated default user, because the cluster-operator gives each RabbitmqCluster a distinct random default username. It does, however, import the source's users (with their password hashes), so after a to-copy restore those source credentials are valid logins on the target — grant access accordingly.
 
@@ -19,8 +19,11 @@ Each backup is stored under a per-run key (`<namespace>/<application>/<backup-na
 ## Flow
 
 - `00-helpers.sh` — shared bash helpers (waiters, sentinel seed/check via `rabbitmqctl`).
-- `05-rabbitmq-src.yaml` — the source application (no `backup:` block; cozy-default carries it).
-- `10-backupjob-adhoc.yaml` — an ad-hoc `BackupJob` routed to `cozy-default`.
+- `00-bucket.yaml` — the demo `Bucket` backing the round-trip.
+- `03-rabbitmq-strategy.yaml` — the `Rabbitmq` strategy (S3 coordinates filled from the Bucket by `run-all.sh`).
+- `04-backupclass.yaml` — the `rabbitmq-default` `BackupClass` mapping `RabbitMQ` to that strategy.
+- `05-rabbitmq-src.yaml` — the source application (no `backup:` block; the strategy carries the S3 coordinates).
+- `10-backupjob-adhoc.yaml` — an ad-hoc `BackupJob` routed to `rabbitmq-default`.
 - `15-plan.yaml` — a cron `Plan` for scheduled backups.
 - `20-rabbitmq-target.yaml` — a separate application for restore-to-copy.
 - `25-restorejob-in-place.yaml` / `30-restorejob-to-copy.yaml` — the two restore flows.
@@ -32,4 +35,4 @@ Run the whole round-trip:
 ./cleanup.sh          # remove this demo's objects (idempotent)
 ```
 
-`SKIP_RESTORE=1 ./run-all.sh` stops after a successful backup (backup-only smoke). Override `NAMESPACE` (default `tenant-root`) to run elsewhere.
+`SKIP_RESTORE=1 ./run-all.sh` stops after a successful backup (backup-only smoke). Override `NAMESPACE` (default `tenant-root`) to run elsewhere. `BucketInfo` advertises the external S3 ingress endpoint, which in-cluster Pods cannot always reach or TLS-validate; set `S3_ENDPOINT=https://seaweedfs-s3.<ns>:8333` to target the in-cluster SeaweedFS instead (the e2e harness does this).
