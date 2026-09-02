@@ -48,6 +48,23 @@ tests:
           path: spec.selector["app.kubernetes.io/name"]
           value: otel-traces
 
+  - it: renders a WorkloadMonitor for the collector in central mode (no local backend)
+    template: templates/workloadmonitors.yaml
+    set:
+      tracingCollector:
+        enabled: true
+        replicas: 1
+        samplingPercentage: 10
+        backend: central
+      tracingStorages: []
+    documentSelector:
+      path: metadata.name
+      value: otel-traces
+    asserts:
+      - equal:
+          path: spec.type
+          value: otel-collector
+
   - it: whitelists the collector WorkloadMonitor in the dashboard-resources Role
     template: templates/dashboard-resourcemap.yaml
     set:
