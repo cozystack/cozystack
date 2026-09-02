@@ -244,3 +244,88 @@ YAML
     fi
     rm -rf "$tmp"
 }
+
+# --disabled emits the complement of the closure: what bundles.disabledPackages
+# must hold so an ordinary platform variant installs only what the suites need.
+@test "disabled mode: closure and complement partition the source list" {
+    # Unique metadata.name, not a file count: the script partitions names, and a
+    # sources file holding two documents would make a file count disagree for a
+    # reason that has nothing to do with the complement.
+    total=$(yq -rN '.metadata.name | select(. != null and . != "")' \
+              packages/core/platform/sources/*.yaml | sort -u | wc -l | tr -d ' ')
+    keep=$(hack/select-install.sh "postgres" | wc -w | tr -d ' ')
+    drop=$(hack/select-install.sh --disabled "postgres" | wc -w | tr -d ' ')
+    sum=$((keep + drop))
+    if [ "$sum" -ne "$total" ]; then
+        echo "closure ($keep) + complement ($drop) = $sum, but there are $total PackageSources" >&2
+        exit 1
+    fi
+}
+
+@test "disabled mode: never lists a package the closure keeps" {
+    keep=$(hack/select-install.sh "postgres kafka")
+    drop=$(hack/select-install.sh --disabled "postgres kafka")
+    for k in $keep; do
+        case " $drop " in
+            *" $k "*) echo "package '$k' is both kept and disabled" >&2; exit 1 ;;
+        esac
+    done
+}
+
+# The forward closure is what makes subtraction safe: a dependency of something
+# kept can never land in the complement. Asserted over every suite rather than
+# on one named pair -- an earlier version pinned backupstrategy-controller
+# dependsOn velero, which no closure can reach (nothing declares an edge TO
+# backupstrategy-controller), so the test asserted nothing at all.
+@test "disabled mode: no kept package has a dependency in the complement" {
+    deps=$(mktemp)
+    yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "") | $n + " " + .' \
+      packages/core/platform/sources/*.yaml > "$deps"
+
+    for suite in $(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml \
+                    | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,'); do
+        keep=$(hack/select-install.sh "$suite")
+        drop=$(hack/select-install.sh --disabled "$suite")
+        for k in $keep; do
+            for d in $(grep "^$k " "$deps" | cut -d' ' -f2); do
+                case " $drop " in
+                    *" $d "*)
+                        echo "suite '$suite': kept '$k' depends on '$d', which is in the disable list" >&2
+                        rm -f "$deps"; exit 1 ;;
+                esac
+            done
+        done
+    done
+    rm -f "$deps"
+}
+
+# The platform baseline is seeded unconditionally: it carries no dependsOn edge
+# from any app, but hack/e2e-install-cozystack.bats waits for the root Tenant and
+# the etcd/ingress/monitoring/seaweedfs/tenant-root HelmReleases before any suite
+# runs, and the suites themselves live in tenant-root. Disabling those leaves the
+# reduced platform with nowhere to install anything.
+@test "disabled mode: never disables the platform baseline" {
+    drop=$(hack/select-install.sh --disabled "postgres")
+    for b in cozystack.cozystack-engine cozystack.cozystack-basics \
+             cozystack.tenant-application cozystack.etcd-application \
+             cozystack.ingress-application cozystack.monitoring-application \
+             cozystack.seaweedfs-application; do
+        case " $drop " in
+            *" $b "*) echo "baseline package '$b' is in the disable list" >&2; exit 1 ;;
+        esac
+    done
+}
+
+# An empty closure would make the complement the entire platform. As an install
+# instruction that is a platform with no packages, so it must refuse rather than
+# emit it.
+@test "disabled mode: refuses an empty selection" {
+    out=$(mktemp); err=$(mktemp)
+    if hack/select-install.sh --disabled "" >"$out" 2>"$err"; then
+        echo "expected a non-zero exit for an empty selection, got: $(cat "$out")" >&2
+        rm -f "$out" "$err"; exit 1
+    fi
+    grep -q "refusing to emit a disable list" "$err" \
+      || { echo "expected the refusal message, got: $(cat "$err")" >&2; rm -f "$out" "$err"; exit 1; }
+    rm -f "$out" "$err"
+}

@@ -1,0 +1,201 @@
+suite: selective install via disabledPackages
+
+# The platform reduces to exactly the packages a test run needs without a
+# dedicated "minimal" variant: the base package helper consults
+# bundles.disabledPackages for EVERY package, not only those declared through
+# package.optional. tests/bundles_velero_default_test.yaml already pins that
+# property for one package; this pins that it holds for a whole install shape.
+#
+# The list is the real output of `hack/select-install.sh --disabled postgres`,
+# the complement of the forward dependency closure the postgres suite needs.
+# Regenerate after adding a PackageSource:
+#
+#   hack/select-install.sh --disabled postgres | tr ' ' '\n' | sed 's/^/    - /'
+#
+# Held in one YAML anchor rather than repeated per test: it was pasted five times
+# before, 450 of 565 lines, with nothing keeping the copies in step.
+
+_shared:
+  disabled: &disabled
+    - cozystack.backup-controller
+    - cozystack.backupstrategy-controller
+    - cozystack.bootbox
+    - cozystack.bootbox-application
+    - cozystack.bucket-application
+    - cozystack.capi-operator
+    - cozystack.capi-provider-bootstrap-kubeadm
+    - cozystack.capi-provider-core
+    - cozystack.capi-provider-cp-kamaji
+    - cozystack.capi-provider-infra-kubevirt
+    - cozystack.clickhouse-application
+    - cozystack.clickhouse-operator
+    - cozystack.cluster-autoscaler-azure
+    - cozystack.cluster-autoscaler-hetzner
+    - cozystack.clustersecret-operator
+    - cozystack.computeplane-application
+    - cozystack.cozy-proxy
+    - cozystack.cozystack-scheduler
+    - cozystack.external-dns
+    - cozystack.external-dns-application
+    - cozystack.external-secrets-operator
+    - cozystack.flux-plunger
+    - cozystack.flux-shard-operator
+    - cozystack.foundationdb-application
+    - cozystack.foundationdb-operator
+    - cozystack.goldpinger
+    - cozystack.gpu-operator
+    - cozystack.hami
+    - cozystack.harbor-application
+    - cozystack.hetzner-robotlb
+    - cozystack.http-cache-application
+    - cozystack.ingress-nginx
+    - cozystack.kafka-application
+    - cozystack.kafka-operator
+    - cozystack.kamaji
+    - cozystack.kubeovn-plunger
+    - cozystack.kubeovn-webhook
+    - cozystack.kubernetes-application
+    - cozystack.kubernetes-nodes-application
+    - cozystack.kuberture
+    - cozystack.kubevirt
+    - cozystack.kubevirt-cdi
+    - cozystack.linstor
+    - cozystack.linstor-gui
+    - cozystack.linstor-scheduler
+    - cozystack.local-ccm
+    - cozystack.mariadb-application
+    - cozystack.mariadb-operator
+    - cozystack.metallb
+    - cozystack.metrics-server
+    - cozystack.mongodb-application
+    - cozystack.mongodb-operator
+    - cozystack.monitoring
+    - cozystack.monitoring-agents
+    - cozystack.multus
+    - cozystack.nats-application
+    - cozystack.nfs-driver
+    - cozystack.objectstorage-controller
+    - cozystack.openbao-application
+    - cozystack.opensearch-application
+    - cozystack.opensearch-operator
+    - cozystack.ouroboros
+    - cozystack.qdrant-application
+    - cozystack.rabbitmq-application
+    - cozystack.rabbitmq-operator
+    - cozystack.redis-application
+    - cozystack.redis-operator
+    - cozystack.reloader
+    - cozystack.securitygroup-controller
+    - cozystack.snapshot-controller
+    - cozystack.tcp-balancer-application
+    - cozystack.telepresence
+    - cozystack.velero
+    - cozystack.virtualprivatecloud-application
+    - cozystack.vm-default-images
+    - cozystack.vm-disk-application
+    - cozystack.vm-instance-application
+    - cozystack.vpn-application
+
+templates:
+  - templates/bundles/paas.yaml
+  - templates/bundles/iaas.yaml
+  - templates/bundles/naas.yaml
+  - templates/bundles/system.yaml
+
+release:
+  name: cozystack
+  namespace: cozy-system
+
+tests:
+  # The load-bearing case. Mutating the helper to ignore disabledPackages turns
+  # exactly this one red, which is why the others below are framed as guards
+  # rather than as evidence for the mechanism.
+  - it: "drops the app operators the closure does not reach"
+    template: templates/bundles/paas.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        paas: {enabled: true}
+        disabledPackages: *disabled
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.mariadb-operator
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.kafka-operator
+          any: true
+        not: true
+
+  - it: "keeps the selected app"
+    template: templates/bundles/paas.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        paas: {enabled: true}
+        disabledPackages: *disabled
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-application
+          any: true
+
+  # postgres-operator comes from the system bundle, not the app catalogue, so
+  # this is what shows the closure spans bundles rather than one of them.
+  - it: "keeps a closure member emitted by a different bundle"
+    template: templates/bundles/system.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        disabledPackages: *disabled
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+
+  # The platform baseline is seeded unconditionally by select-install.sh because
+  # nothing declares a dependsOn edge to it, yet the install waits on it and the
+  # suites run inside tenant-root. If it ever fell into the complement the
+  # reduced platform would have nowhere to install anything.
+  - it: "keeps the tenant baseline the install waits for"
+    template: templates/bundles/system.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        disabledPackages: *disabled
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.tenant-application
+          any: true
+
+  # iaas and naas carry five fail() guards between them on inconsistent
+  # enable/variant combinations. A large disable list is not one of those
+  # combinations; this pins that it does not become one.
+  - it: "the iaas bundle renders with most packages disabled"
+    template: templates/bundles/iaas.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        iaas: {enabled: true}
+        disabledPackages: *disabled
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: "the naas bundle renders with most packages disabled"
+    template: templates/bundles/naas.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        naas: {enabled: true}
+        disabledPackages: *disabled
+    asserts:
+      - notFailedTemplate: {}
