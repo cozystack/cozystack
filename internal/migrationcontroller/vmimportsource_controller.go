@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -237,7 +238,72 @@ func (r *VMImportSourceReconciler) ensureHosts(ctx context.Context, src *migrati
 			return err
 		}
 	}
+	return r.pruneHosts(ctx, src)
+}
+
+// pruneHosts removes the Hosts and projected Secrets of overrides the source no
+// longer lists.
+//
+// A Source is editable, so an override can be dropped after it was created.
+// Creating and updating alone would leave the old Host in place, and a Host is
+// not inert: Forklift keeps routing that ESXi host's transfers through the
+// address it names, so a stale one silently redirects traffic to somewhere the
+// tenant has removed from the spec — and its credentials outlive the decision
+// to stop using them, until the whole Source is deleted.
+//
+// Ownership is checked rather than assumed. The label alone says this
+// controller made the object, not that it made it for this Source, and two
+// Sources in one namespace would otherwise delete each other's Hosts.
+func (r *VMImportSourceReconciler) pruneHosts(ctx context.Context, src *migrationv1alpha1.VMImportSource) error {
+	wanted := make(map[string]bool, len(src.Spec.Hosts))
+	for i := range src.Spec.Hosts {
+		wanted[hostOverrideName(src.Name, src.Spec.Hosts[i].ID)] = true
+	}
+
+	hosts := &unstructured.UnstructuredList{}
+	hosts.SetGroupVersionKind(hostGVK)
+	if err := r.List(ctx, hosts,
+		client.InNamespace(src.Namespace),
+		client.MatchingLabels{migrationv1alpha1.ManagedByLabel: migrationv1alpha1.ManagedByValue},
+	); err != nil {
+		// Forklift's CRDs can be absent; that is not this reconcile's problem.
+		if meta.IsNoMatchError(err) {
+			return nil
+		}
+		return err
+	}
+
+	for i := range hosts.Items {
+		host := &hosts.Items[i]
+		name := host.GetName()
+		if wanted[name] || !ownedBy(host, src) {
+			continue
+		}
+		if err := r.Delete(ctx, host); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		// The projected credentials share the Host's name. They carry an owner
+		// reference to the Source, so leaving them would keep them alive for as
+		// long as the Source itself.
+		secret := &corev1.Secret{}
+		secret.Name = name
+		secret.Namespace = src.Namespace
+		if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
 	return nil
+}
+
+// ownedBy reports whether this Source is the object's owner, by UID rather than
+// by name: names are reused, and a recreated Source is a different object.
+func ownedBy(obj metav1.Object, src *migrationv1alpha1.VMImportSource) bool {
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.UID == src.UID {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *VMImportSourceReconciler) applyProvider(
