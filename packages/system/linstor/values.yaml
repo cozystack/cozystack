@@ -42,6 +42,36 @@ linstor:
     minutes: 30
     allowCleanup: true
 linstorCSI:
+  ## Constrain provisioning to the node the scheduler actually picked.
+  ##
+  ## Without it, external-provisioner passes EVERY topology segment as
+  ## `requisite` and merely *prefers* the selected node, so when that node is out
+  ## of space linstor-csi may legally provision the volume somewhere else. For a
+  ## node-pinned volume (`allowRemoteVolumeAccess: false`, the `local` class that
+  ## is the cluster default) the result is a PV whose node affinity contradicts
+  ## the pod's other volumes, and the pod is then unschedulable FOREVER:
+  ##
+  ##   pv "pvc-..." node affinity doesn't match node "srv1": no matching NodeSelectorTerms
+  ##
+  ## It bites hardest on CDI imports, because an importer pod mounts two volumes
+  ## -- the disk and a ~21 GiB scratch volume that CDI only creates AFTER the pod
+  ## is scheduled. The scheduler therefore sizes the node against the disk alone,
+  ## can place two importers on a node that cannot hold both disks plus both
+  ## scratch volumes, and the second scratch is then placed elsewhere.
+  ##
+  ## Reproduced and fixed by measurement 2026-08-25 on a three-node cluster: with
+  ## the flag absent the scratch PV landed on a different node than its disk and
+  ## the import hung indefinitely at ImportScheduled with no error anywhere; with
+  ## it set the scratch PVC stays Pending and the pod reports the actionable
+  ## `1 node(s) did not have enough free storage`, then binds and completes on
+  ## its own once space frees up. A silent permanent deadlock becomes a legible,
+  ## self-correcting wait.
+  ##
+  ## Verified for node-pinned (`local`) volumes, which is what the cluster
+  ## default uses. For `replicated` volumes the PV is remotely accessible, so the
+  ## constraint is satisfiable wherever the pod lands; that case is reasoned
+  ## rather than measured, hence the switch.
+  strictTopology: true
   image:
     repository: ghcr.io/cozystack/cozystack/linstor-csi
     tag: v1.6.0@sha256:ae854423de62e94fb89b59d92c20da8939196e643e83b2d60d9f6915d5b0e55c
