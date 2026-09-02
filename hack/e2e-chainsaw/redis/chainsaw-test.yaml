@@ -396,12 +396,34 @@ spec:
           # `port 0` beside the TLS port, and every check above would stay
           # green if it stopped doing so. The mirror of the flip case: here the
           # plaintext dial is the one that must not answer.
-          if k -n "$NAMESPACE" exec rfr-redis-secure-0 -c redis -- \
+          #
+          # The verdict is the listener's refusal, not the absence of PONG. A
+          # missing pod, a 403 on exec, a wrong container name and the k()
+          # cap firing print no PONG either, and a check that only looked for
+          # it would pass on every one of them. A TLS listener drops a
+          # plaintext client at the first bytes of AUTH, so redis-cli reports
+          # the AUTH reply as "I/O error", retries once, and exits 1, followed
+          # by "Error: Connection reset by peer". The I/O error line is the
+          # refusal. A
+          # refused connect is not, because nothing listening contradicts the
+          # TLS dial above. Nor is the cap expiring: the flip case reads
+          # expiry as its refusal because a plaintext listener holds a
+          # ClientHello in silence, whereas a TLS listener answers a plaintext
+          # dial at once, so silence here is a state this check did not read.
+          # Both fail as such, with what the dial printed.
+          rc=0
+          pong=$(k -n "$NAMESPACE" exec rfr-redis-secure-0 -c redis -- \
             timeout 15 redis-cli -h "rfr-redis-secure.$NAMESPACE.svc" -p 6379 \
-            --user pinger --pass pingpass --no-auth-warning ping 2>/dev/null | grep -qx PONG; then
-            echo "the plaintext listener still answers on an instance with TLS on" >&2
-            exit 1
-          fi
+            --user pinger --pass pingpass --no-auth-warning ping 2>&1) || rc=$?
+          case "$pong" in
+            *PONG*)
+              echo "the plaintext listener still answers on an instance with TLS on" >&2
+              exit 1 ;;
+            *"I/O error"*) ;;
+            *)
+              echo "cannot determine whether the plaintext listener is off (exit $rc): $pong" >&2
+              exit 1 ;;
+          esac
 
           # readyReplicas above witnesses the bootstrap and stops there. A pod
           # still replicating from the 127.0.0.1 the operator's initial config
@@ -572,14 +594,33 @@ spec:
             echo "plaintext instance stopped answering after the rejected flip: $pong" >&2
             exit 1
           fi
-          # Expiry of that cap IS the refusal being asserted: a plaintext
-          # listener never sends a ServerHello, so redis-cli waits it out and
-          # prints no PONG for grep to find.
-          if k -n "$NAMESPACE" exec rfr-redis-flip-0 -c redis -- \
+          # Expiry of that cap IS the refusal being asserted, and its only
+          # shape. The ClientHello reaches a plaintext listener as an inline
+          # command, which redis scans for a newline with strchr, and the
+          # handshake header carries a NUL byte ahead of anything random, so
+          # the scan ends before any newline, the server waits for a line
+          # that never completes and sends nothing, and redis-cli waits with
+          # it until the cap kills it: silent, exit 124. kubectl reports that
+          # code in its own trailer,
+          # and the trailer is what separates the cap that fired inside the
+          # pod from the k() cap firing outside it, since an exec that never
+          # reached redis-cli leaves none. So the verdict is that trailer,
+          # not the absence of PONG, which a missing pod, a 403 on exec, a
+          # wrong container name or a name that does not resolve would
+          # produce just as well. Those fail as states this check did not
+          # read, with what the dial printed.
+          rc=0
+          pong=$(k -n "$NAMESPACE" exec rfr-redis-flip-0 -c redis -- \
             timeout 15 redis-cli --tls --insecure -h "rfr-redis-flip.$NAMESPACE.svc" -p 6379 \
-            --user pinger --pass pingpass --no-auth-warning ping 2>/dev/null | grep -qx PONG; then
-            echo "a TLS listener appeared on an instance whose flip was rejected" >&2
-            exit 1
-          fi
+            --user pinger --pass pingpass --no-auth-warning ping 2>&1) || rc=$?
+          case "$pong" in
+            *PONG*)
+              echo "a TLS listener appeared on an instance whose flip was rejected" >&2
+              exit 1 ;;
+            *"command terminated with exit code 124"*) ;;
+            *)
+              echo "cannot determine whether a TLS listener is up (exit $rc): $pong" >&2
+              exit 1 ;;
+          esac
         check:
           ($error == null): true
