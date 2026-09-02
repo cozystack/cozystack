@@ -42,6 +42,9 @@ type ConfigSpec struct {
 	// OpenSearch major version to deploy.
 	// +kubebuilder:default:="v2"
 	Version Version `json:"version"`
+	// Let the OpenSearch operator raise `vm.max_map_count` with a privileged init container. Disable it when the node already sets the sysctl to at least 262144 — the init container is privileged, which a tenant namespace under the default `baseline` PodSecurity rejects, leaving the StatefulSet unable to create a Pod.
+	// +kubebuilder:default:=true
+	SetVMMaxMapCount bool `json:"setVMMaxMapCount"`
 	// Container images used by the operator.
 	// +kubebuilder:default:={}
 	Images Images `json:"images"`
