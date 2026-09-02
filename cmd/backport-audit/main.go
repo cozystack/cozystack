@@ -20,11 +20,12 @@ limitations under the License.
 // from PATH) and writes nothing anywhere.
 //
 // A PR is a candidate for release-X.Y when it merged to main carrying the
-// `backport` label while X.Y was the current release line, or the
-// `backport-previous` label while X.Y was one minor behind it. That mirrors
-// .github/workflows/backport.yaml, which resolves its target branches from the
-// latest published release at merge time rather than from the label itself, so
-// the same label means a different branch depending on when the PR merged.
+// `kind/backport` label while X.Y was the current release line, or the
+// `kind/backport-previous` label while X.Y was one minor behind it. That
+// mirrors .github/workflows/backport.yaml, which resolves its target branches
+// from the latest published release at merge time rather than from the label
+// itself, so the same label means a different branch depending on when the PR
+// merged.
 //
 // Landing is established from three independent kinds of evidence: the PR's
 // merge commit already being reachable from the release branch (it merged
@@ -38,7 +39,7 @@ limitations under the License.
 //
 // Known limits: a hand-backport that is squash-merged, rewords its subject and
 // references no original PR is unprovable from either side and reads as
-// MISSING; and a `backport` label added after the release line moved on
+// MISSING; and a `kind/backport` label added after the release line moved on
 // resolves to the newer line.
 package main
 
@@ -82,8 +83,29 @@ var (
 	releaseTagRE   = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
 )
 
-// backportLabels are the two labels .github/workflows/backport.yaml acts on.
-var backportLabels = []string{"backport", "backport-previous"}
+// The two backport requests .github/workflows/backport.yaml acts on, named by
+// the label that carries them. These names are what the audit reports.
+const (
+	labelCurrent  = "kind/backport"
+	labelPrevious = "kind/backport-previous"
+)
+
+// backportLabels maps each request to every label spelling that expresses it.
+//
+// TRANSITIONAL, matching the same allowance in backport.yaml: the labels were
+// namespaced under kind/ in 7b71053a0, carrying the bare names as label-sync
+// aliases so the rename applied in place. Historical PRs therefore read back as
+// `kind/backport` today, but the org-level dosubot still applies the bare names
+// on new PRs, so a candidate can carry either. Both are queried and folded onto
+// the canonical name above. When dosubot's PR labelling is switched off, the
+// legacy spellings here and the ones in backport.yaml can be dropped together.
+var backportLabels = []struct {
+	canonical string
+	spellings []string
+}{
+	{labelCurrent, []string{labelCurrent, "backport"}},
+	{labelPrevious, []string{labelPrevious, "backport-previous"}},
+}
 
 // Statuses, most to least in need of attention. outstanding is the prefix of
 // this order that makes the audit exit non-zero.
@@ -424,8 +446,16 @@ type lineOpen struct {
 
 // lineOpenDates reports when each release line became the current one, oldest
 // first. A line opens when its first non-prerelease release is published,
-// which is when getLatestRelease in backport.yaml starts resolving `backport`
-// to that line. Drafts and prereleases are skipped, as that API does.
+// which is when getLatestRelease in backport.yaml starts resolving
+// `kind/backport` to that line. Drafts and prereleases are skipped, as that
+// API does.
+//
+// backport.yaml stopped calling getLatestRelease in 6ff5b98d5 and now takes the
+// two newest existing release-X.Y branches instead, which opens a line at its
+// first rc rather than at its first stable. The two rules agree everywhere
+// except inside a freeze window, and no window has opened since that commit
+// landed, so every PR audited so far merged under the rule reproduced here.
+// The next rc cut is what makes them diverge.
 func lineOpenDates() ([]lineOpen, error) {
 	var releases []struct {
 		TagName      string    `json:"tagName"`
@@ -464,7 +494,8 @@ func lineOpenDates() ([]lineOpen, error) {
 }
 
 // targetsAt reports the current and previous release lines as of when, which is
-// what the `backport` and `backport-previous` labels meant at that moment.
+// what the `kind/backport` and `kind/backport-previous` labels meant at that
+// moment.
 func targetsAt(opened []lineOpen, when time.Time) (current, previous *line) {
 	var live []line
 	for _, o := range opened {
@@ -481,25 +512,29 @@ func targetsAt(opened []lineOpen, when time.Time) (current, previous *line) {
 	return current, previous
 }
 
-// candidates returns the merged-to-main PRs carrying a backport label.
+// candidates returns the merged-to-main PRs carrying a backport label, keyed by
+// PR number so a PR matched under two spellings of the same request, or under
+// both requests, is one entry carrying both canonical names.
 func candidates(limit int) (map[int]*mainPR, error) {
 	found := map[int]*mainPR{}
-	for _, label := range backportLabels {
-		var prs []mainPR
-		if err := ghJSON(&prs, "pr", "list", "--base", "main", "--state", "merged",
-			"--label", label, "--limit", strconv.Itoa(limit),
-			"--json", "number,title,url,mergedAt,mergeCommit,labels,author"); err != nil {
-			return nil, err
-		}
-		for i := range prs {
-			pr := prs[i]
-			existing, ok := found[pr.Number]
-			if !ok {
-				pr.labels = map[string]bool{}
-				found[pr.Number] = &pr
-				existing = &pr
+	for _, req := range backportLabels {
+		for _, spelling := range req.spellings {
+			var prs []mainPR
+			if err := ghJSON(&prs, "pr", "list", "--base", "main", "--state", "merged",
+				"--label", spelling, "--limit", strconv.Itoa(limit),
+				"--json", "number,title,url,mergedAt,mergeCommit,labels,author"); err != nil {
+				return nil, err
 			}
-			existing.labels[label] = true
+			for i := range prs {
+				pr := prs[i]
+				existing, ok := found[pr.Number]
+				if !ok {
+					pr.labels = map[string]bool{}
+					found[pr.Number] = &pr
+					existing = &pr
+				}
+				existing.labels[req.canonical] = true
+			}
 		}
 	}
 	return found, nil
@@ -685,10 +720,10 @@ func (cfg *config) audit(branch string, cands map[int]*mainPR, opened []lineOpen
 		current, previous := targetsAt(opened, pr.MergedAt)
 		label := ""
 		switch {
-		case pr.labels["backport"] && current != nil && *current == want:
-			label = "backport"
-		case pr.labels["backport-previous"] && previous != nil && *previous == want:
-			label = "backport-previous"
+		case pr.labels[labelCurrent] && current != nil && *current == want:
+			label = labelCurrent
+		case pr.labels[labelPrevious] && previous != nil && *previous == want:
+			label = labelPrevious
 		default:
 			continue
 		}

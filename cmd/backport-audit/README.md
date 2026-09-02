@@ -2,17 +2,17 @@
 
 Answers one question, before a release or an rc is cut: did everything labelled for backport actually land on the release branch? It prints the URLs of the ones that did not, and exits non-zero, so it can gate the cut.
 
-The manual alternative is `gh pr list --search "is:merged label:backport"`, which lists every PR ever labelled and says nothing about whether the change reached the branch. Answering that by hand means reading the branch history per PR, which is where backports quietly go missing.
+The manual alternative is `gh pr list --search "is:merged label:kind/backport"`, which lists every PR ever labelled and says nothing about whether the change reached the branch. Answering that by hand means reading the branch history per PR, which is where backports quietly go missing.
 
 ```console
 $ go run ./cmd/backport-audit release-1.5
 
-=== release-1.5 === 33 candidate PRs: MISSING=4 pending=9 dropped=3 backported=17
+=== release-1.5 === 43 candidate PRs: MISSING=2 pending=3 dropped=5 backported=33
 
-  MISSING -- labelled for this line, no trace of it here (4):
-    https://github.com/cozystack/cozystack/pull/2936
-      #2936 fix(kubernetes): make the default md0 node group removable
-      label=backport author=myasnikovdaniil merged=2026-06-30 -- no backport PR, nothing on branch
+  MISSING -- labelled for this line, no trace of it here (2):
+    https://github.com/cozystack/cozystack/pull/3449
+      #3449 ci(release): move release validation to rc time — e2e lane, changelog button, promote gate, docs at promote
+      label=kind/backport-previous author=myasnikovdaniil merged=2026-07-29 -- no backport PR, nothing on branch
 ```
 
 The URL is always the **original PR on main** — the thing you decide about. The evidence line names the backport PR when one exists. Anything already on the branch is counted in the header and never listed, so silence means done.
@@ -61,9 +61,13 @@ go run ./cmd/backport-audit release-1.5 || echo "do not cut yet"
 
 ## How a PR is matched to a release line
 
-A `backport` label does not name a branch. [`backport.yaml`](../../.github/workflows/backport.yaml) resolves the target from `getLatestRelease` **at merge time**, so the same label means `release-1.5` on a PR merged in June and `release-1.6` on one merged in August.
+A `kind/backport` label does not name a branch. [`backport.yaml`](../../.github/workflows/backport.yaml) resolves the target from `getLatestRelease` **at merge time**, so the same label means `release-1.5` on a PR merged in June and `release-1.6` on one merged in August.
 
-The audit reproduces that rule rather than trusting the label text: a PR is a candidate for `release-X.Y` when it merged carrying `backport` while `X.Y` was the current line, or `backport-previous` while `X.Y` was one minor behind. A line is treated as current from the publication of its first non-prerelease release, which is what `getLatestRelease` returns. Without this, auditing an older line reports every newer-era `backport` PR as missing.
+The audit reproduces that rule rather than trusting the label text: a PR is a candidate for `release-X.Y` when it merged carrying `kind/backport` while `X.Y` was the current line, or `kind/backport-previous` while `X.Y` was one minor behind. A line is treated as current from the publication of its first non-prerelease release, which is what `getLatestRelease` returns. Without this, auditing an older line reports every newer-era `kind/backport` PR as missing.
+
+The labels were namespaced under `kind/` in 7b71053a0, which renamed them in place via label-sync aliases, so every historical PR reads back under the new name. The bare `backport` and `backport-previous` are still queried alongside them, because the org-level dosubot goes on applying the old spelling to new PRs — the same transitional allowance [`backport.yaml`](../../.github/workflows/backport.yaml) makes, and it retires at the same time. A PR found under either spelling is reported under the `kind/` one.
+
+One divergence is open and deliberate. `backport.yaml` stopped calling `getLatestRelease` in 6ff5b98d5 and now takes the two newest existing `release-X.Y` branches, which opens a line at its first rc rather than at its first stable. The two rules agree outside a freeze window, and no window has opened since that commit, so every PR audited so far merged under the rule reproduced here — the next rc cut is what makes them disagree.
 
 ## How landing is established
 
@@ -92,18 +96,18 @@ Output is an object keyed by branch, each holding one record per candidate:
 
 ```json
 {
-  "number": 3372,
-  "title": "fix(keycloak-configure): patch HelmRelease in release namespace on teardown",
-  "url": "https://github.com/cozystack/cozystack/pull/3372",
-  "author": "lexfrei",
-  "mergedAt": "2026-07-28T15:45:47Z",
-  "label": "backport",
-  "backport_prs": [{"number": 3478, "state": "OPEN", "url": "..."}],
+  "number": 3963,
+  "title": "fix(clickhouse): scheme the backup S3_ENDPOINT on the system-bucket flow",
+  "url": "https://github.com/cozystack/cozystack/pull/3963",
+  "author": "androndo",
+  "mergedAt": "2026-08-28T11:05:15Z",
+  "label": "kind/backport",
+  "backport_prs": [{"number": 3987, "state": "OPEN", "url": "..."}],
   "status": "pending",
-  "evidence": "backport PR #3478 open"
+  "evidence": "backport PR #3987 open"
 }
 ```
 
 ## Limits
 
-A `MISSING` verdict is a prompt to check, not proof of absence. A hand-backport that was squash-merged, reworded, and referenced no original PR is invisible to every evidence layer and reads as `MISSING`; confirm at diff level before redoing the work. A `backport` label added long after merge, once the release line has moved on, resolves to the newer line. And the audit reports *that* something is missing, never *why* — a run of `MISSING` entries clustered in time usually means the bot itself was failing during that window, which is worth checking before cherry-picking them one by one.
+A `MISSING` verdict is a prompt to check, not proof of absence. A hand-backport that was squash-merged, reworded, and referenced no original PR is invisible to every evidence layer and reads as `MISSING`; confirm at diff level before redoing the work. A `kind/backport` label added long after merge, once the release line has moved on, resolves to the newer line. And the audit reports *that* something is missing, never *why* — a run of `MISSING` entries clustered in time usually means the bot itself was failing during that window, which is worth checking before cherry-picking them one by one.
