@@ -43,6 +43,9 @@ kubernetesProvider:
     "storage.k8s.io/v1/StorageClass":
       gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
       namespaced: false
+    "v1/PersistentVolumeClaim":
+      gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+      namespaced: true
   objects:
     - kind: VirtualMachineClusterInstancetype
       apiVersion: instancetype.kubevirt.io/v1beta1
@@ -71,6 +74,20 @@ kubernetesProvider:
         storage:
           resources: {requests: {storage: 6Gi}}
       status: {phase: Succeeded}
+    # A golden that declares no class in its spec but whose PVC was bound to an
+    # explicit one -- what a golden created before the cluster's default moved
+    # looks like. The spec says nothing; the PVC is the authority.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-pvcclass-v1.0.0, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+      status: {phase: Succeeded, claimName: talos-worker-pvcclass-v1.0.0}
+    - kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata: {name: talos-worker-pvcclass-v1.0.0, namespace: cozy-public}
+      spec: {storageClassName: local}
     # The golden for the chart's default talos.*, on an explicit class.
     - kind: DataVolume
       apiVersion: cdi.kubevirt.io/v1beta1
@@ -125,3 +142,18 @@ tests:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
           value: talos-worker-nosc-v1.0.0
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # Reading the spec alone would call this golden "on the cluster default", which
+  # is `replicated` here, and clone it for a `replicated` pool. Its PVC is on
+  # `local`, so that clone would silently be a host-assisted copy. Found by the
+  # cross-check on cozystack/cozystack#3294.
+  - it: takes a blank-spec golden's class from its PVC, not from today's default
+    set:
+      storageClass: replicated
+      osImage:
+        builtin:
+          schematicID: pvcclass
+          version: v1.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storageClass "replicated" differs from golden image "talos-worker-pvcclass-v1\.0\.0" storageClass "local"'

@@ -153,13 +153,19 @@ spec:
              left to CDI, which reports a source it cannot clone on the pending
              DataVolume of the worker that actually needs one.
 
-             CAPK names a worker disk disk-system-<clusterName>-<groupName>-<id>,
-             so the prefix scopes the answer to THIS pool: another pool cloning the
-             same golden says nothing about whether this one still needs it. */}}
-      {{-   $poolDiskPrefix := printf "disk-system-%s-%s-" .clusterName .groupName }}
+             The disk names itself as its pool, and the match is on that rather than
+             on the disk's own name. CAPK names a worker disk
+             disk-system-<clusterName>-<groupName>-<machine id>, and a name prefix
+             cannot separate pool md0 from pool md0-gpu: the sibling's disks start
+             with md0's prefix, so a sibling that had cloned would answer for a pool
+             that never had, and suppress both guards while md0's new workers point
+             at a source that is gone. An annotation carrying the exact pool is
+             unambiguous and costs nothing, since the disk template already carries
+             one naming the golden. */}}
+      {{-   $poolID := printf "%s-%s" .clusterName .groupName }}
       {{-   $poolCloned := false }}
       {{-   range (dig "items" (list) ((lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace "") | default dict)) }}
-      {{-     if and (hasPrefix $poolDiskPrefix (dig "metadata" "name" "" . | toString))
+      {{-     if and (eq (dig "metadata" "annotations" "kubernetes-worker-image.cozystack.io/pool" "" . | toString) $poolID)
                      (eq (dig "metadata" "annotations" "kubernetes-worker-image.cozystack.io/golden" "" . | toString) $goldenName)
                      (eq (dig "status" "phase" "" . | toString) "Succeeded") }}
       {{-       $poolCloned = true }}
@@ -202,6 +208,21 @@ spec:
              which the worker DataVolume inherits. */}}
       {{-     $workerSC := .group.storageClass | default $.Values.storageClass | toString }}
       {{-     $goldenSC := dig "spec" "storage" "storageClassName" "" $goldenDV | toString }}
+      {{- /* A golden that declares no class is not on "the cluster default" as it
+             stands today -- it is on whatever default was in force when CDI bound
+             its PVC, and that PVC keeps the concrete class after the cluster's
+             default moves on. Reading the spec alone would substitute today's
+             default for it and then either wave through a cross-class copy or
+             refuse a pool that does match. The PVC is the authority; CDI names it
+             after the DataVolume, and status.claimName says so explicitly when it
+             is set. */}}
+      {{-     if not $goldenSC }}
+      {{-       $goldenPVCName := dig "status" "claimName" $goldenName $goldenDV | toString }}
+      {{-       $goldenPVC := lookup "v1" "PersistentVolumeClaim" "cozy-public" $goldenPVCName }}
+      {{-       if $goldenPVC }}
+      {{-         $goldenSC = dig "spec" "storageClassName" "" $goldenPVC | toString }}
+      {{-       end }}
+      {{-     end }}
       {{-     $defaultSC := "" }}
       {{-     if or (not $workerSC) (not $goldenSC) }}
       {{-       $defaultSC = include "kubernetes-nodes.defaultStorageClassName" $ }}
@@ -209,7 +230,7 @@ spec:
       {{-       if not $goldenSC }}{{- $goldenSC = $defaultSC }}{{- end }}
       {{-     end }}
       {{-     if and $workerSC $goldenSC (ne $workerSC $goldenSC) }}
-      {{-       fail (printf "nodeGroup %q: storageClass %q differs from golden image %q storageClass %q — CDI cannot CSI-clone across StorageClasses and would fall back to a host-assisted copy over the pod network. An empty storageClass on either side resolves to the cluster default StorageClass %q. Set the kubernetes-worker-image catalog entry's storageClass to %q -- on a running cluster that is kubernetesWorkerImage.storageClass in the cozystack-platform Package values. A pool created with storageClass %q instead would also match, but storageClass is immutable on an existing pool, so that is a choice at creation and not a fix here. Otherwise switch this pool to osImage.factory." .groupName $workerSC $goldenName $goldenSC $defaultSC $workerSC $goldenSC) }}
+      {{-       fail (printf "nodeGroup %q: storageClass %q differs from golden image %q storageClass %q — CDI cannot CSI-clone across StorageClasses and would fall back to a host-assisted copy over the pod network. An empty storageClass on either side resolves to the cluster default StorageClass %q. Neither side can be moved in place: this golden's class is fixed for its lifetime, because a DataVolume spec cannot be patched, and the pool's storageClass is immutable on an existing pool. So add a NEW kubernetes-worker-image catalog entry with a different (schematicID, version) on storageClass %q (kubernetesWorkerImage.images in the cozystack-platform Package values) and point this pool's osImage.builtin at it; or, once no pool clones this golden, delete it and let the catalog recreate it on that class. Switching this pool to osImage.factory also resolves it." .groupName $workerSC $goldenName $goldenSC $defaultSC $workerSC) }}
       {{-     end }}
       {{-     $goldenStorage := dig "spec" "storage" "resources" "requests" "storage" "" $goldenDV }}
       {{-     if $goldenStorage }}
@@ -249,6 +270,7 @@ spec:
                  characters and a label value stops at 63. */}}
           annotations:
             kubernetes-worker-image.cozystack.io/golden: {{ $goldenName | quote }}
+            kubernetes-worker-image.cozystack.io/pool: {{ printf "%s-%s" .clusterName .groupName | quote }}
           {{- else }}
           annotations:
             cdi.kubevirt.io/storage.usePopulator: "false"

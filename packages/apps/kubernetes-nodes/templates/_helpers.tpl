@@ -264,7 +264,7 @@ dict the result is written into), groupName (named in every error message).
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" ($schematicID | toString)) -}}
 {{-   fail (printf "nodeGroup %q: Talos schematicID %q is not a plain lowercase alphanumeric identifier. It is interpolated into the worker DataVolume name and the image URL, so it must carry no whitespace, path separators or YAML metacharacters." .groupName ($schematicID | toString)) -}}
 {{- end -}}
-{{- if not (regexMatch "^v[0-9]+\\.[0-9]+(\\.[0-9]+)?(-[0-9a-z.]+)?$" ($version | toString)) -}}
+{{- if not (regexMatch "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9a-z.]+)?$" ($version | toString)) -}}
 {{-   fail (printf "nodeGroup %q: Talos version %q is not a vMAJOR.MINOR.PATCH release. It is interpolated into the worker DataVolume name and the image URL, so it must carry no whitespace or YAML metacharacters." .groupName ($version | toString)) -}}
 {{- end -}}
 {{- if not (regexMatch "^https?://[A-Za-z0-9._~:/?#\\[\\]@!&'()*+,;=%-]+$" ($factoryURL | toString)) -}}
@@ -290,15 +290,30 @@ cozystack/cozystack#3294.
 
 Both the current annotation and its beta predecessor count, because clusters
 provisioned years apart carry different ones and Kubernetes still honours both.
+
+More than one class may carry the annotation at once. Kubernetes permits that --
+it is the normal state midway through swapping a cluster's default -- and
+resolves it by taking the most recently created, so this does the same. Emitting
+every match instead concatenates their names into a class that does not exist,
+and the comparison below then rejects a pool whose class matches the default
+that is actually in force. Timestamps are RFC3339 in UTC, so comparing them as
+strings is comparing them chronologically.
 */ -}}
 {{- define "kubernetes-nodes.defaultStorageClassName" -}}
 {{- $classes := lookup "storage.k8s.io/v1" "StorageClass" "" "" -}}
+{{- $name := "" -}}
+{{- $createdAt := "" -}}
 {{- range (dig "items" (list) ($classes | default dict)) -}}
 {{-   $annotations := dig "metadata" "annotations" (dict) . -}}
 {{-   if or (eq (dig "storageclass.kubernetes.io/is-default-class" "" $annotations | toString) "true") (eq (dig "storageclass.beta.kubernetes.io/is-default-class" "" $annotations | toString) "true") -}}
-{{-     dig "metadata" "name" "" . -}}
+{{-     $at := dig "metadata" "creationTimestamp" "" . | toString -}}
+{{-     if or (not $name) (gt $at $createdAt) -}}
+{{-       $name = dig "metadata" "name" "" . | toString -}}
+{{-       $createdAt = $at -}}
+{{-     end -}}
 {{-   end -}}
 {{- end -}}
+{{- $name -}}
 {{- end -}}
 
 {{- /*

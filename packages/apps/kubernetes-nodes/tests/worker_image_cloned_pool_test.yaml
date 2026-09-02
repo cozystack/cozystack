@@ -62,7 +62,8 @@ kubernetesProvider:
     - kind: StorageClass
       apiVersion: storage.k8s.io/v1
       metadata: {name: replicated}
-    # This pool's own worker disk, cloned and populated. CAPK names it
+    # This pool's own worker disk, cloned and populated. Each disk names its pool
+    # in an annotation; CAPK's own name for it is
     # disk-system-<clusterName>-<groupName>-<machine id>.
     - kind: DataVolume
       apiVersion: cdi.kubevirt.io/v1beta1
@@ -71,6 +72,7 @@ kubernetesProvider:
         namespace: tenant-test
         annotations:
           kubernetes-worker-image.cozystack.io/golden: talos-worker-gone-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0
       status: {phase: Succeeded}
     # Another pool of the same cluster, cloned from the golden that later failed.
     # Its existence must not speak for md0.
@@ -81,7 +83,29 @@ kubernetesProvider:
         namespace: tenant-test
         annotations:
           kubernetes-worker-image.cozystack.io/golden: talos-worker-failed-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md1
       status: {phase: Succeeded}
+    # The sibling whose NAME starts with this pool's: disk-system-kubernetes-myk8s-md0-gpu-*
+    # carries the disk-system-kubernetes-myk8s-md0- prefix. Matching on the name
+    # would let md0-gpu answer for md0. Found by the cross-check on
+    # cozystack/cozystack#3294.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: disk-system-kubernetes-myk8s-md0-gpu-abcde
+        namespace: tenant-test
+        annotations:
+          kubernetes-worker-image.cozystack.io/golden: talos-worker-sibling-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0-gpu
+      status: {phase: Succeeded}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-sibling-v1.0.0, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status: {phase: Failed}
     # md0's disk against a third golden, still importing: not yet proof that this
     # pool is past needing the source.
     - kind: DataVolume
@@ -91,6 +115,7 @@ kubernetesProvider:
         namespace: tenant-test
         annotations:
           kubernetes-worker-image.cozystack.io/golden: talos-worker-pending-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0
       status: {phase: CloneInProgress}
     - kind: DataVolume
       apiVersion: cdi.kubevirt.io/v1beta1
@@ -110,6 +135,7 @@ kubernetesProvider:
         namespace: tenant-test
         annotations:
           kubernetes-worker-image.cozystack.io/golden: talos-worker-brokelater-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0
       status: {phase: Succeeded}
     - kind: DataVolume
       apiVersion: cdi.kubevirt.io/v1beta1
@@ -179,3 +205,16 @@ tests:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
           value: talos-worker-brokelater-v1.0.0
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # A sibling pool whose name this pool's name is a prefix of. md0-gpu cloned the
+  # golden and md0 never did, so md0 is still waiting for a first disk and the
+  # guard must fire. Matching disks by name prefix passes this case wrongly.
+  - it: does not let a sibling pool whose name shares this pool's prefix answer for it
+    set:
+      osImage:
+        builtin:
+          schematicID: sibling
+          version: v1.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'golden DataVolume "talos-worker-sibling-v1\.0\.0" in cozy-public failed to import'
