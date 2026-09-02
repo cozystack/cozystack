@@ -24,9 +24,10 @@
 #   - packages the PR EDITED (TOUCHED, the plan job's changed-package dirs): the
 #     PR's committed refs are its intent (e.g. an upstream image bump in a
 #     non-build-unit package), so they must win over the artifact — never overlay.
-#   - packages/core/talos and packages/core/installer: rebuilt unconditionally
-#     by their dedicated jobs (build-talos / the finalize installer build),
-#     which own those files — never overlay them.
+#   - packages/core/talos and packages/core/installer: owned by dedicated jobs
+#     (the input-gated build-talos job / the finalize installer build), so their
+#     own files are never overlaid. A successful Talos job also adds its actual
+#     output package, packages/extra/bootbox, to BUILT_JSON at the call site.
 #   - vendored charts/ subtrees: upstream chart values we do not build.
 #
 # Surgical + self-validating: a file is overlaid only when every line that
