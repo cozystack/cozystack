@@ -19,7 +19,14 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
   # TLS section should contain only tls/tls.enabled rows, not topology spread.
   # The awk pattern skips the heading line itself, then prints until the next
   # section heading so the range is non-vacuous.
-  ! awk '/### TLS configuration/{found=1; next} found && /^### /{exit} found' "$README" | grep -q "topologySpreadPolicy"
+  #
+  # if/exit rather than a `!` prefix, for the reason spelled out on the
+  # publish-ca-cert check below: under hack/cozytest.sh a negated pipeline cannot
+  # fail the test at all.
+  if awk '/### TLS configuration/{found=1; next} found && /^### /{exit} found' "$README" | grep -q "topologySpreadPolicy"; then
+    echo "topologySpreadPolicy appears inside the TLS configuration section" >&2
+    exit 1
+  fi
 }
 
 @test "topologySpreadPolicy appears in README at all" {
@@ -81,9 +88,24 @@ EOF
 }
 
 @test "cozyrds opensearch.yaml selects the projection, never a publish source" {
-  # The selector must name the key-free projection (tenant-ca), not the label that
-  # marks a publish SOURCE (publish-ca-cert). Sources are key-bearing: the chart puts
-  # publish-ca-cert on the cert-manager CA Secret, which holds the CA private key.
-  # Selecting by that label instead would hand the tenant the key directly.
-  ! grep -q "internal.cozystack.io/publish-ca-cert" "$COZYRDS"
+  # publish-ca-cert was a label-driven extraction leg that never shipped: no
+  # controller on main reads it. What ships is the TenantProjection sentinel, which
+  # names its source Secret outright, and the only label in the mechanism is
+  # tenant-ca on the projection the controller writes — which is what the selector
+  # above matches.
+  #
+  # The assertion outlives the leg it was written for. A publish-ca-cert selector
+  # here would be inert rather than dangerous today, but the name marked a
+  # key-bearing SOURCE — the cert-manager CA Secret, private key under tls.key — so
+  # reviving it as a selector is the one edit that would hand the tenant that key.
+  # Cheaper to keep the name out of this file than to re-derive that each time.
+  #
+  # NOT written as `! grep -q`. These files run under hack/cozytest.sh, which
+  # injects `return 0` ahead of the closing brace, and a `!`-prefixed pipeline is
+  # exempt from set -e — so a bare negation reports green under the runner CI uses
+  # while real bats fails it. if/exit is the form that survives both.
+  if grep -q "internal.cozystack.io/publish-ca-cert" "$COZYRDS"; then
+    echo "cozyrds selects on publish-ca-cert, which marks the key-bearing CA Secret" >&2
+    exit 1
+  fi
 }

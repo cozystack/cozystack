@@ -157,28 +157,6 @@ tests:
       - hasDocuments:
           count: 4
 
-  # CA publication (label-driven leg). The CA-extraction controller selects the source
-  # by these labels and projects ca.crt alone into the key-free <release>.tenant-ca
-  # Secret. The release label is required because a cert-manager-issued Secret carries
-  # no OwnerReference and no Helm metadata to attribute it by.
-  - it: labels the HTTP CA secret for publication to the tenant
-    set:
-      tls:
-        enabled: true
-    asserts:
-      - equal:
-          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
-          value: "true"
-        documentIndex: 1
-      - equal:
-          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
-          value: os-test
-        documentIndex: 1
-      - equal:
-          path: metadata.name
-          value: os-test-http-ca
-        documentIndex: 1
-
   # Passing http.caSecret moves the operator onto subPath mounts, which the kubelet
   # never refreshes, and nothing restarts the pods when the Secret changes. A leaf
   # that outlived its mount would expire in place and take HTTPS down on a timer, so
@@ -270,36 +248,58 @@ tests:
           value: os-test-ca
         documentIndex: 3
 
-  # The two labels are not interchangeable, and collapsing them leaks the CA key.
-  # publish-ca-cert marks a SOURCE for the extraction controller, which copies ca.crt
-  # alone into a separate key-free Secret. tenant-ca marks that PROJECTION, and it is
-  # what the ApplicationDefinition selects to hand to the tenant. This Secret holds
-  # the CA private key under tls.key, so it must never carry the projection's label:
-  # the ApplicationDefinition selects purely by label, so one renamed key here would
-  # make the CA private key tenant-readable with every other test still passing.
-  - it: keeps the key-bearing CA secret off the tenant-visible label
+  # Every Secret this template mints carries a private key: the CA's under tls.key,
+  # and each leaf's server key. The ApplicationDefinition grants by LABEL with no name
+  # constraint, so a tenant-visible label appearing on any of them hands the tenant
+  # that key while every other assertion in this file still passes. The tenant reads
+  # the projection the sentinel produces instead — see tenant_projection_test.yaml.
+  #
+  # Selected by the Secret each Certificate writes rather than by position: a
+  # documentIndex would follow the slot, so reordering this template would let a
+  # labelled key-bearing Certificate slide out from under the assertion and pass
+  # green. spec.secretName also discriminates Certificate from Issuer, which shares
+  # the name os-test-http-ca, and helm-unittest fails the test when a selector
+  # matches no document or more than one — so the anchor cannot go blind either.
+  - it: keeps the key-bearing CA secret off every tenant-visible label
     set:
       tls:
         enabled: true
+    documentSelector:
+      path: spec.secretName
+      value: os-test-http-ca
     asserts:
       - notExists:
           path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
-        documentIndex: 1
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
 
-  # Only the CA may be published. The leaf carries the HTTPS server private key, so
-  # labelling it would hand that key to the extraction controller as a CA source.
-  - it: does not label the leaf server certificate for publication
+  - it: keeps the key-bearing API leaf off every tenant-visible label
     set:
       tls:
         enabled: true
+    documentSelector:
+      path: spec.secretName
+      value: os-test-http-server
     asserts:
-      - equal:
-          path: metadata.name
-          value: os-test-http-server
-        documentIndex: 3
       - notExists:
-          path: spec.secretTemplate
-        documentIndex: 3
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
+
+  - it: keeps the key-bearing Dashboards leaf off every tenant-visible label
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentSelector:
+      path: spec.secretName
+      value: os-test-dashboards-server
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
 
   - it: "(a) renders no resources when external false and tls.enabled unset"
     asserts:

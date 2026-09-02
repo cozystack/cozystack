@@ -1,0 +1,21 @@
+{{- /*
+Gated on the same condition as certmanager.yaml: the source Secret is minted by
+the CA Certificate there, so it only exists when chart-managed TLS is on. An
+ungated sentinel would sit Ready=False/SourceNotFound on every plaintext release.
+
+The source is the cert-manager CA Secret rather than a leaf: it is the anchor a
+client needs, and the controller copies ca.crt alone, so the CA private key
+stored alongside it under tls.key never leaves this namespace.
+*/}}
+{{- if eq (include "opensearch.tls.enabled" .) "true" }}
+---
+apiVersion: internal.cozystack.io/v1alpha1
+kind: TenantProjection
+metadata:
+  name: {{ .Release.Name }}-ca
+spec:
+  projections:
+    - type: CACert
+      sourceSecretName: {{ .Release.Name }}-http-ca
+      sourceKey: ca.crt
+{{- end }}

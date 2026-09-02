@@ -64,26 +64,18 @@ metadata:
   name: {{ .Release.Name }}-http-ca
 spec:
   secretName: {{ .Release.Name }}-http-ca
-  # Publish this CA to the tenant. The CA-extraction controller lifts ca.crt alone
-  # into the key-free <release>.tenant-ca Secret, so a tenant can verify the HTTPS
-  # endpoint without gaining access to the CA private key stored here under tls.key.
-  # The release label is required on this leg: cert-manager issues the Secret, so it
-  # carries neither an OwnerReference nor Helm metadata to attribute it by.
+  # This Secret is the extraction source named by templates/tenant-projection.yaml,
+  # which is what publishes ca.crt to the tenant. Nothing is stamped on the Secret
+  # itself: the controller reads the sentinel's sourceSecretName and never a label,
+  # so the CA private key stored here under tls.key stays unpublishable by any edit
+  # that only touches this file.
   #
-  # TURNING TLS OFF DOES NOT WITHDRAW THIS ANCHOR. Helm removes the Certificate, but
-  # cert-manager leaves the Secret (enableCertificateOwnerRef=false), so it keeps
-  # matching the publish label and the controller keeps projecting it — while the
-  # endpoint has gone back to an operator-issued certificate under a different CA.
-  # Tenants are then handed an anchor that no longer verifies the server. Nothing the
-  # chart renders can prevent this: the label leg withdraws on the source Secret
-  # disappearing, and Helm does not own that Secret. Until the controller gains a
-  # withdrawal signal for a removed Certificate, disabling chart-managed TLS on a
-  # release that had it means deleting <release>-http-ca and <release>-http-server by
-  # hand. Verification fails closed in the meantime; no key is exposed.
-  secretTemplate:
-    labels:
-      internal.cozystack.io/publish-ca-cert: "true"
-      internal.cozystack.io/publish-ca-cert-release: {{ .Release.Name | quote }}
+  # Withdrawal rides on the sentinel. Helm owns it, so disabling chart-managed TLS
+  # removes it, and the projection Secret is collected with it through the owner
+  # reference the controller sets (sentinelOwnerRef in the cacert reconciler). The
+  # cert-manager Secrets here do outlive that — enableCertificateOwnerRef is false
+  # — but they are no longer published to anyone, so a tenant is never left holding
+  # an anchor for an endpoint that has gone back to an operator-issued certificate.
   duration: 87600h  # 10 years
   isCA: true
   commonName: {{ .Release.Name }}-http-ca

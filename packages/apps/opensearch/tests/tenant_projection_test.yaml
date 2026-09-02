@@ -1,0 +1,130 @@
+suite: opensearch TenantProjection sentinel
+
+# The chart renders one TenantProjection per TLS-enabled release: the declaration
+# that tells the CA-extraction controller to lift ca.crt out of the key-bearing
+# <release>-http-ca into the tenant-readable <release>.tenant-ca projection.
+#
+# This is the only thing that creates that projection. templates/dashboard-
+# resourcemap.yaml grants the tenant read on <release>.tenant-ca by name, and the
+# ApplicationDefinition selects it by label; both are inert until the sentinel
+# exists, so losing this template costs the tenant its trust anchor with no error
+# anywhere.
+#
+# The source is named -http-ca, NOT -ca: the operator reserves <clusterName>-ca for
+# its own transport CA. See the note in templates/certmanager.yaml.
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+templates:
+  - templates/tenant-projection.yaml
+
+tests:
+  - it: renders exactly one TenantProjection named after the release
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: TenantProjection
+      - equal:
+          path: apiVersion
+          value: internal.cozystack.io/v1alpha1
+      - equal:
+          path: metadata.name
+          value: os-test-ca
+
+  - it: declares a CACert projection of the chart's HTTP CA
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.projections[0].type
+          value: CACert
+      - equal:
+          path: spec.projections[0].sourceSecretName
+          value: os-test-http-ca
+      - equal:
+          path: spec.projections[0].sourceKey
+          value: ca.crt
+
+  # The one genuine invariant. pkg/lineage/lineage.go returns early once an
+  # ownerReferences is present, so the helm-label fallback that resolves the
+  # application is never reached: the projection never gets tenantresource=true and
+  # the tenant silently loses the anchor. Adding one breaks the read path with no
+  # error anywhere.
+  - it: carries no ownerReferences
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notExists:
+          path: metadata.ownerReferences
+
+  # Not invariants — conformance to the shared sentinel shape. Setting either would
+  # be functionally harmless here (the release namespace is where Helm puts it either
+  # way, and Flux stamps its own label at apply time), but every engine's sentinel is
+  # meant to be the same eight lines, so a local embellishment is a divergence to
+  # catch at review rather than in six copies.
+  - it: matches the shared sentinel shape
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notExists:
+          path: metadata.namespace
+      - notExists:
+          path: metadata.labels
+
+  # The source Secret exists only while chart-managed TLS is on, so an ungated
+  # sentinel would sit Ready=False/SourceNotFound forever on every plaintext release.
+  #
+  # The gate must track the chart's EFFECTIVE TLS state, not the raw tls.enabled
+  # value: leaving it unset means "follow external". A naive `if .Values.tls.enabled`
+  # still passes the two explicit cases below while publishing no anchor to exactly
+  # the releases most likely to need one, so both implied legs are pinned too.
+  - it: renders the sentinel when TLS is implied by external access
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders nothing when TLS is implied off by external being false
+    set:
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when TLS is explicitly disabled despite external access
+    set:
+      external: true
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when TLS is disabled
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The version floor degrades an auto-on request rather than failing it, and
+  # certmanager.yaml is gated on the same helper — so below 2.0.0 there is no CA
+  # Secret to project from. A sentinel rendered here would never resolve.
+  - it: renders nothing when the version floor degrades an auto-on request
+    set:
+      version: v1
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 0
