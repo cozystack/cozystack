@@ -448,12 +448,34 @@ jobs:
   # and shared through _out/assets, so the talos image and the disk are built in
   # one job. Always runs on non-docs PRs — e2e needs the disk regardless of the
   # per-package matrix scope.
+  # Runs when this PR could have changed what it builds, and for every fork PR.
+  #
+  # Nothing on the same-repo PR path consumes either half of it. `image-talos`
+  # pushes ${REGISTRY}/talos:pr-N-sha, which no chart in the tree references and
+  # which is not even version-tagged here (PUBLISH_VERSIONED and PUBLISH_FLOATING
+  # are 0); the nocloud disk it used to build left with the QEMU lanes.
+  # `image-matchbox` stamps packages/extra/bootbox/images/matchbox.tag, and that
+  # one line is the entire content of pr-patch-fragment-talos -- but bootbox is
+  # an opt-in package the E2E platform Package does not enable, so no run pulls
+  # the image. An unstamped tag leaves the installer artifact pointing at the
+  # released matchbox, which is a valid ref that nothing on this path resolves.
+  #
+  # Fork PRs are the exception and it is not about Talos. e2e-fork.yaml's publish
+  # job requires at least one OCI archive to exist, an invariant that holds today
+  # only because this job always ran; a fork PR touching nothing under packages/
+  # would otherwise arrive with an empty export and fail a legitimate run. Fixing
+  # that means teaching the guard what the plan expected to build, which is work
+  # in the fork allowlist path and belongs in its own change.
   build-talos:
     name: Build Talos
     needs: ["plan"]
     if: |
       needs.plan.outputs.code == 'true'
       && !contains(github.event.pull_request.labels.*.name, 'release')
+      && (
+        github.event.pull_request.head.repo.fork
+        || contains(needs.plan.outputs.touched, 'packages/core/talos ')
+      )
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 40
     permissions:
@@ -540,7 +562,7 @@ jobs:
       && !contains(github.event.pull_request.labels.*.name, 'release')
       && needs.checks.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped')
-      && needs.build-talos.result == 'success'
+      && (needs.build-talos.result == 'success' || needs.build-talos.result == 'skipped')
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
     permissions:
