@@ -391,9 +391,10 @@ assert_broad_tier() {
 # including the one asserting the broad tier is NOT the full suite, because its
 # expectation is derived by applying the same two names to the same find.
 @test "heavy_suites names suites that exist on disk" {
+    # No process substitution: cozytest.sh runs these under /bin/sh, which is dash
+    # in CI, and `<(...)` is a bash-only construct that fails there as a syntax
+    # error before a single test runs. Locally sh is bash, so it passed.
     for suite in kubernetes-latest kubernetes-previous; do
-        grep -qx "$suite" <(printf '%s\n' $(broad_tier_list) $(full_suite_list) | sort -u) \
-          || true
         [ -f "hack/e2e-chainsaw/$suite/chainsaw-test.yaml" ] \
           || { echo "heavy_suites names '$suite', which has no chainsaw-test.yaml" >&2; exit 1; }
     done
