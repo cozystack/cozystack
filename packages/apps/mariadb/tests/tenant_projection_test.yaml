@@ -57,11 +57,36 @@ tests:
 
   # Ungated: unlike nats/qdrant, TLS is always served here (see the tls.issuer
   # discussion in the README), so the source Secret exists for every release
-  # regardless of tls.issuer.
-  - it: renders regardless of tls.issuer
+  # regardless of tls.issuer. Being ungated is the projection's whole contract,
+  # so every issuer state is spelled out. One case setting the chart default
+  # would assert the same branch the cases above already cover, and hiding the
+  # sentinel behind the cert-manager gate would still pass it.
+  - it: renders under the default issuer
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders under tls.issuer=operator
     set:
       tls:
         issuer: operator
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders under tls.issuer=cert-manager
+    set:
+      tls:
+        issuer: cert-manager
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  # The chart resolves the issuer through a helper that treats an explicit null
+  # as unset, so this is a third state rather than a spelling of the default.
+  - it: renders when tls is explicitly null
+    set:
+      tls: null
     asserts:
       - hasDocuments:
           count: 1
