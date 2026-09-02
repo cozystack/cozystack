@@ -73,3 +73,92 @@ CATALOG_VALUES="$REPO_ROOT/packages/system/kubernetes-worker-image/values.yaml"
     return 1
   fi
 }
+
+# -----------------------------------------------------------------------------
+# Second family of default-drift guards on the same chart: the Talos <-> Kubernetes
+# support matrix. Reviewed as [MAJOR] on cozystack/cozystack#3294 — the render
+# guard keyed only on `talos.version`, so a pool could reach a different Talos
+# release through `image.builtin.version` / `image.factory.version` and boot a
+# kubelet outside its support window with no render failure. The table now lives
+# once in templates/_helpers.tpl and both paths consult it.
+#
+# The symmetry is structural, not observable from a render: the matrix ships one
+# row (`v1.13`) whose Kubernetes list is a superset of `values.schema.json`'s
+# `version` enum, so no schema-valid pairing can make either call site fail today.
+# A helm-unittest case would have to put an out-of-enum `version` in, and
+# helm-unittest validates the schema, so it cannot. These two guards cover what a
+# render cannot: that both call sites exist, and that the table still means
+# something for the defaults the chart ships.
+
+NODES_TEMPLATE="$REPO_ROOT/packages/apps/kubernetes-nodes/templates/nodegroup.yaml"
+NODES_SCHEMA="$REPO_ROOT/packages/apps/kubernetes-nodes/values.schema.json"
+
+@test "the support matrix is consulted for the image-resolved Talos version, not only talos.version" {
+  calls=$(grep -c 'include "kubernetes-nodes.assertTalosSupportsKubernetes"' "$NODES_TEMPLATE" || true)
+  if [ "$calls" -lt 2 ]; then
+    echo "nodegroup.yaml calls the Talos support-matrix guard $calls time(s); it needs one for talos.version and one for the version image.builtin/image.factory resolves to" >&2
+    echo "without the second call a pool keeps a supported talos.version and still boots an unsupported Talos minor through its image override, with no render failure" >&2
+    return 1
+  fi
+  # And the second call must be fed the RESOLVED version. Passing talos.version
+  # twice would satisfy the count above while checking nothing new.
+  if ! grep -q '"talosVersion" \$reqVersion' "$NODES_TEMPLATE"; then
+    echo "the second support-matrix call does not pass \$reqVersion, so it re-checks the value the first call already checked" >&2
+    return 1
+  fi
+}
+
+@test "the support matrix covers every Kubernetes version the schema offers, for the default Talos" {
+  ver=$(yq '.talos.version' "$APP_VALUES")
+  minor=$(printf '%s\n' "$ver" | grep -oE '^v[0-9]+\.[0-9]+')
+  [ -n "$minor" ]
+
+  helpers="$REPO_ROOT/packages/apps/kubernetes-nodes/templates/_helpers.tpl"
+  # The row is a Helm dict literal: `"v1.13" (list "v1.31" "v1.32" ...)`.
+  row=$(grep -oE "\"${minor}\" \(list [^)]*\)" "$helpers" || true)
+  if [ -z "$row" ]; then
+    echo "the Talos support matrix in $helpers has no row for ${minor}, the default talos.version ($ver)" >&2
+    echo "an unlisted Talos minor passes the guard unchecked, so the guard means nothing on the shipped defaults" >&2
+    return 1
+  fi
+
+  # Every version the schema lets an operator pick must be in that row, or the
+  # guard rejects a combination the API advertises as valid.
+  for k in $(yq -r '.properties.version.enum[]' "$NODES_SCHEMA"); do
+    case "$row" in
+      *"\"$k\""*) ;;
+      *)
+        echo "values.schema.json offers version $k, but the Talos ${minor} matrix row does not list it:" >&2
+        echo "  $row" >&2
+        echo "either the row is stale or the enum gained a version Talos ${minor} does not support" >&2
+        return 1 ;;
+    esac
+  done
+}
+
+# -----------------------------------------------------------------------------
+# Third guard, and the premise the first one rests on. The catalog is keyed off
+# the kubernetes-nodes chart's `talos` defaults, but the parent kubernetes chart
+# carries its own copy of the same block since the Phase 2 split, and its own
+# values.yaml says to keep the two in sync. Nothing enforced that: the pool
+# chart's `make update` copies files/versions.yaml and images/kubectl.tag from
+# the parent and not the talos block, so a one-sided bump leaves the parent's
+# support-matrix guard reasoning about one Talos release while every worker boots
+# another — and the catalog check above would go on passing, because it only ever
+# reads one of the two files.
+
+PARENT_VALUES="$REPO_ROOT/packages/apps/kubernetes/values.yaml"
+
+@test "the parent kubernetes chart and kubernetes-nodes agree on their Talos defaults" {
+  for key in version schematicID imageFactoryURL installerRepository registryMirrors; do
+    parent=$(yq ".talos.${key}" "$PARENT_VALUES")
+    pool=$(yq ".talos.${key}" "$APP_VALUES")
+    if [ "$parent" != "$pool" ]; then
+      echo "talos.${key} differs between the two charts:" >&2
+      echo "  packages/apps/kubernetes/values.yaml:       $parent" >&2
+      echo "  packages/apps/kubernetes-nodes/values.yaml: $pool" >&2
+      echo "both are declared 'keep in sync' and a worker pool follows the second while the parent's support-matrix guard reads the first" >&2
+      return 1
+    fi
+  done
+}

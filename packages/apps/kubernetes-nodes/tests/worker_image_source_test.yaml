@@ -170,8 +170,16 @@ tests:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
           value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
+      # usePopulator=false is what pins the legacy import behaviour, so the clone
+      # path must not carry it; the golden annotation replaces it there.
       - notExists:
-          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.annotations
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.annotations["cdi.kubevirt.io/storage.usePopulator"]
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+      # And the clone names its source, so an operator can find every pool still
+      # pinning a golden before deleting it.
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.annotations["kubernetes-worker-image.cozystack.io/golden"]
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
   - it: image.builtin with an explicit schematicID/version clones that golden
@@ -277,4 +285,60 @@ tests:
       - equal:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
           value: talos-worker-nosc-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # Tenant-controlled strings reach an unquoted YAML scalar in the KMT, so they are
+  # pattern-checked at render. Reviewed as [MINOR] on cozystack/cozystack#3294. The
+  # values below are the shapes that break out of a scalar, not merely odd ones.
+  - it: a schematicID carrying a newline is refused before it reaches the KMT
+    set:
+      image:
+        builtin:
+          schematicID: "abc\ninjected: true"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a plain lowercase alphanumeric identifier'
+
+  - it: a version carrying a YAML metacharacter is refused
+    set:
+      image:
+        factory:
+          version: "v1.13.6: evil"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a vMAJOR\.MINOR\.PATCH release'
+
+  - it: an imageFactoryURL carrying whitespace is refused
+    set:
+      image:
+        factory:
+          imageFactoryURL: "https://mirror.internal x"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a plain http\(s\) URL'
+
+  # A backtick or dollar sign in the URL would also survive into the reconcile
+  # Job's unquoted heredoc if the field ever reached it, so they are refused here
+  # as well rather than relying on that Job's escaping alone.
+  - it: an imageFactoryURL carrying a shell metacharacter is refused
+    set:
+      image:
+        factory:
+          imageFactoryURL: "https://mirror.internal/$(id)"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a plain http\(s\) URL'
+
+  # And the legitimate 64-character hex schematic the Image Factory actually
+  # issues is accepted, so the guard is not merely rejecting everything.
+  - it: a real 64-character hex schematicID is accepted
+    set:
+      image:
+        factory:
+          schematicID: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+          version: v1.13.6
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
         documentSelector: {path: kind, value: KubevirtMachineTemplate}

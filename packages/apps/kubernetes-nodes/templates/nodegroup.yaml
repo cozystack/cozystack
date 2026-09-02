@@ -13,20 +13,16 @@
   rendered for the same group — the KubevirtMachineTemplate is content-hash-named,
   so any drift would roll every live worker VM.
 
-  Talos -> Kubernetes support matrix. Each Talos minor release supports a bounded
-  window of Kubernetes minor versions; running a kubelet outside that window
-  produces a silently broken Talos+kubelet combination. Fail the render instead.
-  Source: https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
+  Talos -> Kubernetes support matrix, against the pool default. The pool can also
+  reach a different Talos release through image.builtin.version /
+  image.factory.version, and that override is checked against the same matrix at
+  the point it is resolved, below. Both call sites share one table, in
+  templates/_helpers.tpl.
 */}}
-{{- $talosK8sSupportMatrix := dict
-      "v1.13" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
-}}
-{{- $talosMinor := regexFind "^v[0-9]+\\.[0-9]+" .Values.talos.version }}
-{{- with index $talosK8sSupportMatrix $talosMinor }}
-{{-   if not (has $.Values.version .) }}
-{{-     fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. Bump 'version' or set talos.version explicitly." $.Values.version $.Values.talos.version .) }}
-{{-   end }}
-{{- end }}
+{{- include "kubernetes-nodes.assertTalosSupportsKubernetes" (dict
+      "talosVersion" .Values.talos.version
+      "kubernetesVersion" .Values.version
+      "remedy" "Bump 'version' or set talos.version explicitly.") }}
 {{- $clusterName := include "kubernetes-nodes.clusterName" . }}
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
 {{- include "kubernetes-nodes.assertNoForeignPool" . }}
@@ -116,6 +112,49 @@ spec:
       {{-   $reqVersion = $factory.version | default $.Values.talos.version }}
       {{-   $reqFactoryURL = $factory.imageFactoryURL | default $.Values.talos.imageFactoryURL }}
       {{- end }}
+      {{- /* Tenant-controlled strings, validated before they are interpolated.
+             Reviewed as [MINOR] on cozystack/cozystack#3294: schematicID, version
+             and imageFactoryURL land unquoted in the KubevirtMachineTemplate
+             below, so a value carrying a newline or a YAML metacharacter injects
+             keys into this pool's own KMT; nindent keeps the blast radius inside
+             the pool, but the value should never get that far. The schema types
+             all three as a bare string and cannot narrow them -- the pinned
+             cozyvalues-gen derives `pattern` from the value TYPE (quantity) and
+             has no annotation for a custom one -- so the check lives here, which
+             is where this chart already validates the kubelet reservation fields
+             for the same class of hazard (see the INVARIANT note in
+             templates/talos-reconcile-job.yaml).
+
+             The resolved values are checked, not just the overridden ones: an
+             override and the pool default reach the same interpolation, and a
+             guard on one of the two paths is the asymmetry this file just removed
+             from the support matrix. The patterns accept every form the chart
+             ships and every form a Talos Image Factory produces -- a 64-character
+             hex schematic, a vN.N.N release, an http(s) URL -- and reject the
+             bytes that would break out of a YAML scalar. */}}
+      {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" ($reqSchematicID | toString)) }}
+      {{-   fail (printf "nodeGroup %q: Talos schematicID %q is not a plain lowercase alphanumeric identifier. It is interpolated into the worker DataVolume name and the image URL, so it must carry no whitespace, path separators or YAML metacharacters." .groupName ($reqSchematicID | toString)) }}
+      {{- end }}
+      {{- if not (regexMatch "^v[0-9]+\\.[0-9]+(\\.[0-9]+)?(-[0-9a-z.]+)?$" ($reqVersion | toString)) }}
+      {{-   fail (printf "nodeGroup %q: Talos version %q is not a vMAJOR.MINOR.PATCH release. It is interpolated into the worker DataVolume name and the image URL, so it must carry no whitespace or YAML metacharacters." .groupName ($reqVersion | toString)) }}
+      {{- end }}
+      {{- if not (regexMatch "^https?://[A-Za-z0-9._~:/?#\\[\\]@!&'()*+,;=%-]+$" ($reqFactoryURL | toString)) }}
+      {{-   fail (printf "nodeGroup %q: imageFactoryURL %q is not a plain http(s) URL. It is interpolated into the worker DataVolume source URL, so it must carry no whitespace, backtick, dollar sign or YAML metacharacters." .groupName ($reqFactoryURL | toString)) }}
+      {{- end }}
+      {{- /* The guard at the top of this file keys on .Values.talos.version. An
+             image override moves the Talos release this pool actually boots and
+             installs, so re-run the same matrix against the resolved version;
+             without this a pool could keep a supported talos.version and still
+             boot a Talos minor whose kubelet window excludes .Values.version,
+             which is exactly the silently-broken pairing the guard exists to
+             refuse. No-op when image pins nothing, since the resolved version is
+             then the one already checked above. */}}
+      {{- if ne ($reqVersion | toString) ($.Values.talos.version | toString) }}
+      {{-   include "kubernetes-nodes.assertTalosSupportsKubernetes" (dict
+              "talosVersion" $reqVersion
+              "kubernetesVersion" $.Values.version
+              "remedy" (printf "nodeGroup %s reaches this Talos release through its image override, not through talos.version. Bump 'version', change the image version, or drop the override so the pool follows talos.version." .groupName)) }}
+      {{- end }}
       {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($reqFactoryURL | trimSuffix "/") $reqSchematicID $reqVersion }}
       {{- $goldenName := printf "talos-worker-%s-%s" $reqSchematicID $reqVersion }}
       {{- /* A builtin pool whose golden is absent, failed to import, or on a
@@ -179,7 +218,25 @@ spec:
                  performs a storage-layer CSI clone of the golden (verified on dev10:
                  temp PVC CSI-cloned + resized, no host-assisted upload pod) instead
                  of a slower pod-network copy. */}}
-          {{- if not $useClone }}
+          {{- if $useClone }}
+          {{- /* Names the golden this disk was cloned from. Reviewed as [MINOR] on
+                 cozystack/cozystack#3294: a golden is referenced only from inside a
+                 VM dataVolumeTemplates source, so before this there was no query
+                 that told an operator which pools still pin `talos-worker-<id>-<ver>`
+                 -- and a pool on `builtin: {}` does not name it in its own CR either,
+                 because the schematic and version come from talos.* defaults. With
+                 this the answer is one read:
+
+                   kubectl get datavolume -A -o jsonpath=\
+                     '{range .items[?(@.metadata.annotations.kubernetes-worker-image\
+                     \.cozystack\.io/golden=="talos-worker-<id>-<ver>")]}\
+                     {.metadata.namespace}/{.metadata.name}{"\n"}{end}'
+
+                 An annotation rather than a label because a schematic ID is 64
+                 characters and a label value stops at 63. */}}
+          annotations:
+            kubernetes-worker-image.cozystack.io/golden: {{ $goldenName | quote }}
+          {{- else }}
           annotations:
             cdi.kubevirt.io/storage.usePopulator: "false"
           {{- end }}
@@ -193,9 +250,16 @@ spec:
           {{- if $useClone }}
             pvc:
               namespace: cozy-public
-              name: {{ $goldenName }}
+              name: {{ $goldenName | quote }}
           {{- else }}
             http:
+              {{- /* Deliberately unquoted. This is the pre-feature render for a pool
+                     with `image` omitted, and the KubevirtMachineTemplate is named by
+                     a hash of its own content -- quoting the scalar changes those
+                     bytes and rolls every live worker on upgrade. The components are
+                     validated above instead, which is what makes an unquoted scalar
+                     safe here. The clone path's name below is quoted because no
+                     existing worker renders it. */}}
               url: {{ $httpURL }}
           {{- end }}
           storage:

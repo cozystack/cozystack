@@ -11,8 +11,9 @@ metadata:
     # tenant worker disks, and a helm fail() on a missing golden aborts the whole
     # Kubernetes HelmRelease of every tenant pinned to it — not just the disk — so
     # pruning one here would strand unrelated tenant operations. Dropping an entry
-    # therefore stops managing the golden rather than deleting it; remove it by hand
-    # once no node group clones it.
+    # therefore stops managing the golden rather than deleting it. Remove it by hand
+    # once no worker pool clones it -- which is checkable, not a guess: every cloned
+    # worker disk annotates its source golden. values.yaml carries the query.
     helm.sh/resource-policy: keep
     # bind.immediate so the image is imported now (not deferred to a first
     # consumer): the DataVolume becoming ready is what the kubernetes app's
@@ -24,8 +25,8 @@ metadata:
     kubernetes-worker-image.cozystack.io/talos-version: {{ $version | quote }}
   labels:
     app.kubernetes.io/managed-by: cozystack
-  # Deterministic name the kubernetes app reconstructs to clone this golden —
-  # keep in sync with packages/apps/kubernetes/templates/cluster.yaml.
+  # Deterministic name the kubernetes-nodes chart reconstructs to clone this golden
+  # — keep in sync with packages/apps/kubernetes-nodes/templates/nodegroup.yaml.
   name: {{ printf "talos-worker-%s-%s" $schematicID $version }}
   namespace: cozy-public
 spec:

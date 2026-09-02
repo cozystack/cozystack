@@ -168,6 +168,44 @@ against a real cluster and never blocks offline rendering.
 {{- end -}}
 
 {{- /*
+kubernetes-nodes.assertTalosSupportsKubernetes fails the render when a Talos
+release is paired with a Kubernetes minor outside that Talos minor's support
+window. Each Talos minor supports a bounded window of Kubernetes minors; running
+a kubelet outside it produces a silently broken Talos+kubelet combination that no
+HelmRelease condition can detect, so the render is where it has to be caught.
+Source: https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
+
+A named template rather than an inline block because the pool resolves TWO Talos
+versions and both reach a worker. `talos.version` is the pool default, and
+`image.builtin.version` / `image.factory.version` override it for the boot disk
+AND for the in-guest installer the reconcile Job writes. Checking only the first
+leaves an asymmetry a reader would not expect: a known-bad pairing set through
+`talos.version` is rejected, while the same pairing reached through an
+`image.*.version` override renders clean. The matrix literal lives here, once, so
+the two call sites cannot drift apart.
+
+A Talos minor the matrix does not list passes. That is deliberate and unchanged:
+the matrix is a hand-maintained table, and failing closed on it would block every
+operator who moves to a newer Talos before this file is updated. What the guard
+promises is that a pairing it KNOWS to be bad is refused, not that every pairing
+is known.
+
+Arguments: talosVersion, kubernetesVersion, remedy (what the operator should
+change, appended to the message).
+*/}}
+{{- define "kubernetes-nodes.assertTalosSupportsKubernetes" -}}
+{{- $talosK8sSupportMatrix := dict
+      "v1.13" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
+-}}
+{{- $talosMinor := regexFind "^v[0-9]+\\.[0-9]+" (.talosVersion | toString) -}}
+{{- with index $talosK8sSupportMatrix $talosMinor -}}
+{{-   if not (has ($.kubernetesVersion | toString) .) -}}
+{{-     fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. %s" ($.kubernetesVersion | toString) ($.talosVersion | toString) . $.remedy) -}}
+{{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
 Validates and returns a duration destined for a consumer that does not reject
 a bad value: the cluster-autoscaler parses its annotation with
 time.ParseDuration and silently falls back to its built-in default on a value
