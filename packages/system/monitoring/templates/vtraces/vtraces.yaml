@@ -1,10 +1,12 @@
 {{- /*
   tracingStorages is empty by default, so tracing is off out of the box and no
   VTCluster/VTSingle is provisioned. Unlike logsStorages, an absent backend
-  drops no data here: nothing produces spans until the trace collector ships (a
-  later PR), so there is no loud-failure guard yet. The collector PR re-adds a
-  fail-on-empty guard — at that point an enabled producer with no backend really
-  would drop spans, exactly as the logsStorages #3181 guard prevents for logs.
+  drops no data here: nothing produces spans unless a backend is configured. The
+  trace collector renders only once a backend exists and gates on a non-empty
+  tracingStorages rather than failing on empty (see collector.yaml), so "no
+  backend" stays a clean off-state — there is deliberately no fail-on-empty
+  guard here (contrast the logsStorages #3181 guard, which must fire because
+  fluent-bit ships logs unconditionally, so an absent log store drops data).
   The readiness-gate healthCheckExprs on VTCluster/VTSingle stay unconditional:
   Flux evaluates them only against CRs present in the release inventory, so with
   nothing rendered they are inert.

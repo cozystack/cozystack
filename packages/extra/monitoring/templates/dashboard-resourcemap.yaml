@@ -35,7 +35,7 @@ rules:
   - grafana
   - grafana-db
   - alerta-db
-  - alermanager
+  - alertmanager
   {{- range .Values.metricsStorages }}
   - {{ .name }}-vmstorage
   - {{ .name }}-vmselect
@@ -49,6 +49,9 @@ rules:
   {{- range .Values.metricsStorages }}
   - vmalert-{{ .name }}
   {{- break }}
+  {{- end }}
+  {{- if and .Values.tracingCollector.enabled (not (empty .Values.tracingStorages)) }}
+  - otel-traces
   {{- end }}
   verbs: ["get", "list", "watch"]
 ---
