@@ -1,0 +1,63 @@
+suite: CDI importer worker resources
+
+# podResourceRequirements applies to every worker pod CDI creates -- importer,
+# uploader and host-assisted cloner -- so the chart default here must restate
+# CDI's own built-in values and not change them. A cluster that needs more
+# headroom raises it through its own Package values; the container E2E lane does
+# exactly that in hack/e2e-platform-packages.sh, and hack/platform-packages_test.bats
+# pins that override.
+#
+# Note this must be set on the CDI CR, not on CDIConfig: the CDI operator
+# reconciles CDIConfig.spec from this CR, so patching CDIConfig directly is
+# silently reverted.
+
+templates:
+  - templates/cdi-cr.yaml
+
+set:
+  _cluster:
+    root-host: example.org
+
+tests:
+  - it: the chart default restates CDI's own built-in requirements
+    template: templates/cdi-cr.yaml
+    # Selected by kind rather than by index: this template emits three
+    # documents and the CDI CR is not the one helm prints first, so an index
+    # here would silently point at a ClusterRole after any reordering.
+    documentSelector:
+      path: kind
+      value: CDI
+    asserts:
+      - equal:
+          path: spec.config.podResourceRequirements.limits.memory
+          value: 600M
+      - equal:
+          path: spec.config.podResourceRequirements.limits.cpu
+          value: 750m
+      - equal:
+          path: spec.config.podResourceRequirements.requests.memory
+          value: 60M
+      - equal:
+          path: spec.config.podResourceRequirements.requests.cpu
+          value: 100m
+
+  - it: importer resources are overridable
+    template: templates/cdi-cr.yaml
+    documentSelector:
+      path: kind
+      value: CDI
+    set:
+      importerResources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 750m
+          memory: 4Gi
+    asserts:
+      - equal:
+          path: spec.config.podResourceRequirements.limits.memory
+          value: 4Gi
+      - equal:
+          path: spec.config.podResourceRequirements.requests.memory
+          value: 256Mi
