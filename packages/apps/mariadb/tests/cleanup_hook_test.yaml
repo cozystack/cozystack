@@ -23,12 +23,15 @@ tests:
       path: kind
       value: Job
     asserts:
+      # The verb is part of the assertion. Matching the name list alone leaves
+      # the whole point of the hook — that these Secrets are REMOVED — pinned by
+      # nothing, so `kubectl get secret` in place of the delete stays green.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "mariadb-test-metrics-password mariadb-test-repl-password"
+          pattern: "(?s)kubectl delete secret -n \\S+.*mariadb-test-metrics-password mariadb-test-repl-password"
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "mariadb-test-ca-tls mariadb-test-tls --ignore-not-found"
+          pattern: "(?s)kubectl delete secret -n \\S+.*mariadb-test-ca-tls mariadb-test-tls --ignore-not-found"
 
   - it: "cleanup Job fails (exits non-zero) when a real delete error occurs, so orphaned resources don't pass silently"
     documentSelector:

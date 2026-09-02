@@ -81,12 +81,14 @@ tests:
   - it: deletes the key-bearing cert-manager Secrets on uninstall
     documentIndex: 0
     asserts:
+      # Bound to the delete: a name reachable by any other verb says nothing
+      # about whether the key outlives the release.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "mariadb-test-ca-tls"
+          pattern: "(?s)kubectl delete secret -n \\S+.*mariadb-test-ca-tls"
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "mariadb-test-tls"
+          pattern: "(?s)kubectl delete secret -n \\S+.*mariadb-test-tls"
       # -ca-bundle carries an ownerRef to the MariaDB resource, so Kubernetes
       # collects it; deleting it here would need a grant that is not warranted.
       - notMatchRegex:
