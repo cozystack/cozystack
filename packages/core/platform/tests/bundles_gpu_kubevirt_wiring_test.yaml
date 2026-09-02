@@ -386,6 +386,73 @@ tests:
           path: spec.components.kubevirt.values.cpuAllocationRatio
           value: 7
 
+  # The kubevirt chart reads disabledFeatureGates from its own values, and the
+  # only writer of a Package CR's components is this bundle — editing the CR by
+  # hand is undone on the next platform render. Without this hop the chart value
+  # is unreachable from a supported install.
+  - it: forwards kubevirt.disabledFeatureGates into the kubevirt component values
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      kubevirt:
+        disabledFeatureGates:
+        - ImageVolume
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: spec.components.kubevirt.values.disabledFeatureGates
+          value:
+          - ImageVolume
+
+  - it: leaves disabledFeatureGates out of the kubevirt component values at the platform defaults
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - notExists:
+          path: spec.components.kubevirt.values.disabledFeatureGates
+      - equal:
+          path: spec.components
+          value:
+            kubevirt:
+              values:
+                cpuAllocationRatio: 10
+
+  - it: renders the kubevirt Package without a nil-pointer error when the whole kubevirt block is set to null
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      kubevirt: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - notExists:
+          path: spec.components.kubevirt.values.disabledFeatureGates
+
   - it: appends user-supplied pciHostDevices in vgpu mode so post-kubevirt#16890 SR-IOV vGPU VFs can be advertised alongside the platform mediated defaults
     set:
       bundles:

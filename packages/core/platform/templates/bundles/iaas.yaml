@@ -15,6 +15,18 @@
 {{- $_ := set $kubevirtValues "cpuAllocationRatio" (.Values.resources.cpuAllocationRatio | int) -}}
 {{- end -}}
 {{- /*
+  Feature gates the cluster declines, forwarded verbatim. This include is the
+  only writer of the cozystack.kubevirt Package, and patching that Package by
+  hand is reverted the next time the platform re-renders it (see
+  docs/operations/backup-classes.md for the same trap on backupStorage), so
+  without this hop the chart value has no supported setter. The parenthesized
+  walk is nil-safe for the reason the gpu block below spells out.
+*/ -}}
+{{- $disabledFeatureGates := (.Values.kubevirt).disabledFeatureGates -}}
+{{- if $disabledFeatureGates -}}
+{{- $_ := set $kubevirtValues "disabledFeatureGates" $disabledFeatureGates -}}
+{{- end -}}
+{{- /*
   When cozystack.gpu-operator is enabled the platform mirrors the variant
   into the KubeVirt CR: the HostDevices feature gate plus a starter
   permittedHostDevices block. Without this the admission webhook rejects
