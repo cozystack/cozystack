@@ -61,13 +61,22 @@ go run ./cmd/backport-audit release-1.5 || echo "do not cut yet"
 
 ## How a PR is matched to a release line
 
-A `kind/backport` label does not name a branch. [`backport.yaml`](../../.github/workflows/backport.yaml) resolves the target from `getLatestRelease` **at merge time**, so the same label means `release-1.5` on a PR merged in June and `release-1.6` on one merged in August.
+A `kind/backport` label does not name a branch. [`backport.yaml`](../../.github/workflows/backport.yaml) resolves the target **at merge time**, so the same label means `release-1.5` on a PR merged in June and `release-1.6` on one merged in August. The audit reproduces that rule rather than trusting the label text: a PR is a candidate for `release-X.Y` when it merged carrying `kind/backport` while `X.Y` was the current line, or `kind/backport-previous` while `X.Y` was one minor behind. Without this, auditing an older line reports every newer-era PR as missing.
 
-The audit reproduces that rule rather than trusting the label text: a PR is a candidate for `release-X.Y` when it merged carrying `kind/backport` while `X.Y` was the current line, or `kind/backport-previous` while `X.Y` was one minor behind. A line is treated as current from the publication of its first non-prerelease release, which is what `getLatestRelease` returns. Without this, auditing an older line reports every newer-era `kind/backport` PR as missing.
+What "the current line" means changed once, so the audit carries both rules and picks by the PR's merge date:
 
-The labels were namespaced under `kind/` in 7b71053a0, which renamed them in place via label-sync aliases, so every historical PR reads back under the new name. The bare `backport` and `backport-previous` are still queried alongside them, because the org-level dosubot goes on applying the old spelling to new PRs — the same transitional allowance [`backport.yaml`](../../.github/workflows/backport.yaml) makes, and it retires at the same time. A PR found under either spelling is reported under the `kind/` one.
+| PR merged | rule `backport.yaml` was running | a line exists from |
+|-----------|----------------------------------|--------------------|
+| before 2026-08-03 | `getLatestRelease` | its first non-prerelease release publishing |
+| on or after 2026-08-03 | the two newest existing `release-X.Y` branches | its `release-X.Y` branch being pushed |
 
-One divergence is open and deliberate. `backport.yaml` stopped calling `getLatestRelease` in 6ff5b98d5 and now takes the two newest existing `release-X.Y` branches, which opens a line at its first rc rather than at its first stable. The two rules agree outside a freeze window, and no window has opened since that commit, so every PR audited so far merged under the rule reproduced here — the next rc cut is what makes them disagree.
+The cutover is a single moment because both halves landed in one push: 53a7fc4dc made cutting an rc freeze the line into `release-X.Y`, and 6ff5b98d5 pointed the bot at the branch list. Before that a release branch was created at promote time, so the newest branch and the newest published stable named the same line and the two rules could not disagree. After it they disagree for the length of every freeze window — `release-X.Y` is created when the first `vX.Y.0-rc.N` is cut, potentially weeks before `vX.Y.0` publishes, and everything labelled in between belongs to the line being stabilised. That window is exactly when a backport has to reach the branch, because the frozen branch is the only way into the release.
+
+The branch-push moment is read exactly rather than approximated. [`cut-prerelease.yaml`](../../.github/workflows/cut-prerelease.yaml) creates the branch **at the tagged commit**, in the same job and immediately after the tag push, and the stale-tip guard just above that push refuses to proceed unless the dispatched commit is still `main`'s tip. So nothing merges to `main` between the tagged commit and the branch appearing, and that commit's own date splits every PR correctly: merged before it, the branch did not exist; merged after it, it did. The rc release's `publishedAt` would not do, since it lands hours later once `tags.yaml` has finished building.
+
+Lines are then ranked by version and never by when they opened, matching the numeric descending sort the workflow applies to its branch list. The two orders come apart as soon as a freeze overlaps the previous line's stabilisation, and version order is also what keeps `release-1.10` above `release-1.9`.
+
+The labels themselves were namespaced under `kind/` in 7b71053a0, which renamed them in place via label-sync aliases, so every historical PR reads back under the new name. The bare `backport` and `backport-previous` are still queried alongside them, because the org-level dosubot goes on applying the old spelling to new PRs — the same transitional allowance [`backport.yaml`](../../.github/workflows/backport.yaml) makes, and it retires at the same time. A PR found under either spelling is reported under the `kind/` one.
 
 ## How landing is established
 

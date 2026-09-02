@@ -23,9 +23,10 @@ limitations under the License.
 // `kind/backport` label while X.Y was the current release line, or the
 // `kind/backport-previous` label while X.Y was one minor behind it. That
 // mirrors .github/workflows/backport.yaml, which resolves its target branches
-// from the latest published release at merge time rather than from the label
-// itself, so the same label means a different branch depending on when the PR
-// merged.
+// at merge time rather than from the label itself, so the same label means a
+// different branch depending on when the PR merged. What "the current line"
+// meant changed once, at the freeze contract; lineOpenDates carries both
+// rules and the reason a single cutover reproduces them faithfully.
 //
 // Landing is established from three independent kinds of evidence: the PR's
 // merge commit already being reachable from the release branch (it merged
@@ -81,7 +82,24 @@ var (
 	backportBodyRE = regexp.MustCompile(`[Bb]ackport of\s+(?:[\w.-]+/[\w.-]+)?#(\d+)`)
 	cherryPickRE   = regexp.MustCompile(`cherry picked from commit ([0-9a-f]{7,40})`)
 	releaseTagRE   = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
+	// The tag whose cut creates release-X.Y. cut-prerelease.yaml gates the
+	// freeze on kind == rc and patch == 0, so alpha, beta and patch-line rcs
+	// deliberately do not match.
+	freezeTagRE = regexp.MustCompile(`^v(\d+)\.(\d+)\.0-rc\.\d+$`)
 )
+
+// freezeContractLandedAt is when cutting an rc started creating release-X.Y,
+// and with it when backport.yaml stopped resolving its targets from the last
+// published stable.
+//
+// One moment, not two: 53a7fc4dc ("cutting an rc freezes the line into
+// release-X.Y") and 6ff5b98d5 ("target the newest existing release line")
+// landed on main in the same push, which is what makes a single cutover
+// faithful. Before it a release-X.Y branch was created at promote time, so the
+// newest branch and the newest published stable named the same line and the
+// two rules could not disagree. After it they disagree for the length of every
+// freeze window, which is precisely when a backport has to reach the branch.
+var freezeContractLandedAt = time.Date(2026, 8, 3, 16, 31, 59, 0, time.UTC)
 
 // The two backport requests .github/workflows/backport.yaml acts on, named by
 // the label that carries them. These names are what the audit reports.
@@ -444,18 +462,26 @@ type lineOpen struct {
 	when time.Time
 }
 
-// lineOpenDates reports when each release line became the current one, oldest
-// first. A line opens when its first non-prerelease release is published,
-// which is when getLatestRelease in backport.yaml starts resolving
-// `kind/backport` to that line. Drafts and prereleases are skipped, as that
-// API does.
+// lineOpenDates reports when each release line came into existence as a
+// backport target, oldest first, reproducing whichever rule backport.yaml was
+// running at the time.
 //
-// backport.yaml stopped calling getLatestRelease in 6ff5b98d5 and now takes the
-// two newest existing release-X.Y branches instead, which opens a line at its
-// first rc rather than at its first stable. The two rules agree everywhere
-// except inside a freeze window, and no window has opened since that commit
-// landed, so every PR audited so far merged under the rule reproduced here.
-// The next rc cut is what makes them diverge.
+// Since freezeContractLandedAt a line exists from the moment its release-X.Y
+// branch is pushed, which is what the workflow's branch enumeration sees; see
+// freezeDates for how that moment is read exactly. Before it, a line existed
+// from the publication of its first non-prerelease release, which is what
+// getLatestRelease returned; drafts and prereleases are skipped, as that API
+// does.
+//
+// The two are combined per line rather than by era, because a PR merged after
+// the cutover is judged against every branch that exists by then, including
+// the ones created long before it. That is sound in both directions: a line
+// created under the freeze contract cannot predate the cutover, and a line
+// created before it had a branch well before the enumeration rule ever ran, so
+// which of the two dates is used for an old line cannot change a verdict.
+// release-1.4 is the case that proves it — its branch was cut at v1.4.0-rc.2,
+// five days before v1.4.0 published — and both dates sit months on the far
+// side of the cutover.
 func lineOpenDates() ([]lineOpen, error) {
 	var releases []struct {
 		TagName      string    `json:"tagName"`
@@ -485,6 +511,14 @@ func lineOpenDates() ([]lineOpen, error) {
 		}
 	}
 
+	frozen, err := freezeDates()
+	if err != nil {
+		return nil, err
+	}
+	for l, when := range frozen {
+		earliest[l] = when
+	}
+
 	opened := make([]lineOpen, 0, len(earliest))
 	for l, when := range earliest {
 		opened = append(opened, lineOpen{l, when})
@@ -493,9 +527,73 @@ func lineOpenDates() ([]lineOpen, error) {
 	return opened, nil
 }
 
+// freezeDates reports, for each line whose release-X.Y branch was created by
+// the freeze, the exact moment it started existing.
+//
+// The moment is read as the committer date of the commit the first
+// vX.Y.0-rc.N tag points at, which is exact rather than approximate. The
+// freeze creates the branch AT the tagged commit, in the same job and
+// immediately after the tag push, and the stale-tip guard just above that push
+// refuses to proceed unless the dispatched commit is still main's tip. So
+// nothing merges to main between the tagged commit and the branch appearing:
+// every PR merged after that commit merged after the branch existed, and every
+// PR merged before it merged before. There is no window for the two to
+// disagree, which the rc release's publishedAt could not offer -- that lands
+// hours later, once tags.yaml has finished building.
+//
+// Lines whose first such tag predates the cutover are dropped: their branches
+// were not created by the freeze, so the tag says nothing about when they
+// appeared, and lineOpenDates falls back to the published-stable rule that was
+// actually in force for them.
+func freezeDates() (map[line]time.Time, error) {
+	out, err := git("for-each-ref", "--format=%(refname:strip=2) %(committerdate:iso-strict)", "refs/tags/v*")
+	if err != nil {
+		return nil, err
+	}
+	return parseFreezeDates(out)
+}
+
+// parseFreezeDates is the half of freezeDates that does not need a repository:
+// `<tag> <iso-8601 date>` per line, in, freeze moments out.
+func parseFreezeDates(out string) (map[line]time.Time, error) {
+	frozen := map[line]time.Time{}
+	for raw := range strings.SplitSeq(out, "\n") {
+		name, date, ok := strings.Cut(strings.TrimSpace(raw), " ")
+		if !ok {
+			continue
+		}
+		m := freezeTagRE.FindStringSubmatch(name)
+		if m == nil {
+			continue
+		}
+		when, err := time.Parse(time.RFC3339, date)
+		if err != nil {
+			return nil, fmt.Errorf("tag %s: unparseable date %q: %w", name, date, err)
+		}
+		if when.Before(freezeContractLandedAt) {
+			continue
+		}
+		major, _ := strconv.Atoi(m[1])
+		minor, _ := strconv.Atoi(m[2])
+		l := line{major, minor}
+		if prev, ok := frozen[l]; !ok || when.Before(prev) {
+			frozen[l] = when
+		}
+	}
+	return frozen, nil
+}
+
 // targetsAt reports the current and previous release lines as of when, which is
 // what the `kind/backport` and `kind/backport-previous` labels meant at that
 // moment.
+//
+// The lines that exist at that point are ranked by version, not by when they
+// opened, matching the numeric descending sort backport.yaml applies to its
+// branch list. The two orders normally coincide, and stop coinciding as soon
+// as a freeze overlaps the previous line's stabilisation: cut vX.(Y+1).0-rc.1
+// while vX.Y.0 is still unpublished and the newer line opens first in time
+// while still being the newer line. Ranking by version is also what keeps
+// release-1.10 above release-1.9.
 func targetsAt(opened []lineOpen, when time.Time) (current, previous *line) {
 	var live []line
 	for _, o := range opened {
@@ -503,10 +601,11 @@ func targetsAt(opened []lineOpen, when time.Time) (current, previous *line) {
 			live = append(live, o.line)
 		}
 	}
+	sort.Slice(live, func(i, j int) bool { return live[j].less(live[i]) })
 	if n := len(live); n > 0 {
-		current = &live[n-1]
+		current = &live[0]
 		if n > 1 {
-			previous = &live[n-2]
+			previous = &live[1]
 		}
 	}
 	return current, previous

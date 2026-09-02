@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test test-controllers test-backport-audit preflight
 
 include hack/common-envs.mk
 
@@ -106,7 +106,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness test-backport-audit migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -148,6 +148,16 @@ test-controllers:
 #   go test ./test/check-readiness/ -update
 test-check-readiness:
 	go test ./test/check-readiness/ -count=1
+
+# Unit tests for cmd/backport-audit, named individually for the same reason
+# test-check-readiness is: ./cmd/... as a whole stays out of go-unit-tests.
+# What they pin is the rule that maps a backport label to a release branch,
+# which lives in this repo but is enforced by .github/workflows/backport.yaml
+# and .github/workflows/cut-prerelease.yaml. A change to either that is not
+# mirrored here turns the pre-release audit silently permissive, which is the
+# one failure mode a release gate must not have.
+test-backport-audit:
+	go test ./cmd/backport-audit/ -count=1
 
 # Discover every hack/*.bats file that is NOT an e2e test and run it
 # through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
