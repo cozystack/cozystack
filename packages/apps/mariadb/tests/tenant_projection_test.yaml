@@ -34,7 +34,7 @@ tests:
   # The source is the operator's own ca-bundle rather than the cert-manager CA
   # Secret: it is key-free already and it exists under both tls.issuer values,
   # whereas the cert-manager CA Secret only renders under tls.issuer:
-  # cert-manager (see certmanager_test.yaml / certmanager.yaml).
+  # cert-manager (see tls_test.yaml / certmanager.yaml).
   - it: declares a CACert projection of the operator's key-free CA bundle
     asserts:
       - equal:
