@@ -415,6 +415,13 @@ tests:
       - equal:
           path: spec.privateKey.rotationPolicy
           value: Never
+      # The subject is a cross-component invariant, not a label: it must differ from
+      # the operator's own CA subject, CN=<release>, because the operator compares
+      # DN bytes to decide whether the admin certificate still needs re-signing. See
+      # the note on the field in certmanager.yaml.
+      - equal:
+          path: spec.commonName
+          value: os-test-http-ca
       - equal:
           path: spec.privateKey.algorithm
           value: ECDSA

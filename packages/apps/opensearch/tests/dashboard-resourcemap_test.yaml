@@ -57,6 +57,12 @@ tests:
       - lengthEqual:
           path: rules[1].resourceNames
           count: 1
+      # And the rule count, because the assertion above is exhaustive only within
+      # rules[1]: a second rule granting secrets at another index satisfies every
+      # other assertion in this file.
+      - lengthEqual:
+          path: rules
+          count: 3
 
   - it: grants read only, never write
     documentIndex: 0

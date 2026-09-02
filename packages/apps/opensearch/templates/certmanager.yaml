@@ -78,6 +78,14 @@ spec:
   # an anchor for an endpoint that has gone back to an operator-issued certificate.
   duration: 87600h  # 10 years
   isCA: true
+  # NOT {{ .Release.Name }}: that is the subject of the operator's own transport CA
+  # (GenerateCA(clusterName)), and the operator decides whether to re-mint the admin
+  # certificate by comparing DN bytes rather than verifying a signature --
+  # IsSignedByCA is bytes.Equal(cert.RawIssuer, ca.RawSubject). A colliding subject
+  # therefore reads as "already signed by this CA" on a release upgrading off
+  # operator-managed TLS: the admin certificate keeps its transport-CA issuer while
+  # the listener trusts this one, and securityadmin fails to authenticate with only a
+  # job timeout to show for it.
   commonName: {{ .Release.Name }}-http-ca
   # No key encipherment: RFC 5480 section 3 forbids it for ECDSA keys, which do no
   # key transport. Both certificates here are ECDSA P-256.
