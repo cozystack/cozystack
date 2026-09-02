@@ -1,0 +1,13 @@
+suite: vm-disk DataVolume binding
+templates:
+  - templates/dv.yaml
+tests:
+  - it: requests immediate binding for a standalone disk
+    set:
+      source:
+        http:
+          url: https://example.com/disk.img
+    asserts:
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
+          value: "true"

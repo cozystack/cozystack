@@ -124,7 +124,7 @@ tests:
           value: {}
       - equal:
           path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
-          value: ""
+          value: "true"
       - equal:
           path: metadata.annotations["vm-disk.cozystack.io/source"]
           value: '{"upload":{}}'
