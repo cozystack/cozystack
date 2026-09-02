@@ -116,7 +116,7 @@ Switching issuer does not enforce anything by itself — enforcement is a separa
 
 > On a fresh instance created with `tls.issuer: cert-manager`, the pods do not start until cert-manager has issued the certificates: the operator needs the server certificate before it creates the StatefulSet. This resolves on its own within a reconcile or two — the chart labels the Secrets so the operator is woken as soon as they appear — but the instance looks stalled in the meantime.
 
-The order that avoids downtime:
+The order to change it in:
 
 1. Switch the issuer and leave enforcement off (the default):
 
@@ -124,6 +124,8 @@ The order that avoids downtime:
    tls:
      issuer: cert-manager
    ```
+
+   This step rolls the StatefulSet. The CR gains `serverCertSecretRef` and `serverCASecretRef`, which changes the name of the Secret projected into the pods, and a pod-template change restarts them. On a multi-replica instance that is a rolling restart; on a single-replica one it is downtime for as long as one pod takes to come back. Wait for `kubectl rollout status statefulset/mariadb-<name>` before going on.
 
 2. Distribute `mariadb-<name>.tenant-ca` and move clients onto verified TLS one at a time.
 3. Once no plaintext clients remain, require it:
@@ -134,7 +136,7 @@ The order that avoids downtime:
      required: true
    ```
 
-Step 3 is the only one that can refuse a connection, and it happens when you choose it rather than when a platform upgrade rolls through.
+Step 3 is the only one that refuses a client by policy, and it happens when you choose it rather than when a platform upgrade rolls through. Step 1 interrupts connections as well, but by restarting the server rather than by rejecting anyone: a client that reconnects is served.
 
 Going back is the same change in reverse: setting `tls.issuer: operator` hands issuance back, and clients have to pick up the operator's CA from the bundle again.
 
