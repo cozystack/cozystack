@@ -31,6 +31,16 @@ tests:
       - equal:
           path: spec.apiTLS.certManager.kind
           value: Issuer
+      # The operator's OWN client, the one that probes
+      # /v1/controller/version, is not provisioned by certManager in
+      # external mode — piraeus-operator emits no controller-side
+      # Certificate there. Left at its default it looks for
+      # linstor-client-tls, finds nothing, and cannot verify a serving
+      # cert signed by blockstor-api-ca; the probe fails and every
+      # satellite reconcile stops behind it.
+      - equal:
+          path: spec.apiTLS.clientSecretName
+          value: blockstor-apiserver-client-tls
 
   - it: "runs in external mode — no in-cluster linstor-controller / plunger"
     asserts:

@@ -28,6 +28,28 @@ spec:
     certManager:
       name: blockstor-api-ca
       kind: Issuer
+    # The operator ALSO talks to the API itself, to probe
+    # /v1/controller/version before every LinstorCluster and
+    # LinstorSatellite reconcile, and that client is not one of the ones
+    # certManager provisions here: in external mode piraeus-operator
+    # returns from kustomizeControllerResources before it emits any
+    # controller-side Certificate, so the secret this name points at is
+    # the operator's to find, not to create.
+    #
+    # Left at its default the operator looks for linstor-client-tls,
+    # finds nothing, and falls back to a client with the system roots —
+    # which cannot verify a serving cert signed by blockstor-api-ca. The
+    # probe then fails with "certificate signed by unknown authority",
+    # and because it runs first, the reconcile stops there: satellite
+    # DaemonSets freeze at whatever spec they last had, keeping volumes
+    # and mounts the chart no longer renders. Nothing shows until a pod
+    # is recreated, and then that node loses its satellite for good.
+    #
+    # Point it at the client cert this package already issues from the
+    # same CA. Its ca.crt is what the operator validates the apiserver
+    # against; the cert itself satisfies the :3371 listener, which is
+    # RequireAndVerifyClientCert.
+    clientSecretName: blockstor-apiserver-client-tls
   # Controller-level DRBD properties. piraeus-operator applies these to the
   # external controller (the blockstor apiserver) over the LINSTOR REST API,
   # so DRBD tuning is honoured regardless of who serves the API. In external
