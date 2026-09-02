@@ -2,69 +2,61 @@
 # Unit test: mariadb-rd cozyrds. The chart's helm-unittest suite cannot reach
 # this file, so its Secret-exposure invariants are pinned here.
 #
-# Read the coverage honestly. Seven of these eleven tests are live, all against
-# parts of the API that exist today: secrets.include (the bundle is exposed by
-# name, no key-bearing Secret is listed), the empty-selector guards, and the
-# four covering secrets.exclude — that its entries are name-scoped, that every
-# key-bearing and credential Secret is named there, and that it does not swallow
-# what the tenant is meant to receive.
+# The tenant reaches the TLS trust anchor as a key-free projection, never by
+# name. The chart renders a TenantProjection sentinel naming the operator's
+# key-free <release>-ca-bundle as the extraction source
+# (packages/apps/mariadb/templates/tenant-projection.yaml); the CA-extraction
+# controller publishes the result as "<release>.tenant-ca" carrying
+# internal.cozystack.io/tenant-ca; and this ApplicationDefinition selects that
+# label. The sentinel's own fields belong to the chart and are pinned by
+# packages/apps/mariadb/tests/tenant_projection_test.yaml, which compares
+# sourceSecretName against an exact key-free name — a stronger guard than any
+# grep here could be, and one this file cannot make, since it never sees the
+# chart.
 #
-# The other four are placeholders: the three reading caCert and the one reading
-# the tenant-ca label. That field is not in ApplicationDefinitionSpec yet and
-# nothing writes that label, so they check that the block we intend to ship is
-# present and spelled consistently, not that it does anything. If the API lands
-# with different names they will need updating; they cannot detect that on their
-# own.
+# What is left for this file is the grant surface: that secrets.include is
+# exactly the credentials Secret plus the tenant-ca selector, that no selector
+# degrades to match-everything, and that every key-bearing and credential Secret
+# is named in secrets.exclude, which wins over include.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 
-# Placeholder (see header): pins the intended spelling, not a live behaviour.
-# `.release` is deliberate here and is not the same context as the selectors
-# below: this field is rendered by the CA-extraction controller, which supplies
-# a release variable, while resourceNames is rendered by the lineage webhook,
-# which supplies only kind, name and namespace.
-@test "mariadb-rd declares the CA source as the operator ca-bundle" {
-  grep -q 'sourceSecretName: "{{ .release }}-ca-bundle"' "$COZYRDS"
-}
+# The complete set of grants the tenant holds, asserted as one value rather than
+# per-dimension: a name whitelist alone passes an added label selector, and a
+# label whitelist alone passes an added name. Either dimension reaches a
+# key-bearing Secret — controller.cert-manager.io/fao is stamped on both
+# -ca-tls and -tls, so a selector on it is a one-line grant of the CA private
+# key.
+EXPECTED_RD_INCLUDE='[{"resourceNames":["mariadb-{{ .name }}-credentials"]},{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}}]'
 
-# Placeholder (see header): the source key is read by nothing yet.
-@test "mariadb-rd extracts ca.crt from the declared source" {
-  grep -q "sourceKey: ca.crt" "$COZYRDS"
-}
+# Subsumed by the whole-value comparison below, which cannot match without this
+# entry. Kept because the runner stops at the first failing test, so this one
+# fires first and says what the loss costs rather than printing two JSON blobs
+# to diff.
+@test "mariadb-rd selects the key-free tenant-CA projection by label" {
+  count=$(yq eval \
+    '[.spec.secrets.include[] | select(.matchLabels."internal.cozystack.io/tenant-ca" == "true")] | length' \
+    "$COZYRDS") || exit 1
 
-# -ca-tls and -tls hold the CA and server private keys. Declaring either as the
-# publication source would run the extraction next to private key material.
-# Placeholder (see header): the declaration is inert, but keeping a key-bearing
-# name out of it means the block is already correct when the API arrives.
-@test "mariadb-rd never names a key-bearing Secret as the CA source" {
-  # Quote-agnostic: an unquoted value is just as wrong as a quoted one.
-  if grep -E "sourceSecretName:.*-(ca-)?tls[\"[:space:]]*$" "$COZYRDS"; then
-    echo "CA source points at a key-bearing Secret" >&2
+  if [ "$count" -lt 1 ]; then
+    echo 'mariadb-rd does not select internal.cozystack.io/tenant-ca: "true"' >&2
+    echo "Without it the tenant cannot read ca.crt and TLS verification is impossible." >&2
     exit 1
   fi
 }
 
-# The RBAC grant in dashboard-resourcemap.yaml and this list have to agree:
-# the Role decides whether the tenant may read the bundle, this decides whether
-# it is surfaced as a tenant resource at all.
-#
-# Scoped to secrets.include rather than the whole file: the bundle is named in
-# a comment and in caCert too, and matching either of those would let the
-# include entry be deleted while this still passed.
-@test "mariadb-rd exposes the operator CA bundle by name" {
-  awk '/^  secrets:/{sec=1; inc=0; next}
-       /^  [a-z]/{sec=0; inc=0}
-       sec && /^    include:/{inc=1; next}
-       sec && /^    [a-z]/{inc=0}
-       sec && inc' "$COZYRDS" | grep -q "mariadb-{{ .name }}-ca-bundle"
-}
+@test "mariadb-rd grants nothing beyond the credentials Secret and the trust anchor" {
+  include=$(yq eval --output-format=json --indent=0 '.spec.secrets.include' "$COZYRDS") || exit 1
 
-# Placeholder (see header): nothing writes this label yet.
-@test "mariadb-rd selects the tenant CA projection by label" {
-  # Must appear inside a matchLabels selector, not merely somewhere in the file:
-  # the label only exposes the projection when it is what the selector matches on.
-  grep -A2 "matchLabels:" "$COZYRDS" | grep -q "internal.cozystack.io/tenant-ca: \"true\""
+  if [ "$include" != "$EXPECTED_RD_INCLUDE" ]; then
+    echo "Unexpected mariadb-rd spec.secrets.include: $include" >&2
+    echo "Expected exactly: $EXPECTED_RD_INCLUDE" >&2
+    echo "mariadb-<name>-ca-tls holds the CA private key and mariadb-<name>-tls the" >&2
+    echo "server key; the operator's own -ca and -client-cert hold keys too." >&2
+    echo "None of them may be granted to a tenant, by name or by label." >&2
+    exit 1
+  fi
 }
 
 # An empty matchLabels compiles to a match-everything selector. The lineage
@@ -73,6 +65,9 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 # whole namespace — but that set includes -ca-tls and -tls, the key-bearing
 # pair this design keeps away from the tenant. Both spellings are empty: the
 # inline "matchLabels: {}" and a bare "matchLabels:" with nothing nested.
+#
+# Scanned over the whole file rather than over secrets.include alone, so a
+# catch-all introduced under services: is caught by the same pass.
 @test "mariadb-rd has no empty matchLabels selector" {
   if grep -qE "matchLabels:[[:space:]]*\{[[:space:]]*\}" "$COZYRDS"; then
     echo "Found an inline empty matchLabels selector (matches every Secret the instance owns)" >&2
@@ -155,16 +150,18 @@ excluded_block() {
 }
 
 # The backstop must not swallow what the tenant is supposed to receive: exclude
-# beats include, so an over-broad entry here silently removes the trust anchor.
-@test "mariadb-rd does not exclude the Secrets it exposes" {
-  excluded=$(awk '/^  secrets:/{sec=1; ex=0; next}
-                  /^  [a-z]/{sec=0; ex=0}
-                  sec && /^    exclude:/{ex=1; next}
-                  sec && /^    [a-z]/{ex=0}
-                  sec && ex' "$COZYRDS")
-  for n in credentials ca-bundle; do
-    if echo "$excluded" | grep -q -- "-$n\$"; then
-      echo "exclude list contains -$n, which the tenant is meant to read" >&2
+# is evaluated before include and wins outright, so it sits upstream of both
+# grants. Every other line in that block is about withholding a Secret, which
+# makes adding one of these to it a plausible edit — and one that would revoke
+# the tenant's connection string, or its trust anchor, in silence. The
+# projection is the dotted "<release>.tenant-ca" the CA-extraction controller
+# writes, not the operator's own -ca-bundle, which the tenant never reads by
+# name under this design.
+@test "mariadb-rd does not exclude the Secrets the tenant is meant to read" {
+  for name in "mariadb-{{ .name }}-credentials" "mariadb-{{ .name }}.tenant-ca"; do
+    hits="$(yq "[.spec.secrets.exclude[].resourceNames[]? | select(. == \"$name\")] | length" "$COZYRDS")" || exit 1
+    if [ "$hits" != "0" ]; then
+      echo "exclude names $name, which the tenant is meant to read" >&2
       exit 1
     fi
   done
