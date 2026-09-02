@@ -1,8 +1,8 @@
-suite: per-pool worker image source (image.builtin / image.factory)
+suite: per-pool worker image source (osImage.builtin / osImage.factory)
 
 # Exercises the disk-system source selection in templates/nodegroup.yaml:
-#   - image omitted / image.factory -> HTTP import from the Image Factory;
-#   - image.builtin                 -> CDI clone of the golden DataVolume in
+#   - osImage omitted / osImage.factory -> HTTP import from the Image Factory;
+#   - osImage.builtin                 -> CDI clone of the golden DataVolume in
 #                                      cozy-public (talos-worker-<schematicID>-<version>).
 # The golden DataVolume and the CAPI LIST kinds are mocked via kubernetesProvider;
 # lookup() is otherwise empty under `helm template`. The default talos.* is
@@ -46,10 +46,23 @@ kubernetesProvider:
     "cdi.kubevirt.io/v1beta1/DataVolume":
       gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
       namespaced: true
+    # The cross-class guard resolves an empty storageClass on either side against
+    # the cluster's default StorageClass, so the LIST kind has to be registered
+    # even for the cases that declare no StorageClass object.
+    "storage.k8s.io/v1/StorageClass":
+      gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+      namespaced: false
   objects:
     - kind: VirtualMachineClusterInstancetype
       apiVersion: instancetype.kubevirt.io/v1beta1
       metadata: {name: u1.medium}
+    # A non-default StorageClass, so the LIST kind is registered with the fake
+    # client and this cluster has NO default class -- the arm where an empty
+    # storageClass on either side stays unresolvable and the comparison is
+    # skipped. The default-class arm gets its own provider below.
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata: {name: replicated}
     # Dummy CAPI objects so the MachineSet / KubevirtMachineTemplate LIST kinds
     # (old-template-preservation loop) are registered with the fake client.
     - kind: MachineSet
@@ -106,6 +119,14 @@ kubernetesProvider:
           storageClassName: replicated
       status:
         phase: Failed
+    # A populated golden that declares no storage request at all. The size guard
+    # reads spec.storage.resources.requests.storage, so its presence gate is the
+    # branch that decides between comparing and skipping; without a fixture the
+    # term could be deleted and every case would stay green.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-nostorage-v1.0.0, namespace: cozy-public}
+      status: {phase: Succeeded}
     # A populated golden with no storageClassName (cluster default), for the
     # skip-when-unresolvable arm of the StorageClass guard.
     - kind: DataVolume
@@ -122,7 +143,7 @@ kubernetesProvider:
         phase: Succeeded
 
 tests:
-  - it: image omitted imports over HTTP from the pool talos.* factory (back-compat)
+  - it: osImage omitted imports over HTTP from the pool talos.* factory (back-compat)
     asserts:
       - equal:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
@@ -134,9 +155,9 @@ tests:
             cdi.kubevirt.io/storage.usePopulator: "false"
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
-  - it: empty image.factory imports over HTTP from the pool talos.* factory
+  - it: empty osImage.factory imports over HTTP from the pool talos.* factory
     set:
-      image:
+      osImage:
         factory: {}
     asserts:
       - equal:
@@ -144,9 +165,9 @@ tests:
           value: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
-  - it: image.factory overrides import from the given mirror / schematic / version
+  - it: osImage.factory overrides import from the given mirror / schematic / version
     set:
-      image:
+      osImage:
         factory:
           imageFactoryURL: https://mirror.internal
           schematicID: deadbeef
@@ -157,9 +178,9 @@ tests:
           value: https://mirror.internal/image/deadbeef/v1.14.0/openstack-amd64.raw.xz
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
-  - it: empty image.builtin clones the pool-default golden and omits usePopulator
+  - it: empty osImage.builtin clones the pool-default golden and omits usePopulator
     set:
-      image:
+      osImage:
         builtin: {}
     asserts:
       - equal:
@@ -182,9 +203,9 @@ tests:
           value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
-  - it: image.builtin with an explicit schematicID/version clones that golden
+  - it: osImage.builtin with an explicit schematicID/version clones that golden
     set:
-      image:
+      osImage:
         builtin:
           schematicID: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
           version: v1.13.6
@@ -194,29 +215,29 @@ tests:
           value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
-  - it: image.builtin fails the render when the requested golden is absent
+  - it: osImage.builtin fails the render when the requested golden is absent
     set:
-      image:
+      osImage:
         builtin:
           schematicID: doesnotexist
           version: v9.9.9
     asserts:
       - failedTemplate:
-          errorPattern: 'image\.builtin requested golden DataVolume "talos-worker-doesnotexist-v9\.9\.9" not found in cozy-public'
+          errorPattern: 'osImage\.builtin requested golden DataVolume "talos-worker-doesnotexist-v9\.9\.9" not found in cozy-public'
 
-  - it: setting both image.builtin and image.factory fails the render
+  - it: setting both osImage.builtin and osImage.factory fails the render
     set:
-      image:
+      osImage:
         builtin: {}
         factory: {}
     asserts:
       - failedTemplate:
-          errorPattern: 'set only one of image\.builtin or image\.factory'
+          errorPattern: 'set only one of osImage\.builtin or osImage\.factory'
 
-  - it: image.builtin fails when the worker diskSize is smaller than the golden storage
+  - it: osImage.builtin fails when the worker diskSize is smaller than the golden storage
     set:
       diskSize: 4Gi
-      image:
+      osImage:
         builtin: {}
     asserts:
       - failedTemplate:
@@ -226,9 +247,9 @@ tests:
   # KubernetesNodes HelmRelease of every pool pinned to that golden, which would
   # block unrelated scale operations for the length of an import. CDI holds the
   # worker DataVolume until the source populates, so rendering the clone is correct.
-  - it: image.builtin still clones while the golden is mid-import
+  - it: osImage.builtin still clones while the golden is mid-import
     set:
-      image:
+      osImage:
         builtin:
           schematicID: importing
           version: v1.0.0
@@ -240,9 +261,9 @@ tests:
 
   # Terminal failure is the one phase worth aborting the render for: it never
   # recovers without operator action, so cloning would block workers forever.
-  - it: image.builtin fails the render when the golden import terminally failed
+  - it: osImage.builtin fails the render when the golden import terminally failed
     set:
-      image:
+      osImage:
         builtin:
           schematicID: failed
           version: v1.0.0
@@ -251,20 +272,20 @@ tests:
           errorPattern: 'golden DataVolume "talos-worker-failed-v1\.0\.0" in cozy-public failed to import \(phase Failed\)'
 
   # Cross-StorageClass clone: CDI would silently fall back to a host-assisted copy
-  # over the pod network, the exact transfer image.builtin exists to avoid.
-  - it: image.builtin fails when the pool storageClass differs from the golden's
+  # over the pod network, the exact transfer osImage.builtin exists to avoid.
+  - it: osImage.builtin fails when the pool storageClass differs from the golden's
     set:
       storageClass: local
-      image:
+      osImage:
         builtin: {}
     asserts:
       - failedTemplate:
           errorPattern: 'storageClass "local" differs from golden image .* storageClass "replicated"'
 
-  - it: image.builtin clones when the pool storageClass matches the golden's
+  - it: osImage.builtin clones when the pool storageClass matches the golden's
     set:
       storageClass: replicated
-      image:
+      osImage:
         builtin: {}
     asserts:
       - equal:
@@ -272,12 +293,13 @@ tests:
           value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
-  # A golden with no storageClassName resolves to the cluster default, which the
-  # render cannot know — the guard skips rather than guessing a mismatch.
-  - it: image.builtin clones when the golden has no explicit storageClass
+  # A golden with no storageClassName means "the cluster default". With no default
+  # class to resolve it against, the comparison stays unresolvable and the guard
+  # skips rather than guessing a mismatch.
+  - it: osImage.builtin clones when the golden has no explicit storageClass and the cluster has no default
     set:
       storageClass: local
-      image:
+      osImage:
         builtin:
           schematicID: nosc
           version: v1.0.0
@@ -287,12 +309,28 @@ tests:
           value: talos-worker-nosc-v1.0.0
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
+  # The size guard's presence gate. A golden that declares no storage request has
+  # no size to compare against, so a pool below the usual floor still renders --
+  # the guard skips rather than treating "unknown" as zero or as a failure.
+  - it: osImage.builtin clones a golden that declares no storage request, whatever the pool diskSize
+    set:
+      diskSize: 1Gi
+      osImage:
+        builtin:
+          schematicID: nostorage
+          version: v1.0.0
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-nostorage-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
   # Tenant-controlled strings reach an unquoted YAML scalar in the KMT, so they are
   # pattern-checked at render. Reviewed as [MINOR] on cozystack/cozystack#3294. The
   # values below are the shapes that break out of a scalar, not merely odd ones.
   - it: a schematicID carrying a newline is refused before it reaches the KMT
     set:
-      image:
+      osImage:
         builtin:
           schematicID: "abc\ninjected: true"
     asserts:
@@ -301,7 +339,7 @@ tests:
 
   - it: a version carrying a YAML metacharacter is refused
     set:
-      image:
+      osImage:
         factory:
           version: "v1.13.6: evil"
     asserts:
@@ -310,7 +348,7 @@ tests:
 
   - it: an imageFactoryURL carrying whitespace is refused
     set:
-      image:
+      osImage:
         factory:
           imageFactoryURL: "https://mirror.internal x"
     asserts:
@@ -322,7 +360,7 @@ tests:
   # as well rather than relying on that Job's escaping alone.
   - it: an imageFactoryURL carrying a shell metacharacter is refused
     set:
-      image:
+      osImage:
         factory:
           imageFactoryURL: "https://mirror.internal/$(id)"
     asserts:
@@ -333,7 +371,7 @@ tests:
   # issues is accepted, so the guard is not merely rejecting everything.
   - it: a real 64-character hex schematicID is accepted
     set:
-      image:
+      osImage:
         factory:
           schematicID: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
           version: v1.13.6

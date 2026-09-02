@@ -15,9 +15,11 @@
 ## `cozystack.kubernetes-worker-image` to `bundles.enabledPackages` in the Cozystack
 ## config; without it no golden is created and every worker imports over HTTP.
 ##
-## A tenant node group opts into a clone explicitly by setting
-## `nodeGroups.<name>.image.builtin` (optionally overriding schematicID/version) in
-## a `Kubernetes` resource; the app then clones the golden named deterministically
+## A tenant node group opts into a clone explicitly by setting `osImage.builtin`
+## (optionally overriding schematicID/version) on its own `KubernetesNodes` resource
+## -- one per pool since the Phase 2 split, NOT `nodeGroups` on the parent `Kubernetes`
+## CR, which is still accepted and stored there but has no effect. The pool then
+## clones the golden named deterministically
 ## `talos-worker-<schematicID>-<version>` from cozy-public. The tenant render fails
 ## rather than degrade silently when the referenced (schematicID, version) has no
 ## matching entry in this catalog, when its golden terminally failed to import
@@ -38,8 +40,8 @@
 ## declarations first:
 ##
 ##   kubectl get kubernetesnodes -A -o json | jq -r '.items[]
-##     | select(.spec.image.builtin != null)
-##     | "\(.metadata.namespace)/\(.metadata.name)\tschematic=\(.spec.image.builtin.schematicID // "<talos.schematicID>")\tversion=\(.spec.image.builtin.version // "<talos.version>")"'
+##     | select(.spec.osImage.builtin != null)
+##     | "\(.metadata.namespace)/\(.metadata.name)\tschematic=\(.spec.osImage.builtin.schematicID // "<talos.schematicID>")\tversion=\(.spec.osImage.builtin.version // "<talos.version>")"'
 ##
 ## A pool that leaves either field unset inherits it from its own `talos.*`, which
 ## is why the fallbacks print as placeholders rather than as values — resolve those
@@ -56,7 +58,7 @@
 ##
 ## Both empty is the go-ahead. The first non-empty on its own is enough to stop.
 ##
-## Worker pools that do not set `image.builtin` import over HTTP and never touch
+## Worker pools that do not set `osImage.builtin` import over HTTP and never touch
 ## this catalog.
 ##
 ## An entry is effectively immutable once its golden exists. The DataVolume is named
@@ -73,7 +75,7 @@ imageFactoryURL: "https://factory.talos.dev"
 ## @param {string} storageClass - Default StorageClass for the golden image(s). Must match the StorageClass of the worker disks that clone it: CDI cannot CSI-clone across StorageClasses and would silently fall back to a host-assisted copy over the pod network, so the tenant render rejects a mismatch outright. Overridable per image.
 storageClass: "replicated"
 
-## @param {quantity} storage - Default storage size allocated for each golden image. Must be >= the imported raw image virtual size and <= the smallest worker diskSize that clones it. The Talos v1.13.x openstack raw is ~4.15 GiB, so 6Gi leaves headroom. Overridable per image, but only when the entry is added: a DataVolume spec cannot be patched in place, so raising this on an entry whose golden already exists is rejected on the next upgrade — a Talos version whose raw outgrows it needs a new `images[]` entry, which it gets anyway since the name is keyed on the version.
+## @param {quantity} storage - Default storage size allocated for each golden image. Must be >= the imported raw image virtual size and <= the smallest worker diskSize that clones it. The Talos v1.13.x openstack raw is ~4.15 GiB, so 6Gi leaves headroom. This size is also the unit of the transient cost every clone pays: CDI populates a worker disk larger than the golden by cloning at the golden's size and then growing it, so one worker in flight occupies the golden plus a temporary clone PVC plus its own diskSize, times the replica count of a replicated StorageClass. Keeping this at the raw image's size rather than rounding it up is therefore worth doing -- it is paid once per golden and again per concurrent clone. Overridable per image, but only when the entry is added: a DataVolume spec cannot be patched in place, so raising this on an entry whose golden already exists is rejected on the next upgrade — a Talos version whose raw outgrows it needs a new `images[]` entry, which it gets anyway since the name is keyed on the version.
 storage: "6Gi"
 
 ## @typedef {struct} WorkerImage - A golden Talos worker image entry.
@@ -83,7 +85,7 @@ storage: "6Gi"
 ## @field {quantity} [storage] - Override the global storage size for this image.
 ## @field {string} [storageClass] - Override the global StorageClass for this image.
 
-## @param {[]WorkerImage} images - Catalog of golden Talos worker images to provision in the cozy-public namespace. Each entry is one (schematicID, version) flavor a tenant node group can clone via `image.builtin`.
+## @param {[]WorkerImage} images - Catalog of golden Talos worker images to provision in the cozy-public namespace. Each entry is one (schematicID, version) flavor a tenant node group can clone via `osImage.builtin`.
 images:
   - schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
     version: "v1.13.6"

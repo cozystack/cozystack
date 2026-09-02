@@ -128,7 +128,25 @@
 {{include "cozystack.platform.package" (list "cozystack.kubevirt" "default" $ $kubevirtComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubevirt-cdi" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.vm-default-images" $) }}
-{{include "cozystack.platform.package.optional.default" (list "cozystack.kubernetes-worker-image" $) }}
+{{- /*
+  Forward the platform-level worker image catalog overrides into the emitted
+  cozystack.kubernetes-worker-image Package CR's
+  components.kubernetes-worker-image.values, so the supported override path
+  on the cozystack-platform Package -- spec.components.platform.values.kubernetesWorkerImage
+  -- actually reaches that chart's HelmRelease. Same pattern as the kubevirt /
+  gpu-operator forwarding above and backupStorage in bundles/system.yaml. The
+  catalog's own knobs are the two the feature exists for: an air-gapped or
+  rate-limited cluster repoints imageFactoryURL, and a cluster whose worker pools
+  do not sit on `replicated` moves the golden onto their class -- without which
+  the pool-side StorageClass guard refuses the render while naming a fix the
+  operator cannot apply. Unset (the default) emits no components block and keeps
+  the Package identical to the historical render.
+*/ -}}
+{{- $workerImageComponents := dict -}}
+{{- if .Values.kubernetesWorkerImage -}}
+{{- $_ := set $workerImageComponents "kubernetes-worker-image" (dict "values" .Values.kubernetesWorkerImage) -}}
+{{- end -}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.kubernetes-worker-image" $ $workerImageComponents) }}
 {{- /*
   Forward platform-level vGPU knobs into the emitted cozystack.gpu-operator
   Package CR's components.gpu-operator.values. Only applies to the vgpu

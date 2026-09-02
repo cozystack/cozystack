@@ -394,7 +394,7 @@ spec:
       "resources" .Values.resources
       "gpus" .Values.gpus
       "kubelet" .Values.kubelet
-      "image" .Values.image
+      "osImage" .Values.osImage
 }}
 {{- /* Mirror the kubelet-reservation computation from nodegroup.yaml so the
        worker machineconfig this Job applies carries the same numbers the
@@ -435,27 +435,26 @@ spec:
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
-{{- /* Resolve this pool's worker image (schematicID, version) from .Values.image
+{{- /* Resolve this pool's worker image (schematicID, version) from .Values.osImage
        — the same selection templates/nodegroup.yaml uses for the boot disk — so the
        in-guest Talos installer image matches the OS this pool actually booted.
-       Defaults to the pool's talos.*; a pool with image.builtin / image.factory
+       Defaults to the pool's talos.*; a pool with osImage.builtin / osImage.factory
        pins its own flavor and version so an in-guest upgrade does not flip it back to
        the pool default. */}}
-{{- /* hasKey, not truthiness: an empty builtin/factory map means "the pool's
-       talos.* defaults", and Go templates treat an empty map as false. Mirrors
-       the resolution in nodegroup.yaml. */}}
-{{- $grpImg := $group.image | default dict }}
-{{- $grpSchematicID := $.Values.talos.schematicID }}
-{{- $grpVersion := $talosVersion }}
-{{- if hasKey $grpImg "builtin" }}
-{{-   $b := $grpImg.builtin | default dict }}
-{{-   $grpSchematicID = $b.schematicID | default $.Values.talos.schematicID }}
-{{-   $grpVersion = $b.version | default $talosVersion }}
-{{- else if hasKey $grpImg "factory" }}
-{{-   $f := $grpImg.factory | default dict }}
-{{-   $grpSchematicID = $f.schematicID | default $.Values.talos.schematicID }}
-{{-   $grpVersion = $f.version | default $talosVersion }}
-{{- end }}
+{{- /* Shared with nodegroup.yaml's boot-disk source rather than mirrored here:
+       a disk booted from one Talos flavor and an installer pinned to another is
+       the silently-broken pairing this chart's support matrix was factored out
+       to prevent, and two hand-kept copies of the resolution are how the two
+       drift apart. The helper also carries the format checks, so this file no
+       longer depends on the other one aborting the shared render first. */}}
+{{- $resolvedImage := dict }}
+{{- include "kubernetes-nodes.resolveOsImage" (dict
+      "osImage" $group.osImage
+      "talos" $.Values.talos
+      "out" $resolvedImage
+      "groupName" (include "kubernetes-nodes.groupName" $)) }}
+{{- $grpSchematicID := $resolvedImage.schematicID }}
+{{- $grpVersion := $resolvedImage.version }}
 {{- $jobContext := deepCopy $ }}
 {{- $_ := set $jobContext "group" $group }}
 {{- $_ := set $jobContext "groupName" $groupName }}

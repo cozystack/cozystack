@@ -6,11 +6,11 @@
 #   packages/apps/kubernetes-nodes/values.yaml      talos.{schematicID,version}
 #   packages/system/kubernetes-worker-image/values.yaml   images[], storageClass
 #
-# A worker pool that opts in with `image.builtin: {}` resolves the golden it
+# A worker pool that opts in with `osImage.builtin: {}` resolves the golden it
 # clones from the POOL chart's talos defaults, then requires the catalog to hold a
 # matching (schematicID, version) — packages/apps/kubernetes-nodes/templates/
 # nodegroup.yaml fails the whole render when it does not. So a one-sided Talos bump
-# silently breaks every fresh install using image.builtin, and nothing catches it
+# silently breaks every fresh install using osImage.builtin, and nothing catches it
 # until a ~95-minute e2e run does.
 #
 # The StorageClass is the same trap from the other direction: CDI cannot
@@ -44,7 +44,7 @@ CATALOG_VALUES="$REPO_ROOT/packages/system/kubernetes-worker-image/values.yaml"
     echo "  version:     $ver" >&2
     echo "but the kubernetes-worker-image catalog has no matching images[] entry:" >&2
     yq '.images[] | "  - " + .schematicID + " " + .version' "$CATALOG_VALUES" >&2
-    echo "Every worker pool using 'image.builtin: {}' would fail to render." >&2
+    echo "Every worker pool using 'osImage.builtin: {}' would fail to render." >&2
     echo "Add the pair to the catalog, or bump both files together." >&2
     return 1
   fi
@@ -65,7 +65,7 @@ CATALOG_VALUES="$REPO_ROOT/packages/system/kubernetes-worker-image/values.yaml"
   fi
 
   if [ "$app_sc" != "$entry_sc" ]; then
-    echo "StorageClass mismatch on the default image.builtin path:" >&2
+    echo "StorageClass mismatch on the default osImage.builtin path:" >&2
     echo "  packages/apps/kubernetes-nodes/values.yaml storageClass:  $app_sc" >&2
     echo "  kubernetes-worker-image golden effective storageClass:    $entry_sc" >&2
     echo "CDI cannot CSI-clone across StorageClasses, so the tenant render" >&2
@@ -78,7 +78,7 @@ CATALOG_VALUES="$REPO_ROOT/packages/system/kubernetes-worker-image/values.yaml"
 # Second family of default-drift guards on the same chart: the Talos <-> Kubernetes
 # support matrix. Reviewed as [MAJOR] on cozystack/cozystack#3294 — the render
 # guard keyed only on `talos.version`, so a pool could reach a different Talos
-# release through `image.builtin.version` / `image.factory.version` and boot a
+# release through `osImage.builtin.version` / `osImage.factory.version` and boot a
 # kubelet outside its support window with no render failure. The table now lives
 # once in templates/_helpers.tpl and both paths consult it.
 #
@@ -96,7 +96,7 @@ NODES_SCHEMA="$REPO_ROOT/packages/apps/kubernetes-nodes/values.schema.json"
 @test "the support matrix is consulted for the image-resolved Talos version, not only talos.version" {
   calls=$(grep -c 'include "kubernetes-nodes.assertTalosSupportsKubernetes"' "$NODES_TEMPLATE" || true)
   if [ "$calls" -lt 2 ]; then
-    echo "nodegroup.yaml calls the Talos support-matrix guard $calls time(s); it needs one for talos.version and one for the version image.builtin/image.factory resolves to" >&2
+    echo "nodegroup.yaml calls the Talos support-matrix guard $calls time(s); it needs one for talos.version and one for the version osImage.builtin/osImage.factory resolves to" >&2
     echo "without the second call a pool keeps a supported talos.version and still boots an unsupported Talos minor through its image override, with no render failure" >&2
     return 1
   fi
@@ -123,8 +123,19 @@ NODES_SCHEMA="$REPO_ROOT/packages/apps/kubernetes-nodes/values.schema.json"
   fi
 
   # Every version the schema lets an operator pick must be in that row, or the
-  # guard rejects a combination the API advertises as valid.
-  for k in $(yq -r '.properties.version.enum[]' "$NODES_SCHEMA"); do
+  # guard rejects a combination the API advertises as valid. Capture the enum
+  # first and refuse an empty read: iterating straight over the command
+  # substitution cannot tell "no versions" from "that query found nothing", so a
+  # renamed or relocated property would run the loop zero times and report
+  # success -- the drift this test exists to catch would be the change that
+  # disarms it.
+  enum=$(yq -r '.properties.version.enum[]' "$NODES_SCHEMA" || true)
+  if [ -z "$enum" ]; then
+    echo "could not read .properties.version.enum from $NODES_SCHEMA" >&2
+    echo "the enum was renamed, moved, or the file relocated; this guard cannot check the matrix without it" >&2
+    return 1
+  fi
+  for k in $enum; do
     case "$row" in
       *"\"$k\""*) ;;
       *)
@@ -191,10 +202,10 @@ RUN_KUBERNETES_LIB="$REPO_ROOT/hack/e2e-chainsaw/_lib/run-kubernetes.sh"
   fi
   case "$block" in
     *"
-  image:
+  osImage:
     builtin: {}"*) ;;
     *)
-      echo "the e2e KubernetesNodes pool does not set image.builtin at pool-value indent, so its workers import the OS image over HTTP" >&2
+      echo "the e2e KubernetesNodes pool does not set osImage.builtin at pool-value indent, so its workers import the OS image over HTTP" >&2
       echo "the kubernetes-worker-image catalog is then enabled in the sandbox and never exercised, and no test fails" >&2
       return 1 ;;
   esac

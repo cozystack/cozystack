@@ -4,7 +4,7 @@ templates:
   - templates/dv.yaml
 
 tests:
-  # The DataVolume name is a contract: packages/apps/kubernetes reconstructs
+  # The DataVolume name is a contract: packages/apps/kubernetes-nodes reconstructs
   # `talos-worker-<schematicID>-<version>` to clone this golden. A rename here
   # silently breaks the clone (workers fall back to per-worker HTTP import), so
   # pin it.
@@ -120,3 +120,120 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'A valid \.version entry is required'
+
+  # Both fields present and the pair repeated is the sub-case `required` cannot
+  # reach, and the one an operator actually produces: a copy-pasted entry meant to
+  # add a flavor on another class, with the version left unbumped. Helm renders
+  # both, the API applies both in list order, and the golden every pinned pool
+  # clones is whichever entry sits later in the file.
+  - it: rejects two catalog entries that resolve to the same golden
+    set:
+      images:
+        - schematicID: aaa
+          version: v1.13.6
+          storageClass: replicated
+        - schematicID: aaa
+          version: v1.13.6
+          storageClass: local
+    asserts:
+      - failedTemplate:
+          errorPattern: 'two images\[\] entries resolve to the same golden DataVolume "talos-worker-aaa-v1\.13\.6"'
+
+  # The pool side pattern-checks the values it resolves before they reach a
+  # DataVolume name; the catalog builds the same name from the same fields, so an
+  # entry it accepts and the pool cannot reconstruct is a golden nobody can use.
+  - it: rejects a schematicID that is not a plain lowercase alphanumeric identifier
+    set:
+      images:
+        - schematicID: CE4C9805
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'schematicID "CE4C9805" is not a plain lowercase alphanumeric identifier'
+
+  - it: rejects a version without the leading v
+    set:
+      images:
+        - schematicID: aaa
+          version: "1.13.6"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'version "1\.13\.6" is not a vMAJOR\.MINOR\.PATCH Talos release'
+
+  - it: rejects an imageFactoryURL that is not a plain http(s) URL
+    set:
+      imageFactoryURL: "factory.talos.dev; rm -rf /"
+      images:
+        - schematicID: aaa
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a plain http\(s\) URL'
+
+  # An entry is immutable once its golden exists, because a DataVolume spec is not
+  # patchable in place. Without this the edit surfaces as a rejected patch on the
+  # next HelmRelease upgrade, whose only documented recovery is deleting the golden
+  # — which is the deletion footgun the catalog warns about. Reviewed across two
+  # rounds on cozystack/cozystack#3294.
+  - it: rejects raising storage on an entry whose golden already exists
+    set:
+      images:
+        - schematicID: aaa
+          version: v1.13.6
+          storage: 10Gi
+    kubernetesProvider: &liveGolden
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: talos-worker-aaa-v1.13.6, namespace: cozy-public}
+          spec:
+            source:
+              http: {url: "https://factory.talos.dev/image/aaa/v1.13.6/openstack-amd64.raw.xz"}
+            storage:
+              resources: {requests: {storage: 6Gi}}
+              storageClassName: replicated
+    asserts:
+      - failedTemplate:
+          errorPattern: 'changed after its golden DataVolume "talos-worker-aaa-v1\.13\.6" was created: storage "6Gi" -> "10Gi"'
+
+  - it: rejects moving an existing golden onto another StorageClass
+    set:
+      storageClass: local
+      images:
+        - schematicID: aaa
+          version: v1.13.6
+    kubernetesProvider: *liveGolden
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storageClass "replicated" -> "local"'
+
+  - it: rejects repointing an existing golden at another Image Factory
+    set:
+      imageFactoryURL: "https://factory.internal.example.com"
+      images:
+        - schematicID: aaa
+          version: v1.13.6
+    kubernetesProvider: *liveGolden
+    asserts:
+      - failedTemplate:
+          errorPattern: 'source URL "https://factory\.talos\.dev/image/aaa/v1\.13\.6/openstack-amd64\.raw\.xz" -> "https://factory\.internal\.example\.com/image/aaa/v1\.13\.6/openstack-amd64\.raw\.xz"'
+
+  # The guard must not fire on an unchanged entry, or every routine upgrade of the
+  # catalog fails once its golden exists.
+  - it: renders an unchanged entry whose golden already exists
+    set:
+      images:
+        - schematicID: aaa
+          version: v1.13.6
+    kubernetesProvider: *liveGolden
+    asserts:
+      - equal:
+          path: metadata.name
+          value: talos-worker-aaa-v1.13.6
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 6Gi

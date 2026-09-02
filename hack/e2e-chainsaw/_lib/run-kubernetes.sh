@@ -4146,7 +4146,7 @@ cozy_report_node_join_failure() {
   # that the VM/VMI state alone does not show: the OS disk never populates, so the
   # VM never boots.
   #
-  # These suites set the worker pool's image.builtin, so a worker disk is a CDI
+  # These suites set the worker pool's osImage.builtin, so a worker disk is a CDI
   # CLONE of the golden Talos image in cozy-public
   # (packages/system/kubernetes-worker-image) rather than a per-worker HTTP import.
   # The usual culprit is therefore a clone blocked on a golden that has not
@@ -4640,7 +4640,7 @@ YAML
   fi
 
   # The kubernetes-worker-image catalog imports the golden Talos worker image into
-  # cozy-public once; the md0 pool below clones it (image.builtin), which is what
+  # cozy-public once; the md0 pool below clones it (osImage.builtin), which is what
   # gives the clone path end-to-end coverage rather than unit coverage alone.
   # Wait for that one import to finish here, so a factory stall stops the run at
   # the download instead of ten minutes later as an opaque node-join timeout, and
@@ -4662,7 +4662,14 @@ YAML
   # Capture the DataVolume list inside the until condition and reuse it for the
   # wait, so a transient get between "exists" and "wait" cannot skip the import
   # check with an empty list.
-  timeout 12m sh -ec '
+  #
+  # The describe above covers a DataVolume that exists and stalls. The other way
+  # this step expires is with no DataVolume at all -- the catalog HelmRelease
+  # failed, so the until loop spins until the outer timeout kills it and the run
+  # reports a bare exit 124 naming nothing. That is the same opaque-timeout shape
+  # this whole block exists to replace, so the outer failure gets its own dump of
+  # the objects that would say why the golden was never created.
+  if ! timeout 12m sh -ec '
     until dvs=$(kubectl -n cozy-public get datavolume -o name 2>/dev/null | grep talos-worker-); [ -n "$dvs" ]; do
       echo "golden DataVolume not created yet; waiting..."; sleep 5
     done
@@ -4674,7 +4681,16 @@ YAML
         kubectl -n cozy-public logs -l cdi.kubevirt.io=importer --tail=50 --all-containers || true
         exit 1
       fi
-    done'
+    done'; then
+    echo "=== no golden Talos worker image finished importing in cozy-public ==="
+    echo "--- DataVolumes in cozy-public ---"
+    kubectl -n cozy-public get datavolume -o wide || true
+    echo "--- Package cozystack.kubernetes-worker-image ---"
+    kubectl get package cozystack.kubernetes-worker-image -o yaml || true
+    echo "--- HelmRelease kubernetes-worker-image ---"
+    kubectl -n cozy-system get helmrelease kubernetes-worker-image -o yaml || true
+    return 1
+  fi
 
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -4750,7 +4766,7 @@ spec:
   # (kubernetes-worker-image catalog, enabled in e2e-install-cozystack.bats)
   # instead of a per-worker HTTP import -- this exercises the clone path and the
   # #3231 mitigation. builtin: {} clones the pool talos.* default golden.
-  image:
+  osImage:
     builtin: {}
   # Sizing comes from resources below; this is here because the values
   # schema requires the field, and the chart drops the instancetype from

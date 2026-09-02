@@ -68,7 +68,7 @@ func (in *ConfigSpec) DeepCopyInto(out *ConfigSpec) {
 		copy(*out, *in)
 	}
 	out.Kubelet = in.Kubelet
-	in.Image.DeepCopyInto(&out.Image)
+	in.OsImage.DeepCopyInto(&out.OsImage)
 	in.Talos.DeepCopyInto(&out.Talos)
 	out.Images = in.Images
 }

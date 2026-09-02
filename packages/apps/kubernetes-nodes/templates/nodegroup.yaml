@@ -14,8 +14,8 @@
   so any drift would roll every live worker VM.
 
   Talos -> Kubernetes support matrix, against the pool default. The pool can also
-  reach a different Talos release through image.builtin.version /
-  image.factory.version, and that override is checked against the same matrix at
+  reach a different Talos release through osImage.builtin.version /
+  osImage.factory.version, and that override is checked against the same matrix at
   the point it is resolved, below. Both call sites share one table, in
   templates/_helpers.tpl.
 */}}
@@ -34,7 +34,7 @@
       "instanceType" .Values.instanceType
       "diskSize" .Values.diskSize
       "storageClass" .Values.storageClass
-      "image" .Values.image
+      "osImage" .Values.osImage
       "roles" .Values.roles
       "resources" .Values.resources
       "gpus" .Values.gpus
@@ -71,89 +71,50 @@ spec:
       {{- end }}
       runStrategy: Always
       dataVolumeTemplates:
-      {{- /* This pool selects its worker OS image source via .Values.image (the
+      {{- /* This pool selects its worker OS image source via .Values.osImage (the
              WorkerImage union in values.yaml); every field defaults to the pool's
              talos.*:
-               * image omitted / image.factory — import the raw image over HTTP from
+               * osImage omitted / osImage.factory — import the raw image over HTTP from
                  the Talos Image Factory (or a mirror): one download per worker.
-               * image.builtin — CDI storage-layer clone of a golden image in the
+               * osImage.builtin — CDI storage-layer clone of a golden image in the
                  opt-in worker image catalog (packages/system/kubernetes-worker-image)
                  in cozy-public, named talos-worker-<schematicID>-<version>. A clone
                  is a CSI copy, so N workers no longer each stream the OS image across
                  the pod network — the source of the kubernetes-* e2e node-join flake
                  (cozystack/cozystack#3231) and a per-worker Factory dependency.
 
-             The disk-system source is derived purely from .Values.image, so it is
-             deterministic across re-renders: with image omitted a pool renders
+             The disk-system source is derived purely from .Values.osImage, so it is
+             deterministic across re-renders: with osImage omitted a pool renders
              byte-identically to the pre-feature chart (its workers do not roll on
              upgrade), and there is no cluster-state-driven flip to guard against.
              Because the source is content-hashed into the KubevirtMachineTemplate
-             name (see the KMT block below), intentionally changing .Values.image on an
+             name (see the KMT block below), intentionally changing .Values.osImage on an
              existing pool reimages that pool — expected, like editing any
              workload's image. lookup() is empty under `helm template`, so a builtin
              pool's golden must be mocked in unit tests. */}}
-      {{- /* Use hasKey, not truthiness: builtin/factory may be present but empty
-             ({} means "clone / import with the pool's talos.* defaults"), and Go
-             templates treat an empty map as false. */}}
-      {{- $img := .group.image | default dict }}
-      {{- if and (hasKey $img "builtin") (hasKey $img "factory") }}{{- fail (printf "nodeGroup %q: set only one of image.builtin or image.factory" .groupName) }}{{- end }}
-      {{- $reqSchematicID := $.Values.talos.schematicID }}
-      {{- $reqVersion := $.Values.talos.version }}
-      {{- $reqFactoryURL := $.Values.talos.imageFactoryURL }}
-      {{- $useClone := false }}
-      {{- if hasKey $img "builtin" }}
-      {{-   $builtin := $img.builtin | default dict }}
-      {{-   $useClone = true }}
-      {{-   $reqSchematicID = $builtin.schematicID | default $.Values.talos.schematicID }}
-      {{-   $reqVersion = $builtin.version | default $.Values.talos.version }}
-      {{- else if hasKey $img "factory" }}
-      {{-   $factory := $img.factory | default dict }}
-      {{-   $reqSchematicID = $factory.schematicID | default $.Values.talos.schematicID }}
-      {{-   $reqVersion = $factory.version | default $.Values.talos.version }}
-      {{-   $reqFactoryURL = $factory.imageFactoryURL | default $.Values.talos.imageFactoryURL }}
-      {{- end }}
-      {{- /* Tenant-controlled strings, validated before they are interpolated.
-             Reviewed as [MINOR] on cozystack/cozystack#3294: schematicID, version
-             and imageFactoryURL land unquoted in the KubevirtMachineTemplate
-             below, so a value carrying a newline or a YAML metacharacter injects
-             keys into this pool's own KMT; nindent keeps the blast radius inside
-             the pool, but the value should never get that far. The schema types
-             all three as a bare string and cannot narrow them -- the pinned
-             cozyvalues-gen derives `pattern` from the value TYPE (quantity) and
-             has no annotation for a custom one -- so the check lives here, which
-             is where this chart already validates the kubelet reservation fields
-             for the same class of hazard (see the INVARIANT note in
-             templates/talos-reconcile-job.yaml).
-
-             The resolved values are checked, not just the overridden ones: an
-             override and the pool default reach the same interpolation, and a
-             guard on one of the two paths is the asymmetry this file just removed
-             from the support matrix. The patterns accept every form the chart
-             ships and every form a Talos Image Factory produces -- a 64-character
-             hex schematic, a vN.N.N release, an http(s) URL -- and reject the
-             bytes that would break out of a YAML scalar. */}}
-      {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" ($reqSchematicID | toString)) }}
-      {{-   fail (printf "nodeGroup %q: Talos schematicID %q is not a plain lowercase alphanumeric identifier. It is interpolated into the worker DataVolume name and the image URL, so it must carry no whitespace, path separators or YAML metacharacters." .groupName ($reqSchematicID | toString)) }}
-      {{- end }}
-      {{- if not (regexMatch "^v[0-9]+\\.[0-9]+(\\.[0-9]+)?(-[0-9a-z.]+)?$" ($reqVersion | toString)) }}
-      {{-   fail (printf "nodeGroup %q: Talos version %q is not a vMAJOR.MINOR.PATCH release. It is interpolated into the worker DataVolume name and the image URL, so it must carry no whitespace or YAML metacharacters." .groupName ($reqVersion | toString)) }}
-      {{- end }}
-      {{- if not (regexMatch "^https?://[A-Za-z0-9._~:/?#\\[\\]@!&'()*+,;=%-]+$" ($reqFactoryURL | toString)) }}
-      {{-   fail (printf "nodeGroup %q: imageFactoryURL %q is not a plain http(s) URL. It is interpolated into the worker DataVolume source URL, so it must carry no whitespace, backtick, dollar sign or YAML metacharacters." .groupName ($reqFactoryURL | toString)) }}
-      {{- end }}
+      {{- $resolved := dict }}
+      {{- include "kubernetes-nodes.resolveOsImage" (dict
+            "osImage" .group.osImage
+            "talos" $.Values.talos
+            "out" $resolved
+            "groupName" .groupName) }}
+      {{- $reqSchematicID := $resolved.schematicID }}
+      {{- $reqVersion := $resolved.version }}
+      {{- $reqFactoryURL := $resolved.imageFactoryURL }}
+      {{- $useClone := $resolved.clone }}
       {{- /* The guard at the top of this file keys on .Values.talos.version. An
              image override moves the Talos release this pool actually boots and
              installs, so re-run the same matrix against the resolved version;
              without this a pool could keep a supported talos.version and still
              boot a Talos minor whose kubelet window excludes .Values.version,
              which is exactly the silently-broken pairing the guard exists to
-             refuse. No-op when image pins nothing, since the resolved version is
+             refuse. No-op when osImage pins nothing, since the resolved version is
              then the one already checked above. */}}
       {{- if ne ($reqVersion | toString) ($.Values.talos.version | toString) }}
       {{-   include "kubernetes-nodes.assertTalosSupportsKubernetes" (dict
               "talosVersion" $reqVersion
               "kubernetesVersion" $.Values.version
-              "remedy" (printf "nodeGroup %s reaches this Talos release through its image override, not through talos.version. Bump 'version', change the image version, or drop the override so the pool follows talos.version." .groupName)) }}
+              "remedy" (printf "nodeGroup %s reaches this Talos release through its osImage override, not through talos.version. Bump 'version', change the osImage version, or drop the override so the pool follows talos.version." .groupName)) }}
       {{- end }}
       {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($reqFactoryURL | trimSuffix "/") $reqSchematicID $reqVersion }}
       {{- $goldenName := printf "talos-worker-%s-%s" $reqSchematicID $reqVersion }}
@@ -169,16 +130,47 @@ spec:
              phase, StorageClass and size guards read fields of a golden that was
              found, so an empty lookup makes them no-ops. The absence guard below is
              the opposite: an empty lookup IS its failure condition. So a pool on
-             image.builtin cannot be rendered by anything that has no cluster to
+             osImage.builtin cannot be rendered by anything that has no cluster to
              read -- `helm template`, `helm lint`, a dashboard preview -- and its
              unit tests have to mock the golden through kubernetesProvider. That is
              the price of failing loudly instead of degrading into an HTTP import
              nobody asked for. */}}
       {{- if $useClone }}
+      {{- /* Has this pool already got a worker disk cloned from this golden?
+
+             The two guards below abort the ENTIRE KubernetesNodes HelmRelease —
+             every resource, not just the disk — and for a pool whose workers all
+             cloned months ago that price buys nothing: replica changes, kubelet
+             retuning and MachineHealthCheck timeouts have no stake in the golden,
+             and no CR edit is needed to trigger the abort, only the next periodic
+             reconcile. The comment below rejects exactly that blast radius for a
+             mid-import golden; applying the same reasoning to a golden that is
+             absent or Failed is what it costs to be consistent. Reviewed as
+             [MINOR] on cozystack/cozystack#3294.
+
+             So the loud failure stays where it is the only signal — a pool still
+             waiting for its first disk — and a pool that is past that point is
+             left to CDI, which reports a source it cannot clone on the pending
+             DataVolume of the worker that actually needs one.
+
+             CAPK names a worker disk disk-system-<clusterName>-<groupName>-<id>,
+             so the prefix scopes the answer to THIS pool: another pool cloning the
+             same golden says nothing about whether this one still needs it. */}}
+      {{-   $poolDiskPrefix := printf "disk-system-%s-%s-" .clusterName .groupName }}
+      {{-   $poolCloned := false }}
+      {{-   range (dig "items" (list) ((lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace "") | default dict)) }}
+      {{-     if and (hasPrefix $poolDiskPrefix (dig "metadata" "name" "" . | toString))
+                     (eq (dig "metadata" "annotations" "kubernetes-worker-image.cozystack.io/golden" "" . | toString) $goldenName)
+                     (eq (dig "status" "phase" "" . | toString) "Succeeded") }}
+      {{-       $poolCloned = true }}
+      {{-     end }}
+      {{-   end }}
       {{-   $goldenDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $goldenName }}
       {{-   if not $goldenDV }}
-      {{-     fail (printf "nodeGroup %q: image.builtin requested golden DataVolume %q not found in cozy-public — enable the cozystack.kubernetes-worker-image catalog via bundles.enabledPackages with a matching (schematicID, version) entry, or switch this pool to image.factory." .groupName $goldenName) }}
-      {{-   end }}
+      {{-     if not $poolCloned }}
+      {{-       fail (printf "nodeGroup %q: osImage.builtin requested golden DataVolume %q not found in cozy-public — enable the cozystack.kubernetes-worker-image catalog via bundles.enabledPackages with a matching (schematicID, version) entry, or switch this pool to osImage.factory." .groupName $goldenName) }}
+      {{-     end }}
+      {{-   else }}
       {{- /* Fail only on the golden's terminal failure phase, not on "not yet
              Succeeded". A golden mid-import is transient: CDI holds the worker
              DataVolume until the source is populated, which is the correct
@@ -191,31 +183,42 @@ spec:
              would make disk-system's source depend on cluster state, so the source —
              and with it the content-hashed KubevirtMachineTemplate name — would flip
              once the golden went Ready and roll every worker in the pool. */}}
-      {{-   $goldenPhase := dig "status" "phase" "" $goldenDV | toString }}
-      {{-   if eq $goldenPhase "Failed" }}
-      {{-     fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public failed to import (phase Failed) — cloning it would block this pool's workers indefinitely. Check the importer pod in cozy-public, then delete the DataVolume to retry the import." .groupName $goldenName) }}
-      {{-   end }}
+      {{-     $goldenPhase := dig "status" "phase" "" $goldenDV | toString }}
+      {{-     if and (eq $goldenPhase "Failed") (not $poolCloned) }}
+      {{-       fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public failed to import (phase Failed) — cloning it would block this pool's workers indefinitely. Check the importer pod in cozy-public, then delete the DataVolume to retry the import." .groupName $goldenName) }}
+      {{-     end }}
       {{- /* CDI takes the storage-layer CSI-clone path only when source and target
              share a StorageClass; across classes it silently falls back to a
              host-assisted copy over the pod network — exactly the per-worker
-             network transfer image.builtin exists to avoid (#3231). Reject the
-             case we can prove. Either side empty means "cluster default", which is
-             not resolvable at render time, so skip rather than guess. This rules
-             out the guaranteed-host-assisted case, not every one: a matching
+             network transfer osImage.builtin exists to avoid (#3231). Reject the
+             case we can prove. An empty class on either side means "the cluster
+             default", which is resolvable against a live cluster and is resolved
+             here: leaving it unresolved is what let the one corner that CANNOT be
+             a clone — a pool at storageClass "" whose golden is on an explicit
+             class — pass unchecked. With no cluster to read (helm template) both
+             stay empty and the comparison is skipped, as before. This rules out
+             the guaranteed-host-assisted case, not every one: a matching
              StorageClass still leaves the strategy to the CDI StorageProfile,
              which the worker DataVolume inherits. */}}
-      {{-   $workerSC := .group.storageClass | default $.Values.storageClass | toString }}
-      {{-   $goldenSC := dig "spec" "storage" "storageClassName" "" $goldenDV | toString }}
-      {{-   if and $workerSC $goldenSC (ne $workerSC $goldenSC) }}
-      {{-     fail (printf "nodeGroup %q: storageClass %q differs from golden image %q storageClass %q — CDI cannot CSI-clone across StorageClasses and would fall back to a host-assisted copy over the pod network. Set the kubernetes-worker-image catalog entry's storageClass to %q, or point this pool at %q, or switch this pool to image.factory." .groupName $workerSC $goldenName $goldenSC $workerSC $goldenSC) }}
-      {{-   end }}
-      {{-   $goldenStorage := dig "spec" "storage" "resources" "requests" "storage" "" $goldenDV }}
-      {{-   if $goldenStorage }}
-      {{-     $workerDisk := .group.diskSize | default "20Gi" | toString }}
-      {{-     $workerBytes := include "cozy-lib.resources.toFloat" $workerDisk | float64 }}
-      {{-     $goldenBytes := include "cozy-lib.resources.toFloat" ($goldenStorage | toString) | float64 }}
-      {{-     if lt $workerBytes $goldenBytes }}
-      {{-       fail (printf "nodeGroup %q: diskSize %s is smaller than golden image %q storage %s — a CDI clone target must be at least the source size. Raise diskSize to %s or larger." .groupName $workerDisk $goldenName ($goldenStorage | toString) ($goldenStorage | toString)) }}
+      {{-     $workerSC := .group.storageClass | default $.Values.storageClass | toString }}
+      {{-     $goldenSC := dig "spec" "storage" "storageClassName" "" $goldenDV | toString }}
+      {{-     $defaultSC := "" }}
+      {{-     if or (not $workerSC) (not $goldenSC) }}
+      {{-       $defaultSC = include "kubernetes-nodes.defaultStorageClassName" $ }}
+      {{-       if not $workerSC }}{{- $workerSC = $defaultSC }}{{- end }}
+      {{-       if not $goldenSC }}{{- $goldenSC = $defaultSC }}{{- end }}
+      {{-     end }}
+      {{-     if and $workerSC $goldenSC (ne $workerSC $goldenSC) }}
+      {{-       fail (printf "nodeGroup %q: storageClass %q differs from golden image %q storageClass %q — CDI cannot CSI-clone across StorageClasses and would fall back to a host-assisted copy over the pod network. An empty storageClass on either side resolves to the cluster default StorageClass %q. Set the kubernetes-worker-image catalog entry's storageClass to %q, or point this pool at %q, or switch this pool to osImage.factory." .groupName $workerSC $goldenName $goldenSC $defaultSC $workerSC $goldenSC) }}
+      {{-     end }}
+      {{-     $goldenStorage := dig "spec" "storage" "resources" "requests" "storage" "" $goldenDV }}
+      {{-     if $goldenStorage }}
+      {{-       $workerDisk := .group.diskSize | default "20Gi" | toString }}
+      {{-       $workerBytes := include "cozy-lib.resources.toFloat" $workerDisk | float64 }}
+      {{-       $goldenBytes := include "cozy-lib.resources.toFloat" ($goldenStorage | toString) | float64 }}
+      {{-       if lt $workerBytes $goldenBytes }}
+      {{-         fail (printf "nodeGroup %q: diskSize %s is smaller than golden image %q storage %s — a CDI clone target must be at least the source size. Raise diskSize to %s or larger." .groupName $workerDisk $goldenName ($goldenStorage | toString) ($goldenStorage | toString)) }}
+      {{-       end }}
       {{-     end }}
       {{-   end }}
       {{- end }}
@@ -264,7 +267,7 @@ spec:
           {{- else }}
             http:
               {{- /* Deliberately unquoted. This is the pre-feature render for a pool
-                     with `image` omitted, and the KubevirtMachineTemplate is named by
+                     with `osImage` omitted, and the KubevirtMachineTemplate is named by
                      a hash of its own content -- quoting the scalar changes those
                      bytes and rolls every live worker on upgrade. The components are
                      validated above instead, which is what makes an unquoted scalar

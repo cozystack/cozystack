@@ -1,7 +1,7 @@
 suite: per-pool worker image — in-guest upgrade installer
 
 # The talos-reconcile Job builds the pool's install.image from the pool's
-# resolved (schematicID, version) — image.builtin / image.factory, or the pool's
+# resolved (schematicID, version) — osImage.builtin / osImage.factory, or the pool's
 # talos.* when omitted — so an in-guest upgrade reinstalls the OS the pool
 # actually booted rather than flipping it back to the pool default.
 
@@ -30,7 +30,7 @@ set:
 tests:
   - it: install.image pins the pool's own schematicID/version
     set:
-      image:
+      osImage:
         factory:
           schematicID: deadbeef
           version: v1.14.0
@@ -49,7 +49,7 @@ tests:
 
   - it: install.image pins a builtin pool's schematicID/version
     set:
-      image:
+      osImage:
         builtin:
           schematicID: cafebabe
           version: v1.15.0

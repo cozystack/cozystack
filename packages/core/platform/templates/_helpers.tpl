@@ -30,10 +30,25 @@ spec:
 {{- include "cozystack.platform.package" (list $name "default" $root) }}
 {{ end }}
 
+{{- /*
+Optional counterpart of cozystack.platform.package: emits the Package only when
+the operator listed it in bundles.enabledPackages.
+
+Takes the same optional 4th argument, a components dict. Without it an optional
+package can carry no values at all -- the Package would name a variant and
+nothing else, and internal/operator/package_reconciler.go takes a component's
+HelmRelease values from the Package alone -- so every knob such a chart
+documents would be unreachable by any supported path. Empty components emit no
+block, keeping the rendered Package identical for callers that pass none.
+*/ -}}
 {{- define "cozystack.platform.package.optional" -}}
 {{- $name := index . 0 -}}
 {{- $variant := default "default" (index . 1) -}}
 {{- $root := default $ (index . 2) -}}
+{{- $components := dict -}}
+{{- if gt (len .) 3 -}}
+{{- $components = index . 3 -}}
+{{- end -}}
 {{- $disabled := default (list) $root.Values.bundles.disabledPackages -}}
 {{- $enabled := default (list) $root.Values.bundles.enabledPackages -}}
 {{- if and (has $name $enabled) (not (has $name $disabled)) -}}
@@ -46,13 +61,21 @@ metadata:
     helm.sh/resource-policy: keep
 spec:
   variant: {{ $variant }}
+{{- if $components }}
+  components:
+{{ toYaml $components | indent 4 }}
+{{- end }}
 {{- end }}
 {{ end }}
 
 {{- define "cozystack.platform.package.optional.default" -}}
 {{- $name := index . 0 -}}
 {{- $root := index . 1 -}}
-{{- include "cozystack.platform.package.optional" (list $name "default" $root) }}
+{{- $components := dict -}}
+{{- if gt (len .) 2 -}}
+{{- $components = index . 2 -}}
+{{- end -}}
+{{- include "cozystack.platform.package.optional" (list $name "default" $root $components) }}
 {{ end }}
 
 {{/*

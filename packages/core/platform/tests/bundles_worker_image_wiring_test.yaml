@@ -1,0 +1,118 @@
+suite: bundles.iaas kubernetesWorkerImage → kubernetes-worker-image wiring
+templates:
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # Reviewed as [MAJOR] on cozystack/cozystack#3294. The catalog documents four
+  # operator knobs, and cozystack.platform.package.optional used to emit a
+  # Package carrying a variant and nothing else -- so an air-gapped cluster
+  # could not repoint the single image import, and a cluster whose worker pools
+  # are not on `replicated` could not move the golden onto their class, which is
+  # the exact fix the pool-side StorageClass guard tells them to apply. These
+  # cases pin the forwarding, and the first one pins that an unset key still
+  # emits no components block at all.
+  - it: emits cozystack.kubernetes-worker-image without a components block when the key is unset
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.kubernetes-worker-image
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubernetes-worker-image
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: spec.variant
+          value: default
+      - notExists:
+          path: spec.components
+
+  - it: forwards kubernetesWorkerImage overrides into the component values
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.kubernetes-worker-image
+      kubernetesWorkerImage:
+        imageFactoryURL: https://factory.internal.example.com
+        storageClass: local
+        storage: 8Gi
+        images:
+          - schematicID: abc123
+            version: v1.13.6
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubernetes-worker-image
+    asserts:
+      - equal:
+          path: spec.components.kubernetes-worker-image.values.imageFactoryURL
+          value: https://factory.internal.example.com
+      - equal:
+          path: spec.components.kubernetes-worker-image.values.storageClass
+          value: local
+      - equal:
+          path: spec.components.kubernetes-worker-image.values.storage
+          value: 8Gi
+      - equal:
+          path: spec.components.kubernetes-worker-image.values.images[0].schematicID
+          value: abc123
+      - equal:
+          path: spec.components.kubernetes-worker-image.values.images[0].version
+          value: v1.13.6
+
+  # The knob is inert without the opt-in, and must not resurrect the package on
+  # its own: an operator who sets the values but forgets enabledPackages gets no
+  # Package, exactly as before.
+  - it: does not emit the package when the values are set but the package is not enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      kubernetesWorkerImage:
+        storageClass: local
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.kubernetes-worker-image
+          any: true
+        not: true
+
+  # vm-default-images shares the helper. Adding a fourth argument to it must not
+  # start emitting a components block on every other optional package.
+  - it: leaves other optional packages without a components block
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.vm-default-images
+          - cozystack.kubernetes-worker-image
+      kubernetesWorkerImage:
+        storageClass: local
+    documentSelector:
+      path: metadata.name
+      value: cozystack.vm-default-images
+    asserts:
+      - notExists:
+          path: spec.components

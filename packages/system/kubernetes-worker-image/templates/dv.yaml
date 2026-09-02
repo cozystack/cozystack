@@ -1,7 +1,63 @@
+{{- /* Names already rendered in this release, so a repeated (schematicID, version)
+       is refused rather than silently collapsing. Helm does not dedupe manifests
+       within a release: two entries resolving to one DataVolume name both reach
+       the API in list order, the second wins, and the golden every pinned pool
+       clones is whichever entry happens to sit later in the file. The likely
+       mistake is a copy-pasted entry meant to add a flavor on another class with
+       the version left unbumped, and it produces no warning at render or apply.
+       Reviewed as [MINOR] on cozystack/cozystack#3294. */}}
+{{- $rendered := dict }}
 {{- range .Values.images }}
 {{- $schematicID := required "A valid .schematicID entry is required for each images[] entry!" .schematicID }}
 {{- $version := required "A valid .version entry is required for each images[] entry!" .version }}
 {{- $factory := .imageFactoryURL | default $.Values.imageFactoryURL | trimSuffix "/" }}
+{{- /* The same three patterns packages/apps/kubernetes-nodes/templates/nodegroup.yaml
+       applies to the values a pool resolves. Both sides build the same DataVolume
+       name from the same two fields, so a catalog that checks only presence can
+       admit an entry no pool will ever be able to reference: an uppercase schematic
+       or a version without the leading `v` either renders a name the API server
+       rejects outright, or imports a golden the pool-side regex refuses to
+       reconstruct -- and neither outcome says which of the two files is wrong.
+       Reviewed as [MINOR] on cozystack/cozystack#3294. */}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" ($schematicID | toString)) }}
+{{-   fail (printf "kubernetes-worker-image: images[] entry schematicID %q is not a plain lowercase alphanumeric identifier. It is interpolated into this golden's DataVolume name and image URL, and a worker pool reconstructs that same name to clone it." ($schematicID | toString)) }}
+{{- end }}
+{{- if not (regexMatch "^v[0-9]+\\.[0-9]+(\\.[0-9]+)?(-[0-9a-z.]+)?$" ($version | toString)) }}
+{{-   fail (printf "kubernetes-worker-image: images[] entry version %q is not a vMAJOR.MINOR.PATCH Talos release. It is interpolated into this golden's DataVolume name and image URL, and a worker pool reconstructs that same name to clone it." ($version | toString)) }}
+{{- end }}
+{{- if not (regexMatch "^https?://[A-Za-z0-9._~:/?#\\[\\]@!&'()*+,;=%-]+$" ($factory | toString)) }}
+{{-   fail (printf "kubernetes-worker-image: imageFactoryURL %q is not a plain http(s) URL. It is interpolated into this golden's DataVolume source URL." ($factory | toString)) }}
+{{- end }}
+{{- $name := printf "talos-worker-%s-%s" $schematicID $version }}
+{{- if hasKey $rendered $name }}
+{{-   fail (printf "kubernetes-worker-image: two images[] entries resolve to the same golden DataVolume %q. The name is keyed on (schematicID, version) alone, so a second entry would silently replace the first and every pool pinning it would clone whichever storage, StorageClass and source URL come last. Give the flavors distinct (schematicID, version) pairs, or drop the duplicate." $name) }}
+{{- end }}
+{{- $_ := set $rendered $name true }}
+{{- $url := printf "%s/image/%s/%s/openstack-amd64.raw.xz" $factory $schematicID $version }}
+{{- $storage := .storage | default $.Values.storage | default "6Gi" }}
+{{- $storageClass := .storageClass | default $.Values.storageClass }}
+{{- /* A DataVolume spec is not patchable in place, so editing storage, storageClass
+       or the source URL of an entry whose golden already exists produces a rejected
+       patch on the next HelmRelease upgrade -- an opaque failure whose only recovery
+       is deleting the golden, which is itself the deletion footgun values.yaml warns
+       about. Catch the edit here instead, where the message can name the entry and
+       the supported move. Raised across two review rounds on
+       cozystack/cozystack#3294; documenting the immutability was the first half, and
+       this is what makes the document enforceable. Inert with no cluster to read
+       (`helm template`, `helm lint`), like every other lookup in this repo. */}}
+{{- $live := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $name }}
+{{- if $live }}
+{{-   $liveURL := dig "spec" "source" "http" "url" "" $live | toString }}
+{{-   $liveStorage := dig "spec" "storage" "resources" "requests" "storage" "" $live | toString }}
+{{-   $liveStorageClass := dig "spec" "storage" "storageClassName" "" $live | toString }}
+{{-   $drift := list }}
+{{-   if and $liveURL (ne $liveURL ($url | toString)) }}{{- $drift = append $drift (printf "source URL %q -> %q" $liveURL $url) }}{{- end }}
+{{-   if and $liveStorage (ne $liveStorage ($storage | toString)) }}{{- $drift = append $drift (printf "storage %q -> %q" $liveStorage $storage) }}{{- end }}
+{{-   if and $liveStorageClass (ne $liveStorageClass ($storageClass | toString)) }}{{- $drift = append $drift (printf "storageClass %q -> %q" $liveStorageClass $storageClass) }}{{- end }}
+{{-   if $drift }}
+{{-     fail (printf "kubernetes-worker-image: images[] entry (%s, %s) changed after its golden DataVolume %q was created: %s. A DataVolume spec cannot be patched in place, so this upgrade would be rejected by the API server. Add a NEW entry with a different (schematicID, version), move the worker pools onto it, then retire the old one -- values.yaml carries the query that says which pools still pin this golden." $schematicID $version $name (join ", " $drift)) }}
+{{-   end }}
+{{- end }}
 ---
 apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
@@ -27,18 +83,18 @@ metadata:
     app.kubernetes.io/managed-by: cozystack
   # Deterministic name the kubernetes-nodes chart reconstructs to clone this golden
   # — keep in sync with packages/apps/kubernetes-nodes/templates/nodegroup.yaml.
-  name: {{ printf "talos-worker-%s-%s" $schematicID $version }}
+  name: {{ $name }}
   namespace: cozy-public
 spec:
   contentType: kubevirt
   source:
     http:
-      url: {{ printf "%s/image/%s/%s/openstack-amd64.raw.xz" $factory $schematicID $version | quote }}
+      url: {{ $url | quote }}
   storage:
     resources:
       requests:
-        storage: {{ .storage | default $.Values.storage | default "6Gi" | quote }}
-    {{- with .storageClass | default $.Values.storageClass }}
+        storage: {{ $storage | quote }}
+    {{- with $storageClass }}
     storageClassName: {{ . | quote }}
     {{- end }}
 {{- end }}
