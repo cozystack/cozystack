@@ -47,6 +47,75 @@ tests:
           path: spec.components.cloudflare-tunnel-gateway-controller.values.cloudflare-tunnel-gateway-controller.controller.clusterDomain
           value: example.local
 
+  # An empty override wins over the package's own cozy.local default and sends
+  # the vendored chart to its cluster.local fallback, so the empty value must
+  # not travel. The controller map around it still has to be rendered: a key
+  # this release rendered before and stops rendering is deleted from the live
+  # Package, and the operator's tunnelID is a sibling under the same path.
+  - it: carries no cluster domain but keeps the key path when the value is empty
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.cloudflare-tunnel-gateway-controller
+      networking:
+        clusterDomain: ""
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cloudflare-tunnel-gateway-controller
+    asserts:
+      - exists:
+          path: spec.components.cloudflare-tunnel-gateway-controller.values.cloudflare-tunnel-gateway-controller.controller
+      - exists:
+          path: spec.components.cloudflare-tunnel-gateway-controller.values.cloudflare-tunnel-gateway-controller.controller.clusterDomain
+        not: true
+
+  - it: carries no cluster domain but keeps the key path when the value is absent
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.cloudflare-tunnel-gateway-controller
+      networking:
+        clusterDomain: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cloudflare-tunnel-gateway-controller
+    asserts:
+      - exists:
+          path: spec.components.cloudflare-tunnel-gateway-controller.values.cloudflare-tunnel-gateway-controller.controller
+      - exists:
+          path: spec.components.cloudflare-tunnel-gateway-controller.values.cloudflare-tunnel-gateway-controller.controller.clusterDomain
+        not: true
+
+  # The two cases above give networking a body; this one takes the whole key
+  # away. `networking:` written with nothing under it is YAML null, and the
+  # two variant blocks higher in this template already guard for that, so the
+  # nil is reachable here too -- reaching it through the unguarded lookup was
+  # a render failure for the whole platform rather than for this package.
+  - it: still emits this package's Package CR when networking is absent
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.cloudflare-tunnel-gateway-controller
+      networking: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cloudflare-tunnel-gateway-controller
+    asserts:
+      - exists:
+          path: spec.components.cloudflare-tunnel-gateway-controller.values.cloudflare-tunnel-gateway-controller.controller
+      - exists:
+          path: spec.components.cloudflare-tunnel-gateway-controller.values.cloudflare-tunnel-gateway-controller.controller.clusterDomain
+        not: true
+
   - it: keeps the disabledPackages opt-out working
     set:
       bundles:

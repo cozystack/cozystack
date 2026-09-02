@@ -333,12 +333,26 @@ cozystack-platform HelmRelease never becomes Ready. */}}
        URL (its own fallback is cluster.local) and subchart values cannot read
        _cluster.cluster-domain, so networking.clusterDomain is threaded in through
        the Package's component values. The tunnel ID the operator sets on the
-       same Package (gatewayClassConfig.tunnelID) is a sibling key: helm-controller
-       applies Packages server-side (a release still on client-side apply patches
-       only the fields it renders) and the values block merges per key, so the two
-       owners do not overwrite each other. */ -}}
+       same Package (gatewayClassConfig.tunnelID) is a sibling key, and it
+       survives because helm-controller upgrades through Helm's own three-way
+       merge, which patches only the fields the release renders — a key that
+       appears in no rendered manifest is never touched. */ -}}
 {{- if has "cozystack.cloudflare-tunnel-gateway-controller" (default (list) .Values.bundles.enabledPackages) }}
-{{- $cfTunnelComponents := dict "cloudflare-tunnel-gateway-controller" (dict "values" (dict "cloudflare-tunnel-gateway-controller" (dict "controller" (dict "clusterDomain" .Values.networking.clusterDomain)))) -}}
+{{- /* The clusterDomain key is carried only when it holds a domain. An empty
+       value is still an override and beats the package's own cozy.local
+       default: the vendored chart emits --cluster-domain only for a non-empty
+       value and falls back to cluster.local in the proxy config-endpoint URL,
+       which resolves nowhere here and reports nothing.
+
+       The enclosing controller map is rendered either way. Dropping it would
+       remove a key this release rendered before, and the merge deletes such a
+       key from the live object — taking the operator's sibling tunnelID with
+       it if the path collapses far enough up. */ -}}
+{{- $cfTunnelController := dict -}}
+{{- with dig "clusterDomain" "" (default (dict) .Values.networking) }}
+{{- $cfTunnelController = dict "clusterDomain" . -}}
+{{- end }}
+{{- $cfTunnelComponents := dict "cloudflare-tunnel-gateway-controller" (dict "values" (dict "cloudflare-tunnel-gateway-controller" (dict "controller" $cfTunnelController))) -}}
 {{include "cozystack.platform.package" (list "cozystack.cloudflare-tunnel-gateway-controller" "default" $ $cfTunnelComponents) }}
 {{- end }}
 
