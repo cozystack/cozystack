@@ -55,7 +55,7 @@
 ## @value xlarge
 ## @value 2xlarge
 
-## @param {int} replicas - Number of Postgres replicas.
+## @param {int} replicas - Number of Postgres replicas. Under active autoscaling this is the resting/seed count (and the count restored on disable), not the live count — KEDA drives the live count. Lowering it below the live count, or disabling/dry-running while it sits below the live count, sheds the surplus replicas + PVCs; stage it to the live count first (suspend the HelmRelease and `kubectl scale` if needed). Must stay greater than `quorum.maxSyncReplicas`.
 replicas: 2
 
 ## @param {Resources} [resources] - Explicit CPU and memory configuration for each PostgreSQL replica. When omitted, the preset defined in `resourcesPreset` is applied.
@@ -133,7 +133,7 @@ postgresql:
 
 ## @typedef {struct} Quorum - Quorum configuration for synchronous replication.
 ## @field {int} minSyncReplicas - Minimum number of synchronous replicas required for commit.
-## @field {int} maxSyncReplicas - Maximum number of synchronous replicas allowed (must be less than total replicas).
+## @field {int} maxSyncReplicas - Maximum number of synchronous replicas allowed (must be less than total replicas). Under autoscaling it also sets the scale-down floor (the effective minimum is `max(minReplicas, maxSyncReplicas+1, 2)`); the chart fails to render if that floor exceeds `autoscaling.maxReplicas`.
 
 ## @param {Quorum} quorum - Quorum configuration for synchronous replication.
 quorum:
@@ -144,14 +144,15 @@ quorum:
 ## @section Autoscaling
 ##
 
-## @typedef {struct} Autoscaling - Horizontal autoscaling of read replicas via KEDA. When active, `replicas` is no longer declared statically — a KEDA ScaledObject drives the CNPG instance count from read load.
-## @field {bool} enabled - Enable horizontal autoscaling of read replicas. Requires the platform `keda` package to be enabled by an administrator first; the chart fails to render (rather than break the release) if KEDA is not installed.
+## @typedef {struct} Autoscaling - Horizontal autoscaling of read replicas via KEDA. When active, the CNPG instance count is SEEDED from `max(replicas, floor)` and then driven by a KEDA ScaledObject from read load; `replicas` becomes the resting/seed count (and the count restored on disable), not the live count, which KEDA owns via the `/scale` subresource.
+## @field {bool} enabled - Enable horizontal autoscaling of read replicas. Requires the platform `keda` package to be enabled by an administrator first; the chart fails to render (rather than break the release) if KEDA is not installed. Prerequisite: the queried vmselect must hold BOTH the CNPG metrics (cnpg_backends_total / container CPU) AND kube_pod_labels (kube-state-metrics). This holds for a tenant on the shared root monitoring stack (`monitoring: false`, both land in tenant-root). A tenant running its OWN Monitoring app (`monitoring: true`) has the CNPG metrics but not kube_pod_labels (KSM is root-only), so it must set `serverAddress` to a vmselect carrying both series or autoscaling never actuates.
+## @field {string} serverAddress - Override the Prometheus/vmselect URL the ScaledObject queries. Empty (default) derives `http://vmselect-shortterm.<monitoring-ns>.svc:8481/select/0/prometheus`. Set it when the derived vmselect does not hold both the CNPG metrics and kube_pod_labels (e.g. `monitoring: true` tenants, or a non-default `metricsStorages` name).
 ## @field {int} minReplicas - Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.
-## @field {int} maxReplicas - Maximum total instances. Must be >= minReplicas and >= the synchronous-quorum floor (maxSyncReplicas+1); the chart fails to render (rather than silently run an unbounded instance count) if the effective floor exceeds it - raise maxReplicas.
+## @field {int} maxReplicas - Maximum total instances. Must be >= minReplicas and >= the synchronous-quorum floor (maxSyncReplicas+1); the chart fails to render (rather than silently run an unbounded instance count) if the effective floor exceeds it - raise maxReplicas. HAZARD: lowering maxReplicas below the live count makes the HPA cut straight to the new maximum in one step (the current>max branch bypasses the scale-down pacing), shedding the surplus replicas + PVCs at once; to lower it deliberately, suspend the HelmRelease and pin the live count with `kubectl scale` first.
 ## @field {ReadMetric} metric - Read-load signal to scale on.
 ## @field {int} target - Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores). Dimensionless integer - a resource.Quantity here would accept `150m`, which PromQL reads as 150 minutes and KEDA cannot use as a threshold.
 ## @field {int} maxReplicationLagSeconds - Freeze scaling while replication lag exceeds this (seconds) and the primary is writing. 0 disables the brake. Default 0: the freeze branch has only been validated on a live cluster in its non-braking (pass-through) form, so the lag brake is opt-in until the braking path is exercised under load; set a positive value (e.g. 30) to enable it.
-## @field {bool} dryRun - Recommendation mode: keep the static count and render the ScaledObject with both scaling directions paused, so KEDA keeps the HPA and keeps serving its trigger metric but actuates neither way. Note both scaling policies are disabled, so the HPA's desiredReplicas is frozen to the current count - read the recommendation from the matching read-load dashboard panel for your metric (connections or CPU): desired = 1 + ceil(read load / target), clamped to [effectiveMin..maxReplicas] where effectiveMin = max(minReplicas, maxSyncReplicas+1, 2), not from the desired-replicas line. Like disabling, flipping a LIVE autoscaled cluster into dryRun re-renders instances from `replicas`; if `replicas` is below the live count, stage it to the live count first (see the enablement note) or the cluster sheds replicas down to max(replicas, floor). Permanent, unlike `transition`.
+## @field {bool} dryRun - Recommendation mode: keep the static count and render the ScaledObject with both scaling directions paused, so KEDA keeps the HPA and keeps serving its trigger metric but actuates neither way. Note both scaling policies are disabled, so the HPA's desiredReplicas is frozen to the current count - read the recommendation from the matching read-load dashboard panel for your metric (connections or CPU): desired = 1 + ceil(read load / target), clamped to [effectiveMin..maxReplicas] where effectiveMin = max(minReplicas, maxSyncReplicas+1, 2), not from the desired-replicas line. Like disabling, flipping a LIVE autoscaled cluster into dryRun re-renders `instances: replicas` (the raw static value, which can be below the autoscaling floor); if `replicas` is below the live count, stage it to the live count first (see the enablement note) or the cluster sheds down to `replicas`. No shed occurs when the rendered value is unchanged (replicas already equals the active seed) — client-side merge is then a no-op and the live count is preserved. Permanent, unlike `transition`.
 ## @field {bool} transition - Migration phase 1: render `.spec.instances` from `replicas` (which the operator stages to the current live count) AND pause the ScaledObject in both directions, so KEDA stands up with its HPA present but not actuating. Flip to false (phase 2) to hand the runtime count to KEDA. Because the both-direction pause keeps the HPA (not the HPA-deleting full pause), KEDA is genuinely warm at phase 2 — no HPA recreate — and because the active seed is max(replicas, effectiveMin), phase 2 re-renders the same instance count phase 1 did (when `replicas` is staged at/above the floor), so the flip is a merge no-op with no dip. The HPA's scaleUp stabilization window still smooths the first actuation.
 
 ## @enum {string} ReadMetric - Read-load metric type.
@@ -161,14 +162,20 @@ quorum:
 ## Under active autoscaling the KEDA HPA owns the runtime count via the /scale
 ## subresource, and the chart SEEDS `.spec.instances` at a CONSTANT =
 ## max(.Values.replicas, effectiveMin), where effectiveMin = max(minReplicas,
-## maxSyncReplicas+1, 2). It re-renders that same constant every reconcile, so
-## helm-controller's client-side three-way merge (not SSA — confirmed:
-## internal/operator/package_reconciler.go buildHelmReleaseSpec sets no Upgrade.Force
-## and leaves driftDetection off) is a no-op on the field and never reverts KEDA's higher
-## live value written through /scale. Seeding (rather than omitting) is deliberate: an
-## omitted field defaults to 1, which the CNPG webhook rejects under quorum, and — worse
-## — deleting the field on an existing cluster's enable-upgrade collapses it to 1 and
-## decommissions every replica PVC before KEDA re-clones.
+## maxSyncReplicas+1, 2). It re-renders that same constant every reconcile, and the
+## postgres HelmRelease applies CLIENT-SIDE, under which helm-controller patches this CRD
+## from the previous-vs-new rendered manifest and does not consult live state, so the
+## unchanged constant yields no patch and never reverts KEDA's higher live value written
+## through /scale.
+## Client-side apply is forced per-app: the platform's helm-controller (v1.5.0) defaults
+## to server-side apply, which would force-own the rendered field and revert it, so the
+## postgres ApplicationDefinition carries `release.cozystack.io/helm-server-side-apply:
+## "false"` (threaded onto the HelmRelease in pkg/registry/apps/application/rest.go).
+## Seeding (rather than omitting) is deliberate: an omitted field defaults to 1, which the
+## CNPG webhook rejects under quorum, and — worse — under server-side apply the phase-2
+## omit prunes the field whenever KEDA has not yet written /scale (e.g. a cluster idle at
+## its floor), collapsing it to 1 and decommissioning every replica PVC (see community
+## design proposal §Upgrade "Implementation update 2026-09-02"; validated live on dev9).
 ## Seeding max(replicas, effectiveMin) — rather than effectiveMin alone — keeps the active
 ## branch equal to the disabled/dryRun/transition branch (which renders `instances:
 ## replicas`) whenever `replicas` sits at or above the floor, so enabling, dry-running, or
@@ -200,6 +207,7 @@ quorum:
 ## @param {Autoscaling} autoscaling - Read-replica autoscaling configuration.
 autoscaling:
   enabled: false
+  serverAddress: ""
   minReplicas: 2
   maxReplicas: 6
   metric: ReadConnections

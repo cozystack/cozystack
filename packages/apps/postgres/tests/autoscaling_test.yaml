@@ -196,6 +196,26 @@ tests:
           path: spec.triggers[0].metadata.query
           pattern: or \(vector\(0\) and on\(\) \(count\(kube_pod_labels
 
+  - it: honors an explicit autoscaling.serverAddress override (own-monitoring tenants)
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        serverAddress: http://custom-vmselect.example.svc:8481/select/0/prometheus
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      # A tenant whose derived vmselect lacks kube_pod_labels (monitoring: true) points
+      # serverAddress at one that holds both series; the override wins over the derived
+      # per-tenant address.
+      - equal:
+          path: spec.triggers[0].metadata.serverAddress
+          value: http://custom-vmselect.example.svc:8481/select/0/prometheus
+
   - it: fails closed when the quorum floor exceeds maxReplicas rather than silently running an unbounded count
     templates:
       - templates/scaledobject.yaml

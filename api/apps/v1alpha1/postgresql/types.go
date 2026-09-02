@@ -18,7 +18,7 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Number of Postgres replicas.
+	// Number of Postgres replicas. Under active autoscaling this is the resting/seed count (and the count restored on disable), not the live count — KEDA drives the live count. Lowering it below the live count, or disabling/dry-running while it sits below the live count, sheds the surplus replicas + PVCs; stage it to the live count first (suspend the HelmRelease and `kubectl scale` if needed). Must stay greater than `quorum.maxSyncReplicas`.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
 	// Explicit CPU and memory configuration for each PostgreSQL replica. When omitted, the preset defined in `resourcesPreset` is applied.
@@ -67,13 +67,13 @@ type ConfigSpec struct {
 }
 
 type Autoscaling struct {
-	// Recommendation mode: keep the static count and render the ScaledObject with both scaling directions paused, so KEDA keeps the HPA and keeps serving its trigger metric but actuates neither way. Note both scaling policies are disabled, so the HPA's desiredReplicas is frozen to the current count - read the recommendation from the matching read-load dashboard panel for your metric (connections or CPU): desired = 1 + ceil(read load / target), clamped to [effectiveMin..maxReplicas] where effectiveMin = max(minReplicas, maxSyncReplicas+1, 2), not from the desired-replicas line. Like disabling, flipping a LIVE autoscaled cluster into dryRun re-renders instances from `replicas`; if `replicas` is below the live count, stage it to the live count first (see the enablement note) or the cluster sheds replicas down to max(replicas, floor). Permanent, unlike `transition`.
+	// Recommendation mode: keep the static count and render the ScaledObject with both scaling directions paused, so KEDA keeps the HPA and keeps serving its trigger metric but actuates neither way. Note both scaling policies are disabled, so the HPA's desiredReplicas is frozen to the current count - read the recommendation from the matching read-load dashboard panel for your metric (connections or CPU): desired = 1 + ceil(read load / target), clamped to [effectiveMin..maxReplicas] where effectiveMin = max(minReplicas, maxSyncReplicas+1, 2), not from the desired-replicas line. Like disabling, flipping a LIVE autoscaled cluster into dryRun re-renders `instances: replicas` (the raw static value, which can be below the autoscaling floor); if `replicas` is below the live count, stage it to the live count first (see the enablement note) or the cluster sheds down to `replicas`. No shed occurs when the rendered value is unchanged (replicas already equals the active seed) — client-side merge is then a no-op and the live count is preserved. Permanent, unlike `transition`.
 	// +kubebuilder:default:=false
 	DryRun bool `json:"dryRun"`
-	// Enable horizontal autoscaling of read replicas. Requires the platform `keda` package to be enabled by an administrator first; the chart fails to render (rather than break the release) if KEDA is not installed.
+	// Enable horizontal autoscaling of read replicas. Requires the platform `keda` package to be enabled by an administrator first; the chart fails to render (rather than break the release) if KEDA is not installed. Prerequisite: the queried vmselect must hold BOTH the CNPG metrics (cnpg_backends_total / container CPU) AND kube_pod_labels (kube-state-metrics). This holds for a tenant on the shared root monitoring stack (`monitoring: false`, both land in tenant-root). A tenant running its OWN Monitoring app (`monitoring: true`) has the CNPG metrics but not kube_pod_labels (KSM is root-only), so it must set `serverAddress` to a vmselect carrying both series or autoscaling never actuates.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// Maximum total instances. Must be >= minReplicas and >= the synchronous-quorum floor (maxSyncReplicas+1); the chart fails to render (rather than silently run an unbounded instance count) if the effective floor exceeds it - raise maxReplicas.
+	// Maximum total instances. Must be >= minReplicas and >= the synchronous-quorum floor (maxSyncReplicas+1); the chart fails to render (rather than silently run an unbounded instance count) if the effective floor exceeds it - raise maxReplicas. HAZARD: lowering maxReplicas below the live count makes the HPA cut straight to the new maximum in one step (the current>max branch bypasses the scale-down pacing), shedding the surplus replicas + PVCs at once; to lower it deliberately, suspend the HelmRelease and pin the live count with `kubectl scale` first.
 	// +kubebuilder:default:=6
 	MaxReplicas int `json:"maxReplicas"`
 	// Freeze scaling while replication lag exceeds this (seconds) and the primary is writing. 0 disables the brake. Default 0: the freeze branch has only been validated on a live cluster in its non-braking (pass-through) form, so the lag brake is opt-in until the braking path is exercised under load; set a positive value (e.g. 30) to enable it.
@@ -85,6 +85,9 @@ type Autoscaling struct {
 	// Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.
 	// +kubebuilder:default:=2
 	MinReplicas int `json:"minReplicas"`
+	// Override the Prometheus/vmselect URL the ScaledObject queries. Empty (default) derives `http://vmselect-shortterm.<monitoring-ns>.svc:8481/select/0/prometheus`. Set it when the derived vmselect does not hold both the CNPG metrics and kube_pod_labels (e.g. `monitoring: true` tenants, or a non-default `metricsStorages` name).
+	// +kubebuilder:default:=""
+	ServerAddress string `json:"serverAddress"`
 	// Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores). Dimensionless integer - a resource.Quantity here would accept `150m`, which PromQL reads as 150 minutes and KEDA cannot use as a threshold.
 	// +kubebuilder:default:=150
 	Target int `json:"target"`
@@ -174,7 +177,7 @@ type PostgreSQL struct {
 }
 
 type Quorum struct {
-	// Maximum number of synchronous replicas allowed (must be less than total replicas).
+	// Maximum number of synchronous replicas allowed (must be less than total replicas). Under autoscaling it also sets the scale-down floor (the effective minimum is `max(minReplicas, maxSyncReplicas+1, 2)`); the chart fails to render if that floor exceeds `autoscaling.maxReplicas`.
 	// +kubebuilder:default:=0
 	MaxSyncReplicas int `json:"maxSyncReplicas"`
 	// Minimum number of synchronous replicas required for commit.

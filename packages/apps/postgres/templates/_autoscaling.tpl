@@ -49,13 +49,27 @@ properties matter and both hold:
     the Cluster and a fresh enable lands at a valid count;
   - it equals .Values.replicas whenever replicas has been staged at/above the floor,
     so the else-branch (dryRun/transition/off, which renders instances: replicas) and
-    this active branch render the SAME value — the three-way merge is then a no-op
-    across an enable / dryRun / transition-phase-2 flip and the live count does not dip.
-Seeding effectiveMin alone (the old behavior) made the two branches differ, so a
+    this active branch render the SAME value — the client-side patch (previous-vs-new
+    render) is then empty across an enable / dryRun / transition-phase-2 flip and the
+    live count does not dip.
+Seeding effectiveMin alone (an earlier variant) made the two branches differ, so a
 transition phase-2 flip rebased a staged live count down to the bare floor, shedding
 replicas + PVCs the "warm hand-off" was supposed to preserve. Because the seed is a
-constant, it stays a merge no-op on reconcile and never reverts KEDA's higher live
-value written through /scale.
+constant, each reconcile renders the same value it rendered last time, so under
+client-side apply the patch is empty and KEDA's higher live value written through /scale
+is never reverted — helm-controller patches this CRD from the previous-vs-new rendered
+manifest and does not consult live state (it leaves Helm's threeWayMergeForUnstructured at
+the default). CAVEAT: this no-op holds only while the seed VALUE is unchanged between
+renders; editing replicas / minReplicas / quorum.maxSyncReplicas moves the seed, and the
+two-way patch then resets spec.instances to the new seed in one step (see the values.yaml
+@field notes on those keys). BUT the whole scheme holds only under CLIENT-SIDE apply. The
+platform's helm-controller (v1.5.0) defaults to server-side apply, which force-owns any
+rendered field and reverts it from KEDA's /scale value; so the postgres ApplicationDefinition
+forces client-side apply via release.cozystack.io/helm-server-side-apply: "false" (see the
+db.yaml seed comment + pkg/registry/apps/application/rest.go). An omit-under-active design
+was evaluated and rejected: under SSA the phase-2 handoff prunes spec.instances whenever
+KEDA has not yet written /scale (e.g. a cluster idle at its floor), collapsing it to 1 —
+see community design proposal §Upgrade "Implementation update (2026-09-02)".
 */}}
 {{- define "postgres.autoscaling.activeSeed" -}}
 {{- $replicas := int .Values.replicas -}}
@@ -85,7 +99,20 @@ MVP, scoped by the query's namespace matcher; the per-object address lets a
 tenant with an isolated monitoring stack point elsewhere later).
 */}}
 {{- define "postgres.autoscaling.serverAddress" -}}
+{{- /* An explicit autoscaling.serverAddress wins; otherwise derive the tenant's
+       shortterm vmselect. The derived address only works where the SAME vmselect holds
+       BOTH cnpg_backends_total (from the CNPG podMonitor) AND kube_pod_labels (from
+       kube-state-metrics) — true for a tenant using the shared root monitoring stack
+       (monitoring: false), where both land in tenant-root. A tenant running its OWN
+       Monitoring app (monitoring: true) has cnpg metrics in its vmselect but NOT
+       kube_pod_labels (KSM lives only in root), so the join is empty there; such a tenant
+       must set autoscaling.serverAddress to a vmselect that carries both series (or use
+       a non-default metricsStorages name), else the query never resolves. */ -}}
+{{- with .Values.autoscaling.serverAddress -}}
+{{- . -}}
+{{- else -}}
 {{- printf "http://vmselect-shortterm.%s.svc:8481/select/0/prometheus" (include "cozy-lib.ns-monitoring" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

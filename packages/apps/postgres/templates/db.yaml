@@ -18,13 +18,26 @@ spec:
          (3) seeding effectiveMin ALONE differs from the else-branch (instances:
          replicas), so a dryRun/transition flip would rebase a staged live count down to
          the bare floor. Seeding max(replicas, effectiveMin) equals the else-branch value
-         whenever replicas is staged at/above the floor, so those flips are a merge no-op
-         and the live count does not dip; it still never undercuts the quorum floor.
-         Because the seed is constant, the merge is a no-op on reconcile (it never
-         reverts KEDA's higher live value). This relies on helm-controller's client-side
-         3-way merge (not SSA), confirmed in internal/operator/package_reconciler.go
-         buildHelmReleaseSpec (no Upgrade.Force, driftDetection off). (Go-template
-         comment, stripped at render.) */}}
+         whenever replicas is staged at/above the floor, so those flips render the same
+         value and the live count does not dip; it still never undercuts the quorum floor.
+         Because the seed is constant, each reconcile renders the value it rendered last
+         time, so the client-side patch is empty and never reverts KEDA's higher live
+         value. This holds ONLY under client-side apply, where helm-controller patches
+         this CRD from the previous-vs-new rendered manifest and does not consult live
+         state (it leaves Helm's threeWayMergeForUnstructured at the default): the
+         platform's helm-controller (v1.5.0) defaults to SERVER-SIDE
+         apply, which force-owns every rendered field and would revert spec.instances from
+         KEDA's live /scale value on every reconcile. (Editing replicas / minReplicas /
+         quorum.maxSyncReplicas moves the constant, so that one reconcile DOES patch
+         spec.instances to the new seed — a documented floor-change caveat, see values.yaml.)
+         The postgres ApplicationDefinition
+         therefore forces client-side apply via the annotation
+         release.cozystack.io/helm-server-side-apply: "false"
+         (packages/system/postgres-rd/cozyrds/postgres.yaml), threaded onto the tenant
+         HelmRelease's Install/Upgrade.ServerSideApply in
+         pkg/registry/apps/application/rest.go (convertApplicationToHelmRelease) and
+         guarded by TestConvertApplicationToHelmRelease_ServerSideApplyOverride.
+         (Go-template comment, stripped at render.) */}}
   instances: {{ include "postgres.autoscaling.activeSeed" . }}
   {{- else }}
   {{- /* Static-count path (autoscaling off / dryRun / transition), which renders
@@ -75,10 +88,14 @@ spec:
         spec.plugins to reference it at first BackupJob time, using field
         manager "cozystack-cnpg-backup-driver" with ForceOwnership (see
         internal/backupcontroller/cnpgstrategy_controller.go
-        applyClusterPluginBackup). SSA semantics mean the chart's Helm
-        field manager never owns spec.plugins, so a subsequent Flux
-        re-render of this chart leaves the driver's patch intact — no
-        tug-of-war on the live Cluster.
+        applyClusterPluginBackup). The postgres HelmRelease is applied
+        CLIENT-SIDE (release.cozystack.io/helm-server-side-apply: "false",
+        for the autoscaler seed invariant), and Helm's client-side patch
+        only diffs fields the chart RENDERS (previous-vs-new manifest);
+        since the chart never renders spec.plugins under useSystemBucket, a
+        subsequent Flux re-render leaves the driver's SSA+ForceOwnership
+        patch intact — no tug-of-war on the live Cluster (the two apply on
+        disjoint field sets).
         Coordinates come from a single backupStorage values block in
         the backupstrategy-controller chart. This eliminates the
         endpoint-duplication failure mode (an operator switching the
@@ -274,11 +291,15 @@ metadata:
     workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
 spec:
   {{- /* Under active autoscaling the expected-replica count tracks the quorum FLOOR
-         (effectiveMin), not KEDA's live autoscaled target, which is unknowable at
-         render time. Consequence: between the floor and the live desired count the
-         monitor will not flag under-provisioning. Health is still sound because
-         minReplicas: 1 gates actual availability; this only affects the "expected"
-         figure. */}}
+         (effectiveMin), NOT the seeded spec.instances (activeSeed = max(replicas,
+         effectiveMin)) and not KEDA's live autoscaled target. This is deliberate: the
+         seed is only the starting count; KEDA owns the runtime count via /scale and
+         legitimately scales DOWN to effectiveMin under low load. Expecting activeSeed
+         (which can exceed effectiveMin when replicas > floor) would false-flag
+         under-provisioning every time KEDA idles the cluster to its floor. effectiveMin
+         is the true minimum KEDA never goes below, so actual >= expected always holds and
+         the monitor never false-alarms. Between the floor and the live desired count it
+         does not flag under-provisioning; health is still gated by minReplicas: 1. */}}
   replicas: {{ if $autoscaling }}{{ include "postgres.autoscaling.effectiveMin" . }}{{ else }}{{ .Values.replicas }}{{ end }}
   minReplicas: 1
   kind: postgres
