@@ -3,11 +3,12 @@ kind: ApplicationDefinition
 metadata:
   name: postgres
   annotations:
-    # Force client-side (three-way-merge) Helm apply for every Postgres HelmRelease.
+    # Force client-side (two-way) Helm apply for every Postgres HelmRelease.
     # helm-controller v1.5.0 defaults to server-side apply, which force-owns every
     # rendered field and would revert spec.instances from KEDA's live /scale value on
-    # every reconcile, collapsing an autoscaled cluster. Client-side apply makes the
-    # chart's constant instances seed a merge no-op, so KEDA's value survives.
+    # every reconcile, collapsing an autoscaled cluster. Client-side apply diffs the
+    # previous vs new rendered manifest and does not consult live state, so the chart's
+    # constant instances seed is a no-op and KEDA's value survives.
     release.cozystack.io/helm-server-side-apply: "false"
 spec:
   application:
