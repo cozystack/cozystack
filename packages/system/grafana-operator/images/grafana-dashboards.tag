@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/grafana-dashboards:v1.6.0@sha256:cb22416b34d4385e4df58314de390920af805c03358fe00734c8fa44ba505fe9
+ghcr.io/cozystack/cozystack/grafana-dashboards:v1.7.0-alpha.1@sha256:41a87524e84624cd5b816f7539d30cd5ec9d73d1899b024481cd447a3381b87c

@@ -13,7 +13,7 @@ migrations:
   # below therefore lags targetVersion in-tree by design; run-migrations.sh
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
-  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
+  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.7.0-alpha.1@sha256:df5cd1e176a0013dce8499441deca023523a8805d2f310d30dbd31dca5bdec29
   targetVersion: 57
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
@@ -139,7 +139,6 @@ networking:
   # the child Package cozystack.multus directly is reverted by the platform
   # reconcile.
   # stageCniPlugins: true
-
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"
