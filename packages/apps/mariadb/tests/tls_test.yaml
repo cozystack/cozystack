@@ -1041,69 +1041,82 @@ tests:
             readOnly: true
 
   # -------------------------------------------------------------------
-  # CA publication contract. The chart owns the cert-manager chain, so it
-  # labels the CA Secret itself. The labels mark the key-bearing CA Secret as
-  # the source for a key-free projection published to the tenant; the tenant
-  # never reads this Secret directly. Only the CA carries the labels — the
-  # leaf Secret holds the server private key and must never be published.
-  # -------------------------------------------------------------------
-  # The trust anchor is published from the operator's key-free ca-bundle via
-  # the chart's own TenantProjection (tenant-projection.yaml), so neither
-  # cert-manager Secret may be marked as a publication source. A publish label
-  # here would create a second path, and it would run right next to the CA
-  # private key.
-  - it: "no cert-manager Secret is marked as a CA publication source"
+  # Tenant read path. The trust anchor reaches the tenant as a key-free
+  # projection, never as one of the Secrets below: tenant-projection.yaml
+  # declares a CACert projection of the operator's <release>-ca-bundle, the
+  # extraction controller writes the anchor from it and stamps
+  # internal.cozystack.io/tenant-ca, and the ApplicationDefinition's
+  # secrets.include selects on that label. That selector carries no name
+  # constraint, so the label rather than the object's name is what decides
+  # tenant visibility, and neither key-bearing cert-manager Secret may carry
+  # it — nor internal.cozystack.io/tenantresource, which is what tenantsecrets
+  # actually serves on. Exclude wins over include and the
+  # ApplicationDefinition names -ca-tls and -tls there, so exclude-by-name is
+  # the backstop behind these assertions, not a substitute for them.
+  #
+  # Selected by the Secret each Certificate writes rather than by position: a
+  # documentIndex would follow the slot, so reordering this template would let
+  # a labelled key-bearing Certificate slide out from under the assertion and
+  # pass green. metadata.name cannot serve here — the CA Certificate and the CA
+  # Issuer share the name <release>-ca — so the kind is pinned separately.
+  - it: "the key-bearing CA Secret is never marked tenant-readable"
     templates:
       - templates/certmanager.yaml
     set:
       tls:
         issuer: cert-manager
+    documentSelector:
+      path: spec.secretName
+      value: my-mariadb-ca-tls
     asserts:
+      - isKind:
+          of: Certificate
       - equal:
           path: spec.isCA
           value: true
-        documentIndex: 1
       - notExists:
-          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
-        documentIndex: 1
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
       - notExists:
-          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
-        documentIndex: 1
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
+
+  # The leaf Secret holds the server private key, and rotationPolicy: Always
+  # replaces that key on every renewal, so it is never a publication source
+  # under any issuer.
+  - it: "the key-bearing leaf Secret is never marked tenant-readable"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        issuer: cert-manager
+    documentSelector:
+      path: spec.secretName
+      value: my-mariadb-tls
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.isCA
+          value: false
       - notExists:
-          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
-        documentIndex: 3
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
 
   # The leaf must present a non-empty Subject CN for clients that still verify
   # against it rather than the SAN list.
   - it: "leaf Certificate sets a commonName"
     templates:
       - templates/certmanager.yaml
-    documentIndex: 3
     set:
       tls:
         issuer: cert-manager
+    documentSelector:
+      path: spec.secretName
+      value: my-mariadb-tls
     asserts:
       - equal:
           path: spec.commonName
           value: my-mariadb
-
-  - it: "leaf Certificate is never labelled for CA publication"
-    templates:
-      - templates/certmanager.yaml
-    documentIndex: 3
-    set:
-      tls:
-        issuer: cert-manager
-    asserts:
-      - equal:
-          path: spec.isCA
-          value: false
-      # The leaf carries the operator watch label but must never be marked as a
-      # publication source: its Secret holds the server private key.
-      - notExists:
-          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
-      - notExists:
-          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
 
   # Both Secrets are referenced by the MariaDB CR (serverCASecretRef /
   # serverCertSecretRef), and the operator gates those watches on this label.
@@ -1122,10 +1135,11 @@ tests:
           path: spec.secretTemplate.labels["k8s.mariadb.com/watch"]
         documentIndex: 3
 
-  # The publication labels are rendered inside the cert-manager gate, so under
-  # the operator issuer the chain does not exist at all and nothing is marked
-  # for publication.
-  - it: "no CA publication labels are rendered under the operator issuer"
+  # The whole cert-manager chain is gated on the issuer, so under the operator
+  # issuer the chart renders no Certificate at all and there is no document
+  # left that could carry a tenant-read label. Zero documents is the entire
+  # statement this case can make.
+  - it: "certmanager.yaml renders no documents when tls.issuer=operator and external is unset"
     templates:
       - templates/certmanager.yaml
     set:
