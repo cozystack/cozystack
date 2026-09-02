@@ -68,6 +68,16 @@ tests:
       - contains:
           path: rules[3].resourceNames
           content: otel-traces
+      # The Role must whitelist each WorkloadMonitor by its real name. Guard the
+      # alertmanager entry, which shipped misspelled ("alermanager") so the
+      # alertmanager WorkloadMonitor was silently not RBAC-covered for the
+      # dashboard — a defect in the exact resourceNames list this PR edits.
+      - contains:
+          path: rules[3].resourceNames
+          content: alertmanager
+      - notContains:
+          path: rules[3].resourceNames
+          content: alermanager
 
   # Absence is asserted on the resourcemap Role (a single deterministic document)
   # via notContains rather than on workloadmonitors.yaml: that template emits a
