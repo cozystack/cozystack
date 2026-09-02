@@ -473,6 +473,13 @@ tests:
       - equal:
           path: spec.privateKey.rotationPolicy
           value: Always
+      # Dropping this falls back to cert-manager's PKCS1 default, which for an ECDSA
+      # key is SEC1 — a format the JVM PEM loader behind the security plugin cannot
+      # read, so OpenSearch fails to start its HTTPS listener. Nothing else in this
+      # file would notice.
+      - equal:
+          path: spec.privateKey.encoding
+          value: PKCS8
 
   # The same positive pin for the dashboards leaf, which also establishes that index 4
   # IS that certificate — the negative guards below would otherwise pass vacuously
@@ -518,6 +525,9 @@ tests:
       - equal:
           path: spec.privateKey.rotationPolicy
           value: Always
+      - equal:
+          path: spec.privateKey.encoding
+          value: PKCS8
       # Never the API leaf's Secret: two Certificates writing one Secret would race,
       # and the CR points each service at its own name.
       - notEqual:
@@ -598,9 +608,9 @@ tests:
   # --- SAN coverage for Dashboards services ---
 
   # THE SAME THREE GUARDS THE API LEAF HAS. The Dashboards certificate inherits every
-  # hazard its sibling documents — a shared key across services, offering a server key
-  # to the CA-extraction controller as a CA source, and colliding with a name the
-  # operator generates into — so it has to inherit the assertions too.
+  # hazard its sibling documents — a shared key across services, a tenant-visible label
+  # on a Secret that holds a server key, and colliding with a name the operator
+  # generates into — so it has to inherit the assertions too.
   - it: keeps the dashboards cert from carrying any API name
     set:
       tls:
@@ -631,13 +641,20 @@ tests:
           path: spec.dnsNames
           content: os-test.example.cozy.local
 
-  - it: never offers the dashboards server key as a CA source
+  # Stronger than the two label guards above, which name the two labels that reach a
+  # tenant: this says the chart writes nothing onto that Secret at all. It is also
+  # what keeps cert-manager's own annotations intact — the operator only finds the CA
+  # key because cert-manager.io/issuer-kind is on the Secret, and a secretTemplate
+  # setting annotations replaces that map.
+  - it: stamps nothing at all onto the dashboards leaf Secret
     set:
       tls:
         enabled: true
       dashboards:
         enabled: true
-    documentIndex: 4
+    documentSelector:
+      path: spec.secretName
+      value: os-test-dashboards-server
     asserts:
       - notExists:
           path: spec.secretTemplate

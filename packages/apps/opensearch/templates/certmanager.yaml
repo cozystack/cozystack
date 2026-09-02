@@ -183,6 +183,14 @@ spec:
     - {{ printf "%s.%s" $name $extHost }}
     {{- end }}
   privateKey:
+    # PKCS#8, not cert-manager's PKCS1 default. For an ECDSA key that default writes
+    # SEC1 ("BEGIN EC PRIVATE KEY"), and the reader here is a JVM: the operator mounts
+    # this key as plugins.security.ssl.http.pemkey_filepath and the security plugin
+    # hands the file to Netty, whose PEM loader builds a PKCS8EncodedKeySpec and tries
+    # RSA, DSA and EC against it. A SEC1 key fails all three, the HTTPS listener never
+    # starts, and the failure is a startup exception rather than anything the chart or
+    # the operator can report. RSA would not help — PKCS#1 fails the same loader.
+    encoding: PKCS8
     rotationPolicy: Always
     algorithm: ECDSA
     size: 256
@@ -232,6 +240,11 @@ spec:
     - {{ printf "%s-dashboards.%s" $name $extHost }}
     {{- end }}
   privateKey:
+    # Node reads this one and accepts SEC1, so the encoding is not forced here the way
+    # it is on the API leaf. It is set anyway: two leaves of one chain differing in key
+    # encoding is a difference nothing explains, and the next reader would have to
+    # re-derive which of the two is the constrained one.
+    encoding: PKCS8
     rotationPolicy: Always
     algorithm: ECDSA
     size: 256
