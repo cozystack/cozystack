@@ -162,8 +162,18 @@ spec:
              rather than degrading silently. And because a CDI clone target must be
              at least as large as its source, a worker diskSize below the golden's
              storage would fail the clone at runtime — reject it at render when the
-             golden's size is known (lookup is empty under `helm template`, so all
-             of these guards are no-ops there). */}}
+             golden's size is known.
+
+             What `lookup` returning nothing means differs by guard, and the
+             difference is worth knowing before running any of this offline. The
+             phase, StorageClass and size guards read fields of a golden that was
+             found, so an empty lookup makes them no-ops. The absence guard below is
+             the opposite: an empty lookup IS its failure condition. So a pool on
+             image.builtin cannot be rendered by anything that has no cluster to
+             read -- `helm template`, `helm lint`, a dashboard preview -- and its
+             unit tests have to mock the golden through kubernetesProvider. That is
+             the price of failing loudly instead of degrading into an HTTP import
+             nobody asked for. */}}
       {{- if $useClone }}
       {{-   $goldenDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $goldenName }}
       {{-   if not $goldenDV }}

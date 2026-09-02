@@ -70,7 +70,7 @@
 ## @param {string} imageFactoryURL - Default base URL of the Talos Image Factory serving the raw worker OS image (`<url>/image/<schematicID>/<version>/openstack-amd64.raw.xz`). Overridable per image. No trailing slash.
 imageFactoryURL: "https://factory.talos.dev"
 
-## @param {string} storageClass - Default StorageClass for the golden image(s). Must match the StorageClass of the worker disks that clone it: CDI cannot CSI-clone across StorageClasses and would silently fall back to a host-assisted copy over the pod network, so the tenant render rejects a mismatch outright. Must also be snapshot-capable (linstor ships the default VolumeSnapshotClass). Overridable per image.
+## @param {string} storageClass - Default StorageClass for the golden image(s). Must match the StorageClass of the worker disks that clone it: CDI cannot CSI-clone across StorageClasses and would silently fall back to a host-assisted copy over the pod network, so the tenant render rejects a mismatch outright. Overridable per image.
 storageClass: "replicated"
 
 ## @param {quantity} storage - Default storage size allocated for each golden image. Must be >= the imported raw image virtual size and <= the smallest worker diskSize that clones it. The Talos v1.13.x openstack raw is ~4.15 GiB, so 6Gi leaves headroom. Overridable per image, but only when the entry is added: a DataVolume spec cannot be patched in place, so raising this on an entry whose golden already exists is rejected on the next upgrade — a Talos version whose raw outgrows it needs a new `images[]` entry, which it gets anyway since the name is keyed on the version.

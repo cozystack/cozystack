@@ -4642,12 +4642,22 @@ YAML
   # The kubernetes-worker-image catalog imports the golden Talos worker image into
   # cozy-public once; the md0 pool below clones it (image.builtin), which is what
   # gives the clone path end-to-end coverage rather than unit coverage alone.
-  # Wait for that one import to finish here: a factory stall then surfaces as a
-  # clear, self-contained failure with the factory in the message, instead of an
-  # opaque node-join timeout downstream, and the KubernetesNodes render (which
-  # fails when the golden is absent) is guaranteed a created source. The catalog
-  # HR is already Ready (install gate), so this waits only for the import phase to
-  # reach Succeeded.
+  # Wait for that one import to finish here, so a factory stall stops the run at
+  # the download instead of ten minutes later as an opaque node-join timeout, and
+  # so the KubernetesNodes render -- which fails when the golden is absent -- is
+  # guaranteed a created source to find.
+  #
+  # `kubectl wait` says only "timed out waiting for the condition on
+  # datavolumes/<name>" when it expires, which names neither the URL nor what the
+  # importer was getting back, so the describe below is what actually carries the
+  # finding: CDI writes the importer's HTTP error and the source URL into the
+  # DataVolume's Running condition message. Without it this step would report a
+  # stall as legibly as the node-join timeout it exists to replace.
+  #
+  # The 12m ceiling is the one here. Whether the catalog HelmRelease's own
+  # readiness gate at install time already covers a slow import depends on
+  # helm-controller treating a DataVolume as a waitable kind, which is not
+  # something this script can assume, so it does not lean on it.
   echo "--- waiting for the golden Talos worker image(s) in cozy-public to import ---"
   # Capture the DataVolume list inside the until condition and reuse it for the
   # wait, so a transient get between "exists" and "wait" cannot skip the import
@@ -4658,7 +4668,12 @@ YAML
     done
     for dv in $dvs; do
       echo "waiting for $dv import (phase=Succeeded)..."
-      kubectl -n cozy-public wait "$dv" --for=jsonpath="{.status.phase}"=Succeeded --timeout=10m
+      if ! kubectl -n cozy-public wait "$dv" --for=jsonpath="{.status.phase}"=Succeeded --timeout=10m; then
+        echo "=== golden import did not finish: $dv ==="
+        kubectl -n cozy-public describe "$dv" || true
+        kubectl -n cozy-public logs -l cdi.kubevirt.io=importer --tail=50 --all-containers || true
+        exit 1
+      fi
     done'
 
   kubectl apply -f - <<EOF

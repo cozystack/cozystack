@@ -134,7 +134,7 @@ type Talos struct {
 	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
 	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 	SchematicID string `json:"schematicID"`
-	// Default Talos release for this pool's worker OS image and in-guest installer. The pool can pin its own release via `image.builtin.version` or `image.factory.version`; when `image` omits it, this value applies. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version` — the matrix is evaluated against this value only, so an `image.*` override is not checked against it.
+	// Default Talos release for this pool's worker OS image and in-guest installer. The pool can pin its own release via `image.builtin.version` or `image.factory.version`; when `image` omits it, this value applies. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`. An `image.*` override is held to the same matrix, against whichever release it resolves to, so neither way in reaches a release outside the kubelet's support window.
 	// +kubebuilder:default:="v1.13.6"
 	Version string `json:"version"`
 }
