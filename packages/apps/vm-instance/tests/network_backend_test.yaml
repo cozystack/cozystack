@@ -1,0 +1,118 @@
+suite: vm-instance network backend detection
+
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+set:
+  fullnameOverride: test-vm
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 1
+    sockets: 1
+    memory: 1Gi
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: renders without Kube-OVN APIs on Cozyplane
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/Port
+    # Keep a Kube-OVN object as a regression trap: it must not be looked up
+    # unless the corresponding API kind is advertised by the cluster.
+    kubernetesProvider:
+      scheme:
+        "kubeovn.io/v1/IP":
+          gvr:
+            group: kubeovn.io
+            version: v1
+            resource: ips
+          namespaced: false
+      objects:
+        - apiVersion: kubeovn.io/v1
+          kind: IP
+          metadata:
+            name: test-vm.tenant-test
+          spec:
+            macAddress: "02:00:00:00:00:03"
+            ipAddress: "10.0.0.12"
+    asserts:
+      - isKind:
+          of: VirtualMachine
+      - notExists:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/mac_address"]
+      - notExists:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/ip_address"]
+
+  - it: renders without backend-specific APIs
+    asserts:
+      - isKind:
+          of: VirtualMachine
+      - notExists:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/mac_address"]
+      - notExists:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/ip_address"]
+
+  - it: preserves Kube-OVN annotations when its IP API is available
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/IP
+    kubernetesProvider:
+      scheme:
+        "kubeovn.io/v1/IP":
+          gvr:
+            group: kubeovn.io
+            version: v1
+            resource: ips
+          namespaced: false
+      objects:
+        - apiVersion: kubeovn.io/v1
+          kind: IP
+          metadata:
+            name: test-vm.tenant-test
+          spec:
+            macAddress: "02:00:00:00:00:01"
+            ipAddress: "10.0.0.10"
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/mac_address"]
+          value: "02:00:00:00:00:01"
+      - equal:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/ip_address"]
+          value: "10.0.0.10"
+
+  - it: gives Kube-OVN priority when both backends are available
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/IP
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/Port
+    kubernetesProvider:
+      scheme:
+        "kubeovn.io/v1/IP":
+          gvr:
+            group: kubeovn.io
+            version: v1
+            resource: ips
+          namespaced: false
+      objects:
+        - apiVersion: kubeovn.io/v1
+          kind: IP
+          metadata:
+            name: test-vm.tenant-test
+          spec:
+            macAddress: "02:00:00:00:00:02"
+            ipAddress: "10.0.0.11"
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/mac_address"]
+          value: "02:00:00:00:00:02"
+      - equal:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/ip_address"]
+          value: "10.0.0.11"
