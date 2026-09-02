@@ -170,7 +170,7 @@ EOF
   # The stable tag is in the copy plan...
   grep -qE 'docker://ghcr\.io/cozystack/cozystack/[^ ]*:v9\.9\.9' "$tmp/out"
   # ...but nothing moves :latest.
-  ! grep -qE 'docker://[^ ]+:latest' "$tmp/out"
+  if grep -qE 'docker://[^ ]+:latest' "$tmp/out"; then echo "FAIL: no :latest tag must have been planned"; false; fi
   rm -rf "$tmp"
 }
 
@@ -256,7 +256,7 @@ EOF
 
   grep -q "already at ${digest}; skipping stable copy" "$tmp/out"
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 2 ]
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  if grep -q '^copy ' "$tmp/skopeo.log"; then echo "FAIL: no image must have been copied"; false; fi
   rm -rf "$tmp"
 }
 
@@ -329,7 +329,7 @@ EOF
   [ "$rc" -ne 0 ]
   grep -q "already exists at '${published_digest}'; refusing to move it to '${rc_digest}'" "$tmp/err"
   # The refusal must happen BEFORE any write.
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  if grep -q '^copy ' "$tmp/skopeo.log"; then echo "FAIL: no image must have been copied"; false; fi
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 1 ]
   rm -rf "$tmp"
 }
@@ -355,10 +355,10 @@ EOF
   # an overwrite of a published stable tag.
   [ "$rc" -ne 0 ]
   grep -q 'returned no manifest bytes' "$tmp/err"
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  if grep -q '^copy ' "$tmp/skopeo.log"; then echo "FAIL: no image must have been copied"; false; fi
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 1 ]
   # The empty-input hash must never appear: that is the guard being absent.
-  ! grep -q 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' "$tmp/err"
+  if grep -q 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' "$tmp/err"; then echo "FAIL: the empty-manifest digest must not reach the diagnostic"; false; fi
   rm -rf "$tmp"
 }
 
@@ -384,6 +384,6 @@ EOF
   [ "$rc" -ne 0 ]
   grep -q 'cannot be treated as unpublished' "$tmp/err"
   grep -q '429' "$tmp/err"
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  if grep -q '^copy ' "$tmp/skopeo.log"; then echo "FAIL: no image must have been copied"; false; fi
   rm -rf "$tmp"
 }

@@ -400,33 +400,33 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
   trap "rm -rf '$tmp'" EXIT
 
   printf '   \n\n  \n' > "$tmp/whitespace.md"
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/whitespace.md" 1.6.0 >/dev/null 2>&1 || {
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/whitespace.md" 1.6.0 >/dev/null 2>&1; then
     echo "Validator accepted a whitespace-only file — it would publish as blank release notes." >&2
     exit 1
-  }
+  fi
 
   : > "$tmp/empty.md"
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/empty.md" 1.6.0 >/dev/null 2>&1 || {
-    echo "Validator accepted an empty file." >&2; exit 1; }
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/empty.md" 1.6.0 >/dev/null 2>&1; then
+    echo "Validator accepted an empty file." >&2; exit 1; fi
 
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/absent.md" 1.6.0 >/dev/null 2>&1 || {
-    echo "Validator accepted a nonexistent file." >&2; exit 1; }
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/absent.md" 1.6.0 >/dev/null 2>&1; then
+    echo "Validator accepted a nonexistent file." >&2; exit 1; fi
 
   # Truncated mid-stream: head intact, tail (the compare link) lost. This is the
   # realistic AI failure — a timeout or quota cutoff partway through the write.
   head -8 "$REPO_ROOT/docs/changelogs/v1.5.1.md" > "$tmp/truncated.md"
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/truncated.md" 1.5.1 >/dev/null 2>&1 || {
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/truncated.md" 1.5.1 >/dev/null 2>&1; then
     echo "Validator accepted a truncated changelog — a fragment would be published" >&2
     echo "verbatim as the release body." >&2
     exit 1
-  }
+  fi
 
   # Right shape, wrong version: a stale file left by a previous promotion, or a
   # changelog generated against the rc tag instead of the stable one.
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$REPO_ROOT/docs/changelogs/v1.5.1.md" 1.6.0 >/dev/null 2>&1 || {
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$REPO_ROOT/docs/changelogs/v1.5.1.md" 1.6.0 >/dev/null 2>&1; then
     echo "Validator accepted v1.5.1's changelog as v1.6.0's release body." >&2
     exit 1
-  }
+  fi
 }
 
 # 12. The workflow must actually call the script. Keeping the predicates in a
