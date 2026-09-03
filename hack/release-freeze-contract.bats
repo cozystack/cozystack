@@ -310,25 +310,56 @@ step_line() {
   printf '%s\n' "$block" | script_lines | grep -qF 'p.merged_at !== null'
 }
 
-@test "both the checkout and the backport-action step are gated on the guard" {
+@test "every step after the guard is gated on the guard" {
   block="$(job_block backport "$BACKPORT")"
   [ -n "$block" ]
 
-  # Losing the gate on either step still runs the action against a target that
-  # already has the change, reproducing the false comment the guard exists to
-  # prevent.
+  # Losing the gate on either the checkout or the action still runs the action
+  # against a target that already has the change, reproducing the false comment
+  # the guard exists to prevent. The git wrapper's install step is gated for a
+  # smaller reason — it does real work (it probes git against a throwaway repo)
+  # that a skipped leg has no use for — but it is gated the same way, so the
+  # count moves with the step list rather than singling one step out.
   count="$(printf '%s\n' "$block" | code_lines | grep -cF "steps.guard.outputs.already_merged != 'true'" || true)"
-  [ "${count:-0}" -eq 2 ]
+  [ "${count:-0}" -eq 3 ]
 }
 
-@test "the guard runs before the checkout and the backport-action step" {
+@test "the guard runs first, and the git wrapper is installed before the action" {
   guard="$(step_line 'Check for existing merged backport' "$BACKPORT")"
   checkout="$(step_line 'Checkout repository' "$BACKPORT")"
+  shim="$(step_line 'Install the empty-tolerant git wrapper' "$BACKPORT")"
   create="$(step_line 'Create back‑port PR' "$BACKPORT")"
-  [ -n "$guard" ] && [ -n "$checkout" ] && [ -n "$create" ]
+  [ -n "$guard" ] && [ -n "$checkout" ] && [ -n "$shim" ] && [ -n "$create" ]
 
   [ "$guard" -lt "$checkout" ]
   [ "$guard" -lt "$create" ]
+
+  # The wrapper reaches the action through $GITHUB_PATH, which the runner
+  # applies to SUBSEQUENT steps only. Installed after the action it is inert,
+  # and inert means the empty-commit failure is back with nothing red to say so.
+  # It also has to come after the checkout, since it copies the script out of
+  # the working tree.
+  [ "$checkout" -lt "$shim" ]
+  [ "$shim" -lt "$create" ]
+}
+
+@test "the git wrapper the backport job installs is the one in the tree" {
+  block="$(job_block backport "$BACKPORT" | code_lines)"
+  [ -n "$block" ]
+
+  # Three separate things, because each fails silently on its own. Without the
+  # copy there is no wrapper; without $GITHUB_PATH the action never resolves it;
+  # without BACKPORT_REAL_GIT the wrapper exits 127 on every invocation. Only
+  # the last of those is loud.
+  printf '%s\n' "$block" | grep -qF 'cp hack/backport-git-shim.sh'
+  printf '%s\n' "$block" | grep -qF '>> "$GITHUB_PATH"'
+  printf '%s\n' "$block" | grep -qF 'BACKPORT_REAL_GIT=$real_git'
+
+  # And the script exists, executable, with hack/backport-git-shim.bats pinning
+  # its behaviour. The workflow copies it by path, so a rename that misses this
+  # workflow is a red step at backport time and nothing earlier.
+  [ -x "$REPO_ROOT/hack/backport-git-shim.sh" ]
+  [ -f "$REPO_ROOT/hack/backport-git-shim.bats" ]
 }
 
 # Mirrors release-changelog-behaviour.bats's convention for a github-script
