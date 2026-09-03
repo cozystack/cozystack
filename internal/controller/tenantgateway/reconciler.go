@@ -755,11 +755,11 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// All port-443 listeners (HTTPS-terminate and TLS-passthrough) share
 	// the same kinds set so that Cilium does not collapse them into a
 	// single listener (cilium#45559: divergent allowedRoutes.kinds on the
-	// same port triggers listener merging that drops HTTPRoutes). Using
-	// both HTTPRoute and TLSRoute keeps the security posture intact —
-	// GRPCRoute / TCPRoute / UDPRoute are still excluded, so Layer 7
-	// (cozystack-route-hostname-policy VAP) continues to gate only the
-	// two expected route types.
+	// same port triggers listener merging that drops HTTPRoutes). That
+	// constraint governs only that the sets match each other, so the
+	// contents are a least-privilege choice: nothing the platform ships
+	// needs gRPC, TCP or UDP routing on port 443, so those three kinds
+	// stay out of the set.
 	port443Kinds := []gatewayv1.RouteGroupKind{
 		{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"},
 		{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
