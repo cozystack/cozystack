@@ -106,17 +106,21 @@
 {{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
 {{- /*
         A CPU quantity must be a whole number of milli-CPUs: the VPA admission
-        webhook rejects anything finer ("MinAllowed: CPU [62500u] must be a
+        webhook rejects anything finer ("minAllowed: CPU [62500u] must be a
         whole number of milli CPUs"), and a sub-milli request is meaningless
         anyway. A ratio that does not divide the value evenly produces one:
         250m / 4 = 62.5m. Round the request up to the next whole milli-CPU so
         every allocation ratio renders a valid quantity, never below the
-        intended fraction of the limit.
-        The %.6f round-trip strips binary-float noise (0.25/10*1000 can come
-        out as 25.000000000000004) so an exactly divisible value keeps its
-        current rendering instead of being bumped to the next milli-CPU.
+        intended fraction of the limit. A request whose shortest decimal form
+        is already whole-milli keeps that form, so the default ratio of 10
+        renders exactly as it did before.
+        The comparison needs no tolerance: sprig's divf/mulf run on
+        shopspring/decimal rather than float64, so 250m / 10 * 1000 is exactly
+        25 and not 25.000000000000004. A tolerance would in fact reintroduce
+        the bug it looks like it prevents, by accepting a value such as
+        100.0000004m as whole-milli and rendering it verbatim.
 */}}
-{{-       $cpuRequestMilli := mulf $cpuRequestF64 1000.0 | printf "%.6f" | float64 }}
+{{-       $cpuRequestMilli := mulf $cpuRequestF64 1000.0 | float64 }}
 {{-       $cpuRequestMilliCeil := ceil $cpuRequestMilli }}
 {{-       if eq $cpuRequestMilli $cpuRequestMilliCeil }}
 {{-         $_ := set $output.requests $k ($cpuRequestF64 | toString) }}

@@ -10,7 +10,7 @@ release:
 
 tests:
   # Regression guard for the VPA admission webhook, which rejects a CPU
-  # quantity finer than 1m ("MinAllowed: CPU [62500u] must be a whole number
+  # quantity finer than 1m ("minAllowed: CPU [62500u] must be a whole number
   # of milli CPUs"). Before the fix, 250m / 4 rendered as "0.0625" and any
   # chart feeding a sanitized CPU request to a VerticalPodAutoscaler was stuck
   # in an UpgradeFailed/RollbackFailed loop on such a ratio.
@@ -42,6 +42,37 @@ tests:
           path: spec.containers[0].resources.requests.cpu
           value: 334m
 
+  # Extreme end of the arbitrary-ratio contract: 1m / 10000000 is 0.0000001m,
+  # which the exact-value branch would render as the raw float "1e-10", not a
+  # valid quantity. ceil() carries any positive sub-milli request to 1m, the
+  # smallest request that is both valid and non-zero.
+  - it: renders a positive request below 1m as 1m at an extreme ratio
+    set:
+      _cluster:
+        cpu-allocation-ratio: 10000000
+      resources:
+        cpu: 1m
+        memory: 256Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: 1m
+      - equal:
+          path: spec.containers[0].resources.limits.cpu
+          value: 1m
+
+  - it: leaves a genuinely zero CPU request at zero
+    set:
+      _cluster:
+        cpu-allocation-ratio: 4
+      resources:
+        cpu: 0
+        memory: 256Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "0"
+
   - it: keeps the rendering unchanged on the default ratio
     set:
       resources:
@@ -68,20 +99,21 @@ tests:
           path: spec.containers[0].resources.requests.cpu
           value: "0.25"
 
-  # 700m / 1 is 699.9999999999999m in binary floating point. Without the
-  # %.6f round-trip in the helper, ceil() would bump it to 700m and change the
-  # rendered value of an exactly divisible request.
-  - it: does not let binary-float noise bump an exact value to the next milli
+  # The helper must not smooth the value before deciding whether it is already
+  # whole-milli. A tolerance of 1e-6 milli-CPU (the %.6f round-trip this fix
+  # originally carried) reads 100.0000004m as exact and renders it verbatim as
+  # "0.1000000004", the very quantity the webhook rejects.
+  - it: rounds up a value that is whole-milli only to within a tolerance
     set:
       _cluster:
         cpu-allocation-ratio: 1
       resources:
-        cpu: 700m
+        cpu: 100.0000004m
         memory: 256Mi
     asserts:
       - equal:
           path: spec.containers[0].resources.requests.cpu
-          value: "0.7"
+          value: 101m
 
   - it: never renders a sub-milli CPU request
     set:

@@ -23,7 +23,7 @@ tests:
   # *request* the VPA sets, so they go through cozy-lib.resources.sanitize and
   # are divided by cpuAllocationRatio like every other request in the chart.
   # 250m / 4 = 62.5m, which the VPA admission webhook rejects outright
-  # ("MinAllowed: CPU [62500u] must be a whole number of milli CPUs"), leaving
+  # ("minAllowed: CPU [62500u] must be a whole number of milli CPUs"), leaving
   # the HelmRelease looping UpgradeFailed -> RollbackFailed forever. The helper
   # now rounds up to a whole milli-CPU, so any ratio renders a valid quantity.
   - it: renders whole milli-CPU bounds on a ratio that does not divide 250m
