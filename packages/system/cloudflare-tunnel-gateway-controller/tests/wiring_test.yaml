@@ -96,6 +96,33 @@ tests:
         hasDocuments:
           count: 0
 
+  - it: keeps the two proxy replicas off one node
+    # The chart renders two proxy replicas and no affinity of its own, and
+    # this is the pod every request from the edge terminates on, so the
+    # spread is a values.yaml override. It only spreads anything while its
+    # selector still matches what the chart labels the pod with, so pin both
+    # halves: a re-vendor that renames either one turns this red.
+    asserts:
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/deployment-proxy.yaml
+        equal:
+          path: spec.template.spec.topologySpreadConstraints[0]
+          value:
+            maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/instance: cloudflare-tunnel-gateway-controller
+                app.kubernetes.io/component: proxy
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/deployment-proxy.yaml
+        equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: proxy
+      - template: charts/cloudflare-tunnel-gateway-controller/templates/deployment-proxy.yaml
+        equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/instance"]
+          value: cloudflare-tunnel-gateway-controller
+
   - it: refuses to render without a tunnel ID and names the missing value
     template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml
     set:
