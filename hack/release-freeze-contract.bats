@@ -347,17 +347,24 @@ step_line() {
   block="$(job_block backport "$BACKPORT" | code_lines)"
   [ -n "$block" ]
 
-  # Three separate things, because each fails silently on its own. Without the
-  # copy there is no wrapper; without $GITHUB_PATH the action never resolves it;
-  # without BACKPORT_REAL_GIT the wrapper exits 127 on every invocation. Only
-  # the last of those is loud.
-  printf '%s\n' "$block" | grep -qF 'cp hack/backport-git-shim.sh'
+  # Two separate things, because each fails silently on its own. Without the
+  # install there is no wrapper; without $GITHUB_PATH the action never resolves
+  # one. Neither is loud.
+  #
+  # The install is a `sed` and not a `cp` on purpose: the committed script is a
+  # template whose @REAL_GIT@ the step replaces with the runner's real git.
+  # Turning it back into a `cp` leaves an unsubstituted template on PATH, which
+  # exits 127 on every git call in the job -- so pin the substitution, not just
+  # the fact that something is written.
+  printf '%s\n' "$block" | grep -qF 'sed "s|@REAL_GIT@|$real_git|" hack/backport-git-shim.sh > "$shim_dir/git"'
   printf '%s\n' "$block" | grep -qF '>> "$GITHUB_PATH"'
-  printf '%s\n' "$block" | grep -qF 'BACKPORT_REAL_GIT=$real_git'
 
   # And the script exists, executable, with hack/backport-git-shim.bats pinning
-  # its behaviour. The workflow copies it by path, so a rename that misses this
-  # workflow is a red step at backport time and nothing earlier.
+  # its behaviour. Executable is not what the job needs -- it installs its own
+  # copy and chmods that -- but a template someone runs by hand should say why
+  # it cannot work rather than "permission denied". The workflow reaches it by
+  # path, so a rename that misses this workflow is a red step at backport time
+  # and nothing earlier.
   [ -x "$REPO_ROOT/hack/backport-git-shim.sh" ]
   [ -f "$REPO_ROOT/hack/backport-git-shim.bats" ]
 }

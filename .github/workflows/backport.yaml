@@ -314,14 +314,14 @@ jobs:
       #
       # zizmor's `github-env` audit is right to fire on an environment-file write
       # in a `pull_request_target` workflow and wrong about this one: it flags a
-      # write whose CONTENT an attacker can steer, and both values here are
-      # produced on the runner — `command -v git` and a path under $RUNNER_TEMP.
-      # Nothing from the pull request reaches either. Ignored inline rather than
-      # in .github/zizmor.yml so the suppression names one write, travels with
-      # the line, and leaves the audit armed for the rest of this file; disabling
-      # the rule there would disarm it for every workflow in the tree. $GITHUB_ENV
-      # and $GITHUB_PATH are also the only mechanism available: the wrapper has to
-      # be on PATH for a LATER step, which no in-step export reaches.
+      # write whose CONTENT an attacker can steer, and this one is a path under
+      # $RUNNER_TEMP that the step itself chose. Nothing from the pull request
+      # reaches it. Ignored inline rather than in .github/zizmor.yml so the
+      # suppression names one write, travels with the line, and leaves the audit
+      # armed for the rest of this file; disabling the rule there would disarm it
+      # for every workflow in the tree. $GITHUB_PATH is also the only mechanism
+      # available: the wrapper has to be on PATH for a LATER step, which no
+      # in-step export reaches.
       - name: Install the empty-tolerant git wrapper
         if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
         run: | # zizmor: ignore[github-env]
@@ -330,11 +330,19 @@ jobs:
           real_git="$(command -v git)"
           shim_dir="$RUNNER_TEMP/backport-git-shim"
           mkdir -p "$shim_dir"
-          cp hack/backport-git-shim.sh "$shim_dir/git"
+
+          # The real git's path is substituted in, not exported. `actions/checkout`
+          # declares a `post` step that runs git after the action has finished, so
+          # the wrapper is reached by a step this workflow does not control, and an
+          # environment variable that failed to arrive there would turn the job red
+          # at cleanup with the backport PR already open. A substituted path cannot
+          # fail to arrive. `command -v git` is a runner path with no shell
+          # metacharacters, so `|` is a safe sed delimiter for it.
+          sed "s|@REAL_GIT@|$real_git|" hack/backport-git-shim.sh > "$shim_dir/git"
           chmod 0755 "$shim_dir/git"
 
-          # Drive the wrapper the way the action will: subcommand first, real
-          # git named in the environment, wrapper's directory ahead of PATH.
+          # Drive the wrapper the way the action will: subcommand first, wrapper's
+          # directory ahead of PATH, nothing else set up for it.
           probe="$RUNNER_TEMP/backport-git-shim-probe"
           rm -rf "$probe"
           mkdir -p "$probe"
@@ -347,13 +355,11 @@ jobs:
           "$real_git" commit -q --allow-empty -m "empty commit"
           empty_sha="$("$real_git" rev-parse HEAD)"
           "$real_git" switch -q -c probe target
-          PATH="$shim_dir:$PATH" BACKPORT_REAL_GIT="$real_git" \
-            git cherry-pick -x "$empty_sha"
+          PATH="$shim_dir:$PATH" git cherry-pick -x "$empty_sha"
           [ "$("$real_git" rev-list --count target..HEAD)" -eq 1 ]
           cd "$GITHUB_WORKSPACE"
           rm -rf "$probe"
 
-          echo "BACKPORT_REAL_GIT=$real_git" >> "$GITHUB_ENV"
           echo "$shim_dir" >> "$GITHUB_PATH"
 
       # 5. Create the back‑port pull request

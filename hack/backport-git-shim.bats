@@ -12,9 +12,9 @@
 # say so out loud instead of passing for a reason that no longer holds.
 #
 # The workflow-side wiring -- that backport.yaml installs this file as `git`,
-# names the real one, and does so between the checkout and the action -- is
-# pinned in hack/release-freeze-contract.bats, which already owns that job's
-# step contract.
+# substitutes the real one into it, and does so between the checkout and the
+# action -- is pinned in hack/release-freeze-contract.bats, which already owns
+# that job's step contract.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
@@ -34,17 +34,19 @@ REAL_GIT="$(command -v git)"
 WORKDIR="$(mktemp -d)"
 SHIM_DIR="$WORKDIR/shim"
 mkdir -p "$SHIM_DIR"
-cp "$REPO_ROOT/hack/backport-git-shim.sh" "$SHIM_DIR/git"
+# Installed exactly as backport.yaml installs it: the committed file is a
+# template, and the real git's path is substituted in rather than exported.
+sed "s|@REAL_GIT@|$REAL_GIT|" "$REPO_ROOT/hack/backport-git-shim.sh" > "$SHIM_DIR/git"
 chmod 0755 "$SHIM_DIR/git"
 
 cozy_cleanup() { rm -rf "$WORKDIR"; }
 
 # Exactly how the action reaches git once the workflow has installed the
-# wrapper: subcommand first, real git named in the environment, wrapper's
-# directory ahead of everything on PATH. Kept to one line so cozytest.sh's
-# translator, which appends `return 0` to any line that is exactly `}`, cannot
-# swallow the exit status these tests read.
-shim_git() { PATH="$SHIM_DIR:$PATH" BACKPORT_REAL_GIT="$REAL_GIT" git "$@"; }
+# wrapper: subcommand first, wrapper's directory ahead of everything on PATH,
+# and nothing else set up for it. Kept to one line so cozytest.sh's translator,
+# which appends `return 0` to any line that is exactly `}`, cannot swallow the
+# exit status these tests read.
+shim_git() { PATH="$SHIM_DIR:$PATH" git "$@"; }
 
 # A repository shaped like the action's input: `target` is the release line, and
 # the merged PR's two commits sit ahead of it on `main` -- one real change, then
@@ -194,15 +196,25 @@ setup_repo() {
 @test "a wrapper that cannot find the real git fails distinguishably from a conflict" {
   # Exit 1 is the action's "conflict" signal, and a misconfigured wrapper
   # answering 1 would be reported on the PR as a merge conflict that does not
-  # exist. Both broken configurations must answer something else.
+  # exist. Both broken installs must answer something else.
   setup_repo "$WORKDIR/misconfigured"
 
+  # The committed template, copied without the substitution the install step
+  # performs -- the mistake a second caller of this script would make.
+  broken="$WORKDIR/broken"
+  mkdir -p "$broken"
+  cp "$REPO_ROOT/hack/backport-git-shim.sh" "$broken/git"
+  chmod 0755 "$broken/git"
   rc=0
-  PATH="$SHIM_DIR:$PATH" git rev-parse HEAD >/dev/null 2>&1 || rc=$?
+  PATH="$broken:$PATH" git rev-parse HEAD >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 127 ]
 
+  # And a path substituted in that is not there any more.
+  absent="$WORKDIR/absent"
+  mkdir -p "$absent"
+  sed "s|@REAL_GIT@|$WORKDIR/no-such-git|" "$REPO_ROOT/hack/backport-git-shim.sh" > "$absent/git"
+  chmod 0755 "$absent/git"
   rc=0
-  PATH="$SHIM_DIR:$PATH" BACKPORT_REAL_GIT="$WORKDIR/absent-git" \
-    git rev-parse HEAD >/dev/null 2>&1 || rc=$?
+  PATH="$absent:$PATH" git rev-parse HEAD >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 127 ]
 }

@@ -35,19 +35,36 @@
 # `--empty=drop` needs git 2.45 or newer. The workflow proves the whole wrapper
 # against the runner's own git before the action depends on it, because the
 # alternative to a red step here is a lost backport reported as a conflict,
-# which is the failure this exists to remove.
+# which is the failure this exists to remove. That probe installs this file the
+# same way the job does, so it covers the substitution below as well.
 #
 # hack/backport-git-shim.bats covers the behaviour under `make unit-tests`.
 
 set -eu
 
-# Resolving the real git by re-scanning PATH would have to guess which entry is
-# this file; the workflow knows, because it captures `command -v git` before
-# putting this directory on PATH. Exit 127 rather than 1 on a missing value: the
-# action treats 1 as a conflict and would report a misleading one.
-real_git=${BACKPORT_REAL_GIT:-}
-if [ -z "$real_git" ] || [ ! -x "$real_git" ]; then
-  echo "backport git wrapper: set BACKPORT_REAL_GIT to the real git binary" >&2
+# The path below is substituted when the workflow installs this file, from the
+# `command -v git` it runs before putting the wrapper's directory on PATH. So
+# this file as committed is a template, not a runnable script.
+#
+# Baked in rather than read from the environment, because PATH is not the only
+# thing this wrapper is on the far side of. `actions/checkout` declares a `post`
+# step, which runs git to unset its auth header after the action has finished —
+# so git is invoked through the wrapper by a step nothing here controls, and an
+# environment variable that failed to reach it would turn every backport job red
+# at cleanup, after the PR was already opened. Substitution has no equivalent
+# question to answer.
+#
+# Resolving the real git by re-scanning PATH is the other option and needs this
+# file to work out which entry on PATH is itself, which the workflow already
+# knows for free.
+#
+# Exit 127 rather than 1 when the path is unusable: the action treats 1 as a
+# conflict and would report one that does not exist.
+real_git='@REAL_GIT@'
+if [ ! -x "$real_git" ]; then
+  echo "backport git wrapper: '$real_git' is not an executable git." >&2
+  echo "The install step substitutes the real path into that line; a copy of" >&2
+  echo "this file taken without that substitution cannot run." >&2
   exit 127
 fi
 
