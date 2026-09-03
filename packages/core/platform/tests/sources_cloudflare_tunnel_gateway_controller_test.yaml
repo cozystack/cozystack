@@ -22,3 +22,17 @@ tests:
       - contains:
           path: spec.variants[0].dependsOn
           content: cozystack.gateway-api-crds
+
+  # The proxy's topologySpreadConstraints selector in the package values keys on
+  # app.kubernetes.io/instance, which the chart fills from .Release.Name, which
+  # is this releaseName. The package's own chart test cannot see that coupling
+  # because it declares its own release name, so changing this value there would
+  # silently select nothing and let both proxy replicas share a node again.
+  - it: installs under the release name the proxy spread selector expects
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cloudflare-tunnel-gateway-controller
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].install.releaseName
+          value: cloudflare-tunnel-gateway-controller
