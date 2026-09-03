@@ -120,8 +120,23 @@ tests:
           path: spec.validations[0].expression
           pattern: 'h\.lowerAscii\(\)\.endsWith\("\." \+ namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\.lowerAscii\(\)\)'
 
-  - it: validation actions are Deny so requests fail closed
+  # A Binding whose policyName points at another policy renders fine and
+  # leaves its own policy inert, so the pair is pinned together: which
+  # policy is bound, and that the binding denies.
+  - it: each binding denies for the policy it names
     asserts:
+      - documentIndex: 1
+        equal:
+          path: spec.policyName
+          value: cozystack-route-hostname-policy
+      - documentIndex: 3
+        equal:
+          path: spec.policyName
+          value: cozystack-route-hostname-policy-tls
+      - documentIndex: 5
+        equal:
+          path: spec.policyName
+          value: cozystack-route-hostname-policy-grpc
       - documentIndex: 1
         equal:
           path: spec.validationActions

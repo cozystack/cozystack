@@ -22,10 +22,9 @@
 # so the warning arrives in the bundle diff and nowhere else -- which is
 # precisely the diff nobody reads line by line.
 #
-# This guard arrived with a Gateway API bundle bump, but the drift it caught
-# was not caused by one: the tlsroutes rule had named a single version since
-# the policy was written, while the bundle served three the whole time. A
-# bump is simply when someone last looks at this file.
+# Drift here is not caused by a bundle bump: the tlsroutes rule had named a
+# single version since the policy was written, while the bundle served three
+# the whole time.
 #
 # The assertion is coverage, not equality: naming a version the bundle does
 # not serve is inert (an unmatched resourceRules entry is not an error), so
@@ -72,11 +71,11 @@ policy_versions() {
 # cozytest.sh harness rejects <(...) with a syntax error, which exits non-zero
 # and would read as a genuine failure.
 uncovered() {
-  served=$1
-  named=$2
+  u_served=$1
+  u_named=$2
   out=
-  for version in $served; do
-    if ! echo "$named" | grep -qxF "$version"; then
+  for version in $u_served; do
+    if ! echo "$u_named" | grep -qxF "$version"; then
       out="$out $version"
     fi
   done
