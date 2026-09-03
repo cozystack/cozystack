@@ -6,6 +6,9 @@ templates:
   - templates/networkpolicy.yaml
   - templates/deployment.yaml
   - templates/service.yaml
+capabilities:
+  apiVersions:
+    - cilium.io/v2/CiliumClusterwideNetworkPolicy
 tests:
   - it: protects exactly the port the webhook serves and the Service routes to
     # The regression guard for the one drift that fails open. The policy runs
@@ -15,11 +18,11 @@ tests:
     # All three render from namespace-annotation-webhook.port for that reason.
     asserts:
       - equal:
-          path: spec.ingressDeny[0].toPorts[0].ports[0].port
+          path: specs[0].egressDeny[0].toPorts[0].ports[0].port
           value: "8443"
         template: templates/networkpolicy.yaml
       - equal:
-          path: spec.ingressDeny[1].toPorts[0].ports[0].port
+          path: specs[1].ingressDeny[0].toPorts[0].ports[0].port
           value: "8443"
         template: templates/networkpolicy.yaml
       - equal:
@@ -29,4 +32,18 @@ tests:
       - equal:
           path: spec.ports[0].targetPort
           value: 8443
+        template: templates/service.yaml
+
+  - it: exposes the webhook on the Service port the caller dials
+    # The policy no longer mirrors this value -- only the backend port is
+    # denied, and Cilium translates a service to its backends before enforcing
+    # egress policy, so there is no frontend value that has to stay in
+    # agreement. The Service still has to expose 443, because that is the port
+    # the caller dials: this package registers a MutatingWebhookConfiguration
+    # whose clientConfig.service omits `port`, and the API server defaults that
+    # to 443.
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 443
         template: templates/service.yaml
