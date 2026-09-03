@@ -2264,6 +2264,17 @@ func tlsRouteAttached(name, ns, hostname, sectionName, parentNs string) *gateway
 	}
 }
 
+// passthroughTLSRoute is a TLSRoute attached by name to the listener a
+// tlsPassthroughServices or tlsPassthroughListeners entry renders.
+//
+// Tests about the withdrawal need one because the withdrawal is not
+// keyed on the declaration: a passthrough listener no route attaches to
+// emits no filter chain on the pinned Cilium, so the terminate listener
+// is still the only thing answering the hostname and keeps it.
+func passthroughTLSRoute(name, ns, hostname, entry string) *gatewayv1alpha2.TLSRoute {
+	return tlsRouteAttached(name, ns, hostname, passthroughListenerPrefix+entry, "tenant-foo")
+}
+
 // TestReconcile_TLSRouteOnPassthroughListenerTerminatesNothing pins the
 // only supported way to use a native-port passthrough listener: attach
 // a TLSRoute to it. A passthrough listener never terminates TLS, so the
@@ -2437,11 +2448,12 @@ func TestReconcile_HTTPRouteOnPassthroughHostnameTerminatesNothing(t *testing.T)
 				},
 			}
 			route := httpRouteAttached("api", "tenant-foo", hostname)
+			claimant := passthroughTLSRoute("api-tls", "tenant-foo", hostname, "api")
 
 			c := fake.NewClientBuilder().
 				WithScheme(s).
-				WithObjects(tgw, route).
-				WithStatusSubresource(tgw, route).
+				WithObjects(tgw, route, claimant).
+				WithStatusSubresource(tgw, route, claimant).
 				Build()
 
 			r := &Reconciler{Client: c, Scheme: s}
@@ -2557,11 +2569,15 @@ func TestReconcile_PassthroughServiceShedsAnExistingTerminateListenerAndCert(t *
 		},
 	}
 	route := httpRouteAttached("api", "tenant-foo", hostname)
+	// Present from the start: phase 1 declares no passthrough listener,
+	// so this route attaches to nothing and phase 1 still measures the
+	// terminate listener it is there to shed.
+	claimant := passthroughTLSRoute("api-tls", "tenant-foo", hostname, "api")
 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(tgw, route).
-		WithStatusSubresource(tgw, route).
+		WithObjects(tgw, route, claimant).
+		WithStatusSubresource(tgw, route, claimant).
 		Build()
 	r := &Reconciler{Client: c, Scheme: s}
 	key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
@@ -2619,6 +2635,120 @@ func TestReconcile_PassthroughServiceShedsAnExistingTerminateListenerAndCert(t *
 	}
 	if got := certNamesOrdering(postCerts, hostname); len(got) != 0 {
 		t.Errorf("Certificates %v still order %s, which a passthrough listener now serves", got, hostname)
+	}
+}
+
+// TestReconcile_RoutelessPassthroughListenerKeepsTheTerminateListener
+// pins the half of the rule that decides whether the withdrawal costs
+// anything: a passthrough listener no TLSRoute has attached to.
+//
+// On the pinned Cilium the two listeners are not equivalent claimants
+// of the SNI. tlsPassthroughFilterChains
+// (operator/pkg/model/translation/envoy_listener.go, v1.19.5) walks
+// listener.Routes and skips a route with no backends, so a listener
+// with no TLSRoute contributes no filter chain and matches no
+// ClientHello, while the terminate listener's chain is built from its
+// own Secret and carries the name. Withdrawing the terminate listener
+// here takes a served hostname offline and hands it to a listener that
+// forwards nowhere.
+//
+// The shape is reachable from shipped defaults rather than from a
+// hostile spec: packages/extra/gateway ships api, vm-exportproxy and
+// cdi-uploadproxy on every tenant Gateway, while the platform TLSRoutes
+// exist once cluster-wide in the publishing tenant, so on every other
+// tenant Gateway all three listeners are routeless.
+func TestReconcile_RoutelessPassthroughListenerKeepsTheTerminateListener(t *testing.T) {
+	const hostname = "api.foo.example.com"
+	sources := []struct {
+		name      string
+		services  []string
+		listeners []gatewayv1alpha1.TLSPassthroughListener
+		section   string
+	}{
+		{
+			name:     "tlsPassthroughServices",
+			services: []string{"api"},
+			section:  passthroughListenerPrefix + "api",
+		},
+		{
+			name:      "tlsPassthroughListeners",
+			listeners: []gatewayv1alpha1.TLSPassthroughListener{{Name: "api", Port: 5432, Hostname: hostname}},
+			section:   passthroughListenerPrefix + "api",
+		},
+	}
+	for _, src := range sources {
+		t.Run(src.name, func(t *testing.T) {
+			s := newScheme(t)
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                    "foo.example.com",
+					CertMode:                gatewayv1alpha1.CertModeHTTP01,
+					GatewayClassName:        "cilium",
+					TLSPassthroughServices:  src.services,
+					TLSPassthroughListeners: src.listeners,
+				},
+			}
+			route := httpRouteAttached("api", "tenant-foo", hostname)
+
+			c := fake.NewClientBuilder().
+				WithScheme(s).
+				WithObjects(tgw, route).
+				WithStatusSubresource(tgw, route).
+				Build()
+
+			r := &Reconciler{Client: c, Scheme: s}
+			key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
+			if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			gw := &gatewayv1.Gateway{}
+			if err := c.Get(context.TODO(), key, gw); err != nil {
+				t.Fatalf("get Gateway: %v", err)
+			}
+			terminate, passthrough := listenerNamesByProtocol(gw, hostname)
+			if want := []string{perListenerName(hostname)}; !reflect.DeepEqual(terminate, want) {
+				t.Errorf("terminate listeners for %s = %v, want %v; nothing else serves the name, so withdrawing it takes the endpoint offline: %+v", hostname, terminate, want, gw.Spec.Listeners)
+			}
+			// The passthrough listener is still declared: the spec asked
+			// for it and a TLSRoute may arrive later. Asserting it is
+			// what keeps this from passing on a render that dropped the
+			// passthrough half instead.
+			if want := []string{src.section}; !reflect.DeepEqual(passthrough, want) {
+				t.Errorf("passthrough listeners for %s = %v, want %v: %+v", hostname, passthrough, want, gw.Spec.Listeners)
+			}
+
+			certs := &cmv1.CertificateList{}
+			if err := c.List(context.TODO(), certs); err != nil {
+				t.Fatalf("list Certificates: %v", err)
+			}
+			if got, want := certNamesOrdering(certs, hostname), []string{perListenerCertName(tgw, hostname)}; !reflect.DeepEqual(got, want) {
+				t.Errorf("Certificates ordering %s = %v, want %v; the terminate listener that survives has nothing to present without one", hostname, got, want)
+			}
+
+			got := &gatewayv1.HTTPRoute{}
+			if err := c.Get(context.TODO(), types.NamespacedName{Name: "api", Namespace: "tenant-foo"}, got); err != nil {
+				t.Fatalf("get route: %v", err)
+			}
+			var accepted *metav1.Condition
+			for _, ps := range got.Status.Parents {
+				if string(ps.ControllerName) != testControllerName {
+					continue
+				}
+				for i := range ps.Conditions {
+					if ps.Conditions[i].Type == "Accepted" {
+						accepted = &ps.Conditions[i]
+					}
+				}
+			}
+			if accepted == nil {
+				t.Fatalf("no Accepted condition under %s: %+v", testControllerName, got.Status.Parents)
+			}
+			if accepted.Status != metav1.ConditionTrue {
+				t.Errorf("Accepted=%s (%s: %s) for %s, which the terminate listener serves", accepted.Status, accepted.Reason, accepted.Message, hostname)
+			}
+		})
 	}
 }
 
@@ -2717,11 +2847,15 @@ func TestReconcile_WildcardPassthroughWithdrawsTheNamesBeneathIt(t *testing.T) {
 		},
 	}
 	route := httpRouteAttached("pg", "tenant-foo", published)
+	// Claims the name beneath the wildcard, which is what puts a
+	// passthrough filter chain on that SNI and makes the terminate
+	// listener the duplicate.
+	claimant := passthroughTLSRoute("pg-tls", "tenant-foo", published, "wild")
 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(tgw, route).
-		WithStatusSubresource(tgw, route).
+		WithObjects(tgw, route, claimant).
+		WithStatusSubresource(tgw, route, claimant).
 		Build()
 
 	r := &Reconciler{Client: c, Scheme: s}
@@ -2802,11 +2936,15 @@ func TestReconcile_WithdrawnHostnameIsReportedOnTheRoute(t *testing.T) {
 	const alsoPublished = "es.db.foo.example.com"
 	route := httpRouteAttached("pg", "tenant-foo", published)
 	route.Spec.Hostnames = append(route.Spec.Hostnames, alsoPublished)
+	// Both names, so both are withdrawn and the message has two to
+	// order.
+	claimant := passthroughTLSRoute("db-tls", "tenant-foo", published, "wild")
+	claimant.Spec.Hostnames = append(claimant.Spec.Hostnames, alsoPublished)
 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(tgw, route).
-		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		WithObjects(tgw, route, claimant).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}, &gatewayv1alpha2.TLSRoute{}).
 		Build()
 
 	r := &Reconciler{Client: c, Scheme: s}
@@ -2902,11 +3040,12 @@ func TestReconcile_WithdrawnHostnameOutranksTheHostnameRace(t *testing.T) {
 	}
 	winner := httpRouteAttached("api", "cozy-public", contested)
 	loser := httpRouteAttached("api-shadow", "tenant-foo", contested)
+	claimant := passthroughTLSRoute("api-tls", "tenant-foo", contested, "api")
 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(tgw, winner, loser).
-		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		WithObjects(tgw, winner, loser, claimant).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}, &gatewayv1alpha2.TLSRoute{}).
 		Build()
 
 	r := &Reconciler{Client: c, Scheme: s}
@@ -3661,11 +3800,12 @@ func TestReconcile_WithdrawnHostnameDoesNotTakeTheRoutesOtherNames(t *testing.T)
 	}
 	route := httpRouteAttached("both", "tenant-foo", withdrawn)
 	route.Spec.Hostnames = append(route.Spec.Hostnames, gatewayv1.Hostname(served))
+	claimant := passthroughTLSRoute("api-tls", "tenant-foo", withdrawn, "api")
 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(tgw, route).
-		WithStatusSubresource(tgw, route).
+		WithObjects(tgw, route, claimant).
+		WithStatusSubresource(tgw, route, claimant).
 		Build()
 
 	r := &Reconciler{Client: c, Scheme: s}
@@ -4132,6 +4272,72 @@ func TestReconcile_SameNamespaceTLSRoutesDoNotConflictAfterTheRecount(t *testing
 // dropping the other route, so the reason has to keep naming it; the
 // refusal is a property of the TenantGateway spec and is named in the
 // message either way.
+// TestReconcile_RefusedTLSRouteDoesNotOutrankTheServedHTTPRoute pins the
+// recount on the branch where nothing can attach to the passthrough
+// listener, so the terminate listener survives and an HTTPRoute is what
+// serves the name.
+//
+// resolveHostnameOwners ranks by namespace with no notion of kind or of
+// whether a route can attach at all, and it runs before any of that is
+// known. A TLSRoute sorting ahead of the tenant — a cozy-* namespace by
+// the explicit rule, and anything lexically before it otherwise — takes
+// the hostname in that first count. Where the listener it named refuses
+// it, the count has to be redone over the routes that are actually
+// served, or the HTTPRoute holding the listener and the certificate is
+// told it lost the name to a route this same pass declared unattachable.
+func TestReconcile_RefusedTLSRouteDoesNotOutrankTheServedHTTPRoute(t *testing.T) {
+	const nativeAt = "postgres.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-public", "tenant-foo"},
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "postgres", Port: 5432, Hostname: nativeAt},
+			},
+		},
+	}
+	// Outside the publishing tenant, so the native-port listener refuses
+	// it, and first in the ownership order, so the mixed count hands it
+	// the hostname.
+	refused := tlsRouteAttached("pg", "cozy-public", nativeAt, passthroughListenerPrefix+"postgres", "tenant-foo")
+	served := httpRouteAttached("web", "tenant-foo", nativeAt)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, refused, served).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}, &gatewayv1alpha2.TLSRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Without the terminate listener nothing serves the name and the
+	// condition below would be describing a different shape.
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), key, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	terminate, _ := listenerNamesByProtocol(gw, nativeAt)
+	if want := []string{perListenerName(nativeAt)}; !reflect.DeepEqual(terminate, want) {
+		t.Fatalf("terminate listeners for %s = %v, want %v: %+v", nativeAt, terminate, want, gw.Spec.Listeners)
+	}
+
+	accepted := acceptedCondition(t, c, "web", "tenant-foo")
+	if accepted.Reason == "HostnameConflict" {
+		t.Errorf("route holding the listener for %s is told it lost the name to a route the same pass refused: %q", nativeAt, accepted.Message)
+	}
+	if accepted.Status != metav1.ConditionTrue {
+		t.Errorf("Accepted=%s (%s: %s) for %s, which this route is the only thing serving", accepted.Status, accepted.Reason, accepted.Message, nativeAt)
+	}
+}
+
 func TestReconcile_RefusedNamespaceDoesNotOutrankALostRace(t *testing.T) {
 	const (
 		contested = "api.foo.example.com"
@@ -4443,11 +4649,12 @@ func TestReconcile_RouteLosingOneHostnameAndWithdrawnOnAnother(t *testing.T) {
 	winner := httpRouteAttached("shared", "cozy-public", contestedName)
 	mixed := httpRouteAttached("mixed", "tenant-foo", withdrawnName)
 	mixed.Spec.Hostnames = append(mixed.Spec.Hostnames, contestedName)
+	claimant := passthroughTLSRoute("api-tls", "tenant-foo", withdrawnName, "api")
 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(tgw, winner, mixed).
-		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		WithObjects(tgw, winner, mixed, claimant).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}, &gatewayv1alpha2.TLSRoute{}).
 		Build()
 
 	r := &Reconciler{Client: c, Scheme: s}
@@ -4542,11 +4749,12 @@ func TestReconcile_RepeatedHostnameIsNamedOnce(t *testing.T) {
 	}
 	route := httpRouteAttached("pg", "tenant-foo", published)
 	route.Spec.Hostnames = append(route.Spec.Hostnames, published)
+	claimant := passthroughTLSRoute("pg-tls", "tenant-foo", published, "wild")
 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(tgw, route).
-		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		WithObjects(tgw, route, claimant).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}, &gatewayv1alpha2.TLSRoute{}).
 		Build()
 
 	r := &Reconciler{Client: c, Scheme: s}

@@ -247,40 +247,39 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 			}
 		}
 		if answeredBy != "" {
-			// A TLSRoute on this hostname is the passthrough listener's
-			// intended user, so nothing is withdrawn from it and its
-			// status is left to conflict resolution. Only the HTTPRoute
-			// that expected termination lost something here.
+			// Whether the passthrough listener takes the hostname over
+			// is decided by the routes on it, not by the spec that
+			// declared it. On the pinned Cilium,
+			// tlsPassthroughFilterChains
+			// (operator/pkg/model/translation/envoy_listener.go, v1.19.5)
+			// walks listener.Routes and skips a route with no backends,
+			// so a listener no TLSRoute attaches to emits no filter
+			// chain and matches no ClientHello, while the terminate
+			// listener's chain is built by httpsFilterChains from its
+			// own Secret and carries the name on its own. Withdrawing
+			// on the strength of the spec alone hands a hostname that
+			// is being served to a listener that forwards nowhere.
 			//
-			// For that HTTPRoute the hostname also leaves the ownership
-			// race: losing it to another route is true and beside the
-			// point once nothing terminates it, and leaving the entry
-			// in would name one hostname under both causes in a single
-			// condition, sending the loser to look at a route that is
-			// not served either.
+			// Deferring is safe because the controller watches routes:
+			// the TLSRoute appearing requeues this object and the
+			// withdrawal lands on that pass, which leaves one reconcile
+			// where both chains carry the SNI. That window is the price
+			// of not shedding a live endpoint for a listener that may
+			// never carry one.
 			//
-			// A race between two TLSRoutes on this hostname is not moot
-			// the same way: the listener does exist, exactly one of
-			// them is served through it, and the other has to hear
-			// that from somewhere. Which of them lost is recounted
-			// below, because the record left here was decided against
-			// a field of claimants that included the HTTPRoutes just
-			// withdrawn.
+			// Eligibility is stricter than "a TLSRoute claims this
+			// name": one pinned to another listener, refused for its
+			// namespace, or naming a port the listener does not publish
+			// attaches to nothing, so it puts no chain on the hostname
+			// either. Empty backends are past what routeRef carries, so
+			// a TLSRoute with none still counts and leaves the hostname
+			// unserved — the shape its own spec asked for.
 			var tls []routeRef
 			for _, ref := range refs {
 				if ref.kind != routeKindHTTP {
 					tls = append(tls, ref)
-					continue
 				}
-				withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy, cause: withdrawnAnswered})
-				dropLostHostname(losers, ref, h)
 			}
-			// The race was decided with no notion of kind, so its
-			// winner may be one of the HTTPRoutes just withdrawn, and
-			// a TLSRoute would then hold a conflict naming a route
-			// this same pass declined to serve. Recount over the
-			// TLSRoutes, the only routes a passthrough listener can
-			// serve, and clear what the mixed count produced.
 			// The refused routes leave before a winner is picked, not
 			// while it is being applied: ownership ranks by namespace
 			// with no notion of eligibility, so a route this pass just
@@ -323,14 +322,74 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 				withdrawn[ref] = append(withdrawn[ref], w)
 				dropLostHostname(losers, ref, h)
 			}
-			tls = eligible
-			if len(tls) > 0 {
-				rankRouteRefs(tls)
-				tlsWinner := tls[0]
-				for _, ref := range tls {
-					if ref.namespace == tlsWinner.namespace {
+			if len(eligible) == 0 {
+				// Nothing can attach to the passthrough listener, so it
+				// holds no SNI and only the terminate listener can
+				// answer. An HTTPRoute claiming the name keeps its
+				// listener and its certificate, exactly as it would
+				// with no passthrough listener declared at all.
+				var https []routeRef
+				for _, ref := range refs {
+					if ref.kind == routeKindHTTP {
+						https = append(https, ref)
+					}
+				}
+				if len(https) == 0 {
+					continue
+				}
+				dynHostnames = append(dynHostnames, h)
+				// Recounted for the reason the served branch recounts:
+				// ownership ranked a field that included the TLSRoutes
+				// refused above, so the route now holding the listener
+				// can be carrying a loss to one of them. Same rule as
+				// there — the winner's namespace keeps the name, and a
+				// genuine loss to another HTTPRoute stays recorded.
+				rankRouteRefs(https)
+				winner := https[0]
+				for _, ref := range https {
+					if ref.namespace == winner.namespace {
 						dropLostHostname(losers, ref, h)
 					}
+				}
+				continue
+			}
+			// A TLSRoute on this hostname is the passthrough listener's
+			// intended user, so nothing is withdrawn from it and its
+			// status is left to conflict resolution. Only the HTTPRoute
+			// that expected termination lost something here.
+			//
+			// For that HTTPRoute the hostname also leaves the ownership
+			// race: losing it to another route is true and beside the
+			// point once nothing terminates it, and leaving the entry
+			// in would name one hostname under both causes in a single
+			// condition, sending the loser to look at a route that is
+			// not served either.
+			//
+			// A race between two TLSRoutes on this hostname is not moot
+			// the same way: the listener does exist, exactly one of
+			// them is served through it, and the other has to hear
+			// that from somewhere. Which of them lost is recounted
+			// below, because the record left here was decided against
+			// a field of claimants that included the HTTPRoutes just
+			// withdrawn.
+			for _, ref := range refs {
+				if ref.kind != routeKindHTTP {
+					continue
+				}
+				withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy, cause: withdrawnAnswered})
+				dropLostHostname(losers, ref, h)
+			}
+			// The race was decided with no notion of kind, so its
+			// winner may be one of the HTTPRoutes just withdrawn, and
+			// a TLSRoute would then hold a conflict naming a route
+			// this same pass declined to serve. Recount over the
+			// TLSRoutes, the only routes a passthrough listener can
+			// serve, and clear what the mixed count produced.
+			rankRouteRefs(eligible)
+			tlsWinner := eligible[0]
+			for _, ref := range eligible {
+				if ref.namespace == tlsWinner.namespace {
+					dropLostHostname(losers, ref, h)
 				}
 			}
 			continue
