@@ -123,6 +123,46 @@ tests:
           path: spec.template.metadata.labels["app.kubernetes.io/instance"]
           value: cloudflare-tunnel-gateway-controller
 
+  - it: leaves the ownership layer off when the package does not ask for it
+    # The flags above are the whole of the controller-side layer, so a
+    # re-vendor that stops keying them on hostnameOwnershipPolicy.enabled --
+    # renaming the value, flipping its default, emitting the flags
+    # unconditionally -- keeps the positive case green while the values stop
+    # selecting anything. Rendering the feature off is what separates "these
+    # values turn it on" from "it is on no matter what they say".
+    template: charts/cloudflare-tunnel-gateway-controller/templates/deployment.yaml
+    set:
+      cloudflare-tunnel-gateway-controller:
+        hostnameOwnershipPolicy:
+          enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --hostname-ownership-enforce=true
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --hostname-ownership-label-key=namespace.cozystack.io/host
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --hostname-ownership-namespace-selector=namespace.cozystack.io/host
+
+  - it: takes the policed namespace scope from the selector the package sets
+    # An empty selector does not mean "police nothing": the controller reads a
+    # missing --hostname-ownership-namespace-selector as "police every
+    # namespace" and then fails closed in each one carrying no host label. So
+    # the flag has to be derived from this value rather than baked in, and
+    # emptying the value has to empty the flag.
+    template: charts/cloudflare-tunnel-gateway-controller/templates/deployment.yaml
+    set:
+      cloudflare-tunnel-gateway-controller.hostnameOwnershipPolicy.namespaceSelector.matchExpressions: []
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --hostname-ownership-enforce=true
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --hostname-ownership-namespace-selector=namespace.cozystack.io/host
+
   - it: refuses to render without a tunnel ID and names the missing value
     template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml
     set:
