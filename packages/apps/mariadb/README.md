@@ -140,13 +140,13 @@ Step 3 is the only one that refuses a client by policy, and it happens when you 
 
 Going back is the same change in reverse: setting `tls.issuer: operator` hands issuance back, and clients have to pick up the operator's CA from the bundle again.
 
-One thing does not clean itself up. The Certificates are removed, but cert-manager is configured not to own the Secrets it issued, so `mariadb-<name>-ca-tls` (the CA private key) and `mariadb-<name>-tls` (the server private key) stay in the namespace. No tenant grant exposes them, but they are private keys, so remove them.
+One thing does not clean itself up. The Certificates are removed, but cert-manager is configured not to own the Secrets it issued, so `mariadb-<name>.ca-tls` (the CA private key) and `mariadb-<name>.tls` (the server private key) stay in the namespace. No tenant grant exposes them, but they are private keys, so remove them.
 
-Wait for the rollout first. `mariadb-<name>-tls` is mounted into the running pods for as long as the instance still serves the chart-issued certificate, so deleting it before the operator has reissued and rolled the StatefulSet leaves the next pod unable to start:
+Wait for the rollout first. `mariadb-<name>.tls` is mounted into the running pods for as long as the instance still serves the chart-issued certificate, so deleting it before the operator has reissued and rolled the StatefulSet leaves the next pod unable to start:
 
 ```bash
 kubectl rollout status statefulset/mariadb-<name>
-kubectl delete secret mariadb-<name>-ca-tls mariadb-<name>-tls --ignore-not-found
+kubectl delete secret mariadb-<name>.ca-tls mariadb-<name>.tls --ignore-not-found
 ```
 
 Uninstalling the instance does this for you; only the turn-it-off-and-keep-running case needs the manual step.

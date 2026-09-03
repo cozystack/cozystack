@@ -37,7 +37,7 @@
 #     metav1.LabelSelector, so all three are legal.
 #   - a SECOND matchLabels include selecting a label the key-bearing Secrets
 #     also carry. cert-manager stamps controller.cert-manager.io/fao on both
-#     -ca-tls and -tls, so one such entry grants the CA private key while every
+#     .ca-tls and .tls, so one such entry grants the CA private key while every
 #     name in the file stays correct.
 #
 # Order within each list is meaningless — the matcher ORs across entries — so
@@ -61,10 +61,10 @@ NORMALIZE='{exclude: (.exclude // [] | sort), include: (.include // [] | sort)}'
 
 # The complete tenant-visible Secret surface: the credentials Secret by name,
 # the trust anchor by label, every key-bearing and credential Secret withheld
-# by name. mariadb-<name>-ca-tls holds the CA private key and mariadb-<name>-tls
+# by name. mariadb-<name>.ca-tls holds the CA private key and mariadb-<name>.tls
 # the server key; the operator's own -ca, -server-cert and -client-cert hold
 # keys too. None of them may reach a tenant, by name or by a label they carry.
-EXPECTED_SECRETS='{"exclude":[{"resourceNames":["mariadb-{{ .name }}-ca-tls","mariadb-{{ .name }}-tls","mariadb-{{ .name }}-ca","mariadb-{{ .name }}-server-cert","mariadb-{{ .name }}-client-cert","mariadb-{{ .name }}-root","mariadb-{{ .name }}-password","mariadb-{{ .name }}-repl-password","mariadb-{{ .name }}-metrics-password","mariadb-{{ .name }}-metrics-config","mariadb-{{ .name }}-backup","mariadb-{{ .name }}-regsecret"]}],"include":[{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}},{"resourceNames":["mariadb-{{ .name }}-credentials"]}]}'
+EXPECTED_SECRETS='{"exclude":[{"resourceNames":["mariadb-{{ .name }}.ca-tls","mariadb-{{ .name }}.tls","mariadb-{{ .name }}-ca","mariadb-{{ .name }}-server-cert","mariadb-{{ .name }}-client-cert","mariadb-{{ .name }}-root","mariadb-{{ .name }}-password","mariadb-{{ .name }}-repl-password","mariadb-{{ .name }}-metrics-password","mariadb-{{ .name }}-metrics-config","mariadb-{{ .name }}-backup","mariadb-{{ .name }}-regsecret"]}],"include":[{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}},{"resourceNames":["mariadb-{{ .name }}-credentials"]}]}'
 
 # The Services an instance exposes, pinned for the same reason: a catch-all
 # selector reaches this list too, and nothing else in the tree holds it.
@@ -127,14 +127,17 @@ EXPECTED_SERVICES='{"exclude":[],"include":[{"resourceNames":["mariadb-{{ .name 
     return 1
   fi
 
-  for n in ca-tls tls ca server-cert client-cert \
-           root password repl-password metrics-password metrics-config \
-           backup regsecret; do
+  # The suffix carries its own separator: the two Secrets this chart asks
+  # cert-manager for are joined with a dot, everything else with a hyphen, so
+  # a loop that supplied the hyphen itself would look for names nothing renders.
+  for n in .ca-tls .tls -ca -server-cert -client-cert \
+           -root -password -repl-password -metrics-password -metrics-config \
+           -backup -regsecret; do
     hits=$(printf '%s\n' "$rendered" | yq eval-all \
-      "[.. | select(has(\"secrets\")) | .secrets.exclude[].resourceNames[]? | select(. == \"mariadb-{{ .name }}-$n\")] | length" \
+      "[.. | select(has(\"secrets\")) | .secrets.exclude[].resourceNames[]? | select(. == \"mariadb-{{ .name }}$n\")] | length" \
       -) || return 1
     if [ "$hits" -lt 1 ]; then
-      echo "mariadb-<name>-$n is missing from secrets.exclude" >&2
+      echo "mariadb-<name>$n is missing from secrets.exclude" >&2
       echo "The include selector matches by label with no name constraint, so this" >&2
       echo "list is the enumerable part of that gap; exclude wins over include." >&2
       return 1

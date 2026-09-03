@@ -160,7 +160,7 @@ tests:
           value: true
       - equal:
           path: spec.secretName
-          value: my-mariadb-ca-tls
+          value: my-mariadb.ca-tls
       - equal:
           path: spec.issuerRef.name
           value: my-mariadb-selfsigned
@@ -182,7 +182,7 @@ tests:
           value: my-mariadb-ca
       - equal:
           path: spec.ca.secretName
-          value: my-mariadb-ca-tls
+          value: my-mariadb.ca-tls
 
   - it: "fourth document is the leaf Certificate when TLS is managed"
     templates:
@@ -201,7 +201,7 @@ tests:
           value: my-mariadb-tls
       - equal:
           path: spec.secretName
-          value: my-mariadb-tls
+          value: my-mariadb.tls
       - equal:
           path: spec.isCA
           value: false
@@ -331,10 +331,10 @@ tests:
           value: false
       - equal:
           path: spec.tls.serverCertSecretRef.name
-          value: my-mariadb-tls
+          value: my-mariadb.tls
       - equal:
           path: spec.tls.serverCASecretRef.name
-          value: my-mariadb-ca-tls
+          value: my-mariadb.ca-tls
       - notExists:
           path: spec.tls.serverCertIssuerRef
 
@@ -435,10 +435,10 @@ tests:
           value: false
       - equal:
           path: spec.tls.serverCertSecretRef.name
-          value: my-mariadb-tls
+          value: my-mariadb.tls
       - equal:
           path: spec.tls.serverCASecretRef.name
-          value: my-mariadb-ca-tls
+          value: my-mariadb.ca-tls
       - notExists:
           path: spec.tls.serverCertIssuerRef
 
@@ -534,10 +534,10 @@ tests:
     asserts:
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-tls
+          content: my-mariadb.tls
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-ca-tls
+          content: my-mariadb.ca-tls
 
   - it: "RBAC excludes TLS secrets when external=true and tls.issuer unset"
     templates:
@@ -548,10 +548,10 @@ tests:
     asserts:
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-tls
+          content: my-mariadb.tls
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-ca-tls
+          content: my-mariadb.ca-tls
 
   - it: "RBAC excludes TLS secrets when tls.issuer=operator even if external=true"
     templates:
@@ -564,10 +564,10 @@ tests:
     asserts:
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-tls
+          content: my-mariadb.tls
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-ca-tls
+          content: my-mariadb.ca-tls
 
   - it: "RBAC excludes TLS secrets when tls.issuer=cert-manager even if external=false"
     templates:
@@ -580,10 +580,10 @@ tests:
     asserts:
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-tls
+          content: my-mariadb.tls
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-ca-tls
+          content: my-mariadb.ca-tls
 
   # -------------------------------------------------------------------
   # B2: issuer resolution must survive explicit tls=null without panic
@@ -667,7 +667,7 @@ tests:
     asserts:
       - equal:
           path: spec.secretName
-          value: my-mariadb-tls
+          value: my-mariadb.tls
 
   - it: "CA cert secretName is pinned"
     templates:
@@ -679,7 +679,7 @@ tests:
     asserts:
       - equal:
           path: spec.secretName
-          value: my-mariadb-ca-tls
+          value: my-mariadb.ca-tls
 
   # The tls.required default and both explicit overrides are covered together
   # with the unmanaged case, further down under "Tenant exposure".
@@ -987,7 +987,7 @@ tests:
           content:
             name: tls-ca
             secret:
-              secretName: my-mariadb-tls
+              secretName: my-mariadb.tls
               optional: true
               items:
               - key: ca.crt
@@ -1057,7 +1057,7 @@ tests:
   # tenant visibility, and neither key-bearing cert-manager Secret may carry
   # it — nor internal.cozystack.io/tenantresource, which is what tenantsecrets
   # actually serves on. Exclude wins over include and the
-  # ApplicationDefinition names -ca-tls and -tls there, so exclude-by-name is
+  # ApplicationDefinition names .ca-tls and .tls there, so exclude-by-name is
   # the backstop behind these assertions, not a substitute for them.
   #
   # Selected by the Secret each Certificate writes rather than by position: a
@@ -1073,7 +1073,7 @@ tests:
         issuer: cert-manager
     documentSelector:
       path: spec.secretName
-      value: my-mariadb-ca-tls
+      value: my-mariadb.ca-tls
     asserts:
       - isKind:
           of: Certificate
@@ -1096,7 +1096,7 @@ tests:
         issuer: cert-manager
     documentSelector:
       path: spec.secretName
-      value: my-mariadb-tls
+      value: my-mariadb.tls
     asserts:
       - isKind:
           of: Certificate
@@ -1118,7 +1118,7 @@ tests:
         issuer: cert-manager
     documentSelector:
       path: spec.secretName
-      value: my-mariadb-tls
+      value: my-mariadb.tls
     asserts:
       - equal:
           path: spec.commonName
@@ -1171,10 +1171,10 @@ tests:
     asserts:
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-ca-tls
+          content: my-mariadb.ca-tls
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-tls
+          content: my-mariadb.tls
       - notContains:
           path: rules[1].resourceNames
           content: my-mariadb-ca-bundle
@@ -1197,10 +1197,10 @@ tests:
           content: my-mariadb-ca-bundle
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-ca-tls
+          content: my-mariadb.ca-tls
       - notContains:
           path: rules[1].resourceNames
-          content: my-mariadb-tls
+          content: my-mariadb.tls
 
   # The CR must not advertise enforcement the server does not apply. The
   # operator treats an absent required as false, so a schema default of true

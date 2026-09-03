@@ -48,13 +48,13 @@ spec:
     # this closes the set we can enumerate, not the set that can exist.
     exclude:
       - resourceNames:
-          # Private keys. -ca-tls and -tls are issued by this chart through
+          # Private keys. .ca-tls and .tls are issued by this chart through
           # cert-manager and hold the CA and server keys. Of the operator's own,
           # -server-cert exists only when it issues the server leg, but -ca and
           # -client-cert exist under both issuers: the chart never sets the
           # client refs, so that leg is never delegated to cert-manager.
-          - mariadb-{{ .name }}-ca-tls
-          - mariadb-{{ .name }}-tls
+          - mariadb-{{ .name }}.ca-tls
+          - mariadb-{{ .name }}.tls
           - mariadb-{{ .name }}-ca
           - mariadb-{{ .name }}-server-cert
           - mariadb-{{ .name }}-client-cert
@@ -80,7 +80,7 @@ spec:
       # the chart's TenantProjection. The selector is deliberately specific: an
       # empty one compiles to match-everything, and the lineage webhook
       # evaluates it against every Secret whose ownership resolves to this
-      # instance — which includes -ca-tls, -tls and the operator's own -ca and
+      # instance — which includes .ca-tls, .tls and the operator's own -ca and
       # -ca-bundle, none of which are meant to reach the tenant by name.
       - matchLabels:
           internal.cozystack.io/tenant-ca: "true"

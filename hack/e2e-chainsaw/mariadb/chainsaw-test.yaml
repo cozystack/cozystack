@@ -248,7 +248,7 @@ spec:
           # everything at once.
           checked=0
           for s in mariadb-test-ca mariadb-test-server-cert mariadb-test-client-cert \
-                   mariadb-test-ca-tls mariadb-test-tls; do
+                   mariadb-test.ca-tls mariadb-test.tls; do
             if ! kubectl -n "$NS" get secret "$s" >/dev/null 2>&1; then
               echo "skip $s: no such Secret under this fixture"
               continue

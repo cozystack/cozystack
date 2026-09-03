@@ -22,7 +22,13 @@ metadata:
 spec:
   isCA: true
   commonName: {{ .Release.Name }}-ca
-  secretName: {{ .Release.Name }}-ca-tls
+  # A dot, not a hyphen: the Secret suffix set holds both .ca-tls and .tls, so
+  # hyphenated, release `foo`'s CA Secret and release `foo-ca`'s leaf Secret are
+  # both mariadb-foo-ca-tls. A dot-free suffix after a dot splits uniquely,
+  # because an application name is a DNS-1035 label and cannot contain a dot.
+  # The Certificate and Issuer names keep the hyphen; their suffixes are not a
+  # pair where one is a tail of the other.
+  secretName: {{ .Release.Name }}.ca-tls
   # This Secret is key-bearing and is never handed to the tenant, nor is it the
   # source the trust anchor is published from: the ApplicationDefinition names
   # the operator's key-free <release>-ca-bundle for that instead, so no
@@ -59,7 +65,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   ca:
-    secretName: {{ .Release.Name }}-ca-tls
+    secretName: {{ .Release.Name }}.ca-tls
 ---
 # Leaf server TLS Certificate passed to mariadb-operator via spec.tls.serverCertSecretRef.
 # The SAN list covers the base, primary, and secondary services plus, when external is
@@ -95,7 +101,8 @@ metadata:
   name: {{ .Release.Name }}-tls
   namespace: {{ .Release.Namespace }}
 spec:
-  secretName: {{ .Release.Name }}-tls
+  # Dotted for the same reason as the CA Secret above.
+  secretName: {{ .Release.Name }}.tls
   # Set explicitly: cert-manager leaves the Subject CN empty otherwise, and a
   # client that still verifies the hostname against the CN rather than the SANs
   # fails outright against an empty one.

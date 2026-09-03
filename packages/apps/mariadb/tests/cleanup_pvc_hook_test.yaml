@@ -85,10 +85,10 @@ tests:
       # about whether the key outlives the release.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "(?s)kubectl delete secret -n \\S+.*mariadb-test-ca-tls"
+          pattern: "(?s)kubectl delete secret -n \\S+.*mariadb-test\\.ca-tls"
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "(?s)kubectl delete secret -n \\S+.*mariadb-test-tls"
+          pattern: "(?s)kubectl delete secret -n \\S+.*mariadb-test\\.tls"
       # -ca-bundle carries an ownerRef to the MariaDB resource, so Kubernetes
       # collects it; deleting it here would need a grant that is not warranted.
       - notMatchRegex:
@@ -103,10 +103,10 @@ tests:
           value: Role
       - contains:
           path: rules[1].resourceNames
-          content: mariadb-test-ca-tls
+          content: mariadb-test.ca-tls
       - contains:
           path: rules[1].resourceNames
-          content: mariadb-test-tls
+          content: mariadb-test.tls
       - lengthEqual:
           path: rules[1].resourceNames
           count: 4

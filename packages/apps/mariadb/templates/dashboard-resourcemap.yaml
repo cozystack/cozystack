@@ -25,7 +25,7 @@ rules:
   - {{ .Release.Name }}-credentials
   verbs: ["get", "list", "watch"]
 # The TLS Secrets are deliberately NOT granted here, key-bearing or not.
-# -ca-tls and the operator's own -ca hold the CA private key, -tls holds the
+# .ca-tls and the operator's own -ca hold the CA private key, .tls holds the
 # server private key, and -ca-bundle — while key-free — is still an operator
 # Secret exposed by name rather than through the platform-vouched-for path.
 #
