@@ -80,8 +80,14 @@ spec:
       # the chart's TenantProjection. The selector is deliberately specific: an
       # empty one compiles to match-everything, and the lineage webhook
       # evaluates it against every Secret whose ownership resolves to this
-      # instance — which includes .ca-tls, .tls and the operator's own -ca and
-      # -ca-bundle, none of which are meant to reach the tenant by name.
+      # instance — the operator's own -ca, -server-cert, -client-cert and
+      # -ca-bundle, which reach the MariaDB resource through ownerReferences
+      # and are none of them meant to reach the tenant by name. The
+      # cert-manager Secrets resolve to nothing while
+      # enableCertificateOwnerRef stays false, since lineage walks
+      # ownerReferences or the Flux helm label and a cert-manager Secret
+      # carries neither; they stay excluded by name above because that is one
+      # setting away from changing.
       - matchLabels:
           internal.cozystack.io/tenant-ca: "true"
   services:

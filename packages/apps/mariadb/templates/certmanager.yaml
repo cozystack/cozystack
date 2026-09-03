@@ -30,9 +30,11 @@ spec:
   # pair where one is a tail of the other.
   secretName: {{ .Release.Name }}.ca-tls
   # This Secret is key-bearing and is never handed to the tenant, nor is it the
-  # source the trust anchor is published from: the ApplicationDefinition names
-  # the operator's key-free <release>-ca-bundle for that instead, so no
-  # publication path ever runs next to the CA private key.
+  # source the trust anchor is published from: the TenantProjection this chart
+  # renders names the operator's key-free <release>-ca-bundle as the source
+  # instead, so no publication path ever runs next to the CA private key. The
+  # ApplicationDefinition names neither — it selects the published anchor by
+  # label.
   #
   # The operator only watches Secrets referenced by serverCASecretRef /
   # serverCertSecretRef when they carry its watch label, and it sets the same
