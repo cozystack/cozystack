@@ -33,6 +33,15 @@ src_to_suites() {
   case "$1" in
     postgres-application) echo postgres ;;
     vm-instance-application) echo vminstance ;;
+    # system/ingress-nginx is owned by cozystack.ingress-application, and the
+    # derived name for that source is `ingress`, which is not a suite -- so the
+    # intersection at the bottom of this script drops it and an ingress-only
+    # change reaches nothing that exercises Ingress on the host cluster. The
+    # gateway suite carries that coverage. cozystack.ingress-nginx owns the same
+    # path but never reaches this function: the caller maps only *-application
+    # sources (and external-dns), so it is the *-application owner that has to
+    # carry the mapping.
+    ingress-application) echo gateway ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
     external-dns) echo external-dns ;;
     *-application) echo "${1%-application}" ;;

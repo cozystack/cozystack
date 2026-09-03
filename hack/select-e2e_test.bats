@@ -153,6 +153,31 @@
     [ "$(echo "$output" | wc -w)" -gt 5 ]
 }
 
+@test "an ingress-nginx change selects the gateway Ingress coverage" {
+    # system/ingress-nginx is shared by the root ingress package, the tenant
+    # ingress application, and tenant Kubernetes clusters. The gateway suite
+    # owns the host-cluster Ingress coverage, while the four Kubernetes suites
+    # cover the copies installed inside tenant clusters. Without the
+    # ingress-application mapping the derived suite name is `ingress`, which
+    # does not exist, so the host-cluster half was silently dropped.
+    #
+    # No EXIT trap: cozytest.sh runs every @test as a function in one shell, so
+    # a test-level trap outlives its test and only the last one ever fires.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/ingress-nginx/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    expected="gateway kubernetes-latest kubernetes-oidc-customconfig kubernetes-oidc-system kubernetes-previous"
+    if [ "$output" != "$expected" ]; then
+        echo "an ingress-nginx change must exercise every installed copy" >&2
+        echo "  expected: $expected" >&2
+        echo "  actual:   $output" >&2
+        rm -rf "$tmp"
+        exit 1
+    fi
+    rm -rf "$tmp"
+}
+
 @test "backup example harness edit selects its app suite" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
