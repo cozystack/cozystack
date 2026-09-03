@@ -270,17 +270,18 @@ spec:
               type: RuntimeDefault
 {{- end }}
 {{- $dnsDomain := include "kubernetes.tenantClusterDomain" $ }}
-{{- $group := dict
-      "instanceType" .Values.instanceType
-      "resources" .Values.resources
-      "gpus" .Values.gpus
-      "kubelet" .Values.kubelet
-}}
 {{- /* The TalosConfigTemplate spec is immutable, so it can only ever be
        created — never updated — and its name therefore carries a hash of the
        machine config it holds (see _talosconfigtemplate.tpl). nodegroup.yaml
        computes the same name for
-       MachineDeployment.spec.template.spec.bootstrap.configRef. */}}
+       MachineDeployment.spec.template.spec.bootstrap.configRef.
+
+       Both sides read the group from the same helper rather than each
+       assembling its own dict: the spec helper reads a subset of the keys, so
+       two assemblies would agree only by coincidence of that subset, and a key
+       dropped on one side alone would point the MachineDeployment at a
+       template this Job never creates. */}}
+{{- $group := include "kubernetes-nodes.group" $ | fromYaml }}
 {{- $tctArgs := dict "root" $ "group" $group }}
 {{- $tctSpec := include "kubernetes.talosConfigTemplateSpec" $tctArgs }}
 {{- $tctName := printf "%s-%s-%s" $clusterName $groupName (include "kubernetes.talosConfigTemplateHash" $tctArgs) }}

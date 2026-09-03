@@ -80,6 +80,23 @@ tests:
           path: spec.template.spec.bootstrap.configRef.kind
           value: TalosConfigTemplate
 
+  # Paired with the GPU-shaped test in talos_reconcile_job_test.yaml: a
+  # machine-config change rotates the name, and both templates must rotate it
+  # to the same value. See that file for why the fixture carries a truthy
+  # `gpus` rather than reusing the all-falsy defaults above.
+  - it: a machine-config change rotates the name the MachineDeployment references
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    set:
+      gpus:
+        - name: nvidia.com/GH200
+    asserts:
+      # Same literal as the paired test in talos_reconcile_job_test.yaml.
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-0bbd2a
+
   - it: names the KubevirtMachineTemplate with the parent cluster prefix and a content hash
     documentSelector:
       path: kind

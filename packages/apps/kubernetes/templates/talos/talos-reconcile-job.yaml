@@ -214,7 +214,10 @@ subjects:
        a content hash of the whole spec (see the header comment). The dot
        passed in is a deepCopy of the root context with the per-nodeGroup
        computed values set on it, so $.Release / $.Values resolve as usual
-       and the loop/computed locals are read as .group, .groupName, etc. */}}
+       and the loop/computed locals are read as .groupName, .dnsDomain,
+       .tctName, .tctSpec and .kubectlImage. The node group itself is not
+       among them: the machine config it feeds is rendered outside this
+       template, into .tctSpec (see _talosconfigtemplate.tpl). */}}
 {{- define "kubernetes.talos-reconcile-job-spec" -}}
 spec:
   {{- /* Each pod attempt runs the ~10-minute (120 × 5s) input-wait loop, so this

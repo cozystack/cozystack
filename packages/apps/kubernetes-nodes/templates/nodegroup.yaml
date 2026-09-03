@@ -31,18 +31,11 @@
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
 {{- include "kubernetes-nodes.assertNoForeignPool" . }}
 {{- $kubevirtmachinetemplateNames := list }}
-{{- $group := dict
-      "minReplicas" .Values.minReplicas
-      "maxReplicas" .Values.maxReplicas
-      "instanceType" .Values.instanceType
-      "diskSize" .Values.diskSize
-      "storageClass" .Values.storageClass
-      "roles" .Values.roles
-      "resources" .Values.resources
-      "gpus" .Values.gpus
-      "kubelet" .Values.kubelet
-      "logSerialConsole" .Values.logSerialConsole
-}}
+{{- /* Assembled once in _helpers.tpl and read back here and in
+       talos-reconcile-job.yaml, so the TalosConfigTemplate name this file
+       hashes into configRef and the one the Job hashes into TCT_NAME cannot
+       be computed from different inputs. */}}
+{{- $group := include "kubernetes-nodes.group" . | fromYaml }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
   {{- /* Talos has no SSH; use 'none' so CAPK does not block Machine.Ready
