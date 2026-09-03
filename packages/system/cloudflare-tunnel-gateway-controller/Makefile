@@ -5,10 +5,11 @@ include ../../../hack/package.mk
 
 # The upstream chart is pinned by version AND OCI manifest digest, and the
 # two images it runs are pinned by tag@digest in values.yaml. Registries can
-# republish a tag; the digests cannot move. Bump all four together:
-#   crane digest ghcr.io/lexfrei/charts/cloudflare-tunnel-gateway-controller:<tag>
-#   crane digest ghcr.io/lexfrei/cloudflare-tunnel-gateway-controller:<tag>
-#   crane digest ghcr.io/lexfrei/cloudflare-tunnel-gateway-controller-proxy:<tag>
+# republish a tag; the digests cannot move. All four are tracked by the
+# renovate custom manager keyed on the marker comments, so a release upstream
+# arrives as a PR rather than aging in place; the four have to move together,
+# and the version check in `update` below is what refuses a half-done bump.
+# renovate: datasource=docker depName=ghcr.io/lexfrei/charts/cloudflare-tunnel-gateway-controller
 CHART_VERSION ?= 3.4.1
 CHART_DIGEST ?= sha256:398a47876d172b86ecf3059586bb226f4af7701cdd0f17d2330f7f5182bcf642
 
