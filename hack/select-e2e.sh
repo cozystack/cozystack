@@ -354,9 +354,9 @@ while IFS= read -r file || [ -n "$file" ]; do
       # so the suite name comes off the basename exactly as the rule above takes
       # it off the directory.
       #
-      # Deliberately NOT marked inert, even though what remains here is wired to
-      # nothing after the Chainsaw migration: inert would bake that orphan status
-      # into the rule and go quietly wrong the day a lane runs these again. The
+      # Deliberately NOT marked inert, even though the directory is empty after
+      # the Chainsaw migration: inert would bake that orphan status into the rule
+      # and go quietly wrong the day a lane runs a suite placed here again. The
       # mapping is correct either way — a file named after an app selects that
       # app's suite whether or not anything currently executes it.
       #
