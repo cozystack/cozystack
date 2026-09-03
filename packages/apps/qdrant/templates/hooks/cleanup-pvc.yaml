@@ -10,6 +10,18 @@ metadata:
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  # One retry — not the Kubernetes default of six, and not zero. Every delete
+  # below is idempotent and carries --ignore-not-found, so a second attempt
+  # re-issues an API call rather than re-running any logic, and one short
+  # backoff is what separates a transient apiserver error from a real one.
+  # That distinction is the whole point here: this hook's failures become
+  # visible for the first time with this change, and a signal that fires on
+  # noise stops being read — including on the day it is right. Six is the far
+  # end of the same mistake: the Job would spend about ten minutes backing off
+  # across seven pods, outlasting the hook timeout, and Helm would report that
+  # timeout instead of the hook's own error. Load-bearing only since the script
+  # gained a non-zero exit; before that the script could not report one.
+  backoffLimit: 1
   template:
     metadata:
       labels:
@@ -46,6 +58,29 @@ spec:
             - /bin/sh
             - -c
             - |
+              set -u
+              # A delete that did not happen must reach Helm as a non-zero exit.
+              # Otherwise the hook-succeeded delete policy garbage-collects this
+              # Job and the pod that carried the only account of the failure, and
+              # an uninstall that left storage behind is indistinguishable from
+              # one that had nothing to reclaim. Failures are counted and the
+              # exit code is set at the end rather than with `set -e`, so one
+              # failed delete does not skip the work that follows it. An object
+              # that is already gone is not a failure: every delete below passes
+              # --ignore-not-found, which exits 0 in that case, so re-running
+              # this hook over an already-clean namespace still succeeds.
+              # Cost: on failure the Job and its pods stay in the namespace,
+              # which is the point — they hold the log. Nothing collects them
+              # on its own: before-hook-creation deletes the previous copy only
+              # when this hook runs again, and a post-delete hook runs only on
+              # an uninstall. They stay until a release of this name is
+              # installed and uninstalled again, or until the namespace goes.
+              failures=0
+              fail() {
+                failures=$((failures + 1))
+                echo "ERROR: $*" >&2
+              }
+
               # StatefulSet-templated data PVCs are named
               # qdrant-storage-<release>-<ordinal> (volumeClaimTemplate name
               # "qdrant-storage" + StatefulSet name <release> + pod ordinal).
@@ -59,13 +94,26 @@ spec:
               # vs "qdrant-test-2") never matches the sibling's PVCs and deletes
               # its data. See #3059.
               echo "Deleting orphaned data PVCs for release {{ .Release.Name }}..."
-              pvcs=$(kubectl get pvc -n {{ .Release.Namespace }} -o name \
-                | grep -E "^persistentvolumeclaim/qdrant-storage-{{ .Release.Name }}-[0-9]+$" || true)
-              if [ -z "$pvcs" ]; then
-                echo "No data PVCs found for release {{ .Release.Name }}; nothing to delete."
+              # The listing is captured on its own line and the filter applied
+              # to the result. Piping the two together reports grep's status,
+              # under which a failed `kubectl get` yields an empty match and
+              # reads exactly like a namespace that holds no data PVCs.
+              if all_pvcs=$(kubectl get pvc -n {{ .Release.Namespace }} -o name); then
+                pvcs=$(echo "$all_pvcs" \
+                  | grep -E "^persistentvolumeclaim/qdrant-storage-{{ .Release.Name }}-[0-9]+$" || true)
+                if [ -z "$pvcs" ]; then
+                  echo "No data PVCs found for release {{ .Release.Name }}; nothing to delete."
+                else
+                  echo "$pvcs" | xargs kubectl delete -n {{ .Release.Namespace }} --ignore-not-found \
+                    || fail "failed to delete data PVCs of {{ .Release.Name }} in {{ .Release.Namespace }} ($(echo "$pvcs" | tr '\n' ' ')); orphaned PVCs may remain"
+                fi
               else
-                echo "$pvcs" | xargs kubectl delete -n {{ .Release.Namespace }} --ignore-not-found \
-                  || echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+                fail "failed to list PVCs in {{ .Release.Namespace }}; cannot tell whether data PVCs of {{ .Release.Name }} remain"
+              fi
+
+              if [ "$failures" -ne 0 ]; then
+                echo "PVC cleanup FAILED for {{ .Release.Name }}: $failures operation(s) did not complete; see the errors above." >&2
+                exit 1
               fi
               echo "PVC cleanup complete."
           volumeMounts:

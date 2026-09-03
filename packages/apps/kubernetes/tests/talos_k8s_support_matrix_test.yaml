@@ -37,7 +37,7 @@ tests:
       version: "v1.31"
     asserts:
       - hasDocuments:
-          count: 8
+          count: 4
 
   - it: keeps rendering for an older patch release of the same Talos minor
     release:
@@ -50,4 +50,4 @@ tests:
       version: "v1.31"
     asserts:
       - hasDocuments:
-          count: 8
+          count: 4

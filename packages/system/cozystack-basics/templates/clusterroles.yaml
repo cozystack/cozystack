@@ -249,6 +249,7 @@ rules:
   - redises
   - seaweedfses
   - tcpbalancers
+  - valkeys
   - virtualmachines
   - vmdisks
   - vminstances

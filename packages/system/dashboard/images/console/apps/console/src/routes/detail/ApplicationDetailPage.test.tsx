@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
 vi.mock("@cozystack/k8s-client", () => ({
   useK8sGet: () => h.get,
   useK8sDelete: () => ({ mutateAsync: vi.fn() }),
+  // Presence probes (use-resource-presence.ts) — report empty lists.
+  useK8sList: () => ({ data: undefined, isLoading: false }),
 }))
 vi.mock("../../lib/app-definitions.ts", () => ({
   useApplicationDefinitions: () => ({

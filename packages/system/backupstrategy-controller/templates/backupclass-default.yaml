@@ -50,6 +50,13 @@ spec:
         apiGroup: strategy.backups.cozystack.io
         kind: Altinity
         name: cozy-default-altinity
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: MongoDB
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: MongoDB
+        name: cozy-default-mongodb
     # FoundationDB intentionally NOT bound in cozy-default. The Strategy
     # CR cozy-default-foundationdb is shipped (admins can wire it into a
     # custom BackupClass), but Restore goes through fdbrestore in the

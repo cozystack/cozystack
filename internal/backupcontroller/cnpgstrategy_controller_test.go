@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -491,6 +492,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsSecretRef_NotCleartext(t *testing.
 	patched := buildPostgresAppRestorePatch(
 		app,
 		"pg-src",
+		"postgres-pg-target-restore-deadbeef",
 		"s3://bucket/pg-src/",
 		"https://s3.example",
 		"",
@@ -524,7 +526,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsCustomKeyOverrides(t *testing.T) {
 		SecretAccessKeyKey: "SECRET_KEY",
 	}
 
-	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", creds, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", creds, nil, nil, nil)
 
 	want := postgresapp.S3CredentialsSecret{
 		Name:               "creds",
@@ -542,7 +544,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsCustomKeyOverrides(t *testing.T) {
 // Secret name and helm install would fail.
 func TestBuildPostgresAppRestorePatch_NoSecretRefIsSkipped(t *testing.T) {
 	app := newPostgresApp("pg", "tenant")
-	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", nil, nil, nil, nil)
 	if got := patched.Spec.Backup.S3CredentialsSecret; got != (postgresapp.S3CredentialsSecret{}) {
 		t.Errorf("spec.backup.s3CredentialsSecret must be zero when credsRef is nil; got %#v", got)
 	}
@@ -700,7 +702,7 @@ func TestBuildPostgresAppRestorePatch_ReplacesTargetUsersAndDatabases(t *testing
 		"appdb": {Extensions: []string{"hstore"}},
 	}
 
-	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, nil, sourceDatabases, sourceUsers)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", nil, nil, sourceDatabases, sourceUsers)
 
 	if _, ok := patched.Spec.Users["stale-target-user"]; ok {
 		t.Errorf("stale target user survived restore; replace semantics regressed")
@@ -726,6 +728,7 @@ func TestBuildPostgresAppRestorePatch_ReplacesTargetUsersAndDatabases(t *testing
 func TestBuildPostgresAppRestorePatch_ScrubsStaleBackupSettings(t *testing.T) {
 	app := newPostgresApp("pg-target", "tenant")
 	app.Spec.Bootstrap.RecoveryTime = "2025-01-01T00:00:00Z"
+	app.Spec.Backup.UseSystemBucket = true
 	app.Spec.Backup.EndpointURL = "https://stale.example"
 	app.Spec.Backup.S3AccessKey = "stale-ak"
 	app.Spec.Backup.S3SecretKey = "stale-sk"
@@ -736,7 +739,7 @@ func TestBuildPostgresAppRestorePatch_ScrubsStaleBackupSettings(t *testing.T) {
 
 	// Restore with no recoveryTime, no endpointURL, no creds, no CA -
 	// everything stale on the target must be wiped.
-	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", nil, nil, nil, nil)
 
 	if got := patched.Spec.Bootstrap.RecoveryTime; got != "" {
 		t.Errorf("stale recoveryTime survived; got %q", got)
@@ -756,6 +759,11 @@ func TestBuildPostgresAppRestorePatch_ScrubsStaleBackupSettings(t *testing.T) {
 	if patched.Spec.Backup.EndpointCA != (postgresapp.EndpointCA{}) {
 		t.Errorf("stale endpointCA survived; got %+v", patched.Spec.Backup.EndpointCA)
 	}
+	// A system-bucket source must be flipped to the explicit-creds path, or the
+	// chart's bootstrap.enabled + useSystemBucket guard wedges the restore.
+	if patched.Spec.Backup.UseSystemBucket {
+		t.Errorf("useSystemBucket must be cleared on restore so the bootstrap guard passes")
+	}
 }
 
 // TestBuildPostgresAppRestorePatch_ForwardsEndpointCA verifies that a
@@ -770,11 +778,55 @@ func TestBuildPostgresAppRestorePatch_ForwardsEndpointCA(t *testing.T) {
 		SecretRef: corev1.LocalObjectReference{Name: "pg-cnpg-backup-ca"},
 		Key:       "ca.crt",
 	}
-	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, caRef, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", nil, caRef, nil, nil)
 
 	want := postgresapp.EndpointCA{Name: "pg-cnpg-backup-ca", Key: "ca.crt"}
 	if got := patched.Spec.Backup.EndpointCA; got != want {
 		t.Fatalf("endpointCA mismatch\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// TestBuildPostgresAppRestorePatch_ArchiveServerNameDiffersFromSource guards the
+// in-place restore fix: the restored cluster archives under bootstrap.newServerName,
+// distinct from the recovery source (bootstrap.serverName / oldName).
+func TestBuildPostgresAppRestorePatch_ArchiveServerNameDiffersFromSource(t *testing.T) {
+	app := newPostgresApp("pg", "tenant")
+	// An in-place restore is the worst case: source serverName equals the
+	// target cluster's own name.
+	const source = "postgres-pg"
+	patched := buildPostgresAppRestorePatch(app, source, "postgres-pg-restore-deadbeef", "s3://b/", "", "", nil, nil, nil, nil)
+
+	if got := patched.Spec.Bootstrap.ServerName; got != source {
+		t.Errorf("recovery serverName must stay the source; got %q want %q", got, source)
+	}
+	if got := patched.Spec.Bootstrap.OldName; got != source {
+		t.Errorf("recovery oldName must stay the source; got %q want %q", got, source)
+	}
+	if got := patched.Spec.Bootstrap.NewServerName; got == "" || got == source {
+		t.Errorf("archive newServerName must be non-empty and differ from the source %q; got %q", source, got)
+	}
+}
+
+// TestRestoredServerName pins the archive-prefix generator: deterministic per
+// RestoreJob UID, distinct across UIDs, and never equal to the plain cluster
+// name (which is the source serverName on an in-place restore).
+func TestRestoredServerName(t *testing.T) {
+	const cluster = "postgres-pg"
+	a1 := restoredServerName(cluster, types.UID("3c2ee41b-346f-4ae2-98d2-5d629c96f744"))
+	a2 := restoredServerName(cluster, types.UID("3c2ee41b-346f-4ae2-98d2-5d629c96f744"))
+	b := restoredServerName(cluster, types.UID("9eb8feed-7d49-467e-b719-d1896c0602d5"))
+
+	if a1 != a2 {
+		t.Errorf("not deterministic for a fixed UID: %q vs %q", a1, a2)
+	}
+	if a1 == b {
+		t.Errorf("distinct UIDs must yield distinct serverNames; both %q", a1)
+	}
+	if a1 == cluster {
+		t.Errorf("restored serverName must never equal the plain cluster name %q", cluster)
+	}
+	if !strings.HasPrefix(a1, cluster+"-restore-") {
+		t.Errorf("restored serverName %q must carry the %q-restore- prefix", a1, cluster)
 	}
 }
 

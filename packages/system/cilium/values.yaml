@@ -38,6 +38,30 @@ cilium:
         memory: 512Mi
       limits:
         memory: 1Gi
+  # The cilium-agent DaemonSet had the same gap the envoy DaemonSet above
+  # already closed. Beyond the node-headroom argument, a memory limit is what
+  # sets memory.max on the pod cgroup, and the Talos userspace OOM handler
+  # (v1.12+) only ever selects cgroups that lack it — so an unlimited agent is
+  # an eviction candidate on every node regardless of what caused the pressure.
+  # 14d peak on a 3-node dev cluster is 575Mi, and the agent grows with
+  # endpoint and policy count, so the limit matches the 4Gi in the upstream
+  # values' own commented example rather than being fitted to that measurement.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 4Gi
+  # Shared by the agent's init containers (config, mount-cgroup, mount-bpf-fs,
+  # apply-sysctl-overwrites, clean-cilium-state). All are short-lived setup
+  # steps, but each one still has to carry a limit for the pod cgroup to get
+  # memory.max at all.
+  initResources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 256Mi
   gatewayAPI:
     enabled: true
     # Upstream default is false — Envoy then advertises no ALPN protocols on

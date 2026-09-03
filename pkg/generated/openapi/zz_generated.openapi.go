@@ -23,6 +23,8 @@ package openapi
 
 import (
 	v1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	sdnv1alpha1 "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,110 +36,110 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		v1alpha1.Application{}.OpenAPIModelName():                                   schema_pkg_apis_apps_v1alpha1_Application(ref),
-		v1alpha1.ApplicationList{}.OpenAPIModelName():                               schema_pkg_apis_apps_v1alpha1_ApplicationList(ref),
-		v1alpha1.ApplicationStatus{}.OpenAPIModelName():                             schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.Option":              schema_pkg_apis_core_v1alpha1_Option(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionItem":          schema_pkg_apis_core_v1alpha1_OptionItem(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionList":          schema_pkg_apis_core_v1alpha1_OptionList(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionSpec":          schema_pkg_apis_core_v1alpha1_OptionSpec(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantModule":        schema_pkg_apis_core_v1alpha1_TenantModule(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantModuleList":    schema_pkg_apis_core_v1alpha1_TenantModuleList(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantModuleStatus":  schema_pkg_apis_core_v1alpha1_TenantModuleStatus(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantNamespace":     schema_pkg_apis_core_v1alpha1_TenantNamespace(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantNamespaceList": schema_pkg_apis_core_v1alpha1_TenantNamespaceList(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantSecret":        schema_pkg_apis_core_v1alpha1_TenantSecret(ref),
-		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantSecretList":    schema_pkg_apis_core_v1alpha1_TenantSecretList(ref),
-		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference": schema_pkg_apis_sdn_v1alpha1_ApplicationReference(ref),
-		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.EgressRule":           schema_pkg_apis_sdn_v1alpha1_EgressRule(ref),
-		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.FQDNSelector":         schema_pkg_apis_sdn_v1alpha1_FQDNSelector(ref),
-		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.IngressRule":          schema_pkg_apis_sdn_v1alpha1_IngressRule(ref),
-		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortProtocol":         schema_pkg_apis_sdn_v1alpha1_PortProtocol(ref),
-		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule":             schema_pkg_apis_sdn_v1alpha1_PortRule(ref),
-		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroup":        schema_pkg_apis_sdn_v1alpha1_SecurityGroup(ref),
-		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroupList":    schema_pkg_apis_sdn_v1alpha1_SecurityGroupList(ref),
-		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroupSpec":    schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref),
-		v1.ConversionRequest{}.OpenAPIModelName():                                   schema_pkg_apis_apiextensions_v1_ConversionRequest(ref),
-		v1.ConversionResponse{}.OpenAPIModelName():                                  schema_pkg_apis_apiextensions_v1_ConversionResponse(ref),
-		v1.ConversionReview{}.OpenAPIModelName():                                    schema_pkg_apis_apiextensions_v1_ConversionReview(ref),
-		v1.CustomResourceColumnDefinition{}.OpenAPIModelName():                      schema_pkg_apis_apiextensions_v1_CustomResourceColumnDefinition(ref),
-		v1.CustomResourceConversion{}.OpenAPIModelName():                            schema_pkg_apis_apiextensions_v1_CustomResourceConversion(ref),
-		v1.CustomResourceDefinition{}.OpenAPIModelName():                            schema_pkg_apis_apiextensions_v1_CustomResourceDefinition(ref),
-		v1.CustomResourceDefinitionCondition{}.OpenAPIModelName():                   schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionCondition(ref),
-		v1.CustomResourceDefinitionList{}.OpenAPIModelName():                        schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionList(ref),
-		v1.CustomResourceDefinitionNames{}.OpenAPIModelName():                       schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionNames(ref),
-		v1.CustomResourceDefinitionSpec{}.OpenAPIModelName():                        schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionSpec(ref),
-		v1.CustomResourceDefinitionStatus{}.OpenAPIModelName():                      schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionStatus(ref),
-		v1.CustomResourceDefinitionVersion{}.OpenAPIModelName():                     schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionVersion(ref),
-		v1.CustomResourceSubresourceScale{}.OpenAPIModelName():                      schema_pkg_apis_apiextensions_v1_CustomResourceSubresourceScale(ref),
-		v1.CustomResourceSubresourceStatus{}.OpenAPIModelName():                     schema_pkg_apis_apiextensions_v1_CustomResourceSubresourceStatus(ref),
-		v1.CustomResourceSubresources{}.OpenAPIModelName():                          schema_pkg_apis_apiextensions_v1_CustomResourceSubresources(ref),
-		v1.CustomResourceValidation{}.OpenAPIModelName():                            schema_pkg_apis_apiextensions_v1_CustomResourceValidation(ref),
-		v1.ExternalDocumentation{}.OpenAPIModelName():                               schema_pkg_apis_apiextensions_v1_ExternalDocumentation(ref),
-		v1.JSON{}.OpenAPIModelName():                                                schema_pkg_apis_apiextensions_v1_JSON(ref),
-		v1.JSONSchemaProps{}.OpenAPIModelName():                                     schema_pkg_apis_apiextensions_v1_JSONSchemaProps(ref),
-		v1.JSONSchemaPropsOrArray{}.OpenAPIModelName():                              schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrArray(ref),
-		v1.JSONSchemaPropsOrBool{}.OpenAPIModelName():                               schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrBool(ref),
-		v1.JSONSchemaPropsOrStringArray{}.OpenAPIModelName():                        schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrStringArray(ref),
-		v1.SelectableField{}.OpenAPIModelName():                                     schema_pkg_apis_apiextensions_v1_SelectableField(ref),
-		v1.ServiceReference{}.OpenAPIModelName():                                    schema_pkg_apis_apiextensions_v1_ServiceReference(ref),
-		v1.ValidationRule{}.OpenAPIModelName():                                      schema_pkg_apis_apiextensions_v1_ValidationRule(ref),
-		v1.WebhookClientConfig{}.OpenAPIModelName():                                 schema_pkg_apis_apiextensions_v1_WebhookClientConfig(ref),
-		v1.WebhookConversion{}.OpenAPIModelName():                                   schema_pkg_apis_apiextensions_v1_WebhookConversion(ref),
-		resource.Quantity{}.OpenAPIModelName():                                      schema_apimachinery_pkg_api_resource_Quantity(ref),
-		metav1.APIGroup{}.OpenAPIModelName():                                        schema_pkg_apis_meta_v1_APIGroup(ref),
-		metav1.APIGroupList{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_APIGroupList(ref),
-		metav1.APIResource{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_APIResource(ref),
-		metav1.APIResourceList{}.OpenAPIModelName():                                 schema_pkg_apis_meta_v1_APIResourceList(ref),
-		metav1.APIVersions{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_APIVersions(ref),
-		metav1.ApplyOptions{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_ApplyOptions(ref),
-		metav1.Condition{}.OpenAPIModelName():                                       schema_pkg_apis_meta_v1_Condition(ref),
-		metav1.CreateOptions{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_CreateOptions(ref),
-		metav1.DeleteOptions{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_DeleteOptions(ref),
-		metav1.Duration{}.OpenAPIModelName():                                        schema_pkg_apis_meta_v1_Duration(ref),
-		metav1.FieldSelectorRequirement{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
-		metav1.FieldsV1{}.OpenAPIModelName():                                        schema_pkg_apis_meta_v1_FieldsV1(ref),
-		metav1.GetOptions{}.OpenAPIModelName():                                      schema_pkg_apis_meta_v1_GetOptions(ref),
-		metav1.GroupKind{}.OpenAPIModelName():                                       schema_pkg_apis_meta_v1_GroupKind(ref),
-		metav1.GroupResource{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_GroupResource(ref),
-		metav1.GroupVersion{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_GroupVersion(ref),
-		metav1.GroupVersionForDiscovery{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
-		metav1.GroupVersionKind{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_GroupVersionKind(ref),
-		metav1.GroupVersionResource{}.OpenAPIModelName():                            schema_pkg_apis_meta_v1_GroupVersionResource(ref),
-		metav1.InternalEvent{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_InternalEvent(ref),
-		metav1.LabelSelector{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_LabelSelector(ref),
-		metav1.LabelSelectorRequirement{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
-		metav1.List{}.OpenAPIModelName():                                            schema_pkg_apis_meta_v1_List(ref),
-		metav1.ListMeta{}.OpenAPIModelName():                                        schema_pkg_apis_meta_v1_ListMeta(ref),
-		metav1.ListOptions{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_ListOptions(ref),
-		metav1.ManagedFieldsEntry{}.OpenAPIModelName():                              schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
-		metav1.MicroTime{}.OpenAPIModelName():                                       schema_pkg_apis_meta_v1_MicroTime(ref),
-		metav1.ObjectMeta{}.OpenAPIModelName():                                      schema_pkg_apis_meta_v1_ObjectMeta(ref),
-		metav1.OwnerReference{}.OpenAPIModelName():                                  schema_pkg_apis_meta_v1_OwnerReference(ref),
-		metav1.PartialObjectMetadata{}.OpenAPIModelName():                           schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
-		metav1.PartialObjectMetadataList{}.OpenAPIModelName():                       schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
-		metav1.Patch{}.OpenAPIModelName():                                           schema_pkg_apis_meta_v1_Patch(ref),
-		metav1.PatchOptions{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_PatchOptions(ref),
-		metav1.Preconditions{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_Preconditions(ref),
-		metav1.RootPaths{}.OpenAPIModelName():                                       schema_pkg_apis_meta_v1_RootPaths(ref),
-		metav1.ServerAddressByClientCIDR{}.OpenAPIModelName():                       schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
-		metav1.Status{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_Status(ref),
-		metav1.StatusCause{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_StatusCause(ref),
-		metav1.StatusDetails{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_StatusDetails(ref),
-		metav1.Table{}.OpenAPIModelName():                                           schema_pkg_apis_meta_v1_Table(ref),
-		metav1.TableColumnDefinition{}.OpenAPIModelName():                           schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
-		metav1.TableOptions{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_TableOptions(ref),
-		metav1.TableRow{}.OpenAPIModelName():                                        schema_pkg_apis_meta_v1_TableRow(ref),
-		metav1.TableRowCondition{}.OpenAPIModelName():                               schema_pkg_apis_meta_v1_TableRowCondition(ref),
-		metav1.Time{}.OpenAPIModelName():                                            schema_pkg_apis_meta_v1_Time(ref),
-		metav1.Timestamp{}.OpenAPIModelName():                                       schema_pkg_apis_meta_v1_Timestamp(ref),
-		metav1.TypeMeta{}.OpenAPIModelName():                                        schema_pkg_apis_meta_v1_TypeMeta(ref),
-		metav1.UpdateOptions{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_UpdateOptions(ref),
-		metav1.WatchEvent{}.OpenAPIModelName():                                      schema_pkg_apis_meta_v1_WatchEvent(ref),
-		runtime.RawExtension{}.OpenAPIModelName():                                   schema_k8sio_apimachinery_pkg_runtime_RawExtension(ref),
-		runtime.TypeMeta{}.OpenAPIModelName():                                       schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
-		runtime.Unknown{}.OpenAPIModelName():                                        schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
-		version.Info{}.OpenAPIModelName():                                           schema_k8sio_apimachinery_pkg_version_Info(ref),
+		v1alpha1.Application{}.OpenAPIModelName():                 schema_pkg_apis_apps_v1alpha1_Application(ref),
+		v1alpha1.ApplicationList{}.OpenAPIModelName():             schema_pkg_apis_apps_v1alpha1_ApplicationList(ref),
+		v1alpha1.ApplicationStatus{}.OpenAPIModelName():           schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref),
+		corev1alpha1.Option{}.OpenAPIModelName():                  schema_pkg_apis_core_v1alpha1_Option(ref),
+		corev1alpha1.OptionItem{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_OptionItem(ref),
+		corev1alpha1.OptionList{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_OptionList(ref),
+		corev1alpha1.OptionSpec{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_OptionSpec(ref),
+		corev1alpha1.TenantModule{}.OpenAPIModelName():            schema_pkg_apis_core_v1alpha1_TenantModule(ref),
+		corev1alpha1.TenantModuleList{}.OpenAPIModelName():        schema_pkg_apis_core_v1alpha1_TenantModuleList(ref),
+		corev1alpha1.TenantModuleStatus{}.OpenAPIModelName():      schema_pkg_apis_core_v1alpha1_TenantModuleStatus(ref),
+		corev1alpha1.TenantNamespace{}.OpenAPIModelName():         schema_pkg_apis_core_v1alpha1_TenantNamespace(ref),
+		corev1alpha1.TenantNamespaceList{}.OpenAPIModelName():     schema_pkg_apis_core_v1alpha1_TenantNamespaceList(ref),
+		corev1alpha1.TenantSecret{}.OpenAPIModelName():            schema_pkg_apis_core_v1alpha1_TenantSecret(ref),
+		corev1alpha1.TenantSecretList{}.OpenAPIModelName():        schema_pkg_apis_core_v1alpha1_TenantSecretList(ref),
+		sdnv1alpha1.ApplicationReference{}.OpenAPIModelName():     schema_pkg_apis_sdn_v1alpha1_ApplicationReference(ref),
+		sdnv1alpha1.EgressRule{}.OpenAPIModelName():               schema_pkg_apis_sdn_v1alpha1_EgressRule(ref),
+		sdnv1alpha1.FQDNSelector{}.OpenAPIModelName():             schema_pkg_apis_sdn_v1alpha1_FQDNSelector(ref),
+		sdnv1alpha1.IngressRule{}.OpenAPIModelName():              schema_pkg_apis_sdn_v1alpha1_IngressRule(ref),
+		sdnv1alpha1.PortProtocol{}.OpenAPIModelName():             schema_pkg_apis_sdn_v1alpha1_PortProtocol(ref),
+		sdnv1alpha1.PortRule{}.OpenAPIModelName():                 schema_pkg_apis_sdn_v1alpha1_PortRule(ref),
+		sdnv1alpha1.SecurityGroup{}.OpenAPIModelName():            schema_pkg_apis_sdn_v1alpha1_SecurityGroup(ref),
+		sdnv1alpha1.SecurityGroupList{}.OpenAPIModelName():        schema_pkg_apis_sdn_v1alpha1_SecurityGroupList(ref),
+		sdnv1alpha1.SecurityGroupSpec{}.OpenAPIModelName():        schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref),
+		v1.ConversionRequest{}.OpenAPIModelName():                 schema_pkg_apis_apiextensions_v1_ConversionRequest(ref),
+		v1.ConversionResponse{}.OpenAPIModelName():                schema_pkg_apis_apiextensions_v1_ConversionResponse(ref),
+		v1.ConversionReview{}.OpenAPIModelName():                  schema_pkg_apis_apiextensions_v1_ConversionReview(ref),
+		v1.CustomResourceColumnDefinition{}.OpenAPIModelName():    schema_pkg_apis_apiextensions_v1_CustomResourceColumnDefinition(ref),
+		v1.CustomResourceConversion{}.OpenAPIModelName():          schema_pkg_apis_apiextensions_v1_CustomResourceConversion(ref),
+		v1.CustomResourceDefinition{}.OpenAPIModelName():          schema_pkg_apis_apiextensions_v1_CustomResourceDefinition(ref),
+		v1.CustomResourceDefinitionCondition{}.OpenAPIModelName(): schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionCondition(ref),
+		v1.CustomResourceDefinitionList{}.OpenAPIModelName():      schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionList(ref),
+		v1.CustomResourceDefinitionNames{}.OpenAPIModelName():     schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionNames(ref),
+		v1.CustomResourceDefinitionSpec{}.OpenAPIModelName():      schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionSpec(ref),
+		v1.CustomResourceDefinitionStatus{}.OpenAPIModelName():    schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionStatus(ref),
+		v1.CustomResourceDefinitionVersion{}.OpenAPIModelName():   schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionVersion(ref),
+		v1.CustomResourceSubresourceScale{}.OpenAPIModelName():    schema_pkg_apis_apiextensions_v1_CustomResourceSubresourceScale(ref),
+		v1.CustomResourceSubresourceStatus{}.OpenAPIModelName():   schema_pkg_apis_apiextensions_v1_CustomResourceSubresourceStatus(ref),
+		v1.CustomResourceSubresources{}.OpenAPIModelName():        schema_pkg_apis_apiextensions_v1_CustomResourceSubresources(ref),
+		v1.CustomResourceValidation{}.OpenAPIModelName():          schema_pkg_apis_apiextensions_v1_CustomResourceValidation(ref),
+		v1.ExternalDocumentation{}.OpenAPIModelName():             schema_pkg_apis_apiextensions_v1_ExternalDocumentation(ref),
+		v1.JSON{}.OpenAPIModelName():                              schema_pkg_apis_apiextensions_v1_JSON(ref),
+		v1.JSONSchemaProps{}.OpenAPIModelName():                   schema_pkg_apis_apiextensions_v1_JSONSchemaProps(ref),
+		v1.JSONSchemaPropsOrArray{}.OpenAPIModelName():            schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrArray(ref),
+		v1.JSONSchemaPropsOrBool{}.OpenAPIModelName():             schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrBool(ref),
+		v1.JSONSchemaPropsOrStringArray{}.OpenAPIModelName():      schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrStringArray(ref),
+		v1.SelectableField{}.OpenAPIModelName():                   schema_pkg_apis_apiextensions_v1_SelectableField(ref),
+		v1.ServiceReference{}.OpenAPIModelName():                  schema_pkg_apis_apiextensions_v1_ServiceReference(ref),
+		v1.ValidationRule{}.OpenAPIModelName():                    schema_pkg_apis_apiextensions_v1_ValidationRule(ref),
+		v1.WebhookClientConfig{}.OpenAPIModelName():               schema_pkg_apis_apiextensions_v1_WebhookClientConfig(ref),
+		v1.WebhookConversion{}.OpenAPIModelName():                 schema_pkg_apis_apiextensions_v1_WebhookConversion(ref),
+		resource.Quantity{}.OpenAPIModelName():                    schema_apimachinery_pkg_api_resource_Quantity(ref),
+		metav1.APIGroup{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_APIGroup(ref),
+		metav1.APIGroupList{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_APIGroupList(ref),
+		metav1.APIResource{}.OpenAPIModelName():                   schema_pkg_apis_meta_v1_APIResource(ref),
+		metav1.APIResourceList{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_APIResourceList(ref),
+		metav1.APIVersions{}.OpenAPIModelName():                   schema_pkg_apis_meta_v1_APIVersions(ref),
+		metav1.ApplyOptions{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_ApplyOptions(ref),
+		metav1.Condition{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_Condition(ref),
+		metav1.CreateOptions{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_CreateOptions(ref),
+		metav1.DeleteOptions{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_DeleteOptions(ref),
+		metav1.Duration{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_Duration(ref),
+		metav1.FieldSelectorRequirement{}.OpenAPIModelName():      schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
+		metav1.FieldsV1{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_FieldsV1(ref),
+		metav1.GetOptions{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_GetOptions(ref),
+		metav1.GroupKind{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_GroupKind(ref),
+		metav1.GroupResource{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_GroupResource(ref),
+		metav1.GroupVersion{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_GroupVersion(ref),
+		metav1.GroupVersionForDiscovery{}.OpenAPIModelName():      schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
+		metav1.GroupVersionKind{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_GroupVersionKind(ref),
+		metav1.GroupVersionResource{}.OpenAPIModelName():          schema_pkg_apis_meta_v1_GroupVersionResource(ref),
+		metav1.InternalEvent{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_InternalEvent(ref),
+		metav1.LabelSelector{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_LabelSelector(ref),
+		metav1.LabelSelectorRequirement{}.OpenAPIModelName():      schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
+		metav1.List{}.OpenAPIModelName():                          schema_pkg_apis_meta_v1_List(ref),
+		metav1.ListMeta{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_ListMeta(ref),
+		metav1.ListOptions{}.OpenAPIModelName():                   schema_pkg_apis_meta_v1_ListOptions(ref),
+		metav1.ManagedFieldsEntry{}.OpenAPIModelName():            schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
+		metav1.MicroTime{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_MicroTime(ref),
+		metav1.ObjectMeta{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_ObjectMeta(ref),
+		metav1.OwnerReference{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_OwnerReference(ref),
+		metav1.PartialObjectMetadata{}.OpenAPIModelName():         schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
+		metav1.PartialObjectMetadataList{}.OpenAPIModelName():     schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
+		metav1.Patch{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_Patch(ref),
+		metav1.PatchOptions{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_PatchOptions(ref),
+		metav1.Preconditions{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_Preconditions(ref),
+		metav1.RootPaths{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_RootPaths(ref),
+		metav1.ServerAddressByClientCIDR{}.OpenAPIModelName():     schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
+		metav1.Status{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_Status(ref),
+		metav1.StatusCause{}.OpenAPIModelName():                   schema_pkg_apis_meta_v1_StatusCause(ref),
+		metav1.StatusDetails{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_StatusDetails(ref),
+		metav1.Table{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_Table(ref),
+		metav1.TableColumnDefinition{}.OpenAPIModelName():         schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
+		metav1.TableOptions{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_TableOptions(ref),
+		metav1.TableRow{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_TableRow(ref),
+		metav1.TableRowCondition{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_TableRowCondition(ref),
+		metav1.Time{}.OpenAPIModelName():                          schema_pkg_apis_meta_v1_Time(ref),
+		metav1.Timestamp{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_Timestamp(ref),
+		metav1.TypeMeta{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_TypeMeta(ref),
+		metav1.UpdateOptions{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_UpdateOptions(ref),
+		metav1.WatchEvent{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_WatchEvent(ref),
+		runtime.RawExtension{}.OpenAPIModelName():                 schema_k8sio_apimachinery_pkg_runtime_RawExtension(ref),
+		runtime.TypeMeta{}.OpenAPIModelName():                     schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
+		runtime.Unknown{}.OpenAPIModelName():                      schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
+		version.Info{}.OpenAPIModelName():                         schema_k8sio_apimachinery_pkg_version_Info(ref),
 	}
 }
 
@@ -321,14 +323,14 @@ func schema_pkg_apis_core_v1alpha1_Option(ref common.ReferenceCallback) common.O
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionSpec"),
+							Ref:     ref(corev1alpha1.OptionSpec{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionSpec", metav1.ObjectMeta{}.OpenAPIModelName()},
+			corev1alpha1.OptionSpec{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -408,7 +410,7 @@ func schema_pkg_apis_core_v1alpha1_OptionList(ref common.ReferenceCallback) comm
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.Option"),
+										Ref:     ref(corev1alpha1.Option{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -419,7 +421,7 @@ func schema_pkg_apis_core_v1alpha1_OptionList(ref common.ReferenceCallback) comm
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.Option", metav1.ListMeta{}.OpenAPIModelName()},
+			corev1alpha1.Option{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -437,7 +439,7 @@ func schema_pkg_apis_core_v1alpha1_OptionSpec(ref common.ReferenceCallback) comm
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionItem"),
+										Ref:     ref(corev1alpha1.OptionItem{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -447,7 +449,7 @@ func schema_pkg_apis_core_v1alpha1_OptionSpec(ref common.ReferenceCallback) comm
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionItem"},
+			corev1alpha1.OptionItem{}.OpenAPIModelName()},
 	}
 }
 
@@ -489,14 +491,14 @@ func schema_pkg_apis_core_v1alpha1_TenantModule(ref common.ReferenceCallback) co
 						SchemaProps: spec.SchemaProps{
 							Description: "Status contains the module status",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantModuleStatus"),
+							Ref:         ref(corev1alpha1.TenantModuleStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantModuleStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			corev1alpha1.TenantModuleStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -534,7 +536,7 @@ func schema_pkg_apis_core_v1alpha1_TenantModuleList(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantModule"),
+										Ref:     ref(corev1alpha1.TenantModule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -545,7 +547,7 @@ func schema_pkg_apis_core_v1alpha1_TenantModuleList(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantModule", metav1.ListMeta{}.OpenAPIModelName()},
+			corev1alpha1.TenantModule{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -654,7 +656,7 @@ func schema_pkg_apis_core_v1alpha1_TenantNamespaceList(ref common.ReferenceCallb
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantNamespace"),
+										Ref:     ref(corev1alpha1.TenantNamespace{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -665,7 +667,7 @@ func schema_pkg_apis_core_v1alpha1_TenantNamespaceList(ref common.ReferenceCallb
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantNamespace", metav1.ListMeta{}.OpenAPIModelName()},
+			corev1alpha1.TenantNamespace{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -772,7 +774,7 @@ func schema_pkg_apis_core_v1alpha1_TenantSecretList(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantSecret"),
+										Ref:     ref(corev1alpha1.TenantSecret{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -783,7 +785,7 @@ func schema_pkg_apis_core_v1alpha1_TenantSecretList(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantSecret", metav1.ListMeta{}.OpenAPIModelName()},
+			corev1alpha1.TenantSecret{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -839,7 +841,7 @@ func schema_pkg_apis_sdn_v1alpha1_EgressRule(ref common.ReferenceCallback) commo
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
+										Ref:     ref(sdnv1alpha1.ApplicationReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -883,7 +885,7 @@ func schema_pkg_apis_sdn_v1alpha1_EgressRule(ref common.ReferenceCallback) commo
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.FQDNSelector"),
+										Ref:     ref(sdnv1alpha1.FQDNSelector{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -897,7 +899,7 @@ func schema_pkg_apis_sdn_v1alpha1_EgressRule(ref common.ReferenceCallback) commo
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule"),
+										Ref:     ref(sdnv1alpha1.PortRule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -907,7 +909,7 @@ func schema_pkg_apis_sdn_v1alpha1_EgressRule(ref common.ReferenceCallback) commo
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.FQDNSelector", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule"},
+			sdnv1alpha1.ApplicationReference{}.OpenAPIModelName(), sdnv1alpha1.FQDNSelector{}.OpenAPIModelName(), sdnv1alpha1.PortRule{}.OpenAPIModelName()},
 	}
 }
 
@@ -953,7 +955,7 @@ func schema_pkg_apis_sdn_v1alpha1_IngressRule(ref common.ReferenceCallback) comm
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
+										Ref:     ref(sdnv1alpha1.ApplicationReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -997,7 +999,7 @@ func schema_pkg_apis_sdn_v1alpha1_IngressRule(ref common.ReferenceCallback) comm
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule"),
+										Ref:     ref(sdnv1alpha1.PortRule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1007,7 +1009,7 @@ func schema_pkg_apis_sdn_v1alpha1_IngressRule(ref common.ReferenceCallback) comm
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule"},
+			sdnv1alpha1.ApplicationReference{}.OpenAPIModelName(), sdnv1alpha1.PortRule{}.OpenAPIModelName()},
 	}
 }
 
@@ -1053,7 +1055,7 @@ func schema_pkg_apis_sdn_v1alpha1_PortRule(ref common.ReferenceCallback) common.
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortProtocol"),
+										Ref:     ref(sdnv1alpha1.PortProtocol{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1063,7 +1065,7 @@ func schema_pkg_apis_sdn_v1alpha1_PortRule(ref common.ReferenceCallback) common.
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortProtocol"},
+			sdnv1alpha1.PortProtocol{}.OpenAPIModelName()},
 	}
 }
 
@@ -1098,14 +1100,14 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroup(ref common.ReferenceCallback) co
 						SchemaProps: spec.SchemaProps{
 							Description: "Spec describes the applications this SecurityGroup attaches to and the traffic it allows.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroupSpec"),
+							Ref:         ref(sdnv1alpha1.SecurityGroupSpec{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroupSpec", metav1.ObjectMeta{}.OpenAPIModelName()},
+			sdnv1alpha1.SecurityGroupSpec{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -1143,7 +1145,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupList(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroup"),
+										Ref:     ref(sdnv1alpha1.SecurityGroup{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1154,7 +1156,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupList(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroup", metav1.ListMeta{}.OpenAPIModelName()},
+			sdnv1alpha1.SecurityGroup{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -1173,7 +1175,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
+										Ref:     ref(sdnv1alpha1.ApplicationReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1187,7 +1189,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.IngressRule"),
+										Ref:     ref(sdnv1alpha1.IngressRule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1201,7 +1203,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.EgressRule"),
+										Ref:     ref(sdnv1alpha1.EgressRule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1211,7 +1213,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.EgressRule", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.IngressRule"},
+			sdnv1alpha1.ApplicationReference{}.OpenAPIModelName(), sdnv1alpha1.EgressRule{}.OpenAPIModelName(), sdnv1alpha1.IngressRule{}.OpenAPIModelName()},
 	}
 }
 

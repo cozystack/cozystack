@@ -69,6 +69,9 @@ type Backup struct {
 	// S3 endpoint URL for uploads.
 	// +kubebuilder:default:="http://minio-gateway-service:9000"
 	EndpointURL string `json:"endpointURL,omitempty"`
+	// Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs).
+	// +kubebuilder:default:=false
+	InsecureSkipTLSVerify bool `json:"insecureSkipTLSVerify,omitempty"`
 	// Retention policy (e.g. "30d").
 	// +kubebuilder:default:="30d"
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`

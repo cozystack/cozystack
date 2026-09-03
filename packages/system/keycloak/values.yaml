@@ -92,7 +92,7 @@ extraEnv: []
 #     MUST be part of the backup set. For production prefer kms.backend=vault-transit.
 encryption:
   enabled: false
-  image: ghcr.io/cozystack/keycloak-kms-proxy:0.2.1
+  image: ghcr.io/cozystack/keycloak-kms-proxy:0.2.2@sha256:6a8fb5b1371ef63e8650d50d36f0bd8aeb9e3229ff4f256f89ebe91c40d2e366
   # Encrypted field set: "" = full default set (username, email, names,
   # PII attributes, credentials), "email-only", or "disabled" (passthrough).
   fields: ""
@@ -139,6 +139,22 @@ encryption:
         secretName: ""          # Secret with the role id / secret id
         roleIdKey: role-id      # key in secretName holding the role id
         secretIdKey: secret-id  # key in secretName holding the secret id
+      # CA to trust when Vault is served over HTTPS by a private CA — as an
+      # inline PEM (the chart renders the Secret and rolls the pods when it
+      # changes) or as a Secret seeded beforehand. Exactly one key of that
+      # Secret is mounted; caSecretKey names it. Rotating a pre-seeded Secret
+      # needs a manual `kubectl rollout restart deploy/keycloak-kms-proxy`,
+      # because the chart cannot see its contents.
+      #
+      # The Vault leg then trusts this CA and nothing else — the public roots in
+      # the proxy image are excluded. The database leg is unaffected either way:
+      # it never consults the system trust store.
+      #
+      # caBundle and caSecretName are mutually exclusive, and both are ignored
+      # unless kms.backend=vault-transit.
+      caBundle: ""
+      caSecretName: ""
+      caSecretKey: ca.crt      # key of caSecretName holding the PEM bundle
   resources:
     requests:
       memory: 128Mi

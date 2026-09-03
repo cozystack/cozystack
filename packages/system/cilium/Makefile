@@ -6,6 +6,12 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+# hack/helm-unit-tests.sh discovers work by probing for this target, so a
+# package without one is skipped in silence however many suites sit under
+# tests/.
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	helm repo add cilium https://helm.cilium.io/

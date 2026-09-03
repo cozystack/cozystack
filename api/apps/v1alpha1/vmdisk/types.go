@@ -19,6 +19,7 @@ type Config struct {
 type ConfigSpec struct {
 	// The source image location used to create a disk.
 	// +kubebuilder:default:={}
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="source is immutable"
 	Source Source `json:"source"`
 	// Defines if disk should be considered optical.
 	// +kubebuilder:default:=false

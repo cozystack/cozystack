@@ -53,7 +53,13 @@
           "description": "Upload local image.",
           "type": "object"
         }
-      }
+      },
+      "x-kubernetes-validations": [
+        {
+          "rule": "self == oldSelf",
+          "message": "source is immutable"
+        }
+      ]
     },
     "optical": {
       "description": "Defines if disk should be considered optical.",

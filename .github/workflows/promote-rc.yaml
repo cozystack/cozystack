@@ -2,19 +2,28 @@ name: Promote RC
 
 # Bless a release-candidate as stable WITHOUT rebuilding it.
 #
-# A stable release is a renamed release-candidate: the bytes shipped as vX.Y.Z
-# are bit-for-bit the bytes built and e2e-tested as vX.Y.Z-rc.N.
+# A stable release promotes the release-candidate's executable bytes: every
+# container digest shipped as vX.Y.Z is bit-for-bit what passed rc e2e. The
+# declarative packages artifact is re-serialized after its rc tag strings are
+# rewritten to stable, then verified before any stable name is created.
 #
-# Promotion is TRANSACTIONAL: this dispatch performs NO registry mutation. It
-# only pushes the release-X.Y.Z staging branch (the rc's digest-vendored tree
-# with the rc version substring rewritten to stable), drafts the stable release
-# with restamped assets, and opens the release-X.Y.Z PR. The rc's mandatory full
-# e2e is verified before staging; the promote PR does not repeat it by default.
-# Every irreversible registry side effect — retagging the rc's images to the
-# stable tag by digest, moving :latest, publishing the stable cozy-installer
-# chart — happens in pull-requests-release.yaml finalize, AFTER the PR has merged.
-# An abandoned promotion therefore leaves nothing but an overwritable draft +
-# branch: no stable-named bytes, nothing to wedge a later re-promotion.
+# Promotion CREATES NO STABLE NAME before merge. This is weaker than the "no
+# registry mutation at dispatch" this workflow used to promise, and the
+# difference is deliberate rather than a slip: the dispatch does now write to
+# the registry, publishing one `promotion-*` packages candidate, and that tag is
+# real and publicly listable. What it is not is a name anything resolves — no
+# vX.Y.Z, no :latest, no stable installer chart. Say it that way round; the
+# older phrasing only reads as true if you already know which writes are meant.
+#
+# So the dispatch re-serializes the tag-rewritten packages tree under that
+# temporary tag, pins its digest in the release-X.Y.Z staging branch, drafts the
+# stable release with restamped assets, and opens the release-X.Y.Z PR. The rc's
+# mandatory full e2e is verified before staging; the promote PR does not repeat
+# it by default. Finalize verifies the pinned candidate against the merged tree
+# before performing any stable-named registry or git side effect. An abandoned
+# promotion therefore leaves only an overwritable draft + branch and a
+# temporary artifact, which retention protects until it is retagged stable and
+# can prune once nothing references it.
 #
 # Triggered manually once an rc has gone green. The stable git tag is never
 # pushed by a human and never force-moved — it is created only at PR merge,
@@ -244,7 +253,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write # push the release-X.Y.Z staging branch, stage the draft release
-      packages: write # read image manifests for asset staging (retag runs in finalize)
+      packages: write # publish the temporary stable-candidate packages artifact
       pull-requests: write # reserved for parity; the PR is opened in open-pr
 
     # open-pr reads these from `promote`, which passes the parse job's validated
@@ -256,6 +265,7 @@ jobs:
       stable_branch: ${{ needs.parse.outputs.stable_branch }}
       line: ${{ needs.parse.outputs.line }}
       e2e_verification: ${{ needs.parse.outputs.e2e_verification }}
+      base_branch: ${{ steps.validate.outputs.base_branch }}
 
     steps:
       - name: Generate GitHub App token
@@ -286,11 +296,12 @@ jobs:
               return;
             }
             // Reject only a *published* stable release. A leftover *draft* is
-            // tolerated: promotion no longer mutates the registry at dispatch
-            // time (retag/chart/:latest all run in finalize, post-merge), so an
-            // abandoned promotion leaves nothing but an overwritable draft +
-            // staging branch. Failing on the draft would wedge re-promotion of a
-            // newer rc to the same version; instead the draft is refreshed below.
+            // tolerated: promotion creates no consumer-visible stable registry
+            // name at dispatch time (retag/chart/:latest all run in finalize,
+            // post-merge), so an abandoned promotion leaves an overwritable
+            // draft + staging branch and a temporary retention-managed packages
+            // candidate. Failing on the draft would wedge re-promotion of a newer
+            // rc to the same version; instead the draft is refreshed below.
             const publishedStable = releases.find(r => r.tag_name === stableTag && !r.draft);
             if (publishedStable) {
               core.setFailed(`Stable release '${stableTag}' is already published — refusing to re-promote.`);
@@ -309,6 +320,62 @@ jobs:
             } catch (e) {
               if (e.status !== 404) throw e;
             }
+            // A maintenance branch created before the candidate pipeline landed
+            // would execute its old pull_request workflows after merge. Refuse
+            // before the first registry write unless the actual target base has
+            // both trusted verification gates and their helpers. Backport this
+            // change to an existing release-X.Y line before promoting its next
+            // patch; the rc-derived head does not need to carry the tooling.
+            //
+            // Every file the base-checked-out verifier reaches for belongs in
+            // the list below, its own sourced libraries included: those are
+            // resolved relative to the verifier at run time, so a base carrying
+            // the script without them fails at the PR gate and at finalize —
+            // after the candidate, the staging branch and the draft exist.
+            const line = '${{ needs.parse.outputs.line }}';
+            let baseBranch = 'main';
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner, repo: context.repo.repo,
+                ref: `heads/release-${line}`
+              });
+              baseBranch = `release-${line}`;
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
+            const requiredBaseFiles = [
+              ['.github/workflows/pull-requests.yaml', 'verify-release-candidate:'],
+              ['.github/workflows/pull-requests-release.yaml', 'Verify stable packages candidate'],
+              ['hack/verify-promoted-packages.sh', 'EXPECTED_PACKAGES_REPOSITORY'],
+              ['hack/lib/image-refs.sh', 'collect_image_refs()'],
+              ['hack/lib/promoted-packages.sh', 'PACKAGES_DIGEST_REF_PATTERN'],
+            ];
+            for (const [path, marker] of requiredBaseFiles) {
+              let file;
+              try {
+                file = await github.rest.repos.getContent({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  path, ref: baseBranch
+                });
+              } catch (e) {
+                if (e.status === 404) {
+                  core.setFailed(`Target base '${baseBranch}' lacks '${path}'. Backport the candidate-aware promotion pipeline before dispatch.`);
+                  return;
+                }
+                throw e;
+              }
+              if (Array.isArray(file.data) || !file.data.content) {
+                core.setFailed(`Target base '${baseBranch}' did not return '${path}' as a file.`);
+                return;
+              }
+              const content = Buffer.from(file.data.content, 'base64').toString('utf8');
+              if (!content.includes(marker)) {
+                core.setFailed(`Target base '${baseBranch}' has an old '${path}'. Backport the candidate-aware promotion pipeline before dispatch.`);
+                return;
+              }
+            }
+            core.setOutput('base_branch', baseBranch);
+            core.info(`✅ Target base '${baseBranch}' carries the candidate-aware promotion pipeline.`);
             // Surface the rc's disk asset id for the copy step.
             const disk = (rcRel.assets || []).find(a => a.name === 'nocloud-amd64.raw.xz');
             if (!disk) {
@@ -330,16 +397,64 @@ jobs:
           # `git remote set-url`, so there's no need to persist it in .git/config.
           persist-credentials: false
 
-      # Only yq is needed here (the asset make targets use it). The registry
-      # side of promotion — retagging the rc images to stable, moving :latest,
-      # publishing the stable chart — is deferred to pull-requests-release.yaml
-      # finalize, so promotion touches the registry only AFTER the promote PR's
-      # e2e has passed and the PR has merged (transactional promotion). No
-      # skopeo/helm login here.
-      - name: Set up toolchain (yq)
+      # Promotion publishes one non-consumer-visible packages candidate. Stable
+      # image/chart tags are still deferred to post-merge finalize.
+      #
+      # Both tools are version-pinned. This step arms the only registry write
+      # the dispatch performs, so what performs it has to be a fixed input:
+      # `latest/download` resolves to whatever mikefarah shipped this morning,
+      # and a yq that changed how it emits or compares a value would rewrite
+      # installer values differently between two promotions of the same rc. The
+      # version tracks packages/core/testing/images/e2e-sandbox/Dockerfile.
+      #
+      # yq is additionally pinned BY CONTENT, which nothing else in this repo
+      # does. It earns the exception by being the one downloaded binary with
+      # write authority over what a release contains: it is what stamps the
+      # candidate digest into installer values. skopeo, helm and oras only move
+      # bytes that are already digest-addressed, so a substituted one is caught
+      # downstream; a substituted yq writes the wrong pin and everything after
+      # it verifies that pin faithfully. A committed SHA-256 is trust-on-first-
+      # use — it fixes the bytes to what a human checked when the version was
+      # chosen (against this release's own published checksums list) and makes
+      # any later substitution loud. Bump the version and this together.
+      #
+      # The Flux installer is deliberately NOT pinned by content. It verifies
+      # the flux binary it fetches against flux_${FLUX_VERSION}_checksums.txt
+      # from the pinned release, so the binary is not the exposure — the ~6 KB
+      # bootstrap script from fluxcd.io is, and it is mutable by design and
+      # fetched the same way in ten other workflows here. Pinning its bytes in
+      # this file alone would break on the next regeneration of a script the
+      # project does not control, while leaving the identical fetch unpinned
+      # everywhere else. Named rather than half-fixed.
+      - name: Set up toolchain (flux, yq)
+        env:
+          FLUX_VERSION: "2.8.6"
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
-          command -v yq >/dev/null \
-            || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
+
+      - name: Login to registry (GHCR)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
       # A second checkout of the DISPATCH ref, used only as a source of release
       # tooling. The primary checkout above is an older commit (the rc tag, or a
@@ -366,10 +481,12 @@ jobs:
       - name: Prepare stable branch
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
           RC_VERSION: ${{ needs.parse.outputs.rc_version }}
           STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
           STABLE_BRANCH: ${{ needs.parse.outputs.stable_branch }}
           RC_TAG: ${{ needs.parse.outputs.rc_tag }}
+          PROMOTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           git config user.name  "cozystack-ci[bot]"
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
@@ -382,7 +499,7 @@ jobs:
           # silently left nine other .tag files and one stamped template on the
           # rc version, which was only observable by cutting a release.
           # The script fails if any rc reference survives it.
-          hack/promote-rewrite-tags.sh "$RC_VERSION" "$STABLE_VERSION"
+          .release-tooling/hack/promote-rewrite-tags.sh "$RC_VERSION" "$STABLE_VERSION"
           # Preserve a changelog already committed on the stable staging branch
           # across the rebuild. -B below resets the branch to the rc tree, which
           # would otherwise silently discard it — and the two ways it gets there
@@ -405,11 +522,25 @@ jobs:
             cp "$PRESERVED" "$CL"
             rm -f "$PRESERVED"
           fi
+          # Commit the exact rewritten tree before serializing it. The OCI
+          # revision can now point at a real, reviewable commit whose packages
+          # content matches the artifact (including the old embedded self-ref).
           git add -A
           git commit -s -m "Prepare release v${STABLE_VERSION} (promoted from ${RC_TAG})" \
             || echo "No tag-string changes to commit (digests already stable)"
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          # The git rewrite alone is not what the operator installs: it pulls the
+          # packages OCI artifact pinned by platformSourceRef. Publish this
+          # rewritten tree under a unique run-specific temporary tag, then add a
+          # second commit carrying its immutable digest. Container digests do not
+          # move; only the declarative bundle changes. A second artifact push is
+          # impossible because writing its own digest would change it forever.
+          .release-tooling/hack/promote-packages-artifact.sh \
+            "$STABLE_VERSION" "$RC_TAG" "$SOURCE_SHA"
+          git add packages/core/installer/values.yaml
+          git commit -s -m "Pin promoted packages artifact for v${STABLE_VERSION}"
           # Compare-before-force, matching tags.yaml's Create release branch step.
-          # git commit above produces a fresh, timestamp-dependent SHA each run,
+          # The commits above produce fresh, timestamp-dependent SHAs each run,
           # so a re-dispatch (retry after a later step failed, or promoting a
           # newer rc to the same version) creates a SIBLING commit. A plain push
           # would then be rejected non-fast-forward and wedge re-promotion until
@@ -831,20 +962,18 @@ jobs:
           # From promote's validated parse, not raw dispatch input — the rc tag is
           # pattern-checked exactly once and every consumer reads that result.
           RC_TAG: ${{ needs.promote.outputs.rc_tag }}
-          LINE: ${{ needs.promote.outputs.line }}
           # True when the PR carries a changelog by EITHER route: preserved on the
           # branch, or generated this run. The PR body must reflect what merged,
           # not just what the AI produced.
           CHANGELOG_PRESENT: ${{ (steps.existing.outputs.present == 'true' || steps.usable.outputs.present == 'true') && 'true' || 'false' }}
           E2E_VERIFICATION: ${{ needs.promote.outputs.e2e_verification }}
+          BASE_BRANCH: ${{ needs.promote.outputs.base_branch }}
           # website-docs is non-blocking; its result drives a ✅/⚠️ line only.
           WEBSITE_DOCS_RESULT: ${{ needs.website-docs.result }}
         run: |
-          # Target the maintenance line if it exists, else main.
-          BASE=main
-          if git ls-remote --exit-code --heads origin "release-${LINE}" >/dev/null 2>&1; then
-            BASE="release-${LINE}"
-          fi
+          # `promote` resolved and validated this target before publishing the
+          # packages candidate. Reuse it so the PR cannot drift to an older base.
+          BASE="$BASE_BRANCH"
           # State the changelog outcome in the PR body: generation is non-blocking,
           # so a missing changelog must be visible where the reviewer is looking.
           # finalize reads this file to populate the published release body — if it
@@ -867,7 +996,7 @@ jobs:
           else
             WEBSITE_NOTE="⚠️ **Website docs not updated** — the website-docs job did not succeed (result: \`${WEBSITE_DOCS_RESULT}\`; e.g. \`cozystack/website\` main not yet on FETCH_REF). Promotion is unaffected; tags.yaml::update-website-docs will backfill the docs PR at tag time. Check the promote run's website-docs job."
           fi
-          BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. The tree pins the rc's images by digest. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit, retags those digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishes the stable cozy-installer chart, and publishes the release — so the stable artifacts are bit-for-bit the rc that passed e2e. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit.
+          BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` without rebuilding containers. Their digests remain bit-for-bit what passed rc e2e; the tag-rewritten packages tree is re-serialized as a temporary OCI candidate and pinned here by digest. On merge, pull-requests-release.yaml verifies that candidate against this tree before creating the write-once \`${STABLE_TAG}\` tag, retagging the candidate and container digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishing the stable cozy-installer chart, and publishing the release. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit.
 
           ${E2E_NOTE}
 

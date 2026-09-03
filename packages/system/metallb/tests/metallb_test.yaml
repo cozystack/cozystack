@@ -185,3 +185,49 @@ tests:
       - equal:
           path: metadata.name
           value: metallb-frr-k8s
+
+  # Both node DaemonSets must carry a memory limit. That limit is what sets
+  # memory.max on the pod cgroup, and the Talos userspace OOM handler (v1.12+)
+  # only ever kills cgroups that lack one — a regression here silently puts the
+  # speaker back in the victim set, which is the failure this pins against.
+  - it: speaker declares a memory limit and request
+    template: charts/metallb/templates/speaker.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 64Mi
+
+  - it: every frr-k8s long-running container declares a memory limit
+    template: charts/metallb/charts/frr-k8s/templates/controller.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    # Asserted one container at a time. A negated matcher over the container
+    # list looks like it covers all five but passes vacuously, so each limit is
+    # pinned explicitly instead.
+    #
+    # The four cp-* initContainers are intentionally not asserted: upstream
+    # hardcodes them with no resources knob, so they rely on the
+    # operator-managed namespace LimitRange instead.
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="controller")].resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="frr")].resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="reloader")].resources.limits.memory
+          value: 128Mi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="frr-metrics")].resources.limits.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="frr-status")].resources.limits.memory
+          value: 256Mi

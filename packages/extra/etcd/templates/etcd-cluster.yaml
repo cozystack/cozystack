@@ -74,6 +74,25 @@ spec:
       matchLabels:
         app.kubernetes.io/instance: etcd
   {{- end }}
+  {{- with .Values.affinity }}
+  affinity:
+    {{- toYaml . | nindent 4 }}
+  {{- else }}
+  # Soft anti-affinity: spread etcd members across nodes on a best-effort
+  # basis so a single node failure is unlikely to take out more than one
+  # member. Preferred (not required) because a hard rule would leave a member
+  # Pending when replicas exceed schedulable nodes, or when node-local storage
+  # pins a member to a node. Override via .Values.affinity for a hard rule.
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/instance: etcd
+            topologyKey: kubernetes.io/hostname
+  {{- end }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer

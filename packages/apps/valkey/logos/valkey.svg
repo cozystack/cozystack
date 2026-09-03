@@ -1,0 +1,11 @@
+<svg width="144" height="144" viewBox="0 0 144 144" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="144" height="144" rx="24" fill="url(#valkey_bg)"/>
+  <path d="M36 40h18l18 44 18-44h18L80 108h-16L36 40z" fill="#ffffff"/>
+  <circle cx="72" cy="52" r="7" fill="#ffffff"/>
+  <defs>
+    <linearGradient id="valkey_bg" x1="0" y1="0" x2="144" y2="144" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7A3BFF"/>
+      <stop offset="1" stop-color="#C6249B"/>
+    </linearGradient>
+  </defs>
+</svg>

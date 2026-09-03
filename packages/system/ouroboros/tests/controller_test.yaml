@@ -22,16 +22,32 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --proxy-service-namespace=cozy-ouroboros
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --proxy-fqdn=ouroboros-proxy.cozy-ouroboros.svc.cluster.local.
+      # Match the flag name per element, not one whole element against one
+      # value: contains and notContains compare elements for equality, and the
+      # baked FQDN carries whatever controller.clusterDomain is set to, so an
+      # equality check against the form the default cluster-domain produces
+      # leaves every other value unforbidden.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: "^--proxy-fqdn"
 
   - it: leaves Gateway-API watching off at the parent default (consumer enables)
     template: charts/ouroboros/templates/controller-deployment.yaml
     asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --gateway-api
+      # Anchor the index before asserting on it. A negative assert passes
+      # whenever its path resolves to something that does not match, and a
+      # different container at [0] qualifies — as does an index resolving to
+      # nothing at all — so without this the guard goes green if a sidecar is
+      # ever placed ahead of the controller.
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: controller
+      # Match the flag name per element. An equality check against the bare
+      # form the chart renders today would go on passing if it ever rendered
+      # --gateway-api=true, with watching on.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: "^--gateway-api"
 
   - it: emits chart-default --resync=30s — host scenario inherits the upstream chart default (changed from 10m in upstream v0.7.x). The reduction is the controller's only recovery path when an Ingress watch silently dies, and 30s caps worst-case event-to-reconcile latency under broken-watch conditions. Pinning here catches a future upstream bump back to the longer value before it lands as a CI surprise.
     template: charts/ouroboros/templates/controller-deployment.yaml
@@ -151,15 +167,15 @@ tests:
       # too — this is the mode tenants actually run, so a future refactor
       # in the upstream controller-deployment template that drops the
       # composition block from this branch only would break tenants
-      # silently. The negative-assert pins that --proxy-fqdn does NOT
-      # bake the cluster-domain at render time when no clusterDomain is
-      # configured (the platform-agnostic default).
+      # silently. The negative assert pins that no --proxy-fqdn is baked at
+      # render time when no clusterDomain is configured (the
+      # platform-agnostic default).
       - contains:
           path: spec.template.spec.containers[0].args
           content: --proxy-service-name=ouroboros-proxy
       - contains:
           path: spec.template.spec.containers[0].args
           content: --proxy-service-namespace=cozy-ouroboros
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --proxy-fqdn=ouroboros-proxy.cozy-ouroboros.svc.cluster.local.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: "^--proxy-fqdn"

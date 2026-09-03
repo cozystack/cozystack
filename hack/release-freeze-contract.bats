@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 
-# Contract for the rc freeze and the backport target resolution that depends on
-# it. Like promote-gate-contract.bats, these tests pin executable/structural
+# Contract for the rc freeze, the backport target resolution that depends on it,
+# and the triggering and concurrency rules that decide whether a backport runs at
+# all. Like promote-gate-contract.bats, these tests pin executable/structural
 # workflow lines rather than prose: a commented-out gate or a guard demoted to a
 # comment must never satisfy the contract.
 #
@@ -20,8 +21,19 @@ CUT="$REPO_ROOT/.github/workflows/cut-prerelease.yaml"
 BACKPORT="$REPO_ROOT/.github/workflows/backport.yaml"
 
 # Strip YAML comments. POSIX `grep` only: the unit-test runner has no ripgrep.
-# grep exits 1 when nothing is selected (legitimate for an all-comment block) and
-# 2 on a real error, so only the latter propagates.
+# grep exits 1 when nothing is selected (legitimate for an all-comment block)
+# and 2 on a real error. Do not read the `rc` check below as what catches
+# that: code_lines is never the last stage of a pipeline in this file, so
+# ordinary (non-pipefail) pipe semantics discard whatever it itself returns,
+# and `hack/cozytest.sh`'s translator appends `return 0` to every line that is
+# exactly `}`, code_lines' closing brace included, making its own exit status
+# even less trustworthy as a signal. What catches a real grep error is the
+# OUTPUT, and only for one class of pin: the error empties code_lines' stream,
+# so a pin that requires something to be present in that stream fails on it. A
+# pin demanding an absence stays blind, because an exact count of zero is what
+# an emptied stream produces anyway, and what the pin was written to assert.
+# The `[ -n "$block" ]` guard at the top of a test is not that check: it runs
+# on the raw awk extraction, upstream of code_lines, and cannot see it fail.
 code_lines() {
   local rc=0
   grep -v '^[[:space:]]*#' || rc=$?
@@ -370,4 +382,215 @@ closed-merged=true"
     echo "backport.yaml's guard no longer uses prs.some(p => p.merged_at !== null)." >&2; exit 1; }
 
   rm -rf "$tmp"
+}
+
+# ── backport concurrency ─────────────────────────────────────────────────────
+# A run joins its concurrency group before `prepare`'s guard is evaluated, so
+# nothing in that guard can keep a label event from disturbing the run already
+# backporting the PR. The group key and `cancel-in-progress` close different
+# halves of that and are pinned separately: either one alone still leaves a
+# live failure, and neither reads load-bearing on its own.
+
+@test "the trigger surface the concurrency key is built for does not widen" {
+  # Both halves of the key are written against one trigger delivering `closed` or
+  # `labeled`, and neither degrades safely if anything else arrives. The group key
+  # routes only `labeled` aside, so a new event lands in the main group;
+  # `cancel-in-progress` is positive, so it does not cancel there; and `prepare`
+  # does not qualify it. The result occupies the single pending slot, evicts a
+  # genuine backport request, and delivers nothing.
+  #
+  # Pinned as the whole surface rather than just the types list, because a SIBLING
+  # trigger reaches the same harm without touching `types:` at all: anything
+  # carrying a `pull_request` payload resolves the PR number and so lands in the
+  # same per-PR group. `pull_request_review` is the realistic one.
+  #
+  # Deliberately strict: this also fails on a widening that would be harmless,
+  # `workflow_dispatch` for instance, whose payload carries no `pull_request` so
+  # the key degenerates to a shared group holding no genuine request. Separating
+  # the harmless case needs a list of which triggers carry that payload, and that
+  # list drifts. A red here means read the block above, not that the pin is wrong.
+  triggers="$(awk '/^on:/{inside=1;next} /^[a-z]/{inside=0} inside && /^  [a-z_]+:/{print $1}' "$BACKPORT")"
+  [ -n "$triggers" ]
+  [ "$(printf '%s\n' "$triggers" | wc -l | tr -d ' ')" -eq 1 ]
+  printf '%s\n' "$triggers" | grep -qF 'pull_request_target:'
+
+  printf '%s\n' "$(code_lines < "$BACKPORT")" | grep -qF 'types: [closed, labeled]'
+}
+
+@test "a label event that requests no backport gets its own concurrency group" {
+  line="$(code_lines < "$BACKPORT" | grep '^  group: backport-')"
+  [ -n "$line" ]
+
+  # The per-PR discriminator, first: without it every PR's backport shares one
+  # group, and since a merge still cancels in that group, merging one PR kills
+  # another's in-flight backport. The assertions below all describe how a label
+  # event is separated from a merge WITHIN one PR, and every one of them stays
+  # green with the PR number deleted, so the widest failure of the three is the
+  # one nothing else here would notice.
+  printf '%s\n' "$line" | grep -qF 'backport-${{ github.workflow }}-${{ github.event.pull_request.number }}${{'
+
+  count="$(printf '%s\n' "$line" | grep -o "github\.event\.action == 'labeled'" | wc -l | tr -d ' ')"
+  [ "${count:-0}" -eq 1 ]
+
+  # The split is on the label NAMES, not on the action alone. Routing EVERY label
+  # event aside would move `backport` and `backport-previous` out of the group
+  # holding the run they have to queue behind, and one request could then evict
+  # the other.
+  #
+  # Pinned as the literal names, not as a count of `label.name != '`. That count
+  # measures the operator and says nothing about the operands, so renaming one
+  # name here and not in `prepare` — the half-finished rename — left it at two
+  # and stayed green, while a real `backport-previous` event took the `-label`
+  # branch and became free to cherry-pick alongside the merge run.
+  # Including the conjunction that joins the action check to the name checks.
+  # `&&` binds tighter than `||` in GitHub expressions, so flipping this one
+  # operator reads as `action == 'labeled' || (name != … && name != …)`, and on a
+  # `closed` event `github.event.label` is absent, both name checks are true, and
+  # EVERY event takes the suffix. A constant suffix is exactly as vacuous as no
+  # split at all. Every operand here was pinned before this line existed; the
+  # operator joining them was not.
+  #
+  # TRANSITIONAL: four names, not the original pair, because backport.yaml
+  # accepts both spellings while the org-level dosubot still applies the legacy
+  # ones. The namespaced names are genuine backport requests, so they belong on
+  # this side of the split exactly as the legacy ones do — routing them aside
+  # would hand a `kind/backport` event its own group and let it cherry-pick
+  # alongside the merge run, which is the failure the pin above describes. When
+  # dosubot's PR labelling is switched off and backport.yaml drops its legacy
+  # arms, this literal and the count below go back to the pair.
+  printf '%s\n' "$line" | grep -qF "github.event.action == 'labeled' && github.event.label.name != 'backport' && github.event.label.name != 'backport-previous' && github.event.label.name != 'kind/backport' && github.event.label.name != 'kind/backport-previous'"
+
+  # And exactly four of them. The literal above is a substring check, so appending
+  # a fifth exclusion satisfies it unchanged — and a fifth exclusion is not
+  # cosmetic: the named label stops being routed aside, lands in the main group,
+  # takes its single pending slot, skips in `prepare`, and evicts a genuine
+  # backport request while delivering nothing. Same harm as widening `types:`.
+  # Presence and count answer different questions; this test needs both.
+  count="$(printf '%s\n' "$line" | grep -o "github\.event\.label\.name != '" | wc -l | tr -d ' ')"
+  [ "${count:-0}" -eq 4 ]
+
+  # The suffix the condition selects, not only the condition. Asserting the
+  # operands alone leaves the whole split deletable — collapsing the tail to
+  # `&& '' || ''` puts every label back in the main group with the condition
+  # still reading correctly above it. Inverting it to `&& '' || '-label'` is
+  # worse than deleting it, because that moves the two backport requests aside
+  # and leaves the irrelevant labels sharing the group with the run in flight,
+  # which is the arrangement this file exists to prevent. Both survive every
+  # other assertion here.
+  printf '%s\n' "$line" | grep -qF "&& '-label' || ''"
+}
+
+@test "a labeled event queues behind the backport in flight instead of cancelling it" {
+  # Labels set with the default GITHUB_TOKEN start no run, but labels set by
+  # third-party GitHub Apps do, and they arrive in bursts. Under a plain `true`
+  # each one killed the backport the merge had just started, leaving a cancelled
+  # run next to a green one and the work repeated by whichever label came last.
+  # With `prepare` now narrowed, no burst label requalifies to repeat it,
+  # so dropping this arm does not restore the old noisy delivery — it loses the
+  # backport. `cancel-in-progress: true` is the obvious thing for the next reader
+  # to normalise this back to, so pin its absence too.
+  count="$(code_lines < "$BACKPORT" | grep -cF "  cancel-in-progress: \${{ github.event.action == 'closed' }}" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # Positively, not as `!= 'labeled'`. The two are equivalent only while `types:`
+  # holds exactly `closed` and `labeled`; the negative form hands cancellation to
+  # any third type added later, in the main group, which is the behaviour this
+  # arm removes.
+  count="$(code_lines < "$BACKPORT" | grep -c "cancel-in-progress:.*!= 'labeled'" || true)"
+  [ "${count:-0}" -eq 0 ]
+
+  count="$(code_lines < "$BACKPORT" | grep -c '^  cancel-in-progress: true$' || true)"
+  [ "${count:-0}" -eq 0 ]
+}
+
+@test "both backport jobs bound how long a queued request can wait" {
+  # These ceilings exist because of the queuing above, not for their own sake. A
+  # cancelling key disposed of a stuck run by killing it; queuing makes the next
+  # genuine request wait behind it instead, and an unbounded job on the 6-hour
+  # default turns one wedged job into a six-hour hole in the release line.
+  # Nothing else in this file makes them look load-bearing, so a tidy-up that
+  # drops them reads as harmless.
+  #
+  # Scope, since the test name says "how long a queued request can wait": what is
+  # bounded here is a stuck JOB. A run can wedge at the RUN level with every job
+  # already finished, and `timeout-minutes` is job-level with no run-level
+  # equivalent, so that state holds the group until the run is cancelled. These
+  # ceilings do not reach it and are not meant to.
+  # Asserted as a bound, not as presence. The hazard is the SIZE of the wait, so
+  # a pin that only checks the key exists is satisfied by `timeout-minutes: 355`,
+  # which restores the hole to within five minutes of the default it was written
+  # against.
+  #
+  # Bounded on BOTH sides, because both directions break it. Too high restores
+  # the hole; too low cancels a real backport that was only waiting for a runner,
+  # and an upper-bound-only assertion stays green at `timeout-minutes: 1`.
+  #
+  # The floor is judgement, not measurement, and says so. `timeout-minutes`
+  # bounds execution, and every execution measured on this workflow has been
+  # seconds, so no observation argues for any particular floor. No maximum is
+  # quoted deliberately: a superlative over a growing set goes stale on the next
+  # slower run. What the floor guards is a ceiling set low enough to cancel a
+  # cherry-pick much larger than anything seen yet; ten minutes is far above
+  # every leg measured. Per JOB, not per run, and not over the runner queue,
+  # which no `timeout-minutes` reaches.
+  for job in prepare backport; do
+    block="$(job_block "$job" "$BACKPORT" | code_lines)"
+    [ -n "$block" ]
+    minutes="$(printf '%s\n' "$block" | grep -o '^    timeout-minutes: [0-9][0-9]*' | grep -o '[0-9][0-9]*$')"
+    [ -n "$minutes" ]
+    [ "$minutes" -ge 10 ]
+    [ "$minutes" -le 30 ]
+  done
+}
+
+@test "each backport trigger reads only the labels it is entitled to" {
+  block="$(job_block prepare "$BACKPORT" | code_lines)"
+  [ -n "$block" ]
+
+  # The cumulative label set answers for the merge and for nothing else. Left
+  # ungated it re-enters this job on every later unrelated label — an automated
+  # size/* or kind/* — for a merged PR still carrying `backport`, redoing a
+  # backport that has already been delivered.
+  #
+  # TRANSITIONAL: four reads, not the original pair. backport.yaml accepts the
+  # namespaced and the legacy spelling of each label while the org-level dosubot
+  # still applies the legacy ones; when its PR labelling is switched off and the
+  # legacy arms are dropped, this literal and the count below go back to two.
+  printf '%s\n' "$block" | grep -qF "(github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'backport') || contains(github.event.pull_request.labels.*.name, 'backport-previous') || contains(github.event.pull_request.labels.*.name, 'kind/backport') || contains(github.event.pull_request.labels.*.name, 'kind/backport-previous')))"
+
+  # And the guard reads that set exactly four times, all of them inside the gated
+  # disjunct above, so it cannot be joined by an ungated one that quietly
+  # restores the old behaviour while the assertion above stays green.
+  #
+  # Counted as OCCURRENCES, not lines. `grep -c` counts matching lines, and all
+  # four reads live on one line here, so it answers 1 and keeps answering 1 when a
+  # fifth read is appended to that same line — which is exactly the restoration
+  # this is meant to catch. Only an append on a NEW line would have moved it.
+  count="$(printf '%s\n' "$block" | grep -o 'contains(github\.event\.pull_request\.labels' | wc -l | tr -d ' ')"
+  [ "${count:-0}" -eq 4 ]
+
+  # A label event answers for the label it carries. Both spellings of each name,
+  # for the transitional reason given above.
+  printf '%s\n' "$block" | grep -qF "(github.event.action == 'labeled' && (github.event.label.name == 'backport' || github.event.label.name == 'backport-previous' || github.event.label.name == 'kind/backport' || github.event.label.name == 'kind/backport-previous'))"
+
+  # The two conjuncts the label logic hangs off, which the label assertions above
+  # would not miss. `base.ref == 'main'` is what stops the bot backporting its own
+  # output: its PRs target release-X.Y, so they cannot satisfy it however often a
+  # labeler re-applies `backport` to a `[Backport release-X.Y]` title. docs/release.md
+  # calls that architectural protection, which is only true while the line is here.
+  # With their trailing conjunctions, for the reason the group-key test spells
+  # out: flipping either `&&` to `||` turns the guard into a disjunction that
+  # fires on every merge to main and on labels applied to open PRs. That one does
+  # not produce a wrong backport, because the `backport` job re-checks both
+  # independently, but it runs the job when nothing asked for it.
+  # In BOTH jobs, because docs/release.md rests the architectural protection on
+  # both `if:` blocks. Losing either copy alone is survivable (the other still
+  # skips, and `backport` needs `prepare`), so this pins a duplicate rather than
+  # a hole — but an untested duplicate is how a duplicate stops being one.
+  for job in prepare backport; do
+    b="$(job_block "$job" "$BACKPORT" | code_lines)"
+    [ -n "$b" ]
+    printf '%s\n' "$b" | grep -qF "github.event.pull_request.base.ref == 'main' &&"
+    printf '%s\n' "$b" | grep -qF 'github.event.pull_request.merged == true &&'
+  done
 }

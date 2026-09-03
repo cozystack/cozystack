@@ -221,8 +221,18 @@ jobs:
   e2e:
     name: E2E (full suite)
     needs: [mirror, build-disk]
-    runs-on: oracle-vm-24cpu-96gb-x86-64
-    timeout-minutes: 180
+    # Same sandbox as the other e2e lanes: three QEMU guests at `-smp 8` commit
+    # 24 vCPU for the whole run, so the runner class has to be strictly larger,
+    # leaving the host its own cycles for QEMU's emulation and IO threads,
+    # containerd and the runner agent. Enforced by
+    # hack/sandbox-runner-headroom.bats.
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    # Sized above what the tenant-Kubernetes pair can spend on a failing run, and
+    # held to one figure across every lane that runs the suite. That bound, the
+    # measured run the rest of the margin comes from, and what neither of them
+    # covers are all in hack/node-join-soft-red_test.bats rather than restated
+    # here in four workflows that would then drift apart.
+    timeout-minutes: 215
     permissions:
       contents: read
       packages: read
@@ -334,7 +344,7 @@ jobs:
           path: _out/chainsaw-report.xml
           if-no-files-found: ignore
 
-      # A ceiling of its own, not the job's 180 minutes. `Upload cozyreport.tgz`
+      # A ceiling of its own, not the job's 215 minutes. `Upload cozyreport.tgz`
       # is the next step and the collector writes its tarball at the very end of
       # its run, so a read that never returns spends what is left of the job
       # budget, the job is cancelled, and the upload never runs -- the artifact

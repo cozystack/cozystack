@@ -1,0 +1,48 @@
+suite: csi-node DaemonSet memory limits
+
+# The node DaemonSet carried requests but no limits, which leaves it Burstable
+# rather than Guaranteed-of-a-cgroup-limit: a memory limit is what sets
+# memory.max on the pod cgroup, and the Talos userspace OOM handler (v1.12+)
+# only ever selects cgroups that lack it. Requests alone did not take the pod
+# out of the victim set.
+#
+# memory.max lands on the POD cgroup only when EVERY container has a limit, so
+# all three are asserted rather than the driver alone — one limit-free sidecar
+# would put the whole pod back in the victim set while the other two assertions
+# still passed, which is precisely the failure this suite exists to catch.
+
+templates:
+  - templates/deploy.yaml
+
+tests:
+  - it: every csi-node container declares a memory limit
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-driver")].resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-node-driver-registrar")].resources.limits.memory
+          value: 128Mi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-liveness-probe")].resources.limits.memory
+          value: 128Mi
+
+  # Pinned alongside the limits because they are what the limits were sized
+  # against; a drift in either direction is worth catching.
+  - it: csi-node containers keep their memory requests
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-driver")].resources.requests.memory
+          value: 50Mi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-node-driver-registrar")].resources.requests.memory
+          value: 20Mi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-liveness-probe")].resources.requests.memory
+          value: 20Mi

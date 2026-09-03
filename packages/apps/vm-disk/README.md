@@ -2,7 +2,7 @@
 
 A Virtual Machine Disk
 
-> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+> `storageClass` and `source` are annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it. `DataVolume.spec` is immutable in CDI, so the chart also fails the release on an attempted `storageClass`/`source` edit of an existing disk rather than silently reusing the old spec; delete and recreate the disk to change either field.
 
 ## Parameters
 

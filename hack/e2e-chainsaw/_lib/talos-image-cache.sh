@@ -200,7 +200,7 @@ _talos_image_cache_reachable_from_tenant() {
 # the request deadline ends the attempt and says why, and the wrapper stays as
 # the backstop for a client that overruns its own deadline. The cost is ten more
 # seconds per attempt on a path where the apiserver is already unreachable,
-# against a 50m op.
+# against a 67m op.
 #
 # kubectl's stderr is therefore deliberately not swallowed: it is the only thing
 # that separates refused from unauthorized from stalled, and suppressing it would

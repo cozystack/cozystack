@@ -12,6 +12,17 @@ spec:
       containers:
       - name: plunger
         image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
+        # Sidecars in the satellite pod. Every container needs a memory limit
+        # for the pod cgroup to get memory.max, which is what keeps the pod out
+        # of the Talos userspace OOM handler's victim set — one limit-free
+        # sidecar is enough to put the whole satellite pod back in it.
+        # 14d peaks on a 3-node dev cluster: plunger 18Mi, drbd-logger 5Mi.
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 128Mi
         command:
         - "/scripts/plunger-satellite.sh"
         securityContext:
@@ -49,6 +60,12 @@ spec:
           readOnly: true
       - name: drbd-logger
         image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 128Mi
         command:
         - "/scripts/plunger-drbd-logger.sh"
         securityContext:

@@ -15,6 +15,7 @@ templates:
   - templates/strategy-mariadb-default.yaml
   - templates/strategy-etcd-default.yaml
   - templates/strategy-altinity-default.yaml
+  - templates/strategy-mongodb-default.yaml
   - templates/strategy-foundationdb-default.yaml
   - templates/strategy-velero-vminstance-default.yaml
   - templates/strategy-velero-vmdisk-default.yaml
@@ -49,6 +50,18 @@ tests:
       - hasDocuments:
           count: 0
         template: templates/strategy-altinity-default.yaml
+      # MongoDB is gated like every sibling, and this count is the assertion
+      # that keeps the chart installable. Its Strategy needs no bucket
+      # coordinates (the S3 target lives on the MongoDB application's
+      # spec.backup, the driver only names the storage), so the gate is there
+      # purely for ordering: this chart ships its own CRDs as templates, Helm
+      # resolves the whole manifest through the RESTMapper before applying any
+      # of it, and one ungated Strategy CR makes the first install apply zero
+      # objects with "no matches for kind" and never recover. A count of 1 here
+      # is that bug, green, which is how it shipped once already.
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-mongodb-default.yaml
       - hasDocuments:
           count: 0
         template: templates/strategy-foundationdb-default.yaml
@@ -62,7 +75,7 @@ tests:
           count: 0
         template: templates/velero-bsl.yaml
 
-  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all six routes (FoundationDB intentionally unbound)"
+  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all seven routes (FoundationDB intentionally unbound)"
     asserts:
       - hasDocuments:
           count: 1
@@ -73,7 +86,7 @@ tests:
         template: templates/backupclass-default.yaml
       - lengthEqual:
           path: spec.strategies
-          count: 6
+          count: 7
         template: templates/backupclass-default.yaml
 
   - it: "all Strategy CRs and the Velero BSL render once a bucket name resolves"
@@ -92,6 +105,9 @@ tests:
       - hasDocuments:
           count: 1
         template: templates/strategy-altinity-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-mongodb-default.yaml
       - hasDocuments:
           count: 1
         template: templates/strategy-foundationdb-default.yaml

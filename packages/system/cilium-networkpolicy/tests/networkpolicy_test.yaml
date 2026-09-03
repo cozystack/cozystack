@@ -81,7 +81,35 @@ tests:
     # bound by anything cozystack ships, so listing it in the deny rule is
     # misleading.
     asserts:
+      # Anchor the rule before asserting about it. notContains passes whenever
+      # its path resolves to something that lacks the content, and a different
+      # deny rule at [0] qualifies, so reordering spec.ingressDeny would leave
+      # this green while 7473 came back on the rule it names. A deny rule has no
+      # name, so the anchor is its selector, which is what identifies it rather
+      # than one of the ports it happens to list.
+      #
+      # The selector identifies it only while there is one rule to identify: a
+      # second world-scoped deny inserted ahead of this one would satisfy the
+      # selector and shift the real rule to [1], which is the reordering above.
+      # lengthEqual is what makes the selector sufficient.
+      # Both indexes in the path, not just the outer one. A second toPorts entry
+      # on the same rule carries its own ports list, so 7473 could come back
+      # there with the rule count and the selector both still satisfied.
+      - lengthEqual:
+          path: spec.ingressDeny
+          count: 1
+      - lengthEqual:
+          path: spec.ingressDeny[0].toPorts
+          count: 1
+      - contains:
+          path: spec.ingressDeny[0].fromEntities
+          content: world
+      # any: true matches on the port alone. Without it the comparison is a
+      # deep-equal against the whole entry, so 7473 re-added with a protocol
+      # beside it, which is how the neighbouring 7946 entry is written, would
+      # slip past a guard that looks like it forbids the port outright.
       - notContains:
           path: spec.ingressDeny[0].toPorts[0].ports
+          any: true
           content:
             port: "7473"

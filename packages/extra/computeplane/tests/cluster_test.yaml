@@ -1,4 +1,4 @@
-suite: computeplane module renders the operator-owned cluster HelmRelease
+suite: computeplane module renders the operator-owned cluster and worker pools
 # The module wraps the ordinary apps/kubernetes chart with operator-fixed
 # values (design-proposals/compute-plane in cozystack/community). These pins
 # are the contract:
@@ -14,6 +14,9 @@ suite: computeplane module renders the operator-owned cluster HelmRelease
 #     cluster via spec.kubeConfig;
 #   - the chart comes from this package's own source-only ExternalArtifact,
 #     keeping the module self-contained.
+# Phase 2 split worker pools into apps/kubernetes-nodes, so the module now also
+# emits one child HelmRelease per nodeGroup against this package's own
+# kubernetes-nodes artifact, wired to the parent via clusterReleaseName.
 templates:
   - templates/cluster.yaml
 release:
@@ -21,6 +24,9 @@ release:
   namespace: tenant-alice
 tests:
   - it: derives the cluster release name from the object name (kubeconfig contract)
+    documentSelector:
+      path: metadata.name
+      value: computeplane-cluster
     asserts:
       - equal:
           path: metadata.name
@@ -35,6 +41,9 @@ tests:
           value: ExternalArtifact
 
   - it: pins the Cozystack-enablement addons as inline values
+    documentSelector:
+      path: metadata.name
+      value: computeplane-cluster
     asserts:
       - notExists:
           path: spec.values.addons.fluxcd
@@ -57,12 +66,12 @@ tests:
           path: spec.upgrade.disableWait
           value: true
 
-  - it: leaves nodeGroups to the wrapped chart's default when unset
-    asserts:
-      - notExists:
-          path: spec.values.nodeGroups
-
-  - it: passes the curated nodeGroups knob through as cluster shape
+  # Phase 2 removed nodeGroups from the wrapped kubernetes chart; the parent
+  # HelmRelease must no longer carry it (it would silently do nothing).
+  - it: does not pass nodeGroups to the wrapped control-plane chart
+    documentSelector:
+      path: metadata.name
+      value: computeplane-cluster
     set:
       nodeGroups:
         md0:
@@ -72,12 +81,92 @@ tests:
           diskSize: 32Gi
           roles: ["ingress-nginx"]
     asserts:
+      - notExists:
+          path: spec.values.nodeGroups
+
+  # With nodeGroups unset, the pre-split wrapped chart injected a scale-from-zero
+  # md0 with roles: [ingress-nginx]; the module now materialises that pool itself
+  # so the pinned ingress-nginx addon has a node to schedule onto.
+  - it: materialises the default ingress-nginx md0 pool when nodeGroups is unset
+    documentSelector:
+      path: metadata.name
+      value: kubernetes-nodes-computeplane-cluster-md0
+    asserts:
       - equal:
-          path: spec.values.nodeGroups.md0.maxReplicas
-          value: 3
+          path: kind
+          value: HelmRelease
       - equal:
-          path: spec.values.nodeGroups.md0.instanceType
+          path: spec.chartRef.name
+          value: cozystack-computeplane-application-kubevirt-kubernetes-nodes
+      - equal:
+          path: spec.chartRef.kind
+          value: ExternalArtifact
+      - equal:
+          path: metadata.labels['apps.cozystack.io/application.kind']
+          value: KubernetesNodes
+      - equal:
+          path: metadata.labels['apps.cozystack.io/application.name']
+          value: computeplane-cluster-md0
+      - equal:
+          path: spec.values.cluster
+          value: computeplane-cluster
+      - equal:
+          path: spec.values.clusterReleaseName
+          value: computeplane-cluster
+      - equal:
+          path: spec.values.roles[0]
+          value: ingress-nginx
+      # canonical KubernetesNodes pool shape (mirrors rest.go): RetryOnFailure
+      # strategy + disableWait, not the parent module's remediation style.
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.install.disableWait
+          value: true
+
+  # A tenant that supplies nodeGroups gets one pool HelmRelease per group,
+  # authoritative (not merged with the default md0), each wired to the parent.
+  - it: emits one pool HelmRelease per supplied nodeGroup
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+        gpu0:
+          minReplicas: 0
+          maxReplicas: 2
+          instanceType: u1.xlarge
+          diskSize: 64Gi
+          roles: []
+          gpus:
+            - name: nvidia.com/AD102GL_L40S
+    asserts:
+      # three docs total: parent + two pools
+      - hasDocuments:
+          count: 3
+      - equal:
+          path: spec.values.instanceType
           value: u1.large
+        documentSelector:
+          path: metadata.name
+          value: kubernetes-nodes-computeplane-cluster-md0
+      - equal:
+          path: spec.values.gpus[0].name
+          value: nvidia.com/AD102GL_L40S
+        documentSelector:
+          path: metadata.name
+          value: kubernetes-nodes-computeplane-cluster-gpu0
+      # no implicit md0 is added on top of supplied groups
+      - equal:
+          path: spec.values.maxReplicas
+          value: 3
+        documentSelector:
+          path: metadata.name
+          value: kubernetes-nodes-computeplane-cluster-md0
 
   # Supplied nodeGroups are authoritative (not merged with the wrapped chart's
   # default md0), while the module pins ingress-nginx on — groups without the
@@ -96,6 +185,9 @@ tests:
           errorPattern: "at least one nodeGroup must carry roles"
 
   - it: accepts nodeGroups when any group carries the ingress-nginx role
+    documentSelector:
+      path: metadata.name
+      value: kubernetes-nodes-computeplane-cluster-edge
     set:
       nodeGroups:
         gpu0:
@@ -112,15 +204,23 @@ tests:
           roles: ["ingress-nginx"]
     asserts:
       - equal:
-          path: spec.values.nodeGroups.edge.roles[0]
+          path: spec.values.roles[0]
           value: ingress-nginx
 
   # The generator does not emit additionalProperties: false, so unlisted
-  # NodeGroup fields are NOT rejected by the schema — they pass through to the
-  # wrapped chart unvalidated. Pinned deliberately (and stated in the README);
-  # if the generator ever learns to close the object, this test should flip to
-  # asserting rejection.
-  - it: passes unlisted nodeGroup fields through to the wrapped chart
+  # NodeGroup fields are NOT rejected by the schema. The splice is an allowlist
+  # (pick), so documented pool-shape extras (e.g. maxUnhealthy — a valid
+  # kubernetes-nodes pool field) still flow through, while everything it does not
+  # name is dropped: the module-owned wiring keys (cluster, clusterReleaseName) so
+  # a tenant group key of the same name cannot render a duplicate YAML key that
+  # re-parents the pool onto a tenant-controlled cluster, and the cluster-level
+  # keys (talos, version, images) plus platform keys (_cluster, nameOverride) so a
+  # shape-only knob cannot choose the worker OS image / kubelet version. This case
+  # pins both directions.
+  - it: passes shape fields through but strips module-owned and cluster-level keys
+    documentSelector:
+      path: metadata.name
+      value: kubernetes-nodes-computeplane-cluster-md0
     set:
       nodeGroups:
         md0:
@@ -129,8 +229,82 @@ tests:
           instanceType: u1.large
           diskSize: 32Gi
           roles: ["ingress-nginx"]
+          # tolerated shape extra: must pass through
           maxUnhealthy: 40%
+          # module-owned wiring: a duplicate key must NOT override the module value
+          cluster: attacker-cluster
+          clusterReleaseName: kubernetes-attacker
+          # cluster-level worker-image keys: a shape-only knob must NOT let a tenant
+          # pick the worker OS image / installer / kubelet version
+          talos:
+            imageFactoryURL: https://evil.example.com
+            installerRepository: evil.example.com/installer
+          version: v1.31
+          images:
+            kubectl: evil.example.com/kubectl:latest
+          # platform-injected object (cluster-domain/oidc/dns01/proxy) delivered via
+          # the cozystack-values Secret: a tenant key must NOT reach the pool values
+          # (the allowlist splice drops anything it does not name — regression guard
+          # for the denylist hole this replaced)
+          _cluster:
+            cluster-domain: attacker.example.com
+          # helm nameOverride: not a pool-shape field, must not pass through
+          nameOverride: pwned
     asserts:
       - equal:
-          path: spec.values.nodeGroups.md0.maxUnhealthy
+          path: spec.values.maxUnhealthy
           value: 40%
+      - equal:
+          path: spec.values.cluster
+          value: computeplane-cluster
+      - equal:
+          path: spec.values.clusterReleaseName
+          value: computeplane-cluster
+      - notExists:
+          path: spec.values.talos
+      - notExists:
+          path: spec.values.version
+      - notExists:
+          path: spec.values.images
+      - notExists:
+          path: spec.values._cluster
+      - notExists:
+          path: spec.values.nameOverride
+
+  # Helm caps a HelmRelease name at 53 chars and each pool renders a 38-char fixed
+  # prefix, so a pool key over 15 chars would create a release the apiserver
+  # accepts but Flux never reconciles. The render must refuse instead (the same
+  # 53-char cap the migration overflow branch and the aggregated API already
+  # guard on their own paths).
+  - it: refuses a pool name that overflows Helm's 53-char release-name cap
+    set:
+      nodeGroups:
+        workers-for-analytics-jobs:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: ["ingress-nginx"]
+    asserts:
+      - failedTemplate:
+          errorPattern: "exceeds Helm's 53-char limit"
+      # the remedy budget is derived (sub 53 (len prefix)) — pin it so a wrong
+      # computation is caught, not just the presence of the error
+      - failedTemplate:
+          errorPattern: "Rename the pool to at most 15 characters"
+
+  # The pool key becomes the HelmRelease name and CAPI object names (RFC-1123
+  # labels). An uppercase/underscore key would render an invalid metadata.name;
+  # the render must refuse early and uniformly, like the length guard.
+  - it: refuses a pool name that is not a valid RFC-1123 label
+    set:
+      nodeGroups:
+        Bad_Pool:
+          minReplicas: 1
+          maxReplicas: 1
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: ["ingress-nginx"]
+    asserts:
+      - failedTemplate:
+          errorPattern: "is not a valid RFC-1123 label"

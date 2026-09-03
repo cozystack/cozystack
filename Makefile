@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -34,6 +34,7 @@ build: build-deps
 	make -C packages/system/objectstorage-controller image
 	make -C packages/system/securitygroup-controller image
 	make -C packages/system/grafana-operator image
+	make -C packages/system/redis-operator image
 	make -C packages/core/testing image
 	make -C packages/core/talos image
 	make -C packages/core/platform image
@@ -160,6 +161,19 @@ test-check-readiness:
 # (e.g. to use `find ... -print0 | xargs -0`).
 BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
 
+# Quiet by default: cozytest.sh streams every test's xtrace live, which over
+# this many suites buried the one failing assertion under ~240k lines of
+# trace in CI. COZYTEST_TRACE=0 keeps the per-test start/end lines and still dumps
+# the full trace of whichever test FAILS -- but not of one that is killed
+# instead, a hang reaped by the job timeout among them, since the dump runs
+# after the test returns. See the COZYTEST_TRACE comment in hack/cozytest.sh.
+# Override to watch a run line by
+# line: `COZYTEST_TRACE=1 make bats-unit-tests`, or invoke the runner
+# directly (`hack/cozytest.sh hack/foo.bats [pattern]`), which stays verbose.
+# The e2e call sites in packages/core/testing/Makefile are untouched and keep
+# the live stream -- see the COZYTEST_TRACE comment in hack/cozytest.sh.
+COZYTEST_TRACE ?= 0
+
 bats-unit-tests:
 	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
 		echo "ERROR: no hack/*.bats unit test files found"; \
@@ -167,7 +181,7 @@ bats-unit-tests:
 	fi
 	@for f in $(BATS_UNIT_FILES); do \
 		echo "--- running $$f ---"; \
-		hack/cozytest.sh "$$f" || exit 1; \
+		COZYTEST_TRACE=$(COZYTEST_TRACE) hack/cozytest.sh "$$f" || exit 1; \
 	done
 
 # Operator-facing host preflight check. Warns about a standalone

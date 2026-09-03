@@ -308,3 +308,22 @@ if [[ "$REASON" != "RecoveryTargetUnreachable" ]]; then
     exit 1
 fi
 log_success "Verified: recoveryTime ${UNREACHABLE_TIME} past the archive -> RestoreJob Failed with reason RecoveryTargetUnreachable."
+
+# In-place restore last: it deletes pg-src and re-bootstraps from S3, so nothing
+# after it may depend on the source. Regression guard for the archive-vs-recovery
+# serverName collision - before bootstrap.newServerName the restored cluster
+# archived onto the source's own WAL prefix and wedged on "Expected empty archive".
+print_header "Step 50: in-place restore of '${PG_SRC_NAME}' from '${BACKUP_NAME}' and wait for Succeeded"
+kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/35-restorejob-in-place.yaml"
+wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_INPLACE_NAME" \
+    '{.status.phase}' Succeeded "$NAMESPACE" 1200 Failed
+wait_for_field clusters.postgresql.cnpg.io "$PG_SRC_CLUSTER" \
+    '{.status.phase}' 'Cluster in healthy state' "$NAMESPACE" 600
+
+print_header "Step 50 verify: the sentinel survived the in-place restore"
+GOT=$(psql_exec "$PG_SRC_CLUSTER" demo "SELECT token FROM e2e_sentinel WHERE id = 1;" | tr -d '[:space:]')
+if [[ "$GOT" != "$SENTINEL_TOKEN" ]]; then
+    log_error "in-place restore sentinel mismatch: source has '${GOT}', expected '${SENTINEL_TOKEN}'"
+    exit 1
+fi
+log_success "In-place restore verified: '${PG_SRC_NAME}' re-bootstrapped and archives to a fresh prefix (sentinel '${GOT}')."

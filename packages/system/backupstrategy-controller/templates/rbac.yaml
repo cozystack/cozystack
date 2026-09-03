@@ -154,6 +154,19 @@ rules:
 - apiGroups: ["k8s.mariadb.com"]
   resources: ["backups", "restores"]
   verbs: ["get", "list", "watch", "create"]
+# MongoDB strategy: read the operator-side PerconaServerMongoDB CR to gate on
+# "backups enabled + storage declared" preconditions, create one-shot
+# PerconaServerMongoDBBackup CRs on the BackupJob path, and create
+# PerconaServerMongoDBRestore CRs on the RestoreJob path. As with MariaDB the
+# driver only ever Creates/Lists/Gets these objects — it never patches or
+# deletes them; their lifecycle is owned by the psmdb operator and (for
+# cleanup) by tenants / explicit teardown flows, never by this controller.
+- apiGroups: ["psmdb.percona.com"]
+  resources: ["perconaservermongodbs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["psmdb.percona.com"]
+  resources: ["perconaservermongodbbackups", "perconaservermongodbrestores"]
+  verbs: ["get", "list", "watch", "create"]
 # FoundationDB strategy: read the operator-side FoundationDBCluster CR to
 # surface "not yet rendered" preconditions, create per-BackupJob
 # FoundationDBBackup CRs and per-RestoreJob FoundationDBRestore CRs.

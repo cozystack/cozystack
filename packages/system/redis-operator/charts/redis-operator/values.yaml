@@ -4,7 +4,7 @@
 
 # Name of the image repository to pull the container image from.
 image:
-  repository: quay.io/spotahome/redis-operator
+  repository: ghcr.io/freshworks-oss/redis-operator
   pullPolicy: IfNotPresent
   tag: v1.3.0
   cli_args: ""
@@ -26,6 +26,9 @@ replicas: 1
 
 # A name in place of the chart name for `app:` labels.
 nameOverride: ""
+
+labels: {}
+  # app: redis
 
 # A name to substitute for the full names of resources.
 fullnameOverride: ""
@@ -49,6 +52,13 @@ service:
 
 container:
   port: 9710
+
+# Extra environment variables to add to the operator container, using the
+# native Kubernetes EnvVar schema, e.g.:
+# extraEnvVars:
+#   - name: FOO
+#     value: bar
+extraEnvVars: []
 
 # Container [security context](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container).
 # See the [API reference](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-1) for details.
@@ -86,13 +96,6 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
-
-# CRDs configuration
-crds:
-  # -- Additional CRDs annotations
-  annotations: {}
-    # argocd.argoproj.io/sync-options: Replace=true
-    # strategy.spinnaker.io/replace: 'true'
 
 priorityClassName: ""
 

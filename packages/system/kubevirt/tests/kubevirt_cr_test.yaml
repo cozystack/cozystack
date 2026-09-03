@@ -92,3 +92,27 @@ tests:
           path: spec.configuration.mediatedDevicesConfiguration.mediatedDeviceTypes
           value:
           - nvidia-740
+
+  # virt-operator owns the virt-handler DaemonSet, so resources cannot come from
+  # chart values — customizeComponents.patches is the only seam. virt-handler ran
+  # BestEffort on every node, and the Talos userspace OOM handler (v1.12+) only
+  # kills cgroups with no memory.max, so it was a standing eviction candidate.
+  # Pin the patch: a malformed or dropped entry fails silently at runtime, since
+  # virt-operator simply reconciles the DaemonSet without the resources.
+  - it: patches virt-handler with memory requests and limits
+    asserts:
+      - equal:
+          path: spec.customizeComponents.patches[0].resourceName
+          value: virt-handler
+      - equal:
+          path: spec.customizeComponents.patches[0].resourceType
+          value: DaemonSet
+      - equal:
+          path: spec.customizeComponents.patches[0].type
+          value: strategic
+      - matchRegex:
+          path: spec.customizeComponents.patches[0].patch
+          pattern: '"limits":\{"memory":"2Gi"\}'
+      - matchRegex:
+          path: spec.customizeComponents.patches[0].patch
+          pattern: '"requests":\{"cpu":"100m","memory":"128Mi"\}'

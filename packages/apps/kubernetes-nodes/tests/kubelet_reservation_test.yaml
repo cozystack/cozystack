@@ -1,0 +1,77 @@
+suite: kubelet reservation validation
+
+# The kubelet-reservation branch (quantity-format regexes, positive-value and
+# eviction-threshold invariants) moved verbatim from the parent chart into
+# nodegroup.yaml. These failure-path guards reject malformed input at render
+# time before a broken machineconfig reaches a worker. Ported from the parent
+# chart's kubelet_reservation_test.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: []
+  resources:
+    cpu: "2"
+    memory: 4Gi
+
+tests:
+  - it: accepts valid kubelet reservation overrides
+    set:
+      kubelet:
+        systemReservedMemory: 512Mi
+        kubeReservedMemory: 512Mi
+        systemReservedCpu: 100m
+        kubeReservedCpu: 100m
+        evictionHardMemory: 5%
+        evictionSoftMemory: 8%
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: rejects an invalid kubelet memory quantity
+    set:
+      kubelet:
+        systemReservedMemory: "not-a-quantity"
+    asserts:
+      - failedTemplate:
+          errorPattern: "invalid systemReservedMemory value"
+
+  - it: rejects an invalid kubelet cpu quantity
+    set:
+      kubelet:
+        systemReservedCpu: "abc"
+    asserts:
+      - failedTemplate:
+          errorPattern: "invalid systemReservedCpu value"
+
+  - it: rejects evictionHard >= evictionSoft (percentage)
+    set:
+      kubelet:
+        evictionHardMemory: "12%"
+        evictionSoftMemory: "10%"
+    asserts:
+      - failedTemplate:
+          errorPattern: "must be strictly less than evictionSoftMemory"
+
+  - it: rejects mixed-unit eviction thresholds
+    set:
+      kubelet:
+        evictionHardMemory: "500Mi"
+        evictionSoftMemory: "10%"
+    asserts:
+      - failedTemplate:
+          errorPattern: "must use the same unit type"

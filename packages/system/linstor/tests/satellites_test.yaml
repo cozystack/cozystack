@@ -1,0 +1,39 @@
+suite: satellite pod resource limits
+
+# The satellite DaemonSet ran BestEffort, which made it a standing victim for the
+# Talos userspace OOM handler (v1.12+): that handler only ever kills cgroups with
+# no memory.max, and picks its victim by QoS class rather than by what caused the
+# pressure. A tenant workload thrashing against its own limit would get the
+# satellite killed, taking DRBD connections on that node down with it.
+#
+# Every container in the pod needs a limit for the pod cgroup to get memory.max,
+# so the plunger sidecars are pinned alongside the satellite itself — one
+# limit-free sidecar is enough to put the whole pod back in the victim set.
+#
+# Note this is the opposite call from linstor-controller, which cluster_test.yaml
+# pins as deliberately limit-free (a JVM that must not be OOM-killed mid-operation).
+
+templates:
+  - templates/satellites-cozy.yaml
+  - templates/satellites-plunger.yaml
+
+tests:
+  - it: satellite declares a memory limit and request
+    template: templates/satellites-cozy.yaml
+    asserts:
+      - equal:
+          path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].resources.limits.memory
+          value: 2Gi
+      - equal:
+          path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].resources.requests.memory
+          value: 128Mi
+
+  - it: plunger sidecars declare memory limits
+    template: templates/satellites-plunger.yaml
+    asserts:
+      - equal:
+          path: spec.podTemplate.spec.containers[?(@.name=="plunger")].resources.limits.memory
+          value: 128Mi
+      - equal:
+          path: spec.podTemplate.spec.containers[?(@.name=="drbd-logger")].resources.limits.memory
+          value: 128Mi

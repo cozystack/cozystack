@@ -10,6 +10,12 @@ spec:
       apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       name: mongodb-test
+  # The controller writes its verdict into the sentinel's status conditions
+  # (SourceNotFound, SourceRejected, ProjectionCollision, ...). Without this a
+  # failed projection surfaces only as an absent Secret, with no reason.
+  - describe:
+      apiVersion: internal.cozystack.io/v1alpha1
+      kind: TenantProjection
   - podLogs:
       selector: app.kubernetes.io/instance=mongodb-test
       tail: 50
@@ -60,3 +66,395 @@ spec:
             name: mongodb-test-rs0
           status:
             readyReplicas: 1
+
+  # The TenantProjection declares the trust-anchor source by name
+  # (<release>-ssl, key ca.crt). Nothing else in the repo checks that this is
+  # what the operator actually produces: the sentinel and any unit fixture
+  # would encode the same assumption and so cannot catch each other being
+  # wrong. This step is the independent witness — a Percona change to either
+  # the Secret name or the key breaks it here rather than silently producing an
+  # empty trust anchor.
+  - name: verify-trust-anchor-source-shape
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl
+          (data."ca.crt" != null): true
+
+  # The README tells operators no manual cleanup of the TLS Secrets is needed,
+  # which reverses the instruction it replaced. That promise rests entirely on
+  # an ownerReference: the operator's deletion finalizer enumerates only the
+  # users, internal-<release>, internal-<release>-users and encryption-key
+  # Secrets, so nothing else would reclaim these three.
+  #
+  # The reference is patched on at reconcile time rather than set at creation —
+  # cert-manager creates the Secret unowned and WaitForCerts adds the CR
+  # reference afterwards — so this asserts the outcome on the path a normal
+  # install takes, and goes red if Percona stops patching. Matched on the owner
+  # kind rather than on a non-empty list, because the Secret acquiring some
+  # other owner is the failure this is meant to catch, not a pass.
+  #
+  # Pinned to PerconaServerMongoDB specifically because the platform ships
+  # cert-manager with enableCertificateOwnerRef: false, which is the leg where
+  # the CR owns the Secret directly. Were that flag ever flipped, the owner
+  # becomes the Certificate and this step correctly goes red rather than
+  # quietly accepting a different ownership graph than the README describes.
+  - name: verify-tls-secrets-are-owned-by-the-cr
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ca-cert
+          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'] || `[]`)): 1
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl
+          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'] || `[]`)): 1
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl-internal
+          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'] || `[]`)): 1
+
+  # The Secrets the operator creates for TLS all carry private key material and
+  # must never be reachable by a tenant. The chart tests pin this at render
+  # time; this pins the object that is actually deployed.
+  #
+  # Asserted as an exact list rather than as the absence of forbidden names,
+  # because a rule granting `secrets` with no resourceNames at all grants every
+  # Secret in the namespace while containing no forbidden name to match on.
+  #
+  # Two counts are asserted alongside it and neither is redundant. An
+  # ADDITIONAL rule naming secrets contributes no entries to the flattened name
+  # list, so the equality alone would still hold while every Secret became
+  # readable — the secrets-rule count catches that. An ADDED rule with resources
+  # ["*"] grants every Secret without containing the string "secrets" at all, so
+  # it is invisible to both — the total rule count catches that one. An existing
+  # rule MUTATED to ["*"] drops the secrets-rule count to zero and empties the
+  # flattened name list, so both assertions below fail on it as well.
+  - name: verify-tenant-role-grants-no-key-material
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: mongodb-test-dashboard-resources
+          (length(rules)): 3
+          (length(rules[?contains(resources, 'secrets')])): 1
+          (rules[?contains(resources, 'secrets')].resourceNames[]):
+          - mongodb-test-credentials
+          # The Role is read-only by intent; verbs is the fourth RBAC axis and
+          # widening it is the same class as widening the other three.
+          (length(rules[?verbs != ['get', 'list', 'watch']])): 0
+
+  # The Role above is only one of the two paths a Secret can reach a tenant by.
+  # The other is core.cozystack.io/tenantsecrets, which surfaces whatever the
+  # lineage webhook stamped internal.cozystack.io/tenantresource=true from this
+  # application's ApplicationDefinition selectors. That is the path the
+  # secrets.include selector drives, and it is the one that would leak the CA
+  # private key if the selector ever named the operator's Secrets instead of
+  # the projection. Assert the key-bearing Secrets are not promoted onto it.
+  #
+  # This negative holds today and does not depend on the CA-extraction
+  # controller: it asserts what must NOT be labelled, not that the projection
+  # exists. Written as != 'true' rather than == 'false' because the stamp is
+  # applied when the operator adds its ownerReference, so before that pass the
+  # label is absent rather than false — both states are correct here.
+  - name: verify-key-bearing-secrets-are-not-tenant-secrets
+    try:
+    # Positive control, and it must come first. The three negatives below are
+    # satisfied by an ABSENT label — which is also exactly what you observe if
+    # the lineage webhook never stamped anything in this run at all, because a
+    # field was renamed or the kind was not reconciled. Without a witness that
+    # the mechanism is live, all three would pass while asserting nothing about
+    # the CA private key.
+    #
+    # The credentials Secret is the right witness: the chart renders it, it
+    # traces to the MongoDB CR, and the ApplicationDefinition grants it by name
+    # — so it MUST be stamped. This also catches the regression the exclude
+    # list makes newly possible, since exclude is evaluated before include and
+    # would silently revoke the tenant's own connection string.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-credentials
+            labels:
+              internal.cozystack.io/tenantresource: "true"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ca-cert
+          (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl
+          (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
+    # All three are enumerated deliberately. The promotion is driven by a label
+    # selector rather than by name, so any one of them acquiring the label
+    # leaks a key — witnessing two of the three would leave the third unguarded.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl-internal
+          (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
+
+  # The negatives above are all satisfied by an absent label, so they say
+  # nothing about the anchor a tenant is supposed to get. This is the positive:
+  # the sentinel converged, the controller lifted the right certificate, and
+  # the registry serves it.
+  #
+  # tenant-ca is stamped by the controller; tenantresource is the LINEAGE
+  # WEBHOOK's verdict, computed from the ApplicationDefinition's secrets.include
+  # selector. It is "true" only if the whole chain held, and nothing short of a
+  # live cluster proves that link.
+  - name: verify-tenant-ca-projection
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test.tenant-ca
+            labels:
+              internal.cozystack.io/tenant-ca: "true"
+              internal.cozystack.io/tenantresource: "true"
+          type: Opaque
+    # Deterministic once the assert above passes, so no retry.
+    - script:
+        content: |
+          set -eu
+
+          # Exactly one key, and it is ca.crt. The source carries a private key,
+          # so any second key is a leak in the making.
+          keys=$(kubectl -n "$NAMESPACE" get secret mongodb-test.tenant-ca \
+            -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' | sort | tr '\n' ' ')
+          if [ "$keys" != "ca.crt " ]; then
+            echo "projection must hold exactly ca.crt, holds: $keys" >&2
+            exit 1
+          fi
+
+          # It lifted the right certificate. This is what pins the declared
+          # source to reality: if Percona renames the Secret or the key, the
+          # controller finds nothing and this fails.
+          #
+          # Compared by fingerprint, not raw PEM — the controller re-encodes
+          # ca.crt from the DER it parsed, so a header or column-width change at
+          # the source would redden a byte comparison of a correct projection.
+          src=$(kubectl -n "$NAMESPACE" get secret mongodb-test-ssl -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if [ -z "$src" ]; then
+            echo "mongodb-test-ssl has no ca.crt — the declared source name or key is wrong" >&2
+            exit 1
+          fi
+          proj=$(kubectl -n "$NAMESPACE" get secret mongodb-test.tenant-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          src_fp=$(echo "$src" | openssl x509 -noout -fingerprint -sha256)
+          proj_fp=$(echo "$proj" | openssl x509 -noout -fingerprint -sha256)
+          if [ "$src_fp" != "$proj_fp" ]; then
+            echo "projection does not carry the operator's CA certificate" >&2
+            exit 1
+          fi
+
+          # The point of the whole exercise: the source carries a private key,
+          # the projection must not. Asserting the source really does hold
+          # tls.key keeps this honest — if the operator ever stopped storing it
+          # there, the check below would pass while proving nothing.
+          if ! kubectl -n "$NAMESPACE" get secret mongodb-test-ssl \
+            -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}' | grep -qx 'tls.key'; then
+            echo "mongodb-test-ssl no longer carries tls.key — this check has stopped proving anything" >&2
+            exit 1
+          fi
+          if kubectl -n "$NAMESPACE" get secret mongodb-test.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d | grep -qi 'BEGIN .*PRIVATE KEY'; then
+            echo "projection carries PEM private key material" >&2
+            exit 1
+          fi
+
+          # The delivery path the README tells a tenant to use, run as the
+          # command the README prints. Everything above reads the raw Secret,
+          # which only an admin can do.
+          anchor=$(kubectl -n "$NAMESPACE" get tenantsecret mongodb-test.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if ! echo "$anchor" | grep -q 'BEGIN CERTIFICATE'; then
+            echo "the trust anchor is not served through core.cozystack.io/tenantsecrets" >&2
+            exit 1
+          fi
+
+          # And the negative that gives the positive its meaning: the registry
+          # must not serve the key-bearing Secrets. If either starts resolving,
+          # the label path has stopped gating on the platform's verdict.
+          for s in mongodb-test-ssl mongodb-test-ssl-internal mongodb-test-ca-cert; do
+            if kubectl -n "$NAMESPACE" get tenantsecret "$s" >/dev/null 2>&1; then
+              echo "key-bearing $s is being served as a tenant secret" >&2
+              exit 1
+            fi
+          done
+
+  # The -old snapshots are operator scratch state that the operator removes
+  # itself once the merged CA has landed, not residue needing manual cleanup.
+  # A settled install must therefore leave none behind. This is a weak witness
+  # on first install, where they are never created at all, but it pins the
+  # corrected claim and goes red if the operator stops cleaning up.
+  - name: verify-no-rotation-snapshots-remain
+    try:
+    - error:
+        # Short: a Secret that does not exist will not start existing while
+        # chainsaw waits, and this step is a weak witness on a first install.
+        timeout: 30s
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl-old
+    - error:
+        timeout: 30s
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl-internal-old
+---
+# Logical-dump backup half of the MongoDB backup flow, driving the validated
+# example scripts (examples/backups/mongodb) as the harness so the test and the
+# documented flow can never drift. run-all.sh runs Bucket -> source MongoDB
+# (backup.enabled) + sentinel document -> ad-hoc BackupJob against the
+# cozy-default BackupClass (waits Succeeded), and SKIP_RESTORE=1 stops it there
+# — the in-cluster witness that a psmdb-operator backup is actually taken.
+#
+# The to-copy restore half is deliberately uncovered. A to-copy restore replays
+# the source cluster's system users into the target, so the target's own
+# generated credentials stop authenticating and the harness cannot read the
+# sentinel back out of the restored copy (#3832). Returning full round-trip
+# coverage once that is fixed means dropping both SKIP_RESTORE below and the
+# marker check beside it: the complete flow never prints that line, so removing
+# only the variable trades this failure for a marker mismatch. The test keeps
+# its round-trip name for that return.
+#
+# Same harness-driving shape as mariadb-2-backup-roundtrip
+# (hack/e2e-chainsaw/mariadb/chainsaw-test.yaml): a single run step pre-cleans
+# any leftover state, drives run-all.sh, and drains in an always-reached finally.
+#
+# Runs in tenant-root, not the default tenant-test: the S3 client here is the
+# percona-backup-mongodb agent INSIDE the mongod pod, and the e2e tenant is
+# created isolated (hack/e2e-install-cozystack.bats) — its Cilium egress
+# allowlist blocks a tenant-test Pod from reaching tenant-root's seaweedfs,
+# while a tenant-root Pod reaches it over same-tenant egress. The harness
+# targets the in-cluster endpoint (S3_ENDPOINT below) instead of the BucketInfo
+# external ingress URL, which in CI is an unroutable placeholder, and tolerates
+# its self-signed cert via backup.insecureSkipTLSVerify=true on the app (the
+# psmdb s3 storage has no CA-bundle field, unlike the mariadb driver's tls
+# block).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mongodb-2-backup-roundtrip
+spec:
+  namespace: tenant-root
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: mongodb-mongodb-src
+  - describe:
+      apiVersion: psmdb.percona.com/v1
+      kind: PerconaServerMongoDB
+      name: mongodb-mongodb-src
+  - describe:
+      apiVersion: psmdb.percona.com/v1
+      kind: PerconaServerMongoDBBackup
+  - describe:
+      apiVersion: psmdb.percona.com/v1
+      kind: PerconaServerMongoDBRestore
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  # The dump/restore runs in the pbm agent inside the mongod pods; a failed
+  # upload or TLS handshake leaves its error in those Pods' logs.
+  - podLogs:
+      selector: app.kubernetes.io/instance=mongodb-mongodb-src
+      tail: 200
+  steps:
+  - name: run
+    try:
+    # Pre-clean: tenant-root is a shared, persistent namespace with fixed
+    # resource names, so a run killed before the finally below leaves stale
+    # state behind. A leftover BackupJob still carrying status.phase=Succeeded
+    # from a prior run would satisfy `wait_for_field ... Succeeded` instantly
+    # and pass without a real backup ever running. cleanup.sh is idempotent
+    # (--ignore-not-found), so this is a no-op on a clean namespace.
+    - script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/mongodb/cleanup.sh
+        check:
+          ($error == null): true
+    # The 30m budget covers what this step drives: bucket provisioning, a
+    # single-replica source MongoDB coming up (psmdb reconcile, PVC bind, image
+    # pull, pbm-agent sidecars) and the logical dump to S3 (convention 6:
+    # justified in-line). It is not lowered for the skipped restore because
+    # run-all.sh's own per-wait budgets up to the backup already exceed it, so
+    # this is the ceiling that fires either way. run-all.sh fails fast on a
+    # terminal BackupJob phase and stalled HelmReleases rather than polling out
+    # the budget.
+    - script:
+        timeout: 30m
+        content: |
+          set -eu
+          cd ../../..
+          [ -x examples/backups/mongodb/run-all.sh ] || { echo "mongodb backup example scripts not found at examples/backups/mongodb" >&2; exit 1; }
+          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+            SKIP_RESTORE=1 examples/backups/mongodb/run-all.sh
+        check:
+          ($error == null): true
+          # Exit zero alone is also what a completed round-trip returns, so the
+          # marker is what tells the skipped flow from the full one — and what
+          # fails the step if SKIP_RESTORE stops reaching the harness. run-all.sh
+          # logs through stderr. The phrase is the skip branch's own line, minus
+          # its colon, which YAML would read as a mapping separator in the key.
+          (contains($stderr, 'stopping after a successful backup')): true
+    finally:
+    # Removes every resource the harness created (chainsaw did not apply them,
+    # so they are not part of automatic cleanup) — including the operator-side
+    # psmdb.percona.com Backup/Restore CRs the Cozystack jobs own only by label.
+    - description: backup-flow cleanup
+      script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/mongodb/cleanup.sh

@@ -92,6 +92,82 @@ jobs:
           # app token authenticates, matching how promote-rc.yaml already pushes.
           persist-credentials: false
 
+      # Use the trusted pre-merge base version of the verifier, while its root
+      # argument remains the merged packages tree checked out above. This keeps
+      # the final guard independent of the release PR's executable contents.
+      - name: Checkout release tooling from base
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .release-tooling
+          sparse-checkout: hack
+          persist-credentials: false
+
+      # Resolve and verify the candidate before creating any write-once stable
+      # git or registry name. The candidate was serialized at promote time from
+      # the tag-rewritten tree; this guard pulls it by the committed digest and
+      # proves it still matches the merge commit (apart from its impossible
+      # self-reference) and still pins the rc-tested container digests.
+      #
+      # flux and yq are version-pinned: they are what this job verifies the
+      # candidate with and what stamps the stable chart, so `latest/download`
+      # would make an irreversible step depend on whatever mikefarah shipped
+      # this morning. The version tracks
+      # packages/core/testing/images/e2e-sandbox/Dockerfile. yq is additionally
+      # pinned by content — it stamps the chart's platformVersion, and this step
+      # is the last one before write-once names exist. The Flux installer is not,
+      # because it checksums the binary it fetches and the mutable part is its
+      # own bootstrap script. promote-rc.yaml's copy carries the full reasoning.
+      - name: Set up promotion toolchain (flux, skopeo, yq, helm)
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          FLUX_VERSION: "2.8.6"
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+        run: |
+          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
+          command -v skopeo >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+          command -v helm >/dev/null \
+            || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          # Not installed here, only required: `flux pull artifact` reads its
+          # registry credentials from ~/.docker/config.json, which is why the
+          # login step below runs `docker login` as well as skopeo's and helm's.
+          # This job's runner class is not one of the docker-using build ones, so
+          # say what is missing here rather than letting the login step fail with
+          # a bare "command not found" in the middle of the release path.
+          command -v docker >/dev/null \
+            || { echo "::error::docker is required on this runner: flux reads registry credentials from ~/.docker/config.json"; exit 1; }
+
+      - name: Login to registry (GHCR)
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | helm registry login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+
+      - name: Verify stable packages candidate
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          TAG: ${{ steps.get_tag.outputs.tag }}
+        run: .release-tooling/hack/verify-promoted-packages.sh "${TAG#v}"
+
       # Create the release tag at the merge commit — write-once.
       #
       # The tag is attached to the PR merge commit, which did not exist before
@@ -389,34 +465,18 @@ jobs:
               console.log(`✅ Restored ${maxRelease.tag} as latest release`);
             }
 
-      # ── Transactional promotion: the registry side effects run HERE, after the
-      #    stable tag is cut and the release is published — i.e. after the promote
-      #    PR's e2e passed and the PR merged. promote-rc.yaml did none of this at
-      #    dispatch time, so an abandoned promotion left no stable-named bytes.
+      # ── Transactional promotion: consumer-visible registry side effects run
+      #    HERE, after the candidate guard passed and the promote PR merged.
+      #    promote-rc.yaml published only a temporary `promotion-*` packages
+      #    candidate, so an abandoned promotion leaves no stable-named bytes.
       #
       #    The checked-out merge commit is the promoted stable tree: the rc's
-      #    digests with the tag string rewritten to stable. skopeo retags those
-      #    digests to the stable image tag; helm packages+pushes the stable chart.
-      - name: Set up toolchain (skopeo, yq, helm)
-        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
-        run: |
-          command -v yq >/dev/null \
-            || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
-          command -v skopeo >/dev/null \
-            || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
-          command -v helm >/dev/null \
-            || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      #    digests with the tag string rewritten to stable and the verified
+      #    candidate pinned. skopeo retags those digests to the stable image tag;
+      #    helm packages+pushes the stable chart.
 
-      - name: Login to registry (GHCR)
-        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
-        env:
-          GHCR_USER:  ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "$GHCR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
-          echo "$GHCR_TOKEN" | helm registry login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
-
-      # Retag every rc image/digest to the stable tag. No rebuild — bit-for-bit
+      # Retag every rc image/digest plus the verified packages candidate to the
+      # stable tag. No container rebuild — bit-for-bit
       # the e2e-tested rc. :latest moves only when this stable is the newest
       # published version, gated by the SAME make_latest decision the release got.
       - name: Retag rc images to stable
@@ -431,9 +491,9 @@ jobs:
       # The retag above covers component images + the cozystack-packages artifact,
       # but the chart is a separate OCI artifact referenced in no values.yaml, so
       # the stable install 404s (manifest unknown) unless it is published here.
-      # No rebuild: the chart is packaged from the merged stable tree, which pins
-      # the retagged images + artifact by digest; only the chart's version and
-      # its platformVersion default are stamped.
+      # No container rebuild: the chart is packaged from the merged stable tree,
+      # which pins the retagged images + artifact by digest; only the chart's
+      # version and its platformVersion default are stamped.
       - name: Publish stable cozy-installer chart
         if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
         env:

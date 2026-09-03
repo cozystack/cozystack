@@ -8,7 +8,7 @@
   - Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer
 - If it's a work in progress, consider creating this PR as a draft.
 - Don't hesistate to ask for opinion and review in the community chats, even if it's still a draft.
-- Add the label `backport` if it's a bugfix that needs to be backported to a previous version.
+- Add the label `kind/backport` if it's a bugfix that needs to be backported to a previous version.
 -->
 
 ## What this PR does

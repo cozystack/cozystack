@@ -1,0 +1,23 @@
+# To-copy restore. Targets the empty mongodb-target MongoDB app from
+# 20-mongodb-target.yaml; the driver creates a PerconaServerMongoDBRestore CR
+# with clusterName=mongodb-mongodb-target and a backupSource pointing at the
+# source backup's S3 destination, so the operator replays the logical dump into
+# the target while mongodb-src stays running and untouched.
+#
+# Driven for the same-namespace happy path by run-all.sh in this directory; also
+# applicable manually with kubectl apply -f. The mongodb-2-backup-roundtrip
+# Chainsaw suite stops before this step while #3832 is open, so nothing in CI
+# exercises it. The cross-tenant variant stays manual; see the README for the
+# network-policy reason.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: mongodb-src-to-mongodb-target
+spec:
+  backupRef:
+    name: mongodb-src-adhoc
+  targetApplicationRef:
+    apiGroup: apps.cozystack.io
+    kind: MongoDB
+    name: mongodb-target

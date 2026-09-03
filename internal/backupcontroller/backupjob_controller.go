@@ -164,6 +164,8 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileAltinity(ctx, j, resolved)
 	case strategyv1alpha1.MariaDBStrategyKind:
 		return r.reconcileMariaDB(ctx, j, resolved)
+	case strategyv1alpha1.MongoDBStrategyKind:
+		return r.reconcileMongoDB(ctx, j, resolved)
 	case strategyv1alpha1.FoundationDBStrategyKind:
 		return r.reconcileFoundationDB(ctx, j, resolved)
 	case strategyv1alpha1.EtcdStrategyKind:
@@ -188,6 +190,7 @@ func supportedBackupStrategyKinds() []string {
 		strategyv1alpha1.CNPGStrategyKind,
 		strategyv1alpha1.AltinityStrategyKind,
 		strategyv1alpha1.MariaDBStrategyKind,
+		strategyv1alpha1.MongoDBStrategyKind,
 		strategyv1alpha1.FoundationDBStrategyKind,
 		strategyv1alpha1.EtcdStrategyKind,
 	}

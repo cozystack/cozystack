@@ -46,6 +46,10 @@ spec:
         - {{ quote .Values.image.cli_args }}
         {{- end }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- if .Values.extraEnvVars }}
+        env:
+          {{- toYaml .Values.extraEnvVars | nindent 10 }}
+        {{- end }}
         ports:
           - name: metrics
             containerPort: {{ .Values.container.port }}

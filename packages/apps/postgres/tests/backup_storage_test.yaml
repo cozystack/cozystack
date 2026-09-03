@@ -236,6 +236,42 @@ tests:
           path: metadata.name
           value: pg-test-recovery
 
+  - it: "in-place restore: archiver serverName uses bootstrap.newServerName, distinct from the recovery source"
+    # Worst case: source serverName equals the restored cluster's own release
+    # name (pg-test). The chart must archive under bootstrap.newServerName (a
+    # fresh prefix) while recovering from bootstrap.serverName, or the restore
+    # would fail barman-cloud-check-wal-archive with "Expected empty archive".
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+        s3AccessKey: AKIAEXAMPLE
+        s3SecretKey: s3cr3t
+        destinationPath: s3://bucket/pg-test/
+        endpointURL: https://s3.example:9000
+      bootstrap:
+        enabled: true
+        oldName: pg-test
+        serverName: pg-test
+        newServerName: pg-test-restore-deadbeef
+    asserts:
+      # WAL archiver writes to the fresh restore prefix, never the source's.
+      - equal:
+          path: spec.plugins[0].parameters.serverName
+          value: pg-test-restore-deadbeef
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      # Recovery still reads the source prefix.
+      - equal:
+          path: spec.externalClusters[0].plugin.parameters.serverName
+          value: pg-test
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+
   - it: "bootstrap recovery without serverName: plugin serverName defaults to oldName (native parity)"
     # Native CNPG defaulted an absent serverName to the externalClusters entry
     # name (= oldName); the barman-cloud plugin defaults it to the NEW cluster's

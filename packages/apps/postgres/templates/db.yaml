@@ -123,9 +123,10 @@ spec:
       parameters:
         barmanObjectName: {{ .Release.Name }}
         # Pin the WAL-archive S3 prefix explicitly (the plugin would default it
-        # to the Cluster name anyway). The prefix must never change on a live
-        # cluster, and the CNPG backup driver preserves whatever it finds here.
-        serverName: {{ .Release.Name }}
+        # to the Cluster name anyway); the driver preserves it on a live cluster.
+        # On restore bootstrap.newServerName overrides it with a fresh prefix, so
+        # the re-bootstrapped cluster does not archive onto the recovery source.
+        serverName: {{ .Values.bootstrap.newServerName | default .Release.Name }}
   {{- end }}
 
   {{/*

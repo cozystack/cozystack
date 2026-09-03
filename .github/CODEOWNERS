@@ -10,6 +10,14 @@
 # from broad to specific. The API review gate block stays last so it cannot be
 # overridden.
 #
+# Matching is NOT additive: the last matching rule fully REPLACES every broader
+# one, including the * catch-all. There is no way to say "these people can
+# review anything" other than repeating their handles in every rule — a scoped
+# rule that omits them silently strips their ownership for that path, exactly
+# like the write-access pitfall below, just with valid handles. Policy: @kvaps
+# and @lllamnyp are listed in every rule, except the governance block which is
+# deliberately owned by @tym83 @kvaps alone.
+#
 # "Require review from Code Owners" is already enabled on main, so these rules
 # gate merges from the moment this file lands — they are not an intention to be
 # tightened later. That makes an unhonoured owner worse than a wrong one: GitHub
@@ -21,13 +29,13 @@
 *                                            @kvaps @lllamnyp
 
 # --- Dashboards, examples, tests (largest fall-throughs to the default) ---
-/dashboards/                                 @myasnikovdaniil @IvanHunters
-/examples/                                   @lllamnyp @myasnikovdaniil
-/examples/backups/                           @androndo @lllamnyp
-/test/                                       @myasnikovdaniil
+/dashboards/                                 @myasnikovdaniil @IvanHunters @kvaps @lllamnyp
+/examples/                                   @lllamnyp @myasnikovdaniil @kvaps
+/examples/backups/                           @androndo @lllamnyp @kvaps
+/test/                                       @myasnikovdaniil @kvaps @lllamnyp
 
 # --- All packages: general owners (overridden by the specific areas below) ---
-/packages/                                   @lexfrei @IvanHunters @myasnikovdaniil @sircthulhu
+/packages/                                   @lexfrei @IvanHunters @myasnikovdaniil @sircthulhu @kvaps @lllamnyp
 
 # --- Go source: general owners (specific cmd/pkg areas overridden below) ---
 /cmd/                                        @kvaps @lllamnyp @sircthulhu @lexfrei
@@ -35,22 +43,22 @@
 /pkg/                                        @kvaps @lllamnyp @sircthulhu @lexfrei
 
 # --- Apps: default owners (specific apps overridden below) ---
-/packages/apps/                              @lexfrei @IvanHunters @myasnikovdaniil @scooby87
+/packages/apps/                              @lexfrei @IvanHunters @myasnikovdaniil @scooby87 @kvaps @lllamnyp
 /packages/apps/vm-instance/                  @scooby87 @lllamnyp @kvaps @myasnikovdaniil
 /packages/apps/vm-disk/                      @scooby87 @lllamnyp @kvaps @myasnikovdaniil
 /packages/apps/vpc/                          @kvaps @lllamnyp
 
 # --- Managed Kubernetes: app chart, node pools, resource definitions, control plane, CAPI ---
-/packages/apps/kubernetes/                   @IvanHunters @kvaps @myasnikovdaniil @lexfrei
-/packages/apps/kubernetes-nodes/             @IvanHunters @kvaps @myasnikovdaniil @lexfrei
-/packages/system/kubernetes-rd/              @IvanHunters @kvaps @myasnikovdaniil @lexfrei
-/packages/system/kubernetes-nodes-rd/        @IvanHunters @kvaps @myasnikovdaniil @lexfrei
-/packages/system/kamaji/                     @IvanHunters @kvaps @myasnikovdaniil @lexfrei
-/packages/system/capi-operator/              @IvanHunters @kvaps @myasnikovdaniil @lexfrei
-/packages/system/capi-providers-core/        @IvanHunters @kvaps @myasnikovdaniil @lexfrei
-/packages/system/capi-providers-bootstrap/   @IvanHunters @kvaps @myasnikovdaniil @lexfrei
-/packages/system/capi-providers-cpprovider/  @IvanHunters @kvaps @myasnikovdaniil @lexfrei
-/packages/system/capi-providers-infraprovider/ @IvanHunters @kvaps @myasnikovdaniil @lexfrei
+/packages/apps/kubernetes/                   @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/apps/kubernetes-nodes/             @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/kubernetes-rd/              @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/kubernetes-nodes-rd/        @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/kamaji/                     @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/capi-operator/              @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/capi-providers-core/        @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/capi-providers-bootstrap/   @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/capi-providers-cpprovider/  @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
+/packages/system/capi-providers-infraprovider/ @IvanHunters @kvaps @myasnikovdaniil @lexfrei @lllamnyp
 
 # --- Extra apps ---
 /packages/extra/                             @kvaps @lllamnyp @IvanHunters @lexfrei @myasnikovdaniil
@@ -68,24 +76,20 @@
 /packages/system/vm-default-images/          @scooby87 @lllamnyp @kvaps @myasnikovdaniil
 
 # --- Backups ---
-/packages/system/backup-controller/          @androndo @lllamnyp @lexfrei
-/packages/system/backupstrategy-controller/  @androndo @lllamnyp
-/packages/system/velero/                     @androndo @lllamnyp @lexfrei
-/cmd/backup-controller/                      @androndo @lllamnyp
-/cmd/backupstrategy-controller/              @androndo @lllamnyp
-
-# --- Flux ---
-/packages/system/fluxcd/                     @kingdonb @kvaps @lllamnyp @myasnikovdaniil
-/packages/system/fluxcd-operator/            @kingdonb @kvaps @lllamnyp @myasnikovdaniil
+/packages/system/backup-controller/          @androndo @lllamnyp @lexfrei @kvaps
+/packages/system/backupstrategy-controller/  @androndo @lllamnyp @kvaps
+/packages/system/velero/                     @androndo @lllamnyp @lexfrei @kvaps
+/cmd/backup-controller/                      @androndo @lllamnyp @kvaps
+/cmd/backupstrategy-controller/              @androndo @lllamnyp @kvaps
 
 # --- GPU ---
-/packages/system/hami/                       @lexfrei @kvaps
-/packages/system/gpu-operator/               @lexfrei @kvaps
-/dashboards/gpu/                             @lexfrei @kvaps
+/packages/system/hami/                       @lexfrei @kvaps @lllamnyp
+/packages/system/gpu-operator/               @lexfrei @kvaps @lllamnyp
+/dashboards/gpu/                             @lexfrei @kvaps @lllamnyp
 
 # --- SeaweedFS ---
-/packages/system/seaweedfs/                  @IvanHunters @lexfrei @myasnikovdaniil
-/packages/extra/seaweedfs/                   @sircthulhu @lexfrei @myasnikovdaniil
+/packages/system/seaweedfs/                  @IvanHunters @lexfrei @myasnikovdaniil @kvaps @lllamnyp
+/packages/extra/seaweedfs/                   @sircthulhu @lexfrei @myasnikovdaniil @kvaps @lllamnyp
 
 # --- cozystack-api / controller / lineage webhook ---
 /packages/system/cozystack-api/              @IvanHunters @kvaps @lllamnyp @lexfrei
@@ -96,9 +100,9 @@
 /cmd/lineage-controller-webhook/             @IvanHunters @kvaps @lllamnyp @lexfrei
 
 # --- Keycloak ---
-/packages/system/keycloak/                   @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil
-/packages/system/keycloak-operator/          @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil
-/packages/system/keycloak-configure/         @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil
+/packages/system/keycloak/                   @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil @kvaps @lllamnyp
+/packages/system/keycloak-operator/          @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil @kvaps @lllamnyp
+/packages/system/keycloak-configure/         @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil @kvaps @lllamnyp
 
 # --- API surface (architects): API types, aggregated apiserver, registry ---
 /api/                                        @kvaps @lllamnyp
@@ -120,13 +124,13 @@
 /packages/system/*/cozyrds/
 
 # --- Docs ---
-/docs/                                       @lexfrei @myasnikovdaniil
+/docs/                                       @lexfrei @myasnikovdaniil @kvaps @lllamnyp
 
 # --- CI / automation ---
-/.github/                                    @myasnikovdaniil @lexfrei
-/hack/                                       @myasnikovdaniil @lexfrei
-/Makefile                                    @myasnikovdaniil @lexfrei
-/.pre-commit-config.yaml                     @myasnikovdaniil @lexfrei
+/.github/                                    @myasnikovdaniil @lexfrei @kvaps @lllamnyp
+/hack/                                       @myasnikovdaniil @lexfrei @kvaps @lllamnyp
+/Makefile                                    @myasnikovdaniil @lexfrei @kvaps @lllamnyp
+/.pre-commit-config.yaml                     @myasnikovdaniil @lexfrei @kvaps @lllamnyp
 
 # --- Governance, licensing, project docs ---
 /LICENSE                                     @tym83 @kvaps

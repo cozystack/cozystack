@@ -22,9 +22,6 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
-	// Worker nodes configuration map. When left empty, a default node group `md0` is emitted with `minReplicas: 0` and `roles: [ingress-nginx]` — the MachineDeployment renders but provisions no workers until an unschedulable Pod triggers the cluster-autoscaler (or an operator scales the group manually). Enabling `addons.ingressNginx.enabled: true` on a CR with default `nodeGroups: {}` therefore requires either supplying a nodeGroup with `roles: [ingress-nginx]` and `minReplicas >= 1`, or waiting for the autoscaler to bring up the default md0 in response to the ingress-nginx controller Pods becoming Pending. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.
-	// +kubebuilder:default:={}
-	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
 	Version Version `json:"version"`
@@ -43,9 +40,6 @@ type ConfigSpec struct {
 	// Talos worker image configuration.
 	// +kubebuilder:default:={}
 	Talos Talos `json:"talos"`
-	// MachineHealthCheck tuning for worker node groups.
-	// +kubebuilder:default:={}
-	NodeHealthCheck NodeHealthCheck `json:"nodeHealthCheck"`
 	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
 	// +kubebuilder:default:={}
 	Oidc OIDC `json:"oidc"`
@@ -79,9 +73,6 @@ type Addons struct {
 	// CoreDNS addon.
 	// +kubebuilder:default:={}
 	Coredns CoreDNSAddon `json:"coredns"`
-	// FluxCD GitOps operator.
-	// +kubebuilder:default:={}
-	Fluxcd FluxCDAddon `json:"fluxcd"`
 	// Gateway API addon.
 	// +kubebuilder:default:={}
 	GatewayAPI GatewayAPIAddon `json:"gatewayAPI"`
@@ -156,20 +147,6 @@ type CoreDNSAddon struct {
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
-type FluxCDAddon struct {
-	// Enable FluxCD.
-	// +kubebuilder:default:=false
-	Enabled bool `json:"enabled"`
-	// Custom Helm values overrides.
-	// +kubebuilder:default:={}
-	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
-}
-
-type GPU struct {
-	// Name of GPU, such as "nvidia.com/AD102GL_L40S".
-	Name string `json:"name"`
-}
-
 type GPUOperatorAddon struct {
 	// Enable GPU Operator.
 	// +kubebuilder:default:=false
@@ -221,13 +198,6 @@ type IngressNginxAddon struct {
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
-type KernelModule struct {
-	// Module name as `modprobe` takes it, e.g. `nvidia_uvm`.
-	Name string `json:"name"`
-	// Module parameters, each as a bare `key=value` string.
-	Parameters []string `json:"parameters,omitempty"`
-}
-
 type Konnectivity struct {
 	// Konnectivity Server configuration.
 	// +kubebuilder:default:={}
@@ -243,23 +213,6 @@ type KonnectivityServer struct {
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 }
 
-type Kubelet struct {
-	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
-	// +kubebuilder:default:="7%"
-	EvictionHardMemory string `json:"evictionHardMemory,omitempty"`
-	// Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
-	// +kubebuilder:default:="10%"
-	EvictionSoftMemory string `json:"evictionSoftMemory,omitempty"`
-	// CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
-	KubeReservedCpu string `json:"kubeReservedCpu,omitempty"`
-	// Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
-	KubeReservedMemory string `json:"kubeReservedMemory,omitempty"`
-	// CPU reserved for host OS. Auto-computed from instanceType if empty.
-	SystemReservedCpu string `json:"systemReservedCpu,omitempty"`
-	// Memory reserved for host OS. Auto-computed from instanceType if empty.
-	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
-}
-
 type MonitoringAgentsAddon struct {
 	// Enable monitoring agents.
 	// +kubebuilder:default:=false
@@ -267,51 +220,6 @@ type MonitoringAgentsAddon struct {
 	// Custom Helm values overrides.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
-}
-
-type NodeGroup struct {
-	// System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.
-	// +kubebuilder:default:="20Gi"
-	DiskSize resource.Quantity `json:"diskSize"`
-	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
-	Gpus []GPU `json:"gpus,omitempty"`
-	// Virtual machine instance type.
-	// +kubebuilder:default:="u1.medium"
-	InstanceType string `json:"instanceType"`
-	// Kernel modules loaded on every worker in this node group, emitted as Talos `machine.kernel.modules`. A Talos system extension installs a module but does not load it, so an extension-provided driver needs its modules declared here. Leave unset to let the chart decide: a node group holding at least one `nvidia.com/*` GPU gets `nvidia` (with `NVreg_NvLinkDisable=1`, which the gpu-operator driver container applies on non-Talos workers; on Talos that container has to be turned off or it clashes with the system extension, and nothing then mounts the ConfigMap carrying the parameter), `nvidia_uvm`, `nvidia_drm`, `nvidia_modeset` (that order — Talos loads the list in sequence and the last three depend on the first), and any other group gets nothing. Set a non-empty list to replace the chart's choice entirely, or `[]` to opt out and emit no modules even on a GPU group. The module still has to be in the image: which extension supplies it is set by `talos.schematicID`, and on Blackwell (GB202) it must be the open-kernel-modules extension. Changing this on a node group that already has running workers does not reach them: the `TalosConfigTemplate` its MachineDeployment references has a fixed name, so rewriting the template leaves `spec.template` untouched, CAPI starts no rollout, and a running Machine keeps the machine config it booted with. Replace the group's Machines to apply it. Unlike `schematicID`, which changes the boot image and therefore rolls the group by itself. Note the automatic set keys on the `nvidia.com/` resource prefix alone: nothing cross-checks that the effective schematic actually carries those modules, so declaring a module the image does not ship is possible. On Talos v1.13 such a module leaves its controller retrying rather than failing the boot, so the symptom is a missing driver, not a dead node.
-	KernelModules []KernelModule `json:"kernelModules,omitempty"`
-	// Kubelet resource reservations for this node group.
-	Kubelet Kubelet `json:"kubelet,omitempty"`
-	// Stream each worker VM's guest serial console into a `guest-console-log` container beside virt-launcher, readable with `kubectl logs`. The only view of a worker that stalls during boot before Talos apid answers, when neither a Node nor a certificate request exists to diagnose from. Two costs the field name does not show. Changing the value rolls the node group, because it is part of the worker VM template whose name is a hash of its content -- including the stuck VM whose console was wanted, so it buys visibility into the next boot rather than the current one. And it overrides the platform's cluster-wide `disableSerialConsoleLog`, set because that container has been seen holding virt-launcher in `PodInitializing` (kubevirt/kubevirt#15989), which would take the node group down rather than explain it -- so check that virt-launcher Pods reach Running after enabling it.
-	// +kubebuilder:default:=false
-	LogSerialConsole bool `json:"logSerialConsole,omitempty"`
-	// Maximum number of replicas.
-	// +kubebuilder:default:=10
-	MaxReplicas int `json:"maxReplicas"`
-	// Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer ("0", "1", ...) or an integer percentage ("0%", "50%").
-	MaxUnhealthy string `json:"maxUnhealthy,omitempty"`
-	// Minimum number of replicas.
-	// +kubebuilder:default:=0
-	MinReplicas int `json:"minReplicas"`
-	// Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.
-	NodeStartupTimeout string `json:"nodeStartupTimeout,omitempty"`
-	// Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
-	Resources Resources `json:"resources,omitempty"`
-	// List of node roles.
-	Roles []string `json:"roles,omitempty"`
-	// Per-group override for `talos.schematicID`, applied to both the worker boot disk image and the Talos installer image. When empty, the cluster-wide `talos.schematicID` applies. A schematic is a fixed set of Talos system extensions, and Talos refuses to finish booting when an extension service in it cannot start: `ext-nvidia-persistenced` and `ext-nvidia-cdi-gen` require an NVIDIA card, so a node group with no GPU that boots an NVIDIA schematic fails `startAllServices` and reboots roughly every 70 minutes, indefinitely, while still reporting `Ready` (kubelet starts before the failing phase). A cluster mixing GPU and non-GPU node groups therefore has no correct cluster-wide value, and this field is what makes it expressible: set the NVIDIA schematic on the GPU group only. Changing it replaces the group's boot image and so rolls its workers.
-	SchematicID string `json:"schematicID,omitempty"`
-	// StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile, not set on the DataVolume here — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so the fallback targets the replicated/DRBD application storageClass rather than a possibly non-DRBD cluster default. NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
-	StorageClass string `json:"storageClass,omitempty"`
-}
-
-type NodeHealthCheck struct {
-	// Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers.
-	// +kubebuilder:default:="50%"
-	MaxUnhealthy string `json:"maxUnhealthy"`
-	// Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
-	// +kubebuilder:default:="10m"
-	NodeStartupTimeout string `json:"nodeStartupTimeout"`
 }
 
 type OIDC struct {
@@ -383,7 +291,7 @@ type Talos struct {
 	// Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap.
 	// +kubebuilder:default:={}
 	RegistryMirrors k8sRuntime.RawExtension `json:"registryMirrors"`
-	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here. A node group can override it for itself via `nodeGroups.<name>.schematicID`. The effective value is rejected if it contains `$`, a backtick, a backslash, quotes or whitespace, because it is interpolated into a worker machine config applied through a shell heredoc; a 64-hex factory digest, a readable name and a multi-segment mirror path such as `gpu/nvidia-open` all pass. That guard covers this field only, not every value reaching that heredoc.
+	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
 	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 	SchematicID string `json:"schematicID"`
 	// Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.

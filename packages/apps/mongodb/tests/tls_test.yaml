@@ -1,0 +1,345 @@
+suite: mongodb TLS CR integration
+
+# TLS is always on in operator-managed mode: the chart unconditionally sets
+# spec.secrets.ssl and spec.tls.mode: preferTLS. The PSMDB operator manages the
+# full cert-manager chain (it does NOT render Issuer/Certificate resources) —
+# see templates/mongodb.yaml for the detailed explanation.
+#
+# splitHorizons (per-pod external hostnames → leaf cert SANs) is injected only
+# when external: true and the per-tenant host (_namespace.host) is present.
+
+release:
+  name: mg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+templates:
+  - templates/mongodb.yaml
+
+tests:
+  ############################################################
+  # TLS is always enabled (operator-managed), regardless of external
+  ############################################################
+
+  - it: spec.tls.mode is preferTLS by default (internal instance, external false)
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.tls.mode
+          value: preferTLS
+
+  - it: spec.secrets.ssl references the operator-managed leaf secret by default
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.secrets.ssl
+          value: mg-test-ssl
+
+  - it: TLS stays on when external is true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.tls.mode
+          value: preferTLS
+      - equal:
+          path: spec.secrets.ssl
+          value: mg-test-ssl
+
+  - it: spec.tls has no issuerConf (the operator-managed secret is passed directly)
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.tls.issuerConf
+
+  ############################################################
+  # crVersion gates the operator's splitHorizons → SAN injection
+  # (cr.CompareVersion("1.22.0") >= 0 in pkg/psmdb/tls/tls.go)
+  ############################################################
+
+  - it: crVersion is hardcoded to 1.22.0
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.crVersion
+          value: 1.22.0
+
+  ############################################################
+  # splitHorizons: per-pod external hostnames for external TLS
+  ############################################################
+
+  - it: splitHorizons advertises per-pod external hostnames when external + host present
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.replsets[0].splitHorizons
+          value:
+            mg-test-rs0-0:
+              external: mg-test-rs0-0.example.cozy.local
+            mg-test-rs0-1:
+              external: mg-test-rs0-1.example.cozy.local
+            mg-test-rs0-2:
+              external: mg-test-rs0-2.example.cozy.local
+
+  - it: splitHorizons honours the replica count
+    set:
+      external: true
+      replicas: 2
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.replsets[0].splitHorizons
+          value:
+            mg-test-rs0-0:
+              external: mg-test-rs0-0.example.cozy.local
+            mg-test-rs0-1:
+              external: mg-test-rs0-1.example.cozy.local
+
+  - it: TLS stays active but splitHorizons is omitted when external true and _namespace.host absent
+    set:
+      external: true
+      # _namespace intentionally absent — controller has not populated host yet
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.tls.mode
+          value: preferTLS
+      - notExists:
+          path: spec.replsets[0].splitHorizons
+
+  - it: no splitHorizons for internal instances (external false)
+    set:
+      external: false
+      # The host must be present for this case to isolate `external`. Without
+      # it the horizons would be omitted by the host guard regardless, so the
+      # test would pass even with the external check removed.
+      _namespace:
+        host: example.com
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.replsets[0].splitHorizons
+
+  - it: chart does not set allowInvalidCertificates, leaving the operator default
+    documentIndex: 0
+    asserts:
+      # The README states the permissive default is inherited rather than
+      # chosen here. Pin that, so the claim stays falsifiable.
+      - notExists:
+          path: spec.tls.allowInvalidCertificates
+
+  - it: chart does not set certValidityDuration, leaving the operator default
+    documentIndex: 0
+    asserts:
+      # Same class as allowInvalidCertificates above: the leaf lifetime is the
+      # operator's to choose, not this chart's. Deliberately left unpinned.
+      # Nothing in the tenant contract keys off it — the operator reissues and
+      # rolls the StatefulSet on its own, and unlike the CA's annual rotation
+      # there is no client-side action to take, so a change in the default is
+      # absorbed rather than breaking anyone. Pinning a value here would also
+      # freeze the chart against upstream shortening it, which is the direction
+      # a certificate lifetime is likely to move.
+      #
+      # Setting spec.tls for the mode does NOT suppress this default: the
+      # operator backfills certValidityDuration on its own branch when the
+      # field is zero, so leaving it out really does inherit rather than
+      # silently render a zero duration.
+      - notExists:
+          path: spec.tls.certValidityDuration
+
+  ############################################################
+  # nothing may disable TLS behind the rendered mode
+  ############################################################
+
+  # allowUnsafeConfigurations: true makes the operator force tls.mode to
+  # disabled at defaulting time AND set unsafeFlags.tls itself, so the
+  # "TLS must be enabled" guard passes too. unsafeFlags.tls: true lifts that
+  # same guard directly. Either switches TLS off while the rendered
+  # spec.tls.mode still reads preferTLS, so the mode assertions above would
+  # keep passing. The chart already renders an unsafeFlags block for small
+  # replica counts, which is exactly where such an edit would land — pin both
+  # branches.
+  #
+  # The path is the JSON name allowUnsafeConfigurations, not the Go field name
+  # UnsafeConf: asserting the latter is vacuous, since no such field exists in
+  # the CRD and notExists on it can never fail.
+
+  - it: no TLS-disabling escape hatches with a default replica count
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.allowUnsafeConfigurations
+      - notExists:
+          path: spec.unsafeFlags.tls
+
+  - it: no TLS-disabling escape hatches when unsafeFlags is rendered
+    set:
+      replicas: 1
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.unsafeFlags.replsetSize
+          value: true
+      - notExists:
+          path: spec.allowUnsafeConfigurations
+      - notExists:
+          path: spec.unsafeFlags.tls
+
+  ############################################################
+  # sharding + TLS combination
+  ############################################################
+
+  - it: spec.tls.mode is preferTLS and secrets.ssl is set when sharding enabled
+    set:
+      sharding: true
+      shardingConfig:
+        configServers: 3
+        configServerSize: 3Gi
+        mongos: 2
+        shards:
+          - name: rs0
+            replicas: 3
+            size: 10Gi
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.tls.mode
+          value: preferTLS
+      - equal:
+          path: spec.secrets.ssl
+          value: mg-test-ssl
+
+  - it: no splitHorizons in sharded mode even with external and host set
+    set:
+      external: true
+      _namespace:
+        host: example.com
+      sharding: true
+      shardingConfig:
+        configServers: 3
+        configServerSize: 3Gi
+        mongos: 2
+        shards:
+          - name: rs0
+            replicas: 3
+            size: 10Gi
+    documentIndex: 0
+    asserts:
+      # splitHorizons is replica-set scoped and rendered only for the
+      # non-sharded topology. In sharded mode external access goes through the
+      # single <release>-external LoadBalancer fronting mongos, which no SAN
+      # covers — external hostname verification is unsupported here, and the
+      # README documents that rather than the CR pretending otherwise.
+      - notExists:
+          path: spec.replsets[0].splitHorizons
+
+  ############################################################
+  # splitHorizons must never render as a null value
+  ############################################################
+
+  - it: splitHorizons is omitted entirely when replicas is zero
+    set:
+      external: true
+      replicas: 0
+      _namespace:
+        host: example.com
+    documentIndex: 0
+    asserts:
+      # With replicas: 0 the range body renders nothing. Emitting the key with
+      # a null value would be rejected by the API server: the CRD types
+      # splitHorizons as object without nullable, so the whole
+      # PerconaServerMongoDB fails admission and the HelmRelease with it.
+      - notExists:
+          path: spec.replsets[0].splitHorizons
+
+  - it: splitHorizons is omitted when the tenant host is an empty string
+    set:
+      external: true
+      _namespace:
+        host: ""
+    documentIndex: 0
+    asserts:
+      # The controller may create _namespace before populating host, so the
+      # bootstrap window presents host as an empty string rather than as an
+      # absent key. Both shapes must omit the horizons: an empty host would
+      # otherwise render <release>-rs0-<i>. as a SAN, with a trailing dot and
+      # no domain.
+      - notExists:
+          path: spec.replsets[0].splitHorizons
+
+  - it: splitHorizons still renders for a single replica
+    set:
+      external: true
+      replicas: 1
+      _namespace:
+        host: example.com
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.replsets[0].splitHorizons.mg-test-rs0-0.external
+          value: mg-test-rs0-0.example.com
+      # The horizons reach a topology that cannot survive losing a member, and
+      # unsafeFlags.replsetSize is the chart's own marker for that. The pairing
+      # is what the README's upgrade-restart warning is about: a SAN change
+      # reissues the leaf, the operator hashes it into the pod template, and the
+      # StatefulSet rolls — which at this size is a full outage rather than an
+      # ordered handover. Asserted together so that gating horizons to
+      # quorum-capable sizes later turns this red and sends someone back to the
+      # doc, instead of leaving a warning describing a case that no longer
+      # exists.
+      - equal:
+          path: spec.unsafeFlags.replsetSize
+          value: true
+
+  - it: splitHorizons renders for two replicas, below the write quorum
+    set:
+      external: true
+      replicas: 2
+      _namespace:
+        host: example.com
+    documentIndex: 0
+    asserts:
+      # Two members is the case that reads as highly available and is not: the
+      # majority is still 2, so the rollout's restart of either member stalls
+      # writes until it returns. Covered separately from the single-replica case
+      # because the failure is different -- an outage of writes rather than of
+      # everything -- and the README distinguishes them.
+      - equal:
+          path: spec.replsets[0].splitHorizons.mg-test-rs0-0.external
+          value: mg-test-rs0-0.example.com
+      - equal:
+          path: spec.replsets[0].splitHorizons.mg-test-rs0-1.external
+          value: mg-test-rs0-1.example.com
+      - equal:
+          path: spec.unsafeFlags.replsetSize
+          value: true
+
+  - it: the quorum-capable default replica count needs no unsafe flag
+    set:
+      external: true
+      _namespace:
+        host: example.com
+    documentIndex: 0
+    asserts:
+      # Positive control for the two assertions above. Both read
+      # unsafeFlags.replsetSize as the sub-quorum marker, which says nothing
+      # unless the flag is actually absent at a size that can tolerate a
+      # restart. Without this, rendering the flag unconditionally would leave
+      # them green while the marker meant nothing.
+      - equal:
+          path: spec.replsets[0].splitHorizons.mg-test-rs0-2.external
+          value: mg-test-rs0-2.example.com
+      - notExists:
+          path: spec.unsafeFlags.replsetSize

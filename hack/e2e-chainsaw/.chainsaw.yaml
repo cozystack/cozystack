@@ -3,9 +3,14 @@ kind: Configuration
 metadata:
   name: cozystack-e2e
 spec:
-  # All app tests run against the pre-existing tenant-test namespace
-  # (created by hack/e2e-install-cozystack.bats), matching the BATS suite.
-  # Chainsaw only deletes namespaces it created itself, so tenant-test is safe.
+  # Default namespace for app tests: the pre-existing tenant-test (created by
+  # hack/e2e-install-cozystack.bats), matching the BATS suite. Chainsaw only
+  # deletes namespaces it created itself, so tenant-test is safe.
+  #
+  # The backup round-trip Tests (postgres-2-, mariadb-2-, clickhouse-2-) override
+  # this to tenant-root per Test: their S3 client runs inside the tenant, and the
+  # e2e tenant-test tenant is created isolated, so its Cilium egress allowlist
+  # blocks its Pods from reaching tenant-root's seaweedfs.
   namespace:
     name: tenant-test
   # Run tests sequentially, matching the current BATS behavior. The bucket
@@ -51,13 +56,13 @@ spec:
   # Accepted tradeoff, so the arithmetic does not have to be rediscovered: this
   # raises the worst-case catch from ~5m per failed test (the old SIGKILL was the
   # de-facto cap) to ~19m, tests run sequentially, and the E2E job is capped at
-  # 180 timeout-minutes. A cascade reddening many suites can therefore spend a
+  # 215 timeout-minutes. A cascade reddening many suites can therefore spend a
   # large share of the job in diagnostics. That is deliberate — the old ceiling
   # bought its speed by collecting nothing at all — and it is bounded: both legs
   # only approach their ceilings on a genuinely degraded cluster, a systemic
   # failure usually reds the install gate and skips the E2E step entirely, and
   # the report-upload steps are `if: always()`. That last point does NOT extend
-  # to a job timeout: a 180-minute cap ends the job `cancelled`, and the ~4m48s
+  # to a job timeout: a 215-minute cap ends the job `cancelled`, and the ~4m48s
   # grace window is consumed by the earlier `Collect report` step, so both
   # cozyreport.tgz and the job log are lost (measured on runs 29557003429 and
   # 29568562337). If this ever does start truncating runs, bound the number of
@@ -103,7 +108,11 @@ spec:
           # own pods first, so a broadly degraded cluster cannot spend the cap on
           # unrelated cozy-* restarts); it never restricts it. tenant-test is the
           # namespace every app suite runs in, declared under `namespace.name`
-          # above.
+          # above. Within each namespace group the helper orders by how recently
+          # the previous instance ended, so the install-time restarts that exist
+          # before any app suite runs no longer displace one that happened during
+          # the failing test. Also ordering only -- an install-time restart is
+          # the explanation when the install is what broke.
           if [ -x ../../e2e-capture-previous-logs.sh ]; then
             timeout -k 30 300 ../../e2e-capture-previous-logs.sh \
               "${snap}/previous-logs" "${COZY_TEST_NAMESPACE:-tenant-test}" 2>&1

@@ -1,6 +1,6 @@
 include ../../../hack/package.mk
 
-.PHONY: generate update
+.PHONY: generate update test
 
 generate:
 	cozyvalues-gen -m 'mongodb' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/mongodb/types.go
@@ -9,3 +9,6 @@ generate:
 update:
 	hack/update-versions.sh
 	make generate
+
+test:
+	helm unittest .

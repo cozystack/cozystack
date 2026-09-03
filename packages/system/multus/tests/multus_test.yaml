@@ -16,6 +16,33 @@ tests:
           path: spec.template.spec.containers[0].image
           pattern: '^ghcr\.io/cozystack/cozystack/multus-cni:'
 
+  # multus runs on every node and had a CPU limit but no memory one, which
+  # leaves the pod cgroup without memory.max. The Talos userspace OOM handler
+  # (v1.12+) only ever selects cgroups that lack it, and picks its victim by QoS
+  # class rather than by what caused the pressure, so multus was an eviction
+  # candidate on every node however healthy it was itself.
+  #
+  # memory.max lands on the POD cgroup only when EVERY container carries a
+  # limit. install-cni-plugins is asserted further down, where the rest of that
+  # container's contract lives; the two below complete the set for a default
+  # render. Keep all three: dropping any one silently returns the whole pod to
+  # the victim set while the other assertions still pass.
+  - it: kube-multus and its binary installer declare memory limits
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="kube-multus")].resources.limits.memory
+          value: 1Gi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="kube-multus")].resources.requests.memory
+          value: 100Mi
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name=="install-multus-binary")].resources.limits.memory
+          value: 128Mi
+
   # Guards the cozystack CNI-ordering fix (multusMasterCNI pinned to the cilium
   # conflist) so multus does not auto-detect kube-ovn ahead of cilium at node
   # startup and bypass the cilium CNI chain. This is a hand-edit that lives in
@@ -263,11 +290,23 @@ tests:
       - equal:
           path: spec.template.spec.initContainers[1].resources.requests.memory
           value: 15Mi
-      # And no limits: a memory limit low enough to kill the copy turns staging
-      # into a crashloop, and there is nothing here whose runtime is worth
-      # capping -- it copies fourteen files and exits.
-      - notExists:
-          path: spec.template.spec.initContainers[1].resources.limits
+      # And a memory limit, which this assertion used to deny. The reasoning it
+      # carried -- nothing here is worth capping, it copies fourteen files and
+      # exits -- is about capping runtime, and that is not what the limit is
+      # for. A limit is what puts memory.max on the POD cgroup, and the Talos
+      # userspace OOM handler (v1.12+) only ever selects cgroups that lack it.
+      # The value is per-pod, not per-container: one limit-free container here
+      # leaves the whole multus pod in the victim set, and the system bundle
+      # defaults stageCniPlugins to true, so that is the default deployment.
+      #
+      # The original worry stands on its own terms and is answered by the size,
+      # not by omitting the limit: 128Mi is what would have to be low enough to
+      # kill a `cp` of fourteen small binaries. It matches install-multus-binary
+      # above, which does the same work, and page cache charged to the cgroup is
+      # reclaimable under pressure rather than a cause of OOM.
+      - equal:
+          path: spec.template.spec.initContainers[1].resources.limits.memory
+          value: 128Mi
       # Writing into the hostPath needs uid 0 IN THE CONTAINER. Nothing sets a
       # user today, so it runs as root; a runAsUser or runAsNonRoot at either
       # level turns every install into a permission error, and the script then

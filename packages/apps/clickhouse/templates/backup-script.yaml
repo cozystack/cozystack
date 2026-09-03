@@ -18,7 +18,7 @@ stringData:
     
     JOB_ID="job-$(uuidgen|cut -f1 -d-)"
     TABLE_LIST=$(clickhouse-client --host "$CLICKHOUSE_HOST" -q 'SHOW TABLES;' | grep -v '^.inner.' || true)
-    echo DB_LIST=$(echo "$TABLE_LIST" | shuf) # shuffle list
+    DB_LIST=$(echo "$TABLE_LIST" | shuf) # shuffle list
     echo "Job ID: $JOB_ID"
     echo "Target repo: $REPO_PREFIX"
     echo "Cleanup strategy: $CLEANUP_STRATEGY"

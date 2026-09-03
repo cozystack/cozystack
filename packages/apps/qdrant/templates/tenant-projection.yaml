@@ -1,0 +1,13 @@
+{{- /* Gated on the same condition as certmanager.yaml: the source Secret only exists when TLS is on. */}}
+{{- if eq (include "qdrant.tls.enabled" .) "true" }}
+---
+apiVersion: internal.cozystack.io/v1alpha1
+kind: TenantProjection
+metadata:
+  name: {{ .Release.Name }}-ca
+spec:
+  projections:
+    - type: CACert
+      sourceSecretName: {{ .Release.Name }}-ca
+      sourceKey: ca.crt
+{{- end }}

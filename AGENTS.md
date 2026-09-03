@@ -20,7 +20,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 
 - **Image references, tags and digests** (e.g., "why is this image tagged rc", "add an image to a package", "change how an image is stamped", "promotion/nightly missed an image", "where do image refs live")
   - Read: [`image-refs.md`](./docs/agents/image-refs.md)
-  - Action: Read the entire file. Image refs live in three storage shapes and carry three classes of tag; a tool that knows only one shape skips images silently rather than failing. `hack/lib/image-refs.sh` is the enumeration shared by the promote, retag and mirror tooling — extend it there rather than teaching an individual script a new path. Note `hack/overlay-main-images.sh` is a fourth consumer that still walks the tree itself and does not source the library
+  - Action: Read the entire file. Image refs live in three storage shapes and carry three classes of tag; a tool that knows only one shape skips images silently rather than failing. `hack/lib/image-refs.sh` is the enumeration shared by the promote, retag, mirror and candidate-verify tooling — extend it there rather than teaching an individual script a new path. The one exception is `hack/overlay-main-images.sh`, which reads refs but walks the tree itself, so a newly declared file does not reach it; `hack/promote-packages-artifact.sh` sources nothing because it publishes the whole tree and consumes no refs at all — the doc carries both cases
 
 - **Project structure, conventions, code layout** (e.g., "where should I put X", "what's the convention for Y", "how is the project organized")
   - Read: [`overview.md`](./docs/agents/overview.md)
@@ -37,6 +37,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 - **Issue and PR labeling, triage** (e.g., "label this issue", "what label should I use", "triage this", "categorize")
   - Read: [`.github/labels.yml`](./.github/labels.yml)
   - Action: Use labels defined there. Conventions follow the Kubernetes scheme — `kind/*` (type), `area/*` (subsystem), `priority/*` (urgency), `triage/*` (review state), `lifecycle/*` (auto-close), `do-not-merge/*` (PR blockers), `security/*` (severity)
+  - For `triage/*`: `.github/workflows/issue-triage.yaml` labels an issue on arrival and sweeps daily for any open issue carrying none, so change a triage decision by replacing the label rather than removing it — remove the only `triage/*` label an issue has and the next sweep puts one back
   - For `area/*`: accuracy outweighs reuse. If no existing `area/*` truly fits the change, propose a new one via PR (extend `.github/labels.yml` and the scope mapping in `.github/workflows/pr-labeler.yaml`) — do not shoehorn the change into a wrong area. `area/uncategorized` is the auto-labeler fallback; treat it as a signal to pick a fit, create a new area, or correct the PR title
   - PR titles: a Conventional Commits header (`type(scope): description`, types from [`contributing.md`](./docs/agents/contributing.md)) auto-applies `kind/*` and `area/*` via `.github/workflows/pr-labeler.yaml`. Append `!` (or add a `BREAKING CHANGE:` footer) to apply `kind/breaking-change`
 

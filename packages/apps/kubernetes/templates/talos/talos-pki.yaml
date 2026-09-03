@@ -76,8 +76,9 @@ spec:
          Workers reach trustd via the Service DNS name (the worker's
          machine.network.extraHostEntries injects the ClusterIP into
          /etc/hosts), so the cert never needs an IP SAN patched in after the
-         ClusterIP becomes known — see the routing note in
-         talos-reconcile-job.yaml. */}}
+         ClusterIP becomes known — see the routing note in the kubernetes-nodes
+         chart's talos-reconcile-job.yaml, where the Job lives since the worker
+         split. */}}
   issuerRef:
     name: {{ .Release.Name }}-talos-ca
     kind: Issuer

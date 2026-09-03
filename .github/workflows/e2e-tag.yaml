@@ -134,7 +134,12 @@ jobs:
     # enough host headroom for QEMU, networking, containerd, and the runner
     # agent while the full platform installs across all three guests.
     runs-on: oracle-vm-32cpu-128gb-x86-64
-    timeout-minutes: 180
+    # Sized above what the tenant-Kubernetes pair can spend on a failing run, and
+    # held to one figure across every lane that runs the suite. That bound, the
+    # measured run the rest of the margin comes from, and what neither of them
+    # covers are all in hack/node-join-soft-red_test.bats rather than restated
+    # here in four workflows that would then drift apart.
+    timeout-minutes: 215
     permissions:
       contents: read
       checks: write # Breakpoint action updates its dedicated "Breakpoint Open" Check Run.
@@ -258,7 +263,7 @@ jobs:
       # collect-report packages cozyreport plus per-failed-test crust-gather
       # snapshots captured before Chainsaw cleanup.
       #
-      # A ceiling of its own, not the job's 180 minutes. `Upload cozyreport.tgz`
+      # A ceiling of its own, not the job's 215 minutes. `Upload cozyreport.tgz`
       # is the next step and the collector writes its tarball at the very end of
       # its run, so a read that never returns spends what is left of the job
       # budget, the job is cancelled, and the upload never runs -- the artifact

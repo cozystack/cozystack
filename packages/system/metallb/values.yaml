@@ -42,6 +42,22 @@ metallb:
     image:
       repository: ghcr.io/cozystack/cozystack/metallb-speaker
       tag: v1.6.0@sha256:61ab7e2381f0897607b15df7cb5ba4d51a947c261c1c197fcda3b79c7a280016
+    # A memory limit is what sets memory.max on the pod cgroup, and the Talos
+    # userspace OOM handler (v1.12+) only ever kills cgroups that lack it. The
+    # speaker ran BestEffort, so it was picked as the victim whenever a tenant
+    # workload drove node memory PSI — the pressure and the victim being
+    # unrelated by design. See the same block on every node DaemonSet below.
+    #
+    # Requests come from observed usage (14d peak 97Mi on a 3-node dev cluster);
+    # limits are deliberately loose, sized as a runaway backstop rather than a
+    # fitted ceiling, because undersizing here converts a rare pressure-driven
+    # kill into a deterministic one.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 512Mi
   # The vendored metallb chart's values.yaml leaves `frr-k8s.prometheus:` as
   # a YAML block containing only commented examples — it parses to null.
   # Helm-controller's deep-merge then writes that null over the frr-k8s
@@ -62,3 +78,47 @@ metallb:
         enabled: false
       podMonitor:
         enabled: false
+    # Same reasoning as speaker.resources above. frr-k8s is the sibling node
+    # DaemonSet that actually speaks BGP, so it shares the speaker's exposure.
+    # 14d peaks on a 3-node dev cluster: controller ~124Mi, frr 43Mi,
+    # frr-metrics 49Mi, frr-status 31Mi, reloader 7Mi.
+    #
+    # The four cp-* init containers are NOT covered here: the upstream chart
+    # hardcodes them with no resources knob, so the pod-level memory.max still
+    # depends on the default LimitRange the operator maintains in every system
+    # namespace. Lifting that needs an upstream change in metallb/frr-k8s.
+    frrk8s:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 512Mi
+      frr:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            memory: 512Mi
+      reloader:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            memory: 128Mi
+      frrMetrics:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 256Mi
+      frrStatus:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 256Mi

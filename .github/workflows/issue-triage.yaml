@@ -1,0 +1,325 @@
+name: Issue triage
+
+# Every open issue should carry a triage/* label marking its lifecycle stage.
+# The issue templates apply `triage/needs-triage` from their front matter, but
+# that only covers issues created through the web form: issues created via
+# the API or `gh issue create` bypass templates and arrive unlabeled. The
+# `issues` events below label those on arrival; the daily sweep is the
+# backstop for removed labels and for the pre-existing backlog.
+on:
+  issues:
+    types: [opened, reopened]
+  schedule:
+    - cron: '53 5 * * *'  # daily at 05:53 UTC, after stale (04:37)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Log what would be labeled without applying'
+        type: boolean
+        # On by default, so the one entry point a human can reach writes
+        # nothing until somebody unchecks it. The scheduled sweep reads no
+        # inputs and is unaffected: it writes.
+        default: true
+
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so the job below holds `issues: write` and
+# nothing else.
+permissions:
+  contents: read
+
+# One queue for every run of this workflow, on purpose. GitHub keeps a
+# single pending run per group, so issues filed while a sweep is running
+# lose all but the last of their own runs and wait for the next sweep,
+# which is what the sweep is there for. Splitting the group per issue would
+# save that wait at the price of a real bug: a sweep works from a listing
+# taken when it started, so it and a concurrent per-issue run can read the
+# same issue differently and leave it holding two contradictory triage
+# labels, which nothing later removes.
+#
+# The queue closes that door against a second run of this workflow, not
+# against a maintainer labeling an issue by hand while a sweep is running:
+# the sweep classifies from the listing it took when it started, so a label
+# applied during its paced writes is invisible to it and the issue ends up
+# carrying a second triage label that the already-triaged skip then keeps
+# every later sweep from revisiting. Losing that race costs the spurious
+# `triage/needs-triage`, which a maintainer deletes and no later sweep
+# re-adds, because the label it raced against is still on the issue. That
+# was judged cheaper than re-reading every issue immediately before every
+# write: that would double the request budget the write cap below is derived
+# against. Deleting is the repair for this one case and not a general undo:
+# an issue left carrying no triage label at all is relabeled by the next
+# sweep, which is what AGENTS.md's labeling bullet warns about.
+concurrency:
+  group: issue-triage
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    # A run that reaches the write cap paces roughly seven minutes of work, so
+    # anything near this ceiling is a call that hung rather than a long sweep.
+    # Without it the default is six hours, and the queue above means one hung
+    # run holds every issue filed behind it for all six.
+    timeout-minutes: 20
+    permissions:
+      issues: write
+    steps:
+      - name: Apply triage labels
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            // Labels applied with the workflow's GITHUB_TOKEN do not trigger
+            // other workflows (GitHub's recursion prevention), so this job
+            // cannot re-enter itself or wake any `labeled`-subscribed workflow.
+            //
+            // Adding a label bumps the issue's `updated_at`, which stale.yaml
+            // reads as fresh activity: the stale bot un-marks `lifecycle/stale`
+            // and restarts its 60-day clock on the next run. For issues labeled
+            // on arrival that is moot; for the sweep over the historical
+            // backlog it is a deliberate one-time reset. Triage first, then
+            // let staleness take its course.
+            //
+            // `triage/accepted` is also on stale.yaml's exempt-issue-labels,
+            // so applying it is more than a clock reset: the issue stops
+            // being auto-closable at all. For every label in
+            // ACCEPTED_SIGNAL_LABELS that changes nothing, because each one
+            // is on the same exempt list already. An assignee is the single
+            // signal that is not a label and not already exempt, so an issue
+            // whose only accepted-signal is an assignee gains something it
+            // did not have. That is new, and it is the
+            // intended reading rather than a side effect: somebody took
+            // ownership, which makes the issue a known long-tail task and
+            // not an abandoned one — the same argument stale.yaml's own
+            // comment makes for exempting `triage/accepted`. Part of the
+            // backlog this reaches is marked stale today, some of it inside
+            // the 14-day close window, and the sweep spares it.
+            const NEEDS_TRIAGE = 'triage/needs-triage';
+            const ACCEPTED = 'triage/accepted';
+
+            // Label-shaped accepted-signals, admitted on two conditions.
+            // Necessary: the label is on stale.yaml's exempt-issue-labels,
+            // because `triage/accepted` is itself exempt and awarding it for
+            // a label that is not would hand the issue a permanent reprieve
+            // as a side effect — which is why `priority/backlog`, the tier
+            // stale.yaml leaves reapable, is not a signal. Not sufficient:
+            // a `lifecycle/*` label states what the stale bot may do and
+            // nothing about whether anyone reviewed the issue, so exempt
+            // `lifecycle/frozen` is still not a signal here. Freezing an
+            // untriaged issue to keep the bot off it is exactly the case
+            // where that inference would be false.
+            const ACCEPTED_SIGNAL_LABELS = [
+              'priority/critical-urgent',
+              'priority/important-soon',
+              'priority/important-longterm',
+              'epic',
+            ];
+
+            // The sweep is the only place this workflow writes in bulk, and
+            // GitHub's secondary rate limits allow 80 content-generating
+            // requests a minute and 500 an hour. This client has no
+            // throttling plugin and no retries, and a throttled write
+            // answers 403, which is exempt from retry anyway: an unpaced
+            // sweep does not slow down when it is throttled, it fails the
+            // job and leaves the backlog half labeled. Pace the writes
+            // under the per-minute ceiling, and stop short of the hourly
+            // one instead of walking into it. Whatever a run leaves behind
+            // stays unlabeled, so the next one picks it up.
+            //
+            // Those are the secondary limits. GITHUB_TOKEN also carries a
+            // primary one of 1000 requests an hour for the whole repository,
+            // shared with every other workflow, and a run that reaches the
+            // cap spends a large part of it. That is affordable at 05:53 and
+            // only while the backlog drains, but it is the ceiling to lower
+            // the cap against if this ever moves to a busier slot.
+            const WRITE_INTERVAL_MS = 1000;
+            const MAX_WRITES_PER_RUN = 400;
+            const sleep = (ms) =>
+              new Promise((resolve) => setTimeout(resolve, ms));
+
+            // Returns the label to add, or null when the item needs nothing.
+            // The signals stand for a maintainer decision already recorded on
+            // the issue, a weaker claim than the one `triage/accepted` makes
+            // in .github/labels.yml: `priority/important-longterm` says
+            // outright the work may not be staffed. Of the two labels this
+            // workflow writes it is still the closer one — `needs-triage` on
+            // an issue somebody prioritised or took asks for a triage that
+            // already happened — and a maintainer who disagrees replaces it.
+            const classify = (issue) => {
+              if (issue.pull_request) return null; // listForRepo returns PRs too
+              const labels = (issue.labels || []).map((l) =>
+                typeof l === 'string' ? l : l.name
+              );
+              if (labels.some((n) => n.startsWith('triage/'))) return null;
+              const looked = // somebody has already looked at this one
+                (issue.assignees || []).length > 0 ||
+                labels.some((n) => ACCEPTED_SIGNAL_LABELS.includes(n));
+              return looked ? ACCEPTED : NEEDS_TRIAGE;
+            };
+
+            const apply = async (issue, label, dryRun) => {
+              if (dryRun) {
+                core.info(`[dry-run] #${issue.number}: would add ${label}`);
+                return;
+              }
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: [label],
+              });
+              core.info(`#${issue.number}: added ${label}`);
+            };
+
+            if (context.eventName === 'issues') {
+              const issue = context.payload.issue;
+              const label = classify(issue);
+              if (label) {
+                await apply(issue, label, false);
+              } else {
+                core.info(`#${issue.number}: already triaged, nothing to do`);
+              }
+              return;
+            }
+
+            // schedule / workflow_dispatch: sweep every open issue.
+            // workflow_dispatch inputs arrive as strings in the webhook
+            // payload even when declared `type: boolean`.
+            //
+            // Keyed on the event rather than on the input alone, so both
+            // unknown cases fail safe: `schedule` is the one event that
+            // writes without being asked, so any trigger added here later
+            // starts out dry rather than writing on its first run, and a
+            // dispatch sending anything but the literal `false` gets a dry
+            // run. The declared default above is what a human sees in the
+            // form; this does not depend on it reaching the payload.
+            const dryRun =
+              context.eventName !== 'schedule' &&
+              String(context.payload.inputs?.dry_run ?? 'true') !== 'false';
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+
+            const acceptedIssues = [];
+            const needsTriageIssues = [];
+            let skipped = 0;
+            let deferred = 0;
+            let failed = 0;
+            let refused = 0;
+            let writes = 0;
+            // Listing index a refusal stopped the run on. The remainder it
+            // yields is counted in listing entries, not in issues left
+            // needing a label — most of any remainder is pull requests and
+            // already-triaged issues the loop would have skipped. It is
+            // reported so that a run which stopped early cannot read as one
+            // that reached the end of the listing; `deferred` is the write
+            // cap's own remainder and does not cover this.
+            let stoppedAt = -1;
+            for (const [index, issue] of issues.entries()) {
+              const label = classify(issue);
+              if (!label) {
+                skipped += 1;
+                continue;
+              }
+              // The cap counts in dry-run too, so a dry run predicts what a
+              // real one would do rather than a longer list nobody gets.
+              if (writes >= MAX_WRITES_PER_RUN) {
+                deferred += 1;
+                continue;
+              }
+              if (writes > 0 && !dryRun) {
+                await sleep(WRITE_INTERVAL_MS);
+              }
+              writes += 1;
+              try {
+                await apply(issue, label, dryRun);
+              } catch (err) {
+                // 403 is what a secondary rate limit and a token without
+                // `issues: write` both answer; 429 is the other throttle
+                // shape. Those two are the only statuses that stop the run.
+                // Every other status carries on, and that is the whole of
+                // the else: the 404 or 410 of an issue transferred or
+                // deleted mid-sweep, but a 422 or a 5xx just the same,
+                // because a failure about one issue says nothing about the
+                // next one and the next sweep retries it. A refusal is the
+                // opposite kind: it applies to every write left in the run,
+                // and repeating a rejected request up to the cap is what
+                // gets an integration banned, so stop at the first one. The
+                // remainder stays unlabeled and the next run takes it,
+                // exactly like the write cap's own deferral.
+                if (err.status === 403 || err.status === 429) {
+                  refused += 1;
+                  stoppedAt = index;
+                  core.warning(
+                    `#${issue.number}: ${label} refused ` +
+                      `(${err.status}); stopping the sweep`
+                  );
+                  break;
+                }
+                // One issue that cannot be labeled, because it was moved or
+                // deleted mid-sweep, must not cost the run the rest of the
+                // backlog and the summary with it. It stays unlabeled, so
+                // the next run picks it up like any other. Counted below the
+                // refusal branch rather than above it, so that one refusal
+                // reports as one problem instead of also inflating the
+                // failed count it is already reported by.
+                failed += 1;
+                core.warning(`#${issue.number}: ${label} failed: ${err.message}`);
+                continue;
+              }
+              if (label === ACCEPTED) {
+                acceptedIssues.push(issue.number);
+              } else {
+                needsTriageIssues.push(issue.number);
+              }
+            }
+
+            // A sweep over the backlog logs one line per issue, which is a
+            // page nobody reads to find out what a run did. Every row is
+            // printed whether or not it is zero: a table that hides its empty
+            // rows makes "no writes failed" and "the count was never taken"
+            // look alike.
+            const unexamined =
+              stoppedAt < 0 ? 0 : issues.length - 1 - stoppedAt;
+            const numbers = (ns) =>
+              ns.length ? ns.map((n) => `#${n}`).join(', ') : 'none';
+            const report = [
+              `## Issue triage${dryRun ? ' — dry run, nothing written' : ''}`,
+              '',
+              '| outcome | issues |',
+              '| --- | --- |',
+              `| \`${ACCEPTED}\` | ${acceptedIssues.length} |`,
+              `| \`${NEEDS_TRIAGE}\` | ${needsTriageIssues.length} |`,
+              `| already triaged, or a pull request | ${skipped} |`,
+              `| deferred, this run hit its write cap of ${MAX_WRITES_PER_RUN} | ${deferred} |`,
+              `| write failed, left for the next run | ${failed} |`,
+              `| write refused, which stopped the sweep | ${refused} |`,
+              `| listing entries never reached, the sweep stopped at a refusal | ${unexamined} |`,
+              '',
+              `\`${ACCEPTED}\`: ${numbers(acceptedIssues)}`,
+              '',
+              `\`${NEEDS_TRIAGE}\`: ${numbers(needsTriageIssues)}`,
+              '',
+            ].join('\n');
+            core.info(report);
+            // `write()` is async: unawaited, the step can end green with an
+            // empty summary panel. `addRaw` appends no newline of its own.
+            await core.summary.addRaw(report).write();
+            // An issue that vanished mid-sweep is benign however many times
+            // it happens, and the next run simply does not see it. A refusal
+            // is not benign even once: it means the token lost `issues:
+            // write`, or the pacing above stopped being enough and the sweep
+            // is into the secondary rate limit. Discriminating on the status
+            // rather than on a count keeps the alarm live once the backlog is
+            // drained and a run writes to a handful of issues at most, which
+            // is the regime this workflow spends almost all of its life in.
+            if (refused > 0) {
+              core.setFailed(
+                `A label write was refused after ${writes} attempted, so ` +
+                  `the sweep stopped early; check the job's issues: write ` +
+                  `permission and the log for rate-limit responses`
+              );
+            }

@@ -41,7 +41,30 @@
    labels:
      tier: node
      app: multus
-@@ -160,10 +161,9 @@
+@@ -157,13 +158,33 @@
+         - name: kube-multus
+           image: ghcr.io/k8snetworkplumbingwg/multus-cni:snapshot-thick
+           command: [ "/usr/src/multus-cni/bin/multus-daemon" ]
++          # Upstream sets 50Mi for both the request and the limit. This patch
++          # already raised the request to 100Mi and DELETED the memory limit
++          # outright, leaving only the CPU one -- which left the pod cgroup with
++          # no memory.max, and the Talos userspace OOM handler (v1.12+) only
++          # ever kills cgroups that lack it. So dropping the limit to survive
++          # 50Mi is what made multus an eviction candidate on every node.
++          #
++          # Restore a limit, sized as a backstop rather than a ceiling: 14d peak
++          # is 230Mi on a 3-node dev cluster and this grows with pods per node,
++          # so upstream's 50Mi was never survivable and a fitted value would
++          # trade a rare pressure-driven kill for a deterministic one.
++          #
++          # 1Gi rather than a tighter multiple of that peak, because the peak is
++          # the part least worth trusting here: multus-daemon holds per-pod
++          # state and a 3-node dev cluster understates pods per node more than
++          # it understates anything else measured for this change. The scar this
++          # avoids is the vertical-pod-autoscaler updater, which OOM-looped at a
++          # 110Mi limit for the same reason -- it scaled with pods in the
++          # cluster -- and was given a limit 2.5x its measured request to stop
++          # it. A limit costs nothing until it is hit; only the request reserves.
            resources:
              requests:
                cpu: "100m"
@@ -50,10 +73,26 @@
              limits:
                cpu: "100m"
 -              memory: "50Mi"
++              memory: "1Gi"
            securityContext:
              privileged: true
            terminationMessagePolicy: FallbackToLogsOnError
-@@ -220,6 +220,76 @@
+@@ -209,10 +230,14 @@
+             - "/host/opt/cni/bin"
+             - "-t"
+             - "thick"
++          # Short-lived, but it still needs a limit for the pod cgroup to get
++          # memory.max — the init container counts.
+           resources:
+             requests:
+               cpu: "10m"
+               memory: "15Mi"
++            limits:
++              memory: "128Mi"
+           securityContext:
+             privileged: true
+           terminationMessagePolicy: FallbackToLogsOnError
+@@ -220,6 +245,81 @@
              - name: cnibin
                mountPath: /host/opt/cni/bin
                mountPropagation: Bidirectional
@@ -101,10 +140,15 @@
 +                echo "failed to install:${failed}" > /dev/termination-log 2>/dev/null || true
 +              fi
 +              exit 0
++          # Short-lived, but it still needs a limit for the pod cgroup to get
++          # memory.max — the init container counts. Same 128Mi as the sibling
++          # install-multus-binary above: both only copy binaries to the host.
 +          resources:
 +            requests:
 +              cpu: "10m"
 +              memory: "15Mi"
++            limits:
++              memory: "128Mi"
 +          # cilium's install-cni-binaries copies plugin binaries into this same
 +          # directory with ALL capabilities dropped, in the spc_t domain, with
 +          # no privileged flag. On a node with SELinux enforcing, a container

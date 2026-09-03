@@ -21,6 +21,7 @@
 ## @field {*SourceDisk} [disk] - Clone an existing vm-disk.
 
 ## @param {Source} source - The source image location used to create a disk.
+## @immutable
 source: {}
 
 ## @param {bool} optical - Defines if disk should be considered optical.

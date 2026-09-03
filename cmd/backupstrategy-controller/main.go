@@ -49,7 +49,9 @@ import (
 	"github.com/cozystack/cozystack/internal/backupcontroller/foundationdbtypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbtypes"
+	"github.com/cozystack/cozystack/internal/backupcontroller/mongodbapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/postgresapp"
+	"github.com/cozystack/cozystack/internal/backupcontroller/psmdbtypes"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	// +kubebuilder:scaffold:imports
 )
@@ -69,6 +71,8 @@ func init() {
 	utilruntime.Must(postgresapp.AddToScheme(scheme))
 	utilruntime.Must(mariadbtypes.AddToScheme(scheme))
 	utilruntime.Must(mariadbapp.AddToScheme(scheme))
+	utilruntime.Must(psmdbtypes.AddToScheme(scheme))
+	utilruntime.Must(mongodbapp.AddToScheme(scheme))
 	utilruntime.Must(foundationdbtypes.AddToScheme(scheme))
 	utilruntime.Must(foundationdbapp.AddToScheme(scheme))
 	utilruntime.Must(etcdtypes.AddToScheme(scheme))

@@ -39,11 +39,37 @@
   nodeGroups lacking the role would leave the controller Pending forever and
   the ComputePlane ingress would never come up.
 */}}
+{{- $clusterRelease := "computeplane-cluster" }}
 {{- if .Values.nodeGroups }}
 {{- $hasIngressRole := false }}
 {{- range $name, $group := .Values.nodeGroups }}
 {{- if and (has "ingress-nginx" (default (list) $group.roles)) (gt (int (default 0 $group.maxReplicas)) 0) }}
 {{- $hasIngressRole = true }}
+{{- end }}
+{{- /* The pool key becomes the pool HelmRelease name and its CAPI object names,
+       which must be RFC-1123 labels. The NodeGroup schema has no propertyNames
+       pattern, so an uppercase/underscore key renders an invalid metadata.name the
+       apiserver rejects, and a key with a ':' renders invalid YAML that fails the
+       whole module render. Guard it here so the failure is uniform and early,
+       alongside the length check (mirrors migration 56's RFC-1123 child-name
+       guard). */}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) }}
+{{- fail (printf "computeplane: nodeGroup key %q is not a valid RFC-1123 label (lowercase alphanumeric and '-', must start and end alphanumeric); it would render an invalid pool HelmRelease name. Rename the pool." $name) }}
+{{- end }}
+{{- /* Helm caps a HelmRelease name at 53 chars. Every pool renders
+       kubernetes-nodes-<clusterRelease>-<pool>; with clusterRelease
+       "computeplane-cluster" that is a 38-char fixed prefix, so a pool key longer
+       than 15 chars yields a name the apiserver accepts as a valid DNS-1123
+       subdomain but Flux then never reconciles, with no other signal. The
+       NodeGroup schema puts no maxLength on the key, so guard it here at render
+       time (mirrors the aggregated API's validateNameLength and migration 56's
+       overflow branch — the same 53-char cap this split hits on every other
+       path). Derived from $clusterRelease so it cannot drift from the name
+       rendered below. */}}
+{{- $childName := printf "kubernetes-nodes-%s-%s" $clusterRelease $name }}
+{{- if gt (len $childName) 53 }}
+{{- $budget := sub 53 (len (printf "kubernetes-nodes-%s-" $clusterRelease)) }}
+{{- fail (printf "computeplane: nodeGroup %q renders pool HelmRelease name %q (%d chars), which exceeds Helm's 53-char limit; the release would be created but never reconcile. Rename the pool to at most %d characters." $name $childName (len $childName) $budget) }}
 {{- end }}
 {{- end }}
 {{- if not $hasIngressRole }}
@@ -96,9 +122,92 @@ spec:
         # named after the cluster release) is created whenever the addon is enabled
         # with exposeMethod Proxied, independent of any hosts list.
         exposeMethod: Proxied
-    {{- with .Values.nodeGroups }}
-    nodeGroups: {{- toYaml . | nindent 6 }}
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+{{- /*
+  Worker pools. Phase 2 split worker nodeGroups out of apps/kubernetes into the
+  apps/kubernetes-nodes chart, so the parent cluster HelmRelease above no longer
+  renders any MachineDeployment from spec.values.nodeGroups (passing it there
+  now does nothing). The module reproduces the pre-split behaviour by emitting
+  one child HelmRelease per nodeGroup against this package's own kubernetes-nodes
+  artifact (cozystack-computeplane-application-kubevirt-kubernetes-nodes, see
+  packages/core/platform/sources/computeplane-application.yaml).
+
+  clusterReleaseName wires each pool to the parent: the pool chart normally
+  derives the parent cluster as kubernetes-<cluster>, but this module fixes the
+  parent release to computeplane-cluster (the admin-kubeconfig Secret contract),
+  which is off that convention, so the pool cannot derive it and is told
+  explicitly. cluster carries the same value because it also drives the pool
+  release-name prefix the chart strips to recover the pool name.
+
+  Each pool HelmRelease is shaped like a natively created KubernetesNodes pool
+  (interval/maxHistory, RetryOnFailure strategy, 15m timeouts + disableWait —
+  mirrors pkg/registry/apps/application/rest.go), so a ComputePlane pool behaves
+  identically to one created through the aggregated API.
+
+  When nodeGroups is empty the wrapped chart used to inject a scale-from-zero
+  md0 with roles: [ingress-nginx]; that default is gone with the split, so the
+  module materialises the same md0 here, otherwise the pinned ingress-nginx
+  addon would have no node to schedule onto and stay Pending forever.
+*/}}
+{{- $pools := .Values.nodeGroups }}
+{{- if not $pools }}
+{{- $pools = dict "md0" (dict "roles" (list "ingress-nginx") "minReplicas" 0) }}
+{{- end }}
+{{- range $pool, $group := $pools }}
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kubernetes-nodes-{{ $clusterRelease }}-{{ $pool }}
+  labels:
+    sharding.fluxcd.io/key: tenants
+    apps.cozystack.io/application.kind: KubernetesNodes
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: {{ $clusterRelease }}-{{ $pool }}
+spec:
+  interval: 5m
+  maxHistory: 5
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-computeplane-application-kubevirt-kubernetes-nodes
+    namespace: cozy-system
+  install:
+    timeout: 15m
+    disableWait: true
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+  upgrade:
+    timeout: 15m
+    disableWait: true
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+  values:
+    cluster: {{ $clusterRelease }}
+    clusterReleaseName: {{ $clusterRelease }}
+    {{- /* Splice ONLY the pool's own shape, as an explicit allowlist (pick), not a
+           denylist. This module runs untrusted tenant code and the NodeGroup schema
+           has no additionalProperties:false, so a tenant can put ANY key in a
+           nodeGroup and it validates. A denylist (omit a few known-bad keys) leaks
+           every key it does not name — e.g. the platform-injected `_cluster` object
+           (cluster-domain, oidc, dns01/proxy config; delivered via the
+           cozystack-values Secret in valuesFrom, and Flux merges spec.values OVER
+           valuesFrom so a tenant key wins), or `nameOverride` — and silently
+           re-opens the hole every time kubernetes-nodes gains a new top-level value.
+           So enumerate exactly the per-pool shape fields kubernetes-nodes accepts
+           and pass through only those. Everything cluster-level or module-owned
+           (cluster, clusterReleaseName, talos, version, images, _cluster,
+           nameOverride, ...) is dropped by construction: the module sets cluster/
+           clusterReleaseName itself above, and a tenant cannot pick the worker OS
+           image / Talos installer / kubelet version / cluster wiring. Keep this list
+           in sync with the kubernetes-nodes values schema's pool-shape params. */}}
+    {{- with pick $group "minReplicas" "maxReplicas" "instanceType" "diskSize" "storageClass" "roles" "resources" "gpus" "kubelet" "logSerialConsole" "maxUnhealthy" "nodeStartupTimeout" "readyUnknownTimeout" "readyFalseTimeout" "podCpuLimit" "podCpuRequest" "maxNodeProvisionTime" }}
+    {{- toYaml . | nindent 4 }}
     {{- end }}
   valuesFrom:
   - kind: Secret
     name: cozystack-values
+{{- end }}

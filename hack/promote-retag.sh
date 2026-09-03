@@ -145,7 +145,7 @@ for raw in $(collect_refs); do
   # a skopeo copy can succeed. Everything else is vendored by digest from a
   # registry this job cannot push to, and a copy there would fail and (under
   # set -e) abort the whole promotion. What this drops today:
-  #   - third-party hosts: docker.io/clastix/kubectl, ghcr.io/kvaps/...,
+  #   - third-party hosts: docker.io/clastix/kubectl,
   #     ghcr.io/lexfrei/{kuberture,ouroboros} (deliberately not mirrored under
   #     ghcr.io/cozystack — see those packages' values.yaml)
   #   - ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/*, which is a

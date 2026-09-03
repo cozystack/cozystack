@@ -50,8 +50,10 @@
 # context here (non-root 65532, read-only rootfs, dropped caps) and to serve
 # ghcr.io/siderolabs/kubelet manifests and blobs as an anonymous pull-through. It is
 # deliberately NOT in the pre-pull set: hack/e2e-install-cozystack.bats applies this
-# manifest before the pre-pull DaemonSet runs, and one replica pulls it once, so
-# adding it there would cache it after the only pull that matters.
+# manifest before the pre-pull DaemonSet runs, so adding it there would cache it
+# after the pulls that matter. Two Pods now pull it in that window -- this
+# Deployment and the warm-up Job the same install step starts -- and the Job carries
+# no affinity, so it may land on a second node and pull it again.
 apiVersion: v1
 kind: Service
 metadata:

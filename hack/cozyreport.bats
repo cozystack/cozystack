@@ -105,6 +105,66 @@ fold_source() {
   esac
 }
 
+@test "CSR capture lists and reads every request on the host cluster and each tenant kubeconfig on disk" {
+  host=$(fold_source "$SCRIPT" | awk '/^echo "Collecting CertificateSigningRequests/,/^echo "Collecting tenant kubernetes CertificateSigningRequests/')
+  [ -n "$host" ] || { echo "FAIL: could not locate the host CSR walk"; false; }
+  printf '%s\n' "$host" | grep -q '^cozyreport_read_object "\$REPORT_DIR/kubernetes/csr.txt" kubectl get csr -o wide$' || {
+    echo "FAIL: the host CSR listing is not a bounded read of every request"; false; }
+  printf '%s\n' "$host" | grep -q '^cozyreport_select_objects "csr" kubectl get csr --no-headers |$' || {
+    echo "FAIL: the host CSR walk does not select through the bounded selector"; false; }
+  printf '%s\n' "$host" | grep -q '^    cozyreport_read_object "\$DIR/csr.yaml" kubectl get csr "\$NAME" -o yaml$' || {
+    echo "FAIL: the host CSR walk does not read each request's yaml through the bounded reader"; false; }
+
+  tenant=$(fold_source "$SCRIPT" | awk '/^echo "Collecting tenant kubernetes CertificateSigningRequests/,/^done$/')
+  [ -n "$tenant" ] || { echo "FAIL: could not locate the tenant CSR walk"; false; }
+  printf '%s\n' "$tenant" | grep -q '^for TENANT_KC in tenantkubeconfig-\*; do$' || {
+    echo "FAIL: the tenant CSR walk does not glob every leftover tenant kubeconfig"; false; }
+  printf '%s\n' "$tenant" | grep -q '^  \[ -f "\$TENANT_KC" \] || continue$' || {
+    echo "FAIL: the tenant CSR walk does not skip a glob match with no matching file"; false; }
+  printf '%s\n' "$tenant" | grep -q '^  cozyreport_read_object "\$DIR/csr.txt" kubectl --kubeconfig "\$TENANT_KC" get csr -o wide$' || {
+    echo "FAIL: the tenant CSR listing is not a bounded read of every request"; false; }
+  printf '%s\n' "$tenant" | grep -q '^  cozyreport_select_objects "tenant csr (\$TENANT_NAME)" kubectl --kubeconfig "\$TENANT_KC" get csr --no-headers |$' || {
+    echo "FAIL: the tenant CSR walk does not select through the bounded selector"; false; }
+  printf '%s\n' "$tenant" | grep -q '^      cozyreport_read_object "\$DIR/\$NAME.yaml" kubectl --kubeconfig "\$TENANT_KC" get csr "\$NAME" -o yaml$' || {
+    echo "FAIL: the tenant CSR walk does not read each request's yaml through the bounded reader"; false; }
+}
+
+@test "no tenant kubeconfig on disk means no tenant CSR read is attempted" {
+  # tenantkubeconfig-<test> only exists while a kubernetes-* Chainsaw test is
+  # running or failed before its own cleanup (hack/e2e-chainsaw/_lib/run-
+  # kubernetes.sh). Every other suite, and a kubernetes suite that passed,
+  # leaves cwd with no such file, and the glob must not turn that absence into
+  # a literal `--kubeconfig tenantkubeconfig-*` read.
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/bin" "$tmp/work"
+  cat > "$tmp/bin/kubectl" <<'STUB'
+#!/bin/sh
+echo "kubectl $*" >> "$KUBECTL_CALL_LOG"
+exit 0
+STUB
+  chmod +x "$tmp/bin/kubectl"
+
+  body=$(fold_source "$SCRIPT" | awk '/^for TENANT_KC in tenantkubeconfig-\*; do$/,/^done$/')
+  [ -n "$body" ] || { echo "FAIL: could not locate the tenant CSR walk"; false; }
+
+  KUBECTL_CALL_LOG="$tmp/calls.txt"
+  : > "$KUBECTL_CALL_LOG"
+  REPORT_DIR="$tmp/report"
+  export KUBECTL_CALL_LOG REPORT_DIR
+  ( cd "$tmp/work" && PATH="$tmp/bin:$PATH" eval "$body" )
+
+  [ ! -s "$KUBECTL_CALL_LOG" ] || {
+    echo "FAIL: kubectl was invoked with no tenant kubeconfig present on disk"
+    cat "$KUBECTL_CALL_LOG"
+    false
+  }
+  [ ! -e "$REPORT_DIR" ] || {
+    echo "FAIL: a report directory was created with nothing to walk"
+    false
+  }
+  rm -rf "$tmp"
+}
+
 @test "every Deployment this script names by hand is one somebody chose to name" {
   # Pinning the two gates above only guards the two lines that were looked at.
   # The same defect sat in the cozystack module the whole time: the image read

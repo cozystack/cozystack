@@ -132,6 +132,16 @@ metadata:
   name: gateway-foreign-hostname-rejected
 spec:
   steps:
+  # No mixed-case-apex counterpart here, unlike the Route and Ingress suites.
+  # Deliberate: this policy applies the same rule as the Route one — own apex
+  # or a dot-bounded subdomain of it, with no outside-root branch — so a
+  # Gateway probe would re-exercise the same two comparisons that
+  # route-hostname-policy already drives against a mixed-case apex at runtime,
+  # in both directions. The two differ only in how the apex reaches the
+  # comparison: a `variables.tenantHost` binding here, the label inlined there.
+  # Because that binding is what this suite does NOT cover, both of its
+  # comparisons are pinned operand-by-operand in
+  # tests/gateway-hostname-policy_test.yaml instead.
   - name: foreign-listener-hostname-denied
     try:
     - script:
@@ -502,6 +512,140 @@ spec:
                 port: 443
           EOF
           kubectl -n "$ns" delete httproute route-hostname-allow-probe --ignore-not-found
+        check:
+          ($error == null): true
+  # Case-insensitivity. The route hostname is always lowercase — the CRD's
+  # hostname pattern permits only lowercase, so an uppercase hostname is rejected
+  # before the VAP runs — but the apex operand is the namespace.cozystack.io/host
+  # label VALUE, and Kubernetes permits uppercase in a label value. Under a
+  # mixed-case apex a lowercase in-apex route must still be admitted, so the VAP
+  # normalizes both operands with .lowerAscii(). Pre-fix it compares
+  # "probe.case-probe.route.invalid" against "Case-Probe.route.invalid", misses,
+  # and denies a legitimate route — this step is red pre-fix, green post-fix.
+  # A mixed-case apex is the only runtime shape that exercises the
+  # normalization.
+  #
+  # The apex here does not need to sit under the platform root: unlike the
+  # Ingress policy this VAP compares against the tenant apex only and has no
+  # outside-root branch, so a reserved .invalid apex (RFC 2606) keeps the case
+  # host-independent and unable to collide with a dev cluster's real apex.
+  #
+  # The mixed-case apex goes on a throwaway tenant-* namespace rather than on
+  # tenant-test: relabelling the shared namespace would leave it mixed-case for
+  # every later test if a restore were missed. The tenant-* prefix is what makes
+  # the VAP's matchCondition fire, and the runner is a trusted caller for the
+  # host-label immutability VAP, so the labelled CREATE is admitted (see
+  # untrusted-sa-cannot-set-host-label-at-create above). Applied declaratively:
+  # an admission denial fails the apply, and Chainsaw auto-cleanup deletes the
+  # route and the namespace.
+  - name: mixed-case-apex-route-allowed
+    try:
+    # Pre-clean a namespace left by an interrupted prior run: a leftover
+    # tenant-case-probe stuck in Terminating fails the apply below, and because
+    # the label here is a fixed literal a surviving namespace would otherwise be
+    # silently reused rather than rebuilt.
+    - script:
+        content: |
+          set -eu
+          kubectl delete namespace tenant-case-probe --ignore-not-found --wait=true --timeout=60s
+        check:
+          ($error == null): true
+    - apply:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-case-probe
+            labels:
+              namespace.cozystack.io/host: Case-Probe.route.invalid
+    # Guard against a vacuous pass: re-read the persisted label. Had anything
+    # normalized it to lowercase, the route below would be admitted with or
+    # without the fix and the step would stop proving case-insensitivity.
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-case-probe
+            labels:
+              namespace.cozystack.io/host: Case-Probe.route.invalid
+    - apply:
+        resource:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: route-hostname-case-probe
+            namespace: tenant-case-probe
+          spec:
+            hostnames:
+            - "probe.case-probe.route.invalid"
+            rules:
+            - backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+  # The deny half of the mixed-case apex, pairing with the step above the way
+  # foreign-apex-route-denied pairs with own-apex-route-allowed. The allow half
+  # alone only proves the normalized match does not UNDER-admit; over-admission
+  # is the direction that hijacks a hostname, and normalizing both operands is
+  # exactly the edit that can widen a match by accident. Reuses the namespace
+  # the previous step created — Chainsaw cleans up at test scope, not step
+  # scope. Scripted rather than an apply/expect pair because the grep for
+  # "ValidatingAdmissionPolicy" is what proves the VAP did the denying: a bare
+  # "the apply failed" assertion would be satisfied by a typo in the manifest.
+  - name: mixed-case-apex-route-denied
+    try:
+    - script:
+        content: |
+          set -eu
+          # deny <case> <name> reads a manifest on stdin and expects the VAP to
+          # reject it, mirroring the deny() helper in the Ingress suite below.
+          deny() {
+            kubectl -n tenant-case-probe delete httproute "$2" --ignore-not-found >/dev/null
+            out=$(kubectl apply -n tenant-case-probe -f - 2>&1) && rc=0 || rc=$?
+            echo "case=$1 rc=$rc"
+            if [ "$rc" -eq 0 ]; then
+              kubectl -n tenant-case-probe delete httproute "$2" --ignore-not-found
+              echo "BUG: admission accepted $1: $out" >&2
+              exit 1
+            fi
+            echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+          }
+          # A wholly foreign apex stays denied once both operands are lowercased.
+          deny foreign-apex route-case-foreign-probe <<'EOF'
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: route-case-foreign-probe
+          spec:
+            hostnames:
+            - "evil.other.invalid"
+            rules:
+            - backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+          EOF
+          # Dot-boundary guard under the mixed-case apex: "evilcase-probe.route.invalid"
+          # ends with the lowercased apex "case-probe.route.invalid" but is NOT a
+          # subdomain of it. The CEL only denies it because the suffix test is
+          # endsWith("." + apex); drop that leading dot and this hostname is
+          # admitted and hijacks the apex. This is the only case in this suite
+          # that would notice.
+          deny prefix-adjacent route-case-adjacent-probe <<'EOF'
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: route-case-adjacent-probe
+          spec:
+            hostnames:
+            - "evilcase-probe.route.invalid"
+            rules:
+            - backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+          EOF
         check:
           ($error == null): true
 ---
@@ -1048,6 +1192,151 @@ spec:
           kubectl -n "$ns" delete ingress ingress-ownapex-wildcard-probe --ignore-not-found
         check:
           ($error == null): true
+  # Case-insensitivity. spec.rules[].host and spec.tls[].hosts[] are always
+  # lowercase — the apiserver's host validation permits only lowercase, so an
+  # uppercase host is rejected before the VAP runs — but the apex operand is the
+  # namespace.cozystack.io/host label VALUE, and Kubernetes permits uppercase in
+  # a label value. Under a mixed-case apex a lowercase in-apex Ingress must
+  # still be admitted, so the VAP normalizes both operands with .lowerAscii().
+  # Ingress is the default publish path and carries the most complex CEL (a
+  # rule-host and a tls-host branch), so it gets its own runtime guard beside
+  # the route one; both branches are exercised at once because the tls branch
+  # denies on its own.
+  #
+  # The probe apex is derived as Case-Probe.<root> rather than hardcoded, and it
+  # has to sit UNDER the platform root to mean anything: the outside-root branch
+  # admits any non-wildcard host outside the root apex whatever the tenant apex
+  # says, so a probe on an unrelated domain would be admitted pre-fix and prove
+  # nothing. Under the root that escape is closed — pre-fix the own-apex branch
+  # misses on case and the outside-root branch is excluded, so admission denies
+  # and this step is red; post-fix the own-apex branch matches and it is green.
+  #
+  # The mixed-case apex goes on a throwaway tenant-* namespace rather than on
+  # tenant-test, for the same reason as the route case. Built in a script since
+  # it needs ${root} interpolation, so the namespace is torn down in finally
+  # rather than by Chainsaw auto-cleanup. That teardown is also why the allow and
+  # deny halves share ONE step here while the route case splits them in two:
+  # finally runs at step scope, so a second step would find the namespace gone.
+  # The route namespace is applied declaratively and reclaimed at test scope, so
+  # it survives into its own deny step.
+  - name: mixed-case-apex-allowed-and-denied
+    try:
+    - script:
+        content: |
+          set -eu
+          root=$(kubectl get namespace tenant-root -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          [ -n "$root" ] || { echo "SETUP FAILURE: tenant-root lacks the namespace.cozystack.io/host label" >&2; exit 1; }
+          apex="Case-Probe.${root}"
+          host="probe.case-probe.${root}"
+          # Guard against a vacuous pass: the probe apex must really be
+          # mixed-case. An all-lowercase apex would admit the Ingress with or
+          # without the fix — this catches a later edit that lowercases the
+          # literal above, which the persisted-label check below cannot see.
+          [ "$apex" != "$(echo "$apex" | tr '[:upper:]' '[:lower:]')" ] || { echo "SETUP FAILURE: probe apex '$apex' is not mixed-case" >&2; exit 1; }
+          # Pre-clean a namespace left behind by an interrupted prior run.
+          kubectl delete namespace tenant-ingress-case-probe --ignore-not-found --wait=true --timeout=60s
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-ingress-case-probe
+            labels:
+              namespace.cozystack.io/host: ${apex}
+          EOF
+          # Second vacuous-pass guard: re-read the persisted label, in case
+          # anything normalized the value on the way in.
+          got=$(kubectl get namespace tenant-ingress-case-probe -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          [ "$got" = "$apex" ] || { echo "SETUP FAILURE: apex label persisted as '$got', want '$apex'" >&2; exit 1; }
+          kubectl apply -n tenant-ingress-case-probe -f - <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-hostname-case-probe
+          spec:
+            tls:
+            - hosts:
+              - "${host}"
+              secretName: noop-tls
+            rules:
+            - host: "${host}"
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+          # The deny half, pairing with the allow above the way
+          # foreign-and-adjacent-hosts-denied pairs with own-apex-allowed. The
+          # allow half alone only proves the normalized match does not
+          # UNDER-admit; over-admission is what hijacks a hostname, and
+          # normalizing both operands is exactly the edit that can widen a match
+          # by accident.
+          deny() {
+            kubectl -n tenant-ingress-case-probe delete ingress "$2" --ignore-not-found >/dev/null
+            out=$(kubectl apply -n tenant-ingress-case-probe -f - 2>&1) && rc=0 || rc=$?
+            echo "case=$1 rc=$rc"
+            if [ "$rc" -eq 0 ]; then
+              kubectl -n tenant-ingress-case-probe delete ingress "$2" --ignore-not-found
+              echo "BUG: admission accepted $1: $out" >&2
+              exit 1
+            fi
+            echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+          }
+          # Under the platform root but outside the probe's own apex: the
+          # own-apex branch must miss on more than case, and the outside-root
+          # branch must stay closed under the root.
+          deny foreign-apex-host ingress-case-foreign-probe <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-case-foreign-probe
+          spec:
+            rules:
+            - host: "dashboard.${root}"
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+          # Dot-boundary guard on the normalized path: "evilcase-probe.<root>"
+          # ends with the lowercased apex "case-probe.<root>" without being a
+          # subdomain of it. Only endsWith("." + apex) denies it; drop that
+          # leading dot and the apex is hijackable.
+          deny prefix-adjacent ingress-case-adjacent-probe <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-case-adjacent-probe
+          spec:
+            rules:
+            - host: "evilcase-probe.${root}"
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+        check:
+          ($error == null): true
+    finally:
+    - delete:
+        ref:
+          apiVersion: v1
+          kind: Namespace
+          name: tenant-ingress-case-probe
   # Static accepts — concrete external domains outside the platform root apex
   # on both spec.rules[].host and spec.tls[].hosts. Declarative apply; Chainsaw
   # auto-cleanup deletes the probes.

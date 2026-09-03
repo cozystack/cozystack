@@ -41,8 +41,10 @@ One person may hold more than one role on a small incident.
    Advisory** (private fork) so that code and discussion stay confidential until
    release.
 5. **Coordinated release.** The fix is shipped through the normal patch-release
-   and backport process across all affected supported release lines
-   (see the *Supported Versions* table in `SECURITY.md`).
+   and backport process. Which supported lines receive the backport is decided
+   per fix, weighing severity against backport risk — see the *Supported
+   Versions* table in `SECURITY.md`, which also records that no documented rule
+   governs that choice.
 6. **Disclosure.** A GHSA — and, when applicable, a CVE — is published. Public
    disclosure follows the outbound channels: GitHub Releases and release notes,
    the changelog, and the GHSA itself. The reporter is credited unless anonymity

@@ -19,6 +19,20 @@ velero:
         name: plugins
 
   deployNodeAgent: true
+  nodeAgent:
+    # node-agent is a DaemonSet and ran BestEffort. A memory limit is what sets
+    # memory.max on the pod cgroup, and the Talos userspace OOM handler (v1.12+)
+    # only ever kills cgroups that lack one — so it was an eviction candidate on
+    # every node, independent of what caused the pressure. Killing it mid-backup
+    # fails the backup, so the limit is deliberately loose: 14d peak is 121Mi at
+    # idle on a dev cluster, but the agent streams volume data during a backup
+    # and that is exactly when it must not be killed.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 2Gi
   configuration:
     # defaultVolumesToFsBackup: true
     # cozy-default BackupStorageLocation lives in the

@@ -16,191 +16,6 @@
         "source": "storageclass"
       }
     },
-    "nodeGroups": {
-      "description": "Worker nodes configuration map. When left empty, a default node group `md0` is emitted with `minReplicas: 0` and `roles: [ingress-nginx]` — the MachineDeployment renders but provisions no workers until an unschedulable Pod triggers the cluster-autoscaler (or an operator scales the group manually). Enabling `addons.ingressNginx.enabled: true` on a CR with default `nodeGroups: {}` therefore requires either supplying a nodeGroup with `roles: [ingress-nginx]` and `minReplicas \u003e= 1`, or waiting for the autoscaler to bring up the default md0 in response to the ingress-nginx controller Pods becoming Pending. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.",
-      "type": "object",
-      "default": {},
-      "additionalProperties": {
-        "type": "object",
-        "required": [
-          "diskSize",
-          "instanceType",
-          "maxReplicas",
-          "minReplicas"
-        ],
-        "properties": {
-          "diskSize": {
-            "description": "System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.",
-            "default": "20Gi",
-            "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "x-kubernetes-int-or-string": true
-          },
-          "gpus": {
-            "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).",
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "name"
-              ],
-              "properties": {
-                "name": {
-                  "description": "Name of GPU, such as \"nvidia.com/AD102GL_L40S\".",
-                  "type": "string",
-                  "x-cozystack-options": {
-                    "source": "gpu"
-                  }
-                }
-              }
-            }
-          },
-          "instanceType": {
-            "description": "Virtual machine instance type.",
-            "type": "string",
-            "default": "u1.medium",
-            "x-cozystack-options": {
-              "source": "instancetype"
-            }
-          },
-          "kernelModules": {
-            "description": "Kernel modules loaded on every worker in this node group, emitted as Talos `machine.kernel.modules`. A Talos system extension installs a module but does not load it, so an extension-provided driver needs its modules declared here. Leave unset to let the chart decide: a node group holding at least one `nvidia.com/*` GPU gets `nvidia` (with `NVreg_NvLinkDisable=1`, which the gpu-operator driver container applies on non-Talos workers; on Talos that container has to be turned off or it clashes with the system extension, and nothing then mounts the ConfigMap carrying the parameter), `nvidia_uvm`, `nvidia_drm`, `nvidia_modeset` (that order — Talos loads the list in sequence and the last three depend on the first), and any other group gets nothing. Set a non-empty list to replace the chart's choice entirely, or `[]` to opt out and emit no modules even on a GPU group. The module still has to be in the image: which extension supplies it is set by `talos.schematicID`, and on Blackwell (GB202) it must be the open-kernel-modules extension. Changing this on a node group that already has running workers does not reach them: the `TalosConfigTemplate` its MachineDeployment references has a fixed name, so rewriting the template leaves `spec.template` untouched, CAPI starts no rollout, and a running Machine keeps the machine config it booted with. Replace the group's Machines to apply it. Unlike `schematicID`, which changes the boot image and therefore rolls the group by itself. Note the automatic set keys on the `nvidia.com/` resource prefix alone: nothing cross-checks that the effective schematic actually carries those modules, so declaring a module the image does not ship is possible. On Talos v1.13 such a module leaves its controller retrying rather than failing the boot, so the symptom is a missing driver, not a dead node.",
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "name"
-              ],
-              "properties": {
-                "name": {
-                  "description": "Module name as `modprobe` takes it, e.g. `nvidia_uvm`.",
-                  "type": "string"
-                },
-                "parameters": {
-                  "description": "Module parameters, each as a bare `key=value` string.",
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "kubelet": {
-            "description": "Kubelet resource reservations for this node group.",
-            "type": "object",
-            "properties": {
-              "evictionHardMemory": {
-                "description": "Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).",
-                "type": "string",
-                "default": "7%"
-              },
-              "evictionSoftMemory": {
-                "description": "Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).",
-                "type": "string",
-                "default": "10%"
-              },
-              "kubeReservedCpu": {
-                "description": "CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
-                "type": "string"
-              },
-              "kubeReservedMemory": {
-                "description": "Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
-                "type": "string"
-              },
-              "systemReservedCpu": {
-                "description": "CPU reserved for host OS. Auto-computed from instanceType if empty.",
-                "type": "string"
-              },
-              "systemReservedMemory": {
-                "description": "Memory reserved for host OS. Auto-computed from instanceType if empty.",
-                "type": "string"
-              }
-            }
-          },
-          "logSerialConsole": {
-            "description": "Stream each worker VM's guest serial console into a `guest-console-log` container beside virt-launcher, readable with `kubectl logs`. The only view of a worker that stalls during boot before Talos apid answers, when neither a Node nor a certificate request exists to diagnose from. Two costs the field name does not show. Changing the value rolls the node group, because it is part of the worker VM template whose name is a hash of its content -- including the stuck VM whose console was wanted, so it buys visibility into the next boot rather than the current one. And it overrides the platform's cluster-wide `disableSerialConsoleLog`, set because that container has been seen holding virt-launcher in `PodInitializing` (kubevirt/kubevirt#15989), which would take the node group down rather than explain it -- so check that virt-launcher Pods reach Running after enabling it.",
-            "type": "boolean",
-            "default": false
-          },
-          "maxReplicas": {
-            "description": "Maximum number of replicas.",
-            "type": "integer",
-            "default": 10
-          },
-          "maxUnhealthy": {
-            "description": "Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer (\"0\", \"1\", ...) or an integer percentage (\"0%\", \"50%\").",
-            "type": "string"
-          },
-          "minReplicas": {
-            "description": "Minimum number of replicas.",
-            "type": "integer",
-            "default": 0
-          },
-          "nodeStartupTimeout": {
-            "description": "Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.",
-            "type": "string"
-          },
-          "resources": {
-            "description": "Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.",
-            "type": "object",
-            "properties": {
-              "cpu": {
-                "description": "CPU available.",
-                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "string"
-                  }
-                ],
-                "x-kubernetes-int-or-string": true
-              },
-              "memory": {
-                "description": "Memory (RAM) available.",
-                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "string"
-                  }
-                ],
-                "x-kubernetes-int-or-string": true
-              }
-            }
-          },
-          "roles": {
-            "description": "List of node roles.",
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "schematicID": {
-            "description": "Per-group override for `talos.schematicID`, applied to both the worker boot disk image and the Talos installer image. When empty, the cluster-wide `talos.schematicID` applies. A schematic is a fixed set of Talos system extensions, and Talos refuses to finish booting when an extension service in it cannot start: `ext-nvidia-persistenced` and `ext-nvidia-cdi-gen` require an NVIDIA card, so a node group with no GPU that boots an NVIDIA schematic fails `startAllServices` and reboots roughly every 70 minutes, indefinitely, while still reporting `Ready` (kubelet starts before the failing phase). A cluster mixing GPU and non-GPU node groups therefore has no correct cluster-wide value, and this field is what makes it expressible: set the NVIDIA schematic on the GPU group only. Changing it replaces the group's boot image and so rolls its workers.",
-            "type": "string"
-          },
-          "storageClass": {
-            "description": "StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile, not set on the DataVolume here — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so the fallback targets the replicated/DRBD application storageClass rather than a possibly non-DRBD cluster default. NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.",
-            "type": "string",
-            "x-cozystack-options": {
-              "source": "storageclass"
-            }
-          }
-        }
-      }
-    },
     "version": {
       "description": "Kubernetes major.minor version to deploy",
       "type": "string",
@@ -226,7 +41,6 @@
         "certManager",
         "cilium",
         "coredns",
-        "fluxcd",
         "gatewayAPI",
         "gpuOperator",
         "hami",
@@ -283,28 +97,6 @@
             "valuesOverride"
           ],
           "properties": {
-            "valuesOverride": {
-              "description": "Custom Helm values overrides.",
-              "type": "object",
-              "default": {},
-              "x-kubernetes-preserve-unknown-fields": true
-            }
-          }
-        },
-        "fluxcd": {
-          "description": "FluxCD GitOps operator.",
-          "type": "object",
-          "default": {},
-          "required": [
-            "enabled",
-            "valuesOverride"
-          ],
-          "properties": {
-            "enabled": {
-              "description": "Enable FluxCD.",
-              "type": "boolean",
-              "default": false
-            },
             "valuesOverride": {
               "description": "Custom Helm values overrides.",
               "type": "object",
@@ -994,7 +786,7 @@
           "x-kubernetes-preserve-unknown-fields": true
         },
         "schematicID": {
-          "description": "Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here. A node group can override it for itself via `nodeGroups.\u003cname\u003e.schematicID`. The effective value is rejected if it contains `$`, a backtick, a backslash, quotes or whitespace, because it is interpolated into a worker machine config applied through a shell heredoc; a 64-hex factory digest, a readable name and a multi-segment mirror path such as `gpu/nvidia-open` all pass. That guard covers this field only, not every value reaching that heredoc.",
+          "description": "Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.",
           "type": "string",
           "default": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
         },
@@ -1002,27 +794,6 @@
           "description": "Talos release used for worker OS image and installer. Must satisfy the chart's Talos\u003c-\u003eKubernetes support matrix against the chosen `version`.",
           "type": "string",
           "default": "v1.13.6"
-        }
-      }
-    },
-    "nodeHealthCheck": {
-      "description": "MachineHealthCheck tuning for worker node groups.",
-      "type": "object",
-      "default": {},
-      "required": [
-        "maxUnhealthy",
-        "nodeStartupTimeout"
-      ],
-      "properties": {
-        "maxUnhealthy": {
-          "description": "Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer (\"0\", \"1\", ...) or a percentage (\"0%\", \"50%\"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default \"50%\" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to \"0%\" once the fleet is stable on Talos workers.",
-          "type": "string",
-          "default": "50%"
-        },
-        "nodeStartupTimeout": {
-          "description": "Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).",
-          "type": "string",
-          "default": "10m"
         }
       }
     },

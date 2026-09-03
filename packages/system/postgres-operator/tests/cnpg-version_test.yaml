@@ -12,27 +12,35 @@ release:
   namespace: cozy-postgres-operator
 
 tests:
-  - it: runs the CNPG 1.28.2 operator image
+  - it: runs the CNPG 1.30.0 operator image
     template: charts/cloudnative-pg/templates/deployment.yaml
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/cloudnative-pg/cloudnative-pg:1.28.2
+          value: ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0
       - equal:
           path: spec.template.spec.containers[0].env[0].value
-          value: ghcr.io/cloudnative-pg/cloudnative-pg:1.28.2
+          value: ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0
       - equal:
           path: metadata.labels["app.kubernetes.io/version"]
-          value: 1.28.2
+          value: 1.30.0
 
-  - it: ships the CNPG 1.28.2 CRDs patched in lockstep with the operator
+  - it: ships the CNPG 1.30.0 CRDs with the Cluster scale-subresource selector
     template: charts/cloudnative-pg/templates/crds/crds.yaml
     asserts:
       - documentIndex: 0
         equal:
           path: metadata.annotations["controller-gen.kubebuilder.io/version"]
-          value: v0.20.1
-      - documentIndex: 0
+          value: v0.21.0
+      # The reason for the >= 1.28.4 floor (we ship 1.30.0, the only published
+      # chart carrying it): the Cluster scale subresource must serve status.selector
+      # so a stock HPA (via KEDA) can drive it (cloudnative-pg#8996); without it the
+      # HPA fails with InvalidSelector. documentIndex 2 is the clusters CRD.
+      - documentIndex: 2
         equal:
-          path: spec.versions[0].schema.openAPIV3Schema.properties.status.properties.instanceID.properties.sessionID.type
-          value: string
+          path: metadata.name
+          value: clusters.postgresql.cnpg.io
+      - documentIndex: 2
+        equal:
+          path: spec.versions[0].subresources.scale.labelSelectorPath
+          value: .status.selector

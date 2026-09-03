@@ -13,6 +13,7 @@ Tenants reference `cozy-default` from `BackupJob`, `Plan`, and `RestoreJob` reso
 | `apps.cozystack.io/Postgres`     | CloudNativePG (barman)               | `strategy.backups.cozystack.io/CNPG` `cozy-default-cnpg`                   |
 | `apps.cozystack.io/MariaDB`      | mariadb-operator dump                | `strategy.backups.cozystack.io/MariaDB` `cozy-default-mariadb`             |
 | `apps.cozystack.io/ClickHouse`   | Altinity `clickhouse-backup` sidecar | `strategy.backups.cozystack.io/Altinity` `cozy-default-altinity`           |
+| `apps.cozystack.io/MongoDB`      | Percona psmdb operator (pbm) dump    | `strategy.backups.cozystack.io/MongoDB` `cozy-default-mongodb`             |
 | `apps.cozystack.io/Etcd`         | etcd-operator snapshot               | `strategy.backups.cozystack.io/Etcd` `cozy-default-etcd`                   |
 | `apps.cozystack.io/VMInstance`   | Velero + kubevirt-velero-plugin      | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vminstance`    |
 | `apps.cozystack.io/VMDisk`       | Velero                               | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vmdisk`        |
@@ -34,6 +35,7 @@ Different operators expect different endpoint shapes; the strategy templates ren
 | CNPG (Postgres) | `barmanObjectStore.endpointURL` | full URL (scheme preserved) |
 | Etcd            | `destination.s3.endpoint`       | full URL (scheme preserved) |
 | MariaDB         | `storage.s3.endpoint`           | bare host:port (scheme stripped); `tls.enabled` derived from the scheme |
+| MongoDB         | n/a — storage lives on the app (`backup.endpointURL`)                     | full URL (scheme preserved), configured on the MongoDB application, not the strategy |
 | FoundationDB    | `blobStoreConfiguration.accountName` + `urlParameters.secure_connection` | bare host:port + derived secure flag |
 | Velero          | `BackupStorageLocation.spec.config.s3Url` | full URL (scheme preserved) |
 | ClickHouse sidecar | `S3_ENDPOINT` env | bare host:port (from projected Secret) |
@@ -65,6 +67,43 @@ When `useSystemBucket: true`:
 - `S3_PATH` is set to `<namespace>/<release>` so two tenants with the same ClickHouse release name never share a prefix.
 
 `s3Region`, `s3Bucket`, `endpoint`, `s3AccessKey`, `s3SecretKey`, and `s3CredentialsSecret` are ignored in this mode.
+
+## MongoDB: the application owns the backup storage
+
+Unlike CNPG / MariaDB / Altinity, the MongoDB driver cannot inject its S3 target per-backup: the Percona psmdb operator only runs the percona-backup-mongodb (pbm) agents and services `PerconaServerMongoDBBackup` CRs when the `PerconaServerMongoDB` cluster has `spec.backup.enabled: true` and a storage declared, and a `PerconaServerMongoDBBackup` references that storage only by name. So the MongoDB application must **opt into backups** and point at the bucket in its own chart values:
+
+```yaml
+apiVersion: apps.cozystack.io/v1alpha1
+kind: MongoDB
+metadata:
+  name: orders-db
+spec:
+  backup:
+    enabled: true
+    destinationPath: "s3://<bucket>/orders-db/"
+    endpointURL: "https://seaweedfs-s3.tenant-root:8333"
+    insecureSkipTLSVerify: true   # self-signed in-cluster seaweedfs; psmdb s3 storage has no CA-bundle field
+    s3AccessKey: "<key>"
+    s3SecretKey: "<secret>"
+```
+
+The chart declares that storage as `s3-storage`, which the `cozy-default-mongodb` strategy names (`storageName: s3-storage`, `type: logical`). The driver then drives on-demand backups and restores through the unified `BackupJob` / `RestoreJob` / `Plan` interface on top of the operator's storage config — adding restore-to-differently-named instances (via `PerconaServerMongoDBRestore.spec.backupSource`) and point-in-time recovery that the raw scheduled-task / `mongodump` paths do not offer. When a target cluster has backups disabled, the driver surfaces a clear `Ready=False` precondition on the BackupJob/RestoreJob rather than hanging until the deadline.
+
+For a to-copy restore the operator reads the dump from the **source** backup's bucket/endpoint, but authenticates with the **target** cluster's own S3 credentials (the source release's Secret dies with it in a DR scenario). So the target application's credentials must be able to read the source bucket — the common case where both share the one platform `cozy-backups` bucket. A target whose credentials are scoped to a different S3 account or bucket cannot read the source archive, and the restore fails loudly with `AccessDenied` (RestoreJob `Failed`) rather than silently restoring nothing.
+
+A full, scripted example (write a marker document, back up, restore to a copy, assert the round-trip while the source stays untouched) is in [`examples/backups/mongodb/`](../../examples/backups/mongodb/) — driven by `run-all.sh`.
+
+### Point-in-time recovery (MongoDB)
+
+psmdb records an oplog stream between logical backups. A MongoDB `RestoreJob` recovers to a timestamp via `spec.options.recoveryTime` — the same option name and RFC3339 format the Postgres/CNPG driver uses, so the two are uniform:
+
+```yaml
+spec:
+  options:
+    recoveryTime: "2026-08-05T12:34:56Z"   # RFC3339 (UTC), same as the CNPG driver
+```
+
+The driver converts `recoveryTime` to the psmdb oplog target internally. Unlike CNPG (whose empty `recoveryTime` replays WAL to the latest archived point), an empty `recoveryTime` here restores the backup snapshot as taken — a psmdb logical backup is already a consistent point, so "restore this backup" is the safe default. `spec.options.restoreTimeoutSeconds` caps how long the driver waits for the operator restore before failing (default 30m), matching the CNPG option. Any unrecognised key under `spec.options` (e.g. a `recoverytime` typo) is ignored but surfaced as a `UnknownRestoreOption` Warning event on the RestoreJob rather than silently dropped.
 
 ## Inspecting the defaults
 
@@ -157,7 +196,7 @@ The default-objects gate emits three more:
 
 ## Admin overrides for `cozy-default`
 
-`cozy-default` is rendered by the `backupstrategy-controller` chart and owned by Flux's helm-controller. **Direct `kubectl edit backupclass cozy-default` is overwritten on the next helm reconcile** — the same applies to its companion `strategy.backups.cozystack.io/*` CRs (`cozy-default-cnpg`, `cozy-default-etcd`, `cozy-default-mariadb`, `cozy-default-altinity`, `cozy-default-foundationdb`, the two `cozy-default-velero-*`). The supported override path is the `backupStorage` block on the **`platform` component** of the `cozystack.cozystack-platform` Package CR:
+`cozy-default` is rendered by the `backupstrategy-controller` chart and owned by Flux's helm-controller. **Direct `kubectl edit backupclass cozy-default` is overwritten on the next helm reconcile** — the same applies to its companion `strategy.backups.cozystack.io/*` CRs (`cozy-default-cnpg`, `cozy-default-etcd`, `cozy-default-mariadb`, `cozy-default-altinity`, `cozy-default-mongodb`, `cozy-default-foundationdb`, the two `cozy-default-velero-*`). The supported override path is the `backupStorage` block on the **`platform` component** of the `cozystack.cozystack-platform` Package CR:
 
 ```yaml
 apiVersion: cozystack.io/v1alpha1
@@ -201,7 +240,8 @@ The defaults aim at a reasonable middle (30-day retention, gzip compression wher
 
 - **CNPG strategy**: `barmanObjectStore.retentionPolicy`, `data.compression`, `wal.compression`.
 - **MariaDB strategy**: `compression`, `maxRetention`, `databases[]`.
-- **Altinity strategy**: tune the `clickhouse-backup` sidecar via `backup.*` values on the ClickHouse release; the strategy Pod is a thin HTTP client.
+- **MongoDB strategy**: `storageName` (which `spec.backup.storages` entry on the psmdb cluster to use), `type` (`logical`), `compressionType` / `compressionLevel`. The S3 target itself is tuned via `backup.*` values on the MongoDB release (see [MongoDB: the application owns the backup storage](#mongodb-the-application-owns-the-backup-storage)).
+- **Altinity strategy**: tune the `clickhouse-backup` sidecar via `backup.*` values on the ClickHouse release; the strategy Pod is a thin HTTP client. When the S3 endpoint's certificate is signed by a private CA rather than a publicly-trusted one — SeaweedFS's in-cluster `:8333` being the case in point — point `backup.endpointCA` at a Secret holding that CA bundle; the chart mounts it into the sidecar and adds it to the trust store via `SSL_CERT_DIR`, which supplements the system CA set rather than replacing it.
 - **FoundationDB strategy**: `snapshotPeriodSeconds`, `agentCount`, `urlParameters[]`.
 - **Velero strategy (VMInstance / VMDisk)**: `ttl`, `includedResources[]`, `excludedResources[]`.
 - **Etcd strategy**: today the strategy is path-only; combine with `Plan.spec.retentionPolicy` for trim cadence.

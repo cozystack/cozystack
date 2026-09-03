@@ -287,6 +287,11 @@
           "type": "string",
           "default": "http://minio-gateway-service:9000"
         },
+        "insecureSkipTLSVerify": {
+          "description": "Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs).",
+          "type": "boolean",
+          "default": false
+        },
         "retentionPolicy": {
           "description": "Retention policy (e.g. \"30d\").",
           "type": "string",

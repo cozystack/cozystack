@@ -105,3 +105,27 @@ tests:
           path: spec.template.spec.containers[0].livenessProbe
       - notExists:
           path: spec.template.spec.containers[0].readinessProbe
+
+  # node-agent is a DaemonSet and ran BestEffort. A memory limit is what sets
+  # memory.max on the pod cgroup, and the Talos userspace OOM handler (v1.12+)
+  # only ever selects cgroups that lack it — so node-agent was an eviction
+  # candidate on every node whatever caused the pressure, and killing it
+  # mid-backup fails the backup.
+  #
+  # The limit is deliberately loose rather than fitted: measured usage is at
+  # idle, and the agent streams volume data during a backup, which is exactly
+  # when it must not be killed. Set from the umbrella values against the
+  # vendored subchart, so an upstream bump that moves the key would render
+  # nothing and leave no other trace; that is what this pins against.
+  - it: node-agent declares a memory limit and request
+    template: charts/velero/templates/node-agent-daemonset.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="node-agent")].resources.limits.memory
+          value: 2Gi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="node-agent")].resources.requests.memory
+          value: 128Mi

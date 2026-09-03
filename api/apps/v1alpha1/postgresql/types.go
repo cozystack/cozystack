@@ -100,6 +100,9 @@ type Bootstrap struct {
 	// Whether to restore from a backup.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
+	// WAL-archive server name (S3 path prefix) the RESTORED cluster writes to. Must differ from `serverName` (the recovery source) so a restored cluster archives to a fresh, empty prefix and barman-cloud-check-wal-archive passes while it recovers from the source's prefix. The CNPG backup driver sets this on restore; empty means the cluster archives under its own name.
+	// +kubebuilder:default:=""
+	NewServerName string `json:"newServerName,omitempty"`
 	// Previous cluster name before deletion.
 	// +kubebuilder:default:=""
 	OldName string `json:"oldName"`

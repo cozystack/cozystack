@@ -1,4 +1,11 @@
 redis-operator:
   image:
     repository: ghcr.io/cozystack/cozystack/redis-operator
-    tag: v1.3.0-rc1@sha256:a4012e6a1b5daaedb57cc27edfdbff52124de4164b5ec0ee53c5ce5710ef4c25
+    tag: v3.3.5@sha256:551f39340bee3d6ea8e1da973cfc64092b769526c4a7aea0427070cbf6702ddd
+  # The freshworks-oss fork requires a non-empty operator group id at startup
+  # (fatal "operator_group_id environment variable is required" otherwise); the
+  # archived spotahome operator had no such knob. A single cluster-wide operator
+  # only needs a stable non-empty value, so pin it rather than leave it unset.
+  extraEnvVars:
+    - name: OPERATOR_GROUP_ID
+      value: "cozystack"

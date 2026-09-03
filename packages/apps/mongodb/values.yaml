@@ -159,6 +159,7 @@ databases: {}
 ## @field {string} [retentionPolicy] - Retention policy (e.g. "30d").
 ## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/).
 ## @field {string} [endpointURL] - S3 endpoint URL for uploads.
+## @field {bool} [insecureSkipTLSVerify] - Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs).
 ## @field {string} [s3AccessKey] - Access key for S3 authentication.
 ## @field {string} [s3SecretKey] - Secret key for S3 authentication.
 
@@ -169,6 +170,7 @@ backup:
   retentionPolicy: 30d
   destinationPath: "s3://bucket/path/to/folder/"
   endpointURL: "http://minio-gateway-service:9000"
+  insecureSkipTLSVerify: false
   s3AccessKey: ""
   s3SecretKey: ""
 

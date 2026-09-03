@@ -1,0 +1,21 @@
+suite: redis-operator applies CRD updates on upgrade
+# The freshworks-oss fork ships an engine-aware RedisFailover CRD (spec.engine,
+# for the Valkey follow-up). Helm never upgrades CRDs shipped in crds/, so the
+# PackageSource must opt into CreateReplace; without it the operator binary
+# upgrades while the live CRD stays on the old spotahome schema and the
+# apiserver prunes spec.engine on existing clusters. Pin the policy so an
+# upgrade cannot silently regress.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: redis-operator PackageSource sets upgradeCRDs to CreateReplace
+    documentSelector:
+      path: metadata.name
+      value: cozystack.redis-operator
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].install.upgradeCRDs
+          value: CreateReplace

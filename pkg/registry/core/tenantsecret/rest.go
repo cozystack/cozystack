@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -43,9 +44,25 @@ const (
 	singularName         = "tenantsecret"
 	kindTenantSecret     = "TenantSecret"
 	kindTenantSecretList = "TenantSecretList"
+
+	// internalPrefix namespaces the labels and annotations the platform owns:
+	// the lineage webhook's tenantresource verdict, the cacert controller's
+	// tenant-ca selector and its ownership markers. They are the platform's
+	// answer to "may this tenant see this Secret", and an ApplicationDefinition
+	// selects on them, so a caller writing through this API must not be able to
+	// plant or strip one on the backing Secret. The guard is on the prefix
+	// rather than on a list of keys so a platform key added later is protected
+	// without anyone remembering to come back here.
+	internalPrefix = "internal.cozystack.io/"
 )
 
-func stripInternal(m map[string]string) map[string]string {
+// isInternalKey reports whether a metadata key belongs to the platform.
+func isInternalKey(k string) bool { return strings.HasPrefix(k, internalPrefix) }
+
+// stripTenantMarker hides the tenant-resource marker, and only that key. The
+// read side is deliberately narrower than the write side: a tenant may see the
+// platform's other verdicts, tenant-ca among them, it just cannot write them.
+func stripTenantMarker(m map[string]string) map[string]string {
 	if m == nil {
 		return nil
 	}
@@ -93,7 +110,7 @@ func secretToTenant(sec *corev1.Secret) *corev1alpha1.TenantSecret {
 			UID:               sec.UID,
 			ResourceVersion:   sec.ResourceVersion,
 			CreationTimestamp: sec.CreationTimestamp,
-			Labels:            stripInternal(sec.Labels),
+			Labels:            stripTenantMarker(sec.Labels),
 			Annotations:       sec.Annotations,
 		},
 		Type:       string(sec.Type),
@@ -115,6 +132,14 @@ func tenantToSecret(ts *corev1alpha1.TenantSecret, cur *corev1.Secret) *corev1.S
 	}
 	out.Labels[tsLabelKey] = tsLabelValue
 	for k, v := range ts.Labels {
+		// Platform keys are dropped rather than rejected: a caller that GETs an
+		// object, edits it and PUTs it back sends them straight back at us, and
+		// failing that round-trip would break `kubectl edit` for no gain. On an
+		// update out starts as a copy of the stored Secret, so ignoring the
+		// caller here also means a platform key cannot be stripped.
+		if isInternalKey(k) {
+			continue
+		}
 		out.Labels[k] = v
 	}
 
@@ -122,6 +147,9 @@ func tenantToSecret(ts *corev1alpha1.TenantSecret, cur *corev1.Secret) *corev1.S
 		out.Annotations = map[string]string{}
 	}
 	for k, v := range ts.Annotations {
+		if isInternalKey(k) {
+			continue
+		}
 		out.Annotations[k] = v
 	}
 
@@ -147,10 +175,13 @@ func nsFrom(ctx context.Context) (string, error) {
 // -----------------------------------------------------------------------------
 
 var (
-	_ rest.Creater              = &REST{}
-	_ rest.Getter               = &REST{}
-	_ rest.Lister               = &REST{}
-	_ rest.Updater              = &REST{}
+	_ rest.Creater = &REST{}
+	_ rest.Getter  = &REST{}
+	_ rest.Lister  = &REST{}
+	_ rest.Updater = &REST{}
+	// rest.Patcher is Getter+Updater: a PATCH request is decoded against the
+	// object Get returns and applied through Update, so there is no separate
+	// patch entry point and the guard in tenantToSecret covers PATCH too.
 	_ rest.Patcher              = &REST{}
 	_ rest.GracefulDeleter      = &REST{}
 	_ rest.Watcher              = &REST{}
@@ -398,53 +429,6 @@ func (r *REST) Delete(
 	}
 	err = r.c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts})
 	return nil, err == nil, err
-}
-
-func (r *REST) Patch(
-	ctx context.Context,
-	name string,
-	pt types.PatchType,
-	data []byte,
-	opts *metav1.PatchOptions,
-	subresources ...string,
-) (runtime.Object, error) {
-	if len(subresources) > 0 {
-		return nil, fmt.Errorf("TenantSecret does not have subresources")
-	}
-	ns, err := nsFrom(ctx)
-	if err != nil {
-		return nil, err
-	}
-	current := &corev1.Secret{}
-	if err := r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, current, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
-		return nil, err
-	}
-	if current.Labels == nil || current.Labels[tsLabelKey] != tsLabelValue {
-		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
-	}
-	out := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns,
-			Name:      name,
-		},
-	}
-	patch := client.RawPatch(pt, data)
-	err = r.c.Patch(ctx, out, patch, &client.PatchOptions{Raw: opts})
-	if err != nil {
-		return nil, err
-	}
-
-	// Ensure tenant secret label is preserved
-	if out.Labels == nil {
-		out.Labels = make(map[string]string)
-	}
-
-	if out.Labels[tsLabelKey] != tsLabelValue {
-		out.Labels[tsLabelKey] = tsLabelValue
-		_ = r.c.Update(ctx, out, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
-	}
-
-	return secretToTenant(out), nil
 }
 
 // -----------------------------------------------------------------------------

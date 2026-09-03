@@ -30,11 +30,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/warning"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 	"github.com/cozystack/cozystack/pkg/config"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 func TestValidateNameFormat(t *testing.T) {
@@ -141,9 +143,9 @@ func TestUpdate_ForceAllowCreate_RejectsTenantDashName(t *testing.T) {
 		ctx,
 		"foo-bar",
 		rest.DefaultUpdatedObjectInfo(newApp),
-		nil,                      // createValidation
-		nil,                      // updateValidation
-		true,                     // forceAllowCreate → routes through Create on NotFound
+		nil,  // createValidation
+		nil,  // updateValidation
+		true, // forceAllowCreate → routes through Create on NotFound
 		&metav1.UpdateOptions{},
 	)
 	if err == nil {
@@ -259,6 +261,30 @@ func TestValidateNameLength(t *testing.T) {
 			kindName:  "Tenant",
 			prefix:    "tenant-",
 			appName:   strings.Repeat("a", 53-len("tenant-")+1), // 47 chars
+			wantError: true,
+		},
+		// Kubernetes clusters carry a stricter cap than their own Helm prefix
+		// allows, so a worker pool's KubernetesNodes child release
+		// ("kubernetes-nodes-<cluster>-<pool>") still fits the 53-char limit.
+		{
+			name:      "kubernetes short name passes",
+			kindName:  "Kubernetes",
+			prefix:    "kubernetes-",
+			appName:   "prod",
+			wantError: false,
+		},
+		{
+			name:      "kubernetes at pool cap passes",
+			kindName:  "Kubernetes",
+			prefix:    "kubernetes-",
+			appName:   strings.Repeat("a", maxKubernetesClusterName), // 32 chars
+			wantError: false,
+		},
+		{
+			name:      "kubernetes exceeding pool cap fails even though it fits the parent prefix",
+			kindName:  "Kubernetes",
+			prefix:    "kubernetes-",
+			appName:   strings.Repeat("a", maxKubernetesClusterName+1), // 33 chars, still <= 42
 			wantError: true,
 		},
 		{
@@ -390,6 +416,76 @@ func TestValidateTenantNamespaceLength(t *testing.T) {
 				}
 				if !strings.Contains(msg, fmt.Sprintf("%d characters", len(computed))) {
 					t.Errorf("error message must contain the computed length %d, got: %s", len(computed), msg)
+				}
+			}
+		})
+	}
+}
+
+// fakeWarningRecorder captures client-facing admission warnings for assertions.
+type fakeWarningRecorder struct{ warnings []string }
+
+func (f *fakeWarningRecorder) AddWarning(_, text string) { f.warnings = append(f.warnings, text) }
+
+// TestWarnRemovedKubernetesFields covers the Phase 2 inert-field warning: a
+// Kubernetes CR that still carries nodeGroups / nodeHealthCheck /
+// maxNodeProvisionTime is accepted (the migration leaves them in place) but the
+// operator is warned that they no longer take effect. Other kinds never warn.
+func TestWarnRemovedKubernetesFields(t *testing.T) {
+	tests := []struct {
+		name     string
+		kindName string
+		specJSON string
+		wantKeys []string
+	}{
+		{
+			name:     "kubernetes with nodeGroups warns once",
+			kindName: "Kubernetes",
+			specJSON: `{"version":"v1.35","nodeGroups":{"md0":{"minReplicas":1}}}`,
+			wantKeys: []string{"nodeGroups"},
+		},
+		{
+			name:     "kubernetes with all three removed fields warns for each",
+			kindName: "Kubernetes",
+			specJSON: `{"nodeGroups":{},"nodeHealthCheck":{"maxUnhealthy":"50%"},"maxNodeProvisionTime":"10m"}`,
+			wantKeys: []string{"nodeGroups", "nodeHealthCheck", "maxNodeProvisionTime"},
+		},
+		{
+			name:     "kubernetes without removed fields does not warn",
+			kindName: "Kubernetes",
+			specJSON: `{"version":"v1.35","host":"example.com"}`,
+			wantKeys: nil,
+		},
+		{
+			name:     "non-kubernetes kind never warns even with nodeGroups",
+			kindName: "MySQL",
+			specJSON: `{"nodeGroups":{"md0":{}}}`,
+			wantKeys: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &fakeWarningRecorder{}
+			ctx := warning.WithWarningRecorder(context.Background(), rec)
+			r := &REST{kindName: tt.kindName}
+			app := &appsv1alpha1.Application{Spec: &apiextv1.JSON{Raw: []byte(tt.specJSON)}}
+
+			r.warnRemovedKubernetesFields(ctx, app)
+
+			if len(rec.warnings) != len(tt.wantKeys) {
+				t.Fatalf("expected %d warnings, got %d: %v", len(tt.wantKeys), len(rec.warnings), rec.warnings)
+			}
+			for _, key := range tt.wantKeys {
+				found := false
+				for _, w := range rec.warnings {
+					if strings.Contains(w, "spec."+key+" is ignored") {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected a warning mentioning spec.%s, got %v", key, rec.warnings)
 				}
 			}
 		})

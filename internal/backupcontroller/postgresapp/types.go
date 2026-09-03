@@ -71,15 +71,20 @@ type PostgresSpec struct {
 }
 
 type Bootstrap struct {
-	Enabled      bool   `json:"enabled,omitempty"`
-	OldName      string `json:"oldName,omitempty"`
-	ServerName   string `json:"serverName,omitempty"`
-	RecoveryTime string `json:"recoveryTime,omitempty"`
+	Enabled       bool   `json:"enabled,omitempty"`
+	OldName       string `json:"oldName,omitempty"`
+	ServerName    string `json:"serverName,omitempty"`
+	NewServerName string `json:"newServerName,omitempty"`
+	RecoveryTime  string `json:"recoveryTime,omitempty"`
 }
 
 type Backup struct {
-	DestinationPath     string              `json:"destinationPath,omitempty"`
-	EndpointURL         string              `json:"endpointURL,omitempty"`
+	DestinationPath string `json:"destinationPath,omitempty"`
+	EndpointURL     string `json:"endpointURL,omitempty"`
+	// No omitempty: the restore patch must be able to set this back to false,
+	// and a bool+omitempty would drop false from the merge patch, leaving the
+	// server value at true.
+	UseSystemBucket     bool                `json:"useSystemBucket"`
 	S3AccessKey         string              `json:"s3AccessKey,omitempty"`
 	S3SecretKey         string              `json:"s3SecretKey,omitempty"`
 	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`

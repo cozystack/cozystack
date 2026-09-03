@@ -22,8 +22,18 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+    # The freshworks-oss operator reconciles only RedisFailovers whose
+    # operator-group label matches its OPERATOR_GROUP_ID (see
+    # packages/system/redis-operator/values.yaml); without it the CR is
+    # silently ignored. Keep both sides in sync.
+    redis-failover.freshworks.com/operator-group: cozystack
 spec:
   sentinel:
+    # Pin the sentinel engine. The freshworks-oss operator's compiled-in default
+    # moved 6.2.6→7.2.4; the data pods run a deliberate versionMap image below,
+    # but the sentinels were on the old 6.2.6 default and must not silently jump
+    # on upgrade. Bump as a deliberate, separate change.
+    image: redis:6.2.6-alpine
     replicas: 3
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
   redis:

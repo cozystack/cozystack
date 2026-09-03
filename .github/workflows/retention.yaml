@@ -1,4 +1,4 @@
-name: Nightly Retention
+name: Artifact Retention
 
 # Prune old nightly artifacts from GHCR: keep the newest KEEP dated versions of
 # each cozystack package, delete older ones. Nightlies are GHCR OCI tags
@@ -12,6 +12,14 @@ name: Nightly Retention
 # carries the floating `nightly` tag (the newest) or any release tag (vX.Y.Z,
 # latest, rc, main) is never touched, so stable/rc/main artifacts can never be
 # pruned.
+#
+# Promotion also creates one temporary cozystack-packages tag of the form
+# promotion-vX.Y.Z-from-vX.Y.Z-rc.N-run-ID-ATTEMPT. Every dispatch gets a unique
+# tag, so a retry never moves one and leaves an untagged manifest behind. A
+# successful promotion adds a stable tag to the same manifest, which makes it
+# ineligible below. A candidate stays protected while an open bot-authored
+# release PR pins its digest; otherwise it becomes eligible after
+# PROMOTION_TTL_DAYS only when ALL its tags are still temporary.
 #
 # Dry-run by default; flip the input or the RETENTION_APPLY repo variable to
 # actually delete. Deletion is irreversible.
@@ -37,18 +45,20 @@ permissions:
 env:
   ORG: cozystack
   KEEP: '14'
+  PROMOTION_TTL_DAYS: '30'
 
 concurrency:
-  group: nightly-retention
+  group: artifact-retention
   cancel-in-progress: false
 
 jobs:
   prune:
-    name: Prune old GHCR nightlies
+    name: Prune old GHCR temporary artifacts
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      pull-requests: read
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -64,14 +74,150 @@ jobs:
           # workflow_dispatch input wins; otherwise the repo variable; else dry-run.
           APPLY: ${{ github.event.inputs.apply || vars.RETENTION_APPLY || 'false' }}
         run: |
-          set -eu
+          set -euo pipefail
           if [ "$APPLY" = "true" ]; then echo "MODE: APPLY (deleting)"; else echo "MODE: dry-run"; fi
+
+          # Protect every immutable packages digest a live promotion still
+          # depends on. Age alone does not imply abandonment: an approved
+          # release PR can legitimately stay open longer than the TTL.
+          #
+          # A candidate becomes permanently safe only when finalize's retag adds
+          # the stable tag to its manifest, because that is what makes the
+          # all(promotion-*) predicate at the bottom stop matching it. Finalize
+          # runs post-merge, so an open-PR-only protection has a hole exactly
+          # where a half-finished release sits: finalize creates the write-once
+          # stable git tag, then dies before the retag, and the digest is now
+          # pinned by a merge commit and a tag nobody can move, referenced by no
+          # open PR, on a manifest carrying only its temporary tag. Deleting it
+          # leaves a release that can be finished only by hand.
+          #
+          # Two sources, therefore, read differently on purpose. A failure in
+          # either blocks the promotion sweep at the bottom and nothing else —
+          # the nightly sweep in between shares no state with it and must not
+          # be held hostage to a bad pin on a release branch.
+          promotion_retention_blocked=0
+          protected_promotion_digests=""
+          protect_digest() {
+            protected_promotion_digests="${protected_promotion_digests:+${protected_promotion_digests} }$1"
+          }
+
+          # Source 1 — open, trusted, same-repository promote PRs opened by the
+          # release bot. Their head is SUPPOSED to carry exactly one candidate
+          # pin, so anything else is an anomaly: block rather than skip.
+          #
+          # The listing that feeds the loop defers the same way instead of
+          # aborting the step. Under `set -euo pipefail` an unhandled failure
+          # here exits before the nightly sweep below has run, which is the
+          # coupling the deferred guard exists to remove — and the handler must
+          # empty the list rather than leave a partially paginated one, because
+          # a shorter list is a smaller protected set. Blocked plus empty is the
+          # fail-closed reading: nothing can be called abandoned while the
+          # protected set is unknown.
+          release_pr_shas="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100" \
+            | jq -s -r --arg repo "$GITHUB_REPOSITORY" 'add[]
+              | select(.user.login == "cozystack-ci[bot]")
+              | select(.head.repo.full_name == $repo)
+              | select(.head.ref | test("^release-[0-9]+\\.[0-9]+\\.[0-9]+$"))
+              | select(any(.labels[]?; .name == "release"))
+              | .head.sha')" || {
+            echo "::error::Could not list open pull requests; refusing retention of promotion candidates."
+            promotion_retention_blocked=1
+            release_pr_shas=""
+          }
+          for sha in $release_pr_shas; do
+            values="$(gh api \
+              -H 'Accept: application/vnd.github.raw+json' \
+              "/repos/${GITHUB_REPOSITORY}/contents/packages/core/installer/values.yaml?ref=${sha}")" || {
+              echo "::error::Open release PR at ${sha} has unreadable installer values; refusing retention of promotion candidates."
+              promotion_retention_blocked=1
+              continue
+            }
+            candidate_ref="$(printf '%s\n' "$values" | awk '
+              /^[[:space:]]*platformSourceRef:[[:space:]]*/ {
+                sub(/^[[:space:]]*platformSourceRef:[[:space:]]*/, "")
+                gsub(/^[\047"]|[\047"][[:space:]]*$/, "")
+                print
+              }')"
+            ref_lines="$(printf '%s\n' "$candidate_ref" | wc -l | tr -d ' ')"
+            if ! printf '%s\n' "$candidate_ref" | grep -Eq '^digest=sha256:[0-9a-f]{64}$' \
+              || [ "$ref_lines" -ne 1 ]; then
+              echo "::error::Open release PR at ${sha} has no single immutable platformSourceRef; refusing retention of promotion candidates."
+              promotion_retention_blocked=1
+              continue
+            fi
+            protect_digest "${candidate_ref#digest=}"
+          done
+
+          # Source 2 — the tips of the branches a promote PR can merge into.
+          # This is what covers the window between merge and retag. Read
+          # permissively, the opposite of source 1: protect every digest pin
+          # found and treat a branch without one as contributing nothing. A
+          # maintenance line cut before this pipeline existed cannot pin a
+          # promotion candidate, because none existed when it was cut, so its
+          # missing or tag-form pin is not an anomaly and must not wedge the
+          # sweep forever. Reading permissively can only ever protect more.
+          #
+          # Permissive is about what a branch CONTAINS, not about whether the
+          # branches were listed at all: a failed listing enumerates no branches
+          # and so silently protects nothing, which is the one way this source
+          # can narrow the protected set. It therefore blocks and empties, like
+          # source 1, and for the same reason does it here rather than by
+          # letting `set -e` take the nightly sweep with it.
+          base_branches="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/branches?per_page=100" \
+            | jq -s -r 'add[] | .name
+              | select(. == "main" or test("^release-[0-9]+\\.[0-9]+$"))')" || {
+            echo "::error::Could not list base branches; refusing retention of promotion candidates."
+            promotion_retention_blocked=1
+            base_branches=""
+          }
+          for branch in $base_branches; do
+            values="$(gh api \
+              -H 'Accept: application/vnd.github.raw+json' \
+              "/repos/${GITHUB_REPOSITORY}/contents/packages/core/installer/values.yaml?ref=${branch}" 2>/dev/null)" || {
+              echo "  ${branch}: no readable installer values; nothing to protect"
+              continue
+            }
+            branch_digests="$(printf '%s\n' "$values" \
+              | grep -oE 'digest=sha256:[0-9a-f]{64}' | sed 's/^digest=//' | sort -u || true)"
+            for digest in $branch_digests; do
+              protect_digest "$digest"
+            done
+          done
+
+          protected_count="$(printf '%s\n' "$protected_promotion_digests" | awk '{print NF}')"
+          echo "Protecting ${protected_count} promotion candidate digest(s) named by an open release PR or a base-branch tip."
 
           # All container packages under the org that live in the cozystack/
           # registry namespace (ghcr.io/cozystack/cozystack/<name>).
-          pkgs="$(gh api --paginate "/orgs/${ORG}/packages?package_type=container" \
-            --jq '.[].name' | grep '^cozystack/' || true)"
-          [ -n "$pkgs" ] || { echo "No cozystack/* container packages found."; exit 0; }
+          #
+          # Listed and filtered as two statements, because one `|| true` cannot
+          # mean two things. `grep` legitimately exits 1 when the org has no
+          # cozystack/* package, and a failed listing produces the same empty
+          # output, so a trailing `|| true` covering both turned an API failure
+          # into "no packages found" — which exits 0 BELOW the nightly sweep and
+          # ABOVE the deferred guard, so an unresolvable protection set ended in
+          # a green run that swept nothing. That bypasses the guard rather than
+          # varying it.
+          all_pkgs="$(gh api --paginate "/orgs/${ORG}/packages?package_type=container" \
+            --jq '.[].name')" || {
+            echo "::error::Could not list ${ORG} container packages; refusing retention of promotion candidates."
+            promotion_retention_blocked=1
+            all_pkgs=""
+          }
+          # grep's exit 1 now means only what it says: nothing matched.
+          pkgs="$(printf '%s\n' "$all_pkgs" | grep '^cozystack/' || true)"
+          if [ -z "$pkgs" ]; then
+            # Fail-closed before the early exit. The flag set here means this
+            # listing or a protection source above went unresolved, and there is
+            # no sweep left to run that could carry the run to the guard below —
+            # so this is the last place the flag can still be honoured.
+            [ "$promotion_retention_blocked" -eq 0 ] || {
+              echo "::error::candidate protection could not be resolved and nothing was swept; refusing to report success."
+              exit 1
+            }
+            echo "No cozystack/* container packages found."
+            exit 0
+          fi
 
           printf '%s\n' "$pkgs" | while IFS= read -r pkg; do
             [ -n "$pkg" ] || continue
@@ -106,5 +252,45 @@ jobs:
                 echo "  • would delete ${pkg} version ${id}"
               fi
             done
+          done
+
+          # Anything unresolved above means the protected set is incomplete, so
+          # no candidate can be called abandoned. Skip this sweep entirely and
+          # fail the job. Deliberately here and not at the point of failure: the
+          # nightly sweep above is unrelated work that had no reason to be
+          # cancelled by a bad pin on a release branch, and it has already run.
+          if [ "$promotion_retention_blocked" -eq 1 ]; then
+            echo "::error::promotion candidate protection could not be resolved; skipping the promotion sweep."
+            exit 1
+          fi
+
+          # A promoted manifest acquires vX.Y.Z (and possibly latest) in addition
+          # to its temporary tag, so the all(tags match promotion-*) predicate is
+          # the safety boundary: published bytes are never eligible. Digests
+          # named by an open promote PR or by a base-branch tip are excluded
+          # separately, which is what covers a candidate between merge and
+          # retag. Only cozystack-packages receives these candidate tags.
+          pkg='cozystack/cozystack-packages'
+          enc="$(jq -rn --arg p "$pkg" '$p|@uri')"
+          cutoff="$(date -u -d "${PROMOTION_TTL_DAYS} days ago" '+%Y-%m-%dT%H:%M:%SZ')"
+          promotion_ids="$(gh api --paginate "/orgs/${ORG}/packages/container/${enc}/versions" \
+            | jq -s --arg cutoff "$cutoff" --arg protected "$protected_promotion_digests" '[add[]
+              | .name as $digest
+              | select((.metadata.container.tags | length) > 0)
+              | select(.metadata.container.tags | all(test("^promotion-v[0-9]+\\.[0-9]+\\.[0-9]+-from-v[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[0-9]+-run-[0-9]+-[0-9]+$")))
+              | select(.updated_at < $cutoff)
+              | select(($protected | split(" ") | index($digest)) == null)
+              | .id]')"
+          promotion_total="$(printf '%s' "$promotion_ids" | jq 'length')"
+          echo "── ${pkg}: ${promotion_total} abandoned promotion candidate(s) older than ${PROMOTION_TTL_DAYS} days"
+          printf '%s' "$promotion_ids" | jq -r '.[]' | while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            if [ "$APPLY" = "true" ]; then
+              echo "  ✗ deleting ${pkg} promotion candidate version ${id}"
+              gh api -X DELETE "/orgs/${ORG}/packages/container/${enc}/versions/${id}" >/dev/null \
+                || echo "::warning::failed to delete ${pkg} version ${id} (permissions?)"
+            else
+              echo "  • would delete ${pkg} promotion candidate version ${id}"
+            fi
           done
           echo "Done."

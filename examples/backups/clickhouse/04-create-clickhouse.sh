@@ -14,6 +14,14 @@ source "$SCRIPT_DIR/.bucket-info.env"
 
 print_header "Step 04: Provision ClickHouse '${CLICKHOUSE_NAME}'"
 
+# backup.endpointCA is only meaningful when step 03 copied a CA (self-signed S3
+# endpoint); on a publicly-trusted endpoint CH_BACKUP_CA_SECRET is empty and the
+# block is omitted entirely so the sidecar stays on the system trust store.
+ENDPOINT_CA_BLOCK=""
+if [[ -n "${CH_BACKUP_CA_SECRET:-}" ]]; then
+    ENDPOINT_CA_BLOCK=$(printf '\n    endpointCA:\n      name: "%s"\n      key: ca.crt' "$CH_BACKUP_CA_SECRET")
+fi
+
 # backup.enabled=true triggers the chart to emit:
 #   - <release>-backup-s3 Secret (with bucket coordinates from values)
 #   - clickhouse-backup sidecar in the chi-* Pod (HTTP API on :7171)
@@ -37,7 +45,7 @@ spec:
     s3Region: "${CH_BACKUP_REGION}"
     endpoint: "${CH_BACKUP_ENDPOINT}"
     s3AccessKey: "${CH_BACKUP_ACCESS_KEY}"
-    s3SecretKey: "${CH_BACKUP_SECRET_KEY}"
+    s3SecretKey: "${CH_BACKUP_SECRET_KEY}"${ENDPOINT_CA_BLOCK}
   clickhouseKeeper:
     enabled: true
     replicas: 1
@@ -46,11 +54,10 @@ spec:
 EOF
 
 log_substep "Waiting for ClickHouse HelmRelease..."
-kubectl -n "$NAMESPACE" wait hr "clickhouse-${CLICKHOUSE_NAME}" --for=condition=ready --timeout=300s
+wait_hr_ready "clickhouse-${CLICKHOUSE_NAME}" 300
 
 log_substep "Waiting for first ClickHouse pod..."
-kubectl -n "$NAMESPACE" wait statefulset.apps/"chi-clickhouse-${CLICKHOUSE_NAME}-clickhouse-0-0" \
-    --for=jsonpath='{.status.readyReplicas}'=1 --timeout=300s
+wait_sts_ready "chi-clickhouse-${CLICKHOUSE_NAME}-clickhouse-0-0" 300
 
 log_substep "Writing sentinel data..."
 clickhouse_query "$CLICKHOUSE_NAME" "CREATE TABLE IF NOT EXISTS default.sentinel (id UInt32, name String) ENGINE = MergeTree ORDER BY id"

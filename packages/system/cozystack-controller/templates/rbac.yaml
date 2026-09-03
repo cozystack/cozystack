@@ -24,8 +24,8 @@ rules:
   verbs: ["get", "list", "watch", "patch", "update"]
 # CACertReconciler reconciles TenantProjection sentinels a chart renders and
 # writes their Ready status. It never creates or deletes a sentinel; that is
-# the chart's (helm-controller's) job, with a companion ValidatingAdmissionPolicy
-# as defence in depth.
+# the chart's (helm-controller's) job. No tenant role grants any verb on
+# internal.cozystack.io, which is what keeps sentinels out of tenant reach.
 - apiGroups: ["internal.cozystack.io"]
   resources: ["tenantprojections"]
   verbs: ["get", "list", "watch"]

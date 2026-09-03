@@ -18,7 +18,7 @@ import {
   APPS_VERSION,
   type ApplicationInstance,
 } from "@cozystack/types"
-import { useApplicationDefinitions } from "../../lib/app-definitions.ts"
+import { useApplicationDefinitions, isTenantModule } from "../../lib/app-definitions.ts"
 import { useTenantContext } from "../../lib/tenant-context.tsx"
 import {
   appDisplayName,
@@ -34,12 +34,15 @@ import { SecretsTab } from "./SecretsTab.tsx"
 import { EventsTab } from "./EventsTab.tsx"
 import { VncTab } from "./VncTab.tsx"
 import { VMPowerControls } from "./VMPowerControls.tsx"
+import { useResourceBasePath } from "../../lib/portal.ts"
+import { useResourcePresence } from "./use-resource-presence.ts"
 
 export function ApplicationDetailPage() {
   const { plural, name } = useParams<{ plural: string; name: string }>()
   const { data: defs } = useApplicationDefinitions()
   const { tenantNamespace } = useTenantContext()
   const navigate = useNavigate()
+  const basePath = useResourceBasePath()
 
   const ad = useMemo(
     () =>
@@ -68,6 +71,8 @@ export function ApplicationDetailPage() {
     namespace: tenantNamespace ?? undefined,
   })
 
+  const presence = useResourcePresence(ad, instance)
+
   if (!plural || !name) return <Navigate to="/console" replace />
   // Check the fetch error before the loading guard: on a failed GET, isLoading
   // is false and instance stays undefined, so a !instance-first guard would
@@ -91,7 +96,7 @@ export function ApplicationDetailPage() {
     if (!confirm(`Delete ${appDisplayName(ad)} "${name}"? This cannot be undone.`)) return
     try {
       await del.mutateAsync(name)
-      navigate(`/console/${plural}`)
+      navigate(`${basePath}/${plural}`)
     } catch (err) {
       alert((err as Error).message)
     }
@@ -99,8 +104,19 @@ export function ApplicationDetailPage() {
 
   const ready = readyCondition(instance)
   const icon = iconDataUrl(ad)
-  const base = `/console/${plural}/${name}`
+  const base = `${basePath}/${plural}/${name}`
   const kind = ad.spec?.application.kind
+
+  // Module singletons are reached from the admin trees (Info from Tenants,
+  // every other module from Modules), not from an instance list — send Back
+  // where the user came from instead of the meaningless one-item list.
+  const backTarget = isTenantModule(ad)
+    ? basePath === "/admin"
+      ? kind === "Info"
+        ? "/admin/tenants"
+        : "/admin/modules"
+      : basePath
+    : `${basePath}/${plural}`
 
   // Absolute URLs so NavLink always rewrites the whole "/<plural>/<name>/..."
   // suffix instead of appending to the current tab path.
@@ -119,11 +135,19 @@ export function ApplicationDetailPage() {
       { to: `${base}/vnc`, label: "VNC", end: false },
     )
   } else {
-    // Other resources: full tab set
+    // Other resources: offer only the tabs the instance has content for.
+    // Presence is watch-driven, so a tab appears as soon as the chart creates
+    // its first matching resource (e.g. while an app is still provisioning).
+    if (presence.workloads) {
+      tabs.push({ to: `${base}/workloads`, label: "Workloads", end: false })
+    }
+    if (presence.services) {
+      tabs.push({ to: `${base}/services`, label: "Services", end: false })
+    }
+    if (presence.ingresses) {
+      tabs.push({ to: `${base}/ingresses`, label: "Ingresses", end: false })
+    }
     tabs.push(
-      { to: `${base}/workloads`, label: "Workloads", end: false },
-      { to: `${base}/services`, label: "Services", end: false },
-      { to: `${base}/ingresses`, label: "Ingresses", end: false },
       { to: `${base}/secrets`, label: "Secrets", end: false },
       { to: `${base}/events`, label: "Events", end: false },
     )
@@ -134,7 +158,7 @@ export function ApplicationDetailPage() {
       <div className="border-b border-slate-200 bg-white px-6 pt-4">
         <button
           type="button"
-          onClick={() => navigate(`/console/${plural}`)}
+          onClick={() => navigate(backTarget)}
           className="mb-2 flex items-center gap-1 text-xs text-slate-500 hover:text-slate-900"
         >
           <ChevronLeft className="size-3.5" /> Back
@@ -162,7 +186,7 @@ export function ApplicationDetailPage() {
             {kind === "VMInstance" && (
               <VMPowerControls ad={ad} instance={instance} />
             )}
-            <Link to={`/console/${plural}/${name}/edit`}>
+            <Link to={`${base}/edit`}>
               <Button variant="outline" size="sm">
                 <Edit className="size-3.5" /> Edit
               </Button>

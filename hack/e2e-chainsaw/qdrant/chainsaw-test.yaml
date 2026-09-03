@@ -24,15 +24,16 @@ spec:
   # delete below happens inside a `try:`, so the Job is in scope while the test
   # is still running.
   #
-  # What this does NOT reach, so the capture is not read as the whole story:
-  # that hook always exits 0 -- no `set -e`, the delete is guarded by
-  # `|| echo "WARNING: PVC cleanup failed"`, and the script ends on an
-  # unconditional echo. Helm therefore marks it succeeded and
-  # `hook-delete-policy: hook-succeeded` takes the pod away, warning and all.
-  # What is left is the case where the uninstall hangs and Helm is still
-  # waiting on the hook: the pod is alive then, and its log is the only account
-  # of where it stopped. The `get jobs,pods` in the cleanup step below lists
-  # the objects but reads no log.
+  # What this reaches, and when, so the capture is read for what it is: the hook
+  # exits non-zero when a delete or a listing failed, and
+  # `hook-delete-policy: hook-succeeded` does not fire for a hook that failed --
+  # so on exactly the runs worth investigating the pod is still there, and this
+  # is the account of what the cleanup could not remove. It also reaches a hook
+  # that is still running, where the uninstall hangs and Helm is still waiting.
+  # On a clean uninstall the hook succeeds and its pod is collected away, so an
+  # empty capture here is the ordinary case rather than a stale selector -- the
+  # instance-label listing below is what tells those two apart. The
+  # `get jobs,pods` in the cleanup step below lists the objects but reads no log.
   - podLogs:
       selector: app.kubernetes.io/instance=qdrant-test
       tail: 50

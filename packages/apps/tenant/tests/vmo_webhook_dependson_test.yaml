@@ -11,10 +11,10 @@ suite: tenant HelmReleases gate on the victoria-metrics-operator
 # rejects with connection refused, the install fails and rolls back. Pin the
 # dependsOn so the gate cannot regress.
 
-# Render only the HelmRelease templates this suite asserts on. The reason given
-# here was that namespace.yaml's `lookup` errors under helm-unittest; it does
-# not. This suite sets `_cluster`, so the chart renders without the list; it
-# stays only to scope the suite.
+# Render only the HelmRelease templates this suite asserts on. The list keeps an
+# unrelated template breaking out of this suite's result, so what reddens here is
+# the gate it guards. (namespace.yaml's `lookup` is not the reason: the lookup
+# returns empty offline and the template renders.)
 templates:
   - templates/etcd.yaml
   - templates/ingress.yaml
@@ -69,14 +69,24 @@ tests:
   # The gate is intentionally narrow: only the releases that create VM* custom
   # resources carry it. Tenant releases that create none (seaweedfs, gateway)
   # must not be needlessly blocked on the operator.
+  # The name pin is what makes the absence mean something: a bare `notExists`
+  # passes on a template that renders no document at all.
   - it: seaweedfs HR carries no operator gate
     asserts:
+      - template: templates/seaweedfs.yaml
+        equal:
+          path: metadata.name
+          value: seaweedfs
       - template: templates/seaweedfs.yaml
         notExists:
           path: spec.dependsOn
 
   - it: gateway HR carries no operator gate
     asserts:
+      - template: templates/gateway.yaml
+        equal:
+          path: metadata.name
+          value: gateway
       - template: templates/gateway.yaml
         notExists:
           path: spec.dependsOn

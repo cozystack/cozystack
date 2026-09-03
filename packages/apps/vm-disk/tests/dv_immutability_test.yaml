@@ -1,0 +1,877 @@
+suite: vm-disk DataVolume immutable fields (storageClass/source)
+
+# Regression for #2985: editing storageClass/source on an existing VMDisk used
+# to be silently ignored — dv.yaml reused the existing DataVolume.spec verbatim
+# and the edit rendered as a no-op while the HelmRelease reported success. The
+# template now fails loudly when the operator's requested storageClass/source
+# differs from what the disk was created with.
+#
+#  - storageClass is compared ONLY against the vm-disk.cozystack.io/storage-class
+#    annotation recorded at creation; the template performs no PVC lookup, so a
+#    disk with no such annotation is not guarded (never false-rejected against a
+#    live class it never recorded).
+#  - source is compared against a vm-disk.cozystack.io/source annotation written
+#    at creation. A disk that predates the annotation is compared against its
+#    stored spec.source, with the exemption keyed on the stored source being an
+#    image clone (whose PVC-name prefix drifts across chart versions — commit
+#    bec35e3a), not on the requested type. The annotation is written only at
+#    creation and preserved verbatim, never overwritten with an edit.
+#
+# Existing DataVolumes are mocked via the kubernetes provider so the DataVolume
+# lookup in dv.yaml resolves without a live cluster.
+release:
+  name: test-vm-disk
+  namespace: tenant-test
+templates:
+  - templates/dv.yaml
+tests:
+  - it: rejects a storageClass change on an existing DataVolume
+    set:
+      storageClass: other
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://example.com/original.qcow2"}}'
+              vm-disk.cozystack.io/storage-class: replicated
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk storageClass is immutable after creation'
+
+  - it: rejects clearing storageClass to empty on a disk created with a class
+    # coderabbit finding: replicated -> "" must not be silently ignored. The
+    # requested value is compared against the storage-class recorded at
+    # creation, so an empty requested value is still caught.
+    set:
+      storageClass: ""
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://example.com/original.qcow2"}}'
+              vm-disk.cozystack.io/storage-class: replicated
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk storageClass is immutable after creation'
+
+  - it: does not reject an unchanged disk created with an empty storageClass
+    # A disk created with "" records an empty storage-class annotation; an
+    # unchanged reconcile ("" vs "") must not fire.
+    set:
+      storageClass: ""
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://example.com/original.qcow2"}}'
+              vm-disk.cozystack.io/storage-class: ""
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: rejects setting a concrete class on a disk created with an empty storageClass
+    # coderabbit finding: "" -> replicated must be caught. Annotation-key presence
+    # (not value truthiness) marks the empty class as recorded provenance.
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://example.com/original.qcow2"}}'
+              vm-disk.cozystack.io/storage-class: ""
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk storageClass is immutable after creation'
+
+  - it: rejects a source change on an existing DataVolume
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/changed.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://example.com/original.qcow2"}}'
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk source is immutable after creation'
+
+  - it: reuses the existing spec and preserves both annotations when unchanged
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://example.com/original.qcow2"}}'
+              vm-disk.cozystack.io/storage-class: replicated
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+      - equal:
+          path: spec.source.http.url
+          value: https://example.com/original.qcow2
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+          value: '{"http":{"url":"https://example.com/original.qcow2"}}'
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/storage-class"]
+          value: replicated
+
+  - it: does not false-reject an unchanged http disk whose URL has query-string special chars
+    # Round-trip lock: the recorded annotation holds toJson-escaped & < >; an
+    # unchanged reconcile recomputes the identical escaped string and must match.
+    set:
+      storageClass: replicated
+      source: {http: {url: "https://s3.example.com/x?a=1&b=2&c=<>"}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://s3.example.com/x?a=1\u0026b=2\u0026c=\u003c\u003e"}}'
+          spec:
+            source: {http: {url: "https://s3.example.com/x?a=1&b=2&c=<>"}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: rejects a changed query-string http URL against the recorded escaped annotation
+    set:
+      storageClass: replicated
+      source: {http: {url: "https://s3.example.com/x?a=1&b=9"}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://s3.example.com/x?a=1\u0026b=2\u0026c=\u003c\u003e"}}'
+          spec:
+            source: {http: {url: "https://s3.example.com/x?a=1&b=2&c=<>"}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk source is immutable after creation'
+
+  - it: allows a storage grow while immutable fields are unchanged
+    set:
+      storageClass: replicated
+      storage: 10Gi
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://example.com/original.qcow2"}}'
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: rejects an image-name change on an annotated image disk
+    set:
+      storageClass: replicated
+      source: {image: {name: debian}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"image":{"name":"ubuntu"}}'
+          spec:
+            source: {pvc: {name: vm-default-images-ubuntu, namespace: cozy-public}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk source is immutable after creation'
+
+  - it: treats a matching image clone as a no-op and preserves its annotation
+    set:
+      storageClass: replicated
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"image":{"name":"ubuntu"}}'
+          spec:
+            source: {pvc: {name: vm-default-images-ubuntu, namespace: cozy-public}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.source.pvc.name
+          value: vm-default-images-ubuntu
+
+  - it: does not falsely reject or poison a legacy image disk whose PVC name predates the rename
+    # CRITICAL regression (#3969 review): a disk cloned before commit bec35e3a
+    # carries spec.source.pvc.name=vm-image-<name> forever and has no source
+    # annotation. Comparing the rendered vm-default-images-<name> against it must
+    # NOT fire, and the reuse render must NOT backfill a source annotation.
+    set:
+      storageClass: replicated
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {pvc: {name: vm-image-ubuntu, namespace: cozy-public}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.source.pvc.name
+          value: vm-image-ubuntu
+      - notExists:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+
+  - it: intentionally does NOT catch an image-name change on a legacy image disk (documented exemption)
+    # Pins the one deliberate gap: a legacy image disk (no annotation) whose
+    # pvc.name prefix drifted across the bec35e3a rename cannot be compared by
+    # rendered spec, so image is exempt from the annotation-less fallback. The
+    # edit is silently reused rather than failed. Not a regression (all edits
+    # were previously silent); all disks created by this chart version onward
+    # carry the annotation and are fully guarded. See docs/storage-immutability.md.
+    set:
+      storageClass: replicated
+      source: {image: {name: debian}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {pvc: {name: vm-image-ubuntu, namespace: cozy-public}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.source.pvc.name
+          value: vm-image-ubuntu
+
+  - it: rejects changing a legacy non-image disk to an image source (exemption keys on stored type)
+    # MAJOR (#3969 review, IvanHunters): the image exemption must key on the
+    # STORED source being an image clone, not the requested type — otherwise a
+    # legacy http disk edited to source.image slips through as a silent no-op.
+    set:
+      storageClass: replicated
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk source is immutable after creation'
+
+  - it: rejects changing a legacy image disk to a non-image source
+    # MAJOR (#3969 re-review, IvanHunters): the image exemption must also key on
+    # the REQUESTED side. A legacy image disk (stored vm-image-<name>, no
+    # annotation) edited to http/upload/disk/blank is a different shape that
+    # cannot coincide with the stored pvc, so the change must be caught — the
+    # prefix-drift ambiguity only exists when the request is itself an image.
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/new.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {pvc: {name: vm-image-ubuntu, namespace: cozy-public}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk source is immutable after creation'
+
+  - it: does not deadlock an adopted DataVolume that uses sourceRef (no spec.source)
+    # MAJOR (#3969 re-review, IvanHunters): an adopted DV may use spec.sourceRef
+    # (DataSource/DataImportCron) with no spec.source. The annotation-less source
+    # fallback must skip a stored source the chart cannot render, rather than
+    # comparing {} against the desired spec and failing every reconcile forever.
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            sourceRef: {kind: DataSource, name: golden, namespace: cozy-public}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not deadlock an adopted DataVolume whose http source carries a secretRef
+    # Same class as above: a stored http source with an extra field the chart
+    # never renders is not chart-shaped, so the fallback must skip it rather than
+    # false-reject on the toYaml mismatch.
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {http: {url: https://example.com/original.qcow2, secretRef: mysecret}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not crash on an adopted DataVolume whose source subfield is null (pvc)
+    # Defensive (#3969 re-review): a stored source of {pvc: null} must route to the
+    # "left alone" path, not hard-crash `keys` on a nil submap and deadlock the render.
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {pvc: null}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not crash on an adopted DataVolume whose source subfield is null (http)
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {http: null}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not crash or false-reject an adopted DataVolume with a null blank submap
+    # Defensive: every recognized source type must require a map body; a null
+    # (or scalar) submap routes to "left alone", never to a toYaml false-reject.
+    set:
+      storageClass: replicated
+      source: {}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: test-vm-disk, namespace: tenant-test}
+          spec:
+            source: {blank: null}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not crash or false-reject an adopted DataVolume with a null upload submap
+    set:
+      storageClass: replicated
+      source: {upload: {}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: test-vm-disk, namespace: tenant-test}
+          spec:
+            source: {upload: null}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not crash on an adopted DataVolume with a scalar pvc source
+    # The $storedIsImageClone namespace read must be guarded too, or a scalar pvc
+    # errors with "can't evaluate field namespace in type string".
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: test-vm-disk, namespace: tenant-test}
+          spec:
+            source: {pvc: "not-a-map"}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not crash on an adopted DataVolume with a scalar http source
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: test-vm-disk, namespace: tenant-test}
+          spec:
+            source: {http: "not-a-map"}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not crash on an adopted DataVolume with a scalar top-level source
+    # Defensive: a non-map spec.source (CDI forbids it, but a hand-written object
+    # might carry it) must route to "left alone", not crash keys on a string.
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: test-vm-disk, namespace: tenant-test}
+          spec:
+            source: "not-a-map"
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: leaves alone an adopted pvc clone in a foreign namespace
+    # BUG (#3969 re-review): the chart only produces a pvc in cozy-public (image)
+    # or .Release.Namespace (disk). A stored pvc in any other namespace is not
+    # chart-producible provenance and must be left alone, not deadlocked.
+    set:
+      storageClass: replicated
+      source: {disk: {name: somedisk}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: test-vm-disk, namespace: tenant-test}
+          spec:
+            source: {pvc: {name: somedisk, namespace: prod-ns}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: leaves alone an adopted image-prefixed pvc stored outside cozy-public
+    set:
+      storageClass: replicated
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: test-vm-disk, namespace: tenant-test}
+          spec:
+            source: {pvc: {name: vm-default-images-ubuntu, namespace: other-images-ns}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not crash on an adopted DataVolume with a scalar blank source
+    set:
+      storageClass: replicated
+      source: {}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: test-vm-disk, namespace: tenant-test}
+          spec:
+            source: {blank: "not-a-map"}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: leaves alone an adopted pvc source with only a name (foreign shape)
+    set:
+      storageClass: replicated
+      source: {disk: {name: whatever}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: test-vm-disk, namespace: tenant-test}
+          spec:
+            source: {pvc: {name: foreign-only}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not falsely reject an adopted disk whose PVC class differs from the values default
+    # MAJOR (#3969 review, IvanHunters): storageClass must be compared against the
+    # creation-time annotation only, never the live PVC/DV — an adopted/foreign
+    # disk on local-path with the CR left at the default (replicated) was Ready
+    # before and must not deadlock the render. The PVC below is mocked on a
+    # different class ON PURPOSE: the template must ignore it (no PVC lookup), so
+    # this doubles as a guard against anyone reintroducing a live-PVC read.
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+        "v1/PersistentVolumeClaim":
+          gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}}
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            storageClassName: local-path
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: rejects a source change on a legacy non-image disk with no annotation
+    # The annotation-less fallback: http/upload/disk/blank reproduce spec.source
+    # exactly, so a changed URL is caught by comparing against the stored spec.
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/changed.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk source is immutable after creation'
+
+  - it: does not reject or poison an unchanged legacy non-image disk with no annotation
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+      - notExists:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+
+  - it: rejects a disk-clone name change on a legacy disk with no annotation
+    # The disk-clone (vm-disk-<name>) fallback branch: prefix is stable, so a
+    # changed clone name is a real edit and must be caught.
+    set:
+      storageClass: replicated
+      source: {disk: {name: newsrc}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {pvc: {name: vm-disk-oldsrc, namespace: tenant-test}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk source is immutable after creation'
+
+  - it: does not reject an unchanged legacy blank disk with no annotation
+    set:
+      storageClass: replicated
+      source: {}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {blank: {}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not reject an unchanged legacy upload disk with no annotation
+    set:
+      storageClass: replicated
+      source: {upload: {}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {upload: {}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not enforce storageClass on a disk with no storage-class annotation
+    # storageClass is guarded via the creation-time annotation ONLY. An adopted
+    # or pre-annotation disk carries no record, so the check is skipped rather
+    # than compared against the live class (which would false-reject when the CR
+    # default differs from the disk's real class).
+    set:
+      storageClass: other
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://example.com/original.qcow2"}}'
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}

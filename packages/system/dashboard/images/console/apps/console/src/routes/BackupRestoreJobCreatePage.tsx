@@ -118,6 +118,10 @@ export function BackupRestoreJobCreatePage() {
       return
     }
 
+    // Run RJSF validation before the page-level checks so schema-required
+    // fields render inline errors instead of being masked by the alerts below.
+    if (schemaFormRef.current && !schemaFormRef.current.validate()) return
+
     if (!formData.backupRef?.name) {
       alert("Backup reference is required")
       return
@@ -133,10 +137,6 @@ export function BackupRestoreJobCreatePage() {
       alert("Target reference requires both Kind and Name, or leave both empty to restore into the source application")
       return
     }
-
-    // The submit button lives outside RJSF and bypasses its validation, so
-    // trigger it explicitly; an invalid spec renders errors inline and aborts.
-    if (schemaFormRef.current && !schemaFormRef.current.validate()) return
 
     // Strip an empty targetApplicationRef so the API does not receive an empty
     // object that the API server would reject as malformed.

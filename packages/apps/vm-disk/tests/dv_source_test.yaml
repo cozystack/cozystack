@@ -1,0 +1,150 @@
+suite: vm-disk DataVolume source rendering on initial creation
+
+# When no DataVolume exists yet, dv.yaml builds spec.source from .Values.source.
+# This pins the refactor that routes every source type through the shared
+# $desiredSource variable (used both for rendering and for the immutability
+# comparison), so a regression there is caught without a live cluster.
+release:
+  name: test-vm-disk
+  namespace: tenant-test
+templates:
+  - templates/dv.yaml
+tests:
+  - it: records an empty storage-class annotation when created with an empty storageClass
+    # Provenance is recorded even for "" (cluster default), so a later change to a
+    # concrete class is caught. Annotation-key presence (not its value)
+    # distinguishes a recorded empty class from a legacy disk with no annotation.
+    set:
+      storageClass: ""
+    asserts:
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/storage-class"]
+          value: ""
+
+  - it: treats an explicit null source as blank without crashing
+    # A direct HelmRelease consumer may write source: null; every .Values.source
+    # access must tolerate it (default dict) rather than crash hasKey on nil.
+    set:
+      source: null
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.source.blank
+          value: {}
+
+  - it: renders a blank source by default and records it in the source annotation
+    asserts:
+      - equal:
+          path: spec.source.blank
+          value: {}
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+          value: '{}'
+
+  - it: renders an http source from values and records it in the source annotation
+    set:
+      source:
+        http:
+          url: https://example.com/img.qcow2
+    asserts:
+      - equal:
+          path: spec.source.http.url
+          value: https://example.com/img.qcow2
+      # The create-path annotation write is the linchpin of the immutability
+      # guard: later renders compare the operator's input against it, so a
+      # regression here would silently degrade every new disk to the lossy
+      # spec-compare fallback.
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+          value: '{"http":{"url":"https://example.com/img.qcow2"}}'
+      # storageClass provenance is recorded at creation too, so a later clear-to-empty is caught.
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/storage-class"]
+          value: replicated
+
+  - it: records a query-string http URL with json-escaped special chars in the annotation
+    # Load-bearing round-trip: the source guard is a byte-for-byte string compare,
+    # so toJson's HTML-escaping of & < > (common in presigned S3 URLs) must be
+    # recorded verbatim and recompute identically. Locks the escaping so a future
+    # toJson change trips here instead of deadlocking every &-URL disk in prod.
+    set:
+      source:
+        http:
+          url: https://s3.example.com/x?a=1&b=2&c=<>
+    asserts:
+      - equal:
+          path: spec.source.http.url
+          value: https://s3.example.com/x?a=1&b=2&c=<>
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+          value: '{"http":{"url":"https://s3.example.com/x?a=1\u0026b=2\u0026c=\u003c\u003e"}}'
+
+  - it: renders an image source as a cozy-public pvc clone
+    set:
+      source:
+        image:
+          name: ubuntu
+    asserts:
+      - equal:
+          path: spec.source.pvc.name
+          value: vm-default-images-ubuntu
+      - equal:
+          path: spec.source.pvc.namespace
+          value: cozy-public
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+          value: '{"image":{"name":"ubuntu"}}'
+
+  - it: renders a disk source as an in-namespace pvc clone
+    set:
+      source:
+        disk:
+          name: other
+    asserts:
+      - equal:
+          path: spec.source.pvc.name
+          value: vm-disk-other
+      - equal:
+          path: spec.source.pvc.namespace
+          value: tenant-test
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+          value: '{"disk":{"name":"other"}}'
+
+  - it: renders an upload source and requests immediate bind
+    set:
+      source:
+        upload: {}
+    asserts:
+      - equal:
+          path: spec.source.upload
+          value: {}
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
+          value: ""
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+          value: '{"upload":{}}'
+
+  - it: rejects more than one source type
+    set:
+      source:
+        http:
+          url: https://example.com/img.qcow2
+        image:
+          name: ubuntu
+    asserts:
+      - failedTemplate:
+          errorMessage: Exactly one type of source is expected!
+
+  - it: rejects an unrecognized single source type with a clear message
+    set:
+      source:
+        snapshot:
+          name: snap1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'Unknown source type'

@@ -102,6 +102,22 @@
     echo "$output" | grep -wq cozystack.gateway-api-crds
 }
 
+@test "etcd closure includes the operator that serves its CRD" {
+    # The other half of the same missing edge. extra/etcd renders kind:
+    # EtcdCluster from etcd-operator.cozystack.io/v1alpha2, so an etcd suite
+    # installed without cozystack.etcd-operator has no CRD to apply against and
+    # fails on `no matches for kind "EtcdCluster"`. The forward walk reaches the
+    # operator only through etcd-application's dependsOn, so this asserts the
+    # operator AND the deps it drags in -- asserting only the app source is what
+    # left the gap invisible.
+    output=$(hack/select-install.sh "etcd")
+    echo "$output" | grep -wq cozystack.etcd-application
+    echo "$output" | grep -wq cozystack.etcd-operator
+    echo "$output" | grep -wq cozystack.cert-manager
+    echo "$output" | grep -wq cozystack.vertical-pod-autoscaler
+    echo "$output" | grep -wq cozystack.cozystack-engine
+}
+
 @test "validate passes on the real source graph and suite mapping" {
     hack/select-install.sh --validate
 }
