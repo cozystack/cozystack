@@ -80,6 +80,13 @@
 
 # kind/backport-previous has no upstream Kubernetes equivalent (k8s has no
 # two-release-line model); it stays under kind/ per the file convention.
+#
+# The aliases below outlive the rename on purpose. backport.yaml reads only the
+# namespaced spellings, so a legacy label applied by hand triggers nothing at
+# all — and an alias is not a label, so the picker never offers one. What it
+# does is make the sync rename a stray back into kind/*, carrying its PRs with
+# it, instead of leaving a dead label nothing ever cleans up. Removing them
+# turns a mislabelled backport into a silent one.
 - name: kind/backport
   color: 'fbca04'
   description: Categorizes issue or PR as requiring a backport to the current release line

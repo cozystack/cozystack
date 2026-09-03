@@ -248,7 +248,7 @@ step_line() {
 
   # Enumerate real branches. getLatestRelease returns the newest published
   # STABLE, which throughout a freeze window still names the PREVIOUS line — so
-  # a `backport` on a fix for the release being stabilised would land on the
+  # a `kind/backport` on a fix for the release being stabilised would land on the
   # wrong branch and miss the release it was written for.
   printf '%s\n' "$block" | script_lines | grep -qF 'github.paginate(github.rest.repos.listBranches'
   count="$(printf '%s\n' "$block" | script_lines | grep -cF 'getLatestRelease' || true)"
@@ -283,7 +283,7 @@ step_line() {
   # The comparands must be numbers, not the captured strings.
   printf '%s\n' "$block" | script_lines | grep -qF 'maj: Number(m[1]), min: Number(m[2])'
 
-  # And the head of that sort is what `backport` uses.
+  # And the head of that sort is what `kind/backport` uses.
   printf '%s\n' "$block" | script_lines | grep -qF 'lines[0].name'
 }
 
@@ -464,9 +464,9 @@ closed-merged=true"
   [ "${count:-0}" -eq 1 ]
 
   # The split is on the label NAMES, not on the action alone. Routing EVERY label
-  # event aside would move `backport` and `backport-previous` out of the group
-  # holding the run they have to queue behind, and one request could then evict
-  # the other.
+  # event aside would move `kind/backport` and `kind/backport-previous` out of
+  # the group holding the run they have to queue behind, and one request could
+  # then evict the other.
   #
   # Pinned as the literal names, not as a count of `label.name != '`. That count
   # measures the operator and says nothing about the operands, so renaming one
@@ -481,24 +481,25 @@ closed-merged=true"
   # split at all. Every operand here was pinned before this line existed; the
   # operator joining them was not.
   #
-  # TRANSITIONAL: four names, not the original pair, because backport.yaml
-  # accepts both spellings while the org-level dosubot still applies the legacy
-  # ones. The namespaced names are genuine backport requests, so they belong on
-  # this side of the split exactly as the legacy ones do — routing them aside
-  # would hand a `kind/backport` event its own group and let it cherry-pick
-  # alongside the merge run, which is the failure the pin above describes. When
-  # dosubot's PR labelling is switched off and backport.yaml drops its legacy
-  # arms, this literal and the count below go back to the pair.
-  printf '%s\n' "$line" | grep -qF "github.event.action == 'labeled' && github.event.label.name != 'backport' && github.event.label.name != 'backport-previous' && github.event.label.name != 'kind/backport' && github.event.label.name != 'kind/backport-previous'"
+  # The two namespaced names, and only those. The un-namespaced spellings were
+  # listed here as well while the rename was in flight and the org-level dosubot
+  # was still applying them; both arms went when dosubot stopped labelling PRs
+  # here and .github/labels.yml had renamed the labels themselves.
+  printf '%s\n' "$line" | grep -qF "github.event.action == 'labeled' && github.event.label.name != 'kind/backport' && github.event.label.name != 'kind/backport-previous'"
 
-  # And exactly four of them. The literal above is a substring check, so appending
-  # a fifth exclusion satisfies it unchanged — and a fifth exclusion is not
+  # And exactly two of them. The literal above is a substring check, so appending
+  # a third exclusion satisfies it unchanged — and a third exclusion is not
   # cosmetic: the named label stops being routed aside, lands in the main group,
   # takes its single pending slot, skips in `prepare`, and evicts a genuine
   # backport request while delivering nothing. Same harm as widening `types:`.
   # Presence and count answer different questions; this test needs both.
+  #
+  # It is also what keeps a legacy spelling from creeping back in on this side
+  # only: re-adding `backport` here without re-adding it to `prepare` routes a
+  # request `prepare` will not qualify into the main group, which is the
+  # half-finished rename the paragraph above describes.
   count="$(printf '%s\n' "$line" | grep -o "github\.event\.label\.name != '" | wc -l | tr -d ' ')"
-  [ "${count:-0}" -eq 4 ]
+  [ "${count:-0}" -eq 2 ]
 
   # The suffix the condition selects, not only the condition. Asserting the
   # operands alone leaves the whole split deletable — collapsing the tail to
@@ -580,34 +581,36 @@ closed-merged=true"
 
   # The cumulative label set answers for the merge and for nothing else. Left
   # ungated it re-enters this job on every later unrelated label — an automated
-  # size/* or kind/* — for a merged PR still carrying `backport`, redoing a
+  # size/* or kind/* — for a merged PR still carrying `kind/backport`, redoing a
   # backport that has already been delivered.
   #
-  # TRANSITIONAL: four reads, not the original pair. backport.yaml accepts the
-  # namespaced and the legacy spelling of each label while the org-level dosubot
-  # still applies the legacy ones; when its PR labelling is switched off and the
-  # legacy arms are dropped, this literal and the count below go back to two.
-  printf '%s\n' "$block" | grep -qF "(github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'backport') || contains(github.event.pull_request.labels.*.name, 'backport-previous') || contains(github.event.pull_request.labels.*.name, 'kind/backport') || contains(github.event.pull_request.labels.*.name, 'kind/backport-previous')))"
+  # Two reads, the namespaced spellings only. The un-namespaced `backport` and
+  # `backport-previous` were read here as well while the rename was in flight
+  # and the org-level dosubot was still applying them; both arms went when
+  # dosubot stopped labelling PRs here and .github/labels.yml had renamed the
+  # labels themselves. They remain as aliases in that file, so a legacy label
+  # applied by hand is renamed into kind/* by the next sync — which is the only
+  # path by which one of these reads ever sees it again.
+  printf '%s\n' "$block" | grep -qF "(github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'kind/backport') || contains(github.event.pull_request.labels.*.name, 'kind/backport-previous')))"
 
-  # And the guard reads that set exactly four times, all of them inside the gated
+  # And the guard reads that set exactly twice, both of them inside the gated
   # disjunct above, so it cannot be joined by an ungated one that quietly
   # restores the old behaviour while the assertion above stays green.
   #
-  # Counted as OCCURRENCES, not lines. `grep -c` counts matching lines, and all
-  # four reads live on one line here, so it answers 1 and keeps answering 1 when a
-  # fifth read is appended to that same line — which is exactly the restoration
+  # Counted as OCCURRENCES, not lines. `grep -c` counts matching lines, and both
+  # reads live on one line here, so it answers 1 and keeps answering 1 when a
+  # third read is appended to that same line — which is exactly the restoration
   # this is meant to catch. Only an append on a NEW line would have moved it.
   count="$(printf '%s\n' "$block" | grep -o 'contains(github\.event\.pull_request\.labels' | wc -l | tr -d ' ')"
-  [ "${count:-0}" -eq 4 ]
+  [ "${count:-0}" -eq 2 ]
 
-  # A label event answers for the label it carries. Both spellings of each name,
-  # for the transitional reason given above.
-  printf '%s\n' "$block" | grep -qF "(github.event.action == 'labeled' && (github.event.label.name == 'backport' || github.event.label.name == 'backport-previous' || github.event.label.name == 'kind/backport' || github.event.label.name == 'kind/backport-previous'))"
+  # A label event answers for the label it carries, in the same two spellings.
+  printf '%s\n' "$block" | grep -qF "(github.event.action == 'labeled' && (github.event.label.name == 'kind/backport' || github.event.label.name == 'kind/backport-previous'))"
 
   # The two conjuncts the label logic hangs off, which the label assertions above
   # would not miss. `base.ref == 'main'` is what stops the bot backporting its own
   # output: its PRs target release-X.Y, so they cannot satisfy it however often a
-  # labeler re-applies `backport` to a `[Backport release-X.Y]` title. docs/release.md
+  # labeler re-applies `kind/backport` to a `[Backport release-X.Y]` title. docs/release.md
   # calls that architectural protection, which is only true while the line is here.
   # With their trailing conjunctions, for the reason the group-key test spells
   # out: flipping either `&&` to `||` turns the guard into a disjunction that

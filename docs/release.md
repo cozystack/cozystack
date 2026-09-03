@@ -156,7 +156,7 @@ gitGraph
 
    Cherry-picking can be done as soon as each patch is merged into `main`, or directly before the release.
 
-   The `backport` label automates this: [`backport.yaml`](../.github/workflows/backport.yaml) targets the newest existing `release-X.Y` branch, which during a freeze window is the line being stabilised rather than the last published one.
+   The `kind/backport` label automates this: [`backport.yaml`](../.github/workflows/backport.yaml) targets the newest existing `release-X.Y` branch, which during a freeze window is the line being stabilised rather than the last published one.
 
    ```mermaid
    gitGraph
@@ -348,9 +348,11 @@ The matching Talos node image is `ghcr.io/cozystack/cozystack/cozystack-nocloud:
 | `kind/backport` | the newest existing `release-X.Y` branch |
 | `kind/backport-previous` | the second-newest existing `release-X.Y` branch |
 
-Resolution is dynamic at run time, and it reads the branches themselves: the job lists the repository's branches, keeps the ones matching `release-<major>.<minor>`, and sorts them numerically descending — so `release-1.10` ranks above `release-1.9`, which a lexicographic sort gets backwards. `backport` takes the first, `backport-previous` the second, so both name a branch that exists by construction; asking for `backport-previous` when only one line exists fails the job rather than inventing a target. Nothing is derived arithmetically — an earlier version computed the previous line as `Y-1`, which named a non-existent branch whenever a minor was skipped.
+Those two spellings and no others. The un-namespaced `backport` and `backport-previous` were read as well while the labels were being renamed; both arms are gone, and neither label exists in the repository any more. [`labels.yml`](../.github/labels.yml) still lists them as aliases, so a legacy label applied by hand is renamed into `kind/*` by the next label sync — carrying its PRs with it — rather than sitting there triggering nothing. That sync runs weekly, so a hand-applied legacy label can look ignored for up to a week; the fix is to apply the namespaced label, which is the only one the picker offers.
 
-**During a freeze window the newest line is the one being stabilised, not the last published one.** `release-X.Y` is created when the first `vX.Y.0-rc.1` is cut, before `vX.Y.0` is published, so from the freeze until the release `backport` targets the release being stabilised and `backport-previous` targets the last published stable. That is the intent: the frozen branch is the only way into the upcoming release, which is when backports matter most. The trade-off is that for the length of the window the line one step further back has no label pointing at it, so a fix that has to reach it before the new release publishes must be cherry-picked by hand.
+Resolution is dynamic at run time, and it reads the branches themselves: the job lists the repository's branches, keeps the ones matching `release-<major>.<minor>`, and sorts them numerically descending — so `release-1.10` ranks above `release-1.9`, which a lexicographic sort gets backwards. `kind/backport` takes the first, `kind/backport-previous` the second, so both name a branch that exists by construction; asking for `kind/backport-previous` when only one line exists fails the job rather than inventing a target. Nothing is derived arithmetically — an earlier version computed the previous line as `Y-1`, which named a non-existent branch whenever a minor was skipped.
+
+**During a freeze window the newest line is the one being stabilised, not the last published one.** `release-X.Y` is created when the first `vX.Y.0-rc.1` is cut, before `vX.Y.0` is published, so from the freeze until the release `kind/backport` targets the release being stabilised and `kind/backport-previous` targets the last published stable. That is the intent: the frozen branch is the only way into the upcoming release, which is when backports matter most. The trade-off is that for the length of the window the line one step further back has no label pointing at it, so a fix that has to reach it before the new release publishes must be cherry-picked by hand.
 
 The bot creates a backport PR with title `[Backport release-X.Y] <original title>`. When this PR merges, the title prefix used to re-trigger the bot through `pr-labeler.yaml`, which auto-applied `backport` to any `[Backport release-X.Y]`-titled PR. Combined with the org-level `dosubot` re-applying the label, this caused recursive backports.
 

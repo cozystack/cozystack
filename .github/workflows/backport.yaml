@@ -23,10 +23,10 @@ on:
 #
 # So the group key moves a label event that is NOT a backport request aside, and
 # `cancel-in-progress` stops one that IS from cancelling rather than queuing.
-# Both are load-bearing. `backport` and `backport-previous` are separate requests
-# that both have to complete, so they share the main group and must not cancel
-# each other; every other label does no work here and only has to stay out of
-# the way.
+# Both are load-bearing. `kind/backport` and `kind/backport-previous` are
+# separate requests that both have to complete, so they share the main group and
+# must not cancel each other; every other label does no work here and only has
+# to stay out of the way.
 #
 # That is also why this file does not simply copy pull-requests.yaml, which
 # splits the key and leaves cancellation unconditional: a discarded label run
@@ -54,7 +54,7 @@ on:
 # surviving run rather than a hundred queued ones, and the feature only shipped
 # 2026-05-07, on a path that delivers fixes to release lines.
 concurrency:
-  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'backport' && github.event.label.name != 'backport-previous' && github.event.label.name != 'kind/backport' && github.event.label.name != 'kind/backport-previous') && '-label' || '' }}
+  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'kind/backport' && github.event.label.name != 'kind/backport-previous') && '-label' || '' }}
   # Stated positively, matching the group key above. `!= 'labeled'` is equivalent
   # only while `types:` holds exactly these two, and that form fails open: adding
   # `unlabeled` or `reopened` there would hand those events cancellation in the
@@ -95,8 +95,8 @@ jobs:
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
       (
-        (github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'backport') || contains(github.event.pull_request.labels.*.name, 'backport-previous') || contains(github.event.pull_request.labels.*.name, 'kind/backport') || contains(github.event.pull_request.labels.*.name, 'kind/backport-previous'))) ||
-        (github.event.action == 'labeled' && (github.event.label.name == 'backport' || github.event.label.name == 'backport-previous' || github.event.label.name == 'kind/backport' || github.event.label.name == 'kind/backport-previous'))
+        (github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'kind/backport') || contains(github.event.pull_request.labels.*.name, 'kind/backport-previous'))) ||
+        (github.event.action == 'labeled' && (github.event.label.name == 'kind/backport' || github.event.label.name == 'kind/backport-previous'))
       )
     # GitHub API calls only — no docker, no repo toolchain: GitHub-hosted.
     runs-on: ubuntu-latest
@@ -144,15 +144,16 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const labels = pr.labels.map(l => l.name);
-            // TRANSITIONAL: both spellings are accepted so the rename can land
-            // in any order relative to the org-level dosubot, which still
-            // applies the legacy names and is today the dominant applier on
-            // real backports. Once dosubot's PR labelling is switched off and
-            // the in-repo labeler is the only applier, the legacy arms here,
-            // in the `if:` gate above and in the concurrency group can all be
-            // deleted in one pass.
-            const isBackport = labels.includes('kind/backport') || labels.includes('backport');
-            const isBackportPrevious = labels.includes('kind/backport-previous') || labels.includes('backport-previous');
+            // Only the namespaced spellings. The un-namespaced `backport` and
+            // `backport-previous` were accepted here through the rename, for as
+            // long as the org-level dosubot was still applying them; it no
+            // longer labels PRs here, and neither label exists in the
+            // repository any more — .github/labels.yml renamed both into
+            // kind/*. They stay listed there as aliases so that a legacy label
+            // applied by hand is renamed by the next label sync rather than
+            // sitting on the PR triggering nothing.
+            const isBackport = labels.includes('kind/backport');
+            const isBackportPrevious = labels.includes('kind/backport-previous');
             
             core.setOutput('backport', isBackport ? 'true' : 'false');
             core.setOutput('backport_previous', isBackportPrevious ? 'true' : 'false');
@@ -252,8 +253,8 @@ jobs:
       # The action's backport branch name is deterministic,
       # backport-<pull_number>-to-<target_branch>. A merged PR with that head
       # means an earlier run already delivered this change to the target — a
-      # second label event (e.g. backport-previous added after backport
-      # already merged) would re-enter this job and cherry-pick
+      # second label event (e.g. kind/backport-previous added after
+      # kind/backport already merged) would re-enter this job and cherry-pick
       # commits the target branch already has, which produces a run whose every
       # pick is empty. The git wrapper installed below drops those rather than
       # failing on them, so the leg no longer dies at the cherry-pick — it dies
