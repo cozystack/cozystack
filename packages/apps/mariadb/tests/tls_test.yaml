@@ -1249,6 +1249,22 @@ tests:
       - failedTemplate:
           errorMessage: "values don't meet the specifications of the schema(s) in the following chart(s):\nmariadb:\n- at '/tls/required': got null, want boolean\n"
 
+  # The resolver maps anything that is not exactly "cert-manager" to the
+  # operator, so a misspelled issuer fails open: the instance keeps operator
+  # issuance and nothing at render time says the value was not understood. The
+  # enum is the only thing that refuses it, and it reaches both this schema and
+  # the ResourceDefinition's from one marker, so a single lost marker opens
+  # both. Pin the rejection on the side that fails quietly.
+  - it: "a misspelled tls.issuer is rejected by the schema, not resolved to the operator"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        issuer: certmanager
+    asserts:
+      - failedTemplate:
+          errorMessage: "values don't meet the specifications of the schema(s) in the following chart(s):\nmariadb:\n- at '/tls/issuer': value must be one of 'operator', 'cert-manager'\n"
+
   - it: "managed TLS honours an explicit required=true"
     templates:
       - templates/mariadb.yaml
