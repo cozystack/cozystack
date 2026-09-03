@@ -1,7 +1,6 @@
 portSecurity: true
 routes: ""
-image: ghcr.io/cozystack/cozystack/kubeovn-webhook:v1.6.2@sha256:8abc089c4469b6572d7eb6cba1bd87528dc1298101a2250d4b351d6ba0ca0620
-
+image: ghcr.io/cozystack/cozystack/kubeovn-webhook:v1.6.3-rc.1@sha256:081370d02d51c4c9eb5acc059084071e820291d25ac27505fa29348ab46cd576
 # Restrict who may reach the webhook's serving port.
 #
 # The handler returns namespace-derived annotations to any caller, and only the

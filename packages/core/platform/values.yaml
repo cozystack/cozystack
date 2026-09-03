@@ -13,7 +13,7 @@ migrations:
   # below therefore lags targetVersion in-tree by design; run-migrations.sh
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
-  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.2@sha256:a34e7156a52dc55b27662917e5f9d5bbea671188d8db233296d0a98c800dc6c6
+  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.3-rc.1@sha256:f26c562a1a98b5408e918e0b1b1bcf1a0796da9043e308e4c585dd258c120a15
   targetVersion: 54
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
