@@ -2,12 +2,16 @@
 package backupcontroller
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/backupcontroller/kafkatypes"
 )
@@ -103,5 +107,36 @@ func TestRenderKafkaArtifactURI(t *testing.T) {
 
 	if uri, err := renderKafkaArtifactURI("", ctxA); err != nil || uri != "" {
 		t.Fatalf("empty template: uri=%q err=%v, want empty/nil", uri, err)
+	}
+}
+
+// TestReconcileKafka_RejectsWrongKind covers the applicationRef Kind gate on the
+// BackupJob path: a non-Kafka application terminates the BackupJob as Failed
+// rather than running a Job against it.
+func TestReconcileKafka_RejectsWrongKind(t *testing.T) {
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: strp("apps.cozystack.io"), Kind: "Postgres", Name: "pg",
+			},
+			BackupClassName: "cozy-default",
+		},
+	}
+	c := newBackupJobTestClient(t, bj)
+	r := &BackupJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileKafka(context.Background(), bj, &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+	}); err != nil {
+		t.Fatalf("reconcileKafka returned error: %v", err)
+	}
+
+	got := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bj), got); err != nil {
+		t.Fatalf("get bj: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("wrong-kind BackupJob phase = %q, want Failed", got.Status.Phase)
 	}
 }

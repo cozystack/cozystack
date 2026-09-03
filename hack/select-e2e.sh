@@ -242,6 +242,10 @@ src_to_suites() {
     ingress-application|ingress-nginx) echo gateway ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
     securitygroup-controller) echo securitygroup ;;
+    # The kafka app source covers both the app suite and the metadata-backup
+    # roundtrip, so an edit to packages/apps/kafka (or kafka-operator, which
+    # reaches this source) selects both.
+    kafka-application) echo "kafka kafka-metadata" ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
   esac

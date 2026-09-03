@@ -31,7 +31,7 @@ export PLAN_NAME="${PLAN_NAME:-kafka-meta-src-daily}"
 # KAFKA_IMAGE only drives the host-side throwaway CLI pods here (seed/verify);
 # the backup/restore Jobs use the image pinned in the strategy. Override to
 # match your operator's Kafka image if it differs.
-export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:0.45.0-kafka-3.8.0}"
+export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1@sha256:ba52ed046b1dccdbd96f4e68057ce014d862a7c9c1fc670760c023b9aa09f23f}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
 
 log_info()    { echo -e "${BLUE}i${NC} $*" >&2; }

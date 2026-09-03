@@ -333,12 +333,14 @@ func (r *RestoreJobReconciler) cleanupOnDelete(ctx context.Context, restoreJob *
 	case strategyv1alpha1.VeleroStrategyKind:
 		r.cleanupVeleroRestore(ctx, restoreJob)
 
-	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MongoDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind, strategyv1alpha1.RabbitmqStrategyKind:
+	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MongoDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind, strategyv1alpha1.RabbitmqStrategyKind, strategyv1alpha1.KafkaStrategyKind:
 		// Nothing to clean up: these drivers don't materialise namespaced
 		// artifacts that outlive the RestoreJob. (Etcd: the operator-side
 		// EtcdCluster is owned by the source HelmRelease, and the
 		// EtcdClusterSpecCaptured / TargetPurged conditions live on the
-		// RestoreJob itself - all gone with the parent.)
+		// RestoreJob itself - all gone with the parent. Kafka: the metadata
+		// restore runs a one-shot Job owned by the RestoreJob and writes only
+		// to the Kafka cluster via the Admin API.)
 	default:
 		// Readable Backup, but an unrecognised strategy kind — not Velero
 		// as far as we can tell. Speculatively reap a stray labelled Velero

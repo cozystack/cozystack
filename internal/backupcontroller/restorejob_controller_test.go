@@ -42,6 +42,7 @@ func TestStrategyKindForRestoreJob(t *testing.T) {
 		{"job strategy", strategyv1alpha1.JobStrategyKind, strategyv1alpha1.JobStrategyKind},
 		{"mariadb strategy", strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MariaDBStrategyKind},
 		{"etcd strategy", strategyv1alpha1.EtcdStrategyKind, strategyv1alpha1.EtcdStrategyKind},
+		{"kafka strategy", strategyv1alpha1.KafkaStrategyKind, strategyv1alpha1.KafkaStrategyKind},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,6 +230,49 @@ func TestCleanupOnDelete_Etcd_DoesNotTouchVeleroNamespace(t *testing.T) {
 	got := &velerov1.Restore{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(owned), got); err != nil {
 		t.Fatalf("Etcd cleanup incorrectly routed to Velero cleanup; matching Velero Restore was deleted (err=%v)", err)
+	}
+}
+
+// TestCleanupOnDelete_Kafka_DoesNotTouchVeleroNamespace mirrors the sibling
+// cleanup tests for the Kafka metadata strategy. The Kafka driver's restore
+// runs a one-shot Job owned by the RestoreJob and writes only to the Kafka
+// cluster via the Admin API — it materialises nothing in cozy-velero. Dropping
+// Kafka from the no-op group would fall through to the conservative `default`
+// branch, which runs the Velero cleanup unconditionally and, on a cluster with
+// velero.bslEnabled=false, that is every Kafka RestoreJob deletion. Seeding a
+// label-matching Velero Restore proves the Kafka branch stays no-op.
+func TestCleanupOnDelete_Kafka_DoesNotTouchVeleroNamespace(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	rj := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "rj"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.KafkaStrategyKind, Name: "s",
+			},
+		},
+	}
+	owned := &velerov1.Restore{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: veleroNamespace,
+			Name:      "would-be-victim",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      "rj",
+				backupsv1alpha1.OwningJobNamespaceLabel: "tenant",
+			},
+		},
+	}
+	c := newRestoreJobTestClient(t, rj, backup, owned)
+	r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	r.cleanupOnDelete(context.Background(), rj)
+
+	got := &velerov1.Restore{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(owned), got); err != nil {
+		t.Fatalf("Kafka cleanup incorrectly routed to Velero cleanup; matching Velero Restore was deleted (err=%v)", err)
 	}
 }
 

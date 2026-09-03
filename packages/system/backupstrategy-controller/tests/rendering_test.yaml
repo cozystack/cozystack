@@ -150,6 +150,17 @@ tests:
       - hasDocuments:
           count: 1
         template: templates/strategy-kafka-default.yaml
+      - isKind:
+          of: Kafka
+        template: templates/strategy-kafka-default.yaml
+      - equal:
+          path: metadata.name
+          value: cozy-default-kafka
+        template: templates/strategy-kafka-default.yaml
+      - equal:
+          path: spec.artifactURITemplate
+          value: "s3://test-bucket/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-metadata.txt"
+        template: templates/strategy-kafka-default.yaml
       - hasDocuments:
           count: 1
         template: templates/strategy-foundationdb-default.yaml
