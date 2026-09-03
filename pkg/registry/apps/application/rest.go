@@ -19,6 +19,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -61,6 +62,40 @@ import (
 	// Importing API errors package to construct appropriate error responses
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
+
+// applicationStatusError restates an error from the underlying HelmRelease client on the aggregated
+// Application resource, preserving the Kubernetes API error semantics callers rely on.
+//
+// Wrapping such an error with fmt.Errorf discards its metav1.Status: the apiserver machinery can no
+// longer map it to an HTTP status and renders a generic 500 carrying only a message. Creating an
+// Application whose HelmRelease already exists therefore returned
+//
+//	{"kind":"Status","apiVersion":"v1","status":"Failure","code":500,
+//	 "message":"failed to create HelmRelease: helmreleases.helm.toolkit.fluxcd.io \"tenant-x\" already exists"}
+//
+// with no reason field. apierrors.IsAlreadyExists keys on the reason, so every client-go caller — every
+// controller included — sees a retryable server error instead of a conflict, and cannot make its create
+// idempotent. The same applied to Update and Delete.
+//
+// The error is restated on the Application, not on the HelmRelease: the HelmRelease is an implementation
+// detail of this registry that the caller never named. Any other typed status (Forbidden, Invalid,
+// TooManyRequests…) is passed through unchanged so that its code survives; only an untyped error keeps
+// the wrapping, since it carries no semantics the API contract defines.
+func (r *REST) applicationStatusError(verb string, name string, err error) error {
+	switch {
+	case apierrors.IsAlreadyExists(err):
+		return apierrors.NewAlreadyExists(r.gvr.GroupResource(), name)
+	case apierrors.IsNotFound(err):
+		return apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	case apierrors.IsConflict(err):
+		return apierrors.NewConflict(r.gvr.GroupResource(), name, err)
+	}
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return err
+	}
+	return fmt.Errorf("failed to %s HelmRelease: %v", verb, err)
+}
 
 // Ensure REST implements necessary interfaces
 var (
@@ -245,7 +280,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	err = r.c.Create(ctx, helmRelease, &client.CreateOptions{Raw: options})
 	if err != nil {
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
-		return nil, fmt.Errorf("failed to create HelmRelease: %v", err)
+		return nil, r.applicationStatusError("create", app.Name, err)
 	}
 
 	// Convert the created HelmRelease back to Application
@@ -618,7 +653,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	})
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
-		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
+		return nil, false, r.applicationStatusError("update", name, err)
 	}
 
 	// Convert the updated HelmRelease back to Application
@@ -691,7 +726,7 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	err = r.c.Delete(ctx, helmRelease, &client.DeleteOptions{Raw: options})
 	if err != nil {
 		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
-		return nil, false, fmt.Errorf("failed to delete HelmRelease: %v", err)
+		return nil, false, r.applicationStatusError("delete", name, err)
 	}
 
 	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)
