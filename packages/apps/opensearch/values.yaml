@@ -125,9 +125,12 @@ version: v2
 ##   (<release>.http-ca, with a dot) is passed to the operator via
 ##   spec.security.tls.http.caSecret, so
 ##   the operator signs the admin certificate with it and anchors the HTTP listener trust on
-##   it. The securityadmin job then verifies the HTTP server certificate and applies the
-##   security configuration (users, roles, audit policies) from the <release>-security-config
-##   Secret. Transport mTLS stays operator-managed and independent.
+##   it. That puts one CA under both the server certificate the securityadmin job
+##   validates and the admin certificate it presents, so the security configuration
+##   (users, roles, audit policies) from the <release>-security-config Secret applies
+##   once the operator's DNS base matches the cluster domain, which the
+##   opensearch-operator package does not yet set. Transport mTLS stays
+##   operator-managed and independent.
 ##   REQUIRES OpenSearch 2.0.0 or later (version v2 or v3). Below that the operator
 ##   signs the admin certificate with the transport CA rather than this one, so
 ##   securityadmin cannot authenticate. Setting enabled: true on such a version

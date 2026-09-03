@@ -121,7 +121,7 @@ tests:
         enabled: true
     asserts:
       - failedTemplate:
-          errorMessage: "opensearch 1.3.20 (version: v1) does not support chart-managed HTTP TLS: below 2.0.0 the operator signs the securityadmin admin certificate with the transport CA, which cannot verify against the cert-manager HTTP CA, so users and roles would silently never apply. Set tls.enabled: false to use operator-managed HTTP TLS, or use version v2 or later."
+          errorMessage: "opensearch 1.3.20 (version: v1) does not support chart-managed HTTP TLS: below 2.0.0 the operator signs the securityadmin admin certificate with the transport CA, which cannot verify against the cert-manager HTTP CA, so the admin certificate and the HTTP listener would never share a CA. Set tls.enabled: false to use operator-managed HTTP TLS, or use version v2 or later."
 
   # A v1 + external release never asked for chart-managed TLS — the tri-state
   # turned it on. Degrade to operator-managed HTTP TLS so such a release keeps
@@ -254,8 +254,7 @@ tests:
   # legal application name. Whichever object reached the name first would keep it while
   # the other side read or wrote key material it did not create. Application names are
   # DNS-1035 labels and cannot contain a dot, so the dot puts this name beyond the
-  # operator's reach for every sibling at once. The remaining assertions cover this
-  # release's own operator-composed names, the way the leaf guard above does for the leaf.
+  # operator's reach for every sibling at once.
   - it: keeps the CA secret beyond the reach of any operator-composed name
     set:
       tls:
@@ -820,8 +819,7 @@ tests:
           path: spec.dnsNames
           content: os-test-dashboards.example.cozy.local
 
-  # The same isolation for the Dashboards leaf, which carries its own copy of the
-  # guard: host present, external cleared.
+  # The same isolation for the Dashboards leaf, which carries its own copy of the guard.
   - it: dashboards cert omits the external SAN when a host exists but external is false
     set:
       tls:

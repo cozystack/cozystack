@@ -53,8 +53,10 @@ ca.crt, authenticating with that same admin certificate. To make both anchor on 
 the CR passes {{ .Release.Name }}.http-ca to spec.security.tls.http.caSecret: the operator
 then signs the admin certificate with this CA and sets the HTTP listener trust anchor to
 it (pemtrustedcas). The operator reads the cert-manager secret's tls.crt/tls.key as the
-CA via the cert-manager.io/issuer-kind annotation. As a result securityadmin verifies the
-server certificate, is accepted as admin, and the security config (users/roles) applies.
+CA via the cert-manager.io/issuer-kind annotation. What that buys is one CA under both
+the server certificate securityadmin validates and the admin certificate it presents, so
+users and roles apply once the operator's DNS base matches the cluster domain — which
+packages/system/opensearch-operator does not yet set.
 
 NAME-LENGTH GUARD: see opensearch.validateReleaseName in _names.tpl, which owns the
 limits table and is invoked below. Keeping a second copy of those numbers here is how
@@ -86,9 +88,9 @@ spec:
 # HTTP-layer CA Certificate. rotationPolicy: Never keeps the CA stable so existing
 # client trust bundles remain valid across cert-manager renewals.
 #
-# The Certificate and Issuer object names keep the hyphen; only the Secret takes the dot.
-# Those two kinds are this chart's alone — the operator composes no Certificate or Issuer
-# name, so there is no second namer to collide with.
+# Certificate and Issuer names are this chart's alone — no other component composes
+# names of those kinds — so they cannot be reached from the other side and the hyphen
+# is safe on them.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

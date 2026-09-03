@@ -37,8 +37,10 @@ spec:
           name: {{ .Release.Name }}-http-server
         # Feed the cert-manager HTTP CA to the operator so it (a) signs the admin
         # certificate with this CA and (b) sets the HTTP listener trust anchor to it.
-        # This lets the operator's securityadmin job validate the HTTP server cert and
-        # authenticate as admin, so the security config (users/roles) actually applies.
+        # That puts one CA under both the server cert securityadmin validates and the
+        # admin cert it presents; users and roles apply once the operator's DNS base
+        # matches the cluster domain, which packages/system/opensearch-operator does
+        # not yet set.
         #
         # The dot before http-ca is load-bearing: hyphenated, this is also the name the
         # operator composes for its own transport CA on the sibling release one -http

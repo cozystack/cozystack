@@ -38,12 +38,10 @@ images.opensearch override cannot move it out from under the operator either.
 */}}
 {{- define "opensearch.tls.enabled" -}}
 {{- /*
-This default is not a null guard, and reading it as one is how the sentence that used
-to sit here got its facts backwards. `tls: {}` in values.yaml is EMPTY, so `default`
-fires on the ordinary path as well; and neither shape needs it in order to render,
-because a field read through nil yields no value exactly as it does through an empty
-dict — `enabled` comes back invalid either way and the tri-state below falls through
-to `external`. Removing it reddens nothing in the suite.
+This default is not a null guard. `tls: {}` in values.yaml is EMPTY, so `default` fires
+on the ordinary path as well, and neither shape needs it in order to render: a field
+read through nil yields no value exactly as it does through an empty dict, so `enabled`
+comes back invalid either way and the tri-state below falls through to `external`.
 
 What it buys is that $tls is always a dict, so an edit reaching for `hasKey` or
 `index`, both of which DO error on nil, cannot be broken by an input the platform
@@ -57,7 +55,7 @@ through --set alike.
 {{- $requested := ternary ($tls.enabled | toString) (.Values.external | default false | toString) $explicit -}}
 {{- if and (eq $requested "true") (semverCompare "<2.0.0" (include "opensearch.versionMap" .)) -}}
   {{- if $explicit -}}
-    {{- fail (printf "opensearch %s (version: %s) does not support chart-managed HTTP TLS: below 2.0.0 the operator signs the securityadmin admin certificate with the transport CA, which cannot verify against the cert-manager HTTP CA, so users and roles would silently never apply. Set tls.enabled: false to use operator-managed HTTP TLS, or use version v2 or later." (include "opensearch.versionMap" .) (.Values.version | default "v2")) -}}
+    {{- fail (printf "opensearch %s (version: %s) does not support chart-managed HTTP TLS: below 2.0.0 the operator signs the securityadmin admin certificate with the transport CA, which cannot verify against the cert-manager HTTP CA, so the admin certificate and the HTTP listener would never share a CA. Set tls.enabled: false to use operator-managed HTTP TLS, or use version v2 or later." (include "opensearch.versionMap" .) (.Values.version | default "v2")) -}}
   {{- else -}}
     {{- "false" -}}
   {{- end -}}
