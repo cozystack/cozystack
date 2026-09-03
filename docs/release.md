@@ -375,11 +375,13 @@ Conflicting cherry-picks produce a draft PR via `conflict_resolution: draft_comm
 
 ```bash
 git checkout release-X.Y
-git cherry-pick -x -s <commit-sha>
+git cherry-pick -x -s --allow-empty --empty=drop <commit-sha>
 # resolve conflicts
 git commit -s
 git push origin release-X.Y  # or push to a new branch and open a PR
 ```
+
+The two `--empty` flags are the same ones [the bot's wrapper injects](#empty-commits), for the same reason: without them a commit that is empty, or whose change `release-X.Y` already carries, stops the cherry-pick with "The previous cherry-pick is now empty" and no indication that the right move is to carry on. Harmless when neither case applies.
 
 To find the bot's failed comments across a batch of PRs:
 

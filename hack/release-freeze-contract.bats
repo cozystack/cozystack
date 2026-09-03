@@ -314,12 +314,34 @@ step_line() {
   block="$(job_block backport "$BACKPORT")"
   [ -n "$block" ]
 
-  # Losing the gate on either the checkout or the action still runs the action
+  # Pinned as the WHOLE condition, not as one of its two conjuncts. The
+  # conjuncts answer different questions and each has its own failure:
+  #
+  # Losing `steps.guard.outputs.already_merged != 'true'` runs the action
   # against a target that already has the change, reproducing the false comment
-  # the guard exists to prevent. The git wrapper's install step is gated for a
-  # smaller reason — it does real work (it probes git against a throwaway repo)
-  # that a skipped leg has no use for — but it is gated the same way, so the
-  # count moves with the step list rather than singling one step out.
+  # the guard exists to prevent.
+  #
+  # Losing `steps.target.outcome == 'success'` is worse on the wrapper's
+  # install step than on the other two. A leg whose label is absent skips `Set
+  # target branch`, so `Check for existing merged backport` skips too, so
+  # `steps.guard.outputs.already_merged` is the empty string and `!= 'true'` is
+  # TRUE. The install step would then run on a leg whose checkout has skipped
+  # — no working tree — and its `sed ... hack/backport-git-shim.sh` would fail
+  # on a missing file under `set -eu`. Result: a red `previous` leg on every PR
+  # carrying only `kind/backport`, which is a red check sitting next to a
+  # delivered backport.
+  #
+  # Three, for the checkout, the wrapper install and the action.
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF "if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'" || true)"
+  [ "${count:-0}" -eq 3 ]
+
+  # And neither conjunct appears anywhere else in the job except the guard's own
+  # gate, which is `steps.target.outcome == 'success'` alone — it is what
+  # decides `already_merged`, so it cannot also test it. Four and three rather
+  # than three and three, and getting that arithmetic wrong is how a pin ends up
+  # agreeing with the mutant it was written to catch instead of with the file.
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF "steps.target.outcome == 'success'" || true)"
+  [ "${count:-0}" -eq 4 ]
   count="$(printf '%s\n' "$block" | code_lines | grep -cF "steps.guard.outputs.already_merged != 'true'" || true)"
   [ "${count:-0}" -eq 3 ]
 }

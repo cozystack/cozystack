@@ -183,6 +183,33 @@ setup_repo() {
   rc=0
   "$REAL_GIT" cherry-pick --abort --empty=drop >/dev/null 2>&1 || rc=$?
   [ "$rc" -ne 0 ]
+
+  # And the other three verbs, which the pinned action never calls -- so
+  # dropping them from the wrapper's list breaks nothing today and nothing
+  # would report it. They are here because the failure they prevent belongs to
+  # a future action version rather than this one: git refuses each combination
+  # the same way, and a wedged sequencer is the same bug whichever verb
+  # reaches it.
+  #
+  # Asserted on the MESSAGE, not the exit code, because the exit code does not
+  # discriminate. Measured on git 2.55, on a clean tree with no cherry-pick in
+  # flight:
+  #
+  #   verb         passed through                     with --empty injected
+  #   --continue   128 "no cherry-pick or revert in"  128 "--empty cannot be used with"
+  #   --skip       128 "no cherry-pick in progress"   128 "--empty cannot be used with"
+  #   --quit         0 (succeeds silently)            128 "--empty cannot be used with"
+  #
+  # Two of the three agree on 128 and differ only in what they say, so what
+  # marks an injection is git's own refusal of the combination.
+  for verb in --continue --skip --quit; do
+    out="$(shim_git cherry-pick "$verb" 2>&1 || true)"
+    if printf '%s\n' "$out" | grep -qF 'cannot be used with'; then
+      echo "the wrapper injected --empty into 'cherry-pick $verb':" >&2
+      printf '%s\n' "$out" >&2
+      exit 1
+    fi
+  done
 }
 
 @test "every other subcommand reaches the real git unchanged" {
