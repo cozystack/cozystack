@@ -1,0 +1,189 @@
+{{/*
+  Strategy template rendering uses two layers of Go templates:
+   1. Helm renders this file at chart install time. Anything inside
+      `{{ ... }}` is interpreted by Helm - the $bucketName gate, the
+      endpoint/bucket/region values, the S3 credentials Secret name.
+   2. The backupstrategy-controller re-renders the resulting Job Strategy
+      CR per BackupJob/RestoreJob, expanding `{{ .Application | .Release |
+      .Mode | .Backup }}` against the live application object.
+  To emit a literal `{{ .Foo }}` that survives Helm, it is passed as the
+  string argument of `printf` (a backtick raw string when it contains
+  double quotes): Helm does not interpret inner template delimiters inside
+  a printf string literal. See strategy-altinity-default.yaml for the
+  longer rationale.
+
+  This is the RabbitMQ definitions backup: the cluster operator ships no
+  backup CR and RabbitMQ has no consistent online message export, so the
+  strategy exports broker DEFINITIONS (vhosts, users, permissions, queues,
+  exchanges, bindings, policies, parameters) via the management HTTP API
+  and stores them in the system bucket. Message payloads are out of scope -
+  a full-data backup is a Velero volume snapshot, not this strategy.
+*/}}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Rabbitmq
+metadata:
+  name: cozy-default-rabbitmq
+spec:
+  # The driver defers the run until the RabbitmqCluster reports AllReplicasReady
+  # (a Go-side precondition), so a not-yet-ready broker surfaces a precise
+  # Ready=False wait on the BackupJob/RestoreJob rather than a Job that starts
+  # and fails. The in-Pod curl retry below still covers the residual gap between
+  # the cluster going ready and the management API accepting requests.
+  #
+  # Record the stored object's location on the produced Backup so it is
+  # introspectable. The key is scoped by the SOURCE namespace/name, matching
+  # what the script writes and reads.
+  artifactURITemplate: {{ printf "s3://%s/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/definitions.json" $bucketName | quote }}
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: rabbitmq-backup
+          image: "{{ .Values.backupStrategyController.rabbitmqBackupClientImage }}"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MODE
+              value: {{ printf "{{ .Mode }}" | quote }}
+            # The Cozystack RabbitMQ release name is prefixed with "rabbitmq-",
+            # so the operator's client Service and default-user Secret are
+            # rabbitmq-<app>. On restore .Release is the TARGET, so host and
+            # credentials point at the broker being restored into.
+            - name: RABBITMQ_HOST
+              value: {{ printf "rabbitmq-{{ .Release.Name }}.{{ .Release.Namespace }}.svc" | quote }}
+            # optional: the cleanup run (on Backup deletion) only touches S3 and
+            # may execute after the source broker - and this Secret - are gone.
+            - name: RABBITMQ_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "rabbitmq-{{ .Release.Name }}-default-user" | quote }}
+                  key: username
+                  optional: true
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "rabbitmq-{{ .Release.Name }}-default-user" | quote }}
+                  key: password
+                  optional: true
+            # ARTIFACT_URI is the single source of truth for the object location:
+            # the driver renders it from spec.artifactURITemplate, records it on
+            # the Backup's status.artifact.uri, and injects it here. On restore
+            # it is that recorded value read back from the Backup, so restore
+            # fetches the exact object the backup wrote and a later change to the
+            # key layout cannot orphan older backups.
+            - name: ARTIFACT_URI
+              value: {{ printf "{{ .ArtifactURI }}" | quote }}
+            # S3 coordinates. Credentials come from cozy-backups-creds, which the
+            # controller projects into the application namespace before dispatch.
+            # The endpoint helper yields the ACME-valid external ingress with a
+            # scheme, so curl --aws-sigv4 (which needs a full URL) verifies TLS
+            # against the image's ca-certificates - no -k, which would disable
+            # verification permanently for every tenant.
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: S3_ENDPOINT
+              value: {{ include "backupstrategy-controller.endpoint" . | quote }}
+            - name: S3_REGION
+              value: {{ .Values.backupStorage.region | quote }}
+            - name: S3_FORCE_PATH_STYLE
+              value: {{ .Values.backupStorage.forcePathStyle | quote }}
+          # command is load-bearing: the reused platform-migrations image's
+          # ENTRYPOINT is run-migrations.sh. See rabbitmqBackupClientImage in
+          # ../values.yaml.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+
+              case "${S3_ENDPOINT}" in
+                http://*|https://*) base="${S3_ENDPOINT}" ;;
+                *) base="https://${S3_ENDPOINT}" ;;
+              esac
+
+              # ARTIFACT_URI is s3://<bucket>/<key>. Split it and build the HTTP
+              # object URL, honouring path-style vs virtual-hosted addressing so
+              # this works against both SeaweedFS (path-style) and an external S3
+              # configured for virtual-hosted-style.
+              case "${ARTIFACT_URI}" in
+                s3://*) rest="${ARTIFACT_URI#s3://}"; bucket="${rest%%/*}"; key="${rest#*/}" ;;
+                *) echo "expected an s3:// artifact URI, got '${ARTIFACT_URI}' (set spec.artifactURITemplate)" >&2; exit 1 ;;
+              esac
+              if [ "${S3_FORCE_PATH_STYLE}" = "false" ]; then
+                scheme="${base%%://*}"; host="${base#*://}"
+                obj_url="${scheme}://${bucket}.${host}/${key}"
+              else
+                obj_url="${base}/${bucket}/${key}"
+              fi
+
+              s3() { curl -fsS --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"; }
+
+              # Cleanup runs when the owning Backup is deleted. It only touches
+              # S3 - the source broker may already be gone - so it deletes the
+              # object and exits before any management-API access. A missing
+              # object is not an error.
+              if [ "${MODE}" = cleanup ]; then
+                echo "deleting ${ARTIFACT_URI}"
+                # A missing object is success (delete is idempotent); any other
+                # non-2xx is a real failure, so this exits non-zero and the
+                # controller retries rather than orphaning the object.
+                code=$(curl -sS -o /dev/null -w '%{http_code}' \
+                  --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+                  -X DELETE "${obj_url}" || true)
+                case "${code}" in
+                  2*|404) echo "deleted (HTTP ${code})"; exit 0 ;;
+                  *) echo "delete failed: HTTP ${code}" >&2; exit 1 ;;
+                esac
+              fi
+
+              api="http://${RABBITMQ_HOST}:15672/api/definitions"
+
+              # Precondition gates on the application being Ready; the
+              # management API can still be warming up. Wait for it before the
+              # export/import so a cold API is not read as a backup failure.
+              for _ in $(seq 1 60); do
+                if curl -fsS -u "${RABBITMQ_USER}:${RABBITMQ_PASSWORD}" --max-time 5 \
+                    "http://${RABBITMQ_HOST}:15672/api/overview" >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 5
+              done
+
+              if [ "${MODE}" = backup ]; then
+                echo "exporting RabbitMQ definitions from ${RABBITMQ_HOST} to ${ARTIFACT_URI}"
+                curl -fsS -u "${RABBITMQ_USER}:${RABBITMQ_PASSWORD}" "${api}" -o /tmp/definitions.json
+                s3 -X PUT --upload-file /tmp/definitions.json "${obj_url}"
+                echo "uploaded ${ARTIFACT_URI}"
+              else
+                echo "importing RabbitMQ definitions into ${RABBITMQ_HOST} from ${ARTIFACT_URI}"
+                echo "note: import is additive (POST /api/definitions merges); it does not delete objects created after the backup"
+                s3 -o /tmp/definitions.json "${obj_url}"
+                curl -fsS -u "${RABBITMQ_USER}:${RABBITMQ_PASSWORD}" \
+                  -H "content-type: application/json" \
+                  -X POST "${api}" --data-binary @/tmp/definitions.json
+                echo "import complete"
+              fi
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+{{- end -}}

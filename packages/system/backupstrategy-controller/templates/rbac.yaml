@@ -197,3 +197,10 @@ rules:
 - apiGroups: ["etcd-operator.cozystack.io"]
   resources: ["etcdsnapshots"]
   verbs: ["get", "list", "watch", "create"]
+# Rabbitmq strategy: read the operator-side RabbitmqCluster CR to gate on
+# "all replicas ready" before exporting/importing definitions over the
+# management API. The driver only ever reads it - the actual work runs in a
+# batch/v1.Job (granted above), never by mutating the RabbitmqCluster.
+- apiGroups: ["rabbitmq.com"]
+  resources: ["rabbitmqclusters"]
+  verbs: ["get", "list", "watch"]

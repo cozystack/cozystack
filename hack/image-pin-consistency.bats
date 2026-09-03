@@ -80,15 +80,19 @@
   a=$(yq -r '.migrations.image' packages/core/platform/values.yaml)
   b=$(yq -r '.backupStrategyController.chBackupClientImage' \
     packages/system/backupstrategy-controller/values.yaml)
+  c=$(yq -r '.backupStrategyController.rabbitmqBackupClientImage' \
+    packages/system/backupstrategy-controller/values.yaml)
 
-  if [ "$a" != "$b" ]; then
+  if [ "$a" != "$b" ] || [ "$a" != "$c" ]; then
     echo "platform-migrations pins have drifted:" >&2
     echo "  packages/core/platform/values.yaml            .migrations.image" >&2
     echo "    $a" >&2
     echo "  backupstrategy-controller/values.yaml         .chBackupClientImage" >&2
     echo "    $b" >&2
+    echo "  backupstrategy-controller/values.yaml         .rabbitmqBackupClientImage" >&2
+    echo "    $c" >&2
     echo >&2
-    echo "packages/core/platform/Makefile stamps both; do not hand-edit either." >&2
+    echo "packages/core/platform/Makefile stamps all three; do not hand-edit any." >&2
     return 1
   fi
 }

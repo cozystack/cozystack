@@ -16,6 +16,7 @@ templates:
   - templates/strategy-etcd-default.yaml
   - templates/strategy-altinity-default.yaml
   - templates/strategy-mongodb-default.yaml
+  - templates/strategy-rabbitmq-default.yaml
   - templates/strategy-foundationdb-default.yaml
   - templates/strategy-velero-vminstance-default.yaml
   - templates/strategy-velero-vmdisk-default.yaml
@@ -62,6 +63,13 @@ tests:
       - hasDocuments:
           count: 0
         template: templates/strategy-mongodb-default.yaml
+      # RabbitMQ Job strategy carries bucket coordinates (endpoint, bucket,
+      # object key), so it MUST stay off the first render like the others -
+      # an ungated Strategy CR trips the same "no matches for kind" install
+      # failure described above.
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-rabbitmq-default.yaml
       - hasDocuments:
           count: 0
         template: templates/strategy-foundationdb-default.yaml
@@ -75,7 +83,7 @@ tests:
           count: 0
         template: templates/velero-bsl.yaml
 
-  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all seven routes (FoundationDB intentionally unbound)"
+  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all eight routes (FoundationDB intentionally unbound)"
     asserts:
       - hasDocuments:
           count: 1
@@ -86,7 +94,18 @@ tests:
         template: templates/backupclass-default.yaml
       - lengthEqual:
           path: spec.strategies
-          count: 7
+          count: 8
+        template: templates/backupclass-default.yaml
+      - contains:
+          path: spec.strategies
+          content:
+            application:
+              apiGroup: apps.cozystack.io
+              kind: RabbitMQ
+            strategyRef:
+              apiGroup: strategy.backups.cozystack.io
+              kind: Rabbitmq
+              name: cozy-default-rabbitmq
         template: templates/backupclass-default.yaml
 
   - it: "all Strategy CRs and the Velero BSL render once a bucket name resolves"
@@ -108,6 +127,9 @@ tests:
       - hasDocuments:
           count: 1
         template: templates/strategy-mongodb-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-rabbitmq-default.yaml
       - hasDocuments:
           count: 1
         template: templates/strategy-foundationdb-default.yaml

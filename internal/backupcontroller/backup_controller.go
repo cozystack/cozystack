@@ -39,6 +39,9 @@ type BackupReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	// CredentialsConfig lets the Rabbitmq cleanup path project cozy-backups-creds
+	// into the Backup's namespace before spawning its best-effort delete Job.
+	CredentialsConfig BackupCredentialsConfig
 }
 
 func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -57,9 +60,16 @@ func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if !backup.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(backup, backupFinalizer) ||
 			controllerutil.ContainsFinalizer(backup, legacyVeleroBackupFinalizer) {
-			if err := r.cleanupOnDelete(ctx, backup); err != nil {
+			res, err := r.cleanupOnDelete(ctx, backup)
+			if err != nil {
 				logger.Error(err, "failed to clean up strategy-owned side state")
 				return ctrl.Result{}, err
+			}
+			if res.Requeue || res.RequeueAfter > 0 {
+				// Cleanup is still in progress (the Rabbitmq delete Job has not
+				// finished); keep the finalizer and requeue so no object is
+				// orphaned.
+				return res, nil
 			}
 
 			controllerutil.RemoveFinalizer(backup, backupFinalizer)
@@ -89,17 +99,20 @@ func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // pattern - each strategy knows what it created and how to undo it. Velero
 // owns the velero.io/Backup CR plus archive data on the BSL; CNPG owns the
 // postgresql.cnpg.io/Backup CR; Job owns nothing namespace-scoped.
-func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv1alpha1.Backup) error {
+// A non-zero ctrl.Result asks the caller to keep the finalizer and requeue -
+// used by the Rabbitmq branch, which waits for its S3 delete Job to finish
+// before letting the Backup be removed, so no object is orphaned.
+func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	kind := strategyKindForBackup(backup)
 	logger.V(1).Info("dispatching Backup cleanup", "backup", backup.Name, "strategy", kind)
 	switch kind {
 	case strategyv1alpha1.CNPGStrategyKind:
-		return r.cleanupCNPGBackup(ctx, backup)
+		return ctrl.Result{}, r.cleanupCNPGBackup(ctx, backup)
 	case strategyv1alpha1.JobStrategyKind:
 		// Nothing to clean up: Job-strategy Backups own no namespace-scoped
 		// artifacts that survive Backup deletion.
-		return nil
+		return ctrl.Result{}, nil
 	case strategyv1alpha1.AltinityStrategyKind:
 		// Cozystack Backup deletion does NOT purge the upstream
 		// clickhouse-backup archive in object storage. Lifecycle of the
@@ -111,7 +124,7 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// driver does not own the S3 data, so it does not delete it on
 		// CR removal. See packages/apps/clickhouse/README.md "Backup
 		// orchestration" for tenant-facing guidance.
-		return nil
+		return ctrl.Result{}, nil
 	case strategyv1alpha1.MariaDBStrategyKind:
 		// Cozystack Backup deletion does NOT delete the operator-side
 		// k8s.mariadb.com/Backup CR or the backing S3/PVC archive.
@@ -123,7 +136,7 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// default) keeps the contract honest: the MariaDB driver does
 		// not own the archive, so it does not delete it on CR removal.
 		// Mirrors the Altinity branch's "we do not own S3" stance.
-		return nil
+		return ctrl.Result{}, nil
 	case strategyv1alpha1.MongoDBStrategyKind:
 		// Cozystack Backup deletion does NOT delete the operator-side
 		// psmdb.percona.com/PerconaServerMongoDBBackup CR or the backing S3
@@ -135,7 +148,7 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// the explicit branch guards the seam against a future driver refactor
 		// that might incidentally stamp velero.io/backup-name onto MongoDB
 		// driverMetadata via a shared helper.
-		return nil
+		return ctrl.Result{}, nil
 	case strategyv1alpha1.FoundationDBStrategyKind:
 		// Cozystack Backup deletion does NOT delete the operator-side
 		// foundationdb.org/FoundationDBBackup CR. That CR drives a
@@ -147,15 +160,24 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// branch guards the seam against a future driver refactor that
 		// might incidentally stamp velero.io/backup-name onto FDB
 		// driverMetadata via a shared helper.
-		return nil
+		return ctrl.Result{}, nil
+	case strategyv1alpha1.RabbitmqStrategyKind:
+		// Unlike the operator-backed drivers above, the Rabbitmq driver
+		// uniquely OWNS its artifact - a plain definitions object it wrote,
+		// with the exact key on status.artifact.uri - and no engine retention
+		// prunes it. Without an explicit delete a retention-pruned Plan would
+		// grow the bucket unboundedly, so this branch deletes the object and
+		// WAITS for that delete to complete before the Backup is removed, so no
+		// object is orphaned (see cleanupRabbitmqBackup).
+		return r.cleanupRabbitmqBackup(ctx, backup)
 	case strategyv1alpha1.VeleroStrategyKind:
-		return r.cleanupVeleroBackup(ctx, backup)
+		return ctrl.Result{}, r.cleanupVeleroBackup(ctx, backup)
 	default:
 		// Unknown or empty strategy. Conservative path: try the Velero
 		// cleanup since it is keyed on a metadata field that only Velero
 		// sets, so it is a no-op for non-Velero Backups. This preserves
 		// backward compatibility with pre-existing objects.
-		return r.cleanupVeleroBackup(ctx, backup)
+		return ctrl.Result{}, r.cleanupVeleroBackup(ctx, backup)
 	}
 }
 

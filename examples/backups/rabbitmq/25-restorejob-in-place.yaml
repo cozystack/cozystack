@@ -1,0 +1,11 @@
+# In-place restore: import the backed-up definitions back into the SOURCE broker.
+# Omitting targetApplicationRef makes the driver restore into the Backup's own
+# application (rabbitmq-src). backupRef names the Backup, which the Job driver
+# names after the BackupJob that produced it (rabbitmq-src-adhoc).
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: rabbitmq-src-in-place
+spec:
+  backupRef:
+    name: rabbitmq-src-adhoc

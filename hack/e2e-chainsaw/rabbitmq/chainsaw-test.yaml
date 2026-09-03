@@ -1,0 +1,149 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: rabbitmq
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: rabbitmq-test
+  - describe:
+      apiVersion: rabbitmq.com/v1beta1
+      kind: RabbitmqCluster
+      name: rabbitmq-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=rabbitmq-test
+      tail: 50
+  steps:
+  - name: create-rabbitmq
+    try:
+    - apply:
+        file: rabbitmq.yaml
+  - name: wait-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: rabbitmq-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: RabbitMQ
+          metadata:
+            name: test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: rabbitmq.com/v1beta1
+          kind: RabbitmqCluster
+          metadata:
+            name: rabbitmq-test
+          status:
+            (conditions[?type == 'AllReplicasReady']):
+            - status: "True"
+  - name: verify-workload
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: rabbitmq-test-server
+          status:
+            readyReplicas: 2
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: rabbitmq-test
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: rabbitmq-2-backup-roundtrip
+spec:
+  # tenant-root, not the suite default tenant-test: the backup Job pushes to the
+  # in-cluster seaweedfs in tenant-root, and the e2e tenant-test is Cilium
+  # egress-isolated from it. run-all.sh provisions its own Bucket + Rabbitmq
+  # strategy + BackupClass; the run step below overrides S3_ENDPOINT to the
+  # in-cluster seaweedfs because the Bucket's advertised external ingress URL is
+  # an unroutable placeholder in CI. The .svc FQDN is load-bearing: the driver's
+  # curl verifies TLS against the copied seaweedfs CA, and the filer serving
+  # cert's SANs are '*.tenant-root.svc' / '*.tenant-root.svc.cluster.local' — the
+  # 2-label 'seaweedfs-s3.tenant-root' matches neither, so it must be
+  # 'seaweedfs-s3.tenant-root.svc'. It still needs the platform backups stack
+  # (backupstrategy-controller + the shipped cozy-default-rabbitmq strategy,
+  # whose client image the demo reuses).
+  namespace: tenant-root
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: rabbitmq-rabbitmq-src
+  - describe:
+      apiVersion: rabbitmq.com/v1beta1
+      kind: RabbitmqCluster
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  - describe:
+      apiVersion: strategy.backups.cozystack.io/v1alpha1
+      kind: Rabbitmq
+      name: rabbitmq-strategy-default
+  - podLogs:
+      selector: rabbitmq.strategy.backups.cozystack.io/mode
+      tail: 200
+  steps:
+  - name: run
+    try:
+    # Pre-clean so a stale Succeeded BackupJob from a prior run cannot satisfy
+    # the wait instantly. Idempotent; the catch cwd is the suite dir.
+    - script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/rabbitmq/cleanup.sh
+        check:
+          ($error == null): true
+    # Honest round-trip: seed a sentinel definition, back it up through
+    # cozy-default, drop it, restore in place, then restore into a copy -
+    # asserting the sentinel survives object storage each time.
+    - script:
+        timeout: 30m
+        content: |
+          set -eu
+          cd ../../..
+          [ -x examples/backups/rabbitmq/run-all.sh ] || { echo "examples/backups/rabbitmq/run-all.sh not found or not executable" >&2; exit 1; }
+          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root.svc:8333" \
+            examples/backups/rabbitmq/run-all.sh
+        check:
+          ($error == null): true
+          (contains($stderr, 'definitions round-tripped through object storage')): true
+    finally:
+    - description: backup-flow cleanup
+      script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/rabbitmq/cleanup.sh
