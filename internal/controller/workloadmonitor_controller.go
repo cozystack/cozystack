@@ -15,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -45,6 +46,9 @@ const (
 	vmSelectService = "vmselect-shortterm"
 	vmSelectPort    = "8481"
 	vmSelectPath    = "/select/0/prometheus"
+	// Resource keys reported on bucket Workloads.
+	resourceS3StorageBytes         = "s3-storage-bytes"
+	resourceS3PhysicalStorageBytes = "s3-physical-storage-bytes"
 )
 
 // prometheusHTTPClient is a dedicated HTTP client for Prometheus queries,
@@ -54,7 +58,14 @@ var prometheusHTTPClient = &http.Client{Timeout: 10 * time.Second}
 // WorkloadMonitorReconciler reconciles a WorkloadMonitor object
 type WorkloadMonitorReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+	// SeaweedfsMetricsEndpoint, when non-empty, is the base URL of the
+	// Prometheus-compatible query API to fetch SeaweedFS bucket size metrics
+	// from, instead of discovering the monitoring stack via the
+	// namespace.cozystack.io/monitoring label. Used when SeaweedFS and the
+	// stack that scrapes it run outside this cluster.
+	SeaweedfsMetricsEndpoint string
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=workloadmonitors,verbs=get;list;watch;create;update;patch;delete
@@ -64,6 +75,7 @@ type WorkloadMonitorReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get
+// +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=objectstorage.k8s.io,resources=bucketclaims,verbs=get;list;watch
 
 // isBucketClaimReady checks if the BucketClaim has been provisioned.
@@ -135,21 +147,49 @@ func updateOwnerReferences(obj metav1.Object, monitor client.Object) {
 	obj.SetOwnerReferences(owners)
 }
 
+// ParseMetricsEndpointURL validates an administrator-supplied metrics endpoint
+// URL and normalizes it to a base without a trailing slash, so that appending
+// /api/v1/query never doubles or drops a slash. Userinfo is allowed: net/http
+// turns it into basic auth on every request.
+func ParseMetricsEndpointURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("URL must be absolute with a host")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("URL must not carry a query string or fragment")
+	}
+	return strings.TrimRight(u.String(), "/"), nil
+}
+
 // resolvePrometheusURL returns the Prometheus-compatible API base URL for the given namespace.
-// It reads the namespace.cozystack.io/monitoring label to find the monitoring namespace,
-// then constructs the vmselect URL. Returns empty string if monitoring is not configured.
-func (r *WorkloadMonitorReconciler) resolvePrometheusURL(ctx context.Context, namespace string) string {
-	logger := log.FromContext(ctx)
+// The SeaweedfsMetricsEndpoint override, when configured, takes precedence; otherwise the
+// namespace.cozystack.io/monitoring label names the monitoring namespace and the well-known
+// vmselect URL inside it is constructed. Returns empty string if monitoring is not configured.
+func (r *WorkloadMonitorReconciler) resolvePrometheusURL(ctx context.Context, namespace string) (string, error) {
+	if r.SeaweedfsMetricsEndpoint != "" {
+		return r.SeaweedfsMetricsEndpoint, nil
+	}
 	ns := &corev1.Namespace{}
 	if err := r.Get(ctx, types.NamespacedName{Name: namespace}, ns); err != nil {
-		logger.V(1).Info("Failed to read namespace for monitoring resolution", "namespace", namespace, "error", err)
-		return ""
+		// The namespace is the monitor's own, so NotFound only happens while
+		// it is being deleted; there is no monitoring to resolve then.
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading namespace %s: %w", namespace, err)
 	}
 	monitoringNS := ns.Labels[namespaceMonitoringLabel]
 	if monitoringNS == "" {
-		return ""
+		return "", nil
 	}
-	return fmt.Sprintf("http://%s.%s.svc:%s%s", vmSelectService, monitoringNS, vmSelectPort, vmSelectPath)
+	return fmt.Sprintf("http://%s.%s.svc:%s%s", vmSelectService, monitoringNS, vmSelectPort, vmSelectPath), nil
 }
 
 // bucketMetrics holds size metrics for a single bucket, keyed by metric name.
@@ -164,18 +204,21 @@ type bucketMetrics struct {
 // bucket names in a single Prometheus query and returns them keyed by bucket
 // name. The query is scoped to only the requested buckets to avoid fetching
 // metrics for buckets belonging to other WorkloadMonitors.
-func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, prometheusBaseURL string, bucketNames []string) map[string]*bucketMetrics {
+//
+// Any failure to obtain a well-formed answer is returned as an error, never as
+// an empty result: the sizes feed billing, and the caller must be able to tell
+// "the endpoint said the bucket is empty" apart from "the endpoint could not
+// be queried".
+func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, prometheusBaseURL string, bucketNames []string) (map[string]*bucketMetrics, error) {
 	result := make(map[string]*bucketMetrics)
 	if prometheusBaseURL == "" || len(bucketNames) == 0 {
-		return result
+		return result, nil
 	}
-	logger := log.FromContext(ctx)
 
 	query := fmt.Sprintf(`{__name__=~"SeaweedFS_s3_bucket_(size|physical_size)_bytes",bucket=~"%s"}`, strings.Join(bucketNames, "|"))
 	u, err := url.Parse(strings.TrimRight(prometheusBaseURL, "/") + "/api/v1/query")
 	if err != nil {
-		logger.Error(err, "Failed to parse Prometheus URL")
-		return result
+		return nil, fmt.Errorf("parsing Prometheus URL: %w", err)
 	}
 	u.RawQuery = url.Values{"query": {query}}.Encode()
 
@@ -184,26 +227,22 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 
 	req, err := http.NewRequestWithContext(httpCtx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		logger.Error(err, "Failed to create Prometheus request")
-		return result
+		return nil, fmt.Errorf("creating Prometheus request: %w", err)
 	}
 
 	resp, err := prometheusHTTPClient.Do(req)
 	if err != nil {
-		logger.V(1).Info("Failed to query Prometheus for bucket metrics", "error", err)
-		return result
+		return nil, fmt.Errorf("querying Prometheus: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		logger.V(1).Info("Prometheus returned non-OK status for bucket metrics", "status", resp.StatusCode)
-		return result
+		return nil, fmt.Errorf("Prometheus returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		logger.Error(err, "Failed to read Prometheus response")
-		return result
+		return nil, fmt.Errorf("reading Prometheus response: %w", err)
 	}
 
 	var promResp struct {
@@ -216,11 +255,10 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &promResp); err != nil {
-		logger.Error(err, "Failed to parse Prometheus response")
-		return result
+		return nil, fmt.Errorf("parsing Prometheus response: %w", err)
 	}
 	if promResp.Status != "success" {
-		return result
+		return nil, fmt.Errorf("Prometheus query finished with status %q", promResp.Status)
 	}
 
 	for _, r := range promResp.Data.Result {
@@ -255,7 +293,7 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 		}
 	}
 
-	return result
+	return result, nil
 }
 
 // reconcileBucketClaimForMonitor creates or updates a Workload object for the given BucketClaim and WorkloadMonitor.
@@ -274,20 +312,6 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		},
 	}
 
-	resources := make(map[string]resource.Quantity)
-
-	// Look up pre-fetched bucket metrics by the SeaweedFS bucket name.
-	// bc.Status.BucketName is the COSI Bucket name, which the COSI driver
-	// uses directly as the SeaweedFS bucket name.
-	if bm, ok := allMetrics[bc.Status.BucketName]; ok {
-		if bm.HasLogical {
-			resources["s3-storage-bytes"] = *resource.NewQuantity(bm.LogicalSize, resource.BinarySI)
-		}
-		if bm.HasPhysical {
-			resources["s3-physical-storage-bytes"] = *resource.NewQuantity(bm.PhysicalSize, resource.BinarySI)
-		}
-	}
-
 	monitorLabels := r.getMonitorLabels(monitor)
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		updateOwnerReferences(workload.GetObjectMeta(), &bc)
@@ -303,6 +327,29 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 			workload.Labels[k] = v
 		}
 		workload.Labels[workloadMonitorLabel] = monitor.Name
+
+		// Start from the sizes already recorded on the Workload: when the
+		// metrics endpoint is unreachable or reports nothing for this bucket,
+		// the last known good values must survive rather than collapse to
+		// "no size", which billing would read as an empty bucket.
+		resources := make(map[string]resource.Quantity)
+		for _, key := range []string{resourceS3StorageBytes, resourceS3PhysicalStorageBytes} {
+			if q, ok := workload.Status.Resources[key]; ok {
+				resources[key] = q
+			}
+		}
+
+		// Look up pre-fetched bucket metrics by the SeaweedFS bucket name.
+		// bc.Status.BucketName is the COSI Bucket name, which the COSI driver
+		// uses directly as the SeaweedFS bucket name.
+		if bm, ok := allMetrics[bc.Status.BucketName]; ok {
+			if bm.HasLogical {
+				resources[resourceS3StorageBytes] = *resource.NewQuantity(bm.LogicalSize, resource.BinarySI)
+			}
+			if bm.HasPhysical {
+				resources[resourceS3PhysicalStorageBytes] = *resource.NewQuantity(bm.PhysicalSize, resource.BinarySI)
+			}
+		}
 
 		workload.Status.Kind = monitor.Spec.Kind
 		workload.Status.Type = monitor.Spec.Type
@@ -628,15 +675,31 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	var bucketMetricsErr error
 	if len(bucketClaimList.Items) > 0 {
-		bucketPromURL := r.resolvePrometheusURL(ctx, monitor.Namespace)
 		var bucketNames []string
 		for _, bc := range bucketClaimList.Items {
 			if bc.Status.BucketName != "" {
 				bucketNames = append(bucketNames, bc.Status.BucketName)
 			}
 		}
-		allBucketMetrics := r.queryAllBucketMetrics(ctx, bucketPromURL, bucketNames)
+		var allBucketMetrics map[string]*bucketMetrics
+		bucketPromURL, err := r.resolvePrometheusURL(ctx, monitor.Namespace)
+		if err == nil {
+			allBucketMetrics, err = r.queryAllBucketMetrics(ctx, bucketPromURL, bucketNames)
+		}
+		if err != nil {
+			// Never let a metrics failure degrade into "bucket size = 0":
+			// the Workloads below are still reconciled, but they keep their
+			// last known sizes, and the failure is surfaced via an event,
+			// the log, and the returned error.
+			bucketMetricsErr = fmt.Errorf("fetching bucket size metrics: %w", err)
+			logger.Error(bucketMetricsErr, "Retaining last known bucket sizes", "monitor", monitor.Name)
+			if r.Recorder != nil {
+				r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketMetricsUnavailable",
+					"Failed to fetch bucket size metrics, retaining last known values: %v", err)
+			}
+		}
 		for _, bc := range bucketClaimList.Items {
 			if err := r.reconcileBucketClaimForMonitor(ctx, monitor, bc, allBucketMetrics); err != nil {
 				logger.Error(err, "Failed to reconcile Workload for BucketClaim", "BucketClaim", bc.Name)
@@ -670,6 +733,13 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err != nil {
 		logger.Error(err, "unable to update WorkloadMonitor status after retries")
 		return ctrl.Result{}, err
+	}
+
+	// Returning the metrics error makes the failure count in controller-runtime's
+	// reconcile error metrics and retries with backoff instead of quietly waiting
+	// for the next periodic requeue.
+	if bucketMetricsErr != nil {
+		return ctrl.Result{}, bucketMetricsErr
 	}
 
 	// Requeue periodically if there are BucketClaims to keep sizes up to date.
