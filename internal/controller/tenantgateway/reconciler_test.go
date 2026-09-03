@@ -1893,9 +1893,12 @@ func TestReconcile_DNS01ModeIgnoresHTTPRoutesForListeners(t *testing.T) {
 	}
 }
 
-// ControllerName is the controllerName used by this controller in
-// RouteParentStatus entries. Mirrors the constant in conflict.go.
-const testControllerName = "gateway.cozystack.io/tenantgateway-controller"
+// testControllerName is the controllerName this controller stamps into
+// RouteParentStatus entries, derived rather than restated: a helper that
+// looks for a name the controller no longer writes finds no entry, and
+// an assertion that something is absent then passes without having
+// checked anything.
+const testControllerName = string(ControllerName)
 
 // TestReconcile_ListenersHaveAllowedRoutesSelector pins Layer 1 of
 // the security model: every listener carries an AllowedRoutes
@@ -4167,6 +4170,352 @@ func TestReconcile_SwitchToEdgeModeCleansACMEMachinery(t *testing.T) {
 			t.Errorf("HTTPS listener %q must not survive the switch to edge", l.Name)
 		}
 	}
+}
+
+// TestReconcile_SwitchToEdgeModeWithdrawsTLSRouteAcceptance pins the
+// route side of that transition. Edge renders no TLS-passthrough
+// listener, so a TLSRoute pinned to one — the platform's own api,
+// vm-exportproxy and cdi-uploadproxy endpoints all are — can no longer
+// attach to anything on this Gateway. collectHostnameClaims returns no
+// claims for a whole-apex mode, so the acceptance this controller wrote
+// while the tenant ran HTTP-01 stands on a route that is no longer
+// served unless the switch withdraws it, and whoever debugs the dead
+// endpoint reads it as proof the route is fine.
+func TestReconcile_SwitchToEdgeModeWithdrawsTLSRouteAcceptance(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "example.org",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"default"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	section := gatewayv1.SectionName("tls-api")
+	parentNs := gatewayv1.Namespace("tenant-root")
+	route := &gatewayv1alpha2.TLSRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "kubernetes-api", Namespace: "default"},
+		Spec: gatewayv1alpha2.TLSRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{
+				Group:       ptrGroup(gatewayv1.GroupName),
+				Kind:        ptrKind("Gateway"),
+				Name:        "cozystack",
+				Namespace:   &parentNs,
+				SectionName: &section,
+			}}},
+			Hostnames: []gatewayv1alpha2.Hostname{"api.example.org"},
+		},
+	}
+	// A route from a namespace that may not attach here: the switch
+	// must not start writing status onto routes this controller never
+	// judged, or any namespace in the cluster could make it write.
+	foreign := route.DeepCopy()
+	foreign.ObjectMeta = metav1.ObjectMeta{Name: "kubernetes-api", Namespace: "tenant-bob"}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route, foreign).
+		WithStatusSubresource(tgw, &gatewayv1.Gateway{}, &gatewayv1alpha2.TLSRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"}}
+	if _, err := r.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("http01 reconcile: %v", err)
+	}
+	if cond := ourAcceptedCondition(t, c, "kubernetes-api", "default"); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("precondition: expected Accepted=True in http01 mode, got %+v", cond)
+	}
+
+	if err := c.Get(context.TODO(), req.NamespacedName, tgw); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	tgw.Spec.CertMode = gatewayv1alpha1.CertModeEdge
+	if err := c.Update(context.TODO(), tgw); err != nil {
+		t.Fatalf("update tgw: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("edge reconcile: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), req.NamespacedName, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	for _, l := range gw.Spec.Listeners {
+		if l.Protocol == gatewayv1.TLSProtocolType {
+			t.Fatalf("precondition: edge must render no TLS-passthrough listener, got %q", l.Name)
+		}
+	}
+
+	cond := ourAcceptedCondition(t, c, "kubernetes-api", "default")
+	if cond == nil {
+		t.Fatalf("expected this controller to keep judging the route it stamped, found no Accepted condition")
+	}
+	if cond.Status != metav1.ConditionFalse || cond.Reason != "NoMatchingParent" {
+		t.Errorf("Accepted=%s reason=%q, want False/NoMatchingParent — the pinned listener is gone", cond.Status, cond.Reason)
+	}
+	if got := ourAcceptedCondition(t, c, "kubernetes-api", "tenant-bob"); got != nil {
+		t.Errorf("route from a namespace that may not attach got a condition from this controller: %+v", got)
+	}
+
+	// Withdrawal joins the same idempotency contract as every other
+	// status write here: a quiescent reconcile must not bump the
+	// resourceVersion, or the Owns/Watches re-trigger never settles.
+	before := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "kubernetes-api", Namespace: "default"}, before); err != nil {
+		t.Fatalf("get TLSRoute: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("second edge reconcile: %v", err)
+	}
+	after := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "kubernetes-api", Namespace: "default"}, after); err != nil {
+		t.Fatalf("get TLSRoute: %v", err)
+	}
+	if before.ResourceVersion != after.ResourceVersion {
+		t.Errorf("second edge reconcile rewrote the route status (resourceVersion %s -> %s)", before.ResourceVersion, after.ResourceVersion)
+	}
+}
+
+// TestReconcile_LeavingEdgeForAWildcardModeClearsTheWithdrawal is the
+// mirror of the test above. dns01 and existingSecret render the
+// TLS-passthrough listeners again and serve them, but collect no
+// hostname claims, so updateRouteStatuses stays silent there and cannot
+// undo the withdrawal edge wrote. Left standing it inverts the defect
+// the withdrawal exists for: a served endpoint reporting that it matches
+// no parent, naming a class provider that no longer terminates anything.
+func TestReconcile_LeavingEdgeForAWildcardModeClearsTheWithdrawal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		back func(*gatewayv1alpha1.TenantGateway)
+	}{
+		{"dns01", func(g *gatewayv1alpha1.TenantGateway) {
+			g.Spec.CertMode = gatewayv1alpha1.CertModeDNS01
+			g.Spec.DNS01 = &gatewayv1alpha1.DNS01Config{
+				Provider:   "cloudflare",
+				Cloudflare: &gatewayv1alpha1.CloudflareDNS01{APITokenSecretRef: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "cf"}, Key: "api-token"}},
+			}
+		}},
+		{"existingSecret", func(g *gatewayv1alpha1.TenantGateway) {
+			g.Spec.CertMode = gatewayv1alpha1.CertModeExistingSecret
+			g.Spec.WildcardSecretRef = &corev1.LocalObjectReference{Name: "wildcard-tls"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScheme(t)
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                   "example.org",
+					CertMode:               gatewayv1alpha1.CertModeEdge,
+					GatewayClassName:       "cloudflare-tunnel",
+					AttachedNamespaces:     []string{"default"},
+					TLSPassthroughServices: []string{"api"},
+				},
+			}
+			section := gatewayv1.SectionName("tls-api")
+			parentNs := gatewayv1.Namespace("tenant-root")
+			route := &gatewayv1alpha2.TLSRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "kubernetes-api", Namespace: "default"},
+				Spec: gatewayv1alpha2.TLSRouteSpec{
+					CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{
+						Group:       ptrGroup(gatewayv1.GroupName),
+						Kind:        ptrKind("Gateway"),
+						Name:        "cozystack",
+						Namespace:   &parentNs,
+						SectionName: &section,
+					}}},
+					Hostnames: []gatewayv1alpha2.Hostname{"api.example.org"},
+				},
+			}
+			c := fake.NewClientBuilder().
+				WithScheme(s).
+				WithObjects(tgw, route).
+				WithStatusSubresource(tgw, &gatewayv1.Gateway{}, &gatewayv1alpha2.TLSRoute{}).
+				Build()
+
+			r := &Reconciler{Client: c, Scheme: s}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"}}
+			if _, err := r.Reconcile(context.TODO(), req); err != nil {
+				t.Fatalf("edge reconcile: %v", err)
+			}
+			if cond := ourAcceptedCondition(t, c, "kubernetes-api", "default"); cond == nil || cond.Status != metav1.ConditionFalse {
+				t.Fatalf("precondition: expected the withdrawal in edge mode, got %+v", cond)
+			}
+
+			if err := c.Get(context.TODO(), req.NamespacedName, tgw); err != nil {
+				t.Fatalf("get tgw: %v", err)
+			}
+			tc.back(tgw)
+			if err := c.Update(context.TODO(), tgw); err != nil {
+				t.Fatalf("update tgw: %v", err)
+			}
+			if _, err := r.Reconcile(context.TODO(), req); err != nil {
+				t.Fatalf("%s reconcile: %v", tc.name, err)
+			}
+
+			gw := &gatewayv1.Gateway{}
+			if err := c.Get(context.TODO(), req.NamespacedName, gw); err != nil {
+				t.Fatalf("get Gateway: %v", err)
+			}
+			var passthrough bool
+			for _, l := range gw.Spec.Listeners {
+				if l.Protocol == gatewayv1.TLSProtocolType {
+					passthrough = true
+				}
+			}
+			if !passthrough {
+				t.Fatalf("precondition: %s must render the tls-api listener again, got %+v", tc.name, gw.Spec.Listeners)
+			}
+			if cond := ourAcceptedCondition(t, c, "kubernetes-api", "default"); cond != nil {
+				t.Errorf("the withdrawal must not survive a switch back to %s, got %+v", tc.name, cond)
+			}
+
+			before := &gatewayv1alpha2.TLSRoute{}
+			if err := c.Get(context.TODO(), types.NamespacedName{Name: "kubernetes-api", Namespace: "default"}, before); err != nil {
+				t.Fatalf("get TLSRoute: %v", err)
+			}
+			if _, err := r.Reconcile(context.TODO(), req); err != nil {
+				t.Fatalf("second %s reconcile: %v", tc.name, err)
+			}
+			after := &gatewayv1alpha2.TLSRoute{}
+			if err := c.Get(context.TODO(), types.NamespacedName{Name: "kubernetes-api", Namespace: "default"}, after); err != nil {
+				t.Fatalf("get TLSRoute: %v", err)
+			}
+			if before.ResourceVersion != after.ResourceVersion {
+				t.Errorf("retraction must be idempotent, resourceVersion %s -> %s", before.ResourceVersion, after.ResourceVersion)
+			}
+		})
+	}
+}
+
+// TestReconcile_HostnameLessTLSRouteIsNotWithdrawn pins the symmetry
+// between the two passes. The withdrawal walks attached routes; the
+// http01 restore walks hostname claims, which collectHostnameClaims
+// gathers inside a loop over spec.hostnames. TLSRoute v1alpha2 puts no
+// minItems on that field, so a route can attach with none, and a
+// withdrawal written on such a route in edge mode has no path back:
+// http01 renders its listener again and judges only the routes that
+// produced claims. Both passes therefore key on the same predicate.
+func TestReconcile_HostnameLessTLSRouteIsNotWithdrawn(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "example.org",
+			CertMode:               gatewayv1alpha1.CertModeEdge,
+			GatewayClassName:       "cloudflare-tunnel",
+			AttachedNamespaces:     []string{"default"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	section := gatewayv1.SectionName("tls-api")
+	parentNs := gatewayv1.Namespace("tenant-root")
+	route := &gatewayv1alpha2.TLSRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "kubernetes-api", Namespace: "default"},
+		Spec: gatewayv1alpha2.TLSRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{
+				Group:       ptrGroup(gatewayv1.GroupName),
+				Kind:        ptrKind("Gateway"),
+				Name:        "cozystack",
+				Namespace:   &parentNs,
+				SectionName: &section,
+			}}},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw, &gatewayv1.Gateway{}, &gatewayv1alpha2.TLSRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"}}
+	if _, err := r.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("edge reconcile: %v", err)
+	}
+	if cond := ourAcceptedCondition(t, c, "kubernetes-api", "default"); cond != nil {
+		t.Errorf("a route this controller never judged must not be withdrawn either, got %+v", cond)
+	}
+
+	if err := c.Get(context.TODO(), req.NamespacedName, tgw); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	tgw.Spec.CertMode = gatewayv1alpha1.CertModeHTTP01
+	if err := c.Update(context.TODO(), tgw); err != nil {
+		t.Fatalf("update tgw: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("http01 reconcile: %v", err)
+	}
+	if cond := ourAcceptedCondition(t, c, "kubernetes-api", "default"); cond != nil {
+		t.Errorf("http01 judges only routes that produced claims, so nothing may be left standing here, got %+v", cond)
+	}
+}
+
+// TestRemoveRouteParentStatus pins the key the retraction deletes on.
+// RouteParentStatus is keyed by (ParentRef, ControllerName): a route may
+// attach through several parentRefs, one per sectionName, and each owns
+// its own entry. Deleting on ControllerName alone would take a sibling
+// section's status with it, and any other controller's entry is not ours
+// to touch at all.
+func TestRemoveRouteParentStatus(t *testing.T) {
+	api := gatewayv1.SectionName("tls-api")
+	exportproxy := gatewayv1.SectionName("tls-vm-exportproxy")
+	refFor := func(section *gatewayv1.SectionName) gatewayv1.ParentReference {
+		return gatewayv1.ParentReference{Name: "cozystack", SectionName: section}
+	}
+	parents := []gatewayv1.RouteParentStatus{
+		{ControllerName: ControllerName, ParentRef: refFor(&api)},
+		{ControllerName: ControllerName, ParentRef: refFor(&exportproxy)},
+		{ControllerName: "io.cilium/gateway-controller", ParentRef: refFor(&api)},
+	}
+
+	removeRouteParentStatus(&parents, refFor(&api))
+
+	if len(parents) != 2 {
+		t.Fatalf("expected exactly the tls-api entry of this controller to go, got %+v", parents)
+	}
+	var sawSibling, sawForeign bool
+	for _, ps := range parents {
+		switch {
+		case ps.ControllerName == ControllerName && *ps.ParentRef.SectionName == exportproxy:
+			sawSibling = true
+		case ps.ControllerName != ControllerName:
+			sawForeign = true
+		default:
+			t.Errorf("unexpected surviving entry %+v", ps)
+		}
+	}
+	if !sawSibling {
+		t.Errorf("the tls-vm-exportproxy entry owns its own parentRef and must survive")
+	}
+	if !sawForeign {
+		t.Errorf("another controller's entry must survive")
+	}
+}
+
+// ourAcceptedCondition returns the Accepted condition this controller
+// wrote on the named TLSRoute, or nil when it wrote none.
+func ourAcceptedCondition(t *testing.T, c client.Client, name, ns string) *metav1.Condition {
+	t.Helper()
+	got := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: ns}, got); err != nil {
+		t.Fatalf("get TLSRoute %s/%s: %v", ns, name, err)
+	}
+	for _, ps := range got.Status.Parents {
+		if string(ps.ControllerName) != testControllerName {
+			continue
+		}
+		for i := range ps.Conditions {
+			if ps.Conditions[i].Type == "Accepted" {
+				return &ps.Conditions[i]
+			}
+		}
+	}
+	return nil
 }
 
 // TestReconcile_EdgeListenersAdmitTheACMEChallengeNamespace pins the one

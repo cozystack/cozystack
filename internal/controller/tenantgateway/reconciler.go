@@ -84,6 +84,14 @@ func servesWholeApex(tgw *gatewayv1alpha1.TenantGateway) bool {
 	return false
 }
 
+// rendersTLSPassthrough reports whether the mode can carry
+// TLS-passthrough listeners at all. Edge ends TLS at the class
+// provider, so its Gateway is HTTP-only and neither a passthrough
+// listener nor a TLSRoute has anything to bind to on it.
+func rendersTLSPassthrough(tgw *gatewayv1alpha1.TenantGateway) bool {
+	return tgw.Spec.CertMode != gatewayv1alpha1.CertModeEdge
+}
+
 // gatewayIssuerName returns the per-tenant ACME Issuer name. The
 // Issuer lives in the same namespace as the TenantGateway and is
 // referenced by every Certificate this controller renders.
@@ -186,6 +194,9 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		return err
 	}
 	if err := r.updateRouteStatuses(ctx, tgw, allRefs, losers); err != nil {
+		return err
+	}
+	if err := r.reconcileTLSRouteWithdrawal(ctx, tgw); err != nil {
 		return err
 	}
 	if err := r.reconcileHTTPToHTTPSRedirect(ctx, tgw); err != nil {
@@ -294,6 +305,34 @@ func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gate
 	return nil
 }
 
+// allowedAttachNamespaces returns the namespaces whose routes this
+// TenantGateway judges: its own, the static admin-configured
+// Spec.AttachedNamespaces list of cozy-* system namespaces, and every
+// namespace carrying namespace.cozystack.io/gateway pointing at this
+// Gateway's namespace. The label is what makes inheritance work — the
+// apps/tenant chart writes it on every tenant namespace, inherited or
+// self-owning, so child tenants reach the parent Gateway — and it is
+// the same label the Gateway's allowedRoutes selector reads, so the
+// two paths agree on which namespaces can attach.
+func (r *Reconciler) allowedAttachNamespaces(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (map[string]struct{}, error) {
+	allowed := map[string]struct{}{tgw.Namespace: {}}
+	for _, ns := range tgw.Spec.AttachedNamespaces {
+		if ns == "" {
+			continue
+		}
+		allowed[ns] = struct{}{}
+	}
+	nsList := &corev1.NamespaceList{}
+	selector := labels.SelectorFromSet(labels.Set{namespaceGatewayLabel: tgw.Namespace})
+	if err := r.List(ctx, nsList, client.MatchingLabelsSelector{Selector: selector}); err != nil {
+		return nil, fmt.Errorf("list namespaces by gateway label: %w", err)
+	}
+	for i := range nsList.Items {
+		allowed[nsList.Items[i].Name] = struct{}{}
+	}
+	return allowed, nil
+}
+
 // collectHostnameClaims lists HTTPRoutes and TLSRoutes cluster-wide
 // and returns a map of hostname -> []routeRef of routes claiming
 // it via parentRefs targeting this TenantGateway's Gateway. Routes
@@ -304,21 +343,13 @@ func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gate
 // limits and leaks the operator's reachable hostname set). Empty
 // map in DNS-01 mode (wildcard handles everything).
 //
-// A namespace is allowed to attach when:
-//   - It is the TenantGateway's own namespace, OR
-//   - It is in Spec.AttachedNamespaces (static admin-configured
-//     attach list of cozy-* system namespaces), OR
-//   - It carries the label namespace.cozystack.io/gateway pointing
-//     at this Gateway's namespace (inheritance — apps/tenant chart
-//     writes the label on every tenant namespace, inherited or
-//     self-owning, so child tenants reach the parent Gateway).
-//
-// The third source is what makes HTTP-01 inheritance work end-to-end:
-// without it, a child tenant's HTTPRoute would be silently dropped
-// here and no per-listener Certificate would be issued — the
-// Gateway's label-based allowedRoutes selector would let the route
-// through at runtime but no listener would accept it (no matching
-// hostname), so Accepted stays False indefinitely.
+// The attach set comes from allowedAttachNamespaces, and its label
+// source is what makes HTTP-01 inheritance work end-to-end: without
+// it, a child tenant's HTTPRoute would be silently dropped here and no
+// per-listener Certificate would be issued — the Gateway's label-based
+// allowedRoutes selector would let the route through at runtime but no
+// listener would accept it (no matching hostname), so Accepted stays
+// False indefinitely.
 func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (map[string][]routeRef, error) {
 	// DNS-01, existingSecret and edge all serve every hostname off
 	// apex-wide listeners, so none needs per-host listeners or claims.
@@ -326,24 +357,9 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 		return nil, nil
 	}
 
-	allowed := map[string]struct{}{tgw.Namespace: {}}
-	for _, ns := range tgw.Spec.AttachedNamespaces {
-		if ns == "" {
-			continue
-		}
-		allowed[ns] = struct{}{}
-	}
-	// Inheritance: every namespace pointing at this Gateway via the
-	// label is also allowed. The same label drives the Gateway's
-	// allowedRoutes selector, so the two paths agree on which
-	// namespaces can attach.
-	nsList := &corev1.NamespaceList{}
-	selector := labels.SelectorFromSet(labels.Set{namespaceGatewayLabel: tgw.Namespace})
-	if err := r.List(ctx, nsList, client.MatchingLabelsSelector{Selector: selector}); err != nil {
-		return nil, fmt.Errorf("list namespaces by gateway label: %w", err)
-	}
-	for i := range nsList.Items {
-		allowed[nsList.Items[i].Name] = struct{}{}
+	allowed, err := r.allowedAttachNamespaces(ctx, tgw)
+	if err != nil {
+		return nil, err
 	}
 
 	out := map[string][]routeRef{}
@@ -971,8 +987,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// The corresponding TLSRoute templates (cozystack-api, vm-exportproxy,
 	// cdi-uploadproxy) attach to these listeners by sectionName.
 	passthroughServices := tgw.Spec.TLSPassthroughServices
-	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeEdge {
-		// An HTTP-only edge cannot serve a TLS listener at all.
+	if !rendersTLSPassthrough(tgw) {
 		passthroughServices = nil
 	}
 	for _, svc := range passthroughServices {
