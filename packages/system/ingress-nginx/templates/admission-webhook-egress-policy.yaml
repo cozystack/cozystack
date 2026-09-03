@@ -19,9 +19,9 @@ a direction the other does not.
 
 The source-side specs (the first two) are an egressDeny evaluated on the
 caller's own endpoint, so they hold while the webhook endpoint's policy is
-being recomputed or has overflowed its own policy map. What they cannot do is
-survive a datapath where Cilium is not the service load balancer, because they
-name the webhook's backend port and rely on the DNAT happening first.
+being recomputed or has overflowed its own policy map. What they cannot cover is
+a Service translated by another component after Cilium's egress hook, because
+they name the webhook's backend port and rely on the DNAT happening first.
 
 The target-side spec (the third) is an ingressDeny on the webhook endpoint,
 evaluated after whatever DNAT already happened, so it is independent of the
@@ -36,8 +36,8 @@ namespace-churn map writes on that endpoint. It makes them non-load-bearing:
 whichever end is degraded, the other still denies, and the writes are writes
 rather than an outage (see the cost paragraph on the third spec). Removing the
 coupling outright would mean dropping the target-side rule and accepting a
-silent fail-open wherever Cilium does not own the DNAT, which is the worse
-trade.
+silent fail-open if another component performs DNAT only after Cilium's egress
+hook, which is the worse trade.
 
 Stated precisely, because #3983 was reported as a hard outage rather than a
 flap: the coupling above is real, but it was not reproduced in isolation as the
@@ -102,9 +102,10 @@ denies kept for different reasons.
 
 Its pod deny is deliberate belt and braces, not a leftover from the shape this
 change replaced. Being on the destination's ingress path it is evaluated after
-whatever DNAT has already happened, so it holds even where Cilium is not the
-service load balancer -- exactly the exposure the paragraphs above describe. It
-cannot catch the API server: for a clusterwide policy Cilium rewrites every
+whatever DNAT has already happened, so it still holds if another component
+translates the Service after source-side egress policy -- exactly the exposure
+the paragraphs above describe. It cannot catch the API server: for a
+clusterwide policy Cilium rewrites every
 fromEndpoints selector to also require k8s:io.kubernetes.pod.namespace to
 Exist, plus the cluster label (Cilium v1.19.5,
 pkg/k8s/apis/cilium.io/utils/utils.go:120-154 getEndpointSelector, whose own
