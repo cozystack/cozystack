@@ -3654,8 +3654,9 @@ func TestReconcile_ExistingSecretModeKeepsHTTPRedirectAndPassthrough(t *testing.
 //     443. TCPRoute and UDPRoute also carry no hostname and no admission
 //     rule gates them, so admitting them would let a tenant serve
 //     arbitrary traffic under the apex cert without admission control.
-//     GRPCRoute is gated by the cozystack-route-hostname-policy VAP on
-//     the port-80 listener it can reach.
+//     GRPCRoute hostnames are gated by the cozystack-route-hostname-policy
+//     VAP wherever the kind attaches; port 443 excludes it because nothing
+//     the platform ships needs gRPC routing there.
 //
 //  3. NON-EMPTY: no port-443 listener may have nil or empty
 //     allowedRoutes.kinds. An empty set means Gateway API defaults to all
