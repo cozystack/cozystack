@@ -20,7 +20,48 @@ spec:
     # Tenant child namespaces) can take minutes to fully reclaim their backing
     # resources, and Chainsaw waits for the delete to complete during cleanup.
     delete: 5m
-    cleanup: 5m
+    # cleanup sits above delete because the kubernetes suites apply their
+    # Kubernetes CR declaratively, so it is Chainsaw's auto-cleanup — not an
+    # explicit delete op — that tears the tenant cluster down, and that teardown
+    # runs the chart's pre-delete hooks. Those hooks impose a floor this budget
+    # has to clear rather than land on.
+    #
+    # The floor is structural. packages/apps/kubernetes/templates/delete.yaml
+    # runs its hooks in hook-weight order and Helm waits for each Job to finish
+    # before the next weight, so a suite with OIDC enabled pays them in series:
+    #   weight 5   <release>-oidc-cleanup Job, rendered only when
+    #              oidc.mode != None. Bounded by --request-timeout=30s and
+    #              --timeout=30s, and backoffLimit 1 with restartPolicy
+    #              OnFailure allows a second attempt --> 60s worst.
+    #   weight 10  <release>-pre-cleanup Job, whose two blocking deletes are
+    #              --wait=true --timeout=120s for the child HelmReleases and
+    #              --wait=true --timeout=120s for the TenantControlPlane
+    #              --> a 240s hard floor, and both are spent in full exactly
+    #              when the tenant has no working nodes, which is the teardown
+    #              case that file's own comments call expected.
+    # plus one cold start per Job: scheduling and container start, ~30s each on
+    # a loaded runner.
+    #
+    # So the derived worst case is 240 + 60 + 60 = 360s, and the 300s this was
+    # set to sat below it. Both measured samples confirm the shape: on the run
+    # for cozystack/cozystack#4033, kubernetes-oidc-customconfig completed the
+    # same teardown in 243.8s and passed, while kubernetes-oidc-system passed
+    # every assertion and then failed CLEANUP at 303.72s — Kamaji recorded the
+    # TenantControlPlane gone 0.45s after Chainsaw gave up. Two suites on one
+    # 240s floor, one landing 4s above it and one 64s above it, against 60s of
+    # headroom.
+    #
+    # 8m = the 240s floor plus twice the 120s derived variable worst case above
+    # it, so the variable part has to double from that worst case before the
+    # cliff returns. Raising the ceiling rather than shortening those two 120s
+    # waits is deliberate: delete.yaml is shipped product, and a shorter wait
+    # there would reach its finalizer-forcing backstop sooner on real clusters,
+    # trading a correct uninstall for a faster one to fit a CI budget. The cost
+    # of the wider ceiling is paid only by a cleanup that genuinely wedges,
+    # since the timeout is a ceiling and a healthy cleanup returns as soon as it
+    # is done — whereas the old value was failing suites that had already
+    # passed every assertion they make.
+    cleanup: 8m
     error: 5m
     exec: 5m
   cleanup:
