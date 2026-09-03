@@ -932,11 +932,11 @@ spec:
   steps:
   - name: routeless-passthrough-keeps-the-terminate-listener
     try:
-    # Above the sum of the poll budgets below (840s), so a poll is what fires
-    # and the trap still runs: a SIGKILL at the op ceiling would skip cleanup
-    # and leave the tenant behind for every later suite.
+    # Above the sum of the poll budgets below (1140s), so a poll is what
+    # fires and the trap still runs: a SIGKILL at the op ceiling would skip
+    # cleanup and leave the tenant behind for every later suite.
     - script:
-        timeout: 18m
+        timeout: 25m
         content: |
           set -eu
           ns="$NAMESPACE"
@@ -1000,6 +1000,8 @@ spec:
           cert_hosts='jsonpath={range .items[*]}{.spec.dnsNames[0]}{"\n"}{end}'
           accepted='jsonpath={range .status.parents[?(@.controllerName=="gateway.cozystack.io/tenantgateway-controller")]}{range .conditions[?(@.type=="Accepted")]}{.status}{"\n"}{end}{end}'
           accepted_reason='jsonpath={range .status.parents[?(@.controllerName=="gateway.cozystack.io/tenantgateway-controller")]}{range .conditions[?(@.type=="Accepted")]}{.reason}{"\n"}{end}{end}'
+          tgw_ready='jsonpath={range .status.conditions[?(@.type=="Ready")]}{.status}{"\n"}{end}'
+          tgw_listener='jsonpath={range .status.listeners[?(@.name=="tls-pgprobe")]}{.ready}{"\n"}{end}'
 
           # A tenant owning its own Gateway, which is where the shipped
           # tlsPassthroughServices entries land with nothing routed to them.
@@ -1023,9 +1025,12 @@ spec:
           poll present 60 tls-api kubectl -n "$tenant_ns" get gateway cozystack -o "$tls_names"
 
           # ...and with a TLSRoute already on it the first phase would be
-          # measuring the withdrawal rather than its absence.
-          attached=$(kubectl -n "$tenant_ns" get tlsroute -o name | wc -l)
-          [ "$attached" -eq 0 ]
+          # measuring the withdrawal rather than its absence. Counted off a
+          # captured result rather than through a pipe: a pipeline reports
+          # its last command's status, so a failed kubectl reaches wc and
+          # answers zero, and the guard passes having measured nothing.
+          attached=$(kubectl -n "$tenant_ns" get tlsroute -o name)
+          [ -z "$attached" ]
 
           kubectl apply -n "$tenant_ns" -f - <<EOF
           apiVersion: gateway.networking.k8s.io/v1
@@ -1092,6 +1097,39 @@ spec:
 
           # ...and the HTTPRoute hears why its hostname went away.
           poll present 60 NoMatchingListenerHostname kubectl -n "$tenant_ns" get httproute api-probe -o "$accepted_reason"
+
+          # Phase 3: the native-port form, which nothing above reaches. The
+          # entry renders a listener on its own port with no TLSRoute behind
+          # it, which is the shape the package README rests a claim on: the
+          # pinned Cilium judges a listener on its protocol, its allowed
+          # kinds and its certificate refs and never on its route set, so a
+          # routeless passthrough listener is Accepted and Programmed and
+          # tenant readiness is untouched. The unit tests run against a fake
+          # client and cannot measure that; only a cluster can.
+          #
+          # Patched onto the TenantGateway because no chart value reaches
+          # this field yet. It survives the patch because helm-controller
+          # runs here with drift detection off, the same fact the README
+          # documents.
+          patch=$(printf '{"spec":{"tlsPassthroughListeners":[{"name":"pgprobe","port":5432,"hostname":"pgprobe.%s"}]}}' "$apex")
+          kubectl -n "$tenant_ns" patch tenantgateway cozystack --type=merge -p "$patch"
+
+          # The per-listener entry is the measurement, and it is read before
+          # the aggregate because the aggregate cannot carry one. The
+          # TenantGateway is already Ready when this phase starts, so a poll
+          # for Ready alone is answered by the state that preceded the patch
+          # unless the transient False happens to land first, which is a
+          # race rather than a guarantee. This entry does not exist until
+          # the controller has re-evaluated readiness against the new
+          # listener, and its own flag folds that listener's Accepted and
+          # Programmed, which is the claim being made. The aggregate after
+          # it says the tenant as a whole did not regress.
+          poll present 60 tls-pgprobe kubectl -n "$tenant_ns" get gateway cozystack -o "$tls_names"
+          poll present 120 true kubectl -n "$tenant_ns" get tenantgateway cozystack -o "$tgw_listener"
+          poll present 60 True kubectl -n "$tenant_ns" get tenantgateway cozystack -o "$tgw_ready"
+
+          kubectl -n "$tenant_ns" patch tenantgateway cozystack --type=merge -p '{"spec":{"tlsPassthroughListeners":null}}'
+          poll absent 60 tls-pgprobe kubectl -n "$tenant_ns" get gateway cozystack -o "$tls_names"
         check:
           ($error == null): true
 ---
