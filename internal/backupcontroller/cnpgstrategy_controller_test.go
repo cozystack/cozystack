@@ -682,21 +682,21 @@ func TestCNPGClusterFreshlyRecovered(t *testing.T) {
 // databases must be wiped and replaced with source's exact map. The
 // recovered cluster carries source's role catalog and data; if target's
 // pre-restore drift survives, the chart's init-job either tries to
-// re-create roles against the wrong data or leaks cleartext passwords
-// from a previous tenant configuration.
+// re-create roles against the wrong data or resurrects a role a previous
+// tenant configuration had dropped.
 func TestBuildPostgresAppRestorePatch_ReplacesTargetUsersAndDatabases(t *testing.T) {
 	app := newPostgresApp("pg-target", "tenant")
 	// Target had pre-existing users/databases (e.g. from a previous restore
 	// or operator drift). Replace must wipe them.
 	app.Spec.Users = map[string]postgresapp.User{
-		"stale-target-user": {Password: "leak-me"},
+		"stale-target-user": {Replication: true},
 	}
 	app.Spec.Databases = map[string]postgresapp.Database{
 		"stale-target-db": {Extensions: []string{"pgcrypto"}},
 	}
 
 	sourceUsers := map[string]postgresapp.User{
-		"app": {Password: "src"},
+		"app": {Replication: true},
 	}
 	sourceDatabases := map[string]postgresapp.Database{
 		"appdb": {Extensions: []string{"hstore"}},
@@ -709,8 +709,8 @@ func TestBuildPostgresAppRestorePatch_ReplacesTargetUsersAndDatabases(t *testing
 	}
 	if u, ok := patched.Spec.Users["app"]; !ok {
 		t.Errorf("source user was not propagated onto target")
-	} else if u.Password != "src" {
-		t.Errorf("source user password mismatch; got %q want %q", u.Password, "src")
+	} else if !u.Replication {
+		t.Errorf("source user attributes not propagated; got %#v", u)
 	}
 	if _, ok := patched.Spec.Databases["stale-target-db"]; ok {
 		t.Errorf("stale target database survived restore; replace semantics regressed")
@@ -842,7 +842,7 @@ func TestMarshalUnmarshalCNPGBackupSnapshot(t *testing.T) {
 		"app": {Extensions: []string{"pgcrypto"}},
 	}
 	src.Spec.Users = map[string]postgresapp.User{
-		"app": {Password: "p"},
+		"app": {Replication: true},
 	}
 	parameters := map[string]string{
 		"credsSecret": "tenant-shared-creds",
@@ -865,7 +865,7 @@ func TestMarshalUnmarshalCNPGBackupSnapshot(t *testing.T) {
 	if dbs["app"].Extensions[0] != "pgcrypto" {
 		t.Errorf("databases round-trip mismatch: %#v", dbs)
 	}
-	if users["app"].Password != "p" {
+	if !users["app"].Replication {
 		t.Errorf("users round-trip mismatch: %#v", users)
 	}
 	if params["credsSecret"] != "tenant-shared-creds" {
