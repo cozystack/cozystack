@@ -33,8 +33,8 @@ spec:
   # source the trust anchor is published from: the TenantProjection this chart
   # renders names the operator's key-free <release>-ca-bundle as the source
   # instead, so no publication path ever runs next to the CA private key. The
-  # ApplicationDefinition names neither — it selects the published anchor by
-  # label.
+  # ApplicationDefinition names neither as a source: it excludes this Secret by
+  # name and selects the published anchor by label.
   #
   # The operator only watches Secrets referenced by serverCASecretRef /
   # serverCertSecretRef when they carry its watch label, and it sets the same
@@ -94,9 +94,9 @@ spec:
 # The operator does not check either: with both serverCASecretRef and
 # serverCertSecretRef supplied it skips certificate issuance, so the code that
 # would validate SANs is never reached. It still reads the Secret — for the pod
-# annotation hash and for status — but never inspects the names in it. So an upstream rename surfaces as a handshake failure
-# in a cluster, and closing that gap needs an e2e case that connects, not
-# another rendering assertion.
+# annotation hash and for status — but never inspects the names in it. So an
+# upstream rename surfaces as a handshake failure in a cluster, and closing
+# that gap needs an e2e case that connects, not another rendering assertion.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
