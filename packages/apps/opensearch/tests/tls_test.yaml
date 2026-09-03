@@ -337,6 +337,31 @@ tests:
       - notExists:
           path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
 
+  # Nothing else in the suite feeds an explicit `tls: null`, and it is a shape a
+  # hand-written values file produces: Helm deletes the key rather than coalescing it
+  # back to the `tls: {}` of values.yaml, so .Values.tls arrives nil. These two pin
+  # that it stays a supported input resolving by `external`, in both directions —
+  # a null that resolved to a constant either way would satisfy one of them by
+  # accident. They do NOT discriminate the `| default dict` in _tls.tpl: nil and the
+  # empty dict read identically there, and dropping it reddens nothing.
+  - it: resolves a null tls block by external, auto-on
+    values:
+      - tls_null_values.yaml
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: resolves a null tls block by external, off
+    values:
+      - tls_null_values.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
   - it: "(a) renders no resources when external false and tls.enabled unset"
     asserts:
       - hasDocuments:

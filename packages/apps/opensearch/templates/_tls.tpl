@@ -38,9 +38,19 @@ images.opensearch override cannot move it out from under the operator either.
 */}}
 {{- define "opensearch.tls.enabled" -}}
 {{- /*
-Defensive only: Helm coalesces an explicit `tls: null` back to the `tls: {}` in
-values.yaml, so nil does not reach here today and no test can exercise it. The
-default keeps that true if values.yaml ever stops defaulting the key.
+This default is not a null guard, and reading it as one is how the sentence that used
+to sit here got its facts backwards. `tls: {}` in values.yaml is EMPTY, so `default`
+fires on the ordinary path as well; and neither shape needs it in order to render,
+because a field read through nil yields no value exactly as it does through an empty
+dict — `enabled` comes back invalid either way and the tri-state below falls through
+to `external`. Removing it reddens nothing in the suite.
+
+What it buys is that $tls is always a dict, so an edit reaching for `hasKey` or
+`index`, both of which DO error on nil, cannot be broken by an input the platform
+never sends but a hand-written values file can. That input is real: an explicit
+`tls: null` arrives here as nil, because Helm deletes the key rather than coalescing
+it back to the values.yaml default. Measured on v4.2.4, through a values file and
+through --set alike.
 */ -}}
 {{- $tls := .Values.tls | default dict -}}
 {{- $explicit := not (kindIs "invalid" $tls.enabled) -}}

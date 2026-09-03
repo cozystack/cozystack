@@ -4,11 +4,13 @@ suite: opensearch TenantProjection sentinel
 # that tells the CA-extraction controller to lift ca.crt out of the key-bearing
 # <release>.http-ca into the tenant-readable <release>.tenant-ca projection.
 #
-# This is the only thing that creates that projection. templates/dashboard-
-# resourcemap.yaml grants the tenant read on <release>.tenant-ca by name, and the
-# ApplicationDefinition selects it by label; both are inert until the sentinel
-# exists, so losing this template costs the tenant its trust anchor with no error
-# anywhere.
+# This is the only thing that creates that projection. The tenant reads it through
+# core.cozystack.io/tenantsecrets, which the base tenant roles grant and which the
+# ApplicationDefinition's label selector admits it to; templates/dashboard-
+# resourcemap.yaml deliberately grants no name for it, and
+# tests/dashboard-resourcemap_test.yaml pins that absence. Both paths are inert
+# until the sentinel exists, so losing this template costs the tenant its trust
+# anchor with no error anywhere.
 #
 # The source is named .http-ca, with a dot: the operator reserves <clusterName>-ca for
 # its own transport CA, and the hyphenated form is exactly that name for the sibling
