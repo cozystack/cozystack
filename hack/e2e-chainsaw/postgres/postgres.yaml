@@ -14,8 +14,7 @@ spec:
     minSyncReplicas: 0
     maxSyncReplicas: 0
   users:
-    testuser:
-      password: xai7Wepo
+    testuser: {}
   databases:
     testdb:
       roles:

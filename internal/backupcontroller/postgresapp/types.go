@@ -116,6 +116,5 @@ type DatabaseRoles struct {
 }
 
 type User struct {
-	Password    string `json:"password,omitempty"`
-	Replication bool   `json:"replication,omitempty"`
+	Replication bool `json:"replication,omitempty"`
 }

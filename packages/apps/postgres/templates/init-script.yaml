@@ -7,10 +7,24 @@
   {{- end }}
 {{- end }}
 
+{{/*
+  Passwords are always chart-generated and preserved across reconciles via the
+  lookup above. Rotation is an explicit, data-driven trigger: the counter is
+  persisted in the Secret's annotation (kept out of stringData so it can never
+  collide with a user named after the marker) and compared with
+  .Values.passwordRotation. A missing marker (pre-rotation releases) is treated
+  as "adopt current baseline", so an in-place upgrade never regenerates a live
+  password on its own — only a counter bump does.
+*/}}
+{{- $rotationAnnotation := "postgres.cozystack.io/password-rotation" }}
+{{- $existingMeta := (index $existingSecret "metadata") | default dict }}
+{{- $existingAnnotations := (index $existingMeta "annotations") | default dict }}
+{{- $storedRotation := index $existingAnnotations $rotationAnnotation | default "" }}
+{{- $wantRotation := .Values.passwordRotation | toString }}
+{{- $rotate := and (ne $storedRotation "") (ne $wantRotation $storedRotation) }}
+
 {{- range $user, $u := .Values.users }}
-  {{- if $u.password }}
-    {{- $_ := set $passwords $user $u.password }}
-  {{- else if not (index $passwords $user) }}
+  {{- if or (not (index $passwords $user)) $rotate }}
     {{- $_ := set $passwords $user (randAlphaNum 16) }}
   {{- end }}
 {{- end }}
@@ -20,6 +34,8 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Release.Name }}-credentials
+  annotations:
+    {{ $rotationAnnotation }}: {{ $wantRotation | quote }}
 stringData:
   {{- range $user, $u := .Values.users }}
   {{ quote $user }}: {{ quote (index $passwords $user) }}

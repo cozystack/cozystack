@@ -33,8 +33,6 @@ export RESTOREJOB_PITR_NAME="${RESTOREJOB_PITR_NAME:-pg-src-to-pg-target-pitr}"
 export RESTOREJOB_UNREACHABLE_NAME="${RESTOREJOB_UNREACHABLE_NAME:-pg-src-to-pg-target-unreachable}"
 export RESTOREJOB_INPLACE_NAME="${RESTOREJOB_INPLACE_NAME:-pg-src-in-place}"
 export PLAN_NAME="${PLAN_NAME:-pg-src-daily}"
-# App user password baked into 05-postgres-src.yaml (REPLACE_WITH_PASSWORD).
-export PG_PASSWORD="${PG_PASSWORD:-Xai7Wepo0aeThie8}"
 
 # S3 endpoint CA. cozystack's default seaweedfs serves its S3 endpoint with a
 # self-signed certificate whose CA lives in this Secret; the demo copies its
