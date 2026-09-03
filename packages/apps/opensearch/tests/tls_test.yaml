@@ -673,6 +673,23 @@ tests:
           path: spec.dnsNames
           content: os-test.example.cozy.local
 
+  # Isolates the `external` operand of that guard. The case above leaves
+  # _namespace.host unset, and the guard is an `and`, so the empty host suppresses the
+  # SAN on its own and the assertion holds whatever `external` does. A host present
+  # with external cleared is the only shape where that operand alone decides.
+  - it: leaf cert omits the external HTTP SAN when a host exists but external is false
+    set:
+      tls:
+        enabled: true
+      external: false
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+
   # --- SAN coverage for Dashboards services ---
 
   # THE SAME THREE GUARDS THE API LEAF HAS. The Dashboards certificate inherits every
@@ -800,6 +817,23 @@ tests:
     documentIndex: 4
     asserts:
       - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.example.cozy.local
+
+  # The same isolation for the Dashboards leaf, which carries its own copy of the
+  # guard: host present, external cleared.
+  - it: dashboards cert omits the external SAN when a host exists but external is false
+    set:
+      tls:
+        enabled: true
+      external: false
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - notContains:
           path: spec.dnsNames
           content: os-test-dashboards.example.cozy.local
 
