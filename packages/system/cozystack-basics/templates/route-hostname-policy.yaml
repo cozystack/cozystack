@@ -3,19 +3,26 @@
 
   Layer 7 of the Gateway API security model (see
   packages/extra/gateway/README.md). The Gateway-side VAPs already in
-  this package validate Gateway listener hostnames; this VAP closes
+  this package validate Gateway listener hostnames; these VAPs close
   the same surface at the route level so a tenant carrying RBAC for
-  HTTPRoute / TLSRoute in its own namespace cannot publish hostnames
-  that fall outside its apex.
+  HTTPRoute, TLSRoute or GRPCRoute in its own namespace cannot publish
+  hostnames that fall outside its apex.
 
   Scope: only routes in tenant-* namespaces are gated. cozy-*
   namespaces are cluster-admin-managed and trusted to publish under
   any apex (they back platform services like dashboard, harbor,
   bucket).
 
-  Two pairs of resources are rendered: a VAP + Binding for HTTPRoute, and
-  a VAP + Binding for TLSRoute. Which API versions each one matches is
-  stated once, in the rule itself, rather than restated here.
+  Three pairs of resources are rendered: a VAP + Binding each for
+  HTTPRoute, TLSRoute and GRPCRoute. Which API versions each one matches
+  is stated once, in the rule itself, rather than restated here.
+
+  GRPCRoute is gated for the same reason as the other two. The port-443
+  listeners the tenant gateway controller renders pin
+  allowedRoutes.kinds to HTTPRoute and TLSRoute, but the port-80
+  listener leaves kinds unset, and an unset kinds list resolves to
+  whatever the listener protocol supports -- for HTTP that includes
+  GRPCRoute, which carries spec.hostnames of its own.
 
   Each rule names every version the vendored bundle serves for its
   resource. hack/route-hostname-policy-version-coverage.bats pins those
@@ -112,5 +119,39 @@ metadata:
     internal.cozystack.io/managed-by-cozystack: ""
 spec:
   policyName: cozystack-route-hostname-policy-tls
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-route-hostname-policy-grpc
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["gateway.networking.k8s.io"]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["grpcroutes"]
+  matchConditions:
+  - name: tenant-namespace
+    expression: object.metadata.namespace.startsWith("tenant-")
+  validations:
+  - expression: >-
+      {{ $celValidator }}
+    messageExpression: >-
+      "GRPCRoute hostnames must equal the namespace's namespace.cozystack.io/host label or be subdomains of it (namespace " + object.metadata.namespace + ")"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-route-hostname-policy-grpc
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-route-hostname-policy-grpc
   validationActions: [Deny]
 {{- end }}
