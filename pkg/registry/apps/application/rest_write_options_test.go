@@ -19,7 +19,9 @@ package application
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -29,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -206,6 +209,58 @@ func TestDeletePropagatesWriteOptions(t *testing.T) {
 	}
 }
 
+// assertWireStatus checks the answer the aggregated endpoint would put on the
+// wire: ErrorToAPIStatus type-switches on the APIStatus interface and never
+// unwraps, so a merely fmt.Errorf-wrapped backend rejection collapses to a
+// generic 500 with an empty reason even while errors.Is/As still succeed.
+func assertWireStatus(t *testing.T, err error, wantCode int32, wantReason metav1.StatusReason, wantContext string) {
+	t.Helper()
+	status := responsewriters.ErrorToAPIStatus(err)
+	if status.Code != wantCode || status.Reason != wantReason {
+		t.Fatalf("wire status = %d %q, want %d %q (err: %v)", status.Code, status.Reason, wantCode, wantReason, err)
+	}
+	if !strings.Contains(status.Message, wantContext) {
+		t.Fatalf("wire message %q lost the %q context", status.Message, wantContext)
+	}
+}
+
+func TestCreatePreservesBackendStatus(t *testing.T) {
+	alreadyExists := apierrors.NewAlreadyExists(
+		schema.GroupResource{Group: helmv2.GroupVersion.Group, Resource: "helmreleases"},
+		"postgresql-example",
+	)
+	r := newOptionsTestREST(t, interceptor.Funcs{
+		Create: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.CreateOption) error {
+			return alreadyExists
+		},
+	})
+	ctx := request.WithNamespace(context.Background(), optionsTestNamespace)
+	_, err := r.Create(ctx, optionsTestApplication(), nil, &metav1.CreateOptions{})
+	if !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("Create returned %v, want a preserved AlreadyExists", err)
+	}
+	assertWireStatus(t, err, http.StatusConflict, metav1.StatusReasonAlreadyExists, "failed to create HelmRelease")
+}
+
+func TestUpdatePreservesBackendStatus(t *testing.T) {
+	forbidden := apierrors.NewForbidden(
+		schema.GroupResource{Group: helmv2.GroupVersion.Group, Resource: "helmreleases"},
+		"postgresql-example",
+		fmt.Errorf("rejected by admission policy"),
+	)
+	r := newOptionsTestREST(t, interceptor.Funcs{
+		Update: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.UpdateOption) error {
+			return forbidden
+		},
+	}, optionsTestHelmRelease())
+	ctx := request.WithNamespace(context.Background(), optionsTestNamespace)
+	_, _, err := r.Update(ctx, "example", rest.DefaultUpdatedObjectInfo(optionsTestApplication()), nil, nil, false, &metav1.UpdateOptions{})
+	if !apierrors.IsForbidden(err) {
+		t.Fatalf("Update returned %v, want a preserved Forbidden", err)
+	}
+	assertWireStatus(t, err, http.StatusForbidden, metav1.StatusReasonForbidden, "failed to update HelmRelease")
+}
+
 func TestDeletePreservesConflictError(t *testing.T) {
 	conflict := apierrors.NewConflict(
 		schema.GroupResource{Group: helmv2.GroupVersion.Group, Resource: "helmreleases"},
@@ -218,7 +273,9 @@ func TestDeletePreservesConflictError(t *testing.T) {
 		},
 	}, optionsTestHelmRelease())
 	ctx := request.WithNamespace(context.Background(), optionsTestNamespace)
-	if _, _, err := r.Delete(ctx, "example", nil, &metav1.DeleteOptions{}); !apierrors.IsConflict(err) {
+	_, _, err := r.Delete(ctx, "example", nil, &metav1.DeleteOptions{})
+	if !apierrors.IsConflict(err) {
 		t.Fatalf("Delete returned %v, want a preserved Conflict", err)
 	}
+	assertWireStatus(t, err, http.StatusConflict, metav1.StatusReasonConflict, "failed to delete HelmRelease")
 }
