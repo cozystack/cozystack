@@ -345,8 +345,12 @@ func dryRunDeleteResult(current *CiliumNetworkPolicy, opts *metav1.DeleteOptions
 		}
 	}
 
-	if opts != nil && opts.OrphanDependents != nil {
-		if *opts.OrphanDependents {
+	var orphanDependents *bool
+	if opts != nil {
+		orphanDependents = opts.OrphanDependents //nolint:staticcheck // SA1019: the apiserver still honours the deprecated field (shouldOrphanDependents), so the dry-run mirror reads it too.
+	}
+	if orphanDependents != nil {
+		if *orphanDependents {
 			finalizers = append(finalizers, metav1.FinalizerOrphanDependents)
 		}
 	} else if opts != nil && opts.PropagationPolicy != nil {
@@ -861,7 +865,11 @@ func (r *REST) Delete(
 		return nil, false, err
 	}
 	current := &CiliumNetworkPolicy{}
-	if err := r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, current, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+	// Read through the direct (uncached) client: the dry-run branch derives its
+	// prospective result from this object, and a stale cache copy could
+	// misreport the finalizer set - the same skew the post-delete read below
+	// guards against.
+	if err := r.w.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, current, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
 		return nil, false, err
 	}
 	if !isSecurityGroup(current) {
