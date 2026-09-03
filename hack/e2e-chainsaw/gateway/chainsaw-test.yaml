@@ -1689,6 +1689,12 @@ spec:
           }
           adm_port=$(service_port "$adm" https-webhook)
           ctl_port=$(service_port "$ctl" https)
+          adm_cluster_ip=$(kubectl -n "$ns" get svc "$adm" -o jsonpath='{.spec.clusterIP}')
+          [ -n "$adm_cluster_ip" ] && [ "$adm_cluster_ip" != None ] || {
+            echo "SETUP FAILURE: $adm must have a real ClusterIP, found ${adm_cluster_ip:-<empty>}" >&2
+            kubectl -n "$ns" get svc "$adm" -o yaml >&2 2>&1 || true
+            exit 1
+          }
           [ -n "$adm_port" ] || {
             echo "SETUP FAILURE: $adm must expose exactly one TCP https-webhook port" >&2
             kubectl -n "$ns" get svc "$adm" -o yaml >&2 2>&1 || true
@@ -1711,10 +1717,11 @@ spec:
             echo "$n"
           }
 
-          # Exact ready admission coordinates. The IP and backend port come
-          # from the same EndpointSlice as the ready condition; selecting them
-          # independently from .items[0] could probe an unready replica while a
-          # different replica kept the aggregate Service readiness above zero.
+          # Exact ready admission coordinates. The Pod identity, IP and backend
+          # port come from the same EndpointSlice as the ready condition;
+          # selecting them independently from .items[0] could probe an unready
+          # replica while a different replica kept aggregate readiness above
+          # zero.
           ready_admission_backends() {
             kubectl -n "$ns" get endpointslice -l "kubernetes.io/service-name=$adm" -o json | jq -r '
               .items[]? as $slice
@@ -1726,21 +1733,32 @@ spec:
               | select(.conditions.ready == true)
               | select(.targetRef.kind == "Pod")
               | select((.targetRef.name // "") != "")
+              | select((.targetRef.uid // "") != "")
               | .targetRef.name as $pod
+              | .targetRef.uid as $uid
               | .addresses[]?
               | select(type == "string" and length > 0)
-              | [$pod, ., ($port.port | tostring)]
+              | [$pod, $uid, ., ($port.port | tostring)]
               | @tsv
             ' | sort -u
           }
 
-          # Pod identity plus restart count, as one string. Compared for
-          # equality across the probe window, so a restart AND a replacement
-          # both show up -- a crash-looping controller can satisfy a readiness
-          # check at both ends of a window it spent dying in the middle of.
+          # Pod identity, IP and every container restart count, as one string.
+          # Compared for equality across the probe window, so a restart AND a
+          # replacement both show up -- a crash-looping controller can satisfy
+          # a readiness check at both ends of a window it spent dying in the
+          # middle of.
           controller_generation() {
-            kubectl -n "$ns" get pod -l "$sel" \
-              -o jsonpath='{range .items[*]}{.metadata.name}/{.metadata.uid}={range .status.containerStatuses[*]}{.name}:{.restartCount},{end}{"\n"}{end}' | sort
+            generation=$(kubectl -n "$ns" get pod -l "$sel" \
+              -o jsonpath='{range .items[*]}{.metadata.name}/{.metadata.uid}/{.status.podIP}={range .status.containerStatuses[*]}{.name}:{.restartCount},{end}{"\n"}{end}') || {
+              echo "SETUP FAILURE: unable to read ingress-nginx controller generation" >&2
+              return 1
+            }
+            [ -n "$generation" ] || {
+              echo "SETUP FAILURE: ingress-nginx controller generation is empty" >&2
+              return 1
+            }
+            printf '%s\n' "$generation" | sort
           }
 
           # Precondition. Both Services are backed by the same controller pods,
@@ -1765,29 +1783,30 @@ spec:
           done
 
           backend=$(ready_admission_backends | head -1)
-          [ -n "$backend" ] || { echo "SETUP FAILURE: $adm has no complete ready Pod/IP/port coordinate" >&2; exit 1; }
+          [ -n "$backend" ] || { echo "SETUP FAILURE: $adm has no complete ready Pod/UID/IP/port coordinate" >&2; exit 1; }
           tab=$(printf '\t')
           backend_fields=$(printf '%s\n' "$backend" | awk -F "$tab" '{ print NF }')
-          [ "$backend_fields" -eq 3 ] || { echo "SETUP FAILURE: malformed ready backend coordinate: $backend" >&2; exit 1; }
+          [ "$backend_fields" -eq 4 ] || { echo "SETUP FAILURE: malformed ready backend coordinate: $backend" >&2; exit 1; }
           pod_name=$(printf '%s\n' "$backend" | cut -f1)
-          pod_ip=$(printf '%s\n' "$backend" | cut -f2)
-          hook_port=$(printf '%s\n' "$backend" | cut -f3)
-          [ -n "$pod_name" ] && [ -n "$pod_ip" ] && [ -n "$hook_port" ] || {
+          pod_uid=$(printf '%s\n' "$backend" | cut -f2)
+          pod_ip=$(printf '%s\n' "$backend" | cut -f3)
+          hook_port=$(printf '%s\n' "$backend" | cut -f4)
+          [ -n "$pod_name" ] && [ -n "$pod_uid" ] && [ -n "$pod_ip" ] && [ -n "$hook_port" ] || {
             echo "SETUP FAILURE: incomplete ready backend coordinate: $backend" >&2
             exit 1
           }
 
           selected_backend_ready() {
             ready_admission_backends | awk -F "$tab" \
-              -v pod="$pod_name" -v ip="$pod_ip" -v port="$hook_port" '
-                $1 == pod && $2 == ip && $3 == port { found = 1 }
+              -v pod="$pod_name" -v uid="$pod_uid" -v ip="$pod_ip" -v port="$hook_port" '
+                $1 == pod && $2 == uid && $3 == ip && $4 == port { found = 1 }
                 END { exit !found }
               '
           }
 
           require_selected_backend() {
             selected_backend_ready && return 0
-            echo "SETUP FAILURE: selected admission backend $pod_name ($pod_ip:$hook_port) was not ready $1" >&2
+            echo "SETUP FAILURE: selected admission backend $pod_name/$pod_uid ($pod_ip:$hook_port) was not ready $1" >&2
             kubectl -n "$ns" get endpointslice -l "kubernetes.io/service-name=$adm" -o yaml >&2 2>&1 || true
             kubectl -n "$ns" get pod "$pod_name" -o wide >&2 2>&1 || true
             exit 1
@@ -1799,6 +1818,14 @@ spec:
           # instant. Six samples over 30s, all of which must be live and show no
           # restart or replacement.
           gen_before=$(controller_generation)
+          printf '%s\n' "$gen_before" | awk \
+            -v prefix="${pod_name}/${pod_uid}/${pod_ip}=" '
+              index($0, prefix) == 1 { found = 1 }
+              END { exit !found }
+            ' || {
+              echo "SETUP FAILURE: selected admission backend is not a current controller Pod: $backend" >&2
+              exit 1
+            }
           i=0
           while [ "$i" -lt 6 ]; do
             sleep 5
@@ -1820,7 +1847,7 @@ spec:
             exit 1
           }
 
-          echo "probing from $ns: expect reachable ${ctl}:${ctl_port}, denied ${adm}:${adm_port}, denied ${pod_name}@${pod_ip}:${hook_port}"
+          echo "probing from $ns: expect reachable ${ctl}:${ctl_port}, denied ${adm}@${adm_cluster_ip}:${adm_port}, denied ${pod_name}/${pod_uid}@${pod_ip}:${hook_port}"
 
           kubectl -n "$ns" delete pod "$probe" --ignore-not-found --wait=true --timeout=60s
           # busybox:musl is staged onto every node by hack/e2e-prepull-images.sh,
@@ -1854,7 +1881,7 @@ spec:
               - name: CTL_PORT
                 value: "${ctl_port}"
               - name: ADM_HOST
-                value: "${adm}.${ns}.svc"
+                value: "${adm_cluster_ip}"
               - name: ADM_PORT
                 value: "${adm_port}"
               - name: POD_IP
