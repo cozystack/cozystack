@@ -109,7 +109,7 @@ matches the golden render of a GPU pool:
             configRef:
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
-              name: kubernetes-myk8s-md0
+              name: kubernetes-myk8s-md0-32908f
               namespace: tenant-test
           clusterName: kubernetes-myk8s
           infrastructureRef:
@@ -262,7 +262,7 @@ matches the golden render of a kubelet-override pool:
             configRef:
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
-              name: kubernetes-myk8s-md0
+              name: kubernetes-myk8s-md0-db97de
               namespace: tenant-test
           clusterName: kubernetes-myk8s
           infrastructureRef:
@@ -418,7 +418,7 @@ matches the golden render of the pool objects:
             configRef:
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
-              name: kubernetes-myk8s-md0
+              name: kubernetes-myk8s-md0-ffdbe1
               namespace: tenant-test
           clusterName: kubernetes-myk8s
           infrastructureRef:
