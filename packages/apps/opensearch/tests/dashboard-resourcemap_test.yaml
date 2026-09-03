@@ -44,7 +44,7 @@ tests:
     asserts:
       - notContains:
           path: rules[1].resourceNames
-          content: os-test-http-ca
+          content: os-test.http-ca
       - notContains:
           path: rules[1].resourceNames
           content: os-test-http-server

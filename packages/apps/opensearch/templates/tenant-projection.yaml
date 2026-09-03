@@ -16,6 +16,6 @@ metadata:
 spec:
   projections:
     - type: CACert
-      sourceSecretName: {{ .Release.Name }}-http-ca
+      sourceSecretName: {{ .Release.Name }}.http-ca
       sourceKey: ca.crt
 {{- end }}

@@ -248,6 +248,41 @@ tests:
           value: os-test-ca
         documentIndex: 3
 
+  # Hyphenated, the CA Secret name is also what the operator composes for its own
+  # transport CA on the sibling release one -http longer: release os-test's
+  # <release>-http-ca is release os-test-http's <clusterName>-ca, and os-test-http is a
+  # legal application name. Whichever object reached the name first would keep it while
+  # the other side read or wrote key material it did not create. Application names are
+  # DNS-1035 labels and cannot contain a dot, so the dot puts this name beyond the
+  # operator's reach for every sibling at once. The remaining assertions cover this
+  # release's own operator-composed names, the way the leaf guard above does for the leaf.
+  - it: keeps the CA secret beyond the reach of any operator-composed name
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: os-test.http-ca
+        documentIndex: 1
+      # The transport CA of the sibling release named one -http longer.
+      - notEqual:
+          path: spec.secretName
+          value: os-test-http-ca
+        documentIndex: 1
+      - notEqual:
+          path: spec.secretName
+          value: os-test-ca
+        documentIndex: 1
+      - notEqual:
+          path: spec.secretName
+          value: os-test-http-cert
+        documentIndex: 1
+      - notEqual:
+          path: spec.secretName
+          value: os-test-admin-cert
+        documentIndex: 1
+
   # Every Secret this template mints carries a private key: the CA's under tls.key,
   # and each leaf's server key. The ApplicationDefinition grants by LABEL with no name
   # constraint, so a tenant-visible label appearing on any of them hands the tenant
@@ -258,15 +293,16 @@ tests:
   # documentIndex would follow the slot, so reordering this template would let a
   # labelled key-bearing Certificate slide out from under the assertion and pass
   # green. spec.secretName also discriminates Certificate from Issuer, which shares
-  # the name os-test-http-ca, and helm-unittest fails the test when a selector
-  # matches no document or more than one — so the anchor cannot go blind either.
+  # metadata.name os-test-http-ca with it and names the same Secret under
+  # spec.ca.secretName, and helm-unittest fails the test when a selector matches no
+  # document or more than one — so the anchor cannot go blind either.
   - it: keeps the key-bearing CA secret off every tenant-visible label
     set:
       tls:
         enabled: true
     documentSelector:
       path: spec.secretName
-      value: os-test-http-ca
+      value: os-test.http-ca
     asserts:
       - notExists:
           path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
@@ -408,7 +444,7 @@ tests:
           value: cert-manager.io
       - equal:
           path: spec.secretName
-          value: os-test-http-ca
+          value: os-test.http-ca
       - equal:
           path: spec.issuerRef.name
           value: os-test-http-selfsigned
@@ -442,7 +478,7 @@ tests:
           value: os-test-http-ca
       - equal:
           path: spec.ca.secretName
-          value: os-test-http-ca
+          value: os-test.http-ca
 
   - it: fourth document is leaf Certificate referencing the CA Issuer
     set:
@@ -859,7 +895,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.security.tls.http.caSecret.name
-          value: os-test-http-ca
+          value: os-test.http-ca
         documentIndex: 0
       - notExists:
           path: spec.security.tls.http.generate
@@ -995,7 +1031,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.security.tls.http.caSecret.name
-          value: os-test-http-ca
+          value: os-test.http-ca
         documentIndex: 0
       - notExists:
           path: spec.security.tls.http.generate
@@ -1035,7 +1071,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.security.tls.http.caSecret.name
-          value: os-test-http-ca
+          value: os-test.http-ca
         documentIndex: 0
       - notExists:
           path: spec.security.tls.http.generate

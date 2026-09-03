@@ -16,7 +16,7 @@ kubectl --context <ctx> --namespace <tenant> \
   --output jsonpath='{.data.ca\.crt}' | base64 --decode
 ```
 
-That object is the only one that hands over the CA certificate without also handing over a private key, which is why it exists. `opensearch-<name>-http-ca` holds the CA private key alongside the certificate, and each leaf Secret holds a server private key; none of the three is granted to a tenant.
+That object is the only one that hands over the CA certificate without also handing over a private key, which is why it exists. `opensearch-<name>.http-ca` holds the CA private key alongside the certificate, and each leaf Secret holds a server private key; none of the three is granted to a tenant.
 
 ### Upgrading an existing release published externally
 

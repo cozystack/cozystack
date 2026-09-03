@@ -30,7 +30,7 @@ rules:
 # it keeps conveying it after the webhook has withdrawn the verdict, so it would
 # bypass the platform's only revocation channel for the anchor.
 #
-# The three Secrets of the TLS chain — <release>-http-ca, -http-server and
+# The three Secrets of the TLS chain — <release>.http-ca, -http-server and
 # -dashboards-server — each hold a private key and belong in no tenant-facing Role at
 # all.
 - apiGroups:

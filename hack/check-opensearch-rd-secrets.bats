@@ -2,7 +2,7 @@
 # Unit test: the opensearch ResourceDefinition hands tenants the key-free trust
 # anchor and nothing else.
 #
-# The chart issues opensearch-<name>-http-ca (CA certificate AND CA private key,
+# The chart issues opensearch-<name>.http-ca (CA certificate AND CA private key,
 # the latter under tls.key), opensearch-<name>-http-server and
 # opensearch-<name>-dashboards-server (each a server certificate AND its private
 # key). None may reach a tenant: read access to the CA key would let the holder
@@ -132,7 +132,7 @@ NORMALIZE='{exclude: (.exclude // []), include: (.include | sort)}'
     echo "Unexpected tenant Secret surface in the rendered opensearch-rd spec.secrets:" >&2
     echo "  actual:   $actual" >&2
     echo "  expected: $expected" >&2
-    echo "opensearch-<name>-http-ca holds the CA PRIVATE KEY, and -http-server and" >&2
+    echo "opensearch-<name>.http-ca holds the CA PRIVATE KEY, and -http-server and" >&2
     echo "-dashboards-server each hold a server private key. None may be granted to" >&2
     echo "a tenant, by name or by a label they also carry -- cert-manager stamps its" >&2
     echo "own labels on all three." >&2

@@ -10,18 +10,47 @@ combined: a single leaf covering both would hand the Dashboards pod a private ke
 valid for the API names. The Dashboards leaf renders last and only when Dashboards is
 enabled, so the chain is 4 resources without it and 5 with it.
 
-IMPORTANT: The CA secret is named {{ .Release.Name }}-http-ca (NOT {{ .Release.Name }}-ca).
-The opensearch-operator hardcodes <clusterName>-ca as the name of its own internal transport
-CA secret (see ReadOrGenerateCaCert in
+IMPORTANT: The CA Secret is named {{ .Release.Name }}.http-ca, with a DOT before
+http-ca. Two reasons stack, and the second is what the dot answers.
+
+It cannot be {{ .Release.Name }}-ca, because the operator hardcodes <clusterName>-ca for
+its own transport CA Secret (ReadOrGenerateCaCert in
 https://github.com/opensearch-project/opensearch-k8s-operator/blob/main/opensearch-operator/pkg/reconcilers/util/util.go).
-Using the same name would cause the operator to read our cert-manager CA and fail with
-"tls: failed to find any PEM data in key input" because it expects ca.key but the
-cert-manager secret stores the private key under tls.key.
+The operator would read the cert-manager Secret as that CA and fail with "tls: failed to
+find any PEM data in key input", because it expects ca.key where cert-manager writes
+tls.key.
+
+Nor is -http-ca far enough away, because every one of these names is a release name plus
+a suffix, and a SIBLING RELEASE supplies the difference between two suffixes. A release is
+<prefix><app> with prefix opensearch-, so release opensearch-foo's chart CA
+(<release>-http-ca) and release opensearch-foo-http's operator transport CA
+(<clusterName>-ca) are both opensearch-foo-http-ca — and foo-http is a legal application
+name. Whichever object reaches the name first keeps it, and the other side then reads or
+writes key material it did not create; that goes wrong in both directions and is not
+recoverable in place. The dot ends it: application names are validated as DNS-1035 labels
+(pkg/apis/apps/validation), which cannot contain a dot, and neither can the release prefix,
+so no operator-composed <clusterName><suffix> can equal this name. Secret names are
+DNS-1123 subdomains, which can. The platform's tenant-CA projection carries the dot for
+the same reason (projectionSuffix in internal/controller/cacert).
+
+So the rule: a suffix needs the dot when it is a tail of another suffix in the combined
+set, or has one as a tail. At operator 2.8.0 that set is -ca, -transport-cert, -http-cert,
+-admin-cert, -dashboards-cert and -admin-password on the operator's side, and .http-ca,
+-http-server, -dashboards-server, -credentials, -admin-credentials and -security-config on
+this chart's. The two leaf Secrets keep the hyphen — {{ .Release.Name }}-http-server and
+{{ .Release.Name }}-dashboards-server — because neither stands in that relation to any
+entry: no other suffix ends in -server, and neither leaf ends in another suffix. A suffix
+added later has to be checked the same way.
+
+One pair on that list does stand in it, outside this chain: -admin-credentials against
+-credentials, which makes release foo's admin Secret release foo-admin's user-facing one.
+Both names ship today and -credentials is what the ResourceDefinition grants the tenant by
+name, so moving either is a breaking change of its own rather than part of this file.
 
 securityadmin trust: the securityadmin job connects to the HTTP endpoint (port 9200 for
 OpenSearch >= 2.0) and validates the server certificate against the admin certificate's
 ca.crt, authenticating with that same admin certificate. To make both anchor on this CA,
-the CR passes {{ .Release.Name }}-http-ca to spec.security.tls.http.caSecret: the operator
+the CR passes {{ .Release.Name }}.http-ca to spec.security.tls.http.caSecret: the operator
 then signs the admin certificate with this CA and sets the HTTP listener trust anchor to
 it (pemtrustedcas). The operator reads the cert-manager secret's tls.crt/tls.key as the
 CA via the cert-manager.io/issuer-kind annotation. As a result securityadmin verifies the
@@ -56,14 +85,18 @@ spec:
 ---
 # HTTP-layer CA Certificate. rotationPolicy: Never keeps the CA stable so existing
 # client trust bundles remain valid across cert-manager renewals.
-# Named http-ca (not ca) to avoid colliding with the operator's own transport CA secret
-# which is always named <clusterName>-ca by the opensearch-operator.
+#
+# The Certificate and Issuer object names keep the hyphen; only the Secret takes the dot.
+# Those two kinds are this chart's alone — the operator composes no Certificate or Issuer
+# name, so there is no second namer to collide with.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: {{ .Release.Name }}-http-ca
 spec:
-  secretName: {{ .Release.Name }}-http-ca
+  # A dot, not a hyphen: hyphenated, this name is also the operator's transport CA Secret
+  # for the sibling release one -http longer. See the header.
+  secretName: {{ .Release.Name }}.http-ca
   # This Secret is the extraction source named by templates/tenant-projection.yaml,
   # which is what publishes ca.crt to the tenant. Nothing is stamped on the Secret
   # itself: the controller reads the sentinel's sourceSecretName and never a label,
@@ -108,7 +141,7 @@ metadata:
   name: {{ .Release.Name }}-http-ca
 spec:
   ca:
-    secretName: {{ .Release.Name }}-http-ca
+    secretName: {{ .Release.Name }}.http-ca
 ---
 # Leaf TLS Certificate for the OpenSearch HTTP API (port 9200), passed to
 # spec.security.tls.http.secret.name. Dashboards gets its OWN certificate below.
@@ -121,8 +154,8 @@ spec:
 # API endpoint for the whole certificate lifetime, which is ten years here. Keeping
 # them apart costs one more Certificate and preserves the operator's isolation.
 #
-# NAMED -http-server, NOT -http-cert, for the same reason the CA above is named
-# -http-ca: the operator reserves <clusterName>-http-cert for the HTTP certificate
+# NAMED -http-server, NOT -http-cert, for the first of the two reasons the CA above is
+# not named -ca: the operator reserves <clusterName>-http-cert for the HTTP certificate
 # it generates itself (nodeSecretName in handleHttp), alongside -ca,
 # -transport-cert, -admin-cert and -dashboards-cert. Reusing the reserved name
 # breaks the moment TLS is turned off again: cert-manager keeps its Secret when

@@ -39,8 +39,12 @@ spec:
         # certificate with this CA and (b) sets the HTTP listener trust anchor to it.
         # This lets the operator's securityadmin job validate the HTTP server cert and
         # authenticate as admin, so the security config (users/roles) actually applies.
+        #
+        # The dot before http-ca is load-bearing: hyphenated, this is also the name the
+        # operator composes for its own transport CA on the sibling release one -http
+        # longer. templates/certmanager.yaml carries the mechanism.
         caSecret:
-          name: {{ .Release.Name }}-http-ca
+          name: {{ .Release.Name }}.http-ca
         {{- else }}
         generate: true
         {{- end }}

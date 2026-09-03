@@ -2,7 +2,7 @@ suite: opensearch TenantProjection sentinel
 
 # The chart renders one TenantProjection per TLS-enabled release: the declaration
 # that tells the CA-extraction controller to lift ca.crt out of the key-bearing
-# <release>-http-ca into the tenant-readable <release>.tenant-ca projection.
+# <release>.http-ca into the tenant-readable <release>.tenant-ca projection.
 #
 # This is the only thing that creates that projection. templates/dashboard-
 # resourcemap.yaml grants the tenant read on <release>.tenant-ca by name, and the
@@ -10,8 +10,9 @@ suite: opensearch TenantProjection sentinel
 # exists, so losing this template costs the tenant its trust anchor with no error
 # anywhere.
 #
-# The source is named -http-ca, NOT -ca: the operator reserves <clusterName>-ca for
-# its own transport CA. See the note in templates/certmanager.yaml.
+# The source is named .http-ca, with a dot: the operator reserves <clusterName>-ca for
+# its own transport CA, and the hyphenated form is exactly that name for the sibling
+# release one -http longer. See the note in templates/certmanager.yaml.
 
 release:
   name: os-test
@@ -47,7 +48,7 @@ tests:
           value: CACert
       - equal:
           path: spec.projections[0].sourceSecretName
-          value: os-test-http-ca
+          value: os-test.http-ca
       - equal:
           path: spec.projections[0].sourceKey
           value: ca.crt
