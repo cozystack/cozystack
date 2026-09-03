@@ -206,9 +206,12 @@ const passthroughListenerPrefix = "tls-"
 // terminate listener for the same hostname, is a protocol conflict.
 // Gateway API admits either — its listener uniqueness rule keys on
 // (port, protocol, hostname), so differing protocols are distinct — and
-// the conflict surfaces as Conflicted on the listeners, which then serve
-// nothing. Rejecting the entry up front turns that into a per-field
-// error on TenantGateway status instead.
+// calls for the conflict to surface as Conflicted on both listeners,
+// which then serve nothing. That is the specification rather than the
+// pinned behaviour: v1.19.5 sets no Conflicted condition anywhere, and
+// v1.19.6 adds one in samePortCrossProtocolConflictedListeners, keyed on
+// the listener specs alone. Rejecting the entry up front turns either
+// into a per-field error on TenantGateway status instead.
 //
 // A function rather than a package-level set: the ports are a property
 // of what renderGateway emits, so nothing should be able to write to
@@ -289,8 +292,18 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 //
 // A TLSPassthroughServices entry shares port 443 with the terminate
 // listeners, so a hostname claimed by both produces two listeners on one
-// port under one name. Gateway API admits the pair and then requires both
-// to report Conflicted, and neither serves.
+// port under one name. Gateway API admits the pair and then requires
+// both to report Conflicted, after which neither serves. What the pinned
+// Cilium does with it is a different question, and the two answers are
+// one patch release apart: v1.19.5 has no Conflicted condition at all —
+// setListenerStatus in operator/pkg/gateway-api/gateway_reconcile.go
+// writes Accepted, Programmed and ResolvedRefs and nothing else — so the
+// pair reaches Envoy as two filter chains whose FilterChainMatch carries
+// one transport protocol and one server name. v1.19.6 adds
+// samePortCrossProtocolConflictedListeners, which finds the pair from
+// the listener specs alone and marks both Conflicted and not Accepted.
+// So on the pin the collision is invisible on the objects, and on the
+// next patch release the declaration alone is enough to kill both.
 //
 // A TLSPassthroughListeners entry sits on its own port, and that is not
 // the protection it looks like on the Cilium this repo pins. v1.19.5
@@ -312,16 +325,22 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // keep the pair from being rendered. Revisit when the pin moves.
 //
 // The cost is that an HTTPRoute claiming a hostname declared here gets
-// no listener. Nothing hostile is needed to reach it:
-// tlsPassthroughServices is a chart value shipped defaulted to api,
-// vm-exportproxy and cdi-uploadproxy, so a tenant app named after one of
-// them collides with a platform default. Suppression is not what breaks
-// that hostname — before this filter the same collision rendered a
-// terminate listener and a passthrough listener under one SNI, and
-// which of them answered was not something the objects said — but it
-// does take away the
-// Conflicted condition, which was the one place the collision was
-// visible on the Gateway. updateRouteStatuses puts it back on the route
+// no listener wherever a TLSRoute is servable on the overlapping entry.
+// Nothing hostile is needed to reach that: tlsPassthroughServices is a
+// chart value shipped defaulted to api, vm-exportproxy and
+// cdi-uploadproxy, so a tenant app named after one of them collides with
+// a platform default. Suppression is not what breaks that hostname —
+// the same collision already rendered a terminate listener and a
+// passthrough listener under one SNI, and with a route on the
+// passthrough side which of them answered was not something the objects
+// said. The declaration on its own is a different case, which is why the
+// reconciler keys the withdrawal on the routes rather than on the spec:
+// a listener nothing attaches to puts no chain on the name, so the
+// terminate listener answers it and keeps it.
+//
+// What the withdrawal takes away is the record of the collision on the
+// Gateway, which on the pin is nothing and on v1.19.6 would be the
+// Conflicted condition. updateRouteStatuses puts it on the route
 // instead, as Accepted=False with NoMatchingListenerHostname naming the
 // passthrough hostname that answers the claim.
 //
@@ -330,9 +349,13 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // "pg.db.<apex>" on the pinned Cilium exactly as an explicit entry would:
 // the filter chain match carries ServerNames and no port. Comparing by
 // equality leaves that pair rendered and exposed to the translation this
-// filter exists to avoid. Withdrawing the whole subtree is the intended
-// reading of a wildcard entry, which declares that everything under the
-// name bypasses termination.
+// filter exists to avoid. What the overlap settles is which entry
+// answers a claim, not on its own whether the claim is withdrawn: a name
+// beneath a wildcard entry loses its terminate listener once a TLSRoute
+// claiming that same name can be served on the entry, which is the pair
+// whose two chains carry one server name. A TLSRoute on the wildcard
+// itself is a different chain, and Envoy separates a wildcard from an
+// exact server name by specificity rather than by refusing the pair.
 type passthroughListener struct {
 	// section is the rendered Gateway listener name, which is also the
 	// sectionName a route pins itself to.
@@ -592,7 +615,11 @@ func validatePassthroughHostname(hostname string) []string {
 // subdomain of it. This mirrors the cozystack-gateway-hostname-policy
 // ValidatingAdmissionPolicy (packages/system/cozystack-basics), whose
 // CEL allows a listener hostname iff it equals the namespace host label
-// or ends with "." + that label. A wildcard such as "*.db.<apex>"
+// or ends with "." + that label, with both operands lowercased first and
+// with an absent or empty label allowing everything. Neither leg is
+// modelled here: this comparison is byte-exact, and an apex no listener
+// hostname can sit within is refused by validateTLSPassthroughListeners
+// before anything reaches this test. A wildcard such as "*.db.<apex>"
 // satisfies the suffix test and is accepted, exactly as the VAP accepts
 // it. Rejecting an out-of-apex hostname here converts a wholesale Gateway
 // rejection (the VAP denies the whole object on the first reconcile,

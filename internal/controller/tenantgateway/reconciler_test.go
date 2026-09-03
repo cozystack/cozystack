@@ -2357,8 +2357,10 @@ func TestReconcile_TLSRouteOnPassthroughListenerTerminatesNothing(t *testing.T) 
 // terminate listener collides harder: it lands on port 443 carrying the
 // same hostname as the passthrough listener. Gateway API admits that —
 // its uniqueness rule is on (port, protocol, hostname) and the two
-// differ in protocol — and then marks both listeners Conflicted, so the
-// hostname is served by neither.
+// differ in protocol — and calls for both to be marked Conflicted, so
+// the hostname is served by neither. The pinned v1.19.5 marks nothing
+// and hands Envoy two chains under one server name; v1.19.6 marks the
+// pair from the listener specs alone.
 func TestReconcile_TLSRouteOnPassthroughServiceTerminatesNothing(t *testing.T) {
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{
@@ -2398,7 +2400,7 @@ func TestReconcile_TLSRouteOnPassthroughServiceTerminatesNothing(t *testing.T) {
 		}
 	}
 	if len(onPort443) != 1 {
-		t.Errorf("port 443 carries %d listeners for api.foo.example.com (%v), want exactly the passthrough one; two on one port and hostname are admitted and then both marked Conflicted, so neither serves", len(onPort443), onPort443)
+		t.Errorf("port 443 carries %d listeners for api.foo.example.com (%v), want exactly the passthrough one; two on one port and hostname are admitted, and carry one server name into one Envoy listener", len(onPort443), onPort443)
 	}
 }
 
@@ -2909,10 +2911,10 @@ func TestReconcile_WildcardPassthroughWithdrawsTheNamesBeneathIt(t *testing.T) {
 // under this controller's own controllerName. Withdrawing the
 // terminate listener leaves nothing on the Gateway for the route to
 // attach to, and Accepted=True would then describe a hostname the
-// controller deliberately dropped. Before the withdrawal the pair
-// still rendered and the listener carried Conflicted, so the operator
-// had one object to look at; after it there is none, which is what
-// makes the route condition the only remaining place to say it.
+// controller deliberately dropped. Nothing on the Gateway says so
+// instead: the pinned Cilium sets no Conflicted condition, so the pair
+// rendered and left no record of the collision anywhere. That is what
+// makes the route condition the only place to say it.
 //
 // The reason must differ from HostnameConflict, which states that
 // another route won the same hostname. Nothing won this one.
@@ -4629,9 +4631,9 @@ func TestReconcile_TLSRouteKeepsAcceptedWhenAnHTTPRouteWinsAPassthroughName(t *t
 // Gateway API gives it a single Accepted condition to say so in, which
 // is what makes it tempting to report whichever cause is found first.
 // Reporting only the race hides the withdrawal, and the withdrawal is
-// the one fact no other object carries: the terminate listener that
-// used to show Conflicted is gone, while the lost hostname at least
-// still has the winning route to look at.
+// the one fact no other object carries: the terminate listener is gone
+// and the pinned Cilium never reported the collision it was in, while
+// the lost hostname at least still has the winning route to look at.
 func TestReconcile_RouteLosingOneHostnameAndWithdrawnOnAnother(t *testing.T) {
 	const withdrawnName = "api.foo.example.com"
 	const contestedName = "shared.foo.example.com"
@@ -5692,7 +5694,7 @@ func TestReconcile_TLSPassthroughListenerWildcardCertModeRejected(t *testing.T) 
 // layer-4 passthrough validation is wired into the render path: a spec
 // with two listeners on the same port makes Reconcile fail loudly
 // rather than emitting a Gateway whose clashing listeners Gateway API
-// admits and then leaves Conflicted, serving nothing.
+// admits and calls for leaving Conflicted, serving nothing.
 //
 // A loud failure is only half of it, and the other half is what the
 // rules on this field are worth. These checks live in the controller,
@@ -5739,9 +5741,9 @@ func TestReconcile_TLSPassthroughListenerInvalidRejected(t *testing.T) {
 // path rejects a passthrough listener on port 80: renderGateway always
 // renders the http listener there, so a TLS listener on 80 is a
 // protocol conflict on a shared port. Gateway API admits the pair —
-// its uniqueness rule keys on (port, protocol, hostname) — and leaves
-// both listeners Conflicted, which is why the entry has to be refused
-// here instead.
+// its uniqueness rule keys on (port, protocol, hostname) — and calls
+// for leaving both listeners Conflicted, which is why the entry has to
+// be refused here instead.
 func TestReconcile_TLSPassthroughListenerPort80Rejected(t *testing.T) {
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{
