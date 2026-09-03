@@ -710,10 +710,7 @@ tests:
           content: os-test.example.cozy.local
 
   # Stronger than the two label guards above, which name the two labels that reach a
-  # tenant: this says the chart writes nothing onto that Secret at all. It is also
-  # what keeps cert-manager's own annotations intact — the operator only finds the CA
-  # key because cert-manager.io/issuer-kind is on the Secret, and a secretTemplate
-  # setting annotations replaces that map.
+  # tenant: this says the chart writes nothing onto that Secret at all.
   - it: stamps nothing at all onto the dashboards leaf Secret
     set:
       tls:
