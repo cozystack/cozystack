@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
-# Asserts that cozystack-route-hostname-policy names every API version the
-# vendored Gateway API CRD bundle actually serves for the route kind it gates.
+# Asserts that the cozystack-basics admission policies name every API version
+# the vendored Gateway API CRD bundle actually serves for the kind they gate:
+# the two route hostname policies and the Gateway listener hostname policy.
 #
 # Why this needs a test rather than a comment. The policy lists API versions
 # literally in matchConstraints, but the version set it must cover lives in a
@@ -123,8 +124,14 @@ assert_covers() {
     cozystack-route-hostname-policy httproutes
 }
 
-# The two cases above only ever see a tree that is already correct, so on their
-# own they cannot tell a working comparison from one that stopped comparing.
+@test "Gateway hostname policy names every served gateways version" {
+  assert_covers gateways.gateway.networking.k8s.io \
+    cozystack-gateway-hostname-policy gateways
+}
+
+# The three cases above only ever see a tree that is already correct, so on
+# their own they cannot tell a working comparison from one that stopped
+# comparing.
 # These drive it with synthetic input, the way hack/bats-no-exit-trap.bats and
 # hack/md-no-hardwrap.bats feed their checkers a broken sample and require a
 # complaint.
