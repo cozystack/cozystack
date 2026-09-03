@@ -1,0 +1,220 @@
+suite: osImage.builtin golden guards on a pool that has already cloned
+
+# The absence and Failed guards abort the ENTIRE KubernetesNodes HelmRelease, and
+# for a pool whose workers all cloned long ago that price buys nothing: replica
+# changes, kubelet retuning and MachineHealthCheck timeouts have no stake in the
+# golden, and no CR edit is needed to trigger the abort — the next periodic
+# reconcile does it. Reviewed as [MINOR] on cozystack/cozystack#3294. So the loud
+# failure is scoped to a pool still waiting for its first disk.
+#
+# Separate suite because the fixture is the whole point: helm-unittest merges a
+# per-test kubernetesProvider into the suite-level objects rather than replacing
+# them, so a cluster that already holds this pool's cloned disk cannot be
+# expressed inside the sibling suite.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 1
+  maxReplicas: 3
+  instanceType: u1.medium
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: [ingress-nginx]
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+      namespaced: true
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+      namespaced: true
+    "storage.k8s.io/v1/StorageClass":
+      gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+      namespaced: false
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata: {name: u1.medium}
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata: {name: ignored-ms, namespace: tenant-test}
+      spec: {template: {spec: {infrastructureRef: {kind: Other, name: ignored}}}}
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata: {name: ignored-kmt, namespace: tenant-test}
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata: {name: replicated}
+    # This pool's own worker disk, cloned and populated. Each disk names its pool
+    # in an annotation; CAPK's own name for it is
+    # disk-system-<clusterName>-<groupName>-<machine id>.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: disk-system-kubernetes-myk8s-md0-abcde
+        namespace: tenant-test
+        annotations:
+          kubernetes-worker-image.cozystack.io/golden: talos-worker-gone-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0
+      status: {phase: Succeeded}
+    # Another pool of the same cluster, cloned from the golden that later failed.
+    # Its existence must not speak for md0.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: disk-system-kubernetes-myk8s-md1-abcde
+        namespace: tenant-test
+        annotations:
+          kubernetes-worker-image.cozystack.io/golden: talos-worker-failed-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md1
+      status: {phase: Succeeded}
+    # The sibling whose NAME starts with this pool's: disk-system-kubernetes-myk8s-md0-gpu-*
+    # carries the disk-system-kubernetes-myk8s-md0- prefix. Matching on the name
+    # would let md0-gpu answer for md0. Found by the cross-check on
+    # cozystack/cozystack#3294.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: disk-system-kubernetes-myk8s-md0-gpu-abcde
+        namespace: tenant-test
+        annotations:
+          kubernetes-worker-image.cozystack.io/golden: talos-worker-sibling-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0-gpu
+      status: {phase: Succeeded}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-sibling-v1.0.0, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status: {phase: Failed}
+    # md0's disk against a third golden, still importing: not yet proof that this
+    # pool is past needing the source.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: disk-system-kubernetes-myk8s-md0-fghij
+        namespace: tenant-test
+        annotations:
+          kubernetes-worker-image.cozystack.io/golden: talos-worker-pending-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0
+      status: {phase: CloneInProgress}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-failed-v1.0.0, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status: {phase: Failed}
+    # md0's own disk against a golden that failed only later. This is the case the
+    # gate exists for: the pool is whole, needs nothing from the source, and its
+    # release must not abort on the next reconcile.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: disk-system-kubernetes-myk8s-md0-klmno
+        namespace: tenant-test
+        annotations:
+          kubernetes-worker-image.cozystack.io/golden: talos-worker-brokelater-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0
+      status: {phase: Succeeded}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-brokelater-v1.0.0, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status: {phase: Failed}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-pending-v1.0.0, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status: {phase: Failed}
+
+tests:
+  - it: renders when the golden is gone but this pool already cloned it
+    set:
+      osImage:
+        builtin:
+          schematicID: gone
+          version: v1.0.0
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-gone-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # Only another pool cloned this one, so md0 is still waiting for a first disk
+  # and the loud failure is the right signal.
+  - it: still fails on a Failed golden when only another pool has cloned it
+    set:
+      osImage:
+        builtin:
+          schematicID: failed
+          version: v1.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'golden DataVolume "talos-worker-failed-v1\.0\.0" in cozy-public failed to import'
+
+  # This pool has a disk against that golden, but the clone has not finished, so
+  # it is not yet evidence that the pool can do without the source.
+  - it: still fails on a Failed golden when this pool's own clone is unfinished
+    set:
+      osImage:
+        builtin:
+          schematicID: pending
+          version: v1.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'golden DataVolume "talos-worker-pending-v1\.0\.0" in cozy-public failed to import'
+
+  # The Failed guard's own gate, which nothing above reaches: the golden is
+  # Failed AND this pool already cloned it, so the render proceeds. Without this
+  # case the (not $poolCloned) conjunct can be deleted and the suite stays green.
+  - it: renders when the golden went Failed after this pool had already cloned it
+    set:
+      osImage:
+        builtin:
+          schematicID: brokelater
+          version: v1.0.0
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-brokelater-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # A sibling pool whose name this pool's name is a prefix of. md0-gpu cloned the
+  # golden and md0 never did, so md0 is still waiting for a first disk and the
+  # guard must fire. Matching disks by name prefix passes this case wrongly.
+  - it: does not let a sibling pool whose name shares this pool's prefix answer for it
+    set:
+      osImage:
+        builtin:
+          schematicID: sibling
+          version: v1.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'golden DataVolume "talos-worker-sibling-v1\.0\.0" in cozy-public failed to import'

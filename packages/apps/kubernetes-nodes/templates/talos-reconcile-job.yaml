@@ -329,7 +329,7 @@ spec:
                               memory.available: "256Mi"
                         install:
                           disk: /dev/vda
-                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}/{{ $.Values.talos.schematicID | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}:{{ .talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}
+                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}/{{ .talosSchematicID | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}:{{ .talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}
                           wipe: false
                         features:
                           rbac: true
@@ -394,6 +394,7 @@ spec:
       "resources" .Values.resources
       "gpus" .Values.gpus
       "kubelet" .Values.kubelet
+      "osImage" .Values.osImage
 }}
 {{- /* Mirror the kubelet-reservation computation from nodegroup.yaml so the
        worker machineconfig this Job applies carries the same numbers the
@@ -434,12 +435,33 @@ spec:
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
+{{- /* Resolve this pool's worker image (schematicID, version) from .Values.osImage
+       — the same selection templates/nodegroup.yaml uses for the boot disk — so the
+       in-guest Talos installer image matches the OS this pool actually booted.
+       Defaults to the pool's talos.*; a pool with osImage.builtin / osImage.factory
+       pins its own flavor and version so an in-guest upgrade does not flip it back to
+       the pool default. */}}
+{{- /* Shared with nodegroup.yaml's boot-disk source rather than mirrored here:
+       a disk booted from one Talos flavor and an installer pinned to another is
+       the silently-broken pairing this chart's support matrix was factored out
+       to prevent, and two hand-kept copies of the resolution are how the two
+       drift apart. The helper also carries the format checks, so this file no
+       longer depends on the other one aborting the shared render first. */}}
+{{- $resolvedImage := dict }}
+{{- include "kubernetes-nodes.resolveOsImage" (dict
+      "osImage" $group.osImage
+      "talos" $.Values.talos
+      "out" $resolvedImage
+      "groupName" (include "kubernetes-nodes.groupName" $)) }}
+{{- $grpSchematicID := $resolvedImage.schematicID }}
+{{- $grpVersion := $resolvedImage.version }}
 {{- $jobContext := deepCopy $ }}
 {{- $_ := set $jobContext "group" $group }}
 {{- $_ := set $jobContext "groupName" $groupName }}
 {{- $_ := set $jobContext "clusterName" $clusterName }}
 {{- $_ := set $jobContext "kubeletVersion" $kubeletVersion }}
-{{- $_ := set $jobContext "talosVersion" $talosVersion }}
+{{- $_ := set $jobContext "talosVersion" $grpVersion }}
+{{- $_ := set $jobContext "talosSchematicID" $grpSchematicID }}
 {{- $_ := set $jobContext "podCIDR" $podCIDR }}
 {{- $_ := set $jobContext "serviceCIDR" $serviceCIDR }}
 {{- $_ := set $jobContext "dnsDomain" $dnsDomain }}

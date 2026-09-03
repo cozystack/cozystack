@@ -18,12 +18,13 @@
 # always answers cleanly would leave every test here green against an entirely
 # unbounded implementation, which is the state this suite was written against.
 #
-# The block also calls talos_image_cache_diagnose (hack/e2e-chainsaw/_lib/
-# talos-image-cache.sh), whose reads are bounded for the same reason and are
-# covered here rather than in that file's own suite, which is mock-free by
-# design. Its reachability re-probe is deliberately not bounded there: it spends
-# its budget inside a Pod it creates, and shrinking that budget would change
-# which image factory the happy path picks.
+# The block used to call two mirror diagnostics as well, and the bounds on their
+# reads were covered here rather than in their own mock-free suites. Both are
+# gone: the ghcr.io pull-through went with the hypothesis it rested on, and worker
+# boot disks are CDI clones of the golden Talos image in cozy-public rather than
+# per-worker HTTP imports, so there is no image cache left to re-probe either. The
+# golden's own state is read at (a2) through cozy_diag_read, which the bounds
+# tests below already cover.
 #
 # cozytest.sh's awk parser ends an @test block at the first bare closing brace,
 # so command mocks stay at top level, and there is no bats `run`/`$status`:
@@ -47,7 +48,6 @@ kubectl_fail_rc=1
 timeout_fail_match=
 timeout_fail_rc=124
 importer_pod_names=
-kubectl_gate_output=
 # Fixed clock. `date +%s` decides whether the phase still has budget, so the
 # tests that are about that decision have to own the clock rather than race it.
 date_now=
@@ -86,12 +86,6 @@ kubectl() {
       ;;
     *"get pods -o name"*)
       [ -z "${importer_pod_names}" ] || printf '%s\n' ${importer_pod_names}
-      return 0
-      ;;
-    *"get deploy talos-image-cache"*)
-      # Empty stdout with exit 0 is what --ignore-not-found returns for a cache
-      # that is not deployed, which is the default here.
-      [ -z "${kubectl_gate_output}" ] || printf '%s\n' "${kubectl_gate_output}"
       return 0
       ;;
   esac
@@ -204,12 +198,11 @@ no_sandbox_talosconfig() {
 # below are stubbed only where the test is about the budget rather than the
 # reads, for the reason given there. Stubbed after sourcing so these tests are
 # about the block's own reads; left un-stubbed they would drag a Certificate, a
-# helper Pod and a cache probe into every case here.
+# helper Pod into every case here.
 stub_collectors() {
   cozy_report_guest_console_wedge() { printf 'wedge-stub\n'; }
   cozy_capture_tenant_serial_console() { printf 'serial-console-stub\n'; }
   cozy_capture_tenant_talos() { printf 'talos-stub\n'; }
-  talos_image_cache_diagnose() { printf 'image-cache-stub\n'; }
   # Stubbed here rather than left to the gated set, and the audit below loses
   # nothing by it: that audit works by letting real collector bodies reach the
   # kubectl mock and failing on any read taken outside a `timeout` wrapper, and
@@ -664,70 +657,6 @@ read_cost_inputs() {
   rm -rf "$tmp"
 }
 
-@test "a cache gate read that was cut off is not reported as a cache that was never deployed" {
-  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  tmp=$(mktemp -d)
-  use_temp_report_dir "$tmp"
-  kubectl_calls="$tmp/kubectl.calls"
-  unbounded_calls="$tmp/unbounded.calls"
-  timeout_calls="$tmp/timeout.calls"
-  timeout_fail_match='get deploy talos-image-cache'
-  timeout_fail_rc=124
-
-  ( set +x; talos_image_cache_diagnose ) >"$tmp/out" 2>&1
-
-  # "not deployed" is a claim about the cluster. Drawn from a read that never
-  # answered, it retires the whole cache hypothesis on this failure path -- the
-  # one the section exists to test -- on the strength of a call that failed.
-  assert_file_contains 'unknown, not no' "$tmp/out"
-  if grep -q 'not deployed' "$tmp/out"; then
-    echo "FAIL: a cut-off gate read was announced as a cache that is not deployed" >&2
-    false
-  fi
-  rm -rf "$tmp"
-}
-
-@test "a cache gate read that failed is not reported as a cache that was never deployed" {
-  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  tmp=$(mktemp -d)
-  use_temp_report_dir "$tmp"
-  kubectl_calls="$tmp/kubectl.calls"
-  unbounded_calls="$tmp/unbounded.calls"
-  timeout_calls="$tmp/timeout.calls"
-  kubectl_fail_match='get deploy talos-image-cache'
-  kubectl_fail_rc=1
-
-  ( set +x; talos_image_cache_diagnose ) >"$tmp/out" 2>&1
-
-  # Exit 1 is what `kubectl get` returns for a refused connection, for
-  # Unauthorized and for an unrecognised kind -- not only for NotFound. Reading
-  # it as "absent" retires the cache hypothesis on the one path that tests it.
-  assert_file_contains 'unknown, not no' "$tmp/out"
-  if grep -q 'not deployed' "$tmp/out"; then
-    echo "FAIL: a failed gate read was announced as a cache that is not deployed" >&2
-    false
-  fi
-  rm -rf "$tmp"
-}
-
-@test "a cache gate that answered with nothing reports the cache as not deployed" {
-  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  tmp=$(mktemp -d)
-  use_temp_report_dir "$tmp"
-  kubectl_calls="$tmp/kubectl.calls"
-  unbounded_calls="$tmp/unbounded.calls"
-  timeout_calls="$tmp/timeout.calls"
-
-  ( set +x; talos_image_cache_diagnose ) >"$tmp/out" 2>&1
-
-  # --ignore-not-found makes absent an exit 0 with empty output, and that is a
-  # real finding: the run used the public factory, so there is nothing to probe.
-  # Without this the fix above would just report everything as unknown.
-  assert_file_contains 'not deployed' "$tmp/out"
-  assert_file_contains 'ignore-not-found' "$timeout_calls"
-  rm -rf "$tmp"
-}
-
 @test "the diagnostics phase declines the rest out loud once its budget is spent" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   stub_collectors
@@ -790,7 +719,7 @@ read_cost_inputs() {
   # the bound audit at the top of this file, which needs it to run for real.
   # A rule written for additions does not catch a removal, so both directions
   # are named here.
-  for marker in serial-console-stub talos-stub image-cache-stub cpu-throttle-stub \
+  for marker in serial-console-stub talos-stub cpu-throttle-stub \
     network-counters-stub block-io-stub sandbox-cpu-time-stub thread-cpu-stub; do
     if grep -q "$marker" "$tmp/out"; then
       echo "FAIL: $marker ran after the phase ran out of budget" >&2
@@ -799,7 +728,6 @@ read_cost_inputs() {
   done
   assert_file_contains '(b1) tenant worker guest serial console: not collected' "$tmp/out"
   assert_file_contains '(b) in-guest Talos dmesg + kubelet logs + service states + links: not collected' "$tmp/out"
-  assert_file_contains 're-probe talos-image-cache ClusterIP + cacher debug bundle: not collected' "$tmp/out"
   assert_file_contains '(d) tenant worker CPU counters, sandbox node CPU time and worker per-thread CPU time: not collected' "$tmp/out"
   assert_file_contains '(d2) tenant worker network counters: not collected' "$tmp/out"
   assert_file_contains '(d3) tenant worker block IO counters: not collected' "$tmp/out"
@@ -823,103 +751,6 @@ read_cost_inputs() {
   ( set +x; cozy_diag_read 'tenant node table' kubectl get nodes ) >"$tmp/out" 2>&1
 
   assert_file_contains 'get nodes' "$kubectl_calls"
-  rm -rf "$tmp"
-}
-
-@test "the cache diagnostic dumps each run inside a wall clock bound" {
-  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  tmp=$(mktemp -d)
-  use_temp_report_dir "$tmp"
-  kubectl_calls="$tmp/kubectl.calls"
-  unbounded_calls="$tmp/unbounded.calls"
-  timeout_calls="$tmp/timeout.calls"
-  # Created up front: the mock only appends, so this file exists today solely because
-  # the re-probe's seven calls are unbounded. Once cozystack/cozystack#3666 bounds
-  # them the walk below would read a file that was never written and die under set -e
-  # -- a test that fails when the thing it tolerates gets fixed.
-  : >"$unbounded_calls"
-  # The gate has to answer "deployed" or the dumps below it never run.
-  kubectl_gate_output='deployment.apps/talos-image-cache'
-
-  ( set +x; talos_image_cache_diagnose ) >"$tmp/out" 2>&1
-
-  # These three run after the re-probe, on the same path to the same exit, so a
-  # hang in any of them costs the snapshot exactly as one in the block above.
-  assert_file_contains 'get deploy,pod,svc,endpointslice' "$timeout_calls"
-  assert_file_contains 'ciliumclusterwidenetworkpolicy' "$timeout_calls"
-  assert_file_contains '-c serve --tail=50' "$timeout_calls"
-  # And nothing here escaped a bound. Asserting the three positively proves some
-  # reads are bounded, never that none escaped -- the distinction this suite's mock
-  # pair exists for, and the one test that checks unbounded_calls stubs this
-  # collector out entirely. The re-probe's seven calls are the documented residual,
-  # so they are named rather than tolerated by an empty-file check that would also
-  # pass on an unbounded dump.
-  while read -r call; do
-    [ -n "$call" ] || continue
-    case "$call" in
-      # _talos_image_cache_reachable_from_tenant, unbounded on purpose (see the
-      # comment in talos-image-cache.sh) and tracked in its own issue.
-      *"get pod -l app.kubernetes.io/name=talos-image-cache"*) continue ;;
-      *"exec "*"-c serve"*) continue ;;
-      *"get deploy talos-image-cache -o jsonpath"*) continue ;;
-      *"delete pod talos-image-cache-probe"*) continue ;;
-      *"run talos-image-cache-probe"*) continue ;;
-      *"logs talos-image-cache-probe"*) continue ;;
-    esac
-    echo "FAIL: an unexpected unbounded read in the cache diagnosis: $call" >&2
-    false
-  done <"$unbounded_calls"
-  rm -rf "$tmp"
-}
-
-@test "a cache dump cut off mid flight says so instead of leaving a bare section header" {
-  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  tmp=$(mktemp -d)
-  use_temp_report_dir "$tmp"
-  kubectl_calls="$tmp/kubectl.calls"
-  unbounded_calls="$tmp/unbounded.calls"
-  timeout_calls="$tmp/timeout.calls"
-  kubectl_gate_output='deployment.apps/talos-image-cache'
-  timeout_fail_match='get deploy,pod,svc,endpointslice'
-  timeout_fail_rc=124
-
-  ( set +x; talos_image_cache_diagnose ) >"$tmp/out" 2>&1
-
-  # Bounding a dump without a note trades a hang for a lie: `timeout` prints
-  # nothing when it fires, so the section header would be followed by nothing, and
-  # an empty deploy/pod/svc/endpointslice listing reads as a cache that has no Pod,
-  # no Service and no EndpointSlice -- a finding a triager acts on, from a read
-  # that never reached the apiserver.
-  assert_file_contains 'cache deploy/pod/svc/endpointslice: read did not finish' "$tmp/out"
-  assert_file_contains 'absent from this log, not absent from the cluster' "$tmp/out"
-  # And the dumps after it still ran, so one cut-off read does not end the section.
-  assert_file_contains 'ciliumclusterwidenetworkpolicy' "$timeout_calls"
-  rm -rf "$tmp"
-}
-
-@test "lowering the cache read budget after sourcing moves the wall clock too" {
-  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-  tmp=$(mktemp -d)
-  use_temp_report_dir "$tmp"
-  kubectl_calls="$tmp/kubectl.calls"
-  unbounded_calls="$tmp/unbounded.calls"
-  timeout_calls="$tmp/timeout.calls"
-  kubectl_gate_output='deployment.apps/talos-image-cache'
-  # After sourcing is the only moment a caller can turn these down, and it is how
-  # the caller's own COZY_DIAG_* budgets are overridden. A wall-clock prefix built
-  # at source time does not follow, so the inner --request-timeout drops to 2s
-  # while the outer stays at the real 20s -- the drift the single value exists to
-  # prevent, arriving through the knob meant to make it adjustable.
-  _TALOS_IMAGE_CACHE_READ_TIMEOUT=2
-
-  ( set +x; talos_image_cache_diagnose ) >"$tmp/out" 2>&1
-
-  assert_file_contains '-k 5 2' "$timeout_calls"
-  if grep -q -- '-k 5 20' "$timeout_calls"; then
-    echo "FAIL: the wall-clock bound stayed at 20s while the request bound moved to 2s:" >&2
-    grep -- '-k 5 20' "$timeout_calls" >&2
-    false
-  fi
   rm -rf "$tmp"
 }
 
@@ -951,8 +782,7 @@ read_cost_inputs() {
       cozy_report_guest_console_wedge() { :; }
       cozy_capture_tenant_serial_console() { :; }
       cozy_capture_tenant_talos() { :; }
-      talos_image_cache_diagnose() { :; }
-      cozy_capture_tenant_worker_cpu_throttle() { :; }
+        cozy_capture_tenant_worker_cpu_throttle() { :; }
       cozy_capture_tenant_worker_network_counters() { :; }
       cozy_capture_sandbox_kvm_exits() { :; }
       cozy_capture_runner_kernel_cpu_time() { :; }
@@ -1020,7 +850,6 @@ read_cost_inputs() {
     cozy_report_guest_console_wedge() { :; }
     cozy_capture_tenant_serial_console() { :; }
     cozy_capture_tenant_talos() { :; }
-    talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
@@ -1048,7 +877,7 @@ read_cost_inputs() {
   # inside the sampling loop could land green. The final section's own header is
   # the one line printed only if nothing unwound the function on the way there,
   # and under `set -eu` a single `command not found` is enough to unwind it.
-  assert_file_contains 're-probe talos-image-cache ClusterIP' "$tmp/out"
+  assert_file_contains '(b) in-guest Talos dmesg + kubelet logs + service states + links' "$tmp/out"
   assert_file_lacks_pattern 'command not found' "$tmp/out"
   # `sleep` is deliberately NOT staged above. It is the one external this block
   # calls outside a `|| true` and outside cozy_diag_read, so an unguarded call
@@ -1098,7 +927,6 @@ read_cost_inputs() {
     cozy_report_guest_console_wedge() { :; }
     cozy_capture_tenant_serial_console() { :; }
     cozy_capture_tenant_talos() { :; }
-    talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
@@ -1134,7 +962,6 @@ read_cost_inputs() {
     cozy_report_guest_console_wedge() { :; }
     cozy_capture_tenant_serial_console() { :; }
     cozy_capture_tenant_talos() { :; }
-    talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
@@ -1147,52 +974,6 @@ read_cost_inputs() {
   printf '%s\n' "$out" >"$tmp/empty"
   assert_file_contains 'a bare integer, no unit suffix' "$tmp/empty"
   assert_file_contains 'T: -k 5 20 ' "$tmp/empty"
-
-  out=$(bash -c '
-    set -eu
-    . hack/e2e-chainsaw/_lib/talos-image-cache.sh
-    _TALOS_IMAGE_CACHE_READ_TIMEOUT=
-    timeout() { printf "T: %s\n" "$*"; }
-    kubectl() { case "$*" in *"get deploy talos-image-cache"*) printf "dep\n" ;; esac; }
-    _talos_image_cache_reachable_from_tenant() { return 1; }
-    talos_image_cache_diagnose
-  ' 2>&1) || true
-  printf '%s\n' "$out" >"$tmp/empty-cache"
-  assert_file_contains 'a bare integer, no unit suffix' "$tmp/empty-cache"
-  assert_file_contains 'T: -k 5 20 ' "$tmp/empty-cache"
-
-  # The cache grace, on the same post-source path, and it needs its own case for two
-  # reasons: one helper validates both knobs there, so a message can name the wrong
-  # one, and the grace's own hazard is different -- `timeout -k abc 20` exits 125
-  # before running the command, which drops every dump and the gate with them.
-  out=$(bash -c '
-    set -eu
-    . hack/e2e-chainsaw/_lib/talos-image-cache.sh
-    _TALOS_IMAGE_CACHE_READ_GRACE=abc
-    timeout() { printf "T: %s\n" "$*"; }
-    kubectl() { case "$*" in *"get deploy talos-image-cache"*) printf "dep\n" ;; esac; }
-    _talos_image_cache_reachable_from_tenant() { return 1; }
-    talos_image_cache_diagnose
-  ' 2>&1) || true
-  printf '%s\n' "$out" >"$tmp/grace-cache"
-  # Named for the knob the caller set, not for its sibling: the first version of that
-  # helper hardcoded one name into every message and quoted the other's default.
-  assert_file_contains "ignoring _TALOS_IMAGE_CACHE_READ_GRACE='abc'" "$tmp/grace-cache"
-  if grep -q -- '-k abc ' "$tmp/grace-cache"; then
-    echo "FAIL: an invalid grace reached timeout, so every dump exits 125" >&2
-    grep -n -- '-k abc ' "$tmp/grace-cache" >&2
-    false
-  fi
-  # And zero stays legal for a grace, which is what its comment claims: -k 0 only
-  # skips the follow-up SIGKILL, and kubectl does not need it.
-  out=$(bash -c '
-    set -eu
-    _TALOS_IMAGE_CACHE_READ_GRACE=0
-    . hack/e2e-chainsaw/_lib/talos-image-cache.sh
-    printf "grace=%s\n" "$_TALOS_IMAGE_CACHE_READ_GRACE"
-  ' 2>&1) || true
-  printf '%s\n' "$out" >"$tmp/grace-zero"
-  assert_file_contains 'grace=0' "$tmp/grace-zero"
 
   out=$(env COZY_DIAG_PHASE_BUDGET=0 bash -c '
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
@@ -1240,15 +1021,14 @@ read_cost_inputs() {
   console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
-  cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
-  for v in volumes console cpu talos cache; do
+  for v in volumes console cpu talos; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to locate $v in $lib" >&2
       exit 1
     fi
   done
-  for later in console cpu talos cache; do
+  for later in console cpu talos; do
     eval "n=\$$later"
     if [ "$volumes" -ge "$n" ]; then
       echo "the volume state read (line $volumes) must precede $later (line $n), or a tight run declines it" >&2
@@ -1271,15 +1051,14 @@ read_cost_inputs() {
   console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
-  cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
-  for v in block console cpu talos cache; do
+  for v in block console cpu talos; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to locate $v in $lib" >&2
       exit 1
     fi
   done
-  for later in console cpu talos cache; do
+  for later in console cpu talos; do
     eval "n=\$$later"
     if [ "$block" -ge "$n" ]; then
       echo "the block IO counters (line $block) must precede $later (line $n), or a tight run declines them" >&2
@@ -1315,15 +1094,14 @@ read_cost_inputs() {
   console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
-  cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
-  for v in cpu net console talos cache; do
+  for v in cpu net console talos; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to locate $v in $lib" >&2
       exit 1
     fi
   done
-  for later in console cpu talos cache; do
+  for later in console cpu talos; do
     eval "n=\$$later"
     if [ "$net" -ge "$n" ]; then
       echo "the network counters (line $net) must precede $later (line $n), or a tight run declines them" >&2
@@ -1530,11 +1308,12 @@ read_cost_inputs() {
   # enclosing definition so the name reported is the function's, not the line's.
   #
   # Over the sourced libraries as well as this file, and the list of them is
-  # read from the source rather than written out here. The talos-image-cache
-  # diagnosis named by the sentence lives in a library this file sources, so a
-  # scan of this file alone would not find it. A guarded read added to any
-  # sourced library is what this has to see, and hardcoding today's library
-  # would put the next one outside the scan in exactly the same silent way.
+  # read from the source rather than written out here. A capture the sentence
+  # names may live in a library this file sources rather than in the file itself,
+  # so a scan of this file alone would not find it and its arm in the table below
+  # would sit unreachable while reading as coverage. A guarded read added to any
+  # sourced library is what this has to see, and hardcoding today's one would put
+  # the next library outside the scan in exactly the same silent way.
   libs="$lib $(awk '/^\. hack\/e2e-chainsaw\/_lib\/[a-z-]+\.sh$/ { print $2 }' "$lib")"
   for f in $libs; do
     if [ ! -f "$f" ]; then
@@ -1581,8 +1360,7 @@ read_cost_inputs() {
     'cozy_capture_runner_kernel_cpu_time:runner kernel CPU time:cozy_capture_runner_kernel_cpu_time' \
     'cozy_capture_sandbox_qemu_thread_cpu:sandbox QEMU per-thread CPU time:cozy_capture_sandbox_qemu_thread_cpu' \
     'cozy_capture_runner_canary:runner fixed-work canary:_cozy_canary_run_arm' \
-    'cozy_capture_tenant_worker_thread_cpu:worker per-thread CPU time:cozy_capture_tenant_worker_thread_cpu _cozy_virt_launcher_listing' \
-    'talos_image_cache_diagnose:talos-image-cache:talos_image_cache_diagnose _talos_image_cache_bounded_read'; do
+    'cozy_capture_tenant_worker_thread_cpu:worker per-thread CPU time:cozy_capture_tenant_worker_thread_cpu _cozy_virt_launcher_listing'; do
     fn=${entry%%:*}
     rest=${entry#*:}
     phrase=${rest%%:*}
@@ -1626,7 +1404,6 @@ ${carrier}
       # and the arm body is exempted below rather than given a phrase of its own.
       cozy_capture_runner_canary) phrase='runner fixed-work canary' ;;
       cozy_capture_tenant_worker_thread_cpu) phrase='worker per-thread CPU time' ;;
-      talos_image_cache_diagnose) phrase='talos-image-cache' ;;
       # The sentence enumerates the CAPTURES. Two other kinds of function guard
       # the same way and are deliberately not in it, each exempt for a stated
       # reason rather than by omission: the shared bounded-read helpers, and the
@@ -1635,7 +1412,7 @@ ${carrier}
       # them in the sentence too would be a second copy of that claim to keep in
       # step. A function that is neither still fails below, which is what makes
       # this a list of exemptions rather than a list of everything.
-      cozy_diag_read | _talos_image_cache_bounded_read) continue ;;
+      cozy_diag_read) continue ;;
       _cozy_cadvisor_node_stream | _cozy_virt_launcher_listing) continue ;;
       # The canary carries its guard in the body that runs one arm, the way the
       # cAdvisor captures carry theirs in the stream they share, so the sentence
@@ -1645,7 +1422,7 @@ ${carrier}
       # completed. Its bounds protect optional reads without belonging to the
       # failure diagnostics phase whose missing-timeout warning is under test.
       cozy_report_node_join_timing) continue ;;
-      cozy_report_node_join_failure | _talos_image_cache_deploy_state) continue ;;
+      cozy_report_node_join_failure) continue ;;
       *)
         echo "$fn guards its call with command -v but this test has no phrase for it; add one here and to the warning" >&2
         exit 1
@@ -1701,7 +1478,6 @@ ${carrier}
       cozy_capture_tenant_worker_block_io) phrase='worker block IO counters' ;;
       cozy_capture_tenant_serial_console) phrase='serial-console family' ;;
       cozy_capture_tenant_talos) phrase='guest Talos capture' ;;
-      talos_image_cache_diagnose) phrase='talos-image-cache diagnosis' ;;
       # Called with the same suffix but not behind the phase gate: it runs ahead
       # of the headline so the console experiment's own failure is named before
       # the wording that matches the bug it studies, and it is not part of what
@@ -1954,7 +1730,6 @@ EOF
     cozy_report_guest_console_wedge() { :; }
     cozy_capture_tenant_serial_console() { :; }
     cozy_capture_tenant_talos() { :; }
-    talos_image_cache_diagnose() { :; }
     cozy_capture_tenant_worker_cpu_throttle() { :; }
     cozy_capture_tenant_worker_network_counters() { :; }
     cozy_capture_sandbox_kvm_exits() { :; }
@@ -2009,13 +1784,17 @@ EOF
   # So this catches a budget raised past what today's collectors leave room for, and
   # a node-join deadline raised past what the operation can carry behind it, and
   # nothing else. It does not cover the guest-Talos walk growing with the pool, which
-  # carries no cap; nor the collector gated last, whose image-cache re-probe has no
-  # wall-clock bound at all; nor a bounded read gated ahead of the console outside
+  # carries no cap; nor a bounded read gated ahead of the console outside
   # `cozy_… || true` call form the sibling guard enumerates, as the LINSTOR resource
   # state read is, whose cost is therefore not summed here; nor a new collector heavier
   # than the literal, since nothing makes one move it; nor whatever the bringup spends
-  # that `prejoin` does not observe. Those are the residuals, and the first three exist
+  # that `prejoin` does not observe. Those are the residuals, and the first two exist
   # today rather than hypothetically. All are tracked in cozystack/cozystack#3666.
+  #
+  # A residual is gone rather than fixed: the collector gated last used to be the
+  # image-cache re-probe, which carried no wall-clock bound at all. Both mirror
+  # diagnostics have since been removed, so what runs last is the guest-Talos
+  # capture, whose reads carry `--request-timeout`/`--timeout`.
   prejoin=420
   # 620 was this figure while the guest-Talos walk ran two commands per worker.
   # It now runs four: the service list and the link table were added at a 10s

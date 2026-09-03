@@ -199,11 +199,16 @@ spec:
            re-opens the hole every time kubernetes-nodes gains a new top-level value.
            So enumerate exactly the per-pool shape fields kubernetes-nodes accepts
            and pass through only those. Everything cluster-level or module-owned
-           (cluster, clusterReleaseName, talos, version, images, _cluster,
+           (cluster, clusterReleaseName, talos, version, images, osImage, _cluster,
            nameOverride, ...) is dropped by construction: the module sets cluster/
            clusterReleaseName itself above, and a tenant cannot pick the worker OS
-           image / Talos installer / kubelet version / cluster wiring. Keep this list
-           in sync with the kubernetes-nodes values schema's pool-shape params. */}}
+           image / Talos installer / kubelet version / cluster wiring. osImage is
+           named here on purpose rather than merely absent: a ComputePlane pool
+           takes the module's worker OS image and cannot opt into the golden-image
+           clone or repoint itself at another Image Factory, both of which are
+           operator decisions about the platform's own images. Reviewed on
+           cozystack/cozystack#3294. Keep this list in sync with the
+           kubernetes-nodes values schema's pool-shape params. */}}
     {{- with pick $group "minReplicas" "maxReplicas" "instanceType" "diskSize" "storageClass" "roles" "resources" "gpus" "kubelet" "logSerialConsole" "maxUnhealthy" "nodeStartupTimeout" "readyUnknownTimeout" "readyFalseTimeout" "podCpuLimit" "podCpuRequest" "maxNodeProvisionTime" }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

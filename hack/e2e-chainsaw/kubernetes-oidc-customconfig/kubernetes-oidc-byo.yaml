@@ -3,12 +3,9 @@
 # AuthenticationConfiguration Secret. Since the Phase 2 split the kubernetes
 # chart renders the control plane only (worker pools are separate KubernetesNodes
 # resources), so there are zero MachineDeployments, KubevirtMachines or worker
-# DataVolumes — no DRBD churn between CI runs.
-# (see #3231).
-# Unlike the bats original, no talos.imageFactoryURL block is injected here:
-# the helper emits it only when the in-sandbox Talos image cache is up, and
-# with zero worker replicas this render-side test instantiates no DataVolume
-# imports for it to redirect — the static fixture stays equivalent.
+# DataVolumes — no DRBD churn between CI runs (see #3231). With no worker pool
+# this test provisions no worker boot disks either, neither a golden-image clone
+# nor an HTTP import, so the static fixture stays equivalent.
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
 metadata:

@@ -168,6 +168,155 @@ against a real cluster and never blocks offline rendering.
 {{- end -}}
 
 {{- /*
+kubernetes-nodes.assertTalosSupportsKubernetes fails the render when a Talos
+release is paired with a Kubernetes minor outside that Talos minor's support
+window. Each Talos minor supports a bounded window of Kubernetes minors; running
+a kubelet outside it produces a silently broken Talos+kubelet combination that no
+HelmRelease condition can detect, so the render is where it has to be caught.
+Source: https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
+
+A named template rather than an inline block because the pool resolves TWO Talos
+versions and both reach a worker. `talos.version` is the pool default, and
+`image.builtin.version` / `image.factory.version` override it for the boot disk
+AND for the in-guest installer the reconcile Job writes. Checking only the first
+leaves an asymmetry a reader would not expect: a known-bad pairing set through
+`talos.version` is rejected, while the same pairing reached through an
+`image.*.version` override renders clean. The matrix literal lives here, once, so
+the two call sites cannot drift apart.
+
+A Talos minor the matrix does not list passes. That is deliberate and unchanged:
+the matrix is a hand-maintained table, and failing closed on it would block every
+operator who moves to a newer Talos before this file is updated. What the guard
+promises is that a pairing it KNOWS to be bad is refused, not that every pairing
+is known.
+
+Arguments: talosVersion, kubernetesVersion, remedy (what the operator should
+change, appended to the message).
+*/}}
+{{- define "kubernetes-nodes.assertTalosSupportsKubernetes" -}}
+{{- $talosK8sSupportMatrix := dict
+      "v1.13" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
+-}}
+{{- $talosMinor := regexFind "^v[0-9]+\\.[0-9]+" (.talosVersion | toString) -}}
+{{- with index $talosK8sSupportMatrix $talosMinor -}}
+{{-   if not (has ($.kubernetesVersion | toString) .) -}}
+{{-     fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. %s" ($.kubernetesVersion | toString) ($.talosVersion | toString) . $.remedy) -}}
+{{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+kubernetes-nodes.resolveOsImage resolves this pool's `osImage` selection down to
+the three strings that reach a rendered manifest -- a schematic, a Talos release
+and an Image Factory URL -- plus whether the boot disk is a clone of a golden or
+an HTTP import.
+
+Two templates need that answer: nodegroup.yaml builds the worker disk source from
+it, and talos-reconcile-job.yaml builds the in-guest installer reference from it.
+They must agree, because a disk booted from one Talos flavor and an installer
+pinned to another is exactly the silently-broken pairing this chart's support
+matrix was factored out to prevent, and it would surface only as a node that
+upgrades itself onto the wrong OS. So the resolution lives here once rather than
+being mirrored by hand in both files.
+
+The result comes back through the caller's `out` dict rather than as text,
+because four values have to return and a delimited string would need parsing at
+both call sites.
+
+The three format checks live here too, for the same reason. The values are
+tenant-controlled strings that land unquoted in a KubevirtMachineTemplate and in
+a DataVolume name, and the schema types all three as a bare string and cannot
+narrow them: the pinned cozyvalues-gen derives `pattern` from the value TYPE
+(quantity) and has no annotation for a custom one. So the check is at render
+time, which is where this chart already validates the kubelet reservation fields
+for the same class of hazard. The resolved values are checked, not just the
+overridden ones -- an override and the pool default reach the same interpolation.
+The patterns accept every form the chart ships and every form a Talos Image
+Factory produces (a 64-character hex schematic, a vN.N.N release, an http(s) URL)
+and reject the bytes that would break out of a YAML scalar.
+
+Arguments: osImage (the pool's .Values.osImage), talos (.Values.talos), out (the
+dict the result is written into), groupName (named in every error message).
+*/ -}}
+{{- define "kubernetes-nodes.resolveOsImage" -}}
+{{- $img := .osImage | default dict -}}
+{{- if and (hasKey $img "builtin") (hasKey $img "factory") -}}
+{{-   fail (printf "nodeGroup %q: set only one of osImage.builtin or osImage.factory" .groupName) -}}
+{{- end -}}
+{{- /* hasKey, not truthiness: builtin/factory may be present but empty ({} means
+       "clone / import with the pool's talos.* defaults"), and Go templates treat
+       an empty map as false. */ -}}
+{{- $schematicID := .talos.schematicID -}}
+{{- $version := .talos.version -}}
+{{- $factoryURL := .talos.imageFactoryURL -}}
+{{- $clone := false -}}
+{{- if hasKey $img "builtin" -}}
+{{-   $builtin := $img.builtin | default dict -}}
+{{-   $clone = true -}}
+{{-   $schematicID = $builtin.schematicID | default .talos.schematicID -}}
+{{-   $version = $builtin.version | default .talos.version -}}
+{{- else if hasKey $img "factory" -}}
+{{-   $factory := $img.factory | default dict -}}
+{{-   $schematicID = $factory.schematicID | default .talos.schematicID -}}
+{{-   $version = $factory.version | default .talos.version -}}
+{{-   $factoryURL = $factory.imageFactoryURL | default .talos.imageFactoryURL -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" ($schematicID | toString)) -}}
+{{-   fail (printf "nodeGroup %q: Talos schematicID %q is not a plain lowercase alphanumeric identifier. It is interpolated into the worker DataVolume name and the image URL, so it must carry no whitespace, path separators or YAML metacharacters." .groupName ($schematicID | toString)) -}}
+{{- end -}}
+{{- if not (regexMatch "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9a-z.]+)?$" ($version | toString)) -}}
+{{-   fail (printf "nodeGroup %q: Talos version %q is not a vMAJOR.MINOR.PATCH release. It is interpolated into the worker DataVolume name and the image URL, so it must carry no whitespace or YAML metacharacters." .groupName ($version | toString)) -}}
+{{- end -}}
+{{- if not (regexMatch "^https?://[A-Za-z0-9._~:/?#\\[\\]@!&'()*+,;=%-]+$" ($factoryURL | toString)) -}}
+{{-   fail (printf "nodeGroup %q: imageFactoryURL %q is not a plain http(s) URL. It is interpolated into the worker DataVolume source URL, so it must carry no whitespace, backtick, dollar sign or YAML metacharacters." .groupName ($factoryURL | toString)) -}}
+{{- end -}}
+{{- $_ := set .out "schematicID" $schematicID -}}
+{{- $_ := set .out "version" $version -}}
+{{- $_ := set .out "imageFactoryURL" $factoryURL -}}
+{{- $_ := set .out "clone" $clone -}}
+{{- end -}}
+
+{{- /*
+Name of the cluster's default StorageClass, or the empty string when there is
+none (and always under `helm template`, which has no cluster to read).
+
+An empty storageClass is a documented, schema-valid setting on both a worker pool
+and a worker image catalog entry, and it means "the cluster default". Without
+resolving it the golden-versus-pool StorageClass comparison simply skips whenever
+either side is empty, which is the one corner where skipping is worst: CDI then
+falls back to a host-assisted copy over the pod network, silently, and that copy
+is the transfer the clone path exists to remove. Reviewed as [MINOR] on
+cozystack/cozystack#3294.
+
+Both the current annotation and its beta predecessor count, because clusters
+provisioned years apart carry different ones and Kubernetes still honours both.
+
+More than one class may carry the annotation at once. Kubernetes permits that --
+it is the normal state midway through swapping a cluster's default -- and
+resolves it by taking the most recently created, so this does the same. Emitting
+every match instead concatenates their names into a class that does not exist,
+and the comparison below then rejects a pool whose class matches the default
+that is actually in force. Timestamps are RFC3339 in UTC, so comparing them as
+strings is comparing them chronologically.
+*/ -}}
+{{- define "kubernetes-nodes.defaultStorageClassName" -}}
+{{- $classes := lookup "storage.k8s.io/v1" "StorageClass" "" "" -}}
+{{- $name := "" -}}
+{{- $createdAt := "" -}}
+{{- range (dig "items" (list) ($classes | default dict)) -}}
+{{-   $annotations := dig "metadata" "annotations" (dict) . -}}
+{{-   if or (eq (dig "storageclass.kubernetes.io/is-default-class" "" $annotations | toString) "true") (eq (dig "storageclass.beta.kubernetes.io/is-default-class" "" $annotations | toString) "true") -}}
+{{-     $at := dig "metadata" "creationTimestamp" "" . | toString -}}
+{{-     if or (not $name) (gt $at $createdAt) -}}
+{{-       $name = dig "metadata" "name" "" . | toString -}}
+{{-       $createdAt = $at -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- $name -}}
+{{- end -}}
+
+{{- /*
 Validates and returns a duration destined for a consumer that does not reject
 a bad value: the cluster-autoscaler parses its annotation with
 time.ParseDuration and silently falls back to its built-in default on a value
