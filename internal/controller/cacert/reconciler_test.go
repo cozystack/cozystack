@@ -1488,10 +1488,14 @@ func TestOwnedSolelyBy(t *testing.T) {
 	}
 }
 
-// TestProjectionNameCannotCollideWithAnEngineCASecret pins the property the
-// canonical name exists to have: no engine CA Secret, for any release, can ever
-// produce the dotted "<release>.tenant-ca" name.
-func TestProjectionNameCannotCollideWithAnEngineCASecret(t *testing.T) {
+// TestProjectionNameCannotCollideWithADotFreeEngineSuffix pins the property the
+// canonical name exists to have, over the dot-free engine suffixes it samples:
+// no engine CA Secret takes the dotted "<release>.tenant-ca" name. Validation
+// elsewhere generalises this over the releases the apps API created and no
+// further, a hand-written HelmRelease being free to carry a dot in its name;
+// over suffixes nothing validates anything, so there the fixtures are the whole
+// coverage. See projectionSuffix.
+func TestProjectionNameCannotCollideWithADotFreeEngineSuffix(t *testing.T) {
 	engineSuffixes := []string{"-ca", "-ca-cert", "-cluster-ca-cert", "-clients-ca-cert", "-ssl", "-tls"}
 	prefixes := []string{"", "postgres-", "kafka-", "clickhouse-", "http-cache-"}
 	appNames := []string{
@@ -1500,8 +1504,8 @@ func TestProjectionNameCannotCollideWithAnEngineCASecret(t *testing.T) {
 	}
 
 	if !strings.HasPrefix(projectionSuffix, ".") {
-		t.Fatalf("the canonical suffix must start with a dot; it is what makes the name "+
-			"unreachable by any engine. Got %q", projectionSuffix)
+		t.Fatalf("the canonical suffix must start with a dot; it is what keeps the name "+
+			"out of reach of a dot-free engine suffix. Got %q", projectionSuffix)
 	}
 
 	for _, prefix := range prefixes {
