@@ -181,13 +181,19 @@ spec:
   steps:
   - name: run
     try:
-    # The 25m budget is the whole documented flow: bucket provisioning, a
+    # The 50m budget is the whole documented flow: bucket provisioning, a
     # 2-replica source Postgres, the plugin base backup to S3, an empty target
-    # app, and the purge + re-bootstrap restore (convention 6: justified
-    # in-line). run-all.sh fails fast on terminal BackupJob/RestoreJob phases
-    # and stalled HelmReleases rather than polling out the budget.
+    # app, and TWO sequential purge + re-bootstrap restores - the latest-point
+    # to-copy restore (step 40) and the in-place restore (step 50, the
+    # regression guard for the archive-vs-recovery serverName collision)
+    # (convention 6: justified in-line). The old 25m budget covered a single
+    # restore; the in-place restore re-bootstraps the source on top of it, and
+    # its own fail-fast waits allow 20m for the RestoreJob plus 10m for the
+    # cluster to return healthy. run-all.sh fails fast on terminal
+    # BackupJob/RestoreJob phases and stalled HelmReleases rather than polling
+    # out the budget.
     - script:
-        timeout: 25m
+        timeout: 50m
         content: |
           set -eu
           cd ../../..

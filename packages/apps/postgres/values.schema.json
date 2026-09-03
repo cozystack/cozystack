@@ -355,6 +355,11 @@
           "type": "boolean",
           "default": false
         },
+        "newServerName": {
+          "description": "WAL-archive server name (S3 path prefix) the RESTORED cluster writes to. Must differ from `serverName` (the recovery source) so a restored cluster archives to a fresh, empty prefix and barman-cloud-check-wal-archive passes while it recovers from the source's prefix. The CNPG backup driver sets this on restore; empty means the cluster archives under its own name.",
+          "type": "string",
+          "default": ""
+        },
         "oldName": {
           "description": "Previous cluster name before deletion.",
           "type": "string",

@@ -25,6 +25,7 @@ export STRATEGY_NAME="${STRATEGY_NAME:-cnpg-strategy-default}"
 export BACKUPCLASS_NAME="${BACKUPCLASS_NAME:-postgres-cnpg}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-pg-src-adhoc}"
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-pg-src-to-pg-target}"
+export RESTOREJOB_INPLACE_NAME="${RESTOREJOB_INPLACE_NAME:-pg-src-in-place}"
 export PLAN_NAME="${PLAN_NAME:-pg-src-daily}"
 # App user password baked into 05-postgres-src.yaml (REPLACE_WITH_PASSWORD).
 export PG_PASSWORD="${PG_PASSWORD:-Xai7Wepo0aeThie8}"
