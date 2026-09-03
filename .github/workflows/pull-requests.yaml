@@ -127,7 +127,7 @@ jobs:
               description: 'e2e in progress — this run has not reported yet',
               target_url: RUN_URL,
             });
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Compute changed files and build matrix
@@ -226,14 +226,14 @@ jobs:
       # The default pull_request checkout is GitHub's prospective merge commit,
       # not just the head branch. That makes base-branch package drift visible.
       - name: Checkout prospective merge
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       # Execute the verifier from the trusted base SHA. An older rc-derived head
       # may not contain it, and a PR must not be able to weaken its own guard.
       - name: Checkout release tooling from base
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .release-tooling
@@ -305,7 +305,7 @@ jobs:
       && !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
@@ -342,7 +342,7 @@ jobs:
         pkg: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -459,7 +459,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -554,7 +554,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -763,7 +763,7 @@ jobs:
 
       - name: Checkout code
         if: contains(github.event.pull_request.labels.*.name, 'release')
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -890,7 +890,7 @@ jobs:
       # fetch-depth: 0 is required by the "Select E2E tests" step so that
       # `git diff origin/${BASE_REF}...HEAD` can resolve the base ref.
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
