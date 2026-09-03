@@ -48,6 +48,19 @@ cloudflare-tunnel-gateway-controller:
       tag: 3.4.1@sha256:cbf03dc444dfd1d71b002e0f0feda95f1a38bed9eb5893f2a08950eb65d0a9db
     tunnelTokenSecretRef:
       name: cloudflare-tunnel-credentials
+    # The chart runs two proxy replicas and sets no affinity of its own, so
+    # both land on one node whenever the scheduler feels like it -- and this
+    # is the pod that terminates every request arriving from the edge, for
+    # every hostname on the class. ScheduleAnyway rather than DoNotSchedule:
+    # a single-node cluster must still get its two replicas.
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: cloudflare-tunnel-gateway-controller
+            app.kubernetes.io/component: proxy
   gatewayClassConfig:
     create: true
     tunnelID: ""
