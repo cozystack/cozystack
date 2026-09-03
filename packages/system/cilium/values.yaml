@@ -1,4 +1,24 @@
 cilium:
+  # Load-bearing beyond service routing, and pinned for that reason. The
+  # admission-webhook deny policy in packages/system/kubeovn-webhook names only
+  # its webhook's backend port, which covers a pod dialling the ClusterIP only
+  # while Cilium is the thing that performs the service DNAT -- and only this
+  # value makes it so, against an upstream chart default of "false". Setting it
+  # false does not break that policy visibly; it reopens the ClusterIP path to
+  # the webhook while the backend deny keeps working.
+  # tests/kube_proxy_replacement_test.yaml asserts the rendered value across the
+  # defaults and every variant valuesFiles combination, and carries the whole
+  # argument. The policy also carries a target-side rule that does not depend on
+  # this value, so losing it degrades the source-side half rather than removing
+  # enforcement outright.
+  #
+  # No test here can observe a live cluster's values, so an operator override in
+  # the field is caught only by templates/kube-proxy-replacement-beacon.yaml,
+  # which renders a status ConfigMap whenever this is not true. It is a beacon
+  # and not a fail() on purpose: whether Cilium without kube-proxy replacement
+  # is a supported cozystack configuration is a platform decision, and refusing
+  # to render the CNI over a weakened defence-in-depth control is not this
+  # chart's call.
   kubeProxyReplacement: true
   # Upstream cilium with hostFirewall enabled and the IPv6 datapath disabled
   # (ipv6.enabled=false, the default here) drops ALL node IPv6 before any

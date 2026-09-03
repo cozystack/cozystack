@@ -6,6 +6,21 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+# hack/helm-unit-tests.sh discovers work by probing for this target, so a
+# package without one is skipped in silence however many suites sit under
+# tests/.
+#
+# Phony because nothing else declares it: hack/package.mk writes its .PHONY as
+# a variable assignment rather than a target, so it declares no target at all,
+# and it would not list `test` in any case. Without this line a path named
+# `test` next to this Makefile would make the target up to date and skip the
+# recipe. That matters here beyond tidiness:
+# tests/kube_proxy_replacement_test.yaml is the pin the kubeovn-webhook deny
+# policy rests on, and a skipped recipe removes it in silence.
+.PHONY: test
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	helm repo add cilium https://helm.cilium.io/

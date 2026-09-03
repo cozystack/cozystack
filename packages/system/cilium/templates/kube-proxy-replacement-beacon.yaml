@@ -1,0 +1,68 @@
+{{- /*
+Render-time signal for the one value in this chart that two other packages
+depend on and that fails OPEN when it is lost.
+
+packages/system/kubeovn-webhook denies pod egress to its /mutate-pods admission
+webhook by naming the webhook's BACKEND port only. That covers a pod dialling
+the Service ClusterIP because Cilium translates a service to its backends
+before it enforces egress policy -- which is true only while Cilium is the
+thing performing the DNAT, and only kubeProxyReplacement makes it so. Turn it
+off and the ClusterIP path to that webhook reopens while the backend deny keeps
+working: nothing fails, nothing is logged, and the rendered policy looks exactly
+as it did.
+
+A ConfigMap rather than `fail`, deliberately. Whether Cilium without
+kube-proxy replacement is a supported cozystack configuration is a platform
+decision, and refusing to render the CNI is not ours to make -- it would take
+the cluster's networking down over a weakened defence-in-depth control. This
+follows the user-visible status beacon the kubernetes chart already uses for
+the same reason (packages/apps/kubernetes/templates/cluster.yaml, the
+`-awaiting-etcd` ConfigMap): emit something an operator and an alert can both
+see, and let the install proceed.
+
+`.Values.cilium.kubeProxyReplacement` reads the coalesced value, so this fires
+both on an explicit flip to false and on the umbrella key being deleted, which
+falls back to the vendored chart's own "false" default.
+
+tests/kube_proxy_replacement_test.yaml pins the value itself and carries the
+full argument, including what the policy's target-side rule does and does not
+cover when this value is lost.
+*/}}
+{{- $cilium := index .Values "cilium" | default dict }}
+{{- $kpr := dig "kubeProxyReplacement" "" $cilium }}
+{{- if ne (toString $kpr) "true" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-kube-proxy-replacement-off
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/name: cilium
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  status: "kube-proxy-replacement-off"
+  kubeProxyReplacement: {{ toString $kpr | quote }}
+  message: |
+    cilium.kubeProxyReplacement is {{ toString $kpr | quote }}, not "true".
+
+    Cilium no longer performs the ClusterIP DNAT ahead of its own egress hook,
+    so the source-side half of the admission-webhook deny policy shipped by
+    packages/system/kubeovn-webhook no longer covers traffic addressed to the
+    webhook Service ClusterIP. That rule names the webhook backend port only and
+    runs with default-deny disabled, so a pod dialling
+    kube-ovn-webhook.cozy-kubeovn.svc:443 falls out of it and is allowed. Direct
+    access to the backend port stays denied, and so does the policy's
+    target-side rule on the webhook's own ingress path, which is evaluated after
+    whatever DNAT already happened -- so this weakens defence in depth rather
+    than removing enforcement.
+
+    Nothing else reports this: the policy still renders, still installs, and
+    still denies what it names.
+
+    Either set cilium.kubeProxyReplacement back to true, or accept the narrower
+    posture and record it by setting kubeovn-webhook's own
+    webhookPolicy.enabled explicitly, so it is a decision rather than an
+    assumption.
+{{- end }}
