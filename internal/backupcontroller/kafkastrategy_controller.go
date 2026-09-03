@@ -27,9 +27,9 @@ import (
 // topic METADATA of a Cozystack Kafka application: the driver renders
 // spec.template into a one-shot batch/v1.Job that talks to the Kafka Admin API
 // (export topic definitions + configs on backup, recreate them on restore).
-// It adds three things over the Job strategy, mirroring the Rabbitmq strategy:
-// an applicationRef Kind gate, a Ready precondition on the Strimzi Kafka
-// cluster, and a per-run object key via .BackupName + ArtifactURITemplate.
+// It adds three things on top of the Job strategy's render-a-Job flow: an
+// applicationRef Kind gate, a Ready precondition on the Strimzi Kafka cluster,
+// and a per-run object key via .BackupName + ArtifactURITemplate.
 
 const (
 	kafkaStrategyLabelMode   = "kafka.strategy.backups.cozystack.io/mode"
@@ -72,7 +72,7 @@ func validateKafkaApplicationRef(ref corev1.TypedLocalObjectReference) error {
 }
 
 // kafkaNotReadyMessage returns "" when the cluster reports Ready=True, otherwise
-// a legible reason. Mirrors rabbitmqNotReadyMessage.
+// a legible reason for the BackupJob/RestoreJob precondition.
 func kafkaNotReadyMessage(cluster *kafkatypes.Kafka) string {
 	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, kafkatypes.ConditionTypeReady)
 	if cond == nil {

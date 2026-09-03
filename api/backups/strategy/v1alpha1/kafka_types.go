@@ -35,8 +35,8 @@ const (
 // Kafka Admin API. It is not a message-data backup and carries no consumer
 // offsets, ACLs, quotas or KafkaUsers — those are out of scope for this
 // strategy (message data belongs to a volume-snapshot strategy). Like the Job
-// and Rabbitmq strategies, the driver renders spec.template into a one-shot
-// batch/v1.Job for both backup and restore.
+// strategy, the driver renders spec.template into a one-shot batch/v1.Job for
+// both backup and restore.
 type Kafka struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
