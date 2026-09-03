@@ -1305,3 +1305,404 @@ spec:
           apiVersion: v1
           kind: Namespace
           name: tenant-admission-churn-probe
+---
+# Companion to admission-webhooks-survive-namespace-churn above. That case
+# proves the pod admission webhook stays AVAILABLE; this one proves it is still
+# UNREACHABLE from pods, which is the property the policy exists for, and that
+# the deny is scoped to that one destination rather than to its port everywhere.
+#
+# The port-scoping half is the assertion that earns this case. The policy
+# previously expressed the Service-frontend deny with `toServices`, which Cilium
+# resolves only inside ALLOW rules -- leaving the deny rule with an empty L3
+# selector that Cilium reads as a WILDCARD when the rule carries toPorts, so
+# "deny this Service on 8443" became "deny EVERY destination on 8443" for every
+# pod in the cluster. Every rendered-YAML assertion in
+# packages/system/kubeovn-webhook passed on that policy, and so would this case
+# without a second destination on the same port. So it stands up its own
+# listener on the denied port and requires that to stay reachable.
+#
+# It runs from a namespace it creates and labels cozystack.io/system=true, and
+# that choice is load-bearing rather than tidiness. Measured on a live
+# kube-ovn+cilium cluster carrying no webhook policy at all: from tenant-root,
+# both kube-ovn-webhook:443 and an unrelated kube-ovn-controller:10660 in
+# cozy-kubeovn are unreachable, because packages/apps/tenant ships a
+# default-deny egress CiliumClusterwideNetworkPolicy per tenant that permits
+# only namespaces carrying tenant.cozystack.io/<tenant> -- which no cozy-*
+# namespace does. A deny verdict measured from there would hold with the policy
+# uninstalled. From a cozystack.io/system namespace, on the same cluster with no
+# policy, all four destinations below were reachable, so the deny under test is
+# the only thing that can refuse the connect. That label also takes the
+# namespace out of this webhook's own namespaceSelector, so creating the probe
+# pods does not depend on the webhook whose reachability is being denied.
+#
+# And "for the wrong reason" is the whole difficulty, because a refused connect
+# does not say why it was refused. "Denied by policy" and "no backend to route
+# to" are the same observation from inside the probe, so both deny assertions
+# would report success against a cluster with no policy installed at all, as
+# long as the backend was dead. So the deny verdicts are gated on the webhook
+# Service having ready backends before the probe, on every sample while it runs,
+# and after it finishes, and on the webhook pods not having restarted or been
+# replaced across that window. The reachable verdicts are gated the same way on
+# the listener. The probe itself only reports reachable/unreachable per
+# destination and always exits 0; this script attributes the cause, because it
+# is the half that holds the endpoint evidence. Anything that leaves the
+# question undecidable fails as a setup failure rather than as a verdict.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: pod-admission-webhook-deny-still-enforced
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: pods-cannot-reach-the-pod-webhook-but-keep-unrelated-egress-on-its-port
+    try:
+    - script:
+        # Above the sum of the inner budgets, per the rule in
+        # hack/e2e-chainsaw/.chainsaw.yaml: 60s to clear a leftover probe
+        # namespace, 120s of webhook endpoint precondition, 90s for the
+        # listener, 30s of stability sampling and 180s of phase polling = 480s,
+        # and timeouts.exec would otherwise cap the whole script at 5m and
+        # SIGKILL it with no verdict.
+        timeout: 12m
+        content: |
+          set -eu
+          probe_ns=e2e-pod-admission-deny-probe
+          registration=kube-ovn-webhook.cozystack.io
+
+          # Coordinates come from the webhook registration itself, which is what
+          # the API server dials, rather than from a guessed release name or
+          # namespace. Not registered at all is a setup failure: nothing below
+          # could then prove anything about it.
+          coords=$(kubectl get mutatingwebhookconfigurations \
+            -o jsonpath='{range .items[*]}{range .webhooks[*]}{.name}{" "}{.clientConfig.service.namespace}{" "}{.clientConfig.service.name}{"\n"}{end}{end}' \
+            | awk -v h="$registration" '$1 == h { print $2, $3; exit }')
+          [ -n "$coords" ] || {
+            echo "SETUP FAILURE: no MutatingWebhookConfiguration registers $registration, so its reachability cannot be asserted" >&2
+            exit 1
+          }
+          hook_ns=${coords% *}
+          hook_svc=${coords#* }
+
+          # The pod selector is read off the Service rather than written out
+          # here, so a chart that relabels its pods does not leave this case
+          # silently selecting nothing.
+          sel=$(kubectl -n "$hook_ns" get svc "$hook_svc" \
+            -o go-template='{{range $k, $v := .spec.selector}}{{$k}}={{$v}},{{end}}' | sed 's/,$//')
+          [ -n "$sel" ] || { echo "SETUP FAILURE: $hook_ns/$hook_svc has no pod selector" >&2; exit 1; }
+
+          hook_fe=$(kubectl -n "$hook_ns" get svc "$hook_svc" -o jsonpath='{.spec.ports[0].port}')
+          [ -n "$hook_fe" ] || { echo "SETUP FAILURE: $hook_ns/$hook_svc exposes no port" >&2; exit 1; }
+
+          # Ready endpoint addresses behind a Service, from EndpointSlice rather
+          # than from pod readiness: this is the state the API server and the
+          # service load balancer route on, and a
+          # `kubectl wait --for=condition=Ready` is satisfied transiently by a
+          # pod that is flapping.
+          ready_backends() {
+            n=$(kubectl -n "$1" get endpointslice -l "kubernetes.io/service-name=$2" \
+              -o jsonpath='{range .items[*]}{range .endpoints[*]}{.conditions.ready}{"\n"}{end}{end}' \
+              2>/dev/null | grep -c '^true$' || true)
+            [ -n "$n" ] || n=0
+            echo "$n"
+          }
+
+          # Pod identity plus restart count, as one string. Compared for
+          # equality across the probe window, so a restart AND a replacement
+          # both show up -- a crash-looping webhook can satisfy a readiness
+          # check at both ends of a window it spent dying in the middle of.
+          webhook_generation() {
+            kubectl -n "$hook_ns" get pod -l "$sel" \
+              -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount}{" "}{end}'
+          }
+
+          # Precondition on the destination under test.
+          deadline=$(( $(date +%s) + 120 ))
+          while :; do
+            hook_ready=$(ready_backends "$hook_ns" "$hook_svc")
+            if [ "$hook_ready" -gt 0 ]; then break; fi
+            [ "$(date +%s)" -lt "$deadline" ] || {
+              echo "SETUP FAILURE: $hook_ns/$hook_svc has no ready backend after 120s." >&2
+              echo "  A refused connect cannot be attributed to policy while the destination" >&2
+              echo "  has nothing listening, so this test stops instead of reporting a deny" >&2
+              echo "  it did not observe." >&2
+              kubectl -n "$hook_ns" get endpointslice -l "kubernetes.io/service-name=$hook_svc" -o yaml >&2 2>&1 || true
+              kubectl -n "$hook_ns" get pod -l "$sel" -o wide >&2 2>&1 || true
+              exit 1
+            }
+            sleep 5
+          done
+          # The backend address and port come from the EndpointSlice, not from
+          # the pod spec: that is the pair the service load balancer actually
+          # DNATs to, so a chart that grew a sidecar, reordered its container
+          # ports or renamed a targetPort cannot leave this case probing a port
+          # nothing serves and reporting the resulting refusal as a deny. Only a
+          # ready endpoint is taken, for the same reason. The port taken here is
+          # also the port the listener below binds, so the two destinations are
+          # compared on one value rather than on two that could drift apart.
+          hook_ep=$(kubectl -n "$hook_ns" get endpointslice -l "kubernetes.io/service-name=$hook_svc" \
+            -o go-template='{{range .items}}{{if .ports}}{{$port := (index .ports 0).port}}{{range .endpoints}}{{if .conditions.ready}}{{range .addresses}}{{.}} {{$port}}{{"\n"}}{{end}}{{end}}{{end}}{{end}}{{end}}' \
+            | awk 'NF == 2 { print; exit }')
+          [ -n "$hook_ep" ] || { echo "SETUP FAILURE: $hook_ns/$hook_svc has no ready endpoint address yet" >&2; exit 1; }
+          hook_ip=${hook_ep% *}
+          hook_port=${hook_ep#* }
+
+          gen_before=$(webhook_generation)
+
+          kubectl delete namespace "$probe_ns" --ignore-not-found --wait=true --timeout=60s
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: ${probe_ns}
+            labels:
+              # See the header: a tenant namespace is behind a default-deny
+              # egress that would make the deny verdicts vacuous, and this label
+              # also keeps pod creation here out of the webhook under test.
+              cozystack.io/system: "true"
+          EOF
+
+          # The positive control, on the DENIED port and in the probe's own
+          # namespace so no cross-namespace policy is in play. busybox:musl is
+          # staged onto every node by hack/e2e-prepull-images.sh, so this adds no
+          # image pull; httpd rather than `nc -l` because it keeps listening
+          # across connections instead of exiting after the first. The
+          # securityContext satisfies the restricted PodSecurity profile, so it
+          # runs whatever level is enforced.
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: deny-probe-sink
+            namespace: ${probe_ns}
+            labels:
+              app: deny-probe-sink
+          spec:
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65534
+              runAsGroup: 65534
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: sink
+              image: busybox:musl
+              command: ["httpd", "-f", "-p", "${hook_port}", "-h", "/tmp"]
+              ports:
+              - name: sink
+                containerPort: ${hook_port}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              readinessProbe:
+                tcpSocket:
+                  port: ${hook_port}
+                periodSeconds: 2
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: deny-probe-sink
+            namespace: ${probe_ns}
+          spec:
+            selector:
+              app: deny-probe-sink
+            ports:
+            - port: ${hook_port}
+              targetPort: ${hook_port}
+              protocol: TCP
+          EOF
+
+          deadline=$(( $(date +%s) + 90 ))
+          while :; do
+            sink_ready=$(ready_backends "$probe_ns" deny-probe-sink)
+            if [ "$sink_ready" -gt 0 ]; then break; fi
+            [ "$(date +%s)" -lt "$deadline" ] || {
+              echo "SETUP FAILURE: the listener never got a ready backend, so a denied connect to it would prove nothing about scope" >&2
+              kubectl -n "$probe_ns" describe pod deny-probe-sink >&2 2>&1 || true
+              exit 1
+            }
+            sleep 5
+          done
+          sink_ip=$(kubectl -n "$probe_ns" get pod deny-probe-sink -o jsonpath='{.status.podIP}')
+          [ -n "$sink_ip" ] || { echo "SETUP FAILURE: the listener has no address" >&2; exit 1; }
+
+          # Stability: the same evidence held across a window, not at one
+          # instant. Six samples over 30s, all of which must show both
+          # destinations live and the webhook neither restarted nor replaced.
+          i=0
+          while [ "$i" -lt 6 ]; do
+            sleep 5
+            i=$(( i + 1 ))
+            n=$(ready_backends "$hook_ns" "$hook_svc")
+            m=$(ready_backends "$probe_ns" deny-probe-sink)
+            [ "$n" -gt 0 ] && [ "$m" -gt 0 ] || {
+              echo "SETUP FAILURE: a destination lost its ready backend during the stability window (sample $i: webhook=$n listener=$m)" >&2
+              kubectl -n "$hook_ns" get pod -l "$sel" -o wide >&2 2>&1 || true
+              exit 1
+            }
+          done
+          gen_stable=$(webhook_generation)
+          [ "$gen_stable" = "$gen_before" ] || {
+            echo "SETUP FAILURE: the webhook restarted or was replaced during the stability window" >&2
+            echo "  before: $gen_before" >&2
+            echo "  after:  $gen_stable" >&2
+            exit 1
+          }
+
+          echo "probing from $probe_ns: expect reachable deny-probe-sink:${hook_port} and ${sink_ip}:${hook_port}, denied ${hook_svc}.${hook_ns}.svc:${hook_fe} and ${hook_ip}:${hook_port}"
+
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: deny-probe
+            namespace: ${probe_ns}
+          spec:
+            restartPolicy: Never
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65534
+              runAsGroup: 65534
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: probe
+              image: busybox:musl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              env:
+              - name: SINK_SVC_HOST
+                value: "deny-probe-sink.${probe_ns}.svc"
+              - name: SINK_POD_HOST
+                value: "${sink_ip}"
+              - name: SINK_PORT
+                value: "${hook_port}"
+              - name: HOOK_SVC_HOST
+                value: "${hook_svc}.${hook_ns}.svc"
+              - name: HOOK_SVC_PORT
+                value: "${hook_fe}"
+              - name: HOOK_POD_HOST
+                value: "${hook_ip}"
+              - name: HOOK_POD_PORT
+                value: "${hook_port}"
+              command: ["sh", "-c"]
+              args:
+              # Measurement only, and always exit 0. The pod reports what it
+              # observed per destination; the script that started it holds the
+              # endpoint evidence and is the only place that can say why a
+              # connect was refused. Keeping the verdict out of here is also
+              # what stops "the probe could not run" from being read as "the
+              # assertion failed".
+              - |
+                set -u
+                reach() { nc -w 5 "\$1" "\$2" </dev/null >/dev/null 2>&1; }
+                report() {
+                  if reach "\$2" "\$3"; then
+                    echo "\$1 reachable \$2:\$3"
+                  else
+                    echo "\$1 unreachable \$2:\$3"
+                  fi
+                }
+                report SINK_SVC "\$SINK_SVC_HOST" "\$SINK_PORT"
+                report SINK_POD "\$SINK_POD_HOST" "\$SINK_PORT"
+                report HOOK_SVC "\$HOOK_SVC_HOST" "\$HOOK_SVC_PORT"
+                report HOOK_POD "\$HOOK_POD_HOST" "\$HOOK_POD_PORT"
+          EOF
+
+          # Wait for a terminal phase rather than a condition, and re-check both
+          # backends on every poll: a destination that dies mid-probe invalidates
+          # the verdicts, and this is the window it would die in.
+          deadline=$(( $(date +%s) + 180 ))
+          phase=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            n=$(ready_backends "$hook_ns" "$hook_svc")
+            m=$(ready_backends "$probe_ns" deny-probe-sink)
+            [ "$n" -gt 0 ] && [ "$m" -gt 0 ] || {
+              echo "SETUP FAILURE: a destination lost its ready backend while the probe was running (webhook=$n listener=$m), so its result proves nothing" >&2
+              kubectl -n "$hook_ns" get pod -l "$sel" -o wide >&2 2>&1 || true
+              kubectl -n "$probe_ns" logs deny-probe >&2 2>&1 || true
+              exit 1
+            }
+            phase=$(kubectl -n "$probe_ns" get pod deny-probe -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            case "$phase" in Succeeded|Failed) break ;; esac
+            sleep 3
+          done
+
+          log=$(kubectl -n "$probe_ns" logs deny-probe 2>&1 || true)
+          printf '%s\n' "$log"
+
+          # Postconditions, before the log is interpreted at all.
+          [ "$phase" = "Succeeded" ] || {
+            echo "SETUP FAILURE: the probe did not run to completion (phase=${phase:-unknown})" >&2
+            kubectl -n "$probe_ns" describe pod deny-probe >&2 2>&1 || true
+            exit 1
+          }
+          gen_after=$(webhook_generation)
+          [ "$gen_after" = "$gen_before" ] || {
+            echo "SETUP FAILURE: the webhook restarted or was replaced during the probe" >&2
+            echo "  before: $gen_before" >&2
+            echo "  after:  $gen_after" >&2
+            exit 1
+          }
+          n=$(ready_backends "$hook_ns" "$hook_svc")
+          m=$(ready_backends "$probe_ns" deny-probe-sink)
+          [ "$n" -gt 0 ] && [ "$m" -gt 0 ] || {
+            echo "SETUP FAILURE: a destination has no ready backend after the probe (webhook=$n listener=$m), so its result proves nothing" >&2
+            exit 1
+          }
+
+          verdict() { printf '%s\n' "$log" | awk -v k="$1" '$1 == k { print $2; exit }'; }
+          sink_svc_seen=$(verdict SINK_SVC)
+          sink_pod_seen=$(verdict SINK_POD)
+          hook_svc_seen=$(verdict HOOK_SVC)
+          hook_pod_seen=$(verdict HOOK_POD)
+          for v in "$sink_svc_seen" "$sink_pod_seen" "$hook_svc_seen" "$hook_pod_seen"; do
+            [ -n "$v" ] || {
+              echo "SETUP FAILURE: the probe did not report all four destinations" >&2
+              exit 1
+            }
+          done
+
+          # From here every branch is a real verdict: each destination had a live
+          # backend before, throughout and after, on pods that neither restarted
+          # nor were replaced.
+          rc=0
+          if [ "$sink_svc_seen" = reachable ]; then
+            echo "OK   unrelated ClusterIP egress on port ${hook_port} works"
+          else
+            echo "BUG  unrelated ClusterIP egress on port ${hook_port} DENIED to a live backend -- the webhook deny is not scoped to the webhook" >&2
+            rc=1
+          fi
+          if [ "$sink_pod_seen" = reachable ]; then
+            echo "OK   unrelated pod-IP egress on port ${hook_port} works"
+          else
+            echo "BUG  unrelated pod-IP egress on port ${hook_port} DENIED to a live backend -- the webhook deny is not scoped to the webhook" >&2
+            rc=1
+          fi
+          if [ "$hook_svc_seen" = unreachable ]; then
+            echo "OK   webhook denied through its Service ClusterIP"
+          else
+            echo "BUG  webhook reachable through its Service ClusterIP (${hook_svc}.${hook_ns}.svc:${hook_fe})" >&2
+            rc=1
+          fi
+          if [ "$hook_pod_seen" = unreachable ]; then
+            echo "OK   webhook denied on its backend port"
+          else
+            echo "BUG  webhook reachable directly on its backend port (${hook_ip}:${hook_port})" >&2
+            rc=1
+          fi
+          exit "$rc"
+        check:
+          ($error == null): true
+    finally:
+    - delete:
+        ref:
+          apiVersion: v1
+          kind: Namespace
+          name: e2e-pod-admission-deny-probe
