@@ -12,16 +12,35 @@ image: ghcr.io/cozystack/cozystack/kubeovn-webhook:v1.6.2@sha256:8abc089c4469b65
 # ships only a PodSecurity block. Until that changes, this policy is the
 # enforcement.
 #
-# Rendered as a CiliumNetworkPolicy on purpose: kube-ovn runs with
+# Rendered as a CiliumClusterwideNetworkPolicy on purpose: kube-ovn runs with
 # ENABLE_NP: false, so a core NetworkPolicy object would be created and never
-# enforced. Set enabled: false on a cluster whose networking variant ships no
-# Cilium, where the object would have no controller to act on it.
+# enforced. The template renders only when that Cilium API is discoverable; set
+# enabled: false to opt out explicitly.
 #
 # The port is deliberately not configurable here. It has to agree with the
 # container port and the Service targetPort, and because the policy runs with
 # default-deny disabled, a disagreement fails open: the policy would deny a port
 # nothing serves while the real one stayed reachable, removing this control
-# without breaking anything visible. All three read one definition instead --
-# see namespace-annotation-webhook.port in templates/_helpers.tpl.
+# without breaking anything visible. The source-side endpoint deny and the
+# target-side world deny both read that one definition -- see
+# namespace-annotation-webhook.port in templates/_helpers.tpl. Only the backend
+# port is denied; Cilium translates a service to its backends before enforcing
+# egress policy, so ClusterIP-addressed traffic is matched there too. That last
+# step depends on Cilium owning service load-balancing --
+# packages/system/cilium/values.yaml kubeProxyReplacement, true there against an
+# upstream default of "false", pinned by
+# packages/system/cilium/tests/kube_proxy_replacement_test.yaml, which carries
+# the argument. Flip it and the ClusterIP path to /mutate-pods reopens while the
+# backend deny keeps working -- except that the policy's target-side rule does
+# not depend on that value at all, being evaluated on the webhook's own ingress
+# path after whatever DNAT already happened, so the two together degrade rather
+# than fail open.
+#
+# Residual risk worth stating: no test in this repo can observe a live cluster's
+# Cilium values, so an operator setting kubeProxyReplacement: false in the field
+# is caught only by the status ConfigMap that
+# packages/system/cilium/templates/kube-proxy-replacement-beacon.yaml renders.
+# Whether that configuration is supported at all is a platform question this
+# chart does not answer.
 webhookPolicy:
   enabled: true
