@@ -110,19 +110,19 @@ version: v11.8
 ##
 
 ## @typedef {struct} User - User configuration.
-## @field {string} password - Password for the user.
 ## @field {int} maxUserConnections - Maximum number of connections.
 
-## @param {map[string]User} users - Users configuration map.
+## @param {map[string]User} users - Users configuration map. Passwords (including the `root` account) are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values. Read a user's password from that Secret, or rotate every managed password by bumping `passwordRotation`.
 users: {}
 ## Example:
 ## users:
 ##   user1:
 ##     maxUserConnections: 1000
-##     password: hackme
 ##   user2:
 ##     maxUserConnections: 1000
-##     password: hackme
+
+## @param {int} passwordRotation - Rotation counter for auto-generated application-user passwords. Increment it (0 -> 1 -> 2 ...) to regenerate every managed user password on the next reconcile; leaving it unchanged keeps the passwords already stored in the `<release>-credentials` Secret. Existing releases adopt their current passwords as the baseline on first upgrade: the counter value is recorded without rotating, so a bump requested during that same first upgrade does not rotate — bump it once more afterwards to rotate a legacy release. The `root` password is auto-generated but not rotated by this counter, since mariadb-operator only applies it at datadir bootstrap.
+passwordRotation: 0
 
 ## @typedef {struct} DatabaseRoles - Role assignments for a database.
 ## @field {[]string} [admin] - List of users with admin privileges.

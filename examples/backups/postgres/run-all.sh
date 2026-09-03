@@ -25,13 +25,13 @@ source "$SCRIPT_DIR/00-helpers.sh"
 RECOVERY_TIME="${RECOVERY_TIME:-}"
 
 # Substitute the manifest placeholders. $BUCKET / $S3_HOST are resolved from the
-# Bucket below; $PG_PASSWORD is the app user's password; $RECOVERY_TIME is the
-# PITR target (empty for every manifest except 45-restorejob-pitr.yaml).
+# Bucket below; $RECOVERY_TIME is the PITR target (empty for every manifest
+# except 45-restorejob-pitr.yaml). The app user's password is chart-generated,
+# not substituted.
 subst() {
     sed \
         -e "s|REPLACE_WITH_COSI_BUCKET_NAME|${BUCKET}|g" \
         -e "s|REPLACE_WITH_S3_ENDPOINT|${S3_HOST}|g" \
-        -e "s|REPLACE_WITH_PASSWORD|${PG_PASSWORD}|g" \
         -e "s|REPLACE_WITH_RECOVERY_TIME|${RECOVERY_TIME}|g" \
         "$SCRIPT_DIR/$1"
 }
