@@ -39,9 +39,11 @@ metadata:
   {{- end }}
 spec:
   type: LoadBalancer
-  # The operator labels Dashboards pods with opensearch.cluster.dashboards and
-  # nothing else — no opster.io/opensearch-cluster, no app.kubernetes.io/*. A
-  # selector naming those matches no pod, so the Service silently has no endpoints.
+  {{- /*
+  The operator labels Dashboards pods with opensearch.cluster.dashboards and
+  nothing else — no opster.io/opensearch-cluster, no app.kubernetes.io/*. A
+  selector naming those matches no pod, so the Service silently has no endpoints.
+  */}}
   selector:
     opensearch.cluster.dashboards: {{ .Release.Name }}
   ports:

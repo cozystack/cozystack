@@ -22,17 +22,19 @@ rules:
   resourceNames:
   - {{ .Release.Name }}-credentials
   verbs: ["get", "list", "watch"]
-# The trust anchor is deliberately absent from that list. It reaches the tenant as
-# the key-free <release>.tenant-ca projection through core.cozystack.io/tenantsecrets,
-# which the base tenant roles already grant and which gates on the
-# internal.cozystack.io/tenantresource label the lineage webhook stamps. A name grant
-# here would answer a different question: it conveys whatever occupies the name, and
-# it keeps conveying it after the webhook has withdrawn the verdict, so it would
-# bypass the platform's only revocation channel for the anchor.
-#
-# The three Secrets of the TLS chain — <release>.http-ca, -http-server and
-# -dashboards-server — each hold a private key and belong in no tenant-facing Role at
-# all.
+{{- /*
+The trust anchor is deliberately absent from that list. It reaches the tenant as
+the key-free <release>.tenant-ca projection through core.cozystack.io/tenantsecrets,
+which the base tenant roles already grant and which gates on the
+internal.cozystack.io/tenantresource label the lineage webhook stamps. A name grant
+here would answer a different question: it conveys whatever occupies the name, and
+it keeps conveying it after the webhook has withdrawn the verdict, so it would
+bypass the platform's only revocation channel for the anchor.
+
+The three Secrets of the TLS chain — <release>.http-ca, -http-server and
+-dashboards-server — each hold a private key and belong in no tenant-facing Role at
+all.
+*/}}
 - apiGroups:
   - cozystack.io
   resources:
