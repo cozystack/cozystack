@@ -33,6 +33,12 @@ e2e: test-openapi test-chainsaw ## Run the end-to-end tests in existing sandbox
 copy-nocloud-image:
 	docker cp ../../../_out/assets/nocloud-amd64.raw.xz "${SANDBOX_NAME}":/workspace/_out/assets/nocloud-amd64.raw.xz
 
+# The BATS suites below are named literally, one per recipe line, and this is the
+# only runner for a hack/e2e-*.bats file or for anything in a hack/ subdirectory —
+# the root Makefile's unit glob is one level deep and skips the e2e- prefix.
+# hack/bats-runner-coverage.bats fails when a suite here names a file that no
+# longer exists, and when a .bats file under hack/ is named by nothing, so a new
+# live-cluster suite needs a line here to run at all.
 prepare-cluster: copy-nocloud-image
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster.bats'
 
