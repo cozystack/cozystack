@@ -141,14 +141,14 @@ substrate: kubevirt
 
 ## @typedef {struct} Proxmox - Proxmox substrate settings. Ignored unless `substrate` is `proxmox`.
 ## @field {[]string} templateTags - Tags identifying the Talos VM template to clone. capmox matches a template when its tag set is EQUAL to this list, not when it contains it, so every tag on the template must be listed here — a missing one yields `found 0 VM templates with tags ...` while the tags are plainly present. Required when `substrate` is `proxmox`.
-## @field {bool} [full] - Full clone rather than linked. A linked clone is faster and thinner but ties the worker's disk to the template's lifetime; full is the safe default for a pool that outlives template rotation.
+## @field {bool} [full] - Full clone rather than linked. Default is a linked clone: it costs kilobytes at creation instead of the whole disk, because a ZFS-backed linked clone writes only its own increment (measured: 8K against 10.2G for the same worker full-cloned onto a `sparse 0` pool). The cost is that the clone holds the template's base snapshot, so the template cannot be rotated while any linked clone still references it — which is what the consolidation CronJob resolves 24h after creation. Set true for a pool that must be independent of the template from the first second.
 ## @field {ProxmoxNetwork} network - NIC configuration.
 ## @field {string} [storage] - Proxmox storage for the cloned disk. Empty keeps the template's storage.
 
 ## @param {Proxmox} proxmox - Proxmox substrate settings.
 proxmox:
   templateTags: []
-  full: true
+  full: false
   # vlan and mtu stay absent rather than null: the schema types them as
   # integers, so a null default fails validation for every pool that does
   # not set them.

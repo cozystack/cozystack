@@ -118,8 +118,8 @@ type Kubelet struct {
 }
 
 type Proxmox struct {
-	// Full clone rather than linked. A linked clone is faster and thinner but ties the worker's disk to the template's lifetime; full is the safe default for a pool that outlives template rotation.
-	// +kubebuilder:default:=true
+	// Full clone rather than linked. Default is a linked clone: it costs kilobytes at creation instead of the whole disk, because a ZFS-backed linked clone writes only its own increment (measured: 8K against 10.2G for the same worker full-cloned onto a `sparse 0` pool). The cost is that the clone holds the template's base snapshot, so the template cannot be rotated while any linked clone still references it — which is what the consolidation CronJob resolves 24h after creation. Set true for a pool that must be independent of the template from the first second.
+	// +kubebuilder:default:=false
 	Full bool `json:"full,omitempty"`
 	// NIC configuration.
 	// +kubebuilder:default:={}
