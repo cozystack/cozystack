@@ -144,7 +144,7 @@ jobs:
             // Discarded label event: pull-requests.yaml triggers on `labeled` but
             // its `plan` guard discards every label a fork run could not publish
             // for, so such a run skips every job and builds nothing. That guard
-            // admits full-e2e, and admits `release` for SAME-REPO PRs only —
+            // admits e2e/full, and admits `release` for SAME-REPO PRs only —
             // deliberately, for this check. A `release`-labelled run reaches
             // `plan` but has `build`/`finalize` gated off by its own label, so it
             // succeeds having produced no pr-patch, and this lane would take it
@@ -293,7 +293,7 @@ jobs:
             // Test-Impact Analysis inputs, from the SAME trusted sources as the
             // docs-only decision above: the base-repo PR file list drives suite
             // selection (base64 so newlines survive the job output), and the
-            // base-repo PR labels drive the full-e2e override. Deriving these
+            // base-repo PR labels drive the e2e/full override. Deriving these
             // from `git diff` on the fork-controlled merge ref would hand a
             // fork a second way to make TIA select nothing, on top of the one
             // it already has — the selector runs from the fork tree, so this
@@ -322,7 +322,7 @@ jobs:
               .flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename])
               .join('\n') + '\n';
             core.setOutput('changed_b64', Buffer.from(changed, 'utf8').toString('base64'));
-            const fullE2e = (pr.labels || []).some(l => l.name === 'full-e2e');
+            const fullE2e = (pr.labels || []).some(l => l.name === 'e2e/full');
             core.setOutput('full_e2e', fullE2e ? 'true' : 'false');
 
             // Real run: the pending status was posted above, as soon as this
@@ -649,7 +649,7 @@ jobs:
       # .github/workflows/ reads as inert until it is added to the escalation
       # list by name, because .github/ is inert as a directory and the e2e
       # workflows are exempted from it individually.
-      # Skipped (→ full suite below) on the full-e2e label.
+      # Skipped (→ full suite below) on the e2e/full label.
       - name: Select E2E tests
         id: select
         if: ${{ needs.resolve.outputs.full_e2e != 'true' }}
@@ -668,7 +668,7 @@ jobs:
           fi
       # Single `chainsaw test` invocation, no per-app retry loop (e2e-testing.md
       # §1) — Chainsaw polls each assertion to its own timeout. Full suite only
-      # when the full-e2e label skipped selection: if `select` ran and came back
+      # when the e2e/full label skipped selection: if `select` ran and came back
       # empty it set skip=true and this step never starts.
       - name: Run E2E tests
         id: e2e_tests

@@ -84,8 +84,12 @@ group_key_conclusions() {
 # counted separately: a count is satisfied by the wrong labels and needs raising
 # by hand every time a publishing label is added, which is how it stops being
 # the invariant and becomes a number.
+# The character class admits `/` so a namespaced label (`e2e/run`) is seen. A
+# class that misses a label name does not fail: both sides simply stop
+# mentioning it, the two sets still match, and the complement contract silently
+# stops covering it.
 label_names() {
-  grep -o "github\.event\.label\.name $1 '[a-z0-9-]*'" \
+  grep -o "github\.event\.label\.name $1 '[a-z0-9/-]*'" \
     | sed "s/.*'\\(.*\\)'/\\1/" \
     | sort -u
 }
