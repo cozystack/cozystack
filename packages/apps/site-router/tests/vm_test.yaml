@@ -1,0 +1,193 @@
+suite: site-router gateway VirtualMachine
+
+# T04/T11 — the gateway VM is rendered directly (not via the vm-instance
+# chart) so it can carry the DRBD 4Kn blockSize override and cloud-init the
+# vm-instance chart does not expose. These assertions pin:
+#   - the 512/4096 blockSize on the boot disk (design "bootable + 512-native");
+#   - the default pod-network bridge NIC (+ live-migration annotation);
+#   - CPU/memory sizing from .Values.resources{cpu,memory} (D11);
+#   - stable, seed-derived firmware.uuid so cloud-init re-runs only on an
+#     intentional cloudInitSeed change (and is preserved when the seed is
+#     cleared and a VM already exists).
+# Modelled on packages/apps/kubernetes/templates/cluster.yaml (the only place
+# blockSize.custom is wired) and vm-instance's stableUuid idiom.
+
+templates:
+  - templates/vm.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+  resources:
+    cpu: 4
+    memory: 4Gi
+  cloudInitSeed: alpha
+
+tests:
+  - it: renders a VirtualMachine named after the release
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: metadata.name
+          value: site-router-test
+
+  - it: boot disk carries the DRBD 4Kn blockSize override (512 logical / 4096 physical)
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.disks[0].blockSize.custom.logical
+          value: 512
+      - equal:
+          path: spec.template.spec.domain.devices.disks[0].blockSize.custom.physical
+          value: 4096
+      - equal:
+          path: spec.template.spec.domain.devices.disks[0].disk.bus
+          value: virtio
+
+  # R3 — kube-ovn v1.15.10 only reconciles the LSP port_security field at pod
+  # CREATE (a live annotation flip on an already-wired virt-launcher pod is a
+  # no-op, validated live), so the router's port_security=false relaxation is
+  # baked on the pod TEMPLATE here and the pod is born with it. The controller
+  # verifies (no longer patches) this annotation; the guest tunnel-ingress source
+  # filter is the sole compensating control (see docs/security-model.md).
+  - it: bakes port_security=false onto the gateway pod template (chart-baked relaxation)
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/port_security"]
+          value: "false"
+
+  - it: places the gateway on the default pod network via a bridge NIC
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["kubevirt.io/allow-pod-bridge-network-live-migration"]
+          value: "true"
+      - equal:
+          path: spec.template.spec.domain.devices.interfaces[0].name
+          value: default
+      - exists:
+          path: spec.template.spec.domain.devices.interfaces[0].bridge
+      - equal:
+          path: spec.template.spec.networks[0].name
+          value: default
+      - exists:
+          path: spec.template.spec.networks[0].pod
+
+  - it: sizes the VM from .Values.resources
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 4
+      - equal:
+          path: spec.template.spec.domain.cpu.sockets
+          value: 1
+      - equal:
+          path: spec.template.spec.domain.memory.guest
+          value: 4Gi
+
+  # resources.cpu is an integer count of topology cores (values.schema.json
+  # "type": integer). A fractional quantity like "1500m"/"0.5" — schema-valid
+  # under the old {quantity} type — used to coerce to `cores: 0` via `| int64`
+  # and silently under-provision the router. It is now rejected at schema
+  # validation instead of ever rendering a zero-core VM.
+  - it: rejects a fractional CPU quantity instead of rendering cores 0
+    set:
+      resources.cpu: "1500m"
+    asserts:
+      - failedTemplate:
+          errorPattern: "resources.cpu"
+
+  - it: attaches the boot DataVolume and the cloud-init NoCloud disk
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.disks[1].name
+          value: cloudinitdisk
+      - equal:
+          path: spec.template.spec.volumes[0].dataVolume.name
+          value: site-router-test-boot
+      - equal:
+          path: spec.template.spec.volumes[1].cloudInitNoCloud.secretRef.name
+          value: site-router-test-cloud-init
+
+  - it: firmware.uuid is a stable v4-shaped hash for a given seed (seed alpha)
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.domain.firmware.uuid
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-9[0-9a-f]{3}-[0-9a-f]{12}$'
+      - equal:
+          path: spec.template.spec.domain.firmware.uuid
+          value: fc2ce302-df7b-488c-9b9c-bbeb78ca8737
+
+  - it: changing cloudInitSeed changes firmware.uuid (intentional cloud-init re-run)
+    set:
+      cloudInitSeed: bravo
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.firmware.uuid
+          value: d4d778ea-1c96-4592-9edf-2d100fb37c9e
+
+  - it: with an empty seed and no existing VM, firmware.uuid is the deterministic hash
+    set:
+      cloudInitSeed: ""
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.firmware.uuid
+          value: eaa99b7d-6ec1-4ff4-9623-8ce839dcaa43
+
+  - it: with an empty seed and an existing VM, the previous firmware.uuid is preserved
+    set:
+      cloudInitSeed: ""
+    kubernetesProvider:
+      scheme:
+        "kubevirt.io/v1/VirtualMachine":
+          gvr:
+            group: kubevirt.io
+            version: v1
+            resource: virtualmachines
+          namespaced: true
+      objects:
+        - kind: VirtualMachine
+          apiVersion: kubevirt.io/v1
+          metadata:
+            name: site-router-test
+            namespace: tenant-test
+          spec:
+            template:
+              spec:
+                domain:
+                  firmware:
+                    uuid: 11111111-1111-4111-9111-111111111111
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.firmware.uuid
+          value: 11111111-1111-4111-9111-111111111111
