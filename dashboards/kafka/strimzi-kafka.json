@@ -2801,7 +2801,7 @@
       "targets": [
         {
           "datasource": "${DS_PROMETHEUS}",
-          "expr": "sum(kafka_server_raftmetrics_commit_latency_avg{namespace=\"$kubernetes_namespace\",pod=~\"$strimzi_cluster_name-controller-.*\"}) by (pod)",
+          "expr": "sum(kafka_server_raftmetrics_commit_latency_avg{namespace=\"$kubernetes_namespace\",pod=~\"$strimzi_cluster_name-c-.*\"}) by (pod)",
           "format": "time_series",
           "instant": false,
           "intervalFactor": 1,
