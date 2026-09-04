@@ -112,7 +112,7 @@ version: v11.8
 ## @typedef {struct} User - User configuration.
 ## @field {int} maxUserConnections - Maximum number of connections.
 
-## @param {map[string]User} users - Users configuration map. Passwords (including the `root` account) are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values. Read a user's password from that Secret, or rotate every managed password by bumping `passwordRotation`.
+## @param {map[string]User} users - Users configuration map. Passwords (including the `root` account) are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values. Read a user's password from that Secret, or rotate every managed password by bumping `passwordRotation`. A `password` left over in values from before the field was removed is ignored by the chart but stays the live credential until a `passwordRotation` bump retires it.
 users: {}
 ## Example:
 ## users:
