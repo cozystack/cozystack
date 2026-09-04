@@ -15,6 +15,7 @@ spec:
     targetPort: metrics
     protocol: TCP
 ---
+{{- if .Capabilities.APIVersions.Has "operator.victoriametrics.com/v1beta1" }}
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMServiceScrape
 metadata:
@@ -27,3 +28,4 @@ spec:
   endpoints:
   - port: metrics
     scheme: http
+{{- end }}
