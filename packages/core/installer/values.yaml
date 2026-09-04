@@ -21,7 +21,7 @@ cozystackOperator:
   # well, or the opt-out is partial. Declared here rather than left implicit
   # because the documented opt-out is a `--set` against this key.
   disableTelemetry: false
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.6.3-rc.2@sha256:ac60e57ab47868c552ae6d1a6195ea7dd7633afbc828a68d1a2b1ce4ba5d0dac
+  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.6.3@sha256:ac60e57ab47868c552ae6d1a6195ea7dd7633afbc828a68d1a2b1ce4ba5d0dac
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
   platformSourceRef: 'digest=sha256:171cdb1f013d6409e9576256233045e8ca70f6f7988ba3b3b2afe0780aae2bcf'
   # When non-empty, overrides the operator's --helmrelease-interval flag

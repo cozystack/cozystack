@@ -1,4 +1,4 @@
 console:
-  image: ghcr.io/cozystack/cozystack/cozystack-ui:v1.6.3-rc.2@sha256:69fced6e8b0029579de5a0b54c3824855258e7a8e28dc9c3ec5ba0ff8fdddfc4
+  image: ghcr.io/cozystack/cozystack/cozystack-ui:v1.6.3@sha256:69fced6e8b0029579de5a0b54c3824855258e7a8e28dc9c3ec5ba0ff8fdddfc4
 tokenProxy:
-  image: ghcr.io/cozystack/cozystack/token-proxy:v1.6.3-rc.2@sha256:97124c012246c33cdcac60e8f884097b48c0081624716fe8161efc2b3ceeb2a8
+  image: ghcr.io/cozystack/cozystack/token-proxy:v1.6.3@sha256:97124c012246c33cdcac60e8f884097b48c0081624716fe8161efc2b3ceeb2a8
