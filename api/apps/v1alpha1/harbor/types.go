@@ -36,6 +36,9 @@ type ConfigSpec struct {
 	// Trivy vulnerability scanner configuration.
 	// +kubebuilder:default:={}
 	Trivy Trivy `json:"trivy"`
+	// Nginx reverse proxy configuration.
+	// +kubebuilder:default:={}
+	Nginx Nginx `json:"nginx"`
 	// PostgreSQL database configuration.
 	// +kubebuilder:default:={}
 	Database Database `json:"database"`
@@ -68,6 +71,15 @@ type Jobservice struct {
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
 	// +kubebuilder:default:="t1.nano"
+	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
+}
+
+type Nginx struct {
+	// Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+	// +kubebuilder:default:={}
+	Resources Resources `json:"resources,omitempty"`
+	// Default sizing preset used when `resources` is omitted.
+	// +kubebuilder:default:="t1.small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
 }
 

@@ -107,6 +107,15 @@ trivy:
   resources: {}
   resourcesPreset: "t1.nano"
 
+## @typedef {struct} Nginx - Nginx reverse proxy configuration.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {Nginx} nginx - Nginx reverse proxy configuration.
+nginx:
+  resources: {}
+  resourcesPreset: "t1.small"
+
 ## @typedef {struct} Database - PostgreSQL database configuration (provisioned via CloudNativePG).
 ## @field {quantity} size - Persistent Volume size for database storage.
 ## @field {int} replicas - Number of database instances.

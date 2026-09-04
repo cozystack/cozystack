@@ -52,6 +52,11 @@ Without object storage in the tenant chain, Harbor cannot provision its registry
 | `trivy.resources.cpu`         | Number of CPU cores allocated.                                                                           | `quantity` | `""`       |
 | `trivy.resources.memory`      | Amount of memory allocated.                                                                              | `quantity` | `""`       |
 | `trivy.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `t1.nano`  |
+| `nginx`                       | Nginx reverse proxy configuration.                                                                       | `object`   | `{}`       |
+| `nginx.resources`             | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
+| `nginx.resources.cpu`         | Number of CPU cores allocated.                                                                           | `quantity` | `""`       |
+| `nginx.resources.memory`      | Amount of memory allocated.                                                                              | `quantity` | `""`       |
+| `nginx.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `t1.small` |
 | `database`                    | PostgreSQL database configuration.                                                                       | `object`   | `{}`       |
 | `database.size`               | Persistent Volume size for database storage.                                                             | `quantity` | `5Gi`      |
 | `database.replicas`           | Number of database instances.                                                                            | `int`      | `2`        |

@@ -211,6 +211,8 @@ spec:
         {{- if .Values.trivy.enabled }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.trivy.resourcesPreset .Values.trivy.resources $) | nindent 10 }}
         {{- end }}
+      nginx:
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.nginx.resourcesPreset .Values.nginx.resources $) | nindent 10 }}
       database:
         type: external
         external:
