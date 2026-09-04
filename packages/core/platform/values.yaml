@@ -169,6 +169,20 @@ publishing:
   # value requires recreating that Service once (the chart fails early with the
   # exact command).
   loadBalancerClass: ""
+  # DNS suffix the dashboard appends to the name of a LoadBalancer Service on
+  # the application Services tab, shown under the external IP as
+  # `<service-name>.<serviceDomain>` (e.g. demo-external-write.svc.example.org
+  # for a postgres release named demo). Display-only: nothing in the platform
+  # creates DNS records for it. Set it only when your DNS already resolves
+  # exactly that name to the Service's LoadBalancer IP, e.g. external-dns with
+  # a matching fqdn template. A CoreDNS k8s_external zone does not fit: it
+  # answers <service>.<namespace>.<zone>, which this suffix cannot express.
+  # This is not the `<release>.<tenant host>` name the app charts put into
+  # their certificates, so a TLS client may see a SAN mismatch unless DNS and
+  # certificates are aligned by the operator. The suffix is cluster-wide, so
+  # two tenants with a release of the same name get the same hostname.
+  # Empty (the default) shows no hostname.
+  serviceDomain: ""
   # Enable PROXY-protocol on the host ingress-nginx and auto-deploy
   # ouroboros (system/ouroboros) to fix the resulting hairpin-NAT
   # problem (intra-cluster traffic to the cluster's own public hostnames

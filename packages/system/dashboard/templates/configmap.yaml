@@ -13,6 +13,11 @@
        and the vX.Y.Z release tags, rather than stripping the leading v. */}}
 {{- $_ := set $config "version" $tag }}
 {{- end }}
+{{- /* Omitted when empty: the console treats a missing key as "show no
+       hostname", so an empty string must not reach config.json. */}}
+{{- with index .Values._cluster "service-domain" }}
+{{- $_ := set $config "serviceDomain" . }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
