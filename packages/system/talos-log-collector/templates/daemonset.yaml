@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: talos-log-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "talos-log-collector.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: talos-log-collector
+  template:
+    metadata:
+      labels:
+        {{- include "talos-log-collector.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: talos-log-collector
+      priorityClassName: system-node-critical
+      # No hostNetwork: the pod stays on the pod network, so the outbound sink
+      # resolves vlinsert-generic.<target>.svc through cluster DNS with no extra
+      # config. Talos machine.logging pushes to 127.0.0.1:<listenPort>; the
+      # hostPort below, bound to hostIP 127.0.0.1, publishes that loopback
+      # socket into the pod via portmap. This keeps the receiver off the host
+      # network (no node-wide pod exposure, no host-DNS handling) while still
+      # accepting node-loopback traffic.
+      # The loopback hostPort relies on the portmap CNI plugin (chained ahead of
+      # Cilium on the kubeovn-cilium* variants). Cilium's own eBPF hostPort
+      # implementation cannot bind a hostPort to 127.0.0.1, so on the plain
+      # cilium/cilium-generic/cilium-kilo variants (not selected by any bundle
+      # today) this receiver would silently stop receiving.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: vector
+        image: "{{ $.Files.Get "images/vector.tag" | trim }}"
+        imagePullPolicy: IfNotPresent
+        args: ["--config", "/etc/vector/vector.yaml"]
+        livenessProbe:
+          tcpSocket:
+            port: talos
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        env:
+        - name: VECTOR_SELF_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: VECTOR_LOG
+          value: {{ .Values.logLevel | quote }}
+        ports:
+        - name: talos
+          containerPort: {{ .Values.listenPort }}
+          hostPort: {{ .Values.listenPort }}
+          hostIP: 127.0.0.1
+          protocol: TCP
+        resources:
+          requests:
+            cpu: {{ .Values.resources.cpu }}
+            memory: {{ .Values.resources.memory }}
+          limits:
+            memory: {{ .Values.resources.memory }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: config
+          mountPath: /etc/vector
+        - name: data
+          mountPath: /vector-data
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - effect: NoExecute
+        operator: Exists
+      volumes:
+      - name: config
+        configMap:
+          name: talos-log-collector
+      - name: data
+        emptyDir: {}

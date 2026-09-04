@@ -1,0 +1,38 @@
+##
+## @section Common parameters
+##
+
+## @enum {string} LogLevel - Vector log verbosity.
+## @value trace
+## @value debug
+## @value info
+## @value warn
+## @value error
+
+## @param {LogLevel} [logLevel] - Vector log verbosity (trace, debug, info, warn, error).
+logLevel: warn
+
+## @param {int} [listenPort] - TCP port bound on the node loopback (127.0.0.1) where Talos machine.logging pushes logs.
+## @minimum 1
+## @maximum 65535
+listenPort: 5170
+
+## @typedef {struct} Resources - Compute resources for the collector.
+## @field {quantity} [cpu] - CPU request.
+## @field {quantity} [memory] - Memory request and limit.
+
+## @param {Resources} [resources] - Compute resources for the collector.
+resources:
+  cpu: 100m
+  memory: 128Mi
+
+##
+## @section VictoriaLogs destination
+##
+
+## @typedef {struct} Global - Global values block; `target` selects the destination tenant.
+## @field {string} [target] - Tenant whose VictoriaLogs (vlinsert-generic.<target>.svc) receives the logs. Defaults to tenant-root; override via bundle values.
+
+## @param {Global} [global] - Global values block; `target` selects the destination tenant.
+global:
+  target: tenant-root
