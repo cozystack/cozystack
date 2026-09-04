@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -35,11 +36,23 @@ type ObjectID struct {
 }
 
 func (o ObjectID) GetUnstructured(ctx context.Context, client dynamic.Interface, mapper meta.RESTMapper) (*unstructured.Unstructured, error) {
-	u, err := getUnstructuredObject(ctx, client, mapper, o.APIVersion, o.Kind, o.Namespace, o.Name)
-	if err != nil {
-		return nil, err
-	}
-	return u, nil
+	return o.GetUnstructuredCached(ctx, client, mapper, nil)
+}
+
+// GetUnstructuredCached fetches the object using the supplied cache. A nil
+// cache reverts to a direct, uncached dynamic.Get.
+func (o ObjectID) GetUnstructuredCached(ctx context.Context, client dynamic.Interface, mapper meta.RESTMapper, cache *ObjectCache) (*unstructured.Unstructured, error) {
+	return getUnstructuredObject(ctx, client, mapper, cache, o.APIVersion, o.Kind, o.Namespace, o.Name)
+}
+
+// walkState bundles the per-walk arguments that used to be threaded through the
+// variadic `memory` parameter. Encapsulating them keeps the variadic backwards
+// compatible (a single `*walkState` or the legacy `map[ObjectID]bool` are both
+// accepted) while letting callers thread a shared ObjectCache through the
+// recursion without changing every call site.
+type walkState struct {
+	visited map[ObjectID]bool
+	cache   *ObjectCache
 }
 
 func WalkOwnershipGraph(
@@ -55,47 +68,28 @@ func WalkOwnershipGraph(
 	out = []ObjectID{}
 	l := log.FromContext(ctx)
 
-	l.Info("processing object", "apiVersion", obj.GetAPIVersion(), "kind", obj.GetKind(), "name", obj.GetName())
-	var visited map[ObjectID]bool
-	var ok bool
-	if len(memory) == 1 {
-		visited, ok = memory[0].(map[ObjectID]bool)
-		if !ok {
-			l.Error(
-				fmt.Errorf("invalid argument"), "could not parse visited map in WalkOwnershipGraph call",
-				"received", memory[0], "expected", "map[ObjectID]bool",
-			)
-			return out
-		}
-	}
-
-	if len(memory) == 0 {
-		visited = make(map[ObjectID]bool)
-	}
-
-	if len(memory) != 0 && len(memory) != 1 {
-		l.Error(
-			fmt.Errorf("invalid argument count"), "could not parse variadic arguments to WalkOwnershipGraph",
-			"args passed", len(memory)+5, "expected args", "4|5",
-		)
+	l.V(1).Info("processing object", "apiVersion", obj.GetAPIVersion(), "kind", obj.GetKind(), "name", obj.GetName())
+	state, err := parseWalkMemory(memory)
+	if err != nil {
+		l.Error(err, "invalid WalkOwnershipGraph variadic arguments", "variadic_args_passed", len(memory), "expected", "0 or 1 (map[ObjectID]bool | *walkState)")
 		return out
 	}
 
-	if visited[id] {
+	if state.visited[id] {
 		return out
 	}
 
-	visited[id] = true
+	state.visited[id] = true
 
 	ownerRefs := obj.GetOwnerReferences()
 	for _, owner := range ownerRefs {
-		ownerObj, err := getUnstructuredObject(ctx, client, mapper, owner.APIVersion, owner.Kind, obj.GetNamespace(), owner.Name)
+		ownerObj, err := getUnstructuredObject(ctx, client, mapper, state.cache, owner.APIVersion, owner.Kind, obj.GetNamespace(), owner.Name)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Could not fetch owner %s/%s (%s): %v\n", obj.GetNamespace(), owner.Name, owner.Kind, err)
 			continue
 		}
 
-		out = append(out, WalkOwnershipGraph(ctx, client, mapper, appMapper, ownerObj, visited)...)
+		out = append(out, WalkOwnershipGraph(ctx, client, mapper, appMapper, ownerObj, state)...)
 	}
 
 	// if object has owners, it couldn't be owned directly by the custom app
@@ -119,7 +113,7 @@ func WalkOwnershipGraph(
 			l.Error(err, "failed to map HelmRelease to app")
 			break
 		}
-		ownerObj, err := getUnstructuredObject(ctx, client, mapper, a, k, obj.GetNamespace(), strings.TrimPrefix(obj.GetName(), p))
+		ownerObj, err := getUnstructuredObject(ctx, client, mapper, state.cache, a, k, obj.GetNamespace(), strings.TrimPrefix(obj.GetName(), p))
 		if err != nil {
 			l.Error(err, "couldn't get unstructured object", "APIVersion", a, "Kind", k, "Name", strings.TrimPrefix(obj.GetName(), p))
 			break
@@ -141,21 +135,82 @@ func WalkOwnershipGraph(
 	if !ok {
 		return
 	}
-	ownerObj, err := getUnstructuredObject(ctx, client, mapper, HRAPIVersion, HRKind, obj.GetNamespace(), name)
+	ownerObj, err := getUnstructuredObject(ctx, client, mapper, state.cache, HRAPIVersion, HRKind, obj.GetNamespace(), name)
 	if err != nil {
 		return
 	}
-	out = append(out, WalkOwnershipGraph(ctx, client, mapper, appMapper, ownerObj, visited)...)
+	out = append(out, WalkOwnershipGraph(ctx, client, mapper, appMapper, ownerObj, state)...)
 
 	return
+}
+
+// parseWalkMemory normalises the variadic `memory` argument of
+// WalkOwnershipGraph into a *walkState. Three forms are accepted for backwards
+// compatibility:
+//
+//   - no argument  → fresh state, no cache
+//   - *walkState   → use as-is (preferred, threads cache through recursion)
+//   - map[ObjectID]bool → legacy visited map (no cache)
+func parseWalkMemory(memory []interface{}) (*walkState, error) {
+	switch len(memory) {
+	case 0:
+		return &walkState{visited: make(map[ObjectID]bool)}, nil
+	case 1:
+		switch m := memory[0].(type) {
+		case *walkState:
+			if m == nil {
+				return &walkState{visited: make(map[ObjectID]bool)}, nil
+			}
+			if m.visited == nil {
+				m.visited = make(map[ObjectID]bool)
+			}
+			return m, nil
+		case map[ObjectID]bool:
+			if m == nil {
+				// Defend against callers who pass `map[ObjectID]bool(nil)` —
+				// writing into a nil map would panic on the first visited[id] = true.
+				m = make(map[ObjectID]bool)
+			}
+			return &walkState{visited: m}, nil
+		default:
+			return &walkState{visited: make(map[ObjectID]bool)}, fmt.Errorf("invalid argument: received %T, expected map[ObjectID]bool or *walkState", memory[0])
+		}
+	default:
+		return &walkState{visited: make(map[ObjectID]bool)}, fmt.Errorf("invalid argument count: %d", len(memory))
+	}
+}
+
+// WalkOwnershipGraphWithCache is the cache-aware entrypoint. It plumbs the
+// supplied ObjectCache through recursion so all dynamic GETs for the lifetime
+// of the walk (and across walks sharing the same cache) hit memory rather than
+// the apiserver. A nil cache is valid; it falls back to the original uncached
+// behaviour.
+func WalkOwnershipGraphWithCache(
+	ctx context.Context,
+	client dynamic.Interface,
+	mapper meta.RESTMapper,
+	appMapper AppMapper,
+	cache *ObjectCache,
+	obj *unstructured.Unstructured,
+) []ObjectID {
+	state := &walkState{
+		visited: make(map[ObjectID]bool),
+		cache:   cache,
+	}
+	return WalkOwnershipGraph(ctx, client, mapper, appMapper, obj, state)
 }
 
 func getUnstructuredObject(
 	ctx context.Context,
 	client dynamic.Interface,
 	mapper meta.RESTMapper,
+	cache *ObjectCache,
 	apiVersion, kind, namespace, name string,
 ) (*unstructured.Unstructured, error) {
+	if cached, cachedErr, ok := cache.Get(apiVersion, kind, namespace, name); ok {
+		return cached, cachedErr
+	}
+
 	l := log.FromContext(ctx)
 	gv, err := schema.ParseGroupVersion(apiVersion)
 	if err != nil {
@@ -163,6 +218,8 @@ func getUnstructuredObject(
 			err, "failed to parse groupversion",
 			"apiVersion", apiVersion,
 		)
+		// A parse error means the input was malformed — don't pollute the cache
+		// with what is effectively a permanent client-side error.
 		return nil, err
 	}
 	gvk := schema.GroupVersionKind{
@@ -174,6 +231,13 @@ func getUnstructuredObject(
 	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
 		l.Error(err, "Could not map GVK "+gvk.String())
+		// Never cache mapping failures: the apps.cozystack.io kinds walked here
+		// are served by the aggregated cozystack-api, so discovery fails
+		// transiently while it rolls (upgrade, drain) or before a new
+		// ApplicationDefinition is discovered. Caching the failure would mark
+		// every object admitted in the TTL window unmanaged — permanently,
+		// since the webhook's objectSelector never re-admits them. In steady
+		// state the mapper serves this from its own discovery cache anyway.
 		return nil, err
 	}
 
@@ -183,6 +247,16 @@ func getUnstructuredObject(
 	}
 
 	ownerObj, err := client.Resource(mapping.Resource).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	// Only cache results we are confident won't change soon:
+	//   - successful lookups (err == nil)
+	//   - permanent NotFound (object truly doesn't exist; recreate will get a
+	//     new resourceVersion and clear the cache through the TTL)
+	// Other errors (timeouts, transient 5xx, throttling) are intentionally
+	// not cached so the next admission retries against the apiserver instead
+	// of repeatedly returning a stale failure.
+	if err == nil || apierrors.IsNotFound(err) {
+		cache.Set(apiVersion, kind, namespace, name, ownerObj, err)
+	}
 	if err != nil {
 		return nil, err
 	}
