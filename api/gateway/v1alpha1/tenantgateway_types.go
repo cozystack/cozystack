@@ -484,8 +484,11 @@ type TenantGatewaySpec struct {
 	// backend Service, and the backend must present its own certificate
 	// for the listener's Hostname — a passthrough listener never
 	// terminates TLS, so the Gateway neither holds nor issues that
-	// certificate. Declaring an entry without attaching a TLSRoute opens
-	// the port and matches the SNI but has nowhere to forward the stream.
+	// certificate. Until such a route attaches and its backend
+	// resolves, the entry publishes the port and answers nothing on it:
+	// a passthrough listener carrying no forwarding route contributes
+	// no filter chain, so a hostname an HTTPS-terminate listener
+	// already serves goes on being served there.
 	// +optional
 	// +listType=map
 	// +listMapKey=name

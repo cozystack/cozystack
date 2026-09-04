@@ -300,13 +300,20 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 					}
 					// Attached and forwarding nowhere, so out of the
 					// race like any other route that cannot carry the
-					// name — but nothing is written on it. Gateway API
-					// puts an unresolvable backendRef under
+					// name, and with no withdrawal cause of its own.
+					// Gateway API puts an unresolvable backendRef under
 					// ResolvedRefs rather than under Accepted, and this
-					// route did attach to the listener it named, so an
-					// Accepted=False here would contradict the object
+					// route did attach to the listener it named, so a
+					// refusal invented here would contradict the object
 					// it sits on. Cilium writes that ResolvedRefs on
 					// its own RouteParentStatus for the same route.
+					//
+					// A loss the race already recorded stays, for the
+					// reason it stays on a route refused with no cause:
+					// the route did claim a hostname another route
+					// holds, which is true however its backends
+					// resolve, and dropping it would leave it in
+					// neither map and falling through to Accepted=True.
 					continue
 				}
 				// answeredBy is the name this pass reports for the
