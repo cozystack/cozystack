@@ -1,0 +1,169 @@
+suite: seaweedfs volume resize hook
+
+# The pre-upgrade hook deletes the volume StatefulSet with --cascade=orphan and
+# then patches each PVC to the new size. Both sizes reach the comparison through
+# an include, which returns a STRING, so the original `gt $newSize $oldSize`
+# compared them lexicographically: growing across a decimal exponent that lowers
+# the leading digit (5Gi -> 10Gi, 8Gi -> 16Gi, 20Gi -> 100Gi) read as "smaller",
+# the patches were skipped, and the tenant was left with its StatefulSet
+# recreated and its claims still at the old size, hook exit 0 and no signal.
+# patches/volume-resize-quantity.diff compares as numbers instead. The first
+# case is the one that was silently broken; the second is a size pair that
+# worked before the fix and must keep working.
+
+templates:
+  - charts/seaweedfs/templates/volume/volume-resize-hook.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-test
+
+tests:
+  - it: patches the PVCs when the grow crosses a decimal exponent (5Gi to 10Gi)
+    kubernetesProvider:
+      scheme: &scheme
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+      objects:
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume
+            namespace: tenant-test
+          spec:
+            volumeClaimTemplates:
+              - metadata:
+                  name: data1
+                spec:
+                  resources:
+                    requests:
+                      storage: 5Gi
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-test
+          spec:
+            resources:
+              requests:
+                storage: 5Gi
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-1
+            namespace: tenant-test
+          spec:
+            resources:
+              requests:
+                storage: 5Gi
+    asserts:
+      - documentIndex: 0
+        isKind:
+          of: Job
+      - documentIndex: 0
+        matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: kubectl delete statefulset seaweedfs-volume --cascade=orphan
+      - documentIndex: 0
+        matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: kubectl patch pvc data1-seaweedfs-volume-0 .*"storage":"10Gi"
+      - documentIndex: 0
+        matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: kubectl patch pvc data1-seaweedfs-volume-1 .*"storage":"10Gi"
+
+  - it: still patches a grow that stays inside one exponent (10Gi to 20Gi)
+    set:
+      seaweedfs.volume.dataDirs:
+        - name: data1
+          type: persistentVolumeClaim
+          size: 20Gi
+          maxVolumes: 0
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume
+            namespace: tenant-test
+          spec:
+            volumeClaimTemplates:
+              - metadata:
+                  name: data1
+                spec:
+                  resources:
+                    requests:
+                      storage: 10Gi
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-test
+          spec:
+            resources:
+              requests:
+                storage: 10Gi
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-1
+            namespace: tenant-test
+          spec:
+            resources:
+              requests:
+                storage: 10Gi
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: kubectl patch pvc data1-seaweedfs-volume-0 .*"storage":"20Gi"
+
+  - it: does not shrink a PVC when the desired size is smaller
+    set:
+      seaweedfs.volume.dataDirs:
+        - name: data1
+          type: persistentVolumeClaim
+          size: 5Gi
+          maxVolumes: 0
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume
+            namespace: tenant-test
+          spec:
+            volumeClaimTemplates:
+              - metadata:
+                  name: data1
+                spec:
+                  resources:
+                    requests:
+                      storage: 10Gi
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-test
+          spec:
+            resources:
+              requests:
+                storage: 10Gi
+    asserts:
+      - documentIndex: 0
+        notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: kubectl patch pvc

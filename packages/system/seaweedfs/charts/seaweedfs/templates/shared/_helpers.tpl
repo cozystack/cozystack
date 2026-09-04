@@ -432,7 +432,11 @@ true
 {{-             if $currentPVC }}
 {{-               $oldSize := include "seaweedfs.resource-quantity" $currentPVC.spec.resources.requests.storage }}
 {{-               $newSize := include "seaweedfs.resource-quantity" $desiredSize }}
-{{-               if gt $newSize $oldSize }}
+{{- /* both sides come from an include, so they are STRINGS: gt would compare
+       them lexicographically and read 1.073741824e+10 (10Gi) as smaller than
+       5.36870912e+09 (5Gi), skipping the patch while the statefulset delete
+       above still runs. Compare as numbers. */}}
+{{-               if gt (float64 $newSize) (float64 $oldSize) }}
 {{-                 $commands = append $commands (printf "kubectl patch pvc %s-%s-%s-%d -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"%s\"}}}}'" $dir.name $seaweedfsName $volumeName $e $desiredSize) }}
 {{-               end }}
 {{-             end }}
