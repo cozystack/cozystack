@@ -113,3 +113,120 @@ spec:
           kind: PersistentVolumeClaim
           metadata:
             name: data-kafka-test-zookeeper-1
+---
+# Logical topic-data backup -> in-place + to-copy RestoreJob round-trip,
+# driving the validated example scripts (examples/backups/kafka) as the harness
+# so the test and the documented flow can never drift. run-all.sh runs Bucket
+# -> source Kafka + a seeded 3-partition topic -> Job strategy + BackupClass ->
+# ad-hoc BackupJob (freeze-end-offset drain to S3, waits Succeeded) -> in-place
+# restore (deletes the topic, restores, asserts the record count) -> empty
+# target Kafka + to-copy RestoreJob (waits Succeeded) and asserts the records
+# round-tripped through S3 into the restored copy. It follows the same
+# harness-driving shape as mariadb-2-backup-roundtrip
+# (hack/e2e-chainsaw/mariadb/chainsaw-test.yaml): a single run step pre-cleans
+# any leftover state, drives run-all.sh, and drains in an always-reached
+# finally.
+#
+# Runs in tenant-root, not the default tenant-test: the S3 client here is the
+# generic Job strategy Pod INSIDE the tenant, and the e2e tenant is created
+# isolated (hack/e2e-install-cozystack.bats) — its Cilium egress allowlist
+# blocks a tenant-test Pod from reaching tenant-root's seaweedfs, while a
+# tenant-root Pod reaches it over same-tenant egress. The harness targets the
+# in-cluster endpoint (S3_ENDPOINT below) instead of the BucketInfo external
+# ingress URL, which in CI is an unroutable placeholder, and the Job strategy
+# trusts its self-signed cert with curl -k. KAFKA_IMAGE is resolved from the
+# running operator so the backup Pod reuses the exact Kafka image already
+# cached on the nodes (no extra pull, no version skew).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kafka-2-backup-roundtrip
+spec:
+  namespace: tenant-root
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: kafka-kafka-test
+  - describe:
+      apiVersion: kafka.strimzi.io/v1beta2
+      kind: Kafka
+      name: kafka-kafka-test
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  # The drain/replay runs in backupstrategy-controller-created Job Pods; a
+  # failed S3 upload/connect or a SigV4 rejection prints there, not on the
+  # broker. Those Pods carry job.strategy.backups.cozystack.io/mode=backup|
+  # restore (never app.kubernetes.io/instance) and are not TTL-reaped, so they
+  # are still present at catch time - select on that label to capture the
+  # actual backup/restore error.
+  - podLogs:
+      selector: job.strategy.backups.cozystack.io/mode
+      tail: 200
+  # Broker Pods too, for the drain/replay's server side. The example uses its
+  # default app names (kafka-test source, kafka-restore to-copy target); the
+  # Cozystack chart prefixes the Strimzi cluster with "kafka-", so the source
+  # cluster is kafka-kafka-test.
+  - podLogs:
+      selector: app.kubernetes.io/instance=kafka-kafka-test
+      tail: 200
+  steps:
+  - name: run
+    try:
+    # Pre-clean: tenant-root is a shared, persistent namespace with fixed
+    # resource names, so a run killed before the finally below leaves stale
+    # state behind. A leftover BackupJob still carrying status.phase=Succeeded
+    # from a prior run would satisfy `wait_for_field ... Succeeded` instantly
+    # and pass without a real backup ever running. cleanup.sh is idempotent
+    # (--ignore-not-found), so this is a no-op on a clean namespace.
+    - script:
+        timeout: 10m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/kafka/cleanup.sh
+        check:
+          ($error == null): true
+    # The 40m budget is the whole documented flow: bucket provisioning, TWO
+    # single-broker Strimzi clusters (source + to-copy target, each pulls the
+    # Kafka image, boots ZooKeeper then the broker, and passes readiness), the
+    # freeze-end-offset drain to S3, and the in-place + to-copy restores with
+    # their verifications. run-all.sh fails fast on terminal BackupJob/RestoreJob
+    # phases and stalled HelmReleases rather than polling out the budget.
+    - script:
+        timeout: 40m
+        content: |
+          set -eu
+          cd ../../..
+          [ -x examples/backups/kafka/run-all.sh ] || { echo "kafka backup example scripts not found at examples/backups/kafka" >&2; exit 1; }
+          # Reuse a Kafka image the operator already caches on the nodes, so the
+          # backup Pod hits a warm image cache. STRIMZI_KAFKA_IMAGES is a
+          # newline-separated "version=image" map (one entry per supported Kafka
+          # version), so split on whitespace, drop the "version=" prefix and take
+          # the last (newest) image rather than concatenating every line into one
+          # malformed reference.
+          KAFKA_IMAGE=$(kubectl -n cozy-kafka-operator get deploy strimzi-cluster-operator \
+            -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="STRIMZI_KAFKA_IMAGES")].value}' \
+            | tr '[:space:]' '\n' | grep -E '=.*/kafka:' | sed 's/.*=//' | tail -n1)
+          [ -n "$KAFKA_IMAGE" ] || { echo "could not resolve Kafka image from strimzi-cluster-operator" >&2; exit 1; }
+          NAMESPACE="$NAMESPACE" KAFKA_IMAGE="$KAFKA_IMAGE" \
+            S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+            examples/backups/kafka/run-all.sh
+        check:
+          ($error == null): true
+    finally:
+    # Removes every resource the harness created (chainsaw did not apply them,
+    # so they are not part of automatic cleanup).
+    - description: backup-flow cleanup
+      script:
+        timeout: 10m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/kafka/cleanup.sh
