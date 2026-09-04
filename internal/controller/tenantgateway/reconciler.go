@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 )
@@ -91,6 +92,8 @@ const (
 // +kubebuilder:rbac:groups=gateway.cozystack.io,resources=tenantgateways/finalizers,verbs=update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes;tlsroutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/status;httproutes/status;tlsroutes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=referencegrants,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates;issuers,verbs=get;list;watch;create;update;patch;delete
 
 // Reconciler reconciles TenantGateway resources, owning the downstream
@@ -271,9 +274,11 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 			// name": one pinned to another listener, refused for its
 			// namespace, or naming a port the listener does not publish
 			// attaches to nothing, so it puts no chain on the hostname
-			// either. Empty backends are past what routeRef carries, so
-			// a TLSRoute with none still counts and leaves the hostname
-			// unserved — the shape its own spec asked for.
+			// either. Nor does one that attaches and then forwards
+			// nowhere, because the chain is built per route out of the
+			// backends that survived resolution, so a route whose
+			// backendRefs resolve to no Service is the routeless case
+			// with an object standing in it.
 			var tls []routeRef
 			for _, ref := range refs {
 				if ref.kind != routeKindHTTP {
@@ -289,7 +294,19 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 			for _, ref := range tls {
 				servable, cause, refusedBy := servableOn(ref, h, tgw.Namespace, byHostname, sections)
 				if servable {
-					eligible = append(eligible, ref)
+					if ref.forwards {
+						eligible = append(eligible, ref)
+						continue
+					}
+					// Attached and forwarding nowhere, so out of the
+					// race like any other route that cannot carry the
+					// name — but nothing is written on it. Gateway API
+					// puts an unresolvable backendRef under
+					// ResolvedRefs rather than under Accepted, and this
+					// route did attach to the listener it named, so an
+					// Accepted=False here would contradict the object
+					// it sits on. Cilium writes that ResolvedRefs on
+					// its own RouteParentStatus for the same route.
 					continue
 				}
 				// answeredBy is the name this pass reports for the
@@ -634,6 +651,15 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 	if err := r.List(ctx, tlsRoutes); err != nil {
 		return nil, fmt.Errorf("list TLSRoutes: %w", err)
 	}
+	// Whether a TLSRoute forwards anywhere is read from the same objects
+	// Cilium reads it from, so the grants have to be to hand before the
+	// first route is judged. The CRD ships in the bundle that carries
+	// TLSRoute itself, which the list above already depends on, so this
+	// adds no install-time dependency of its own.
+	grants := &gatewayv1beta1.ReferenceGrantList{}
+	if err := r.List(ctx, grants); err != nil {
+		return nil, fmt.Errorf("list ReferenceGrants: %w", err)
+	}
 	for i := range tlsRoutes.Items {
 		route := &tlsRoutes.Items[i]
 		if _, ok := allowed[route.Namespace]; !ok {
@@ -643,12 +669,20 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 		if len(matchingRefs) == 0 {
 			continue
 		}
+		// Resolved once per route rather than per parentRef: the answer
+		// is a property of the route's own rules, and every ref built
+		// below has to carry the same one for routeRef to key a map.
+		forwards, err := r.tlsRouteForwards(ctx, route, grants.Items)
+		if err != nil {
+			return nil, err
+		}
 		for _, matchingRef := range matchingRefs {
 			ref := routeRef{
 				kind:      routeKindTLS,
 				namespace: route.Namespace,
 				name:      route.Name,
 				parentRef: matchingRef,
+				forwards:  forwards,
 			}
 			for _, h := range route.Spec.Hostnames {
 				out[string(h)] = append(out[string(h)], ref)
@@ -1453,7 +1487,11 @@ func (r *Reconciler) stripNamespaceGatewayLabel(ctx context.Context, name string
 }
 
 // route additions in attached namespaces re-trigger reconciliation
-// of the parent TenantGateway.
+// of the parent TenantGateway, and so do the objects a TLSRoute's
+// backendRef resolves through: a route that forwards nowhere leaves
+// the terminate listener standing, so the Service appearing — or the
+// ReferenceGrant that admits a cross-namespace reference — is what
+// lands the withdrawal that was deferred.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("tenantgateway-controller").
@@ -1469,6 +1507,14 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&gatewayv1alpha2.TLSRoute{},
 			r.routeToTenantGateway(),
+		).
+		Watches(
+			&corev1.Service{},
+			r.backendToTenantGateways(),
+		).
+		Watches(
+			&gatewayv1beta1.ReferenceGrant{},
+			r.backendToTenantGateways(),
 		).
 		Complete(r)
 }

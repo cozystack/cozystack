@@ -58,6 +58,15 @@ type routeRef struct {
 	namespace string
 	name      string
 	parentRef gatewayv1.ParentReference // exact ref the route used to attach
+	// forwards records whether the route resolves at least one backend,
+	// for routeKindTLS only — an HTTPRoute's is neither set nor read,
+	// because no decision here consults an HTTPRoute's backends.
+	//
+	// It sits in a type used as a map key, which is safe because it is
+	// derived once per route per pass: every ref built from one route
+	// carries the same value, so the field cannot split that route's
+	// entries across two keys.
+	forwards bool
 }
 
 // servableOn reports whether ref could be served on hostname h by any
