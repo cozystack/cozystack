@@ -8158,3 +8158,67 @@ func TestReconcile_UnreadableBackendFailsRatherThanShedding(t *testing.T) {
 		t.Errorf("error = %v, want one naming the backend read that failed", err)
 	}
 }
+
+// TestReconcile_UnroutableTLSRouteKeepsTheHostnameItLost pins what a
+// route that attached and forwards nowhere is left holding. It is out
+// of the eligibility set, so it takes no terminate listener away, and
+// the controller invents no refusal for it — an unresolvable backendRef
+// belongs under ResolvedRefs, which Cilium writes on its own parent
+// entry. What it does keep is a loss the hostname race already
+// recorded, because that claim is true however its backends resolve,
+// and dropping it would leave the route in neither map and reporting
+// Accepted=True on a hostname another route holds.
+func TestReconcile_UnroutableTLSRouteKeepsTheHostnameItLost(t *testing.T) {
+	const contested = "api.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"aaa-ns", "zzz-ns"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	// aaa-ns sorts first, so the race is decided before eligibility is
+	// known and the stranded route is the one carrying the loss.
+	routed := tlsRouteAttached("routed", "aaa-ns", contested, "tls-api", "tenant-foo")
+	stranded := tlsRouteAttached("stranded", "zzz-ns", contested, "tls-api", "tenant-foo")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, routed, stranded).
+		// Only the winner's backend is seeded; the stranded route's
+		// resolves to nothing, which is the whole fixture.
+		WithObjects(tlsRouteBackends(routed)...).
+		WithStatusSubresource(tgw, routed, stranded).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "stranded", Namespace: "zzz-ns"}, got); err != nil {
+		t.Fatalf("get stranded route: %v", err)
+	}
+	accepted := acceptedCondition2(got.Status.Parents)
+	if accepted == nil {
+		t.Fatalf("stranded route carries no Accepted condition under %s: %+v", testControllerName, got.Status.Parents)
+	}
+	if accepted.Status != metav1.ConditionFalse || accepted.Reason != "HostnameConflict" {
+		t.Errorf("stranded route Accepted=%s reason=%s, want False/HostnameConflict: %q", accepted.Status, accepted.Reason, accepted.Message)
+	}
+
+	winner := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "routed", Namespace: "aaa-ns"}, winner); err != nil {
+		t.Fatalf("get routed route: %v", err)
+	}
+	won := acceptedCondition2(winner.Status.Parents)
+	if won == nil || won.Status != metav1.ConditionTrue {
+		t.Errorf("routed route Accepted=%+v, want True; without it the loss above is not a race anyone won", won)
+	}
+}
