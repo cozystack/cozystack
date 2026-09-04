@@ -179,6 +179,35 @@ tests:
           content: groups
         documentIndex: 1
 
+  # The chart deliberately provisions no group directory of its own: role
+  # mapping rides tenant membership, and oidc-keycloak.yaml says so in a comment.
+  # Nothing asserted it until now, so the comment was the only thing standing
+  # between us and a chart that quietly started minting groups per instance.
+  #
+  # This is the one assertion that hack/e2e-apps/monitoring-oidc-system.bats made
+  # and this file did not, which is why it arrives as those files are removed.
+  - it: mode=System provisions no KeycloakRealmGroup
+    template: templates/grafana/oidc-keycloak.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
+    asserts:
+      # Positive control first: the template DOES emit here, so the negative
+      # below is a statement about KeycloakRealmGroup rather than about an empty
+      # render.
+      - containsDocument:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClient
+          any: true
+      - containsDocument:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakRealmGroup
+          any: true
+        not: true
+
   - it: mode=System audience scope pins id_token.aud to the per-instance clientId
     template: templates/grafana/oidc-keycloak.yaml
     set:
