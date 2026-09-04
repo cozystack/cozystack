@@ -298,6 +298,27 @@ tests:
           path: spec.dnsNames
           content: myrabbitmq.example.com
 
+  # `external` is the sole discriminator here. Every other case with
+  # external: false also leaves _namespace.host unset, so the platform host is
+  # absent from the SAN list for want of a host rather than for want of the
+  # gate, and dropping the gate would go unnoticed.
+  - it: leaf Certificate omits the platform host when external is false and a host is available
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+      _namespace.host: example.com
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: myrabbitmq.example.com
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc.cozy.local
+
   # -----------------------------------------------------------------------
   # Default: tls.enabled unset => no certificate chain, whatever external is.
   #
