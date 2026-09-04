@@ -51,11 +51,11 @@ spec:
       - resourceNames:
           - rabbitmq-{{ .name }}-default-user
       # The key-free trust anchor the CA-extraction controller publishes. The
-      # chart mints the CA through cert-manager and labels that Secret for
-      # publication, so rabbitmq resolves on the label-driven leg and declares no
-      # spec.caCert — the operator produces no CA object of its own to point at
-      # (spec.tls.caSecretName is an input it only consumes). This is the
-      # engine-agnostic selector every converged engine shares.
+      # chart names its own CA Secret in a TenantProjection sentinel, and the
+      # controller stamps this label on the projection it writes from that
+      # source — never on the CA Secret, which the exclude list above keeps out
+      # of reach. This is the single, engine-agnostic selector every converged
+      # engine shares; it carries no per-release name templating.
       - matchLabels:
           internal.cozystack.io/tenant-ca: "true"
       - matchLabels:

@@ -3,10 +3,11 @@
 # The chart's own helm-unittest suite cannot cover this file, so the invariants
 # that decide whether a private key can reach a tenant are pinned here.
 #
-# rabbitmq resolves on the label-driven leg: cluster-operator produces no CA
-# object of its own (spec.tls.caSecretName is an input it only consumes), so the
-# chart mints the CA through cert-manager and labels it for publication. There is
-# therefore no sourceSecretName to assert — the include selector is the contract.
+# cluster-operator produces no CA object of its own (spec.tls.caSecretName is an
+# input it only consumes), so the chart mints the CA through cert-manager and
+# names that Secret in a TenantProjection sentinel. The label selected on here is
+# stamped by the controller on the projection it writes, never on the CA Secret,
+# so what this file has to pin is the include selector and the exclude backstop.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/rabbitmq-rd/cozyrds/rabbitmq.yaml"
