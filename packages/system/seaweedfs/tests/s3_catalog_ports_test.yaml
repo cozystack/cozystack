@@ -1,0 +1,65 @@
+suite: seaweedfs s3 catalog listener ports
+
+# The 4.45 bump brought upstream's Lance Namespace catalog, which defaults to
+# lancePort 9101 and is published on the s3 Service. weed serves that catalog
+# over plain HTTP with no certificate option (weed/command/s3.go: newHttpServer
+# with a nil TLS config) while every other port on this gateway is TLS by way of
+# patches/s3-tls-main-port.patch, and its namespace and table routes are
+# writable. Nothing in Cozystack consumes the catalog, so values.yaml pins the
+# port off. These cases fail if that pin is dropped or if a future bump
+# reintroduces the listener under a different default.
+
+templates:
+  - charts/seaweedfs/templates/s3/s3-service.yaml
+  - charts/seaweedfs/templates/s3/s3-deployment.yaml
+
+release:
+  name: seaweedfs
+  namespace: cozy-seaweedfs
+
+tests:
+  - it: does not publish a Lance port on the s3 Service
+    template: charts/seaweedfs/templates/s3/s3-service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - notContains:
+          path: spec.ports
+          content:
+            name: swfs-lance
+          any: true
+
+  - it: keeps the s3 Service on the pre-4.45 port set
+    template: charts/seaweedfs/templates/s3/s3-service.yaml
+    asserts:
+      - contains:
+          path: spec.ports
+          content:
+            name: swfs-s3
+          any: true
+      - contains:
+          path: spec.ports
+          content:
+            name: metrics
+          any: true
+      - lengthEqual:
+          path: spec.ports
+          count: 2
+
+  - it: tells weed to skip the Lance server
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: -port\.lance=0
+
+  - it: does not expose a Lance container port
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: swfs-lance
+          any: true
