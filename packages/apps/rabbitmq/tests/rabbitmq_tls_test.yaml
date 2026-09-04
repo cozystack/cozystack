@@ -242,12 +242,12 @@ tests:
   # cert-manager chain. Inter-node Erlang distribution (port 25672) is NOT
   # covered. The operator exposes exactly three TLS fields — secretName,
   # caSecretName and disableNonTLSListeners — and none of them governs 25672,
-  # which the operator carries on the headless Service unconditionally. Inter-node
-  # mTLS would require caSecretName plus operator-side configuration this chart
-  # does not wire.
+  # which the operator carries on the headless Service unconditionally.
+  # caSecretName is client-certificate verification on the client-facing
+  # listeners, not a distribution setting.
   # -----------------------------------------------------------------------
 
-  - it: leaves caSecretName unset, so no inter-node mTLS is configured
+  - it: leaves caSecretName unset, so clients are never asked for a certificate
     release:
       name: myrabbitmq
       namespace: tenant-test
