@@ -17,7 +17,7 @@
      topology CR, so hand-written objects fail the same way without this refusal.
      See README "Closing the plaintext listeners". */}}
 {{- if and $disableNonTLS (or .Values.users .Values.vhosts) }}
-{{-   fail "tls.disableNonTLSListeners cannot be combined with users or vhosts: closing the plaintext listeners stops messaging-topology-operator from reconciling User, Vhost and Permission objects, because it would have to verify the per-release CA against the system trust pool. That applies to hand-written topology objects too — the operator reads the RabbitmqCluster, not who created the CR — so moving them out of the chart does not help. Manage users and permissions with rabbitmqctl or a definitions import, or leave tls.disableNonTLSListeners unset. Clearing them and setting the flag are two separate upgrades, in that order: the objects have to be gone from the namespace before the flag goes on, not merely gone from values." }}
+{{-   fail "tls.disableNonTLSListeners cannot be combined with users or vhosts: closing the plaintext listeners stops messaging-topology-operator from reconciling User, Vhost and Permission objects, and from deleting them. Hand-written objects break the same way, because the operator reads the RabbitmqCluster and not who created the CR. Manage users and permissions with rabbitmqctl or a definitions import. Clearing them and setting the flag are two separate upgrades, in that order. See README \"Closing the plaintext listeners\"." }}
 {{- end }}
 
 {{- /* The check above reads values, so it cannot see the transition itself:
@@ -48,7 +48,7 @@
 {{-       end }}
 {{-     end }}
 {{-     if $pending }}
-{{-       fail (printf "tls.disableNonTLSListeners cannot be turned on while topology objects still exist in namespace %s: %s. Closing the plaintext listeners cuts messaging-topology-operator off from the broker, and Helm applies this RabbitmqCluster before it prunes the objects the release dropped, so those objects would hold their deletion finalizers for good while the upgrade reported success. Split it into two upgrades: first remove users and vhosts, along with any hand-written topology object (they fail to delete as well as to reconcile), wait until `kubectl get users.rabbitmq.com,vhosts.rabbitmq.com,permissions.rabbitmq.com --namespace %s` returns nothing, and only then set tls.disableNonTLSListeners: true. A release already wedged this way recovers by unsetting the flag and waiting for the finalizers to clear." $.Release.Namespace (join ", " $pending) $.Release.Namespace) }}
+{{-       fail (printf "tls.disableNonTLSListeners cannot be turned on while this release still has topology objects in namespace %s: %s. Remove users and vhosts in one upgrade, confirm `kubectl get users.rabbitmq.com,vhosts.rabbitmq.com,permissions.rabbitmq.com --namespace %s` returns nothing, then set the flag in a second upgrade. Setting both at once leaves those objects stuck in Terminating. See README \"Removing the topology objects is its own upgrade\"." $.Release.Namespace (join ", " $pending) $.Release.Namespace) }}
 {{-     end }}
 {{-   end }}
 {{- end }}

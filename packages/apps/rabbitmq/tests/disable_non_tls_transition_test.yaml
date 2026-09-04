@@ -65,7 +65,7 @@ tests:
       tls.disableNonTLSListeners: true
     asserts:
       - failedTemplate:
-          errorPattern: "cannot be turned on while topology objects still exist in namespace tenant-test: User/myrabbitmq-alice\\."
+          errorPattern: "cannot be turned on while this release still has topology objects in namespace tenant-test: User/myrabbitmq-alice\\."
 
   - it: names every pending object across all three kinds
     kubernetesProvider:
@@ -111,7 +111,7 @@ tests:
       tls.disableNonTLSListeners: true
     asserts:
       - failedTemplate:
-          errorPattern: "still exist in namespace tenant-test: Vhost/written-by-hand\\."
+          errorPattern: "in namespace tenant-test: Vhost/written-by-hand\\."
 
   - it: spells out the two-upgrade order and the confirmation command
     kubernetesProvider:
@@ -130,13 +130,13 @@ tests:
       tls.disableNonTLSListeners: true
     asserts:
       - failedTemplate:
-          errorPattern: "Split it into two upgrades: first remove users and vhosts"
+          errorPattern: "Remove users and vhosts in one upgrade"
       - failedTemplate:
-          errorPattern: "they fail to delete as well as to reconcile"
+          errorPattern: "Setting both at once leaves those objects stuck in Terminating"
       - failedTemplate:
           errorPattern: "kubectl get users\\.rabbitmq\\.com,vhosts\\.rabbitmq\\.com,permissions\\.rabbitmq\\.com --namespace tenant-test"
       - failedTemplate:
-          errorPattern: "recovers by unsetting the flag and waiting for the finalizers to clear"
+          errorPattern: "See README .Removing the topology objects is its own upgrade."
 
   # -----------------------------------------------------------------------
   # Silent paths: the refusal must not outlive the transition it guards.
@@ -263,3 +263,5 @@ tests:
           errorPattern: "cannot be combined with users or vhosts"
       - failedTemplate:
           errorPattern: "two separate upgrades, in that order"
+      - failedTemplate:
+          errorPattern: "and from deleting them"
