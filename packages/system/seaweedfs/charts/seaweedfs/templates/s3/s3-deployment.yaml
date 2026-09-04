@@ -146,9 +146,8 @@ spec:
               -auditLogConfig=/etc/sw/s3_auditLogConfig.json \
               {{- end }}
               -filer={{ include "seaweedfs.componentName" (list . "filer-client") }}.{{ .Release.Namespace }}:{{ .Values.filer.port }} \
-              {{- if .Values.s3.icebergPort }}
-              -port.iceberg={{ .Values.s3.icebergPort }} \
-              {{- end }}
+              {{- /* rendered even when 0: an if would drop the flag and weed would serve its 8181 default */}}
+              -port.iceberg={{ .Values.s3.icebergPort | default 0 }} \
               {{- /* rendered even when 0: an if would drop the flag and weed would serve its default */}}
               -port.lance={{ .Values.s3.lancePort | default 0 }} \
               {{- range .Values.s3.extraArgs }}
