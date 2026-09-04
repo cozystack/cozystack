@@ -18,8 +18,8 @@ tests:
           apiVersion: cozystack.io/v1alpha1
           kind: Package
           name: cozystack.ouroboros
+          any: true
         not: true
-        documentIndex: -1
 
   - it: leaves cozystack.ingress-application as the bare default Package when proxyProtocol is false
     set:
@@ -150,8 +150,8 @@ tests:
           apiVersion: cozystack.io/v1alpha1
           kind: Package
           name: cozystack.ouroboros
+          any: true
         not: true
-        documentIndex: -1
 
   - it: renders cleanly with proxyProtocol=false and proxyProtocolAcknowledgeUnclean=true (operator acknowledged cleanup)
     set:
