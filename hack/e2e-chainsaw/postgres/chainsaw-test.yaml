@@ -42,13 +42,17 @@ spec:
 
   - name: wait-init-job-complete
     try:
+    # The init Job's name carries a content-hash suffix (it is a main-phase
+    # immutable Job), so it is matched by its stable selector labels, not by name.
     - assert:
         timeout: 2m
         resource:
           apiVersion: batch/v1
           kind: Job
           metadata:
-            name: postgres-test-init-job
+            labels:
+              app.kubernetes.io/instance: postgres-test
+              app.kubernetes.io/component: init-job
           status:
             (conditions[?type == 'Complete']):
             - status: "True"
@@ -123,7 +127,9 @@ spec:
         ref:
           apiVersion: batch/v1
           kind: Job
-          name: postgres-test-init-job
+          labels:
+            app.kubernetes.io/instance: postgres-test
+            app.kubernetes.io/component: init-job
 
   # The trust anchor a client verifies against, checked against the live
   # operator rather than against our own beliefs about it.
