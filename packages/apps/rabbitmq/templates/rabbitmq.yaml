@@ -17,7 +17,34 @@
      topology CR, so hand-written objects fail the same way without this refusal.
      See README "Closing the plaintext listeners". */}}
 {{- if and $disableNonTLS (or .Values.users .Values.vhosts) }}
-{{-   fail "tls.disableNonTLSListeners cannot be combined with users or vhosts: closing the plaintext listeners stops messaging-topology-operator from reconciling User, Vhost and Permission objects, because it would have to verify the per-release CA against the system trust pool. That applies to hand-written topology objects too — the operator reads the RabbitmqCluster, not who created the CR — so moving them out of the chart does not help. Manage users and permissions with rabbitmqctl or a definitions import, or leave tls.disableNonTLSListeners unset." }}
+{{-   fail "tls.disableNonTLSListeners cannot be combined with users or vhosts: closing the plaintext listeners stops messaging-topology-operator from reconciling User, Vhost and Permission objects, because it would have to verify the per-release CA against the system trust pool. That applies to hand-written topology objects too — the operator reads the RabbitmqCluster, not who created the CR — so moving them out of the chart does not help. Manage users and permissions with rabbitmqctl or a definitions import, or leave tls.disableNonTLSListeners unset. Clearing them and setting the flag are two separate upgrades, in that order: the objects have to be gone from the namespace before the flag goes on, not merely gone from values." }}
+{{- end }}
+
+{{- /* The check above reads values, so it cannot see the transition itself:
+     clearing users and vhosts and setting the flag in one edit leaves both
+     empty and renders cleanly. Helm applies every object in the target release
+     before pruning the ones it dropped, so the broker closes plaintext and
+     loses the connection annotation while the User, Vhost and Permission
+     objects are still holding deletion.finalizers.<plural>.rabbitmq.com. Their
+     operator then has to reach a management API it can no longer verify, so
+     the delete never completes and the upgrade reports success over three
+     objects stuck in Terminating. Read the namespace rather than the values,
+     and only while the flag is being introduced: once the live cluster already
+     carries it the transition is behind us, and an object created after that
+     is the tenant's to clean up rather than a reason to stop rendering. */}}
+{{- if $disableNonTLS }}
+{{-   $live := lookup "rabbitmq.com/v1beta1" "RabbitmqCluster" .Release.Namespace .Release.Name | default dict }}
+{{-   if not (dig "spec" "tls" "disableNonTLSListeners" false $live) }}
+{{-     $pending := list }}
+{{-     range $kind := list "User" "Vhost" "Permission" }}
+{{-       range dig "items" (list) (lookup "rabbitmq.com/v1beta1" $kind $.Release.Namespace "" | default dict) }}
+{{-         $pending = append $pending (printf "%s/%s" $kind .metadata.name) }}
+{{-       end }}
+{{-     end }}
+{{-     if $pending }}
+{{-       fail (printf "tls.disableNonTLSListeners cannot be turned on while topology objects still exist in namespace %s: %s. Closing the plaintext listeners cuts messaging-topology-operator off from the broker, and Helm applies this RabbitmqCluster before it prunes the objects the release dropped, so those objects would hold their deletion finalizers for good while the upgrade reported success. Split it into two upgrades: first remove users and vhosts, along with any hand-written topology object (they fail to delete as well as to reconcile), wait until `kubectl get users.rabbitmq.com,vhosts.rabbitmq.com,permissions.rabbitmq.com --namespace %s` returns nothing, and only then set tls.disableNonTLSListeners: true. A release already wedged this way recovers by unsetting the flag and waiting for the finalizers to clear." $.Release.Namespace (join ", " $pending) $.Release.Namespace) }}
+{{-     end }}
+{{-   end }}
 {{- end }}
 
 apiVersion: rabbitmq.com/v1beta1

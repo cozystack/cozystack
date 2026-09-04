@@ -1,0 +1,226 @@
+suite: RabbitMQ disableNonTLSListeners one-step migration refusal
+
+templates:
+  - templates/rabbitmq.yaml
+
+release:
+  name: myrabbitmq
+  namespace: tenant-test
+
+# The values-level refusal cannot see this case: an operator who clears users
+# and vhosts and sets the flag in the same edit renders with both empty. What
+# is still in the namespace decides it, so every firing case below mocks the
+# objects Helm would prune only after applying the closed-listener cluster.
+#
+# The `registrar` objects sit in an unrelated namespace. The fake dynamic
+# client learns a kind from the objects it is given rather than from `scheme`,
+# and refuses to LIST a kind it has never seen instead of returning an empty
+# list; a registrar teaches it the kind without answering the namespaced query.
+tests:
+  - it: refuses the flag while a User is still live and the cluster has not closed its listeners yet
+    kubernetesProvider:
+      scheme: &topologyScheme
+        "rabbitmq.com/v1beta1/RabbitmqCluster":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "rabbitmqclusters" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/User":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "users" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/Vhost":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "vhosts" }
+          namespaced: true
+        "rabbitmq.com/v1beta1/Permission":
+          gvr: { group: "rabbitmq.com", version: "v1beta1", resource: "permissions" }
+          namespaced: true
+      objects:
+        - &registrarUser
+          apiVersion: rabbitmq.com/v1beta1
+          kind: User
+          metadata: { name: registrar, namespace: unrelated }
+        - &registrarVhost
+          apiVersion: rabbitmq.com/v1beta1
+          kind: Vhost
+          metadata: { name: registrar, namespace: unrelated }
+        - &registrarPermission
+          apiVersion: rabbitmq.com/v1beta1
+          kind: Permission
+          metadata: { name: registrar, namespace: unrelated }
+        - &openCluster
+          apiVersion: rabbitmq.com/v1beta1
+          kind: RabbitmqCluster
+          metadata: { name: myrabbitmq, namespace: tenant-test }
+          spec:
+            tls:
+              secretName: myrabbitmq-tls
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: User
+          metadata: { name: myrabbitmq-alice, namespace: tenant-test }
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot be turned on while topology objects still exist in namespace tenant-test: User/myrabbitmq-alice\\."
+
+  - it: names every pending object across all three kinds
+    kubernetesProvider:
+      scheme: *topologyScheme
+      objects:
+        - *registrarUser
+        - *registrarVhost
+        - *registrarPermission
+        - *openCluster
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: User
+          metadata: { name: myrabbitmq-alice, namespace: tenant-test }
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: Vhost
+          metadata: { name: myrabbitmq-orders, namespace: tenant-test }
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: Permission
+          metadata: { name: myrabbitmq-orders-alice, namespace: tenant-test }
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "User/myrabbitmq-alice, Vhost/myrabbitmq-orders, Permission/myrabbitmq-orders-alice"
+
+  - it: refuses on a hand-written Vhost the chart never declared
+    kubernetesProvider:
+      scheme: *topologyScheme
+      objects:
+        - *registrarUser
+        - *registrarVhost
+        - *registrarPermission
+        - *openCluster
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: Vhost
+          metadata: { name: written-by-hand, namespace: tenant-test }
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "still exist in namespace tenant-test: Vhost/written-by-hand\\."
+
+  - it: spells out the two-upgrade order and the confirmation command
+    kubernetesProvider:
+      scheme: *topologyScheme
+      objects:
+        - *registrarUser
+        - *registrarVhost
+        - *registrarPermission
+        - *openCluster
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: User
+          metadata: { name: myrabbitmq-alice, namespace: tenant-test }
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "Split it into two upgrades: first remove users and vhosts"
+      - failedTemplate:
+          errorPattern: "they fail to delete as well as to reconcile"
+      - failedTemplate:
+          errorPattern: "kubectl get users\\.rabbitmq\\.com,vhosts\\.rabbitmq\\.com,permissions\\.rabbitmq\\.com --namespace tenant-test"
+      - failedTemplate:
+          errorPattern: "recovers by unsetting the flag and waiting for the finalizers to clear"
+
+  # -----------------------------------------------------------------------
+  # Silent paths: the refusal must not outlive the transition it guards.
+  # -----------------------------------------------------------------------
+
+  - it: renders once the live cluster already has the listeners closed, even with a stray User
+    kubernetesProvider:
+      scheme: *topologyScheme
+      objects:
+        - *registrarUser
+        - *registrarVhost
+        - *registrarPermission
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: RabbitmqCluster
+          metadata: { name: myrabbitmq, namespace: tenant-test }
+          spec:
+            tls:
+              secretName: myrabbitmq-tls
+              disableNonTLSListeners: true
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: User
+          metadata: { name: created-later-by-the-tenant, namespace: tenant-test }
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.disableNonTLSListeners
+          value: true
+
+  - it: renders on a fresh install where no topology object exists yet
+    kubernetesProvider:
+      scheme: *topologyScheme
+      objects:
+        - *registrarUser
+        - *registrarVhost
+        - *registrarPermission
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.disableNonTLSListeners
+          value: true
+
+  - it: renders without a cluster to query, as helm template and a dry run do
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.disableNonTLSListeners
+          value: true
+
+  - it: leaves a release that never sets the flag untouched by the lookup
+    kubernetesProvider:
+      scheme: *topologyScheme
+      objects:
+        - *registrarUser
+        - *registrarVhost
+        - *registrarPermission
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: User
+          metadata: { name: myrabbitmq-alice, namespace: tenant-test }
+    set:
+      tls.enabled: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls.disableNonTLSListeners
+
+  # -----------------------------------------------------------------------
+  # The values-level refusal keeps its own job and now states the order.
+  # -----------------------------------------------------------------------
+
+  - it: still refuses on declared users before any lookup happens
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+      users:
+        alice: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot be combined with users or vhosts"
+      - failedTemplate:
+          errorPattern: "two separate upgrades, in that order"

@@ -73,8 +73,20 @@ And **the connection details handed to clients change**. `<release>-default-user
 
 Two consequences to know before enabling it:
 
-- **It puts the whole cluster out of reach of `messaging-topology-operator`, and the chart refuses to render if `users` or `vhosts` are set.** That operator reconciles those objects over the management API, and the flag forces its connection onto TLS regardless of how it is configured — computed as `TLSEnabled() && (!connectUsingHTTP || DisableNonTLSListeners())`. It then verifies the broker against the operator process's system trust pool, which cannot contain a per-release CA, so every `User`, `Vhost` and `Permission` stops reconciling. Pointing it back at plaintext is no escape, because that is the port the flag closes. Note the scope: that calculation reads the `RabbitmqCluster` object, not the origin of the topology CR, so moving users and vhosts out of `values.yaml` into hand-written `User`/`Vhost`/`Permission` objects does **not** work around it — they fail the same way, just without the chart's refusal to warn you. Once this flag is on, manage users and permissions through `rabbitmqctl` or a definitions import instead.
+- **It puts the whole cluster out of reach of `messaging-topology-operator`, and the chart refuses to render if `users` or `vhosts` are set.** That operator reconciles those objects over the management API, and the flag forces its connection onto TLS regardless of how it is configured — computed as `TLSEnabled() && (!connectUsingHTTP || DisableNonTLSListeners())`. It then verifies the broker against the operator process's system trust pool, which cannot contain a per-release CA, so every `User`, `Vhost` and `Permission` stops reconciling. Pointing it back at plaintext is no escape, because that is the port the flag closes. Note the scope: that calculation reads the `RabbitmqCluster` object, not the origin of the topology CR, so moving users and vhosts out of `values.yaml` into hand-written `User`/`Vhost`/`Permission` objects does **not** work around it — they fail the same way, just without the chart's refusal to warn you. Once this flag is on, manage users and permissions through `rabbitmqctl` or a definitions import instead. The same calculation governs deletion, so a topology object that is left behind does not merely stop reconciling: its `deletion.finalizers.<plural>.rabbitmq.com` finalizer can no longer be removed either, and the object sits in `Terminating` until the flag comes back off or the whole `RabbitmqCluster` goes away.
 - The plaintext metrics port closes with it, leaving only `prometheus-tls` on 15691.
+
+#### Removing the topology objects is its own upgrade
+
+Clearing `users` and `vhosts` and setting `tls.disableNonTLSListeners: true` in a single edit does not work, and the chart refuses to render it. Helm applies every object in the target release before it prunes the ones the release dropped, so the broker would close its plaintext listeners while the `User`, `Vhost` and `Permission` objects were still waiting to be deleted. Their operator needs the management API to release a finalizer, that API is now reachable only over a certificate it cannot verify, and the delete never completes — leaving the objects in `Terminating`, their users still live in the broker, and `kubectl delete namespace` on the tenant hanging, all while the upgrade reports success.
+
+Do it as two upgrades instead:
+
+1. Remove `users` and `vhosts` from the values, along with any hand-written topology object in the namespace, and let that upgrade finish.
+2. Confirm the namespace is clear: `kubectl get users.rabbitmq.com,vhosts.rabbitmq.com,permissions.rabbitmq.com --namespace <tenant-namespace>` must return nothing. Objects in `Terminating` still count — a finalizer that has not come off yet means the operator has not finished with the broker.
+3. Set `tls.disableNonTLSListeners: true`.
+
+A release already wedged this way recovers without data loss: unset `tls.disableNonTLSListeners`, wait for the finalizers to clear once the operator can reach the broker again, and then start over from step 1.
 
 ## Verifying the server certificate
 
