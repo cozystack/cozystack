@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,22 +46,25 @@ func (r *ApplicationDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) err
 		r.Debounce = 5 * time.Second
 	}
 
+	// Both ApplicationDefinitions and ApplicationGroupDefinitions feed the
+	// cozystack-api startup config (which kinds are served, and in which API
+	// groups), so a change to either must roll the deployment.
+	markEvent := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		r.mu.Lock()
+		r.lastEvent = time.Now()
+		r.mu.Unlock()
+		return []reconcile.Request{{
+			NamespacedName: types.NamespacedName{
+				Namespace: "cozy-system",
+				Name:      "cozystack-api",
+			},
+		}}
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("applicationdefinition-controller").
-		Watches(
-			&cozyv1alpha1.ApplicationDefinition{},
-			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-				r.mu.Lock()
-				r.lastEvent = time.Now()
-				r.mu.Unlock()
-				return []reconcile.Request{{
-					NamespacedName: types.NamespacedName{
-						Namespace: "cozy-system",
-						Name:      "cozystack-api",
-					},
-				}}
-			}),
-		).
+		Watches(&cozyv1alpha1.ApplicationDefinition{}, markEvent).
+		Watches(&cozyv1alpha1.ApplicationGroupDefinition{}, markEvent).
 		Complete(r)
 }
 
@@ -69,22 +73,51 @@ type appDefHashView struct {
 	Spec cozyv1alpha1.ApplicationDefinitionSpec `json:"spec"`
 }
 
+type appGroupDefHashView struct {
+	Name string                                      `json:"name"`
+	Spec cozyv1alpha1.ApplicationGroupDefinitionSpec `json:"spec"`
+}
+
+// configHashView is the full input the cozystack-api startup config is
+// derived from: ApplicationDefinitions plus the ApplicationGroupDefinitions
+// that decide which API groups those definitions may be served in.
+type configHashView struct {
+	AppDefs   []appDefHashView      `json:"appDefs"`
+	GroupDefs []appGroupDefHashView `json:"groupDefs"`
+}
+
 func (r *ApplicationDefinitionReconciler) computeConfigHash(ctx context.Context) (string, error) {
 	list := &cozyv1alpha1.ApplicationDefinitionList{}
 	if err := r.List(ctx, list); err != nil {
 		return "", err
 	}
+	groupList := &cozyv1alpha1.ApplicationGroupDefinitionList{}
+	if err := r.List(ctx, groupList); err != nil {
+		return "", err
+	}
 
 	slices.SortFunc(list.Items, sortAppDefs)
+	slices.SortFunc(groupList.Items, func(a, b cozyv1alpha1.ApplicationGroupDefinition) int {
+		return strings.Compare(a.Name, b.Name)
+	})
 
-	views := make([]appDefHashView, 0, len(list.Items))
+	view := configHashView{
+		AppDefs:   make([]appDefHashView, 0, len(list.Items)),
+		GroupDefs: make([]appGroupDefHashView, 0, len(groupList.Items)),
+	}
 	for i := range list.Items {
-		views = append(views, appDefHashView{
+		view.AppDefs = append(view.AppDefs, appDefHashView{
 			Name: list.Items[i].Name,
 			Spec: list.Items[i].Spec,
 		})
 	}
-	b, err := json.Marshal(views)
+	for i := range groupList.Items {
+		view.GroupDefs = append(view.GroupDefs, appGroupDefHashView{
+			Name: groupList.Items[i].Name,
+			Spec: groupList.Items[i].Spec,
+		})
+	}
+	b, err := json.Marshal(view)
 	if err != nil {
 		return "", err
 	}

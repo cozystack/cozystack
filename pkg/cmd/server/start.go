@@ -41,6 +41,7 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	basecompatibility "k8s.io/component-base/compatibility"
 	baseversion "k8s.io/component-base/version"
+	"k8s.io/klog/v2"
 	netutils "k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	k8sconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -216,6 +217,7 @@ func (o *CozyServerOptions) Complete() error {
 	}
 
 	crdList := &v1alpha1.ApplicationDefinitionList{}
+	groupList := &v1alpha1.ApplicationGroupDefinitionList{}
 
 	// Retry with exponential backoff for at least 30 minutes
 	const maxRetryDuration = 30 * time.Minute
@@ -227,6 +229,9 @@ func (o *CozyServerOptions) Complete() error {
 
 	for {
 		err := o.Client.List(context.Background(), crdList)
+		if err == nil {
+			err = o.Client.List(context.Background(), groupList)
+		}
 		if err == nil {
 			break
 		}
@@ -246,9 +251,59 @@ func (o *CozyServerOptions) Complete() error {
 		}
 	}
 
-	// Convert to ResourceConfig
-	o.ResourceConfig = &config.ResourceConfig{}
-	for _, crd := range crdList.Items {
+	o.ResourceConfig, err = buildResourceConfig(crdList.Items, groupList.Items, hrFlags)
+	return err
+}
+
+// servedGroups resolves the set of API groups the server will serve: the
+// built-in default group plus every valid registered
+// ApplicationGroupDefinition. Invalid registrations (malformed or reserved
+// group names that slipped past CRD validation — the CRD carries the same
+// rules as CEL, but the apiserver must not trust cluster state it did not
+// write) are skipped with an error log rather than failing startup: one bad
+// registration must not take down serving of every healthy group.
+func servedGroups(groupDefs []v1alpha1.ApplicationGroupDefinition) map[string]bool {
+	groups := map[string]bool{v1alpha1.DefaultApplicationGroup: true}
+	for _, gd := range groupDefs {
+		group := gd.Spec.Group
+		if err := v1alpha1.ValidateApplicationGroup(group); err != nil {
+			klog.Errorf("Skipping ApplicationGroupDefinition %q: %v", gd.Name, err)
+			continue
+		}
+		groups[group] = true
+	}
+	return groups
+}
+
+// buildResourceConfig converts ApplicationDefinitions into the served
+// ResourceConfig, resolving each definition's API group against the
+// registered ApplicationGroupDefinitions. Definitions referencing an
+// unregistered group (a dangling reference — e.g. the
+// ApplicationGroupDefinition was deleted while ApplicationDefinitions still
+// point at it) are skipped with an error log and picked up again once the
+// group is re-registered; the backing HelmReleases are untouched, the
+// resources are just not served. A kind already claimed by another group is
+// skipped too, because the published OpenAPI schemas are keyed by kind
+// alone. Definitions with no group set keep today's behavior exactly: they
+// are served in apps.cozystack.io.
+func buildResourceConfig(appDefs []v1alpha1.ApplicationDefinition, groupDefs []v1alpha1.ApplicationGroupDefinition, hrFlags helmReleaseFlagValues) (*config.ResourceConfig, error) {
+	groups := servedGroups(groupDefs)
+	kindGroup := map[string]string{}
+
+	resourceConfig := &config.ResourceConfig{}
+	for _, crd := range appDefs {
+		group := crd.Spec.Application.EffectiveGroup()
+		if !groups[group] {
+			klog.Errorf("Skipping ApplicationDefinition %q: group %q has no ApplicationGroupDefinition; kind %s is not served until the group is registered",
+				crd.Name, group, crd.Spec.Application.Kind)
+			continue
+		}
+		if prev, ok := kindGroup[crd.Spec.Application.Kind]; ok && prev != group {
+			klog.Errorf("Skipping ApplicationDefinition %q: kind %s is already served in group %q and kinds must be unique across groups",
+				crd.Name, crd.Spec.Application.Kind, prev)
+			continue
+		}
+		kindGroup[crd.Spec.Application.Kind] = group
 		release := config.ReleaseConfig{
 			Prefix: crd.Spec.Release.Prefix,
 			Labels: crd.Spec.Release.Labels,
@@ -289,7 +344,7 @@ func (o *CozyServerOptions) Complete() error {
 			crd.Annotations[config.HelmInstallTimeoutAnnotation],
 		)
 		if err != nil {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"ApplicationDefinition %q has invalid %s annotation: %w",
 				crd.Name, config.HelmInstallTimeoutAnnotation, err,
 			)
@@ -299,7 +354,7 @@ func (o *CozyServerOptions) Complete() error {
 			crd.Annotations[config.HelmUpgradeTimeoutAnnotation],
 		)
 		if err != nil {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"ApplicationDefinition %q has invalid %s annotation: %w",
 				crd.Name, config.HelmUpgradeTimeoutAnnotation, err,
 			)
@@ -309,7 +364,7 @@ func (o *CozyServerOptions) Complete() error {
 			crd.Annotations[config.HelmInstallDisableWaitAnnotation],
 		)
 		if err != nil {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"ApplicationDefinition %q has invalid %s annotation: %w",
 				crd.Name, config.HelmInstallDisableWaitAnnotation, err,
 			)
@@ -317,6 +372,7 @@ func (o *CozyServerOptions) Complete() error {
 		release.HelmInstallDisableWait = disableWait
 		resource := config.Resource{
 			Application: config.ApplicationConfig{
+				Group:         group,
 				Kind:          crd.Spec.Application.Kind,
 				Singular:      crd.Spec.Application.Singular,
 				Plural:        crd.Spec.Application.Plural,
@@ -325,10 +381,10 @@ func (o *CozyServerOptions) Complete() error {
 			},
 			Release: release,
 		}
-		o.ResourceConfig.Resources = append(o.ResourceConfig.Resources, resource)
+		resourceConfig.Resources = append(resourceConfig.Resources, resource)
 	}
 
-	return nil
+	return resourceConfig, nil
 }
 
 // Validate checks the correctness of the options

@@ -1,0 +1,82 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: applicationgroupdefinitions.cozystack.io
+spec:
+  group: cozystack.io
+  names:
+    kind: ApplicationGroupDefinition
+    listKind: ApplicationGroupDefinitionList
+    plural: applicationgroupdefinitions
+    singular: applicationgroupdefinition
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.group
+      name: Group
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ApplicationGroupDefinition registers an additional API group to be served
+          by the cozystack aggregated API server. ApplicationDefinitions may then
+          select the group via spec.application.group; every kind of such an
+          ApplicationDefinition is served under the registered group instead of the
+          default apps.cozystack.io.
+
+          The object name must equal spec.group, which makes group registrations
+          unique by construction (object names are unique) and the group immutable
+          (object names are immutable). All groups are currently served at the fixed
+          version v1alpha1, matching the built-in apps.cozystack.io group; a versions
+          field can be added compatibly once multi-version serving exists.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              group:
+                description: |-
+                  Group is the API group name to serve, e.g. "apps.example.com". It must
+                  be a DNS-1123 subdomain containing at least one dot: requiring a domain
+                  shape keeps single-label built-in Kubernetes groups ("apps", "batch",
+                  ...) out of reach by construction. Groups under cozystack.io and k8s.io
+                  are reserved for the platform and for Kubernetes respectively; the
+                  default apps.cozystack.io group needs no registration and is always
+                  served.
+                maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$
+                type: string
+                x-kubernetes-validations:
+                - message: groups under cozystack.io are reserved
+                  rule: self != 'cozystack.io' && !self.endsWith('.cozystack.io')
+                - message: groups under k8s.io are reserved
+                  rule: self != 'k8s.io' && !self.endsWith('.k8s.io')
+            required:
+            - group
+            type: object
+        type: object
+        x-kubernetes-validations:
+        - message: metadata.name must equal spec.group
+          rule: self.metadata.name == self.spec.group
+    served: true
+    storage: true
+    subresources: {}

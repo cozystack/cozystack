@@ -98,6 +98,8 @@ mv ${TMPDIR}/cozystack.io_packagesources.yaml ${OPERATOR_CRDDIR}/cozystack.io_pa
 
 mv ${TMPDIR}/cozystack.io_applicationdefinitions.yaml \
         ${COZY_RD_CRDDIR}/cozystack.io_applicationdefinitions.yaml
+mv ${TMPDIR}/cozystack.io_applicationgroupdefinitions.yaml \
+        ${COZY_RD_CRDDIR}/cozystack.io_applicationgroupdefinitions.yaml
 
 mv ${TMPDIR}/backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
 mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/

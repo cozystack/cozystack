@@ -63,7 +63,23 @@ type ApplicationDefinitionSpec struct {
 	Dashboard *ApplicationDefinitionDashboard `json:"dashboard,omitempty"`
 }
 
+// DefaultApplicationGroup is the API group applications are served in when
+// spec.application.group is unset. It predates ApplicationGroupDefinitions
+// and remains the hardwired default so existing ApplicationDefinitions keep
+// their behavior.
+const DefaultApplicationGroup = "apps.cozystack.io"
+
 type ApplicationDefinitionApplication struct {
+	// Group is the API group this application kind is served in. Empty means
+	// the default apps.cozystack.io. Any other value must match the group of
+	// a registered ApplicationGroupDefinition; an ApplicationDefinition
+	// referencing an unregistered group is not served (and logged) until the
+	// group is registered. Same shape constraint as
+	// ApplicationGroupDefinitionSpec.Group.
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$`
+	Group string `json:"group,omitempty"`
 	// Kind of the application, used for UI and API
 	Kind string `json:"kind"`
 	// OpenAPI schema for the application, used for API validation
@@ -72,6 +88,18 @@ type ApplicationDefinitionApplication struct {
 	Plural string `json:"plural"`
 	// Singular name of the application, used for UI and API
 	Singular string `json:"singular"`
+}
+
+// EffectiveGroup returns the API group this application kind is served in,
+// falling back to DefaultApplicationGroup when spec.application.group is
+// unset. All group consumers (apiserver loading, HelmRelease label
+// selection) must resolve the group through this method so the back-compat
+// default lives in exactly one place.
+func (a ApplicationDefinitionApplication) EffectiveGroup() string {
+	if a.Group == "" {
+		return DefaultApplicationGroup
+	}
+	return a.Group
 }
 
 type ApplicationDefinitionRelease struct {

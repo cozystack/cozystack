@@ -139,6 +139,12 @@ type Resource struct {
 
 // ApplicationConfig contains the application settings.
 type ApplicationConfig struct {
+	// Group is the API group this kind is served in. The loading path
+	// (pkg/cmd/server) populates it from ApplicationDefinition
+	// spec.application.group after checking it against the registered
+	// ApplicationGroupDefinitions; empty means the default apps.cozystack.io
+	// (consumers resolve it through appsv1alpha1.GroupOrDefault).
+	Group         string   `yaml:"group"`
 	Kind          string   `yaml:"kind"`
 	Singular      string   `yaml:"singular"`
 	Plural        string   `yaml:"plural"`
