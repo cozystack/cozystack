@@ -38,18 +38,18 @@ data:
     frontend http
         bind :::8080 v4v6
         mode tcp
-        default_backend http
+        default_backend http_backend
         {{- if $.Values.whitelistHTTP }}
         {{- with $.Values.whitelist }}
         acl whitelist src{{ range . }} {{ . }}{{ end }}
-        {{- end }}
         acl all src 0.0.0.0
         tcp-request content accept if whitelist
         tcp-request content reject
         {{- end }}
+        {{- end }}
         tcp-request content set-dst-port int(80)
 
-    backend http
+    backend http_backend
         {{- include "backendoptions" (default "tcp" .mode) | nindent 8 }}
         {{- range $num, $ep := .endpoints }} 
         server srv{{ $num }} {{ $ep }}:{{ $.Values.httpAndHttps.targetPorts.http }} check
@@ -64,18 +64,18 @@ data:
         {{- else }}
         mode tcp
         {{- end }}
-        default_backend https
+        default_backend https_backend
         {{- if $.Values.whitelistHTTP }}
         {{- with $.Values.whitelist }}
         acl whitelist src{{ range . }} {{ . }}{{ end }}
-        {{- end }}
         acl all src 0.0.0.0
         tcp-request content accept if whitelist
         tcp-request content reject
         {{- end }}
+        {{- end }}
         tcp-request content set-dst-port int(443)
 
-    backend https
+    backend https_backend
         {{- include "backendoptions" (default "tcp" .mode) | nindent 8 }}
         {{- range $num, $ep := .endpoints }} 
         server srv{{ $num }} {{ $ep }}:{{ $.Values.httpAndHttps.targetPorts.https }} check
@@ -89,32 +89,32 @@ data:
     frontend kubernetes
         bind :::6443 v4v6
         mode tcp
-        default_backend kubernetes
+        default_backend kubernetes_backend
         {{- with $.Values.whitelist }}
         acl whitelist src{{ range . }} {{ . }}{{ end }}
-        {{- end }}
         acl all src 0.0.0.0
         tcp-request content accept if whitelist
         tcp-request content reject
+        {{- end }}
 
     frontend talos
         bind :::50000 v4v6
         mode tcp
-        default_backend talos
+        default_backend talos_backend
         {{- with $.Values.whitelist }}
         acl whitelist src{{ range . }} {{ . }}{{ end }}
-        {{- end }}
         acl all src 0.0.0.0
         tcp-request content accept if whitelist
         tcp-request content reject
+        {{- end }}
 
-    backend kubernetes
+    backend kubernetes_backend
         {{- include "backendoptions" (default "tcp" .mode) | nindent 8 }}
         {{- range $num, $ep := .endpoints }} 
         server srv{{ $num }} {{ $ep }}:6443 check
         {{- end }}
 
-    backend talos
+    backend talos_backend
         {{- include "backendoptions" (default "tcp" .mode) | nindent 8 }}
         {{- range $num, $ep := .endpoints }} 
         server srv{{ $num }} {{ $ep }}:50000 check
