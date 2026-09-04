@@ -1,0 +1,27 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/shared/_helpers.tpl b/packages/system/seaweedfs/charts/seaweedfs/templates/shared/_helpers.tpl
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/shared/_helpers.tpl
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/shared/_helpers.tpl
+@@ -415,7 +415,9 @@
+ {{-           if eq .type "persistentVolumeClaim" }}
+ {{-             $desiredSize := .size }}
+ {{-             range $statefulset.spec.volumeClaimTemplates }}
+-{{-               if and (eq .metadata.name $dir.name) (ne .spec.resources.requests.storage $desiredSize) }}
++{{- /* normalise both sides: the API server canonicalises quantities, so a raw
++       compare fires on a respelling that changed nothing. */}}
++{{-               if and (eq .metadata.name $dir.name) (ne (include "seaweedfs.resource-quantity" .spec.resources.requests.storage) (include "seaweedfs.resource-quantity" $desiredSize)) }}
+ {{-                 $commands = append $commands (printf "kubectl delete statefulset %s --cascade=orphan" $statefulsetName) }}
+ {{-               end }}
+ {{-             end }}
+@@ -432,8 +434,10 @@
+ {{-             if $currentPVC }}
+ {{-               $oldSize := include "seaweedfs.resource-quantity" $currentPVC.spec.resources.requests.storage }}
+ {{-               $newSize := include "seaweedfs.resource-quantity" $desiredSize }}
+-{{-               if gt $newSize $oldSize }}
+-{{-                 $commands = append $commands (printf "kubectl patch pvc %s-%s-%s-%d -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"%s\"}}}}'" $dir.name $seaweedfsName $volumeName $e $desiredSize) }}
++{{- /* both sides are strings from an include, so compare them as numbers: a
++       lexicographic gt reads 10Gi as smaller than 5Gi and skips the patch. */}}
++{{-               if gt (float64 $newSize) (float64 $oldSize) }}
++{{-                 $commands = append $commands (printf "kubectl patch pvc %s-%s-%s-%d -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"%v\"}}}}'" $dir.name $seaweedfsName $volumeName $e $desiredSize) }}
+ {{-               end }}
+ {{-             end }}
+ {{-           end }}
