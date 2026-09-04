@@ -18,6 +18,7 @@ package tenantgateway
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"sort"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
@@ -8106,5 +8108,53 @@ func TestReconcile_TerminateListenerGoesOnceTheBackendAppears(t *testing.T) {
 	}
 	if got := certNamesOrdering(certs, hostname); len(got) != 0 {
 		t.Errorf("Certificates %v still order %s, which the passthrough listener now serves", got, hostname)
+	}
+}
+
+// TestReconcile_UnreadableBackendFailsRatherThanShedding pins the
+// direction the resolution fails in. A read that fails for anything
+// but NotFound says nothing about whether the Service is there, and
+// treating that silence as "no backend" is the one answer with a
+// standing HTTPS endpoint on the other side of it — the terminate
+// listener would go, or stay, on the strength of an apiserver that did
+// not answer. The reconcile fails instead and the requeue asks again.
+func TestReconcile_UnreadableBackendFailsRatherThanShedding(t *testing.T) {
+	const hostname = "api.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	route := httpRouteAttached("api", "tenant-foo", hostname)
+	claimant := passthroughTLSRoute("api-tls", "tenant-foo", hostname, "api")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route, claimant).
+		WithObjects(tlsRouteBackends(claimant)...).
+		WithStatusSubresource(tgw, route, claimant).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, isService := obj.(*corev1.Service); isService {
+					return apierrors.NewInternalError(errors.New("apiserver unavailable"))
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
+	_, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key})
+	if err == nil {
+		t.Fatalf("reconcile succeeded; an unreadable backend must not decide a withdrawal")
+	}
+	if !strings.Contains(err.Error(), "get backend Service") {
+		t.Errorf("error = %v, want one naming the backend read that failed", err)
 	}
 }
