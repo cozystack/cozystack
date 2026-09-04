@@ -7,9 +7,16 @@ suite: seaweedfs volume resize hook
 # the leading digit (5Gi -> 10Gi, 8Gi -> 16Gi, 20Gi -> 100Gi) read as "smaller",
 # the patches were skipped, and the tenant was left with its StatefulSet
 # recreated and its claims still at the old size, hook exit 0 and no signal.
-# patches/volume-resize-quantity.diff compares as numbers instead. The first
-# case is the one that was silently broken; the second is a size pair that
-# worked before the fix and must keep working.
+# The gate that emits the delete had the same defect in the other direction: it
+# compared the two size strings raw, and the API server re-emits a quantity in
+# its canonical form, so values spelling 10Gi as 10240Mi come back from the
+# cluster as 10Gi and the statefulset was deleted on every upgrade for a size
+# that never changed.
+#
+# patches/volume-resize-quantity.diff normalises both gates through
+# seaweedfs.resource-quantity. The cases below cover a grow that was silently
+# skipped, a grow that always worked, a shrink that must stay a no-op, and a
+# respelling that must not touch anything.
 
 templates:
   - charts/seaweedfs/templates/volume/volume-resize-hook.yaml
@@ -167,3 +174,39 @@ tests:
         notMatchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: kubectl patch pvc
+
+  - it: does nothing when the size is respelled but unchanged (10Gi as 10240Mi)
+    set:
+      seaweedfs.volume.dataDirs:
+        - name: data1
+          type: persistentVolumeClaim
+          size: 10240Mi
+          maxVolumes: 0
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume
+            namespace: tenant-test
+          spec:
+            volumeClaimTemplates:
+              - metadata:
+                  name: data1
+                spec:
+                  resources:
+                    requests:
+                      storage: 10Gi
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-test
+          spec:
+            resources:
+              requests:
+                storage: 10Gi
+    asserts:
+      - hasDocuments:
+          count: 0

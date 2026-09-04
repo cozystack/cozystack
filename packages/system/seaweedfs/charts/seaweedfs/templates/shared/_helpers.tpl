@@ -415,7 +415,11 @@ true
 {{-           if eq .type "persistentVolumeClaim" }}
 {{-             $desiredSize := .size }}
 {{-             range $statefulset.spec.volumeClaimTemplates }}
-{{-               if and (eq .metadata.name $dir.name) (ne .spec.resources.requests.storage $desiredSize) }}
+{{- /* normalise both sides: the API server re-emits a quantity in its canonical
+       form, so values saying 10240Mi come back from the cluster as 10Gi and a raw
+       string compare deletes the statefulset on EVERY upgrade for a size that
+       never changed. */}}
+{{-               if and (eq .metadata.name $dir.name) (ne (include "seaweedfs.resource-quantity" .spec.resources.requests.storage) (include "seaweedfs.resource-quantity" $desiredSize)) }}
 {{-                 $commands = append $commands (printf "kubectl delete statefulset %s --cascade=orphan" $statefulsetName) }}
 {{-               end }}
 {{-             end }}
