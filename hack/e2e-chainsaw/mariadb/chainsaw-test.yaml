@@ -98,6 +98,188 @@ spec:
             name: mariadb-test-metrics
           status:
             replicas: 1
+
+  # The trust anchor a client verifies against, read off the live operator
+  # rather than off this repo's beliefs about it. The unit suite pins what the
+  # chart renders — the sentinel, its source name and its key — from the same
+  # assumptions the chart encodes, so the two agree by construction and cannot
+  # catch each other being wrong. Only a real mariadb-operator can say whether
+  # <release>-ca-bundle is the right name and ca.crt the right key, and only a
+  # real apiserver can say whether the lineage webhook promotes the projection
+  # to something a tenant can read.
+  #
+  # This fixture sets no tls.issuer, and that is the interesting case rather
+  # than a gap: TLS is always served and tenant-projection.yaml is ungated, so
+  # the operator reconciles the source and the projection is expected here.
+  - name: verify-tenant-ca-projection
+    try:
+    # Positive control, and it must come first. Every negative below is
+    # satisfied by an ABSENT label, which is also exactly what you observe if
+    # the lineage webhook stamped nothing in this run at all — a renamed field,
+    # a kind that never reconciled. Without a witness that the mechanism is
+    # live, they would all pass while asserting nothing.
+    #
+    # The credentials Secret is the witness: the chart renders it, its lineage
+    # resolves to this instance, and the ApplicationDefinition grants it by
+    # name, so it MUST be stamped.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mariadb-test-credentials
+            labels:
+              internal.cozystack.io/tenantresource: "true"
+    # tenant-ca is stamped by the CA-extraction controller; tenantresource is
+    # the LINEAGE WEBHOOK's verdict, computed from the ApplicationDefinition's
+    # secrets.include matchLabels. It reads "true" only if the whole chain held:
+    # the sentinel converged, the controller lifted the certificate, the
+    # definition selected the label and the webhook admitted the object.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mariadb-test.tenant-ca
+            labels:
+              internal.cozystack.io/tenant-ca: "true"
+              internal.cozystack.io/tenantresource: "true"
+          type: Opaque
+    # Deterministic once the asserts above pass, so no retry.
+    - script:
+        content: |
+          set -eu
+
+          NS="$NAMESPACE"
+          PROJ=mariadb-test.tenant-ca
+          SRC=mariadb-test-ca-bundle
+
+          # Reads one key of a Secret. `index` takes the key as a string, so a
+          # key with dots in it needs no jsonpath escaping.
+          secret_value() {
+            kubectl -n "$NS" get secret "$1" \
+              -o go-template="{{if .data}}{{index .data \"$2\"}}{{end}}" | base64 -d
+          }
+          secret_keys() {
+            kubectl -n "$NS" get secret "$1" \
+              -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}'
+          }
+          # True when any value in the Secret is PEM private key material.
+          # Key-agnostic on purpose: which key the operator stores it under is
+          # its business, and naming one here would go quietly vacuous the day
+          # it changes.
+          has_private_key() {
+            for k in $(secret_keys "$1"); do
+              if secret_value "$1" "$k" | grep -qi 'BEGIN .*PRIVATE KEY'; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          # Exactly one key, and it is ca.crt. The sources this was lifted
+          # alongside carry private keys, so any second key is a leak in the
+          # making.
+          keys=$(secret_keys "$PROJ" | sort | tr '\n' ' ')
+          if [ "$keys" != "ca.crt " ]; then
+            echo "projection must hold exactly ca.crt, holds: $keys" >&2
+            exit 1
+          fi
+
+          # It lifted the right certificate. This is what pins the declared
+          # source to reality: if the operator renames the bundle or its key,
+          # the controller finds nothing and this fails.
+          #
+          # Compared by fingerprint rather than raw PEM — the controller
+          # re-encodes ca.crt from the DER it parsed, so a header or
+          # column-width change at the source would redden a byte comparison of
+          # a correct projection.
+          src=$(secret_value "$SRC" "ca.crt")
+          if [ -z "$src" ]; then
+            echo "$SRC has no ca.crt — the declared source name or key is wrong" >&2
+            exit 1
+          fi
+          proj=$(secret_value "$PROJ" "ca.crt")
+          src_fp=$(echo "$src" | openssl x509 -noout -fingerprint -sha256)
+          proj_fp=$(echo "$proj" | openssl x509 -noout -fingerprint -sha256)
+          if [ "$src_fp" != "$proj_fp" ]; then
+            echo "projection does not carry the operator's CA certificate" >&2
+            exit 1
+          fi
+
+          # The source is key-free by design, which is why it is the source. If
+          # the operator ever starts storing a key in it, the projection stops
+          # being a copy of something safe.
+          if has_private_key "$SRC"; then
+            echo "$SRC now carries private key material — it is no longer a safe source" >&2
+            exit 1
+          fi
+          if echo "$proj" | grep -qi 'BEGIN .*PRIVATE KEY'; then
+            echo "projection carries PEM private key material" >&2
+            exit 1
+          fi
+
+          # The delivery path the README tells a tenant to use, run as the
+          # command the README prints. Everything above reads raw Secrets, which
+          # only an admin can do, and so proves the projection's shape and
+          # nothing about whether a tenant can reach it.
+          anchor=$(kubectl -n "$NS" get tenantsecret "$PROJ" \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if ! echo "$anchor" | grep -q 'BEGIN CERTIFICATE'; then
+            echo "the trust anchor is not served through core.cozystack.io/tenantsecrets" >&2
+            exit 1
+          fi
+
+          # And the negative that gives the positive its meaning: the registry
+          # must not serve a Secret that holds a private key. Promotion is
+          # driven by a label selector with no name constraint, so any one of
+          # these acquiring the label leaks a key.
+          #
+          # The candidates are the names the ApplicationDefinition excludes, and
+          # each is checked for private key material before its absence from the
+          # registry is required. A name that does not exist under this fixture
+          # would otherwise 404 for the wrong reason and pass while proving
+          # nothing — which is most of this list, since the cert-manager leg
+          # renders no Secrets when tls.issuer is unset. Counting what was
+          # actually discriminated on, and failing when that is zero, is what
+          # keeps the whole block from going vacuous if the operator renames
+          # everything at once.
+          checked=0
+          for s in mariadb-test-ca mariadb-test-server-cert mariadb-test-client-cert \
+                   mariadb-test.ca-tls mariadb-test.tls; do
+            if ! kubectl -n "$NS" get secret "$s" >/dev/null 2>&1; then
+              echo "skip $s: no such Secret under this fixture"
+              continue
+            fi
+            if ! has_private_key "$s"; then
+              echo "skip $s: holds no private key material"
+              continue
+            fi
+            checked=$((checked + 1))
+            # NotFound is the only acceptable failure. An RBAC denial or an
+            # unavailable aggregated apiserver also makes the read fail, and
+            # reading that as "safely absent" is how this check would stop
+            # discriminating without going red.
+            if err=$(kubectl -n "$NS" get tenantsecret "$s" 2>&1 >/dev/null); then
+              echo "key-bearing $s is being served as a tenant secret" >&2
+              exit 1
+            fi
+            case "$err" in
+              *NotFound*) echo "ok $s: key-bearing and not served" ;;
+              *)
+                echo "tenantsecret $s did not answer NotFound, so this check proved nothing: $err" >&2
+                exit 1
+                ;;
+            esac
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo "no key-bearing Secret was found to check, so the negative above is vacuous" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true
 ---
 # Guard for the operator-webhook regression fixed in c7e8f4d97: replication is
 # guarded on replicas>1, so replicas=1 must render a CR the mariadb-operator's

@@ -15,14 +15,28 @@ release:
   namespace: tenant-test
 
 tests:
-  - it: "cleanup Job deletes the operator-generated password Secrets by name"
+  # The cert-manager Secrets are deleted here too: cert-manager runs with
+  # enableCertificateOwnerRef=false, so removing the Certificates leaves the CA
+  # private key and the server private key behind in the tenant's namespace.
+  - it: "cleanup Job deletes the operator-generated and cert-manager Secrets by name"
     documentSelector:
       path: kind
       value: Job
     asserts:
+      # The verb is part of the assertion. Matching the name list alone leaves
+      # the whole point of the hook — that these Secrets are REMOVED — pinned by
+      # nothing, so `kubectl get secret` in place of the delete stays green.
+      #
+      # One pattern for the whole invocation, with the shell's line
+      # continuations spelled out instead of skipped over. A `(?s).*` gap does
+      # not bind a name to the verb it follows: with `.` matching newlines the
+      # gap runs across command boundaries, so the names satisfy it from any
+      # later command in the script while the delete above them removes
+      # something else entirely. Whitespace and backslashes cannot spell a
+      # command, which is what makes this separator load-bearing.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "mariadb-test-metrics-password mariadb-test-repl-password --ignore-not-found"
+          pattern: "kubectl delete secret -n \\S+[\\s\\\\]+mariadb-test-metrics-password mariadb-test-repl-password[\\s\\\\]+mariadb-test\\.ca-tls mariadb-test\\.tls --ignore-not-found"
 
   - it: "cleanup Job fails (exits non-zero) when a real delete error occurs, so orphaned resources don't pass silently"
     documentSelector:
@@ -57,7 +71,7 @@ tests:
             resources: ["persistentvolumeclaims"]
             verbs: ["get", "list", "delete"]
 
-  - it: "cleanup Role scopes secret access to the two named secrets only (least privilege)"
+  - it: "cleanup Role scopes secret access to the named secrets only (least privilege)"
     documentSelector:
       path: kind
       value: Role
@@ -70,6 +84,8 @@ tests:
             resourceNames:
               - mariadb-test-metrics-password
               - mariadb-test-repl-password
+              - mariadb-test.ca-tls
+              - mariadb-test.tls
             verbs: ["get", "delete"]
       # Lock the exact rule set (PVC rule + the single scoped secrets rule).
       # Without this, a broader unscoped `secrets` rule could be added and the

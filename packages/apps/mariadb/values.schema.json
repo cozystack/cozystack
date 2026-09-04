@@ -127,6 +127,26 @@
       "type": "boolean",
       "default": false
     },
+    "tls": {
+      "description": "TLS configuration. Selects who issues the certificates and whether plaintext is refused; TLS itself is always served.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "issuer": {
+          "description": "Who issues the server certificate: `operator` uses the CA mariadb-operator manages itself, `cert-manager` gives the instance its own CA and is what covers the external hostname. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off.",
+          "type": "string",
+          "default": "operator",
+          "enum": [
+            "operator",
+            "cert-manager"
+          ]
+        },
+        "required": {
+          "description": "Refuse plaintext connections (sets MariaDB require_secure_transport=ON). Applies under either issuer. Opt-in: turn it on once every client connects over TLS, since it disconnects those that do not.",
+          "type": "boolean"
+        }
+      }
+    },
     "version": {
       "description": "MariaDB major.minor version to deploy",
       "type": "string",
