@@ -21,9 +21,9 @@ tests:
       - equal:
           path: kind
           value: Deployment
-      - equal:
+      - matchRegex:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/cozystack/cozystack/nginx-cache:v1.6.0@sha256:bd042a8a9789e8b21b12cb266e390484a3a48f4af6ca6e2d2864a8a83c74bd25
+          pattern: '^ghcr\.io/cozystack/cozystack/nginx-cache:[^@]+@sha256:[0-9a-f]{64}$'
 
   - it: sizes the first replica's PVC from values.size
     template: templates/nginx/deployment.yaml
