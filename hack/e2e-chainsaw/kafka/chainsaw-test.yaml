@@ -51,13 +51,16 @@ spec:
 
   - name: verify-kraft
     try:
+    # Fresh pools use short release-hashed names (b-<hash>/c-<hash>), so match by
+    # the cluster label + role rather than a hard-coded name.
     - assert:
         timeout: 2m
         resource:
           apiVersion: kafka.strimzi.io/v1beta2
           kind: KafkaNodePool
           metadata:
-            name: kafka
+            labels:
+              strimzi.io/cluster: kafka-test
           spec:
             roles:
             - broker
@@ -67,7 +70,8 @@ spec:
           apiVersion: kafka.strimzi.io/v1beta2
           kind: KafkaNodePool
           metadata:
-            name: controller
+            labels:
+              strimzi.io/cluster: kafka-test
           spec:
             roles:
             - controller

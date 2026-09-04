@@ -22,18 +22,21 @@ tests:
           of: KafkaNodePool
         documentIndex: 1
 
-  - it: names pools correctly
+  - it: names pools with short release-hashed tokens (no doubled release name)
     release:
       name: test-kafka
       namespace: tenant-test
     asserts:
-      - equal:
+      # Fresh broker pool: "b-<8 hex>"; controller pool: "c-<8 hex>". The release
+      # name is not embedded, so the derived <cluster>-<pool>-<id> pod hostname
+      # stays short regardless of release length.
+      - matchRegex:
           path: metadata.name
-          value: kafka
+          pattern: ^b-[0-9a-f]{8}$
         documentIndex: 0
-      - equal:
+      - matchRegex:
           path: metadata.name
-          value: controller
+          pattern: ^c-[0-9a-f]{8}$
         documentIndex: 1
 
   - it: sets cluster label on both pools
@@ -49,6 +52,25 @@ tests:
           path: metadata.labels["strimzi.io/cluster"]
           value: my-kafka
         documentIndex: 1
+
+  - it: fails the render when the release name is too long for the 63-char pod-hostname budget
+    release:
+      # Even with the short hashed pool name, a release at the 53-char Helm limit
+      # pushes the derived controller node name <cluster>-c-<hash>-<id> a few
+      # chars over 63.
+      name: kafka-01234567890123456789012345678901234567890123456
+      namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorPattern: "over the 63-character"
+
+  - it: renders normally for a release name that stays within the budget
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 2
 
   ##################################
   # Roles                          #
@@ -221,3 +243,184 @@ tests:
       - exists:
           path: spec.resources
         documentIndex: 1
+
+  ###################################################
+  # lookup-gated resolution (seeded cluster state)  #
+  ###################################################
+
+  - it: resolves the broker pool to kafka for an already-migrated cluster (steady state)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    kubernetesProvider:
+      scheme: &kscheme
+        "kafka.strimzi.io/v1beta2/KafkaNodePool":
+          gvr:
+            group: "kafka.strimzi.io"
+            version: "v1beta2"
+            resource: "kafkanodepools"
+          namespaced: true
+        "kafka.strimzi.io/v1beta2/Kafka":
+          gvr:
+            group: "kafka.strimzi.io"
+            version: "v1beta2"
+            resource: "kafkas"
+          namespaced: true
+      objects:
+        # This cluster already owns the fixed "kafka" broker pool (adopted at
+        # migration), so brokerPoolName must keep resolving to "kafka".
+        - kind: KafkaNodePool
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka
+            namespace: tenant-test
+            labels:
+              strimzi.io/cluster: test-kafka
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kafka
+        documentIndex: 0
+
+  - it: fails the render on a second ZK->KRaft migration into a namespace whose kafka pool belongs to another cluster
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    kubernetesProvider:
+      scheme: *kscheme
+      objects:
+        # A "kafka" pool owned by a DIFFERENT cluster, plus this release's own
+        # not-yet-KRaft CR about to migrate -> the guard must fail closed.
+        - kind: KafkaNodePool
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka
+            namespace: tenant-test
+            labels:
+              strimzi.io/cluster: other-kafka
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: test-kafka
+            namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorPattern: "broker pool owned by cluster"
+
+  - it: pins the controller replica count to the existing pool instead of recomputing from kafka.replicas
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 5
+    kubernetesProvider:
+      scheme: *kscheme
+      objects:
+        # An existing single-replica controller pool must stay pinned at 1 even
+        # though kafka.replicas=5 would otherwise compute a 3-node quorum
+        # (Strimzi 0.45 cannot scale a controller pool). c-ddfcee32 is the
+        # controllerPoolName for release "test-kafka".
+        - kind: KafkaNodePool
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: c-ddfcee32
+            namespace: tenant-test
+            labels:
+              strimzi.io/cluster: test-kafka
+          spec:
+            # Quoted so helm-unittest's fake lookup can deep-copy the seed
+            # object (it rejects a bare int); kafka.controllerReplicas coerces
+            # it back with `int` either way.
+            replicas: "1"
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+        documentIndex: 1
+
+  - it: resolves the broker pool to kafka for a classic ZooKeeper cluster about to migrate
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    kubernetesProvider:
+      scheme: &scheme3
+        "kafka.strimzi.io/v1beta2/KafkaNodePool":
+          gvr:
+            group: "kafka.strimzi.io"
+            version: "v1beta2"
+            resource: "kafkanodepools"
+          namespaced: true
+        "kafka.strimzi.io/v1beta2/Kafka":
+          gvr:
+            group: "kafka.strimzi.io"
+            version: "v1beta2"
+            resource: "kafkas"
+          namespaced: true
+        "v1/ConfigMap":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "configmaps"
+          namespaced: true
+      objects:
+        # Existing ZooKeeper Kafka CR (not yet KRaft), no node pools yet -> the
+        # steady-state manifest must render the broker pool as "kafka" so it
+        # agrees with the pool the pre-upgrade hook creates for in-place adoption.
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: test-kafka
+            namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kafka
+        documentIndex: 0
+
+  - it: keeps a fresh cluster's broker pool at b-<hash> on its day-2 upgrade (owns its own pool)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    kubernetesProvider:
+      scheme: *scheme3
+      objects:
+        # Fresh KRaft cluster in steady state: KRaft-enabled CR + version
+        # ConfigMap + it already owns its own "b-<hash>"/"c-<hash>" pools. Every
+        # routine upgrade must keep resolving to "b-<hash>" (via the $ownBrokerPool
+        # branch), never flip to "kafka".
+        - kind: ConfigMap
+          apiVersion: v1
+          metadata:
+            name: test-kafka-kafka-deployed-version
+            namespace: tenant-test
+          data:
+            version: "1"
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: test-kafka
+            namespace: tenant-test
+            annotations:
+              strimzi.io/kraft: enabled
+        - kind: KafkaNodePool
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: b-ddfcee32
+            namespace: tenant-test
+            labels:
+              strimzi.io/cluster: test-kafka
+        - kind: KafkaNodePool
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: c-ddfcee32
+            namespace: tenant-test
+            labels:
+              strimzi.io/cluster: test-kafka
+          spec:
+            replicas: "3"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: b-ddfcee32
+        documentIndex: 0

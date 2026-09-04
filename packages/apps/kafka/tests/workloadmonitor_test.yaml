@@ -45,9 +45,9 @@ tests:
           path: spec.type
           value: kafka-broker
         documentIndex: 0
-      - equal:
+      - matchRegex:
           path: spec.selector["strimzi.io/pool-name"]
-          value: kafka
+          pattern: ^b-[0-9a-f]{8}$
         documentIndex: 0
 
   - it: sets controller monitor type to kafka-controller with pool-name selector
@@ -59,9 +59,9 @@ tests:
           path: spec.type
           value: kafka-controller
         documentIndex: 1
-      - equal:
+      - matchRegex:
           path: spec.selector["strimzi.io/pool-name"]
-          value: controller
+          pattern: ^c-[0-9a-f]{8}$
         documentIndex: 1
 
   ##################################

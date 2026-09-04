@@ -12,7 +12,6 @@
   Internal TLS listener (port 9093) is always on; Strimzi manages the PKI.
   Null detection uses `kindIs "invalid"` (canonical pattern) — see _tls.tpl.
 */ -}}
-{{- include "kafka.assertSingleInstance" . -}}
 {{- $tlsEnabled := include "kafka.tls.enabled" . | trim -}}
 {{- $showExternal := .Values.external -}}
 {{- $kafkaVersion := include "kafka.versionMap" . -}}

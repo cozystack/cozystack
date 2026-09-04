@@ -108,13 +108,24 @@ spec:
               # annotated strimzi.io/kraft=enabled. Never drive it through the
               # migration state machine: re-issuing kraft=migration from there is an
               # invalid backward transition Strimzi rejects.
-              kraft=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.metadata.annotations.strimzi\.io/kraft}' 2>/dev/null || echo "")
+              # Fail closed, like the reads above: the CR exists, so a genuine
+              # "no annotation/status yet" is an empty string with exit 0, while a
+              # real read error is non-zero. Masking a transient error as "" here
+              # would skip the "already KRaft, nothing to do" exits below and
+              # re-issue kraft=migration against a live, already-migrated cluster.
+              if ! kraft=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.metadata.annotations.strimzi\.io/kraft}' 2>&1); then
+                echo "ERROR: reading the strimzi.io/kraft annotation failed: $kraft" >&2
+                exit 1
+              fi
               if [ "$kraft" = "enabled" ]; then
                 echo "Kafka is already KRaft (strimzi.io/kraft=enabled) — nothing to do."
                 exit 0
               fi
 
-              state=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.status.kafkaMetadataState}' 2>/dev/null || echo "")
+              if ! state=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.status.kafkaMetadataState}' 2>&1); then
+                echo "ERROR: reading kafkaMetadataState failed: $state" >&2
+                exit 1
+              fi
               echo "Current kafkaMetadataState: '${state}'"
               # A cluster already fully in KRaft is done. An EMPTY state on an
               # EXISTING ZooKeeper CR is NOT "migrated" (status may simply not be
@@ -129,7 +140,14 @@ spec:
               # as <cluster>-kafka-N). If a "kafka" pool already exists for a
               # DIFFERENT cluster, a second Kafka is being migrated in this
               # namespace — unsupported, since node pool names are namespace-unique.
-              owner=$(kubectl -n "$ns" get "$np" kafka -o jsonpath='{.metadata.labels.strimzi\.io/cluster}' 2>/dev/null || echo "")
+              # Fail closed like the Kafka CR read above: --ignore-not-found makes
+              # a genuine "no kafka pool yet" exit 0 with empty output, while a real
+              # apiserver/RBAC/timeout error exits non-zero and aborts — never
+              # silently waiving the collision check on a transient kubectl failure.
+              if ! owner=$(kubectl -n "$ns" get "$np" kafka --ignore-not-found -o jsonpath='{.metadata.labels.strimzi\.io/cluster}' 2>&1); then
+                echo "ERROR: reading the \"kafka\" node pool owner label failed: $owner" >&2
+                exit 1
+              fi
               if [ -n "$owner" ] && [ "$owner" != "$name" ]; then
                 echo "ERROR: KafkaNodePool 'kafka' in namespace '$ns' already belongs to cluster '$owner'." >&2
                 echo "In-place ZK->KRaft migration of more than one Kafka per namespace is unsupported (Strimzi node pool names are namespace-unique). Migrate one at a time or in separate namespaces." >&2
@@ -181,7 +199,7 @@ spec:
               apiVersion: kafka.strimzi.io/v1beta2
               kind: KafkaNodePool
               metadata:
-                name: controller
+                name: {{ include "kafka.controllerPoolName" . }}
                 namespace: ${ns}
                 labels:
                   strimzi.io/cluster: ${name}

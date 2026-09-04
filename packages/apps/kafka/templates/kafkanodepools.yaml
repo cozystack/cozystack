@@ -1,13 +1,15 @@
+{{- include "kafka.assertNameLength" . }}
 {{- $controllerReplicas := include "kafka.controllerReplicas" . }}
+{{- $brokerPool := include "kafka.brokerPoolName" . }}
 ---
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaNodePool
 metadata:
-  # Must be "kafka": Strimzi derives broker/PVC names as <cluster>-<pool>-<id>,
-  # so this name adopts an existing ZooKeeper cluster's <cluster>-kafka-N brokers
-  # and data in place during migration. Safe as a fixed (namespace-unique) name
-  # because the chart enforces one Kafka per namespace (see kafka.assertSingleInstance).
-  name: kafka
+  # "b-<hash>" (short release hash) for fresh installs, so several Kafka clusters
+  # coexist in one namespace; or exactly "kafka" for a cluster migrated from
+  # ZooKeeper — that name adopts the existing <cluster>-kafka-N brokers and data
+  # in place. See kafka.brokerPoolName.
+  name: {{ $brokerPool }}
   labels:
     strimzi.io/cluster: {{ .Release.Name }}
 spec:
@@ -31,7 +33,7 @@ spec:
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaNodePool
 metadata:
-  name: controller
+  name: {{ include "kafka.controllerPoolName" . }}
   labels:
     strimzi.io/cluster: {{ .Release.Name }}
 spec:

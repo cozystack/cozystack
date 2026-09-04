@@ -121,6 +121,23 @@ tests:
           pattern: "roles:\\n +- broker"
         documentIndex: 3
 
+  # The controller pool the hook creates must use the same short hashed name the
+  # steady-state chart renders (kafka.controllerPoolName), or Helm would leave a
+  # stray "controller"/mismatched pool alongside "c-<hash>" and split the quorum.
+  - it: creates the controller node pool with the release-hashed name (in lockstep with the chart)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'name: c-[0-9a-f]{8}\n'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\n +- controller"
+        documentIndex: 3
+
   # Fail closed: a real read error (non-zero from the --ignore-not-found get)
   # must abort, never be mistaken for a fresh install.
   - it: fails closed on non-NotFound errors reading the Kafka CR
@@ -271,3 +288,30 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "roles:\\s+- controller[\\s\\S]*?resources:\\s+limits:"
         documentIndex: 3
+
+  # Idempotency gate: once the deployed-version ConfigMap is stamped, the whole
+  # hook (SA/Role/RoleBinding/Job) must stop rendering so a routine upgrade of an
+  # already-migrated cluster never re-runs the migration.
+  - it: renders nothing once the deployed-version ConfigMap is stamped
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    kubernetesProvider:
+      scheme:
+        "v1/ConfigMap":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "configmaps"
+          namespaced: true
+      objects:
+        - kind: ConfigMap
+          apiVersion: v1
+          metadata:
+            name: test-kafka-kafka-deployed-version
+            namespace: tenant-test
+          data:
+            version: "1"
+    asserts:
+      - hasDocuments:
+          count: 0
