@@ -159,7 +159,7 @@
       ]
     },
     "users": {
-      "description": "Users configuration map. Passwords (including the `root` account) are always auto-generated and stored in the `\u003crelease\u003e-credentials` Secret; they cannot be set from values. Read a user's password from that Secret, or rotate every managed password by bumping `passwordRotation`.",
+      "description": "Users configuration map. Passwords (including the `root` account) are always auto-generated and stored in the `\u003crelease\u003e-credentials` Secret; they cannot be set from values. Read a user's password from that Secret, or rotate every managed password by bumping `passwordRotation`. A `password` left over in values from before the field was removed is ignored by the chart but stays the live credential until a `passwordRotation` bump retires it.",
       "type": "object",
       "default": {},
       "additionalProperties": {

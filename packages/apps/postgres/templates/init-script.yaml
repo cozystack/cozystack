@@ -36,6 +36,15 @@ metadata:
   name: {{ .Release.Name }}-credentials
   annotations:
     {{ $rotationAnnotation }}: {{ $wantRotation | quote }}
+    {{- if .Values.bootstrap.enabled }}
+    # During a restore the roles recovered from the backup keep their original
+    # password hashes, but this Secret holds freshly generated passwords and the
+    # init-job that would apply them (ALTER ROLE) is skipped while bootstrap is
+    # on. So the values below do NOT authenticate yet; they converge once the app
+    # leaves bootstrap and the init-job runs. Flag it so a reader (dashboard,
+    # tenant) does not treat the advertised password as usable mid-restore.
+    postgres.cozystack.io/credentials-pending: "true"
+    {{- end }}
 stringData:
   {{- range $user, $u := .Values.users }}
   {{ quote $user }}: {{ quote (index $passwords $user) }}

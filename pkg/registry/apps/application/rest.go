@@ -204,6 +204,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
+	r.warnRemovedUserPasswords(ctx, app)
 
 	// Run the genericapiserver-supplied validating admission chain
 	// (validating webhooks + ValidatingAdmissionPolicies) before
@@ -552,6 +553,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
+	r.warnRemovedUserPasswords(ctx, app)
 
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
@@ -1948,6 +1950,44 @@ func (r *REST) warnRemovedKubernetesFields(ctx context.Context, app *appsv1alpha
 		if _, present := values[key]; present {
 			warning.AddWarning(ctx, "", fmt.Sprintf(
 				"spec.%s is ignored on the Kubernetes resource since Phase 2: worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart). The field is stored but has no effect.", key))
+		}
+	}
+}
+
+// removedUserPasswordKinds are the Application kinds whose per-user `password`
+// field was removed from the chart render -- passwords are chart-generated into
+// the <release>-credentials Secret. Like the Kubernetes fields above the key is
+// still accepted and stored (the user object's schema keeps additionalProperties
+// open, and the render preserves an existing password through lookup), so a value
+// left from before the upgrade stays the LIVE credential until a passwordRotation
+// bump retires it. Warn so an operator editing it to rotate is told it has no
+// effect instead of getting a silent 200.
+var removedUserPasswordKinds = map[string]bool{
+	postgresKind: true,
+	mariadbKind:  true,
+}
+
+const (
+	postgresKind = "Postgres"
+	mariadbKind  = "MariaDB"
+)
+
+// warnRemovedUserPasswords emits a client-facing admission warning for every
+// spec.users[<name>].password still present on a Postgres or MariaDB resource.
+func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.Application) {
+	if !removedUserPasswordKinds[r.kindName] || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
+		return
+	}
+	var values struct {
+		Users map[string]map[string]json.RawMessage `json:"users"`
+	}
+	if err := json.Unmarshal(app.Spec.Raw, &values); err != nil {
+		return
+	}
+	for user, u := range values.Users {
+		if _, present := u["password"]; present {
+			warning.AddWarning(ctx, "", fmt.Sprintf(
+				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. A value left from before the upgrade is still the live password until you retire it with a passwordRotation bump.", user))
 		}
 	}
 }
