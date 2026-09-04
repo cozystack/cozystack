@@ -3648,10 +3648,15 @@ func TestReconcile_ExistingSecretModeKeepsHTTPRedirectAndPassthrough(t *testing.
 //     HTTPRoutes that were accepted by the HTTPS-terminate listeners.
 //
 //  2. FORBIDDEN KINDS: GRPCRoute, TCPRoute, and UDPRoute must NEVER
-//     appear in any port-443 listener's kinds set. These route types are
-//     not gated by the cozystack-route-hostname-policy VAP; admitting them
-//     would let a tenant serve arbitrary traffic under the apex cert
-//     without admission control.
+//     appear in any port-443 listener's kinds set. cilium#45559 governs
+//     only that the sets match each other, so this is least privilege:
+//     nothing the platform ships needs gRPC, TCP or UDP routing on port
+//     443. TCPRoute and UDPRoute also carry no hostname and no admission
+//     rule gates them, so admitting them would let a tenant serve
+//     arbitrary traffic under the apex cert without admission control.
+//     GRPCRoute hostnames are gated by the cozystack-route-hostname-policy
+//     VAP wherever the kind attaches; port 443 excludes it because nothing
+//     the platform ships needs gRPC routing there.
 //
 //  3. NON-EMPTY: no port-443 listener may have nil or empty
 //     allowedRoutes.kinds. An empty set means Gateway API defaults to all
@@ -3736,7 +3741,7 @@ func TestReconcile_Port443ListenersShareKinds(t *testing.T) {
 			}
 			for _, forbidden := range []string{"GRPCRoute", "TCPRoute", "UDPRoute"} {
 				if kindSet[forbidden] {
-					t.Errorf("listener[%d] %q: forbidden kind %q present — would bypass cozystack-route-hostname-policy VAP", i, l.Name, forbidden)
+					t.Errorf("listener[%d] %q: forbidden kind %q present — port-443 listeners serve HTTPRoute and TLSRoute only", i, l.Name, forbidden)
 				}
 			}
 		}

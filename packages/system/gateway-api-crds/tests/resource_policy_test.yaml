@@ -32,6 +32,19 @@ tests:
       - hasDocuments:
           count: 14
 
+  # Pins the vendored bundle version. Nothing else in the tree names it
+  # outside the Makefile ref, so `make update` against a different ref
+  # would otherwise land with every other case still green.
+  - it: stamps every CRD with the vendored bundle version
+    documentSelector:
+      path: kind
+      value: CustomResourceDefinition
+      matchMany: true
+    asserts:
+      - equal:
+          path: metadata.annotations["gateway.networking.k8s.io/bundle-version"]
+          value: v1.6.1
+
   - it: keeps the backendtlspolicies CRD
     documentSelector:
       path: metadata.name

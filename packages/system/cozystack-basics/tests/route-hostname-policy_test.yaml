@@ -14,17 +14,17 @@ capabilities:
     - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
 
 tests:
-  - it: renders ValidatingAdmissionPolicy + Binding for HTTPRoute and TLSRoute (Layer 7)
+  - it: renders ValidatingAdmissionPolicy + Binding for HTTPRoute, TLSRoute and GRPCRoute (Layer 7)
     # Layer 7 (route-hostname VAP) is the only VAP rendered by THIS
-    # template: 2 docs (VAP + Binding) × 2 route kinds (HTTPRoute,
-    # TLSRoute) = 4 docs total. Layers 2-5 live in
+    # template: 2 docs (VAP + Binding) × 3 route kinds (HTTPRoute,
+    # TLSRoute, GRPCRoute) = 6 docs total. Layers 2-5 live in
     # gateway-hostname-policy.yaml. Pin both counts so the 7-layer
     # security model documented in README.md is enforced at render
     # time — a maintainer dropping one of the VAPs without updating
     # the docs trips one of these counts.
     asserts:
       - hasDocuments:
-          count: 4
+          count: 6
       - documentIndex: 0
         equal:
           path: kind
@@ -37,6 +37,22 @@ tests:
         equal:
           path: kind
           value: ValidatingAdmissionPolicyBinding
+      - documentIndex: 2
+        equal:
+          path: metadata.name
+          value: cozystack-route-hostname-policy-tls
+      - documentIndex: 3
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
+      - documentIndex: 4
+        equal:
+          path: metadata.name
+          value: cozystack-route-hostname-policy-grpc
+      - documentIndex: 5
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
 
   - it: gates on tenant-* namespace prefix via matchConditions
     asserts:
@@ -45,6 +61,14 @@ tests:
           path: spec.matchConditions[0].name
           value: tenant-namespace
       - documentIndex: 0
+        equal:
+          path: spec.matchConditions[0].expression
+          value: object.metadata.namespace.startsWith("tenant-")
+      - documentIndex: 2
+        equal:
+          path: spec.matchConditions[0].expression
+          value: object.metadata.namespace.startsWith("tenant-")
+      - documentIndex: 4
         equal:
           path: spec.matchConditions[0].expression
           value: object.metadata.namespace.startsWith("tenant-")
@@ -66,7 +90,8 @@ tests:
     # permits to carry uppercase.
     #
     # Both comparisons are pinned as whole operand pairs, for HTTPRoute
-    # (doc 0) and TLSRoute (doc 2), which share one CEL validator: a pattern
+    # (doc 0) and TLSRoute (doc 2), which share one CEL validator with
+    # GRPCRoute (doc 4): a pattern
     # matching a lone `.lowerAscii()` somewhere in the expression still
     # matches when one operand loses its normalization.
     asserts:
@@ -86,15 +111,46 @@ tests:
         matchRegex:
           path: spec.validations[0].expression
           pattern: 'h\.lowerAscii\(\)\.endsWith\("\." \+ namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\.lowerAscii\(\)\)'
+      - documentIndex: 4
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'h\.lowerAscii\(\) == namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\.lowerAscii\(\)'
+      - documentIndex: 4
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'h\.lowerAscii\(\)\.endsWith\("\." \+ namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\.lowerAscii\(\)\)'
 
-  - it: validation actions are Deny so requests fail closed
+  # A Binding whose policyName points at another policy renders fine and
+  # leaves its own policy inert, so the pair is pinned together: which
+  # policy is bound, and that the binding denies.
+  - it: each binding denies for the policy it names
     asserts:
+      - documentIndex: 1
+        equal:
+          path: spec.policyName
+          value: cozystack-route-hostname-policy
+      - documentIndex: 3
+        equal:
+          path: spec.policyName
+          value: cozystack-route-hostname-policy-tls
+      - documentIndex: 5
+        equal:
+          path: spec.policyName
+          value: cozystack-route-hostname-policy-grpc
       - documentIndex: 1
         equal:
           path: spec.validationActions
           value: [Deny]
+      - documentIndex: 3
+        equal:
+          path: spec.validationActions
+          value: [Deny]
+      - documentIndex: 5
+        equal:
+          path: spec.validationActions
+          value: [Deny]
 
-  - it: targets gateway.networking.k8s.io v1 HTTPRoute and v1alpha2 TLSRoute
+  - it: targets every served HTTPRoute, TLSRoute and GRPCRoute version in gateway.networking.k8s.io
     asserts:
       - documentIndex: 0
         equal:
@@ -106,12 +162,36 @@ tests:
           value: ["httproutes"]
       - documentIndex: 2
         equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["gateway.networking.k8s.io"]
+      - documentIndex: 2
+        equal:
           path: spec.matchConstraints.resourceRules[0].resources
           value: ["tlsroutes"]
+      # Every version the vendored bundle serves for each kind, pinned to
+      # exact values so a change here is deliberate. The reason a shorter
+      # list is unsafe lives in
+      # hack/route-hostname-policy-version-coverage.bats.
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiVersions
+          value: ["v1", "v1beta1"]
       - documentIndex: 2
         equal:
           path: spec.matchConstraints.resourceRules[0].apiVersions
-          value: ["v1alpha2"]
+          value: ["v1", "v1alpha2", "v1alpha3"]
+      - documentIndex: 4
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["gateway.networking.k8s.io"]
+      - documentIndex: 4
+        equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: ["grpcroutes"]
+      - documentIndex: 4
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiVersions
+          value: ["v1"]
 
   - it: failurePolicy is Fail so admission errors deny instead of allow
     asserts:
@@ -123,19 +203,26 @@ tests:
         equal:
           path: spec.failurePolicy
           value: Fail
+      - documentIndex: 4
+        equal:
+          path: spec.failurePolicy
+          value: Fail
 
   - it: CEL is fail-closed when namespace has no host label (returns false, not true)
-    # Regression guard: an earlier draft used `... ? true : (...)` which
+    # Regression guard: an earlier form used `... ? true : (...)`, which
     # silently allowed routes in any tenant-* namespace where the layer-5
-    # label was missing or scrubbed. Fixing this is the whole point of the
-    # round-6 hardening pass — pin the false branch in the CEL string so
-    # nobody flips it back without an explicit test failure.
+    # label was missing or scrubbed. Pin the false branch in the CEL string
+    # so nobody flips it back without an explicit test failure.
     asserts:
       - documentIndex: 0
         matchRegex:
           path: spec.validations[0].expression
           pattern: '\)\s*\?\s*false\s*:'
       - documentIndex: 2
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '\)\s*\?\s*false\s*:'
+      - documentIndex: 4
         matchRegex:
           path: spec.validations[0].expression
           pattern: '\)\s*\?\s*false\s*:'
