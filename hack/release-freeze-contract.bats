@@ -1,8 +1,9 @@
 #!/usr/bin/env bats
 
 # Contract for the rc freeze, the backport target resolution that depends on it,
-# and the triggering and concurrency rules that decide whether a backport runs at
-# all. Like promote-gate-contract.bats, these tests pin executable/structural
+# the triggering and concurrency rules that decide whether a backport runs at
+# all, and the agreement between those rules and cmd/backport-audit, which
+# gates a cut by reproducing them. Like promote-gate-contract.bats, these tests pin executable/structural
 # workflow lines rather than prose: a commented-out gate or a guard demoted to a
 # comment must never satisfy the contract.
 #
@@ -19,6 +20,7 @@
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CUT="$REPO_ROOT/.github/workflows/cut-prerelease.yaml"
 BACKPORT="$REPO_ROOT/.github/workflows/backport.yaml"
+AUDIT="$REPO_ROOT/cmd/backport-audit/main.go"
 
 # Strip YAML comments. POSIX `grep` only: the unit-test runner has no ripgrep.
 # grep exits 1 when nothing is selected (legitimate for an all-comment block)
@@ -593,4 +595,43 @@ closed-merged=true"
     printf '%s\n' "$b" | grep -qF "github.event.pull_request.base.ref == 'main' &&"
     printf '%s\n' "$b" | grep -qF 'github.event.pull_request.merged == true &&'
   done
+}
+
+@test "the audit accepts exactly the backport labels the bot acts on" {
+  # cmd/backport-audit answers "has everything labelled for this line landed on
+  # it" and exits non-zero while anything has not, so docs/release.md gates a
+  # patch cut on it. It reaches its candidates with `gh pr list --label`, which
+  # matches a label by exact name.
+  #
+  # That makes the label set a contract between two files that nothing else
+  # couples. When the labels were namespaced under kind/, backport.yaml was
+  # updated in lockstep and the audit was not: `--label backport` went on
+  # matching, so nothing errored, and it returned 7 of the 290 merged PRs that
+  # carried a request. The audit then reported two branches clean that between
+  # them had 5 missing and 7 pending backports, and exited 0. A gate that goes
+  # green because it stopped seeing the work is worse than no gate, and it is
+  # invisible precisely because a rename does not break anything loudly.
+  #
+  # So pin the two sets equal rather than pinning either one's contents: the
+  # audit must not miss a spelling the bot honours, and must not keep one the
+  # bot has retired. Both directions matter, because the legacy names are
+  # transitional and the two files have to drop them together.
+  [ -f "$AUDIT" ]
+
+  # Every name the bot tests for, from the label-detection script.
+  bot="$(grep -o "labels\.includes('[^']*')" "$BACKPORT" | sed "s/.*('//;s/')//" | sort -u)"
+  [ -n "$bot" ]
+
+  # Every backport label spelled as a Go string literal in the audit. Its own
+  # prose quotes these names with backticks, not double quotes, so a comment
+  # cannot satisfy this.
+  audit="$(grep -o '"\(kind/\)\{0,1\}backport\(-previous\)\{0,1\}"' "$AUDIT" | tr -d '"' | sort -u)"
+  [ -n "$audit" ]
+
+  [ "$bot" = "$audit" ]
+
+  # Both requests are represented, so the sets cannot agree by both having lost
+  # the same half.
+  printf '%s\n' "$audit" | grep -qx 'kind/backport'
+  printf '%s\n' "$audit" | grep -qx 'kind/backport-previous'
 }
