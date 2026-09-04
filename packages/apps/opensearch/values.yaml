@@ -155,7 +155,8 @@ version: v2
 ##   operator-managed TLS today and moves to chart-managed TLS the first time it is
 ##   reconciled after this becomes available. That rolls the cluster and re-anchors it
 ##   on a new CA, so anything pinned to the operator's CA must be repointed at
-##   <release>.tenant-ca. Set enabled: false beforehand to stay as you are.
+##   <release>.tenant-ca. Set enabled: false beforehand to keep the TLS side as it
+##   is; the external-dns name documented under external moves either way.
 ##   Turning this off again on a release that had it on needs a manual cleanup, for a
 ##   narrower reason than the tenant's trust: the projection carries an owner
 ##   reference to the sentinel this chart removes with the switch, so it is collected
