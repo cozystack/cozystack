@@ -1,0 +1,43 @@
+suite: Redis external service
+templates:
+  - templates/service.yaml
+
+release:
+  name: redis-test
+  namespace: tenant-test
+
+tests:
+  - it: does not render external service by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a LoadBalancer service when external access is enabled
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 1
+
+      - isKind:
+          of: Service
+
+      - equal:
+          path: metadata.name
+          value: redis-test-external-lb
+
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+
+      - equal:
+          path: spec.externalTrafficPolicy
+          value: Local
+
+      - equal:
+          path: spec.ports[0].port
+          value: 6379
+
+      - equal:
+          path: spec.ports[0].targetPort
+          value: redis
