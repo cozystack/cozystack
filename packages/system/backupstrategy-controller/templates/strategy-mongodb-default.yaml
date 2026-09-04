@@ -6,24 +6,36 @@
   lives on the MongoDB application (declared by the chart as "s3-storage" when
   backup.enabled=true), not here.
 
-  It is gated on $bucketName all the same, and NOT because it needs the value.
-  The gate is what keeps this chart installable on a fresh cluster. This chart
+  It is gated all the same, and NOT because it needs a bucket value. This chart
   ships its own strategy.backups.cozystack.io CRDs as ordinary templates
   (templates/crds.yaml globs definitions/*.yaml), and Helm resolves every
   document in a release manifest through the cluster's RESTMapper in Build()
   BEFORE it applies any of them. An ungated Strategy CR therefore has no
-  mapping on the first install, Build() fails with "no matches for kind", and
-  the release applies ZERO objects — including the CRDs that would have made
-  the mapping resolve. Nothing recovers from that: every retry renders the same
-  manifest, so the failure is permanent rather than a race, and Helm's kind
-  sorter cannot help because it orders the apply, not the Build.
+  mapping while its CRD is still absent, Build() fails with "no matches for
+  kind", and the release applies ZERO objects — including the CRDs that would
+  have made the mapping resolve. Nothing recovers from that: every retry
+  renders the same manifest, so the failure is permanent rather than a race,
+  and Helm's kind sorter cannot help because it orders the apply, not the
+  Build.
 
-  So every default Strategy in this chart must be absent from the first render.
-  $bucketName is empty until the COSI BucketClaim status is reconciled (see
-  templates/_helpers.tpl), which is exactly the window where the CRDs are being
-  applied; by the time DefaultObjectsGate forces a second revision the CRDs
-  exist and the mapping resolves. The seven sibling strategies got this for
-  free by needing the bucket name. This one has to ask for it.
+  So this Strategy must be absent from any render whose cluster cannot yet map
+  it, and there are TWO such renders, not one.
+
+  A fresh install is the first. $bucketName is empty until the COSI BucketClaim
+  status is reconciled (see templates/_helpers.tpl), which is exactly the window
+  where the CRDs are being applied; by the time DefaultObjectsGate forces a
+  second revision the CRDs exist and the mapping resolves. The seven sibling
+  strategies get that for free by needing the bucket name.
+
+  Adding this kind to an ALREADY-INSTALLED chart is the second, and the bucket
+  gate is no help there: the bucket name resolved releases ago, so the first
+  upgraded revision renders the new CRD and this CR together and wedges the
+  release. That is not a hypothetical — this Strategy shipped to main that way,
+  and the upgrade E2E lane caught it on the v1.6.2 → main path. Hence the
+  explicit CRD gate below, which asks whether the apiserver serves the kind and
+  answers for both renders; see the crdEstablished helper for why it asks about
+  the CRD object rather than listing the kind, and for how the release converges
+  afterwards.
 
   Precondition (surfaced by the driver as a clear Ready=False, not a silent
   hang): the MongoDB application must be deployed with backup.enabled=true so
@@ -31,7 +43,8 @@
   docs/operations/backup-classes.md.
 */}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
-{{- if $bucketName -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "mongodbs.strategy.backups.cozystack.io") -}}
+{{- if and $bucketName $crdEstablished -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: MongoDB
 metadata:
