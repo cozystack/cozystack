@@ -18,6 +18,25 @@ rules:
   resources:
   - secrets
   resourceNames:
+  {{- /*
+  No TLS Secret of this release is granted here, whatever tls.enabled and
+  tls.authClients are set to. The trust anchor a client needs travels to the
+  tenant as the key-free <release>.tenant-ca projection instead
+  (templates/tenant-projection.yaml), which the platform's CA-extraction
+  controller writes and vouches for; a grant on a Secret name would convey
+  whatever occupies that name.
+
+  The three Secrets deliberately absent:
+    - <release>.ca-tls, the CA certificate and its private key. Anyone holding
+      the key can mint certificates that every client trusting this release's
+      CA accepts.
+    - <release>.tls, the server leaf and its private key. Anyone holding it can
+      impersonate this release's Redis and Sentinel endpoints.
+    - <release>.ca-cert, the CA-only copy the operator publishes. Key-free
+      today, but the operator holds create and update on Secrets cluster-wide,
+      so what lands under that name is the operator's choice rather than the
+      platform's, and RBAC cannot filter by key.
+  */}}
   - "{{ .Release.Name }}-auth"
   verbs: ["get", "list", "watch"]
 - apiGroups:

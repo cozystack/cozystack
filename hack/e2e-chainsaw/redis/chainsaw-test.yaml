@@ -72,3 +72,555 @@ spec:
             name: rfr-redis-test
           status:
             readyReplicas: 2
+---
+# TLS on. Everything the unit tests can only render runs live here: the
+# rebuilt operator with the TLS patch, the CRD and ClusterRole patches on its
+# chart, cert-manager issuing the per-release chain, and the CA-extraction
+# controller lifting the trust anchor for the tenant. readyReplicas is the
+# handshake witness: the patched probes dial the pod's own listener with
+# --tls, so a pod that still answers plaintext, or serves a certificate the
+# CA did not sign, never becomes Ready.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: redis-tls
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: redis-secure
+  - describe:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      name: redis-secure-tls
+  - describe:
+      apiVersion: databases.spotahome.com/v1
+      kind: RedisFailover
+      name: redis-secure
+  - podLogs:
+      selector: app.kubernetes.io/instance=redis-secure
+      tail: 50
+  # A TLS dial that fails or a Secret write the ClusterRole refuses shows up
+  # in the operator's log and nowhere in the tenant namespace.
+  - podLogs:
+      namespace: cozy-redis-operator
+      selector: app.kubernetes.io/name=redis-operator
+      tail: 100
+  steps:
+  - name: create-redis-tls
+    try:
+    - apply:
+        file: redis-tls.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: redis-secure
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  # cert-manager issued the chain the chart declares. Ready on the leaf means
+  # <release>.tls holds tls.crt, tls.key and ca.crt; without it the pods have
+  # nothing to serve and never start.
+  - name: verify-certificates-issued
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: redis-secure-ca
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: redis-secure-tls
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-workloads-serve-tls
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: rfr-redis-secure
+          status:
+            readyReplicas: 2
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: rfs-redis-secure
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+    # The operator's own witness that its ClusterRole patch is in force: the
+    # CA-only Secret it publishes needs create on Secrets, which upstream
+    # v3.3.5 does not grant. Whether it stays out of the tenant's reach is the
+    # next step's business.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: redis-secure.ca-cert
+          type: Opaque
+
+  # Two paths carry a Secret to a tenant and both are asserted. The dashboard
+  # Role grants by name; core.cozystack.io/tenantsecrets serves whatever the
+  # lineage webhook stamped tenantresource=true from the ApplicationDefinition
+  # selectors, and that label-driven path is the one that would leak a
+  # private key if the selector ever named the cert-manager Secrets instead of
+  # the projection.
+  - name: verify-tenant-ca-projection
+    try:
+    # The name-granting path, on the deployed object rather than the render:
+    # the Role must reach exactly the auth Secret. The unit tests pin the same
+    # rule, but only against the template, so a Role that fails to apply or
+    # gets widened in the cluster is invisible to them.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: redis-secure-dashboard-resources
+          (length(rules[?contains(resources, 'secrets')])): 1
+          (rules[?contains(resources, 'secrets')].resourceNames[]):
+          - redis-secure-auth
+    # Positive control, and it comes first: the negatives below are satisfied
+    # by an ABSENT label, which is also what a webhook that stamped nothing
+    # this run looks like. The auth Secret is chart-rendered, traces to the
+    # Redis CR and is granted by name, so it MUST be stamped.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: redis-secure-auth
+            labels:
+              internal.cozystack.io/tenantresource: "true"
+    # tenant-ca is stamped by the CA-extraction controller; tenantresource is
+    # the lineage webhook's verdict from the redis ApplicationDefinition's
+    # matchLabels include. Both true means the whole chain held.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: redis-secure.tenant-ca
+            labels:
+              internal.cozystack.io/tenant-ca: "true"
+              internal.cozystack.io/tenantresource: "true"
+          type: Opaque
+    # All three enumerated: the promotion is label-driven, so any one of them
+    # acquiring the label leaks. != 'true' rather than == 'false' because the
+    # cert-manager Secrets carry no ownerReference (enableCertificateOwnerRef
+    # is off) and the webhook never stamps them at all.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: redis-secure.ca-tls
+          (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: redis-secure.tls
+          (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: redis-secure.ca-cert
+          (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
+    # Deterministic once the asserts above have passed, so no retry.
+    #
+    # Every redis-cli below runs under the container's own `timeout`. That
+    # inner cap, not the op timeout, is what keeps a dial that never answers
+    # from taking the whole suite down: Chainsaw kills the shell when the op
+    # expires, but it captures stdout and stderr through pipes, and Go's exec
+    # waits for every holder of the write end to close it -- the orphaned
+    # kubectl is one, so the run goes silent until the job ceiling instead of
+    # failing. Both engine images carry /usr/bin/timeout; expiry reports 143
+    # on the sentinel's busybox and 124 on the data pods' coreutils, and
+    # neither is zero, which is all these checks read.
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+
+          # Every kubectl below runs under a wall-clock bound. The inner
+          # `timeout` on a redis-cli cannot fire if the exec stream itself
+          # never establishes, and a kubectl still running holds this script's
+          # stdout open, which is what turns a stuck call into a silent run to
+          # the job ceiling instead of a failure.
+          k() { timeout 30 kubectl "$@"; }
+
+          # Exactly one key, and it is ca.crt. The source carries the CA
+          # private key, so any second key is a leak in the making.
+          keys=$(k -n "$NAMESPACE" get secret redis-secure.tenant-ca \
+            -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' | sort | tr '\n' ' ')
+          if [ "$keys" != "ca.crt " ]; then
+            echo "projection must hold exactly ca.crt, holds: $keys" >&2
+            exit 1
+          fi
+
+          # It lifted the right certificate: the CA cert-manager wrote to
+          # <release>.ca-tls, the source the chart's TenantProjection names.
+          # Compared by fingerprint, not raw PEM: the controller re-encodes
+          # ca.crt from the DER it parsed, so a header or column-width change
+          # at the source would redden a byte comparison of a correct copy.
+          src=$(k -n "$NAMESPACE" get secret redis-secure.ca-tls -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if [ -z "$src" ]; then
+            echo "redis-secure.ca-tls has no ca.crt: the declared source name or key is wrong" >&2
+            exit 1
+          fi
+          proj=$(k -n "$NAMESPACE" get secret redis-secure.tenant-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if [ -z "$proj" ]; then
+            echo "redis-secure.tenant-ca has no ca.crt: the controller published an empty projection" >&2
+            exit 1
+          fi
+          src_fp=$(echo "$src" | openssl x509 -noout -fingerprint -sha256)
+          proj_fp=$(echo "$proj" | openssl x509 -noout -fingerprint -sha256)
+          if [ "$src_fp" != "$proj_fp" ]; then
+            echo "projection does not carry the release CA certificate" >&2
+            exit 1
+          fi
+
+          # The source really does hold the private key, or the leak check
+          # below would pass while proving nothing.
+          if ! k -n "$NAMESPACE" get secret redis-secure.ca-tls \
+            -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}' | grep -qx 'tls.key'; then
+            echo "redis-secure.ca-tls no longer carries tls.key: this check has stopped proving anything" >&2
+            exit 1
+          fi
+          if k -n "$NAMESPACE" get secret redis-secure.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d | grep -qi 'BEGIN .*PRIVATE KEY'; then
+            echo "projection carries PEM private key material" >&2
+            exit 1
+          fi
+
+          # The operator's CA-only copy is key-free too; it is kept from the
+          # tenant for what it could become, not for what it holds today.
+          cacert_keys=$(k -n "$NAMESPACE" get secret redis-secure.ca-cert \
+            -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' | sort | tr '\n' ' ')
+          if [ "$cacert_keys" != "ca.crt " ]; then
+            echo "operator CA-only Secret must hold exactly ca.crt, holds: $cacert_keys" >&2
+            exit 1
+          fi
+
+          # The delivery path the README tells a tenant to use, run as the
+          # command the README prints. Everything above reads the raw Secret,
+          # which only an admin can do.
+          anchor=$(k -n "$NAMESPACE" get tenantsecret redis-secure.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if ! echo "$anchor" | grep -q 'BEGIN CERTIFICATE'; then
+            echo "the trust anchor is not served through core.cozystack.io/tenantsecrets" >&2
+            exit 1
+          fi
+
+          # And the negative that gives the positive its meaning: the registry
+          # must not serve the key-bearing Secrets, nor the operator's copy.
+          # A per-object error is not absence, so the message has to say
+          # NotFound: a 403, a timeout or an unserved CRD would otherwise read
+          # as proof that the Secret is not served, which is the half of this
+          # pair the tenant's isolation rests on.
+          for s in redis-secure.ca-tls redis-secure.tls redis-secure.ca-cert; do
+            if out=$(k -n "$NAMESPACE" get tenantsecret "$s" 2>&1); then
+              echo "$s is being served as a tenant secret" >&2
+              exit 1
+            elif ! printf '%s' "$out" | grep -q 'NotFound'; then
+              echo "cannot determine whether $s is served: $out" >&2
+              exit 1
+            fi
+          done
+
+          # The anchor the tenant is handed verifies the live server. The pods
+          # mount the leaf Secret at /tls, whose ca.crt is the same CA; pin
+          # that by fingerprint, then complete a handshake through the
+          # service name with it. redis-cli verifies the chain and not the
+          # name, so this proves the chain and that the listener answers TLS
+          # on that name. It says nothing about the SAN list, which redis-cli
+          # never checks; the unit tests pin that.
+          pod_fp=$(k -n "$NAMESPACE" exec rfr-redis-secure-0 -c redis -- cat /tls/ca.crt \
+            | openssl x509 -noout -fingerprint -sha256)
+          if [ "$pod_fp" != "$proj_fp" ]; then
+            echo "the CA the pods mount is not the anchor the tenant is given" >&2
+            exit 1
+          fi
+          # pinger is an ACL user the operator writes into every redis.conf it
+          # generates, ping-only, and the credentials its own liveness probe
+          # uses. It is defined in the operator source, so grepping this tree
+          # for it finds nothing.
+          pong=$(k -n "$NAMESPACE" exec rfr-redis-secure-0 -c redis -- \
+            timeout 15 redis-cli --tls --cacert /tls/ca.crt -h "rfr-redis-secure.$NAMESPACE.svc" -p 6379 \
+            --user pinger --pass pingpass --no-auth-warning ping) \
+            || pong='(no reply: redis-cli failed or hit the 15s cap)'
+          if [ "$pong" != "PONG" ]; then
+            echo "TLS handshake through rfr-redis-secure.$NAMESPACE.svc did not answer PONG: $pong" >&2
+            exit 1
+          fi
+
+          # TLS replaces plaintext rather than joining it: the operator writes
+          # `port 0` beside the TLS port, and every check above would stay
+          # green if it stopped doing so. The mirror of the flip case: here the
+          # plaintext dial is the one that must not answer.
+          #
+          # The verdict is the listener's refusal, not the absence of PONG. A
+          # missing pod, a 403 on exec, a wrong container name and the k()
+          # cap firing print no PONG either, and a check that only looked for
+          # it would pass on every one of them. A TLS listener drops a
+          # plaintext client at the first bytes of AUTH, so redis-cli reports
+          # the AUTH reply as "I/O error", retries once, and exits 1, followed
+          # by "Error: Connection reset by peer". The I/O error line is the
+          # refusal. A
+          # refused connect is not, because nothing listening contradicts the
+          # TLS dial above. Nor is the cap expiring: the flip case reads
+          # expiry as its refusal because a plaintext listener holds a
+          # ClientHello in silence, whereas a TLS listener answers a plaintext
+          # dial at once, so silence here is a state this check did not read.
+          # Both fail as such, with what the dial printed.
+          rc=0
+          pong=$(k -n "$NAMESPACE" exec rfr-redis-secure-0 -c redis -- \
+            timeout 15 redis-cli -h "rfr-redis-secure.$NAMESPACE.svc" -p 6379 \
+            --user pinger --pass pingpass --no-auth-warning ping 2>&1) || rc=$?
+          case "$pong" in
+            *PONG*)
+              echo "the plaintext listener still answers on an instance with TLS on" >&2
+              exit 1 ;;
+            *"I/O error"*) ;;
+            *)
+              echo "cannot determine whether the plaintext listener is off (exit $rc): $pong" >&2
+              exit 1 ;;
+          esac
+
+          # readyReplicas above witnesses the bootstrap and stops there. A pod
+          # still replicating from the 127.0.0.1 the operator's initial config
+          # names never goes ready, so two ready replicas mean the operator
+          # promoted a master and linked the other over its own TLS dials --
+          # but the readiness script exits 0 for anything reporting
+          # role:master, so a link that breaks afterwards is invisible to it.
+          # Assert the topology directly, and assert the sentinels moved off
+          # the bootstrap address, which nothing above covers at all.
+          masters=0
+          linked=0
+          for i in 0 1; do
+            if ! info=$(k -n "$NAMESPACE" exec "rfr-redis-secure-$i" -c redis -- \
+              sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" timeout 15 redis-cli --tls --cacert /tls/ca.crt -h localhost -p 6379 info replication'); then
+              echo "rfr-redis-secure-$i did not answer INFO replication within the 15s cap" >&2
+              exit 1
+            fi
+            case "$info" in
+              *role:master*) masters=$((masters + 1)) ;;
+              *role:slave*)
+                case "$info" in
+                  *master_link_status:up*) linked=$((linked + 1)) ;;
+                  *) echo "rfr-redis-secure-$i replicates with no link up" >&2; exit 1 ;;
+                esac
+                ;;
+              *) echo "rfr-redis-secure-$i reports no replication role" >&2; exit 1 ;;
+            esac
+          done
+          if [ "$masters" != "1" ] || [ "$linked" != "1" ]; then
+            echo "expected one master and one linked replica, got $masters and $linked" >&2
+            exit 1
+          fi
+
+          sentinel=$(k -n "$NAMESPACE" get pod \
+            -l app.kubernetes.io/component=sentinel,app.kubernetes.io/name=redis-secure \
+            -o jsonpath='{.items[0].metadata.name}')
+          if ! addr=$(k -n "$NAMESPACE" exec "$sentinel" -c sentinel -- \
+            timeout 15 redis-cli --tls --cacert /tls/ca.crt -h localhost -p 26379 \
+            sentinel get-master-addr-by-name mymaster); then
+            echo "the sentinel did not answer get-master-addr-by-name within the 15s cap" >&2
+            exit 1
+          fi
+          addr=$(echo "$addr" | head -n 1 | tr -d '\r')
+          case "$addr" in
+            ''|127.0.0.1) echo "sentinel still points at the bootstrap address: '$addr'" >&2; exit 1 ;;
+          esac
+        check:
+          ($error == null): true
+---
+# TLS is chosen at creation. A replica restarted onto the TLS listener cannot
+# replicate from a master still on plaintext, and Sentinels already on TLS
+# would fail over to a stale replica, so the operator's RedisFailover schema
+# rejects a change of tls.enabled. This is the live proof: the rejection
+# reaches the HelmRelease as a failed upgrade, and the running plaintext
+# instance is untouched by it.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: redis-tls-flip-rejected
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: redis-flip
+  - describe:
+      apiVersion: databases.spotahome.com/v1
+      kind: RedisFailover
+      name: redis-flip
+  - podLogs:
+      selector: app.kubernetes.io/instance=redis-flip
+      tail: 50
+  - podLogs:
+      namespace: cozy-redis-operator
+      selector: app.kubernetes.io/name=redis-operator
+      tail: 100
+  steps:
+  - name: create-redis-plaintext
+    try:
+    - apply:
+        file: redis-flip.yaml
+
+  - name: wait-plaintext-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: redis-flip
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # 5m, not 2m: this assert measured 98s of a 120s budget on run
+    # 33608673237, and it is the third RedisFailover the group brings up in
+    # one namespace, behind two teardowns. The TLS test's equivalent took 44s.
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: rfr-redis-flip
+          status:
+            readyReplicas: 2
+
+  # Same object with tls.enabled added: Chainsaw applies it as an update to
+  # the Redis it created, so cleanup still owns it.
+  - name: flip-tls-on
+    try:
+    # Helm applies the objects it can before the RedisFailover is refused, so a
+    # failed run shows this release with a cert-manager chain and a projection
+    # of its own next to the rejection. They are inert without the listener,
+    # and Chainsaw's cleanup removes them with the rest.
+    - apply:
+        file: redis-flip-tls.yaml
+
+  # The apiserver refuses the RedisFailover change with the schema's own
+  # message, Helm's upgrade fails on it, and Flux reports that on the release.
+  - name: verify-flip-rejected
+    try:
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: redis-flip
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "False"
+            (length(conditions[?type == 'Ready' && contains(message, 'cannot be enabled or disabled on an existing RedisFailover')])): 1
+    # Nothing rolled: the pods still run the revision the plaintext install
+    # created, and both listeners are what they were.
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: rfr-redis-flip
+          status:
+            readyReplicas: 2
+            (currentRevision == updateRevision): true
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+
+          # Every kubectl below runs under a wall-clock bound. The inner
+          # `timeout` on a redis-cli cannot fire if the exec stream itself
+          # never establishes, and a kubectl still running holds this script's
+          # stdout open, which is what turns a stuck call into a silent run to
+          # the job ceiling instead of a failure.
+          k() { timeout 30 kubectl "$@"; }
+          # pinger: the operator's own ping-only ACL user, as in the TLS case.
+          # Both dials run under the container's `timeout`, for the reason the
+          # redis-tls script records above -- and here the TLS one is the whole
+          # point: there is no listener to answer it, so without an inner cap
+          # it blocks forever and hangs the suite instead of failing it.
+          pong=$(k -n "$NAMESPACE" exec rfr-redis-flip-0 -c redis -- \
+            timeout 15 redis-cli -h "rfr-redis-flip.$NAMESPACE.svc" -p 6379 \
+            --user pinger --pass pingpass --no-auth-warning ping) \
+            || pong='(no reply: redis-cli failed or hit the 15s cap)'
+          if [ "$pong" != "PONG" ]; then
+            echo "plaintext instance stopped answering after the rejected flip: $pong" >&2
+            exit 1
+          fi
+          # Expiry of that cap IS the refusal being asserted, and its only
+          # shape. The ClientHello reaches a plaintext listener as an inline
+          # command, which redis scans for a newline with strchr, and the
+          # handshake header carries a NUL byte ahead of anything random, so
+          # the scan ends before any newline, the server waits for a line
+          # that never completes and sends nothing, and redis-cli waits with
+          # it until the cap kills it: silent, exit 124. kubectl reports that
+          # code in its own trailer,
+          # and the trailer is what separates the cap that fired inside the
+          # pod from the k() cap firing outside it, since an exec that never
+          # reached redis-cli leaves none. So the verdict is that trailer,
+          # not the absence of PONG, which a missing pod, a 403 on exec, a
+          # wrong container name or a name that does not resolve would
+          # produce just as well. Those fail as states this check did not
+          # read, with what the dial printed.
+          rc=0
+          pong=$(k -n "$NAMESPACE" exec rfr-redis-flip-0 -c redis -- \
+            timeout 15 redis-cli --tls --insecure -h "rfr-redis-flip.$NAMESPACE.svc" -p 6379 \
+            --user pinger --pass pingpass --no-auth-warning ping 2>&1) || rc=$?
+          case "$pong" in
+            *PONG*)
+              echo "a TLS listener appeared on an instance whose flip was rejected" >&2
+              exit 1 ;;
+            *"command terminated with exit code 124"*) ;;
+            *)
+              echo "cannot determine whether a TLS listener is up (exit $rc): $pong" >&2
+              exit 1 ;;
+          esac
+        check:
+          ($error == null): true

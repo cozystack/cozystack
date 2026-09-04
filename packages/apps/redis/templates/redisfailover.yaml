@@ -1,3 +1,4 @@
+{{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
 {{- if .Values.authEnabled }}
   {{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-auth" .Release.Name) }}
   {{- $password := randAlphaNum 32 | b64enc }}
@@ -28,6 +29,20 @@ metadata:
     # silently ignored. Keep both sides in sync.
     redis-failover.freshworks.com/operator-group: cozystack
 spec:
+  {{- if $tlsEnabled }}
+  tls:
+    enabled: true
+    authClients: {{ include "redis.tls.authClients" . | quote }}
+    # When TLS is on the operator always publishes an Opaque Secret holding just
+    # ca.crt; this only chooses its name, which otherwise defaults to
+    # "<tls-secret>-ca" — a name that reads as though it belonged to the leaf.
+    # Nothing in the tenant read path consumes it: the trust anchor reaches the
+    # tenant as the <release>.tenant-ca projection declared in
+    # templates/tenant-projection.yaml, sourced from the chart's own CA Secret.
+    caCertSecretName: {{ .Release.Name }}.ca-cert
+    certificateSecret:
+      secretName: {{ .Release.Name }}.tls
+  {{- end }}
   sentinel:
     # Pin the sentinel engine. The freshworks-oss operator's compiled-in default
     # moved 6.2.6→7.2.4; the data pods run a deliberate versionMap image below,
