@@ -908,6 +908,249 @@ spec:
         check:
           ($error == null): true
 ---
+# What a tlsPassthroughServices name costs an HTTPRoute that publishes it,
+# measured on the objects rather than on the renderer. The chart ships api,
+# vm-exportproxy and cdi-uploadproxy on every tenant Gateway while the platform
+# TLSRoutes for them exist once cluster-wide and name one tenant's Gateway, so
+# a tenant that is not that one renders all three listeners with a route on
+# none. Both halves of the rule live in that gap: a declared listener nothing
+# attaches to contributes no Envoy filter chain, so the terminate listener is
+# what answers the name and keeps it; once a TLSRoute can be served on the
+# listener the two chains carry one server name and the terminate listener goes.
+#
+# The two phases are one measurement on purpose. Asserting the terminate
+# listener is present proves nothing on its own — a withdrawal that is merely
+# slow looks the same — so the second phase withdraws it on demand, which dates
+# the first phase's presence to a state the controller had settled.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenant-gateway-passthrough-withdrawal
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: routeless-passthrough-keeps-the-terminate-listener
+    try:
+    # Above the sum of the poll budgets below (1140s), so a poll is what
+    # fires and the trap still runs: a SIGKILL at the op ceiling would skip
+    # cleanup and leave the tenant behind for every later suite.
+    - script:
+        timeout: 25m
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          tenant_ns="${ns}-pw"
+
+          # --wait=false because the trap runs inside the op ceiling, and a
+          # tenant delete blocks until its child namespaces drain. Waiting
+          # here would spend the headroom the budgets leave and let the
+          # SIGKILL land mid-trap, which is the leak the ceiling is sized
+          # to avoid.
+          cleanup() {
+            kubectl -n "$tenant_ns" delete tlsroute api-passthrough --ignore-not-found --wait=false >/dev/null 2>&1 || true
+            kubectl -n "$tenant_ns" delete httproute api-probe --ignore-not-found --wait=false >/dev/null 2>&1 || true
+            kubectl -n "$ns" delete tenant pw --ignore-not-found --wait=false >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          # kubectl's stdout is the measurement, so a call that failed must not
+          # be read as one. An empty read satisfies "absent", which would end a
+          # wait-until-withdrawn poll on a transient API error having measured
+          # nothing at all.
+          poll() {
+            want=$1; budget=$2; match=$3; shift 3
+            deadline=$(( $(date +%s) + budget ))
+            while :; do
+              if out=$("$@" 2>/dev/null); then
+                if printf '%s\n' "$out" | grep -qxF "$match"; then
+                  found=present
+                else
+                  found=absent
+                fi
+                if [ "$found" = "$want" ]; then
+                  return 0
+                fi
+              fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "timed out after ${budget}s waiting for '$match' to be $want" >&2
+                return 1
+              fi
+              sleep 3
+            done
+          }
+
+          poll_exists() {
+            budget=$1; shift
+            deadline=$(( $(date +%s) + budget ))
+            while :; do
+              if "$@" >/dev/null 2>&1; then
+                return 0
+              fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "timed out after ${budget}s waiting for: $*" >&2
+                return 1
+              fi
+              sleep 3
+            done
+          }
+
+          tls_names='jsonpath={range .spec.listeners[?(@.protocol=="TLS")]}{.name}{"\n"}{end}'
+          https_hosts='jsonpath={range .spec.listeners[?(@.protocol=="HTTPS")]}{.hostname}{"\n"}{end}'
+          cert_hosts='jsonpath={range .items[*]}{.spec.dnsNames[0]}{"\n"}{end}'
+          accepted='jsonpath={range .status.parents[?(@.controllerName=="gateway.cozystack.io/tenantgateway-controller")]}{range .conditions[?(@.type=="Accepted")]}{.status}{"\n"}{end}{end}'
+          accepted_reason='jsonpath={range .status.parents[?(@.controllerName=="gateway.cozystack.io/tenantgateway-controller")]}{range .conditions[?(@.type=="Accepted")]}{.reason}{"\n"}{end}{end}'
+          tgw_ready='jsonpath={range .status.conditions[?(@.type=="Ready")]}{.status}{"\n"}{end}'
+          tgw_listener='jsonpath={range .status.listeners[?(@.name=="tls-pgprobe")]}{.ready}{"\n"}{end}'
+
+          # A tenant owning its own Gateway, which is where the shipped
+          # tlsPassthroughServices entries land with nothing routed to them.
+          kubectl apply -n "$ns" -f - <<EOF
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: pw
+          spec:
+            gateway: true
+          EOF
+          poll_exists 180 kubectl get ns "$tenant_ns"
+          poll_exists 120 kubectl -n "$tenant_ns" get gateway cozystack
+
+          apex=$(kubectl get ns "$tenant_ns" -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          [ -n "$apex" ]
+          route_host="api.${apex}"
+
+          # Without the passthrough listener the rest measures an ordinary
+          # HTTPRoute and says nothing about the withdrawal.
+          poll present 60 tls-api kubectl -n "$tenant_ns" get gateway cozystack -o "$tls_names"
+
+          # ...and with a TLSRoute already on it the first phase would be
+          # measuring the withdrawal rather than its absence. Counted off a
+          # captured result rather than through a pipe: a pipeline reports
+          # its last command's status, so a failed kubectl reaches wc and
+          # answers zero, and the guard passes having measured nothing.
+          attached=$(kubectl -n "$tenant_ns" get tlsroute -o name)
+          [ -z "$attached" ]
+
+          kubectl apply -n "$tenant_ns" -f - <<EOF
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: api-probe
+          spec:
+            parentRefs:
+            - group: gateway.networking.k8s.io
+              kind: Gateway
+              name: cozystack
+              namespace: ${tenant_ns}
+            hostnames:
+            - "${route_host}"
+            rules:
+            - matches:
+              - path:
+                  type: PathPrefix
+                  value: /
+              backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+          EOF
+
+          # The name is served by the terminate listener, which is the whole
+          # claim: the passthrough listener declared above answers no
+          # ClientHello while nothing routes to it.
+          poll present 120 "$route_host" kubectl -n "$tenant_ns" get gateway cozystack -o "$https_hosts"
+          poll present 60 "$route_host" kubectl -n "$tenant_ns" get certificate -l cozystack.io/per-listener-cert=true -o "$cert_hosts"
+          poll present 60 True kubectl -n "$tenant_ns" get httproute api-probe -o "$accepted"
+
+          # Phase 2: a TLSRoute the passthrough listener can serve. Now both
+          # chains carry one server name, and the terminate listener is the one
+          # that has to go.
+          #
+          # The backend is a Service in the tenant's own namespace, and that
+          # is the half of "can serve" this step would otherwise skip: the
+          # withdrawal fires only for a route that forwards somewhere, and a
+          # cross-namespace backendRef with no ReferenceGrant resolves to no
+          # Service at all. Selectorless is enough — resolution asks whether
+          # the Service exists and never reads its ports or its endpoints —
+          # and it goes with the tenant namespace, so nothing outlives the
+          # test in a namespace the test does not own.
+          kubectl apply -n "$tenant_ns" -f - <<EOF
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: api-passthrough-backend
+          spec:
+            ports:
+            - port: 443
+          EOF
+
+          kubectl apply -n "$tenant_ns" -f - <<EOF
+          apiVersion: gateway.networking.k8s.io/v1alpha2
+          kind: TLSRoute
+          metadata:
+            name: api-passthrough
+          spec:
+            parentRefs:
+            - group: gateway.networking.k8s.io
+              kind: Gateway
+              name: cozystack
+              namespace: ${tenant_ns}
+              sectionName: tls-api
+            hostnames:
+            - "${route_host}"
+            rules:
+            - backendRefs:
+              - name: api-passthrough-backend
+                port: 443
+          EOF
+
+          poll absent 120 "$route_host" kubectl -n "$tenant_ns" get gateway cozystack -o "$https_hosts"
+          poll absent 60 "$route_host" kubectl -n "$tenant_ns" get certificate -l cozystack.io/per-listener-cert=true -o "$cert_hosts"
+
+          # The passthrough listener survives the withdrawal — without it the
+          # hostname would be served by nothing, which is the failure the first
+          # phase exists to rule out.
+          kubectl -n "$tenant_ns" get gateway cozystack -o "$tls_names" | grep -qxF tls-api
+
+          # ...and the HTTPRoute hears why its hostname went away.
+          poll present 60 NoMatchingListenerHostname kubectl -n "$tenant_ns" get httproute api-probe -o "$accepted_reason"
+
+          # Phase 3: the native-port form, which nothing above reaches. The
+          # entry renders a listener on its own port with no TLSRoute behind
+          # it, which is the shape the package README rests a claim on: the
+          # pinned Cilium judges a listener on its protocol, its allowed
+          # kinds and its certificate refs and never on its route set, so a
+          # routeless passthrough listener is Accepted and Programmed and
+          # tenant readiness is untouched. The unit tests run against a fake
+          # client and cannot measure that; only a cluster can.
+          #
+          # Patched onto the TenantGateway because no chart value reaches
+          # this field yet. It survives the patch because helm-controller
+          # runs here with drift detection off, the same fact the README
+          # documents.
+          patch=$(printf '{"spec":{"tlsPassthroughListeners":[{"name":"pgprobe","port":5432,"hostname":"pgprobe.%s"}]}}' "$apex")
+          kubectl -n "$tenant_ns" patch tenantgateway cozystack --type=merge -p "$patch"
+
+          # The per-listener entry is the measurement, and it is read before
+          # the aggregate because the aggregate cannot carry one. The
+          # TenantGateway is already Ready when this phase starts, so a poll
+          # for Ready alone is answered by the state that preceded the patch
+          # unless the transient False happens to land first, which is a
+          # race rather than a guarantee. This entry does not exist until
+          # the controller has re-evaluated readiness against the new
+          # listener, and its own flag folds that listener's Accepted and
+          # Programmed, which is the claim being made. The aggregate after
+          # it says the tenant as a whole did not regress.
+          poll present 60 tls-pgprobe kubectl -n "$tenant_ns" get gateway cozystack -o "$tls_names"
+          poll present 120 true kubectl -n "$tenant_ns" get tenantgateway cozystack -o "$tgw_listener"
+          poll present 60 True kubectl -n "$tenant_ns" get tenantgateway cozystack -o "$tgw_ready"
+
+          kubectl -n "$tenant_ns" patch tenantgateway cozystack --type=merge -p '{"spec":{"tlsPassthroughListeners":null}}'
+          poll absent 60 tls-pgprobe kubectl -n "$tenant_ns" get gateway cozystack -o "$tls_names"
+        check:
+          ($error == null): true
+---
 # Legacy-Ingress counterpart of the gateway/route hostname VAPs (bats: the 12
 # cozystack-ingress-hostname-policy cases). Gateway API is off by default, so
 # tenant apps publish through a legacy networking.k8s.io/Ingress; the VAP
