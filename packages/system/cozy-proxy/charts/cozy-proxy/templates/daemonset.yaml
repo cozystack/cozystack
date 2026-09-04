@@ -21,6 +21,16 @@ spec:
         - name: cozy-proxy
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            # Scopes the nftables rules to the backends hosted on this node.
+            # Without it cozy-proxy programs every service on every node, and a
+            # node that does not host the backend rewrites the destination of a
+            # packet merely leaving it, which desynchronises conntrack on the
+            # owning node and gets the reply dropped by port_filter.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           securityContext:
             privileged: true
             capabilities:
