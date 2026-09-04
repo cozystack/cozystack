@@ -125,7 +125,7 @@ type ClusterProcessCounts struct {
 }
 
 type Monitoring struct {
-	// Enable WorkloadMonitor integration.
+	// Enable the dashboard resource map used by the tenant UI.
 	// +kubebuilder:default:=true
 	Enabled bool `json:"enabled"`
 }

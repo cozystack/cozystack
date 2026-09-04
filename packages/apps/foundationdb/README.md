@@ -107,12 +107,7 @@ securityContext:
 
 ## Monitoring
 
-This package includes WorkloadMonitor integration for cluster health monitoring and resource tracking. Monitoring can be disabled by setting:
-
-```yaml
-monitoring:
-  enabled: false
-```
+This package includes WorkloadMonitor integration for cluster health monitoring and resource tracking. The WorkloadMonitor is always created and cannot be disabled, since it is also the resource used to meter and bill the workload. The `monitoring.enabled` flag only controls the dashboard resource map consumed by the tenant UI.
 
 ## Security
 
@@ -186,7 +181,7 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 | `backup.s3.credentials.secretAccessKey`    | DEPRECATED S3 secret access key.                                                                                                        | `string`   | `""`                     |
 | `backup.retentionPolicy`                   | DEPRECATED Retention policy for backups.                                                                                                | `string`   | `7d`                     |
 | `monitoring`                               | Monitoring configuration.                                                                                                               | `object`   | `{}`                     |
-| `monitoring.enabled`                       | Enable WorkloadMonitor integration.                                                                                                     | `bool`     | `true`                   |
+| `monitoring.enabled`                       | Enable the dashboard resource map used by the tenant UI.                                                                                | `bool`     | `true`                   |
 
 
 ### FoundationDB configuration

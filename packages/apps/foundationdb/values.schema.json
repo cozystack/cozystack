@@ -285,7 +285,7 @@
       ],
       "properties": {
         "enabled": {
-          "description": "Enable WorkloadMonitor integration.",
+          "description": "Enable the dashboard resource map used by the tenant UI.",
           "type": "boolean",
           "default": true
         }
