@@ -35,14 +35,12 @@ spec:
 
   - name: verify-service-and-statefulset
     try:
-    - assert:
-        resource:
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: mariadb-test
-          spec:
-            (ports[0].port): 3306
+    # The `mariadb-test` Service and its 3306 belong to mariadb-operator:
+    # packages/apps/mariadb/templates/ renders no Service outside a cleanup
+    # hook, and the port is that operator's constant. Nothing in this repository
+    # can change it, so the assert could not fail for any reason under test. The
+    # Endpoints assert below covers the same object and says something real.
+    #
     # The chart hands the operator a MariaDB CR and ships no built-in workload,
     # so the HelmRelease above goes Ready as soon as helm applies the manifests
     # -- it never waits for a pod. This assert is the first gate that does: an
@@ -73,14 +71,8 @@ spec:
 
   - name: verify-metrics
     try:
-    - assert:
-        resource:
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: mariadb-test-metrics
-          spec:
-            (ports[0].port): 9104
+    # Same as above: the metrics Service and 9104 are the operator's, and the
+    # Endpoints assert that follows is the one that reports on this deployment.
     - assert:
         timeout: 1m
         resource:

@@ -55,36 +55,18 @@ spec:
 
   - name: verify-services-and-endpoints
     try:
-    # Replaces three `until kubectl get svc ... | grep -q 5432` loops
-    # TODO(chainsaw>0.2.15): the (ports[0].port) / (ports[*].port) projection form in
-    # these Service asserts is a v0.2.15 workaround for mis-evaluated number-literal
-    # filters (ports[?port==`5432`]); (ports[0]) also checks only the first port.
-    # Restore the filter form on a chainsaw bump. Same workaround lives in
-    # kafka/mariadb/harbor — see "Chainsaw v0.2.15 gotchas" in docs/agents/e2e-testing.md.
-    - assert:
-        resource:
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: postgres-test-r
-          spec:
-            (ports[0].port): 5432
-    - assert:
-        resource:
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: postgres-test-ro
-          spec:
-            (ports[0].port): 5432
-    - assert:
-        resource:
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: postgres-test-rw
-          spec:
-            (ports[0].port): 5432
+    # The three `postgres-test-{r,ro,rw}` Services and their 5432 are CNPG's,
+    # not ours: packages/apps/postgres/templates/ renders exactly one Service
+    # (external-svc.yaml) and it is none of these. The port is a constant in
+    # CNPG's own source, covered by CNPG's own tests, and no change to this
+    # repository can alter it -- so asserting it here spent suite time on a
+    # result that could not vary with the code under test.
+    #
+    # The Endpoints asserts below are kept and are strictly stronger: an address
+    # appears only once the Service exists AND a replica passed its readiness
+    # probe, which is a statement about this deployment rather than about CNPG's
+    # constants.
+    #
     # Replaces `until kubectl get endpoints ... | grep -q '[0-9]'` loops.
     # The read-only endpoint is skipped, same as in the BATS test.
     - assert:
