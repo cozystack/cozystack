@@ -114,10 +114,11 @@ const (
 	// per-release name templating.
 	TenantCALabel = "internal.cozystack.io/tenant-ca"
 
-	// ManagedLabel marks a projection as controller-created. The reconciler
-	// only ever writes over a Secret bearing this label, so a Secret that
-	// merely shares the name — an engine's own key-bearing CA, for one — is
-	// never clobbered.
+	// ManagedLabel marks a projection as controller-created. It is part of the
+	// drift check, so stripping it produces a write that puts it back, but no
+	// decision keys on it beyond that: whether a Secret at the canonical name may
+	// be overwritten is isOurProjection's call, and it does not look at this
+	// label.
 	ManagedLabel = "internal.cozystack.io/ca-cert-copy"
 
 	// SourceRefAnnotation records the "<namespace>/<name>" of the source on the
@@ -165,7 +166,9 @@ const (
 	SelectorsDigestAnnotation = "internal.cozystack.io/ca-cert-selectors"
 
 	// managedByCozystackLabel is stamped by the lineage admission webhook. The
-	// reconciler never writes it; it only takes care not to strip it.
+	// reconciler removes it on exactly one occasion — a change to the selectors
+	// digest, which is what hands the projection back for re-admission (see
+	// upsertProjection) — and preserves it on every other write.
 	managedByCozystackLabel = "internal.cozystack.io/managed-by-cozystack"
 
 	// helmNameLabel is the Helm ownership label Flux stamps on every rendered
@@ -185,12 +188,18 @@ const (
 
 	// projectionSuffix completes the canonical name "<release>.tenant-ca".
 	//
-	// The DOT is load-bearing. Engine CA Secrets are named <prefix><app><suffix>,
-	// and app names are validated as DNS-1035 labels, which cannot contain a dot
-	// (pkg/apis/apps/validation); Secret names are DNS-1123 subdomains, which can.
-	// So no engine can generate this name for any application, and the projection
-	// cannot collide with an operator-owned object — in either direction, and both
-	// are unrecoverable. Do not "tidy" the dot into a dash.
+	// The DOT is what separates the projection from engine CA Secrets, named
+	// <prefix><app><suffix>; Secret names are DNS-1123 subdomains, so a dot in one
+	// is legal. A release the apps API created carries none: application names are
+	// DNS-1035 labels (pkg/apis/apps/validation) and release.prefix is restricted
+	// to ^[a-z0-9-]*$ (api/v1alpha1). That guarantee stops at the API, because the
+	// release here comes from the helm.toolkit.fluxcd.io/name LABEL and a label
+	// value may carry a dot, so a hand-written HelmRelease is outside it. On the
+	// validated path the dot can only come from the <suffix> an operator or chart
+	// appends, which nothing validates at all, and a canonical name ends in
+	// ".tenant-ca" carrying that one dot, so only a suffix ending in ".tenant-ca"
+	// reaches one. A Secret there this controller does not recognise as its own is
+	// never overwritten; see isOurProjection. Do not "tidy" the dot into a dash.
 	projectionSuffix = ".tenant-ca"
 
 	// appsGroup is the API group of the aggregated application kinds, as it
@@ -598,9 +607,13 @@ func (r *Reconciler) anotherSentinelForRelease(ctx context.Context, tp *internal
 // over itself.
 //
 // The canonical name is chosen so that no operator the platform ships claims
-// it, so this is not reachable through any of them today; it is reachable
-// through a misconfiguration (a sentinel pointing sourceSecretName at
-// "<release>.tenant-ca" itself), and the answer depends entirely on content.
+// it, so this is not reachable through any of them today. One way in is a
+// misconfiguration: a sentinel pointing sourceSecretName at
+// "<release>.tenant-ca" itself. The other is legitimate, and is why the
+// key-free branch below is a success rather than a refusal: an operator whose
+// own CA Secret is named with an appended ".tenant-ca", declared as the source
+// by its chart. Nothing validates that suffix; see projectionSuffix. The answer
+// depends entirely on content.
 //
 // A key-FREE Secret there is already the trust anchor the tenant needs: there
 // is nothing to extract, it is not the controller's to adopt, and that is a
