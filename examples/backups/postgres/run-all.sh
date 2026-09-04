@@ -180,6 +180,21 @@ if [[ "$GOT" != "$SENTINEL_TOKEN" ]]; then
 fi
 log_success "Round-trip verified: '${PG_TARGET_NAME}' restored sentinel '${GOT}' from S3."
 
+# The passwords in <target>-credentials are chart-generated and do not match the
+# password hashes recovery brought back with the roles; the driver clears
+# bootstrap.enabled so the init-job reconciles them. Prove the app user can
+# actually log in against the restored copy - psql_exec above only ever used the
+# in-pod postgres superuser, so a broken credential would otherwise pass silently.
+print_header "Step 40 verify: the app user authenticates against the restored copy"
+wait_for_app_login "$PG_TARGET_CLUSTER" "$PG_TARGET_NAME" app demo 360
+APP_GOT=$(psql_app_exec "$PG_TARGET_CLUSTER" "$PG_TARGET_NAME" app demo \
+    "SELECT token FROM e2e_sentinel WHERE id = 1;" | tr -d '[:space:]')
+if [[ "$APP_GOT" != "$SENTINEL_TOKEN" ]]; then
+    log_error "app-user read mismatch: target has '${APP_GOT}', expected '${SENTINEL_TOKEN}'"
+    exit 1
+fi
+log_success "App-user login verified: 'app' authenticated and read sentinel '${APP_GOT}' from '${PG_TARGET_NAME}'."
+
 if [[ "${SKIP_PITR:-0}" == "1" ]]; then
     log_warning "SKIP_PITR=1: stopping after the latest-point restore."
     exit 0
