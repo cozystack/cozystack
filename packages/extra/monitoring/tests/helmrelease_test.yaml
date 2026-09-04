@@ -42,3 +42,30 @@ tests:
       - equal:
           path: spec.healthCheckExprs[0].failed
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  # The gate was extended (#2642) to the rest of the stack the release applies:
+  # the metrics VMCluster/VMAgent/VMAlert/VMAlertmanager (same updateStatus
+  # contract), Grafana (stage/stageStatus), and the backing CNPG Cluster.
+  - it: also gates on the metrics VM* CRs, Grafana and the CNPG Cluster
+    asserts:
+      - lengthEqual:
+          path: spec.healthCheckExprs
+          count: 7
+      - equal:
+          path: spec.healthCheckExprs[1].kind
+          value: VMCluster
+      - equal:
+          path: spec.healthCheckExprs[1].apiVersion
+          value: operator.victoriametrics.com/v1beta1
+      - equal:
+          path: spec.healthCheckExprs[5].kind
+          value: Grafana
+      - equal:
+          path: spec.healthCheckExprs[5].current
+          value: "has(status.stage) && has(status.stageStatus) && status.stage == 'complete' && status.stageStatus == 'success'"
+      - equal:
+          path: spec.healthCheckExprs[6].apiVersion
+          value: postgresql.cnpg.io/v1
+      - equal:
+          path: spec.healthCheckExprs[6].kind
+          value: Cluster
