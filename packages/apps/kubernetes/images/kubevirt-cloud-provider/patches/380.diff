@@ -1,0 +1,46 @@
+diff --git a/pkg/controller/kubevirteps/kubevirteps_controller.go b/pkg/controller/kubevirteps/kubevirteps_controller.go
+index 8af51fbe8..a53860c60 100644
+--- a/pkg/controller/kubevirteps/kubevirteps_controller.go
++++ b/pkg/controller/kubevirteps/kubevirteps_controller.go
+@@ -362,10 +362,38 @@ func (c *Controller) getTenantEPSFromInfraService(ctx context.Context, svc *v1.S
+ 			tenantServiceNamespace, err)
+ 		return nil, err
+ 	}
+-	for _, eps := range result.Items {
+-		c.tenantEPSTracker.add(&eps)
+-		tenantEPSSlices = append(tenantEPSSlices, &eps)
++	for i := range result.Items {
++		c.tenantEPSTracker.add(&result.Items[i])
++		tenantEPSSlices = append(tenantEPSSlices, &result.Items[i])
++	}
++
++	// Cilium Gateway API backs a LoadBalancer Service named "cilium-gateway-<gateway>"
++	// with an EndpointSlice that Cilium labels with "io.cilium.gateway/owning-gateway=<gateway>"
++	// (and "gateway.networking.k8s.io/gateway-name"), but NOT with the standard
++	// "kubernetes.io/service-name" label. The label lookup above therefore returns nothing,
++	// leaving the infra LoadBalancer without endpoints. When that happens, retry the lookup
++	// using the Cilium gateway label so endpoint reconciliation (and the all-VMIs fallback for
++	// endpoints without a NodeName) can proceed.
++	if len(tenantEPSSlices) == 0 {
++		const ciliumGatewaySvcPrefix = "cilium-gateway-"
++		if strings.HasPrefix(tenantServiceName, ciliumGatewaySvcPrefix) {
++			gatewayName := strings.TrimPrefix(tenantServiceName, ciliumGatewaySvcPrefix)
++			klog.Infof("No EndpointSlices found via %s for service %s; retrying via Cilium gateway label for gateway %s",
++				discovery.LabelServiceName, tenantServiceName, gatewayName)
++			gwResult, err := c.tenantClient.DiscoveryV1().EndpointSlices(tenantServiceNamespace).List(ctx,
++				metav1.ListOptions{LabelSelector: fmt.Sprintf("io.cilium.gateway/owning-gateway=%s", gatewayName)})
++			if err != nil {
++				klog.Errorf("Failed to get Cilium gateway EndpointSlices for service %s in namespace %s: %v",
++					tenantServiceName, tenantServiceNamespace, err)
++				return nil, err
++			}
++			for i := range gwResult.Items {
++				c.tenantEPSTracker.add(&gwResult.Items[i])
++				tenantEPSSlices = append(tenantEPSSlices, &gwResult.Items[i])
++			}
++		}
+ 	}
++
+ 	return tenantEPSSlices, nil
+ }
+ 
