@@ -1,0 +1,27 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.capi-provider-ipam-in-cluster
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  # No infrastructure edge here on purpose: an IPAM provider is a generic Cluster
+  # API addon, and the only current consumer (capmox) declares the dependency on
+  # its own side. Keeping this variant free of a proxmox edge leaves it reusable
+  # for any future provider that assigns addresses instead of leasing them.
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.capi-operator
+    components:
+    - name: capi-providers-ipam-in-cluster
+      path: system/capi-providers-ipam-in-cluster
+      install:
+        privileged: true
+        namespace: cozy-cluster-api
+        releaseName: capi-providers-ipam-in-cluster
