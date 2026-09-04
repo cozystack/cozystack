@@ -22,7 +22,7 @@ That object is the only one that hands over the CA certificate without also hand
 
 A release with `external: true` that never set `tls.enabled` runs operator-managed HTTP TLS today and moves to chart-managed TLS the first time it reconciles after this version. That rolls the cluster and re-anchors it on a new CA, so anything pinned to the operator's CA must be repointed at `opensearch-<name>.tenant-ca`. Set `tls.enabled: false` before upgrading to stay as you are.
 
-The published external-dns name changes with the same upgrade: the LoadBalancer Services move from the in-cluster domain, which never resolved outside the cluster, to `<release>.<tenant-host>` and `<release>-dashboards.<tenant-host>`. external-dns is upsert-only and never issues a delete, so the stale record keeps pointing at the LoadBalancer until it is removed from the zone by hand.
+The published external-dns name changes with the same upgrade: the LoadBalancer Services move from the in-cluster domain, which never resolved outside the cluster, to `<release>.<tenant-host>` and `<release>-dashboards.<tenant-host>`. external-dns is configured upsert-only here, so it issues no delete and the stale record keeps pointing at the LoadBalancer until it is removed from the zone by hand.
 
 ## Parameters
 
