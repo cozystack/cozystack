@@ -7,8 +7,9 @@ are NOT yet applied to the database — the init-job that runs ALTER ROLE is ski
 while bootstrap is on. The credentials Secret is flagged
 postgres.cozystack.io/credentials-pending: "true" until this converges.
 
-Clear bootstrap.enabled on the Postgres resource (or let a later reconcile/upgrade
-run once bootstrap is cleared) so the init-job applies the Secret's passwords onto
-the recovered roles. Until then, do not treat the advertised application passwords
-as usable; the database is reachable as the CloudNativePG superuser.
+The restore driver clears bootstrap.enabled automatically once recovery is healthy,
+and the next reconcile runs the init-job to apply the Secret's passwords onto the
+recovered roles — no action is required. Until that convergence completes, do not
+treat the advertised application passwords as usable; the database is reachable as
+the CloudNativePG superuser.
 {{- end }}
