@@ -95,10 +95,29 @@ substrate: kubevirt
 ## @field {[]string} dnsServers - Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
 ## @field {ProxmoxIPv4} ipv4Config - Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
 
+## @typedef {struct} ProxmoxStorageClass - A StorageClass backed by a Proxmox storage.
+## @field {string} name - StorageClass name inside the tenant cluster.
+## @field {string} storage - Proxmox storage id the volumes are created on (as it appears in `pvesm status`).
+## @field {string} [fstype] - Filesystem the driver formats volumes with: ext4 or xfs.
+## @field {bool} [ssd] - Mark volumes as SSD-backed, which changes the discard/cache defaults Proxmox applies.
+## @field {string} [reclaimPolicy] - Delete or Retain.
+
+## @typedef {struct} ProxmoxCSI - Proxmox CSI driver, deployed into the tenant cluster.
+## @field {bool} enabled - Install the driver. Without it a Proxmox-backed tenant has no way to provision PersistentVolumes at all.
+## @field {string} credentialsSecretName - Secret in THIS namespace holding the driver's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. Flux injects them into the tenant release, so the token is never written into a rendered manifest. Distinct from the capmox credentials on purpose: the driver attaches and detaches disks, which is a different blast radius from creating VMs.
+## @field {[]ProxmoxStorageClass} storageClasses - StorageClasses to create in the tenant.
+
+## @typedef {struct} Proxmox - Proxmox substrate settings for the cluster's infrastructure object. Ignored unless `substrate` is `proxmox`.
+## @field {ProxmoxCSI} csi - Proxmox CSI driver settings.
+
 ## @param {Proxmox} proxmox - Proxmox substrate settings.
 proxmox:
   allowedNodes: []
   dnsServers: []
+  csi:
+    enabled: true
+    credentialsSecretName: ""
+    storageClasses: []
   ipv4Config:
     addresses: []
     gateway: ""

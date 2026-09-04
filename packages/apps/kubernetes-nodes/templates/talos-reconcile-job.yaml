@@ -326,6 +326,22 @@ spec:
                         {{- end }}
                         kubelet:
                           image: ghcr.io/siderolabs/kubelet:{{ .kubeletVersion }}
+                          {{- /* Without this the kubelet never applies the
+                                node.cloudprovider.kubernetes.io/uninitialized
+                                taint, the Proxmox cloud-controller-manager
+                                never gets to initialise the Node, and the
+                                topology.kubernetes.io/{region,zone} labels are
+                                never set. The CSI node plugin then exits
+                                fatally on "Failed to get region or zone for
+                                node", so the tenant ends up with a
+                                StorageClass and no way to attach a volume.
+                                The kubevirt path has no cloud provider and
+                                must not carry the flag: it would taint every
+                                worker with nothing to remove the taint. */}}
+                          {{- if eq ($.Values.substrate | default "kubevirt") "proxmox" }}
+                          extraArgs:
+                            cloud-provider: external
+                          {{- end }}
                           extraConfig:
                             systemReserved:
                               cpu: "{{ .systemReservedCpu }}"

@@ -275,12 +275,27 @@ type Proxmox struct {
 	// Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
 	// +kubebuilder:default:={}
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
+	// Proxmox CSI driver settings.
+	// +kubebuilder:default:={}
+	Csi ProxmoxCSI `json:"csi"`
 	// Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
 	// +kubebuilder:default:={}
 	DnsServers []string `json:"dnsServers,omitempty"`
 	// Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
 	// +kubebuilder:default:={}
 	Ipv4Config ProxmoxIPv4 `json:"ipv4Config"`
+}
+
+type ProxmoxCSI struct {
+	// Secret in THIS namespace holding the driver's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. Flux injects them into the tenant release, so the token is never written into a rendered manifest. Distinct from the capmox credentials on purpose: the driver attaches and detaches disks, which is a different blast radius from creating VMs.
+	// +kubebuilder:default:=""
+	CredentialsSecretName string `json:"credentialsSecretName"`
+	// Install the driver. Without it a Proxmox-backed tenant has no way to provision PersistentVolumes at all.
+	// +kubebuilder:default:=true
+	Enabled bool `json:"enabled"`
+	// StorageClasses to create in the tenant.
+	// +kubebuilder:default:={}
+	StorageClasses []ProxmoxStorageClass `json:"storageClasses,omitempty"`
 }
 
 type ProxmoxIPv4 struct {
@@ -293,6 +308,19 @@ type ProxmoxIPv4 struct {
 	// Netmask prefix length.
 	// +kubebuilder:default:=24
 	Prefix int `json:"prefix"`
+}
+
+type ProxmoxStorageClass struct {
+	// Filesystem the driver formats volumes with: ext4 or xfs.
+	Fstype string `json:"fstype,omitempty"`
+	// StorageClass name inside the tenant cluster.
+	Name string `json:"name"`
+	// Delete or Retain.
+	ReclaimPolicy string `json:"reclaimPolicy,omitempty"`
+	// Mark volumes as SSD-backed, which changes the discard/cache defaults Proxmox applies.
+	Ssd bool `json:"ssd,omitempty"`
+	// Proxmox storage id the volumes are created on (as it appears in `pvesm status`).
+	Storage string `json:"storage"`
 }
 
 type Resources struct {

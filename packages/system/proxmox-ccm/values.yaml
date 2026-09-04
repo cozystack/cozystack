@@ -1,0 +1,33 @@
+## @section Proxmox cloud-controller-manager
+##
+## Not an optional extra on this substrate. The CSI node plugin reads
+## `topology.kubernetes.io/region` and `zone` off its own Node and exits
+## fatally when they are absent — "Failed to get region or zone for node …,
+## see documentation about topology labels" — and those labels are applied by
+## this controller. A Proxmox-backed tenant without it has a StorageClass, a
+## running CSI controller, and no node plugin, which presents as volumes that
+## never attach rather than as a missing component.
+##
+## The upstream values.talos.yaml preset pins the controller onto
+## `node-role.kubernetes.io/control-plane`, which a Kamaji tenant does not
+## have: its control plane is a Deployment in the management cluster. The
+## affinity is dropped here for the same reason it is dropped in the CSI
+## package.
+
+proxmox-cloud-controller-manager:
+  # Runs on tenant worker nodes, which are the only nodes a Kamaji tenant has.
+  affinity: {}
+  nodeSelector: {}
+  tolerations:
+    - operator: Exists
+
+  # cloud-node applies the topology labels and the providerID; the lifecycle
+  # controller removes Nodes whose VM is gone. Both are wanted here; the
+  # route and service controllers are not — routing is Cilium's and load
+  # balancing is not something a Proxmox tenant gets from the hypervisor.
+  enabledControllers:
+    - cloud-node
+    - cloud-node-lifecycle
+
+  config:
+    clusters: []

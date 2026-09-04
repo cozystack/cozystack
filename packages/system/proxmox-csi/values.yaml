@@ -1,0 +1,40 @@
+## @section Proxmox CSI
+##
+## The upstream chart ships a values.talos.yaml preset that does not fit a
+## Cozystack tenant, and the two differences are not cosmetic:
+##
+##   - it selects the controller onto `node-role.kubernetes.io/control-plane`.
+##     A Kamaji tenant has no control-plane nodes at all — the control plane is
+##     a Deployment in the management cluster — so that selector leaves the
+##     controller Pending forever.
+##   - it selects the node plugin onto
+##     `node.cloudprovider.kubernetes.io/platform: nocloud`, a label a
+##     cloud-controller-manager applies. Until a CCM runs in the tenant, that
+##     DaemonSet would schedule nowhere.
+##
+## Both are dropped here. What is kept is `config.features.provider: proxmox`,
+## which the upstream chart documents as the setting for clusters provisioned
+## by capmox: it makes the driver resolve a node's hypervisor placement from
+## the Machine's providerID instead of the topology labels a CCM would supply.
+
+proxmox-csi-plugin:
+  createNamespace: false
+
+  config:
+    features:
+      provider: proxmox
+    clusters: []
+
+  # Filled in by the parent kubernetes chart from its `proxmox` values: the
+  # credentials are a hypervisor token and belong to the platform's secret
+  # management, not to a chart default.
+  existingConfigSecret: ~
+
+  storageClass: []
+
+  node:
+    tolerations:
+      - operator: Exists
+
+  controller:
+    replicaCount: 1

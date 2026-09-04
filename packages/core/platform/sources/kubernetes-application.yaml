@@ -38,6 +38,12 @@ spec:
           path: system/victoria-metrics-operator
         - name: kubernetes-kubevirt-csi-node
           path: system/kubevirt-csi-node
+        # The storage driver for the proxmox substrate. Published alongside the
+        # KubeVirt one rather than in a variant of its own: a second variant
+        # would rename every tenant addon artifact, and only this component
+        # differs between the two substrates.
+        - name: kubernetes-proxmox-csi
+          path: system/proxmox-csi
         - name: kubernetes-vertical-pod-autoscaler-crds
           path: system/vertical-pod-autoscaler-crds
         - name: kubernetes-coredns

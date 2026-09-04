@@ -43,6 +43,7 @@
       "type": "object",
       "default": {},
       "required": [
+        "csi",
         "ipv4Config"
       ],
       "properties": {
@@ -52,6 +53,61 @@
           "default": [],
           "items": {
             "type": "string"
+          }
+        },
+        "csi": {
+          "description": "Proxmox CSI driver settings.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "credentialsSecretName",
+            "enabled"
+          ],
+          "properties": {
+            "credentialsSecretName": {
+              "description": "Secret in THIS namespace holding the driver's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. Flux injects them into the tenant release, so the token is never written into a rendered manifest. Distinct from the capmox credentials on purpose: the driver attaches and detaches disks, which is a different blast radius from creating VMs.",
+              "type": "string",
+              "default": ""
+            },
+            "enabled": {
+              "description": "Install the driver. Without it a Proxmox-backed tenant has no way to provision PersistentVolumes at all.",
+              "type": "boolean",
+              "default": true
+            },
+            "storageClasses": {
+              "description": "StorageClasses to create in the tenant.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "storage"
+                ],
+                "properties": {
+                  "fstype": {
+                    "description": "Filesystem the driver formats volumes with: ext4 or xfs.",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "StorageClass name inside the tenant cluster.",
+                    "type": "string"
+                  },
+                  "reclaimPolicy": {
+                    "description": "Delete or Retain.",
+                    "type": "string"
+                  },
+                  "ssd": {
+                    "description": "Mark volumes as SSD-backed, which changes the discard/cache defaults Proxmox applies.",
+                    "type": "boolean"
+                  },
+                  "storage": {
+                    "description": "Proxmox storage id the volumes are created on (as it appears in `pvesm status`).",
+                    "type": "string"
+                  }
+                }
+              }
+            }
           }
         },
         "dnsServers": {
