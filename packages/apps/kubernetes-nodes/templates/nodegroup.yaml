@@ -60,6 +60,9 @@
 {{-   if not $.Values.proxmox.network.bridge }}
 {{-     fail "substrate proxmox requires proxmox.network.bridge" }}
 {{-   end }}
+{{-   if not $.Values.proxmox.dnsServers }}
+{{-     fail "substrate proxmox requires proxmox.dnsServers: an off-cluster worker cannot resolve through the management cluster's CoreDNS" }}
+{{-   end }}
 {{- /* KubeVirt-only knobs. Accepting them silently on Proxmox would let a pool
          believe it had asked for something the substrate cannot deliver. */}}
 {{-   if $.Values.gpus }}

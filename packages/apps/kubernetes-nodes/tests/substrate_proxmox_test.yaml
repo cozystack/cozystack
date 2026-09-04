@@ -32,6 +32,7 @@ set:
     network:
       bridge: vmbr0
     storage: ""
+    dnsServers: ["8.8.8.8"]
 tests:
   - it: renders a ProxmoxMachineTemplate instead of a KubevirtMachineTemplate
     documentSelector:
@@ -110,6 +111,7 @@ tests:
     set:
       proxmox:
         templateTags: []
+        dnsServers: ["8.8.8.8"]
         network:
           bridge: vmbr0
     asserts:

@@ -23,6 +23,7 @@ set:
     full: true
     network:
       bridge: vmbr0
+    dnsServers: ["8.8.8.8"]
 tests:
   - it: refuses a pool it cannot size, instead of inventing capacity
     asserts:

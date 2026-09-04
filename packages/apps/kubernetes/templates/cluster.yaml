@@ -361,7 +361,14 @@ spec:
     - InternalIP
     - ExternalIP
   network:
-    serviceType: ClusterIP
+    {{- /* A KubeVirt worker is a Pod in this cluster and dials the apiserver
+          over the pod network, where a ClusterIP is meaningful. A Proxmox
+          worker is a VM on the hypervisor network and cannot route to one at
+          all: it boots, fails to reach the endpoint, and never files a CSR —
+          a silence that looks like a broken bootstrap rather than an
+          unreachable address. Publishing the Service moves the endpoint onto
+          a network the workers share. */}}
+    serviceType: {{ ternary "LoadBalancer" "ClusterIP" $isProxmox }}
     ingress:
       extraAnnotations:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"

@@ -41,11 +41,16 @@ tests:
       - equal:
           path: spec.dnsServers
           value: ["8.8.8.8"]
-      # Kamaji owns the endpoint on both substrates; capmox must not reconcile
-      # one of its own.
+      # Kamaji owns the endpoint, and capmox reads the FIELD for that — not the
+      # managed-by annotation, which must be absent here. With the annotation
+      # present CAPI never sets an ownerRef on this object and capmox stops at
+      # "Waiting for Cluster Controller to set OwnerRef", leaving the address
+      # pool uncreated and every worker Machine waiting on infrastructure.
       - equal:
+          path: spec.externalManagedControlPlane
+          value: true
+      - notExists:
           path: metadata.annotations["cluster.x-k8s.io/managed-by"]
-          value: kamaji
 
   - it: points the Cluster at the Proxmox infrastructure object
     template: templates/cluster.yaml
@@ -56,6 +61,40 @@ tests:
       - equal:
           path: spec.infrastructureRef.kind
           value: ProxmoxCluster
+
+  - it: publishes the apiserver, which an off-cluster worker can actually reach
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.serviceType
+          value: LoadBalancer
+
+  - it: keeps the KubeVirt path on a ClusterIP, where its in-cluster workers reach it
+    template: templates/cluster.yaml
+    set:
+      substrate: kubevirt
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.serviceType
+          value: ClusterIP
+
+  - it: keeps the KubeVirt path on its own infrastructure object
+    template: templates/cluster.yaml
+    set:
+      substrate: kubevirt
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.infrastructureRef.kind
+          value: KubevirtCluster
 
   - it: drops the KubeVirt cloud-controller-manager, which has nothing to reconcile here
     template: templates/kccm/manager.yaml
