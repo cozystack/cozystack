@@ -40,6 +40,12 @@ const (
 	// a later RestoreJob re-renders with the backup-time values.
 	kafkaStrategyParamPrefix = "kafka.strategy.backups.cozystack.io/parameter/"
 
+	// Stamped on every produced Backup so `kubectl describe backup` and any
+	// consumer make the narrow scope explicit: this strategy captures topic
+	// definitions/configs, not message data, offsets, ACLs or users.
+	kafkaScopeKey   = "strategy.backups.cozystack.io/scope"
+	kafkaScopeValue = "topic-metadata"
+
 	kafkaStrategyPollInterval = 5 * time.Second
 
 	// Cap on the Ready-precondition wait so a cluster that never comes up fails
@@ -272,7 +278,7 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 			Type:    "Ready",
 			Status:  metav1.ConditionTrue,
 			Reason:  "BackupCompleted",
-			Message: "Kafka metadata backup Job completed",
+			Message: "Kafka topic-metadata backup completed (topic definitions and configs only; no message data, offsets, ACLs or users)",
 		})
 		if err := r.Status().Update(ctx, j); err != nil {
 			return ctrl.Result{}, err
@@ -352,7 +358,7 @@ func (r *BackupJobReconciler) createKafkaBackupArtifact(
 	resolved *ResolvedBackupConfig,
 	artifactURI string,
 ) (*backupsv1alpha1.Backup, error) {
-	driverMD := map[string]string{}
+	driverMD := map[string]string{kafkaScopeKey: kafkaScopeValue}
 	for k, v := range resolved.Parameters {
 		driverMD[kafkaStrategyParamPrefix+k] = v
 	}
@@ -516,7 +522,7 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 			Type:    "Ready",
 			Status:  metav1.ConditionTrue,
 			Reason:  "RestoreCompleted",
-			Message: "Kafka metadata restore Job completed",
+			Message: "Kafka topic-metadata restore completed (topic definitions and configs only)",
 		})
 		if err := r.Status().Update(ctx, restoreJob); err != nil {
 			return ctrl.Result{}, err

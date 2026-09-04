@@ -147,7 +147,7 @@ seed_topic() {
 topic_meta() {
     local app="$1"
     kafka_run "$app" '
-        line=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --describe --topic "$TOPIC" 2>/dev/null | head -1) || exit 0
+        line=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --describe --topic "\Q$TOPIC\E" 2>/dev/null | head -1) || exit 0
         [ -n "$line" ] || exit 0
         parts=$(printf "%s" "$line" | grep -oE "PartitionCount: [0-9]+" | awk "{print \$2}")
         ret=$(printf "%s" "$line" | grep -oE "retention.ms=[0-9]+" | head -1 | cut -d= -f2)

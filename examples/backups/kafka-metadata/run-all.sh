@@ -51,7 +51,7 @@ fi
 
 print_header "Step 25: In-place restore — drop the topic, then restore it"
 kafka_run "$KAFKA_SRC_NAME" '
-    "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --delete --topic "$TOPIC" || true
+    "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --delete --topic "\Q$TOPIC\E" || true
     for _ in $(seq 1 60); do
         list=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --list) || { sleep 2; continue; }
         if ! printf "%s\n" "$list" | grep -qx "$TOPIC"; then echo "topic $TOPIC deleted"; exit 0; fi
