@@ -68,8 +68,11 @@ tests:
       - hasDocuments:
           count: 5
 
-  # -dashboards (SAN label and the operator's own Service) is 11 -> 52.
-  - it: rejects a name whose dashboards SAN would exceed 63
+  # -dashboards (11 -> 52) is deliberately not a bound: the name that overflows is the
+  # operator's Dashboards Service, not an object this chart renders, and the apps API
+  # admits the 53-character release that overflows it. The SAN below carries the same
+  # overflowing label and cert-manager accepts it, so the whole chain must render.
+  - it: renders the whole chain for the longest admissible name with dashboards on
     release:
       name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       namespace: tenant-test
@@ -79,8 +82,12 @@ tests:
       dashboards:
         enabled: true
     asserts:
-      - failedTemplate:
-          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 53 chars; opensearch requires <=52 in this configuration so that "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards" stays within the 63-char DNS label limit.'
+      - hasDocuments:
+          count: 5
+      - contains:
+          path: spec.dnsNames
+          content: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards
+        documentIndex: 4
 
   - it: accepts that same name when dashboards is off and -discovery binds instead
     release:
@@ -976,27 +983,14 @@ tests:
           path: spec.security.tls.http.secret
         documentIndex: 0
 
-  # The dashboards-only path: no external access, no chart-managed TLS. The operator
-  # still creates a <release>-dashboards Service, which is a DNS-1035 label bounded at
-  # 63, so the bound applies here even though neither of the other two templates that
-  # invoke the guard renders anything in this configuration.
-  - it: applies the dashboards bound with external access and TLS both off
+  # The dashboards-only path: no external access, no chart-managed TLS, so of the three
+  # templates that invoke the name guard this is the only one rendering anything at all.
+  # The longest name the apps API admits has to produce the cluster: what overflows at
+  # this length is the operator's Dashboards Service, and withholding the CR would cost
+  # the release every object rather than that one Service.
+  - it: renders the cluster for the longest admissible dashboards-only name
     release:
       name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      namespace: tenant-test
-    set:
-      dashboards:
-        enabled: true
-      external: false
-      tls:
-        enabled: false
-    asserts:
-      - failedTemplate:
-          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 53 chars; opensearch requires <=52 in this configuration so that "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards" stays within the 63-char DNS label limit.'
-
-  - it: accepts the longest dashboards-only name with external access and TLS off
-    release:
-      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       namespace: tenant-test
     set:
       dashboards:
