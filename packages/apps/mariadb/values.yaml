@@ -121,7 +121,7 @@ users: {}
 ##   user2:
 ##     maxUserConnections: 1000
 
-## @param {int} passwordRotation - Rotation counter for auto-generated application-user passwords. Increment it (0 -> 1 -> 2 ...) to regenerate every managed user password on the next reconcile; leaving it unchanged keeps the passwords already stored in the `<release>-credentials` Secret. Existing releases adopt their current passwords as the baseline on first upgrade: the counter value is recorded without rotating, so a bump requested during that same first upgrade does not rotate — bump it once more afterwards to rotate a legacy release. The `root` password is auto-generated but not rotated by this counter, since mariadb-operator only applies it at datadir bootstrap.
+## @param {int} passwordRotation - Rotation counter for auto-generated application-user passwords. Change it to any new value (0 -> 1 -> 2 ...; any change, not only an increment, triggers a rotation) to regenerate every managed user password on the next reconcile; leaving it unchanged keeps the passwords already stored in the `<release>-credentials` Secret. Existing releases adopt their current passwords as the baseline on first upgrade: the counter value is recorded without rotating, so a bump requested during that same first upgrade does not rotate — bump it once more afterwards to rotate a legacy release. The `root` password is auto-generated but not rotated by this counter, since mariadb-operator only applies it at datadir bootstrap.
 passwordRotation: 0
 
 ## @typedef {struct} DatabaseRoles - Role assignments for a database.

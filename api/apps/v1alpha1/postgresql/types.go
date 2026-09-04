@@ -52,7 +52,7 @@ type ConfigSpec struct {
 	// Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values. Read a user's password from that Secret, or rotate every managed password by bumping `passwordRotation`.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
-	// Rotation counter for auto-generated user passwords. Increment it (0 -> 1 -> 2 ...) to regenerate every managed password on the next reconcile; leaving it unchanged keeps the passwords already stored in the `<release>-credentials` Secret. Existing releases adopt their current passwords as the baseline on first upgrade: the counter value is recorded without rotating, so a bump requested during that same first upgrade does not rotate — bump it once more afterwards to rotate a legacy release.
+	// Rotation counter for auto-generated user passwords. Change it to any new value (0 -> 1 -> 2 ...; any change, not only an increment, triggers a rotation) to regenerate every managed password on the next reconcile; leaving it unchanged keeps the passwords already stored in the `<release>-credentials` Secret. Existing releases adopt their current passwords as the baseline on first upgrade: the counter value is recorded without rotating, so a bump requested during that same first upgrade does not rotate — bump it once more afterwards to rotate a legacy release.
 	// +kubebuilder:default:=0
 	PasswordRotation int `json:"passwordRotation"`
 	// Databases configuration map.
