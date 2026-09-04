@@ -19,6 +19,7 @@
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CUT="$REPO_ROOT/.github/workflows/cut-prerelease.yaml"
 BACKPORT="$REPO_ROOT/.github/workflows/backport.yaml"
+LABELS="$REPO_ROOT/.github/workflows/labels.yaml"
 
 # Strip YAML comments. POSIX `grep` only: the unit-test runner has no ripgrep.
 # grep exits 1 when nothing is selected (legitimate for an all-comment block)
@@ -66,6 +67,14 @@ step_block() {
     inside' "$2"
 }
 
+# Body of the step whose `uses:` names $1, up to the next `- ` at that indent.
+step_block_uses() {
+  awk -v want="$1" '
+    index($0, "- uses: " want) { inside = 1; next }
+    /^ *- (uses|name): / { inside = 0 }
+    inside' "$2"
+}
+
 # Line number of a step within the comment-stripped file, for ordering asserts.
 # Compared only against other stripped line numbers.
 step_line() {
@@ -75,6 +84,34 @@ step_line() {
 @test "workflows under contract exist" {
   [ -f "$CUT" ]
   [ -f "$BACKPORT" ]
+  [ -f "$LABELS" ]
+}
+
+# ── the label sync cannot deliver a backport ─────────────────────────────────
+# backport.yaml reads only kind/backport and kind/backport-previous, and
+# .github/labels.yml keeps the un-namespaced spellings as aliases so the sync
+# renames a stray into kind/*. docs/release.md states plainly that the rename
+# does NOT then deliver the backport, and that claim rests entirely on the sync
+# writing as the default GITHUB_TOKEN: GitHub does not let an event created by
+# that token start a workflow run.
+#
+# Hand the sync a PAT and that stops being true — the rename would fire a
+# `labeled` event, backport.yaml would qualify on the new kind/* name, and a
+# legacy label would start delivering backports up to a week late. Which is
+# arguably an improvement, but it is the opposite of what the documentation
+# tells a maintainer, and nothing else in the tree connects the two files.
+@test "the label sync writes as GITHUB_TOKEN, so a rename starts no backport" {
+  block="$(step_block_uses 'EndBug/label-sync' "$LABELS")"
+  [ -n "$block" ]
+
+  # No token override. The action's own default is ${{ github.token }}, so
+  # absence here is what makes the suppression apply.
+  count="$(printf '%s\n' "$block" | code_lines | grep -cE '^ *token:' || true)"
+  [ "${count:-0}" -eq 0 ]
+
+  # And docs/release.md still says so, rather than the older claim that the
+  # sync recovers a mislabelled backport on its own.
+  grep -qF 'The rename does not deliver the backport.' "$REPO_ROOT/docs/release.md"
 }
 
 # ── the freeze condition ─────────────────────────────────────────────────────

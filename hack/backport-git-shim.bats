@@ -125,7 +125,14 @@ setup_repo() {
   [ "$rc" -ne 0 ]
 }
 
-@test "a commit the target branch already carries is dropped, not reported failed" {
+@test "a commit the target branch already carries is dropped, and the pick still succeeds" {
+  # Scoped to the wrapper on purpose. What is asserted is that the PICK does not
+  # fail -- which is what used to lose a whole backport when one commit of
+  # several was already upstream. It is NOT a claim that a backport whose every
+  # commit is already upstream ends well: the branch is then identical to the
+  # target and the action fails opening a PR with no commits in it. That case is
+  # a deliberate non-goal, and docs/release.md's "Empty commits" section says
+  # why rather than leaving the gap to be rediscovered here.
   setup_repo "$WORKDIR/upstream"
   shim_git switch -q -c backport-1-to-target target
   shim_git cherry-pick -x "$REAL_SHA"
@@ -138,6 +145,13 @@ setup_repo() {
   # `--empty=keep`. A backport PR should not carry a commit that changes
   # nothing.
   [ "$(shim_git rev-parse HEAD)" = "$head" ]
+
+  # And the case the wrapper does fix, in the same repository: a PR of two
+  # commits where only the first is already upstream still delivers the second.
+  # This is the difference between "one redundant commit" and "all of them",
+  # and it is the whole reason the drop is worth having.
+  shim_git cherry-pick -x "$EMPTY_SHA"
+  [ "$(shim_git rev-list --count target..HEAD)" -eq 2 ]
 }
 
 @test "a real conflict still exits 1 with unmerged paths" {
