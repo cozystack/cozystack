@@ -80,6 +80,8 @@ type GPU struct {
 }
 
 type Network struct {
+	// Static IPv4 address for this interface, pinned through the network backend the cluster serves (Kube-OVN or Cozyplane). Empty lets IPAM allocate one. The address must be free and inside the network CIDR; the backend refuses the VM otherwise.
+	IpAddress string `json:"ipAddress,omitempty"`
 	// Network attachment name.
 	Name string `json:"name,omitempty"`
 }
