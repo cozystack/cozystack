@@ -90,9 +90,27 @@ make generate       # Regenerate values.schema.json + README.md from values.yaml
 
 Build environment variables:
 
-- `REGISTRY` — Docker registry (default `ghcr.io/cozystack/cozystack`).
+- `REGISTRY` — target registry for the build (default `ghcr.io/cozystack/cozystack`). CI overrides it per workflow — see [Registries](#registries).
 - `PUSH=1` / `LOAD=0` — control buildx push/load behaviour.
 - `LOAD=1 PUSH=0` — load images locally instead of pushing.
+
+### Registries
+
+Cozystack publishes to two registries with different trust levels. They are **not** interchangeable, and the `REGISTRY` default above applies only to a local build.
+
+| | `iad.ocir.io/idyksih5sir9/cozystack` (OCIR) | `ghcr.io/cozystack/cozystack` (GHCR) |
+| --- | --- | --- |
+| Role | CI build registry | Public release registry |
+| Holds | PR images (`pr-<N>-<sha>`), `main` builds, the shared buildx cache | releases, release candidates, nightlies |
+| Written by | [`pull-requests.yaml`](../../.github/workflows/pull-requests.yaml), [`build-main.yaml`](../../.github/workflows/build-main.yaml) | [`tags.yaml`](../../.github/workflows/tags.yaml), [`nightly.yaml`](../../.github/workflows/nightly.yaml), [`pull-requests-release.yaml`](../../.github/workflows/pull-requests-release.yaml) |
+| Read by | e2e, and developers installing a PR build | end users |
+| Auth to push | `OCIR_USER` / `OCIR_TOKEN` repo secrets | `GITHUB_TOKEN` + `permissions: packages: write` |
+
+Both allow anonymous pull, so nothing that only reads images needs credentials — the e2e job has no registry login at all.
+
+Images move OCIR → GHCR **by digest only**: [`nightly.yaml`](../../.github/workflows/nightly.yaml) mirrors the latest `main` build, and promotion retags an rc that already passed e2e ([`hack/promote-retag.sh`](../../hack/promote-retag.sh)). Nothing is rebuilt on the way to GHCR, so a released image is bit-for-bit the image that was tested. [`retention.yaml`](../../.github/workflows/retention.yaml) prunes old nightly versions on the GHCR side.
+
+The practical rule: **treat GHCR as user-facing and OCIR as scratch.** A wrong or overwritten tag in OCIR costs a rebuild; in GHCR it reaches whoever installs next. See [`release.md`](../release.md) for the full release and nightly flow.
 
 ### Values schema generation
 
