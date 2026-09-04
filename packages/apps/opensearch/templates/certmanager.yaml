@@ -34,13 +34,17 @@ DNS-1123 subdomains, which can. The platform's tenant-CA projection carries the 
 the same reason (projectionSuffix in internal/controller/cacert).
 
 So the rule: a suffix needs the dot when it is a tail of another suffix in the combined
-set, or has one as a tail. At operator 2.8.0 that set is -ca, -transport-cert, -http-cert,
--admin-cert, -dashboards-cert and -admin-password on the operator's side, and .http-ca,
--http-server, -dashboards-server, -credentials, -admin-credentials and -security-config on
-this chart's. The two leaf Secrets keep the hyphen — {{ .Release.Name }}-http-server and
+set, or has one as a tail. Names collide within a kind and not across kinds, so each kind
+has its own set; the one below is the SECRET suffixes. At operator 2.8.0 that set is -ca,
+-transport-cert, -http-cert, -admin-cert, -dashboards-cert and -admin-password on the
+operator's side, and .http-ca, -http-server, -dashboards-server, -credentials,
+-admin-credentials and -security-config on this chart's. The two leaf Secrets keep the hyphen — {{ .Release.Name }}-http-server and
 {{ .Release.Name }}-dashboards-server — because neither stands in that relation to any
 entry: no other suffix ends in -server, and neither leaf ends in another suffix. A suffix
-added later has to be checked the same way.
+added later has to be checked the same way, against the set for its own kind. This chart's
+-security-config does have -config as a tail, and is harmless only because the operator
+composes <clusterName>-config as a ConfigMap (buildConfigMap in the configuration
+reconciler) rather than a Secret.
 
 One pair on that list does stand in it, outside this chain: -admin-credentials against
 -credentials, which makes release foo's admin Secret release foo-admin's user-facing one.
