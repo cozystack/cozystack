@@ -385,7 +385,7 @@ git commit -s
 git push origin release-X.Y  # or push to a new branch and open a PR
 ```
 
-`--keep-redundant-commits` is there for the same reason [the bot's wrapper injects its own flags](#empty-commits): without it a commit that is empty, or whose change `release-X.Y` already carries, stops the cherry-pick with "The previous cherry-pick is now empty" and no indication that carrying on is the right move. It keeps such a commit as an empty one rather than dropping it, which for a pick you are watching is the more useful of the two — you can see what was redundant and drop it yourself. Harmless when neither case applies, and it needs no particular git: the flag has been there since well before `--empty`, which the bot uses instead and which arrived in git 2.45. On any git, `git cherry-pick --skip` is what git itself suggests when a pick turns out empty mid-sequence.
+`--keep-redundant-commits` is there for the same reason [the bot's wrapper injects its own flags](#empty-commits): without it a commit that is empty, or whose change `release-X.Y` already carries, stops the cherry-pick with "The previous cherry-pick is now empty" and no indication that carrying on is the right move. It keeps such a commit as an empty one rather than dropping it, which for a pick you are watching is the more useful of the two — you can see what was redundant and drop it yourself. Harmless when neither case applies, and it needs no particular git: the flag has been there since well before `--empty`, which the bot uses instead and which arrived in git 2.45. When a pick does turn out empty mid-sequence, `git cherry-pick --skip` is what git itself suggests, and has been since 2.23.
 
 To find the bot's failed comments across a batch of PRs:
 
