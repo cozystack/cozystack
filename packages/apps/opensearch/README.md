@@ -80,13 +80,13 @@ The published external-dns name changes with the same upgrade: the LoadBalancer 
 
 ### OpenSearch Dashboards configuration
 
-| Name                          | Description                                           | Type       | Value      |
-| ----------------------------- | ----------------------------------------------------- | ---------- | ---------- |
-| `dashboards`                  | OpenSearch Dashboards configuration.                  | `object`   | `{}`       |
-| `dashboards.enabled`          | Enable OpenSearch Dashboards deployment.              | `bool`     | `false`    |
-| `dashboards.replicas`         | Number of Dashboards replicas.                        | `int`      | `1`        |
-| `dashboards.resources`        | Explicit CPU and memory configuration for Dashboards. | `object`   | `{}`       |
-| `dashboards.resources.cpu`    | CPU available to each node.                           | `quantity` | `""`       |
-| `dashboards.resources.memory` | Memory (RAM) available to each node.                  | `quantity` | `""`       |
-| `dashboards.resourcesPreset`  | Default sizing preset for Dashboards.                 | `string`   | `c1.small` |
+| Name                          | Description                                                                                                                                                                | Type       | Value      |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
+| `dashboards`                  | OpenSearch Dashboards configuration.                                                                                                                                       | `object`   | `{}`       |
+| `dashboards.enabled`          | Enable OpenSearch Dashboards deployment. At a 42-character application name the Dashboards Service is not created: its name would exceed the 63-character DNS label limit. | `bool`     | `false`    |
+| `dashboards.replicas`         | Number of Dashboards replicas.                                                                                                                                             | `int`      | `1`        |
+| `dashboards.resources`        | Explicit CPU and memory configuration for Dashboards.                                                                                                                      | `object`   | `{}`       |
+| `dashboards.resources.cpu`    | CPU available to each node.                                                                                                                                                | `quantity` | `""`       |
+| `dashboards.resources.memory` | Memory (RAM) available to each node.                                                                                                                                       | `quantity` | `""`       |
+| `dashboards.resourcesPreset`  | Default sizing preset for Dashboards.                                                                                                                                      | `string`   | `c1.small` |
 

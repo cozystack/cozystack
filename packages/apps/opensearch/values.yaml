@@ -217,7 +217,7 @@ users: {}
 ##
 
 ## @typedef {struct} Dashboards - OpenSearch Dashboards deployment configuration.
-## @field {bool} enabled - Enable OpenSearch Dashboards deployment.
+## @field {bool} enabled - Enable OpenSearch Dashboards deployment. At a 42-character application name the Dashboards Service is not created: its name would exceed the 63-character DNS label limit.
 ## @field {int} replicas - Number of Dashboards replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration for Dashboards.
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset for Dashboards.

@@ -237,7 +237,7 @@
       ],
       "properties": {
         "enabled": {
-          "description": "Enable OpenSearch Dashboards deployment.",
+          "description": "Enable OpenSearch Dashboards deployment. At a 42-character application name the Dashboards Service is not created: its name would exceed the 63-character DNS label limit.",
           "type": "boolean",
           "default": false
         },

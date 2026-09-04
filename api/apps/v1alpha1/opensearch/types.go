@@ -60,7 +60,7 @@ type ConfigSpec struct {
 }
 
 type Dashboards struct {
-	// Enable OpenSearch Dashboards deployment.
+	// Enable OpenSearch Dashboards deployment. At a 42-character application name the Dashboards Service is not created: its name would exceed the 63-character DNS label limit.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
 	// Number of Dashboards replicas.
