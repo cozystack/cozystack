@@ -1066,6 +1066,25 @@ spec:
           # Phase 2: a TLSRoute the passthrough listener can serve. Now both
           # chains carry one server name, and the terminate listener is the one
           # that has to go.
+          #
+          # The backend is a Service in the tenant's own namespace, and that
+          # is the half of "can serve" this step would otherwise skip: the
+          # withdrawal fires only for a route that forwards somewhere, and a
+          # cross-namespace backendRef with no ReferenceGrant resolves to no
+          # Service at all. Selectorless is enough — resolution asks whether
+          # the Service exists and never reads its ports or its endpoints —
+          # and it goes with the tenant namespace, so nothing outlives the
+          # test in a namespace the test does not own.
+          kubectl apply -n "$tenant_ns" -f - <<EOF
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: api-passthrough-backend
+          spec:
+            ports:
+            - port: 443
+          EOF
+
           kubectl apply -n "$tenant_ns" -f - <<EOF
           apiVersion: gateway.networking.k8s.io/v1alpha2
           kind: TLSRoute
@@ -1082,8 +1101,7 @@ spec:
             - "${route_host}"
             rules:
             - backendRefs:
-              - name: kubernetes
-                namespace: default
+              - name: api-passthrough-backend
                 port: 443
           EOF
 
