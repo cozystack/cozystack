@@ -1,0 +1,66 @@
+suite: forklift CR pre-delete cleanup
+# The operator holds a finalizer on the ForkliftController. When the whole
+# bundle is removed, nothing sequences the operator package against this one,
+# so the operator is usually gone before the CR is deleted — and then nothing
+# ever clears that finalizer and the release never finishes uninstalling.
+release:
+  name: forklift
+  namespace: cozy-forklift
+templates:
+  - templates/forklift-cr-cleanup-hook.yaml
+tests:
+  - it: runs before the release is deleted, and cleans itself up afterwards
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: hook-succeeded,before-hook-creation
+      # Bounded, or a wedged API call holds helm uninstall open indefinitely.
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 120
+
+  - it: can delete the CR and clear its finalizer, and nothing else
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[0].apiGroups[0]
+          value: forklift.konveyor.io
+      - equal:
+          path: rules[0].resources[0]
+          value: forkliftcontrollers
+      # Named explicitly: the hook has no business touching any other CR.
+      - equal:
+          path: rules[0].resourceNames[0]
+          value: forklift-controller
+      - contains:
+          path: rules[0].verbs
+          content: delete
+      - contains:
+          path: rules[0].verbs
+          content: patch
+
+  - it: runs under the restricted pod security standard
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL

@@ -53,11 +53,11 @@ tests:
             resources: ["bucketclasses"]
             verbs: ["get", "watch", "list"]
 
-  - it: ships exactly the sixteen rules this role is pinned to
+  - it: ships exactly the eighteen rules this role is pinned to
     asserts:
       # Both directions. A dropped grant is the failure this suite is about:
       # the apiserver returns forbidden and List silently drops the dropdown.
       - exists:
-          path: rules[15]
+          path: rules[17]
       - notExists:
-          path: rules[16]
+          path: rules[18]

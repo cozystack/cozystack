@@ -9,6 +9,11 @@ import { BackupPlanCreatePage } from "./BackupPlanCreatePage.tsx"
 import { BackupJobCreatePage } from "./BackupJobCreatePage.tsx"
 import { BackupCreatePage } from "./BackupCreatePage.tsx"
 import { BackupRestoreJobCreatePage } from "./BackupRestoreJobCreatePage.tsx"
+import { MigrationResourceListPage } from "./MigrationResourceListPage.tsx"
+import { MigrationSourceCreatePage } from "./MigrationSourceCreatePage.tsx"
+import { MigrationSourceEditPage } from "./MigrationSourceEditPage.tsx"
+import { MigrationTaskCreatePage } from "./MigrationTaskCreatePage.tsx"
+import { MigrationTaskDetailPage } from "./MigrationTaskDetailPage.tsx"
 import { ApplicationOrderPage } from "./ApplicationOrderPage.tsx"
 
 export function ConsolePage() {
@@ -62,6 +67,34 @@ export function ConsolePage() {
       <Route
         path="backups/restorejobs/:name/edit"
         element={<BackupResourceEditPage resourceType="restorejobs" title="Restore Jobs" />}
+      />
+      {/* Migration routes precede the generic `:plural` catch-alls below, which
+          would otherwise swallow /console/migration/* as an application kind. */}
+      <Route
+        path="migration/vmimportsources"
+        element={<MigrationResourceListPage resourceType="vmimportsources" title="Sources" />}
+      />
+      <Route
+        path="migration/vmimportsources/create"
+        element={<MigrationSourceCreatePage />}
+      />
+      {/* Sources are editable, tasks are not: a task's spec is immutable on
+          admission, so an edit form would only offer rejected changes. */}
+      <Route
+        path="migration/vmimportsources/:name/edit"
+        element={<MigrationSourceEditPage />}
+      />
+      <Route
+        path="migration/vmimporttasks"
+        element={<MigrationResourceListPage resourceType="vmimporttasks" title="Imports" />}
+      />
+      <Route
+        path="migration/vmimporttasks/create"
+        element={<MigrationTaskCreatePage />}
+      />
+      <Route
+        path="migration/vmimporttasks/:name"
+        element={<MigrationTaskDetailPage />}
       />
       <Route path="new/:appName" element={<ApplicationOrderPage />} />
       <Route path=":plural/:name/edit" element={<ApplicationEditRoute />} />

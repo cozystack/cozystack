@@ -1,0 +1,439 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package migrationcontroller
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	migrationv1alpha1 "github.com/cozystack/cozystack/api/migration/v1alpha1"
+)
+
+// ConnectionRequeue is how often a Source is re-examined while its Forklift
+// Provider has not settled. Short enough that a corrected endpoint or password
+// is noticed quickly, long enough that a permanently wrong one does not flood
+// the apiserver.
+const ConnectionRequeue = 30 * time.Second
+
+// VMImportSourceReconciler turns a VMImportSource into the Forklift objects a
+// migration needs: a credentials Secret and the source/destination Provider
+// pair. It never contacts the provider itself — Forklift's Provider controller
+// performs the connection test and publishes the result, so this reconciler
+// mirrors that verdict onto the Source rather than shipping a second vSphere
+// client that could disagree with the one doing the actual work.
+type VMImportSourceReconciler struct {
+	client.Client
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+
+	// VDDKImage is the operator-supplied VMware Virtual Disk Development Kit
+	// image. It is platform configuration, never a tenant value: naming an
+	// image the cluster will run is not a tenant's decision, and this one is
+	// built from a proprietary SDK that Cozystack cannot ship or mirror. Empty
+	// means the VMware path is unavailable, which a vSphere Source reports on
+	// its own status instead of failing somewhere deep in a transfer.
+	VDDKImage string
+
+	// Inventory reads Forklift's view of the source so the machine list can be
+	// published for the console's VM picker. This is still not a second vSphere
+	// client: it asks Forklift what Forklift already discovered. Nil disables
+	// publishing, and the picker then simply offers nothing.
+	Inventory *inventoryClient
+}
+
+func (r *VMImportSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	src := &migrationv1alpha1.VMImportSource{}
+	if err := r.Get(ctx, req.NamespacedName, src); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	// A vSphere source is unusable without the VDDK image, and saying so here
+	// is the whole point: the tenant learns the VMware path is not configured
+	// when they register the connection, not when a 200 GiB transfer dies.
+	if src.Spec.Type == migrationv1alpha1.ProviderVSphere && r.VDDKImage == "" {
+		return r.fail(ctx, src, migrationv1alpha1.ReasonVDDKNotConfigured,
+			"VMware import requires the platform administrator to configure a VDDK image "+
+				"(vmImport.vddkImage in the platform values); until then the vSphere import "+
+				"path is unavailable")
+	}
+
+	secretName, err := projectCredentials(ctx, r.Client, src)
+	if err != nil {
+		var perr *ProjectionError
+		if errors.As(err, &perr) {
+			return r.fail(ctx, src, perr.Reason, perr.Message)
+		}
+		return ctrl.Result{}, err
+	}
+
+	if err := r.ensureProviders(ctx, src, secretName); err != nil {
+		// Forklift's absence is a state to report, not a failure to retry
+		// silently. Returning it as an error means the reconcile never reaches
+		// the status write below, so the Source keeps whatever condition it had
+		// — which is actively misleading once the operator fixes the thing the
+		// old condition complained about. Seen on a live cluster: a Source went
+		// on claiming VDDKNotConfigured long after a VDDK image was configured,
+		// because every pass died here before saying anything.
+		if meta.IsNoMatchError(err) {
+			return r.fail(ctx, src, migrationv1alpha1.ReasonForkliftNotInstalled,
+				"the migration engine is not installed in this cluster: enable the "+
+					"forklift-operator and forklift packages")
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Host overrides come after the Provider they attach to: Forklift resolves
+	// a Host against its provider, so creating one first only produces an
+	// object that cannot validate yet.
+	if err := r.ensureHosts(ctx, src); err != nil {
+		var perr *ProjectionError
+		if errors.As(err, &perr) {
+			return r.fail(ctx, src, perr.Reason, perr.Message)
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Mirror Forklift's own verdict. Until its Provider controller has run, the
+	// Source stays not-ready with a reason that says so rather than claiming a
+	// connection nobody has tested.
+	ready, reason, message, err := r.providerVerdict(ctx, src)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if ready {
+		if err := r.setReady(ctx, src, metav1.ConditionTrue, migrationv1alpha1.ReasonConnected, message); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.V(1).Info("VMImportSource ready", "name", src.Name)
+		// Refresh the machine list on the same beat. A failure is logged and
+		// dropped rather than returned: the Source reports on the connection,
+		// and an inventory that is briefly unavailable should cost the picker
+		// its contents, not turn a working source not-ready.
+		if err := r.publishInventory(ctx, src); err != nil {
+			logger.V(1).Info("could not publish the source inventory", "name", src.Name, "error", err.Error())
+		}
+		// Re-check periodically: a connection that worked at registration can
+		// stop working, and a task that starts then would fail confusingly.
+		return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
+	}
+	if err := r.setReady(ctx, src, metav1.ConditionFalse, reason, message); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: ConnectionRequeue}, nil
+}
+
+// ensureProviders creates or updates the source and destination Providers. The
+// destination is Forklift's model of the local cluster: an "openshift"-type
+// provider with an empty URL, which is Forklift's own naming and says nothing
+// about what Cozystack runs on.
+func (r *VMImportSourceReconciler) ensureProviders(ctx context.Context, src *migrationv1alpha1.VMImportSource, secretName string) error {
+	owner := ownerRef(migrationv1alpha1.GroupVersion.WithKind("VMImportSource"), src.Name, src.UID)
+
+	sourceSpec := map[string]interface{}{
+		"type": string(src.Spec.Type),
+		"url":  src.Spec.URL,
+		"secret": map[string]interface{}{
+			"name":      secretName,
+			"namespace": src.Namespace,
+		},
+	}
+	if src.Spec.Type == migrationv1alpha1.ProviderVSphere && r.VDDKImage != "" {
+		sourceSpec["settings"] = map[string]interface{}{
+			"vddkInitImage": r.VDDKImage,
+		}
+	}
+	if err := r.applyProvider(ctx, src, sourceProviderName(src.Name), sourceSpec, owner); err != nil {
+		return err
+	}
+
+	destSpec := map[string]interface{}{
+		"type":   "openshift",
+		"url":    "",
+		"secret": map[string]interface{}{},
+	}
+	return r.applyProvider(ctx, src, destinationProviderName(src.Name), destSpec, owner)
+}
+
+// ensureHosts materializes one Forklift Host per spec.hosts entry, redirecting
+// the disk transfer away from the address vCenter advertises.
+//
+// Each host needs its own Secret: the ESXi host authenticates the transfer
+// connection itself rather than honouring the vCenter session, and Forklift
+// connection-tests the pair before any Plan referencing that host can run.
+func (r *VMImportSourceReconciler) ensureHosts(ctx context.Context, src *migrationv1alpha1.VMImportSource) error {
+	owner := ownerRef(migrationv1alpha1.GroupVersion.WithKind("VMImportSource"), src.Name, src.UID)
+
+	for i := range src.Spec.Hosts {
+		h := &src.Spec.Hosts[i]
+		name := hostOverrideName(src.Name, h.ID)
+
+		secretName, err := projectSecret(ctx, r.Client, src, name, h.Credentials)
+		if err != nil {
+			return err
+		}
+
+		spec := map[string]interface{}{
+			"id":        h.ID,
+			"ipAddress": h.Address,
+			"provider": map[string]interface{}{
+				"name":      sourceProviderName(src.Name),
+				"namespace": src.Namespace,
+			},
+			"secret": map[string]interface{}{
+				"name":      secretName,
+				"namespace": src.Namespace,
+			},
+		}
+
+		existing := newObject(hostGVK)
+		err = r.Get(ctx, types.NamespacedName{Namespace: src.Namespace, Name: name}, existing)
+		if apierrors.IsNotFound(err) {
+			obj := newObject(hostGVK)
+			obj.SetName(name)
+			obj.SetNamespace(src.Namespace)
+			obj.SetLabels(map[string]string{
+				migrationv1alpha1.ManagedByLabel: migrationv1alpha1.ManagedByValue,
+			})
+			obj.SetOwnerReferences([]metav1.OwnerReference{owner})
+			if err := unstructured.SetNestedMap(obj.Object, spec, "spec"); err != nil {
+				return err
+			}
+			if err := r.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		current, _, _ := unstructured.NestedMap(existing.Object, "spec")
+		if specEqual(current, spec) {
+			continue
+		}
+		if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
+			return err
+		}
+		if err := r.Update(ctx, existing); err != nil {
+			return err
+		}
+	}
+	return r.pruneHosts(ctx, src)
+}
+
+// pruneHosts removes the Hosts and projected Secrets of overrides the source no
+// longer lists.
+//
+// A Source is editable, so an override can be dropped after it was created.
+// Creating and updating alone would leave the old Host in place, and a Host is
+// not inert: Forklift keeps routing that ESXi host's transfers through the
+// address it names, so a stale one silently redirects traffic to somewhere the
+// tenant has removed from the spec — and its credentials outlive the decision
+// to stop using them, until the whole Source is deleted.
+//
+// Ownership is checked rather than assumed. The label alone says this
+// controller made the object, not that it made it for this Source, and two
+// Sources in one namespace would otherwise delete each other's Hosts.
+func (r *VMImportSourceReconciler) pruneHosts(ctx context.Context, src *migrationv1alpha1.VMImportSource) error {
+	wanted := make(map[string]bool, len(src.Spec.Hosts))
+	for i := range src.Spec.Hosts {
+		wanted[hostOverrideName(src.Name, src.Spec.Hosts[i].ID)] = true
+	}
+
+	hosts := &unstructured.UnstructuredList{}
+	hosts.SetGroupVersionKind(hostGVK)
+	if err := r.List(ctx, hosts,
+		client.InNamespace(src.Namespace),
+		client.MatchingLabels{migrationv1alpha1.ManagedByLabel: migrationv1alpha1.ManagedByValue},
+	); err != nil {
+		// Forklift's CRDs can be absent; that is not this reconcile's problem.
+		if meta.IsNoMatchError(err) {
+			return nil
+		}
+		return err
+	}
+
+	for i := range hosts.Items {
+		host := &hosts.Items[i]
+		name := host.GetName()
+		if wanted[name] || !ownedBy(host, src) {
+			continue
+		}
+		if err := r.Delete(ctx, host); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		// The projected credentials share the Host's name. They carry an owner
+		// reference to the Source, so leaving them would keep them alive for as
+		// long as the Source itself.
+		secret := &corev1.Secret{}
+		secret.Name = name
+		secret.Namespace = src.Namespace
+		if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// ownedBy reports whether this Source is the object's owner, by UID rather than
+// by name: names are reused, and a recreated Source is a different object.
+func ownedBy(obj metav1.Object, src *migrationv1alpha1.VMImportSource) bool {
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.UID == src.UID {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *VMImportSourceReconciler) applyProvider(
+	ctx context.Context,
+	src *migrationv1alpha1.VMImportSource,
+	name string,
+	spec map[string]interface{},
+	owner metav1.OwnerReference,
+) error {
+	existing := newObject(providerGVK)
+	err := r.Get(ctx, types.NamespacedName{Namespace: src.Namespace, Name: name}, existing)
+	if apierrors.IsNotFound(err) {
+		obj := newObject(providerGVK)
+		obj.SetName(name)
+		obj.SetNamespace(src.Namespace)
+		obj.SetLabels(map[string]string{
+			migrationv1alpha1.ManagedByLabel: migrationv1alpha1.ManagedByValue,
+		})
+		obj.SetOwnerReferences([]metav1.OwnerReference{owner})
+		if err := unstructured.SetNestedMap(obj.Object, spec, "spec"); err != nil {
+			return err
+		}
+		if err := r.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	current, _, _ := unstructured.NestedMap(existing.Object, "spec")
+	if specEqual(current, spec) {
+		return nil
+	}
+	if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
+		return err
+	}
+	return r.Update(ctx, existing)
+}
+
+// providerVerdict reads the source Provider's conditions. Forklift publishes a
+// Ready condition once it has authenticated and read the inventory; anything
+// else is reported verbatim so a tenant sees Forklift's own words about their
+// endpoint rather than a paraphrase.
+func (r *VMImportSourceReconciler) providerVerdict(ctx context.Context, src *migrationv1alpha1.VMImportSource) (bool, string, string, error) {
+	provider := newObject(providerGVK)
+	err := r.Get(ctx, types.NamespacedName{Namespace: src.Namespace, Name: sourceProviderName(src.Name)}, provider)
+	if apierrors.IsNotFound(err) {
+		return false, migrationv1alpha1.ReasonConnectionFailed, "the Forklift Provider has not been created yet", nil
+	}
+	if err != nil {
+		if meta.IsNoMatchError(err) {
+			return false, migrationv1alpha1.ReasonForkliftNotInstalled,
+				"the migration engine is not installed in this cluster: enable the " +
+					"forklift-operator and forklift packages", nil
+		}
+		return false, "", "", err
+	}
+
+	conditions, _, _ := unstructured.NestedSlice(provider.Object, "status", "conditions")
+	var critical []string
+	for _, raw := range conditions {
+		cond, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		ctype, _, _ := unstructured.NestedString(cond, "type")
+		status, _, _ := unstructured.NestedString(cond, "status")
+		category, _, _ := unstructured.NestedString(cond, "category")
+		message, _, _ := unstructured.NestedString(cond, "message")
+
+		if ctype == "Ready" && status == "True" {
+			return true, migrationv1alpha1.ReasonConnected, "the provider endpoint answered and its inventory is readable", nil
+		}
+		if status == "True" && (category == "Critical" || category == "Error") {
+			critical = append(critical, fmt.Sprintf("%s: %s", ctype, message))
+		}
+	}
+	if len(critical) > 0 {
+		return false, migrationv1alpha1.ReasonConnectionFailed, strings.Join(critical, "; "), nil
+	}
+	return false, migrationv1alpha1.ReasonConnectionFailed, "waiting for Forklift to test the connection", nil
+}
+
+func (r *VMImportSourceReconciler) fail(ctx context.Context, src *migrationv1alpha1.VMImportSource, reason, message string) (ctrl.Result, error) {
+	if err := r.setReady(ctx, src, metav1.ConditionFalse, reason, message); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: ConnectionRequeue}, nil
+}
+
+func (r *VMImportSourceReconciler) setReady(ctx context.Context, src *migrationv1alpha1.VMImportSource, status metav1.ConditionStatus, reason, message string) error {
+	cond := metav1.Condition{
+		Type:               migrationv1alpha1.SourceReadyCondition,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: src.Generation,
+	}
+	if !conditionChanged(src.Status.Conditions, cond) && src.Status.ObservedGeneration == src.Generation {
+		return nil
+	}
+	meta.SetStatusCondition(&src.Status.Conditions, cond)
+	src.Status.ObservedGeneration = src.Generation
+	return r.Status().Update(ctx, src)
+}
+
+// conditionChanged reports whether setting cond would change anything the
+// reader can see. Without this the reconciler would write status on every
+// requeue, and a not-ready Source would rewrite its condition twice a minute
+// forever.
+func conditionChanged(existing []metav1.Condition, cond metav1.Condition) bool {
+	current := meta.FindStatusCondition(existing, cond.Type)
+	if current == nil {
+		return true
+	}
+	return current.Status != cond.Status ||
+		current.Reason != cond.Reason ||
+		current.Message != cond.Message ||
+		current.ObservedGeneration != cond.ObservedGeneration
+}
+
+func specEqual(a, b map[string]interface{}) bool {
+	return equality.Semantic.DeepEqual(a, b)
+}
+
+func (r *VMImportSourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&migrationv1alpha1.VMImportSource{}).
+		Named("vmimportsource").
+		Complete(r)
+}

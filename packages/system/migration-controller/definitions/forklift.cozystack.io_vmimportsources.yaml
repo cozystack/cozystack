@@ -1,0 +1,284 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: vmimportsources.forklift.cozystack.io
+spec:
+  group: forklift.cozystack.io
+  names:
+    kind: VMImportSource
+    listKind: VMImportSourceList
+    plural: vmimportsources
+    shortNames:
+    - vmis
+    - vmimportsrc
+    singular: vmimportsource
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .spec.url
+      name: URL
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VMImportSource registers a reusable connection to a source virtualization
+          platform. It is long-lived: VMImportTasks reference it, and deleting it
+          deregisters the connection without touching anything already imported.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VMImportSourceSpec describes a connection to a source virtualization
+              platform.
+            properties:
+              credentials:
+                description: Credentials is the account used to reach the provider.
+                properties:
+                  caCert:
+                    description: |-
+                      CACert is the PEM-encoded certificate authority that signed the
+                      endpoint's TLS certificate. Required unless insecureSkipVerify is set:
+                      the migration engine refuses a vSphere connection that can neither
+                      verify the endpoint nor was told not to.
+
+                      This is a CA certificate, not a fingerprint. A SHA-1 thumbprint is what
+                      the engine wants for a direct ESXi host connection, which v1 does not
+                      expose, and supplying one here does not satisfy the check.
+                    type: string
+                  insecureSkipVerify:
+                    description: |-
+                      InsecureSkipVerify disables verification of the endpoint's TLS
+                      certificate. Convenient in a lab and a bad idea anywhere else: the
+                      credentials above travel over that connection. Prefer caCert.
+                    type: boolean
+                  password:
+                    description: Password is the account's password.
+                    minLength: 1
+                    type: string
+                  username:
+                    description: |-
+                      Username is the account used to authenticate against the provider
+                      (e.g. `migration@vsphere.local`).
+                    minLength: 1
+                    type: string
+                required:
+                - password
+                - username
+                type: object
+                x-kubernetes-validations:
+                - message: 'either caCert must be set or insecureSkipVerify must be
+                    true: the migration engine will not open a vSphere connection
+                    it can neither verify nor was told to trust'
+                  rule: has(self.caCert) || (has(self.insecureSkipVerify) && self.insecureSkipVerify)
+              hosts:
+                description: |-
+                  Hosts redirects the disk transfer for individual ESXi hosts.
+
+                  Disk data does not travel through vCenter. VDDK opens its connection
+                  straight to the ESXi host holding the VM, at whatever address vCenter
+                  advertises for it — and that address is frequently one the cluster
+                  cannot reach: a management network the workers are not on, or, worse,
+                  one that collides with the cluster's own Service CIDR, where the packet
+                  is swallowed by service routing and never leaves. The transfer then
+                  fails late, after validation has passed, with an NBD error naming
+                  neither the address nor the reason.
+
+                  An entry here names the host and the address to use instead. Each
+                  carries its own credentials because the ESXi host authenticates the
+                  connection itself rather than honouring the vCenter session, and the
+                  engine connection-tests them before the transfer starts.
+                items:
+                  description: HostOverride redirects the disk transfer for one ESXi
+                    host.
+                  properties:
+                    address:
+                      description: |-
+                        Address is the address the cluster should use to reach this host for the
+                        disk transfer, replacing the one vCenter advertises.
+                      minLength: 1
+                      type: string
+                    credentials:
+                      description: |-
+                        Credentials is the account on the ESXi host itself. The host
+                        authenticates the transfer connection directly, so the provider's
+                        vCenter account does not carry over.
+                      properties:
+                        caCert:
+                          description: |-
+                            CACert is the PEM-encoded certificate authority that signed the
+                            endpoint's TLS certificate. Required unless insecureSkipVerify is set:
+                            the migration engine refuses a vSphere connection that can neither
+                            verify the endpoint nor was told not to.
+
+                            This is a CA certificate, not a fingerprint. A SHA-1 thumbprint is what
+                            the engine wants for a direct ESXi host connection, which v1 does not
+                            expose, and supplying one here does not satisfy the check.
+                          type: string
+                        insecureSkipVerify:
+                          description: |-
+                            InsecureSkipVerify disables verification of the endpoint's TLS
+                            certificate. Convenient in a lab and a bad idea anywhere else: the
+                            credentials above travel over that connection. Prefer caCert.
+                          type: boolean
+                        password:
+                          description: Password is the account's password.
+                          minLength: 1
+                          type: string
+                        username:
+                          description: |-
+                            Username is the account used to authenticate against the provider
+                            (e.g. `migration@vsphere.local`).
+                          minLength: 1
+                          type: string
+                      required:
+                      - password
+                      - username
+                      type: object
+                      x-kubernetes-validations:
+                      - message: 'either caCert must be set or insecureSkipVerify
+                          must be true: the migration engine will not open a connection
+                          to the host it can neither verify nor was told to trust'
+                        rule: has(self.caCert) || (has(self.insecureSkipVerify) &&
+                          self.insecureSkipVerify)
+                    id:
+                      description: |-
+                        ID is the host's managed-object reference in the source inventory
+                        (e.g. `host-10`). It is what the VM's inventory record names as its
+                        host, not the hostname.
+                      minLength: 1
+                      type: string
+                  required:
+                  - address
+                  - credentials
+                  - id
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - id
+                x-kubernetes-list-type: map
+              type:
+                description: Type is the source platform this connection speaks to.
+                enum:
+                - vsphere
+                type: string
+                x-kubernetes-validations:
+                - message: type is immutable
+                  rule: self == oldSelf
+              url:
+                description: URL is the provider's API endpoint (e.g. `https://vcenter.example.com/sdk`).
+                minLength: 1
+                type: string
+            required:
+            - credentials
+            - type
+            - url
+            type: object
+          status:
+            description: VMImportSourceStatus reports whether the connection is usable.
+            properties:
+              conditions:
+                description: |-
+                  Conditions represents the latest available observations of the connection's state.
+                  The Ready condition is the connection's readiness: it is true only once the
+                  endpoint has answered and every platform prerequisite for this provider
+                  type is satisfied.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the .metadata.generation the conditions
+                  were computed from.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    selectableFields:
+    - jsonPath: .spec.type
+    served: true
+    storage: true
+    subresources:
+      status: {}

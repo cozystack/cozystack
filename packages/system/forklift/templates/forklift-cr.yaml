@@ -1,0 +1,11 @@
+apiVersion: forklift.konveyor.io/v1beta1
+kind: ForkliftController
+metadata:
+  name: forklift-controller
+  namespace: cozy-forklift
+spec:
+  feature_ui_plugin: "false"
+  feature_validation: "true"
+  feature_volume_populator: "true"
+  feature_auth_required: "true"
+  feature_cli_download: "false"

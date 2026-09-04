@@ -24,6 +24,11 @@
 ## @field {quantity} [memory] - Amount of memory allocated.
 ## @field {quantity} [sockets] - Number of CPU sockets (vCPU topology).
 
+## @typedef {struct} Firmware - Firmware and boot configuration. When left empty, the boot mode is inherited from the instanceProfile.
+## @field {string} [bootloader] - Bootloader to boot the VM with: "uefi" (OVMF) or "bios" (SeaBIOS). Empty inherits the instanceProfile default.
+## @field {bool} [secureBoot] - Enable UEFI Secure Boot. Only applies when bootloader is "uefi".
+## @field {bool} [efiPersistent] - Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi". On default RWO storage the VM is node-pinned (no live-migration).
+
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
@@ -81,6 +86,14 @@ gpus: []
 
 ## @param {string} cpuModel - Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map
 cpuModel: ""
+
+## @param {Firmware} [firmware] - Firmware and boot configuration (UEFI/BIOS selection, Secure Boot, persistent EFI NVRAM).
+firmware: {}
+## Example:
+## firmware:
+##   bootloader: uefi
+##   secureBoot: true
+##   efiPersistent: true
 
 ## @param {Resources} [resources] - Resource configuration for the virtual machine.
 resources: {}

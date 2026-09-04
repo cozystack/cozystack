@@ -92,6 +92,20 @@ describe("useConsoleSidebarSections — admin areas moved out", () => {
     expect(findItem(result.current, "Info")).toBeUndefined()
     expect(findItem(result.current, "Tenants")).toBeUndefined()
   })
+
+  // Migration is a tenant area, not an admin one: a tenant registers their own
+  // vCenter and runs their own imports, so it belongs beside Backups in Console
+  // rather than in the admin portal.
+  it("offers the Migration group with both source and import entries", async () => {
+    const client = makeClient({ nodes: true, backupclasses: true })
+    const { result } = renderHook(() => useConsoleSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    await waitFor(() => expect(result.current.length).toBeGreaterThan(0))
+    expect(findItem(result.current, "Sources")?.to).toBe("/console/migration/vmimportsources")
+    expect(findItem(result.current, "Imports")?.to).toBe("/console/migration/vmimporttasks")
+    expect(result.current.some((s) => s.title === "Migration")).toBe(true)
+  })
 })
 
 describe("useAdminSidebarSections", () => {

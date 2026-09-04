@@ -53,6 +53,9 @@ type ConfigSpec struct {
 	// Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map
 	// +kubebuilder:default:=""
 	CpuModel string `json:"cpuModel"`
+	// Firmware and boot configuration (UEFI/BIOS selection, Secure Boot, persistent EFI NVRAM).
+	// +kubebuilder:default:={}
+	Firmware Firmware `json:"firmware,omitempty"`
 	// Resource configuration for the virtual machine.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
@@ -72,6 +75,15 @@ type Disk struct {
 	Bus string `json:"bus,omitempty"`
 	// Disk name.
 	Name string `json:"name"`
+}
+
+type Firmware struct {
+	// Bootloader to boot the VM with: "uefi" (OVMF) or "bios" (SeaBIOS). Empty inherits the instanceProfile default.
+	Bootloader string `json:"bootloader,omitempty"`
+	// Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi". On default RWO storage the VM is node-pinned (no live-migration).
+	EfiPersistent bool `json:"efiPersistent,omitempty"`
+	// Enable UEFI Secure Boot. Only applies when bootloader is "uefi".
+	SecureBoot bool `json:"secureBoot,omitempty"`
 }
 
 type GPU struct {

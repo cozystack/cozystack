@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -35,16 +36,32 @@ var (
 	_ rest.SingularNameProvider = &REST{}
 )
 
+// paramSeparator divides a parameterised source name from its argument, as in
+// `vmimportvm.my-source`. A dot is legal in a resource name, so the whole thing
+// still addresses as an ordinary object.
+const paramSeparator = "."
+
 // REST implements the read-only Option resource.
 type REST struct {
 	providers map[string]providerFunc
-	gvr       schema.GroupVersionResource
+	// paramProviders answer sources whose contents depend on a value the caller
+	// already chose — the VMs of one import source, say. They are addressed as
+	// `<source><paramSeparator><argument>` and are deliberately absent from
+	// List: without an argument they name nothing.
+	paramProviders map[string]paramProviderFunc
+	gvr            schema.GroupVersionResource
 }
 
 // NewREST builds the Option REST storage from a provider registry.
 func NewREST(providers map[string]providerFunc) *REST {
+	return NewRESTWithParams(providers, nil)
+}
+
+// NewRESTWithParams builds the storage from both registries.
+func NewRESTWithParams(providers map[string]providerFunc, params map[string]paramProviderFunc) *REST {
 	return &REST{
-		providers: providers,
+		providers:      providers,
+		paramProviders: params,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -102,11 +119,25 @@ func (r *REST) List(ctx context.Context, _ *metainternal.ListOptions) (runtime.O
 }
 
 func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
+	ns, _ := request.NamespaceFrom(ctx)
+
 	provider, ok := r.providers[name]
 	if !ok {
-		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		// A parameterised source: everything up to the first separator names
+		// the provider, the rest is its argument.
+		base, arg, found := strings.Cut(name, paramSeparator)
+		param, known := r.paramProviders[base]
+		if !found || arg == "" || !known {
+			return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		}
+		items, err := param(ctx, ns, arg)
+		if err != nil {
+			return nil, apierrors.NewInternalError(fmt.Errorf("compute options for %q: %w", name, err))
+		}
+		opt := r.makeOption(name, ns, items)
+		return &opt, nil
 	}
-	ns, _ := request.NamespaceFrom(ctx)
+
 	items, err := provider(ctx, ns)
 	if err != nil {
 		return nil, apierrors.NewInternalError(fmt.Errorf("compute options for %q: %w", name, err))
