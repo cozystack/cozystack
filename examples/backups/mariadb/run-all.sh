@@ -186,6 +186,17 @@ if [[ "$GOT" != "$SENTINEL_TOKEN" ]]; then
 fi
 log_success "Round-trip verified: '${MARIADB_TARGET_NAME}' restored sentinel '${GOT}' from S3."
 
+# The app-user read above already proves the restore did not overwrite the
+# target's grant table with the source's. root is the one the operator can never
+# repair after bootstrap, so assert it too: its login must still match the
+# chart-generated password in the target Secret.
+print_header "Step 40 verify: root still authenticates against the restored copy"
+if ! mysql_root_login "$MARIADB_TARGET_CR" >/dev/null; then
+    log_error "root cannot authenticate against '${MARIADB_TARGET_NAME}': the restore overwrote the grant table and the target Secret's root password no longer matches"
+    exit 1
+fi
+log_success "root login verified against '${MARIADB_TARGET_NAME}'."
+
 # To-copy must not mutate the source. Regressing into a source-touching restore
 # would corrupt the running instance, so assert the source still reads back.
 SRC_GOT=$(mysql_exec "$MARIADB_SRC_CR" "SELECT token FROM demo.e2e_sentinel WHERE id = 1;" \

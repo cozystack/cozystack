@@ -122,12 +122,23 @@ type BackupList struct {
 // the driver writes. Unknown fields are preserved by the server during
 // merge patches; everything we don't set falls back to operator defaults.
 type BackupSpec struct {
-	MariaDBRef  MariaDBObjectRef `json:"mariaDbRef"`
-	Storage     BackupStorage    `json:"storage"`
-	Databases   []string         `json:"databases,omitempty"`
-	Compression string           `json:"compression,omitempty"`
+	MariaDBRef   MariaDBObjectRef `json:"mariaDbRef"`
+	Storage      BackupStorage    `json:"storage"`
+	Databases    []string         `json:"databases,omitempty"`
+	Compression  string           `json:"compression,omitempty"`
 	MaxRetention *metav1.Duration `json:"maxRetention,omitempty"`
-	LogLevel    string           `json:"logLevel,omitempty"`
+	LogLevel     string           `json:"logLevel,omitempty"`
+	// IgnoreGlobalPriv excludes mysql.global_priv (the grant table holding
+	// every user's password hash, root included) from the logical dump. The
+	// operator otherwise ships it even for a database-scoped backup, so a
+	// restore into a copy would overwrite the target's grant table with the
+	// source's hashes - and the target's passwords are chart-generated in
+	// <release>-credentials, never the source's, so every application-user
+	// login would then fail and root, which the operator only sets at datadir
+	// bootstrap, would be wrong for good. Cozystack owns users through their
+	// User CRs and root through rootPasswordSecretKeyRef, so the grant table is
+	// never the source of truth and is safe to drop from the dump.
+	IgnoreGlobalPriv *bool `json:"ignoreGlobalPriv,omitempty"`
 }
 
 // MariaDBObjectRef is a local reference to the source/target MariaDB CR.

@@ -162,3 +162,20 @@ mysql_exec() {
     kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
         mariadb -u"$MARIADB_APP_USER" -p"$pass" -h "${cr}-primary" -e "$sql"
 }
+
+# Authenticate as root against a MariaDB CR's primary over TCP, using the
+# chart-generated root password in <cr>-credentials. root is the sharp edge on a
+# restore into a copy: the operator only applies rootPasswordSecretKeyRef at
+# datadir bootstrap, so if a restore overwrote the grant table with the source's
+# root hash the target's advertised root would be wrong for good. Args: <cr-name>
+mysql_root_login() {
+    local cr="$1"
+    local pod pass
+    pod=$(mariadb_primary_pod "$cr")
+    [[ -n "$pod" ]] || { log_error "no primary pod for MariaDB CR '$cr'"; return 1; }
+    pass=$(kubectl -n "$NAMESPACE" get secret "${cr}-credentials" \
+        -o "jsonpath={.data['root']}" | base64 -d)
+    [[ -n "$pass" ]] || { log_error "no root password in ${cr}-credentials"; return 1; }
+    kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
+        mariadb -uroot -p"$pass" -h "${cr}-primary" -e "SELECT 1;"
+}
