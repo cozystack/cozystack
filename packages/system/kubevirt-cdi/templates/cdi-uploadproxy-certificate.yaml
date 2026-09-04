@@ -1,0 +1,19 @@
+{{- $cluster := .Values._cluster | default dict -}}
+{{- $host := (index $cluster "root-host") | default "" -}}
+{{- $exposeServices := splitList "," ((index $cluster "expose-services") | default "") -}}
+{{- $wildcardSecret := (index $cluster "wildcard-secret-name") | default "" -}}
+{{- $clusterIssuer := (index $cluster "issuer-name") | default "letsencrypt-prod" -}}
+{{- if and $host (has "cdi-uploadproxy" $exposeServices) (not $wildcardSecret) }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cdi-uploadproxy-public
+  namespace: cozy-kubevirt-cdi
+spec:
+  secretName: cdi-uploadproxy-public-cert
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ $clusterIssuer | quote }}
+  dnsNames:
+  - {{ printf "cdi-uploadproxy.%s" $host | quote }}
+{{- end }}

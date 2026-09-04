@@ -4,17 +4,22 @@
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 
 
-{{- if and (has "cdi-uploadproxy" $exposeServices) (ne $gatewayEnabled "true") }}
+{{- if and $host (has "cdi-uploadproxy" $exposeServices) (ne $gatewayEnabled "true") }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
     nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/ssl-passthrough: "true"
   name: cdi-uploadproxy
   namespace: cozy-kubevirt-cdi
 spec:
   ingressClassName: {{ $exposeIngress }}
+  tls:
+  - hosts:
+    - cdi-uploadproxy.{{ $host }}
   rules:
   - host: cdi-uploadproxy.{{ $host }}
     http:

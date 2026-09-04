@@ -462,11 +462,12 @@ gateway:
   #     works for tenants whose ingress is via Gateway API rather than
   #     ingress-nginx.
   #   - Exposed services (dashboard, keycloak, harbor, bucket, grafana,
-  #     cozystack-api, vm-exportproxy, cdi-uploadproxy) render an
-  #     HTTPRoute attached to the tenant's Gateway.
+  #     cozystack-api, vm-exportproxy, cdi-uploadproxy) render an HTTPRoute
+  #     or TLSRoute, according to their TLS mode, attached to the tenant's
+  #     Gateway.
   # Per-tenant opt-in is still governed by tenant.spec.gateway=true, which
   # materialises the Gateway itself. This flag only controls platform-wide
-  # Gateway API integration (cert-manager solver + per-service HTTPRoutes).
+  # Gateway API integration (cert-manager solver + per-service routes).
   enabled: false
   # Advertise HTTP/2 on every Gateway API listener served by the bundled
   # Cilium dataplane. Browsers negotiate HTTP/2 exclusively through TLS ALPN

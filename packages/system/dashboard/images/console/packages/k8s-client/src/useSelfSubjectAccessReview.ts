@@ -63,9 +63,7 @@ function ssarCacheKey(spec: SelfSubjectAccessReviewSpec): readonly string[] {
  * 'can I see this UI section' are functionally indifferent to 'denied'
  * versus 'cannot determine'; in both cases the section stays hidden.
  */
-export function useSelfSubjectAccessReview(
-  spec: SelfSubjectAccessReviewSpec,
-): { allowed: boolean; isLoading: boolean; error: Error | null } {
+export function useSelfSubjectAccessReview(spec: SelfSubjectAccessReviewSpec) {
   const client = useK8sClient()
   const queryKey = ssarCacheKey(spec)
   const query = useQuery<SelfSubjectAccessReview>({
@@ -87,7 +85,10 @@ export function useSelfSubjectAccessReview(
   })
   return {
     allowed: query.data?.status?.allowed ?? false,
+    isFetched: query.isFetched,
     isLoading: query.isLoading,
+    isFetching: query.isFetching,
     error: (query.error as Error | null) ?? null,
+    refetch: query.refetch,
   }
 }

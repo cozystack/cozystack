@@ -1,0 +1,59 @@
+suite: CDI upload proxy public certificate
+templates:
+  - templates/cdi-uploadproxy-certificate.yaml
+
+release:
+  name: kubevirt-cdi
+  namespace: cozy-kubevirt-cdi
+
+tests:
+  - it: issues a per-host certificate when no platform wildcard exists
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard,cdi-uploadproxy"
+        issuer-name: letsencrypt-stage
+    asserts:
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: spec.secretName
+          value: cdi-uploadproxy-public-cert
+      - equal:
+          path: spec.issuerRef
+          value:
+            kind: ClusterIssuer
+            name: letsencrypt-stage
+      - equal:
+          path: spec.dnsNames
+          value:
+          - cdi-uploadproxy.example.org
+
+  - it: reuses the copied wildcard instead of issuing another certificate
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: issues nothing when the upload proxy is not exposed
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: issues nothing without a publication hostname
+    set:
+      _cluster:
+        root-host: ""
+        expose-services: "cdi-uploadproxy"
+    asserts:
+      - hasDocuments:
+          count: 0

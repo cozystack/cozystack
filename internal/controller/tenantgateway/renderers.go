@@ -76,11 +76,18 @@ func acmeServerForIssuer(name gatewayv1alpha1.IssuerName) (string, error) {
 	}
 }
 
-// acmeChallengeNamespace is the namespace cert-manager publishes
-// HTTP-01 challenge HTTPRoutes from. Hardcoded to the cozystack
-// platform default; if you ever move cert-manager out of cozy-cert-
-// manager, add a TenantGateway spec field to override this.
-const acmeChallengeNamespace = "cozy-cert-manager"
+const (
+	// acmeChallengeNamespace is the namespace cert-manager publishes
+	// HTTP-01 challenge HTTPRoutes from. Hardcoded to the cozystack
+	// platform default; if you ever move cert-manager out of cozy-cert-
+	// manager, add a TenantGateway spec field to override this.
+	acmeChallengeNamespace = "cozy-cert-manager"
+
+	// CDI's public upload-proxy Certificate lives with the workload, so
+	// cert-manager creates its HTTP-01 solver route in this namespace.
+	cdiUploadProxyNamespace = "cozy-kubevirt-cdi"
+	cdiUploadProxyService   = "cdi-uploadproxy"
+)
 
 // buildAllowedRoutes computes the AllowedRoutes block applied to
 // HTTPS / TLS-passthrough listeners: a label selector matching
@@ -120,8 +127,10 @@ func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRo
 // buildHTTPListenerAllowedRoutes returns a strictly narrower
 // allowedRoutes for the port-80 listener: only the tenant namespace
 // (the controller-owned http→https redirect HTTPRoute lives there)
-// and the cert-manager challenge namespace (HTTP-01 ACME challenges
-// publish a transient HTTPRoute under /.well-known/acme-challenge/).
+// and namespaces that legitimately publish HTTP-01 solver routes. That is
+// cert-manager's platform namespace plus the CDI namespace when the Gateway
+// uses HTTP-01, its TLS-passthrough listener is configured, and CDI is an
+// attached namespace.
 //
 // Why: app HTTPRoutes (harbor, keycloak, dashboard, bucket) attach
 // by hostname with no sectionName, so without this narrower filter
@@ -129,15 +138,30 @@ func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRo
 // tie-breaks merged routes by creationTimestamp, so an app route
 // created before the controller's redirect would silently serve
 // plaintext on port 80 and leak credentials. Restricting the HTTP
-// listener's allowedRoutes namespaces excludes the cozy-* / tenant-*
-// namespaces apps live in, while keeping cert-manager's challenge
-// namespace open so ACME still completes.
+// listener's allowedRoutes namespaces excludes unrelated cozy-* / tenant-*
+// app namespaces, while keeping the required ACME solver namespaces open.
 func buildHTTPListenerAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRoutes {
 	values := []string{tgw.Namespace}
 	if acmeChallengeNamespace != tgw.Namespace {
 		values = append(values, acmeChallengeNamespace)
 	}
+	usesHTTP01 := tgw.Spec.CertMode == "" || tgw.Spec.CertMode == gatewayv1alpha1.CertModeHTTP01
+	if usesHTTP01 &&
+		stringInList(tgw.Spec.TLSPassthroughServices, cdiUploadProxyService) &&
+		stringInList(tgw.Spec.AttachedNamespaces, cdiUploadProxyNamespace) &&
+		cdiUploadProxyNamespace != tgw.Namespace {
+		values = append(values, cdiUploadProxyNamespace)
+	}
 	return allowedRoutesFromValues(values)
+}
+
+func stringInList(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func allowedRoutesFromValues(values []string) *gatewayv1.AllowedRoutes {
@@ -387,8 +411,8 @@ func buildSolver(tgw *gatewayv1alpha1.TenantGateway) (*cmacmev1.ACMEChallengeSol
 func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGateway, childApexes []string) (*cmv1.Certificate, error) {
 	dnsNames := []string{tgw.Spec.Apex, "*." + tgw.Spec.Apex}
 	seen := map[string]struct{}{
-		tgw.Spec.Apex:           {},
-		"*." + tgw.Spec.Apex:    {},
+		tgw.Spec.Apex:        {},
+		"*." + tgw.Spec.Apex: {},
 	}
 	for _, apex := range childApexes {
 		if apex == "" {

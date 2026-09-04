@@ -1,0 +1,45 @@
+suite: CDI upload proxy Gateway TLSRoute
+templates:
+  - templates/cdi-uploadproxy-tlsroute.yaml
+
+release:
+  name: kubevirt-cdi
+  namespace: cozy-kubevirt-cdi
+
+tests:
+  - it: renders the TLSRoute in Gateway mode
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        expose-ingress: tenant-root
+        gateway-enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: TLSRoute
+      - equal:
+          path: spec.hostnames[0]
+          value: cdi-uploadproxy.example.org
+
+  - it: renders no TLSRoute in ingress mode
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        gateway-enabled: "false"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no TLSRoute without a publication hostname
+    set:
+      _cluster:
+        root-host: ""
+        expose-services: "cdi-uploadproxy"
+        gateway-enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 0

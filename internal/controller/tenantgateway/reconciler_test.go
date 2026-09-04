@@ -209,7 +209,7 @@ func TestReconcile_IsIdempotent(t *testing.T) {
 // TestReconcile_HTTPListenerExcludesAppNamespaces pins the
 // security contract: the HTTP listener (port 80) accepts routes
 // only from the tenant namespace (controller's redirect HTTPRoute)
-// and the cert-manager challenge namespace. App namespaces
+// and namespaces that need HTTP-01 solver routes. App namespaces
 // (cozy-harbor, cozy-keycloak, etc.) are explicitly excluded so
 // app HTTPRoutes that attach by hostname (no sectionName) cannot
 // bind to port 80 and silently serve plaintext.
@@ -218,10 +218,11 @@ func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
 	tgw := &gatewayv1alpha1.TenantGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
 		Spec: gatewayv1alpha1.TenantGatewaySpec{
-			Apex:               "foo.example.com",
-			CertMode:           gatewayv1alpha1.CertModeHTTP01,
-			GatewayClassName:   "cilium",
-			AttachedNamespaces: []string{"cozy-harbor", "cozy-keycloak", "cozy-cert-manager"},
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"cozy-harbor", "cozy-keycloak", "cozy-cert-manager", "cozy-kubevirt-cdi"},
+			TLSPassthroughServices: []string{"cdi-uploadproxy"},
 		},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
@@ -245,7 +246,7 @@ func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
 		case "http":
 			httpListener = &gw.Spec.Listeners[i]
 		}
-		if gw.Spec.Listeners[i].Hostname != nil {
+		if gw.Spec.Listeners[i].Protocol == gatewayv1.HTTPSProtocolType {
 			httpsListener = &gw.Spec.Listeners[i]
 		}
 	}
@@ -260,6 +261,9 @@ func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
 	if !containsString(httpValues, "cozy-cert-manager") {
 		t.Errorf("http listener missing cozy-cert-manager (HTTP-01 ACME would break): %v", httpValues)
 	}
+	if !containsString(httpValues, "cozy-kubevirt-cdi") {
+		t.Errorf("http listener missing cozy-kubevirt-cdi (upload-proxy HTTP-01 ACME would break): %v", httpValues)
+	}
 	for _, app := range []string{"cozy-harbor", "cozy-keycloak"} {
 		if containsString(httpValues, app) {
 			t.Errorf("http listener accepts %s — apps from this namespace can serve plaintext on port 80: %v", app, httpValues)
@@ -272,6 +276,70 @@ func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
 		if !containsString(httpsValues, "cozy-harbor") {
 			t.Errorf("https listener should still accept cozy-harbor: %v", httpsValues)
 		}
+	}
+}
+
+func TestBuildHTTPListenerAllowedRoutes_CDIRequiresHTTP01Exposure(t *testing.T) {
+	tests := []struct {
+		name        string
+		certMode    gatewayv1alpha1.CertMode
+		attached    []string
+		passthrough []string
+		wantCDI     bool
+	}{
+		{
+			name:        "default HTTP-01 mode",
+			attached:    []string{cdiUploadProxyNamespace},
+			passthrough: []string{cdiUploadProxyService},
+			wantCDI:     true,
+		},
+		{
+			name:        "explicit HTTP-01 mode",
+			certMode:    gatewayv1alpha1.CertModeHTTP01,
+			attached:    []string{cdiUploadProxyNamespace},
+			passthrough: []string{cdiUploadProxyService},
+			wantCDI:     true,
+		},
+		{
+			name:        "DNS-01 mode",
+			certMode:    gatewayv1alpha1.CertModeDNS01,
+			attached:    []string{cdiUploadProxyNamespace},
+			passthrough: []string{cdiUploadProxyService},
+		},
+		{
+			name:        "existing Secret mode",
+			certMode:    gatewayv1alpha1.CertModeExistingSecret,
+			attached:    []string{cdiUploadProxyNamespace},
+			passthrough: []string{cdiUploadProxyService},
+		},
+		{
+			name:        "namespace not attached",
+			certMode:    gatewayv1alpha1.CertModeHTTP01,
+			passthrough: []string{cdiUploadProxyService},
+		},
+		{
+			name:     "proxy not exposed",
+			certMode: gatewayv1alpha1.CertModeHTTP01,
+			attached: []string{cdiUploadProxyNamespace},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-root"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					CertMode:               tt.certMode,
+					AttachedNamespaces:     tt.attached,
+					TLSPassthroughServices: tt.passthrough,
+				},
+			}
+			allowed := buildHTTPListenerAllowedRoutes(tgw)
+			values := allowed.Namespaces.Selector.MatchExpressions[0].Values
+			if got := containsString(values, cdiUploadProxyNamespace); got != tt.wantCDI {
+				t.Fatalf("CDI namespace allowed=%v, want %v (values=%v)", got, tt.wantCDI, values)
+			}
+		})
 	}
 }
 
