@@ -15,21 +15,16 @@ metadata:
   name: {{ .Release.Name }}-ca
   namespace: {{ .Release.Namespace }}
 spec:
+  {{- /* tenant-projection.yaml names this Secret as its sourceSecretName, and
+       that is how the CA-extraction controller finds it: no label on this
+       Secret selects it. The controller reads ca.crt from here rather than
+       from the leaf below, whose Secret carries the server private key beside
+       the same ca.crt.
+
+       cert-manager keeps this Secret when TLS goes off and Helm does not own
+       it, so nothing rendered here can withdraw the raw CA material. See
+       README "Turning TLS off again". */}}
   secretName: {{ .Release.Name }}-ca
-  # This Secret is the source the tenant-projection.yaml sentinel names as
-  # sourceSecretName: the CA-extraction controller reads ca.crt from HERE (never
-  # from the leaf below, whose Secret carries the server private key beside the
-  # same ca.crt) and lifts it into the key-free <release>.tenant-ca projection it
-  # owns. No label on this Secret drives that — the controller is told the
-  # source by name through the sentinel CR, not by a selector on the Secret.
-  #
-  # Turning TLS off does NOT withdraw the raw CA material: cert-manager keeps
-  # this Secret (enableCertificateOwnerRef=false), so `rabbitmq-<name>-ca` stays
-  # around for an endpoint back on plaintext. Helm does not own that Secret, so
-  # nothing rendered here can prevent it — delete it by hand. See README
-  # "Turning TLS off again". The tenant-facing projection does NOT have this
-  # problem: it is owned by the sentinel, which Helm does manage, so disabling
-  # TLS removes the sentinel and Kubernetes garbage-collects the projection with it.
   duration: 43800h
   commonName: {{ .Release.Name }}-ca
   issuerRef:
@@ -43,10 +38,9 @@ spec:
   privateKey:
     algorithm: ECDSA
     size: 256
-    # Never rotate the CA private key: rotating the CA key invalidates all
-    # leaf certs signed by the old key and causes a service outage. CA renewal
-    # (new certificate, same key) is handled automatically by cert-manager
-    # when the cert approaches its 43800h expiry.
+    {{- /* Rotating the CA key invalidates every leaf signed by the old one.
+         Renewal keeps the key and issues a fresh certificate, which
+         cert-manager does on its own as the 43800h duration runs out. */}}
     rotationPolicy: Never
 ---
 apiVersion: cert-manager.io/v1
