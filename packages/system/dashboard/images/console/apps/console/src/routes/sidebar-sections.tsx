@@ -9,6 +9,7 @@ import {
   LayoutGrid,
   Layers,
   Network,
+  Package,
   Server,
   ToyBrick,
   Users,
@@ -54,6 +55,7 @@ export function useMarketplaceSidebarSections(): SidebarSection[] {
         title: "Marketplace",
         items: [
           { label: "Marketplace", to: "/marketplace", end: true, icon: LayoutGrid },
+          { label: "Repositories", to: "/marketplace/taps", icon: Package },
           ...ordered.map((category) => ({
             label: category,
             to: `/marketplace/c/${encodeURIComponent(category)}`,

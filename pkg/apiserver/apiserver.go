@@ -48,6 +48,7 @@ import (
 	cozyregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
 	optionstorage "github.com/cozystack/cozystack/pkg/registry/core/option"
+	tapstorage "github.com/cozystack/cozystack/pkg/registry/core/tap"
 	tenantmodulestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantmodule"
 	tenantnamespacestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantnamespace"
 	tenantsecretstorage "github.com/cozystack/cozystack/pkg/registry/core/tenantsecret"
@@ -225,6 +226,9 @@ func (c completedConfig) New() (*CozyServer, error) {
 	)
 	coreV1alpha1Storage["options"] = cozyregistry.RESTInPeace(
 		optionstorage.NewREST(optionstorage.DefaultProviders(dyn)),
+	)
+	coreV1alpha1Storage["taps"] = cozyregistry.RESTInPeace(
+		tapstorage.NewREST(dyn),
 	)
 
 	coreApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(core.GroupName, Scheme, metav1.ParameterCodec, Codecs)

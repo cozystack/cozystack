@@ -32,5 +32,8 @@ var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
 		func(s *v1alpha1.Option, c randfill.Continue) {
 			c.FillNoCustom(s) // fill self without calling this function again
 		},
+		func(s *v1alpha1.Tap, c randfill.Continue) {
+			c.FillNoCustom(s) // fill self without calling this function again
+		},
 	}
 }
