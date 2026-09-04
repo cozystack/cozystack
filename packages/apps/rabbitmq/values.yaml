@@ -75,6 +75,9 @@ storageClass: ""
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+## @param {*object} [affinity] - Pod affinity applied to RabbitMQ pods (standard Kubernetes corev1.Affinity). Use podAntiAffinity with topologyKey `kubernetes.io/hostname` to spread RabbitMQ pods across nodes.
+affinity: {}
+
 ##
 ## @enum {string} Version
 ## @value v4.2
