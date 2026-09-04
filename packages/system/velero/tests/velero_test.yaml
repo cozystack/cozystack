@@ -112,20 +112,41 @@ tests:
   # candidate on every node whatever caused the pressure, and killing it
   # mid-backup fails the backup.
   #
-  # The limit is deliberately loose rather than fitted: measured usage is at
-  # idle, and the agent streams volume data during a backup, which is exactly
-  # when it must not be killed. Set from the umbrella values against the
-  # vendored subchart, so an upstream bump that moves the key would render
-  # nothing and leave no other trace; that is what this pins against.
-  - it: node-agent declares a memory limit and request
+  # It is nonetheless exempted from a limit, the same call linstor-controller and
+  # the satellite make, because its memory is driven by the data it moves rather
+  # than by cluster size: during a PodVolumeBackup kopia/restic walk, hash and
+  # index the volume's file tree, so demand scales with file count and volume
+  # size on that node. The 121Mi 14d peak is an idle figure and nothing measured
+  # on a 3-node dev cluster bounds the backup case, so a ceiling written here
+  # would be a guess — and a guess on this workload trades a kill that happens
+  # only when the node is genuinely short of memory for one that happens on a
+  # healthy node mid-backup, the single moment the agent has to survive.
+  #
+  # The ceiling is not dropped, it moves: the default LimitRange the operator
+  # maintains in every system namespace defaults container memory in cozy-velero,
+  # so the pod still gets memory.max and the value is tunable once, centrally,
+  # on the cluster whose backups need more. Before that LimitRange exists
+  # node-agent is limit-free and stays in the victim set — which is what it does
+  # today, so no regression, just not yet the fix.
+  #
+  # What would settle a fitted limit instead: a peak measured under a
+  # PodVolumeBackup of a large, many-file volume on a real cluster.
+  #
+  # Set from the umbrella values against the vendored subchart, so an upstream
+  # bump that moves the key would render nothing and leave no other trace; that
+  # is what the request assertions pin against, and notExists pins the exemption
+  # so a ceiling cannot come back quietly.
+  - it: node-agent declares a memory request and deliberately no limit
     template: charts/velero/templates/node-agent-daemonset.yaml
     documentSelector:
       path: kind
       value: DaemonSet
     asserts:
       - equal:
-          path: spec.template.spec.containers[?(@.name=="node-agent")].resources.limits.memory
-          value: 2Gi
-      - equal:
           path: spec.template.spec.containers[?(@.name=="node-agent")].resources.requests.memory
           value: 128Mi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="node-agent")].resources.requests.cpu
+          value: 50m
+      - notExists:
+          path: spec.template.spec.containers[?(@.name=="node-agent")].resources.limits
