@@ -310,15 +310,17 @@ step_line() {
   printf '%s\n' "$block" | script_lines | grep -qF 'p.merged_at !== null'
 }
 
-@test "both the checkout and the backport-action step are gated on the guard" {
+@test "the checkout, app-token and backport-action steps are all gated on the guard" {
   block="$(job_block backport "$BACKPORT")"
   [ -n "$block" ]
 
-  # Losing the gate on either step still runs the action against a target that
-  # already has the change, reproducing the false comment the guard exists to
-  # prevent.
+  # Losing the gate on any of these still runs work against a target that
+  # already has the change: checkout and the action reproduce the false comment
+  # the guard exists to prevent, and the token step mints an App credential for
+  # a backport that was already decided against. Count, not names, so that a
+  # step renamed but left ungated cannot pass.
   count="$(printf '%s\n' "$block" | code_lines | grep -cF "steps.guard.outputs.already_merged != 'true'" || true)"
-  [ "${count:-0}" -eq 2 ]
+  [ "${count:-0}" -eq 3 ]
 }
 
 @test "the guard runs before the checkout and the backport-action step" {
