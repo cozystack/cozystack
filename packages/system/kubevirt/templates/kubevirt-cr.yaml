@@ -1,3 +1,70 @@
+{{- /*
+  A gate named in both featureGates and disabledFeatureGates is not a
+  configuration KubeVirt honours, and it fails differently depending on when it
+  lands. kubevirt-update-validator.kubevirt.io rejects it (failurePolicy Fail),
+  so on a cluster that already has the CR the write is refused and the kubevirt
+  HelmRelease stops converging, taking every other field in this CR with it. The
+  create admitter runs no such check, so on a fresh install the same CR is
+  admitted, and virt-config reads featureGates before disabledFeatureGates —
+  the gate stays on while the values file says it is off. Stop the render
+  instead.
+
+  Only the cross-list overlap is checked. Upstream's validateFeatureGates walks
+  featureGates and looks each name up in disabledFeatureGates, and both fields
+  are x-kubernetes-list-type: atomic in the CRD, so a name repeated inside one
+  list is a CR KubeVirt accepts and this guard leaves it alone.
+
+  The gates this chart pins off can arrive a second time from a supported
+  values file, because the chart writes them itself and an operator listing the
+  gates their cluster declines has no reason to know that. The range below skips
+  them, so a gate named once in the values file is named once in the CR.
+
+  Which list a colliding gate came from decides what the operator can do about
+  it, so each case says its own thing: Template is pinned off and cannot be
+  asked back, a gate in staticFeatureGates is pinned on and cannot be switched
+  off from values, and anything else got there through extraFeatureGates and can
+  leave from either side.
+
+  Upstream also carries a dedicated field for the first of them,
+  spec.configuration.virtTemplateDeployment.enabled. It is the weaker switch:
+  VirtTemplateDeploymentEnabled reads TemplateEnabled() first, so the field
+  stops the deployment while the gate and its API stay on. The gate stops both.
+
+  ImageVolume is the third opt-out and the only one that depends on the host.
+  With it on, virt-controller drops the containerDisk sidecars and mounts the
+  image as a VolumeSource.Image instead. Kubernetes carries its own ImageVolume
+  gate, off by default until 1.35, and an apiserver with it off silently strips
+  every image volume and the mounts referencing it, so the launcher pod is
+  admitted without the disk it needs. The management cluster is supported from
+  1.33, so below 1.35 the chart keeps the KubeVirt gate off and the sidecar
+  path in use; from 1.35 the gate is left alone and extraFeatureGates can
+  collide with nothing.
+
+  staticFeatureGates and staticDisabledFeatureGates must name exactly the gates
+  rendered below. Both lists stay literal in both places because `make update`
+  anchors the extraFeatureGates insert on the "- VMExport" line and its sanity
+  tail greps for the static disabled entries by line, so a copy is the price of
+  the self-heal contract; tests/kubevirt_cr_test.yaml carries one case per gate,
+  which is what makes a name dropped from a copy visible.
+*/ -}}
+{{- $staticFeatureGates := list "HotplugVolumes" "ExpandDisks" "LiveMigration" "AutoResourceLimitsGate" "CPUManager" "GPU" "VMExport" -}}
+{{- $staticDisabledFeatureGates := list "Template" "ExternalNetResourceInjection" -}}
+{{- if semverCompare "<1.35-0" .Capabilities.KubeVersion.Version -}}
+{{- $staticDisabledFeatureGates = append $staticDisabledFeatureGates "ImageVolume" -}}
+{{- end -}}
+{{- $enabledGates := concat $staticFeatureGates (.Values.extraFeatureGates | default list) -}}
+{{- $disabledGates := concat $staticDisabledFeatureGates (.Values.disabledFeatureGates | default list) -}}
+{{- range $gate := $disabledGates -}}
+{{- if has $gate $enabledGates -}}
+{{- if eq $gate "Template" -}}
+{{- fail "the Template feature gate is pinned off by this chart because the platform does not use virt-template, and extraFeatureGates cannot undo that: it would render Template under both featureGates and disabledFeatureGates, which KubeVirt refuses. Remove \"Template\" from extraFeatureGates." -}}
+{{- else if has $gate $staticFeatureGates -}}
+{{- fail (printf "feature gate %q is one this chart enables and cannot be switched off from values: KubeVirt refuses a CR that names the same gate in both lists. Remove it from disabledFeatureGates." $gate) -}}
+{{- else -}}
+{{- fail (printf "feature gate %q is named under both featureGates and disabledFeatureGates, which KubeVirt refuses; remove it from extraFeatureGates or from disabledFeatureGates." $gate) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 ---
 apiVersion: kubevirt.io/v1
 kind: KubeVirt
@@ -13,7 +80,27 @@ spec:
       {{- if .Values.cpuAllocationRatio }}
       cpuAllocationRatio: {{ .Values.cpuAllocationRatio }}
       {{- end }}
+      # Template is Beta and on by default since 1.9; it makes virt-operator
+      # deploy the virt-template aggregated API server, which nothing here uses.
+      # ExternalNetResourceInjection hands NAD resourceName requests to an
+      # injector the platform does not deploy; off keeps virt-controller doing it.
+      # ImageVolume needs the Kubernetes gate of the same name, which is off by
+      # default below 1.35 and strips the launcher's image volumes in silence.
+      disabledFeatureGates:
+      - Template
+      - ExternalNetResourceInjection
+      {{- if semverCompare "<1.35-0" .Capabilities.KubeVersion.Version }}
+      - ImageVolume
+      {{- end }}
+      {{- range .Values.disabledFeatureGates }}
+      {{- if not (has . $staticDisabledFeatureGates) }}
+      - {{ . }}
+      {{- end }}
+      {{- end }}
       featureGates:
+      # HotplugVolumes: deprecated in 1.9, replaced by DeclarativeHotplugVolumes.
+      # Kept because virt-api accepts kubevirt-csi's VMI-level removevolume on a
+      # VM-owned VMI only while it is on — which also keeps the replacement inert.
       - HotplugVolumes
       - ExpandDisks
       - LiveMigration

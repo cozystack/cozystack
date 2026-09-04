@@ -650,6 +650,28 @@ resources:
   cpuAllocationRatio: 10
   memoryAllocationRatio: 1
   ephemeralStorageAllocationRatio: 40
+# KubeVirt CR settings that no other platform knob implies. Forwarded into the
+# emitted cozystack.kubevirt Package CR as components.kubevirt.values, next to
+# the entries the iaas bundle derives from resources.cpuAllocationRatio and
+# from the gpu block below.
+kubevirt:
+  # Feature gates switched off under
+  # spec.configuration.developerConfiguration.disabledFeatureGates, on top of
+  # the opt-outs the kubevirt chart pins: Template and
+  # ExternalNetResourceInjection always, ImageVolume below Kubernetes 1.35.
+  # KubeVirt 1.9 turns every Beta gate on by default, so this is how a cluster
+  # declines one it cannot carry — a container runtime without image volume
+  # support on Kubernetes 1.35 or newer is the case this list is for.
+  #
+  #   kubevirt:
+  #     disabledFeatureGates:
+  #     - ImageVolume
+  #
+  # A gate the chart already enables cannot be switched off here. KubeVirt
+  # refuses a CR that names one gate in both lists, so the chart stops the
+  # render and names the gate rather than ship a CR the cluster would reject
+  # on update and misread on install.
+  disabledFeatureGates: []
 # GPU host-device wiring for VirtualMachine workloads. Auto-injected into the
 # KubeVirt CR's permittedHostDevices when bundles.enabledPackages contains
 # cozystack.gpu-operator. Without it the admission webhook rejects any VM
