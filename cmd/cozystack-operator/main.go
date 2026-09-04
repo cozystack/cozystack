@@ -35,6 +35,7 @@ import (
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
@@ -97,6 +98,8 @@ func main() {
 	var platformSourceName string
 	var platformSourceRef string
 	var platformSourceSecret string
+	var systemNamespaceMemoryLimit string
+	var systemNamespaceMemoryRequest string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -144,6 +147,40 @@ func main() {
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
+	flag.StringVar(&systemNamespaceMemoryLimit, "system-namespace-memory-limit", DefaultSystemNamespaceMemoryLimit,
+		"Default container memory limit applied through a LimitRange in every system namespace. "+
+			"Keeps system components out of the Talos userspace OOM handler's victim set, which only "+
+			"considers cgroups with no memory.max. The default is deliberately far above any real "+
+			"working set: the handler discards a cgroup for having a memory.max at all, whatever its "+
+			"value, so what this buys is immunity rather than a fitted ceiling, and a ceiling nothing "+
+			"reaches cannot turn a rare pressure-driven kill into a deterministic one. Lower it to make "+
+			"it bind, per component or fleet-wide, once real usage is known. "+
+			"It must stay above the largest memory request in any system namespace: a defaulted limit "+
+			"below a container's own request is rejected at admission, so a namespace holding such a "+
+			"container is left with no default at all rather than one that would stop its pods. Grep "+
+			"the operator log for \"withholding the default container memory limit\" to find those, and "+
+			"fix them by giving the container a limit of its own or by raising this value above its "+
+			"request. "+
+			"Scope is every namespace a Package targets that is not a tenant namespace, which "+
+			"includes kube-system - cozystack-scheduler is installed there - so namespaces owned "+
+			"by the underlying distribution are covered too. A namespace where another LimitRange "+
+			"already says anything about memory is left alone, in any field and at either the "+
+			"Container or the Pod scope, because two defaults leave the effective ceiling to the "+
+			"order LimitRanger iterates them and a max, min or maxLimitRequestRatio can reject the "+
+			"pods this default would produce. Empty or 0 disables the LimitRange. On the next "+
+			"Package reconcile, the operator removes every LimitRange carrying its "+
+			"app.kubernetes.io/managed-by=cozystack-package-controller ownership label, including "+
+			"objects in namespaces no active Package targets.")
+
+	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
+		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+
+			"explicitly: Kubernetes defaults an unset request to the limit, which would reserve the full "+
+			"limit for every system container at schedule time. 0 is supported and means the opposite "+
+			"trade rather than a broken value: the API server accepts a LimitRange with defaultRequest 0, "+
+			"and a container with no memory request of its own is then admitted with an explicit request "+
+			"of 0 and the default limit, so it still gets the memory.max this feature exists to give it, "+
+			"while the scheduler reserves nothing for it - the same scheduling signal system components "+
+			"had before this feature, no worse and no better.")
 
 	opts := zap.Options{
 		Development: true,
@@ -167,6 +204,13 @@ func main() {
 	hrUpgradeTimeoutDuration := parseFlag("--helmrelease-upgrade-timeout", helmReleaseUpgradeTimeout)
 	if helmReleaseMaxHistory < 0 {
 		setupLog.Error(fmt.Errorf("--helmrelease-max-history must be >= 0"), "invalid value", "value", helmReleaseMaxHistory)
+		os.Exit(1)
+	}
+
+	systemNSMemoryLimit, systemNSMemoryRequest, err := parseSystemNamespaceMemory(systemNamespaceMemoryLimit, systemNamespaceMemoryRequest)
+	if err != nil {
+		setupLog.Error(err, "invalid system namespace memory flags",
+			"limit", systemNamespaceMemoryLimit, "request", systemNamespaceMemoryRequest)
 		os.Exit(1)
 	}
 
@@ -306,13 +350,20 @@ func main() {
 
 	// Setup Package reconciler
 	if err := (&operator.PackageReconciler{
-		Client:                    mgr.GetClient(),
+		Client: mgr.GetClient(),
+		// Non-cached, so the per-namespace pod and workload scan guarding the
+		// system defaults LimitRange does not start cluster-wide informers in an
+		// operator whose whole purpose here is to bound memory.
+		APIReader:                 mgr.GetAPIReader(),
 		Scheme:                    mgr.GetScheme(),
 		HelmReleaseInterval:       hrIntervalDuration,
 		HelmReleaseRetryInterval:  hrRetryIntervalDuration,
 		HelmReleaseInstallTimeout: hrInstallTimeoutDuration,
 		HelmReleaseUpgradeTimeout: hrUpgradeTimeoutDuration,
 		HelmReleaseMaxHistory:     helmReleaseMaxHistory,
+
+		SystemNamespaceMemoryLimit:   systemNSMemoryLimit,
+		SystemNamespaceMemoryRequest: systemNSMemoryRequest,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Package")
 		os.Exit(1)
@@ -441,6 +492,59 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	}
 
 	return nil
+}
+
+// The shipped defaults for the two system-namespace memory knobs. Constants keep flag
+// registration and the parser test inputs on the same values; the test compares the parsed
+// result with literal contract values so changing a default cannot stay green by construction.
+const (
+	DefaultSystemNamespaceMemoryLimit   = "32Gi"
+	DefaultSystemNamespaceMemoryRequest = "32Mi"
+)
+
+// parseSystemNamespaceMemory turns the --system-namespace-memory-limit and
+// --system-namespace-memory-request flag values into the quantities the Package reconciler
+// takes, rejecting the combinations that would fail later and further away.
+//
+// Empty is how both flags are disabled and parses to the zero quantity; for the limit that
+// means "no LimitRange, and remove any this operator created", which is the documented
+// off switch. A negative quantity parses fine as a Quantity and is meaningless as memory,
+// so it is caught here rather than being written into a LimitRange the API server rejects.
+//
+// The pair check is the one that matters most. A LimitRange whose defaultRequest exceeds
+// its default is rejected by the API server, and because the reconciler applies one per
+// system namespace on every Package reconcile, a bad pair would wedge namespace
+// reconciliation for every system package with an error nothing connects back to a flag.
+// A request of 0 against a non-zero limit passes deliberately: it is the supported way to
+// take the memory.max without reserving anything at schedule time, not a broken value.
+// Both zero is the disabled case and never reaches the comparison.
+func parseSystemNamespaceMemory(rawLimit, rawRequest string) (limit, request resource.Quantity, err error) {
+	parse := func(flagName, raw string) (resource.Quantity, error) {
+		if raw == "" {
+			return resource.Quantity{}, nil
+		}
+		q, err := resource.ParseQuantity(raw)
+		if err != nil {
+			return resource.Quantity{}, fmt.Errorf("%s: %w", flagName, err)
+		}
+		if q.Sign() < 0 {
+			return resource.Quantity{}, fmt.Errorf("%s must not be negative, got %s", flagName, raw)
+		}
+		return q, nil
+	}
+
+	if limit, err = parse("--system-namespace-memory-limit", rawLimit); err != nil {
+		return resource.Quantity{}, resource.Quantity{}, err
+	}
+	if request, err = parse("--system-namespace-memory-request", rawRequest); err != nil {
+		return resource.Quantity{}, resource.Quantity{}, err
+	}
+	if !limit.IsZero() && request.Cmp(limit) > 0 {
+		return resource.Quantity{}, resource.Quantity{}, fmt.Errorf(
+			"--system-namespace-memory-request (%s) must not exceed --system-namespace-memory-limit (%s)",
+			request.String(), limit.String())
+	}
+	return limit, request, nil
 }
 
 // parsePlatformSourceURL parses the source URL and returns the source type and repository URL.

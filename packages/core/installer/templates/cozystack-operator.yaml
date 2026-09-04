@@ -186,6 +186,12 @@ spec:
         {{- if ne (toString .Values.cozystackOperator.helmReleaseMaxHistory) "" }}
         - --helmrelease-max-history={{ .Values.cozystackOperator.helmReleaseMaxHistory }}
         {{- end }}
+        {{- if ne (toString .Values.cozystackOperator.systemNamespaceMemoryLimit) "" }}
+        - --system-namespace-memory-limit={{ .Values.cozystackOperator.systemNamespaceMemoryLimit }}
+        {{- end }}
+        {{- if ne (toString .Values.cozystackOperator.systemNamespaceMemoryRequest) "" }}
+        - --system-namespace-memory-request={{ .Values.cozystackOperator.systemNamespaceMemoryRequest }}
+        {{- end }}
         - --platform-source-name=cozystack-platform
         - --platform-source-url={{ .Values.cozystackOperator.platformSourceUrl }}
         {{- if .Values.cozystackOperator.platformSourceRef }}

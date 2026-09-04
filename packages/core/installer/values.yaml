@@ -43,6 +43,77 @@ cozystackOperator:
   # (operator default: 5). Number of release revisions Helm keeps per HR.
   # Use 0 for unlimited; lower values reduce Secret accumulation in test clusters.
   helmReleaseMaxHistory: ""
+  # When non-empty, overrides the operator's --system-namespace-memory-limit flag
+  # (operator default: 32Gi). The operator maintains a LimitRange in every system
+  # namespace defaulting container memory for anything that declares none.
+  #
+  # This exists for the Talos userspace OOM handler (v1.12+), which ranks cgroups
+  # with `memory_max.hasValue() ? 0.0 : {Besteffort: 1.0, ...}[class] *
+  # memory_current` and discards everything scoring zero. Only a memory *limit*
+  # sets memory.max and buys immunity — a request merely demotes BestEffort to
+  # Burstable, which under strictCgroupClassOrdering still means "killed second".
+  # Without this, system components are the victims whenever a tenant workload
+  # drives node memory PSI, because the tenant workload has limits and they do not:
+  # packages/apps/tenant ships tenant-range-limits, which defaults container memory
+  # in tenant namespaces that declare resourceQuotas. Tenant namespaces are left to
+  # that chart; this closes the same gap for system namespaces.
+  #
+  # Scope is every namespace a Package targets whose name does not start with `tenant-`.
+  # That includes kube-system, because cozystack-scheduler is installed there, so a namespace
+  # owned by the underlying Kubernetes distribution is defaulted like any other. Containers
+  # the kubelet builds from an on-disk manifest rather than from the API get no memory.max
+  # from this: the kubelet runs them from disk whatever the API says, so a Talos
+  # control-plane static pod is neither protected nor constrained by the default. Its mirror
+  # pod is a different matter, being an ordinary API object that passes admission like any
+  # other — a static pod declaring a memory request above the ceiling with no limit of its
+  # own therefore has its mirror pod rejected, which leaves the container running with no
+  # representation in the API rather than taking anything down. The scan covers that case,
+  # since a mirror pod is a live Pod and withholds the namespace default like any other.
+  #
+  # A ceiling, not a reservation, and the default is deliberately far above any real
+  # working set. The OOM handler discards a cgroup for having a memory.max at all,
+  # whatever its value, so the default buys immunity rather than a fitted ceiling —
+  # and a ceiling nothing reaches cannot convert a rare pressure-driven kill into a
+  # deterministic one, which is the failure mode this repository already carries a scar
+  # from (see the vertical-pod-autoscaler values). Lower it to make it bind once real
+  # usage is known; the scan below cannot see real usage, only declared requests.
+  #
+  # It must stay above the largest memory request in any system namespace, because a
+  # defaulted limit below a container's own request is rejected at admission. Before
+  # applying, the operator scans each system namespace for a container that requests more
+  # than this and declares no limit of its own, and where it finds one that namespace is
+  # left with no default at all rather than one that would stop its pods. That is the safe
+  # direction: no memory.max is how every release before this behaved, while a default
+  # below a request is a namespace whose workload cannot be admitted. The withheld
+  # namespace is logged with the workload and container responsible; grep the operator log
+  # for "withholding the default container memory limit". Fix it by giving that container a
+  # limit of its own, or by raising this value above its request. Nothing is remembered
+  # between reconciles: once the oversized request is gone the default is applied again.
+  #
+  # A container that declares its own memory limit is never touched, so a component
+  # that needs a ceiling other than this one states a limit in its own chart rather than
+  # relying on the knob.
+  #
+  # A system namespace where another LimitRange already says anything about memory is left
+  # alone entirely, and anything the operator wrote there earlier is withdrawn. Any
+  # memory-bearing field counts, at either the Container or the Pod scope: a second default
+  # leaves the effective ceiling to the order LimitRanger iterates them, while a max below
+  # this default, a min above the default request, or a maxLimitRequestRatio each reject the
+  # pod at admission. The Pod scope is in because the collision there cannot be decided in
+  # advance, it depends on how many containers a pod that does not exist yet will have.
+  # A LimitRange bounding only cpu or storage coexists normally.
+  #
+  # Set to 0 to disable. On the next Package reconcile, the operator removes every LimitRange
+  # carrying app.kubernetes.io/managed-by: cozystack-package-controller, including objects in
+  # namespaces no active Package targets. A same-named object without that ownership label is
+  # left alone while disabled and is neither overwritten nor adopted while enabled, even if
+  # it contains only cpu or storage policy.
+  systemNamespaceMemoryLimit: ""
+  # When non-empty, overrides the operator's --system-namespace-memory-request flag
+  # (operator default: 32Mi). Deliberately small and always set: Kubernetes defaults
+  # an unset request to the limit, which would have every system container reserve
+  # the full limit at schedule time.
+  systemNamespaceMemoryRequest: ""
   # Name of the Secret in cozy-system namespace containing credentials for the
   # platform source. When non-empty, sets spec.secretRef on the generated
   # OCIRepository or GitRepository resource. Secret type depends on source kind:

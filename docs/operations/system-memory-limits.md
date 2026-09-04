@@ -40,10 +40,10 @@ Two installer values, both empty by default so the operator's own defaults apply
 
 | Value | Operator flag | Default |
 |---|---|---|
-| `cozystackOperator.systemNamespaceMemoryLimit` | `--system-namespace-memory-limit` | `4Gi` |
+| `cozystackOperator.systemNamespaceMemoryLimit` | `--system-namespace-memory-limit` | `32Gi` |
 | `cozystackOperator.systemNamespaceMemoryRequest` | `--system-namespace-memory-request` | `32Mi` |
 
-The limit is a ceiling, not a reservation, so it is deliberately set far above real usage — the point is that `memory.max` exists, not that it binds. Raising it is close to free; lowering it is where the risk lives.
+The limit is a ceiling, not a reservation, and the default is deliberately far above any real working set. The handler discards a cgroup for carrying a `memory.max` at all, whatever its value, so what the default buys is immunity rather than a fitted ceiling. That is also why it is set so high: the scan described below sees *declared requests*, never a container's actual resident set, so a ceiling low enough to bind is a ceiling that can convert a rare pressure-driven kill into a deterministic one for any component whose real usage nobody measured. Raising it is close to free; lowering it is where the risk lives, and it is worth doing per component in that component's own chart before doing it fleet-wide here.
 
 **The limit must stay above the largest memory request in any system namespace.** A defaulted limit below a container's own request is rejected at admission, and the pod simply will not start. List the requests before lowering it — the operator marks exactly the namespaces it treats as system with `cozystack.io/system=true`, the same condition under which it creates the LimitRange:
 
@@ -61,7 +61,21 @@ done | sort -u
 
 The operator also refuses to start when the request exceeds the limit. A `LimitRange` whose `defaultRequest` is above its `default` is rejected by the API server, which would wedge namespace reconciliation for every system package, so the check happens at startup rather than at apply time.
 
-Setting the limit to `0` disables the feature and removes the LimitRanges the operator previously created, so the knob is reversible. Leaving it empty is not the same thing — that selects the operator's `4Gi` default.
+Setting the limit to `0` disables the feature, so the knob is reversible. Leaving it empty is not the same thing: that selects the operator's `32Gi` default.
+
+On the next Package reconcile after the feature is disabled, the operator lists LimitRanges cluster-wide by `app.kubernetes.io/managed-by: cozystack-package-controller` and removes every object it owns, including leftovers in namespaces no active Package targets. A same-named LimitRange without that ownership label is left alone. The same ownership boundary applies while the feature is enabled: a foreign object already holding the `cozystack-system-defaults` name is neither overwritten nor adopted, even if it contains only CPU or storage policy, so that namespace receives no Cozystack memory default until the name is free.
+
+**A namespace holding an oversized request is left with no default.** Before applying, the operator scans each system namespace for the shape that would be rejected once defaulted — a container requesting more memory than the configured limit and declaring no limit of its own. Where it finds one, that namespace gets no default at all, and anything written there earlier is withdrawn. This is the safe direction: a namespace with no default is a namespace back to how every release before this behaved, whereas a default below a container's own request is a namespace whose workload cannot be admitted. The withheld namespace is logged with the workload and container responsible:
+
+```bash
+kubectl -n cozy-system logs deploy/cozystack-operator | grep "withholding the default container memory limit"
+```
+
+Resolve it by giving that container a memory limit of its own, which takes it out of this mechanism entirely, or by raising the configured limit above its request. Nothing is remembered between reconciles — once the oversized request is gone, the default is applied again on the next one.
+
+An earlier revision raised the namespace's ceiling to clear the request instead, on the grounds that a loose `memory.max` still confers OOM-handler immunity where none confers nothing. That reasoning was sound and the mechanism still did not work: `LimitRanger` writes the raised limit onto the very container that justified the raise, so at its next admission that container carries a limit, the scan skips it, and the raise has erased its own evidence — after which the ceiling dropped and the workload was rejected for good. A `LimitRange` default is one number for a whole namespace and cannot be "the configured limit, or this container's request, whichever is larger"; only per-pod conditional defaulting could express that, which means a mutating webhook rather than a scan.
+
+**A namespace another LimitRange already governs is left alone.** If a system namespace — `kube-system` included — already carries a LimitRange that says anything about memory, the operator writes nothing there and withdraws anything it wrote earlier. Any memory-bearing field counts, at either the `Container` or the `Pod` scope: a second `default` leaves the effective ceiling to the order `LimitRanger` happens to iterate them, a `max` below this default or a `min` above the default request rejects the pod outright, and a `maxLimitRequestRatio` rejects it too, since a 32Gi default against a 32Mi default request is a ratio of 1024:1. The `Pod` scope is included because the collision there is not decidable in advance at all — whether a per-container default breaches a pod-wide bound depends on how many containers a not-yet-created pod will have. LimitRanges that bound only cpu or storage say nothing about memory and coexist normally. Note that withdrawing hands the namespace to the administrator's policy in full: if that LimitRange defaults container memory below some container's own request, the resulting admission rejection is theirs to resolve, and it is one that would have occurred without Cozystack in the picture at all.
 
 A LimitRange only mutates at admission. Existing pods keep running without limits until they restart, so the protection lands progressively as workloads roll rather than the moment the setting is applied.
 
@@ -106,7 +120,7 @@ Both halves of that signature — `OOM controller triggered`, then `no eligible 
 
 ## What this does not cover
 
-**Kubernetes static pods.** `kube-apiserver`, `kube-controller-manager` and `kube-scheduler` are managed by Talos rather than by any chart. A `cozystack-system-defaults` LimitRange does reach `kube-system`, since `cozystack-scheduler` installs there, but it cannot touch them: a LimitRange defaults resources at API-server admission, and kubelet builds static pods straight from files on disk without ever passing through it. Sizing those is a Talos machine-config matter.
+**Kubernetes static pods.** `kube-apiserver`, `kube-controller-manager` and `kube-scheduler` are managed by Talos rather than by any chart. A `cozystack-system-defaults` LimitRange does reach `kube-system`, since `cozystack-scheduler` installs there, but it cannot touch them: a LimitRange defaults resources at API-server admission, and kubelet builds static pods straight from files on disk without ever passing through it. Sizing those is a Talos machine-config matter. Their mirror pods are ordinary API objects and do pass admission, so if a static pod declares a memory request above the configured limit with no limit of its own, the scan sees that mirror pod like any other and withholds the default from `kube-system` entirely.
 
 **A handful of vendored containers with no upstream `resources` knob** — the four frr-k8s `cp-*` init containers, the kube-ovn `hostpath-init` and `install-cni` init containers, and `cozy-proxy`, whose chart exposes no resources value at all. These are covered by the namespace LimitRange and nothing else. That is enough for OOM immunity, since the defaulted limit is what puts `memory.max` on the cgroup, but their request is then the generic default rather than a figure fitted to measured usage, so the scheduler gets a weaker signal for them than for the DaemonSets above. Lifting that needs changes upstream.
 
