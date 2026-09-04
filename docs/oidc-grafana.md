@@ -1,11 +1,6 @@
 # OIDC for the Grafana instance (Phase 1)
 
-Cozystack ships one Grafana codebase deployed twice: as
-`monitoring-system` in the platform's `cozy-monitoring` namespace and as
-`monitoring` in every tenant namespace. Both instances opt in to OIDC
-authentication through the same flat selector on the `Monitoring` CR.
-This document covers the operator-facing surface: what the modes mean,
-what the chart provisions, and how a user signs in.
+Cozystack ships one Grafana codebase deployed twice, both released as `monitoring-system` and differing only by namespace: the platform instance runs in `tenant-root` and a per-tenant instance runs in every tenant namespace. Both instances opt in to OIDC authentication through the same flat selector on the `Monitoring` CR. This document covers the operator-facing surface: what the modes mean, what the chart provisions, and how a user signs in.
 
 The architectural rationale lives in
 [cozystack/community#24](https://github.com/cozystack/community/pull/24)
