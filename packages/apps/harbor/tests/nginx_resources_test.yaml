@@ -1,0 +1,74 @@
+suite: nginx resources
+
+release:
+  name: harbor
+  namespace: tenant-test
+
+# The upstream harbor chart ships nginx without resources, so the tenant
+# LimitRange default (128Mi) applies. nginx runs `worker_processes auto`, which
+# forks one worker per host CPU regardless of the cgroup quota; on a 96-CPU node
+# that is 96 workers and about 150Mi idle, and the pod is OOM-killed before it
+# serves a request. The wrapper now forwards a sized resources block like it
+# already does for core, registry, jobservice and trivy.
+set:
+  _namespace:
+    host: example.org
+    ingress: nginx
+    gateway: ""
+    seaweedfs: seaweedfs
+  _cluster:
+    solver: http01
+
+tests:
+  - it: defaults nginx to the t1.small preset
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.harbor.nginx.resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.values.harbor.nginx.resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.values.harbor.nginx.resources.requests.cpu
+          value: "0.1"
+      - equal:
+          path: spec.values.harbor.nginx.resources.requests.memory
+          value: "536870912"
+
+  - it: applies an alternative preset
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      nginx:
+        resourcesPreset: t1.micro
+    asserts:
+      - equal:
+          path: spec.values.harbor.nginx.resources.limits.cpu
+          value: 500m
+      - equal:
+          path: spec.values.harbor.nginx.resources.limits.memory
+          value: 256Mi
+
+  - it: prefers explicit resources over the preset
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      nginx:
+        resources:
+          cpu: "2"
+          memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.values.harbor.nginx.resources.limits.cpu
+          value: "2"
+      - equal:
+          path: spec.values.harbor.nginx.resources.limits.memory
+          value: 1Gi
