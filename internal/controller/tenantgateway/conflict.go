@@ -156,6 +156,119 @@ func (r *Reconciler) updateRouteStatuses(
 	return nil
 }
 
+// reconcileTLSRouteWithdrawal keeps this controller's Accepted condition
+// on attached TLSRoutes honest in the modes where updateRouteStatuses
+// above says nothing. collectHostnameClaims returns no claims for a
+// whole-apex mode, so that pass runs over an empty ref set and neither
+// writes nor retracts anything.
+//
+// Edge renders no TLS-passthrough listener, so every attached TLSRoute
+// pins a section that is gone and is told so. NoMatchingParent is
+// Gateway API's reason for a parentRef whose port or sectionName
+// matches no listener on the Gateway, which is what the platform's own
+// api, vm-exportproxy and cdi-uploadproxy routes now have: all three
+// pin sectionName tls-<svc>.
+//
+// The other whole-apex modes render those listeners and serve them, but
+// this controller collects no claims there and so has no basis to judge
+// any TLSRoute. It therefore owns no condition on them, and drops the
+// one it wrote while the tenant ran edge. Leaving that behind inverts
+// the problem the withdrawal exists for: a served endpoint reported as
+// matching no parent, with a message naming a class provider that no
+// longer terminates anything.
+//
+// HTTP-01 is not handled here at all: it collects claims, so
+// updateRouteStatuses has already judged every route this pass would
+// have anything to say about.
+//
+// Both directions therefore skip a route that declares no hostnames.
+// collectHostnameClaims gathers refs inside a loop over spec.hostnames
+// and TLSRoute v1alpha2 sets no minItems on it, so such a route never
+// reaches updateRouteStatuses in any mode. Withdrawing it would write a
+// condition with no path back: HTTP-01 renders its listener again and
+// judges only the routes that produced claims. This controller does not
+// judge a hostname-less route, so it holds no opinion on one either.
+func (r *Reconciler) reconcileTLSRouteWithdrawal(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
+	if !servesWholeApex(tgw) {
+		return nil
+	}
+	withdraw := !rendersTLSPassthrough(tgw)
+	logger := log.FromContext(ctx)
+
+	allowed, err := r.allowedAttachNamespaces(ctx, tgw)
+	if err != nil {
+		return err
+	}
+	routes := &gatewayv1alpha2.TLSRouteList{}
+	if err := r.List(ctx, routes); err != nil {
+		return fmt.Errorf("list TLSRoutes: %w", err)
+	}
+	for i := range routes.Items {
+		route := &routes.Items[i]
+		if _, ok := allowed[route.Namespace]; !ok {
+			continue
+		}
+		if len(route.Spec.Hostnames) == 0 {
+			continue
+		}
+		for _, parentRef := range allAttachingParentRefs(route.Spec.ParentRefs, route.Namespace, tgw) {
+			ref := routeRef{
+				kind:      routeKindTLS,
+				namespace: route.Namespace,
+				name:      route.Name,
+				parentRef: parentRef,
+			}
+			var err error
+			if withdraw {
+				err = r.updateRouteParentStatus(ctx, ref, []metav1.Condition{
+					{
+						Type:    "Accepted",
+						Status:  metav1.ConditionFalse,
+						Reason:  "NoMatchingParent",
+						Message: fmt.Sprintf("TenantGateway %s/%s terminates TLS at its class provider and renders no TLS-passthrough listener", tgw.Namespace, tgw.Name),
+					},
+				})
+			} else {
+				err = r.dropTLSRouteParentStatus(ctx, ref)
+			}
+			if err != nil {
+				logger.Error(err, "reconcile TLSRoute status", "route", ref.namespace+"/"+ref.name)
+			}
+		}
+	}
+	return nil
+}
+
+// dropTLSRouteParentStatus removes this controller's RouteParentStatus
+// entry for ref from a TLSRoute, leaving every other controller's entry
+// in place. Same idempotency contract as updateRouteParentStatus: the
+// Status().Update is issued only when the entry was actually there.
+func (r *Reconciler) dropTLSRouteParentStatus(ctx context.Context, ref routeRef) error {
+	route := &gatewayv1alpha2.TLSRoute{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, route); err != nil {
+		return fmt.Errorf("get TLSRoute: %w", err)
+	}
+	before := route.DeepCopy()
+	removeRouteParentStatus(&route.Status.Parents, ref.parentRef)
+	if routeParentStatusEqual(before.Status.Parents, route.Status.Parents) {
+		return nil
+	}
+	return r.Status().Update(ctx, route)
+}
+
+// removeRouteParentStatus deletes the entry tagged with (ControllerName,
+// ref), the exact key mergeRouteParentStatus writes under.
+func removeRouteParentStatus(parents *[]gatewayv1.RouteParentStatus, ref gatewayv1.ParentReference) {
+	kept := (*parents)[:0]
+	for _, ps := range *parents {
+		if ps.ControllerName == ControllerName && parentRefEqual(ps.ParentRef, ref) {
+			continue
+		}
+		kept = append(kept, ps)
+	}
+	*parents = kept
+}
+
 // updateRouteParentStatus locates or creates the RouteParentStatus
 // entry for our ControllerName on the given route (HTTPRoute or
 // TLSRoute, by ref.kind) and merges Conditions in.

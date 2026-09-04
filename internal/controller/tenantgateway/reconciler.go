@@ -73,6 +73,25 @@ func wildcardListenerCertName(tgw *gatewayv1alpha1.TenantGateway) (string, error
 	return gatewayCertificateName(tgw), nil
 }
 
+// servesWholeApex reports whether the mode publishes the apex and every
+// subdomain off apex-wide listeners (wildcard cert or edge-terminated
+// HTTP), as opposed to HTTP-01's one listener per attached hostname.
+func servesWholeApex(tgw *gatewayv1alpha1.TenantGateway) bool {
+	switch tgw.Spec.CertMode {
+	case gatewayv1alpha1.CertModeDNS01, gatewayv1alpha1.CertModeExistingSecret, gatewayv1alpha1.CertModeEdge:
+		return true
+	}
+	return false
+}
+
+// rendersTLSPassthrough reports whether the mode can carry
+// TLS-passthrough listeners at all. Edge ends TLS at the class
+// provider, so its Gateway is HTTP-only and neither a passthrough
+// listener nor a TLSRoute has anything to bind to on it.
+func rendersTLSPassthrough(tgw *gatewayv1alpha1.TenantGateway) bool {
+	return tgw.Spec.CertMode != gatewayv1alpha1.CertModeEdge
+}
+
 // gatewayIssuerName returns the per-tenant ACME Issuer name. The
 // Issuer lives in the same namespace as the TenantGateway and is
 // referenced by every Certificate this controller renders.
@@ -177,6 +196,9 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	if err := r.updateRouteStatuses(ctx, tgw, allRefs, losers); err != nil {
 		return err
 	}
+	if err := r.reconcileTLSRouteWithdrawal(ctx, tgw); err != nil {
+		return err
+	}
 	if err := r.reconcileHTTPToHTTPSRedirect(ctx, tgw); err != nil {
 		return err
 	}
@@ -213,6 +235,13 @@ func (r *Reconciler) markFailed(ctx context.Context, tgw *gatewayv1alpha1.Tenant
 // attaching by hostname without sectionName otherwise pick up the
 // HTTP listener too — Harbor / dashboard / keycloak credentials in
 // the clear. The redirect HTTPRoute matches any host on path /.
+//
+// certMode=edge is the deliberate exception: there is no https listener
+// to redirect to (TLS ends at the class provider's edge, which does that
+// redirect itself) and no narrow port-80 listener either, so the function
+// DELETES an owned redirect route instead of ensuring one. The
+// plaintext-credentials guard described above therefore does not exist in
+// that mode — the protection belongs to the edge, not to this Gateway.
 func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
 	logger := log.FromContext(ctx)
 	desired, err := r.renderHTTPRedirect(tgw)
@@ -222,6 +251,28 @@ func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gate
 
 	existing := &gatewayv1.HTTPRoute{}
 	getErr := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, existing)
+	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeEdge {
+		// Nothing listens on https here, so the redirect has nowhere
+		// to send anyone; the edge does that redirect itself. Remove
+		// an owned route left from a previous mode. A route of that
+		// name this controller does not own is left alone WITHOUT an
+		// error, unlike the takeover refusal below: edge has nothing
+		// it wants to put in its place, so there is no conflict to
+		// report.
+		switch {
+		case apierrors.IsNotFound(getErr):
+			return nil
+		case getErr != nil:
+			return fmt.Errorf("get redirect HTTPRoute for cleanup: %w", getErr)
+		case !ownedByTenantGateway(existing.OwnerReferences, tgw):
+			return nil
+		}
+		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete stale redirect HTTPRoute %s: %w", existing.Name, err)
+		}
+		logger.V(1).Info("deleted redirect HTTPRoute after switch to edge", "name", existing.Name, "namespace", existing.Namespace)
+		return nil
+	}
 	switch {
 	case apierrors.IsNotFound(getErr):
 		if err := r.Create(ctx, desired); err != nil {
@@ -254,6 +305,34 @@ func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gate
 	return nil
 }
 
+// allowedAttachNamespaces returns the namespaces whose routes this
+// TenantGateway judges: its own, the static admin-configured
+// Spec.AttachedNamespaces list of cozy-* system namespaces, and every
+// namespace carrying namespace.cozystack.io/gateway pointing at this
+// Gateway's namespace. The label is what makes inheritance work — the
+// apps/tenant chart writes it on every tenant namespace, inherited or
+// self-owning, so child tenants reach the parent Gateway — and it is
+// the same label the Gateway's allowedRoutes selector reads, so the
+// two paths agree on which namespaces can attach.
+func (r *Reconciler) allowedAttachNamespaces(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (map[string]struct{}, error) {
+	allowed := map[string]struct{}{tgw.Namespace: {}}
+	for _, ns := range tgw.Spec.AttachedNamespaces {
+		if ns == "" {
+			continue
+		}
+		allowed[ns] = struct{}{}
+	}
+	nsList := &corev1.NamespaceList{}
+	selector := labels.SelectorFromSet(labels.Set{namespaceGatewayLabel: tgw.Namespace})
+	if err := r.List(ctx, nsList, client.MatchingLabelsSelector{Selector: selector}); err != nil {
+		return nil, fmt.Errorf("list namespaces by gateway label: %w", err)
+	}
+	for i := range nsList.Items {
+		allowed[nsList.Items[i].Name] = struct{}{}
+	}
+	return allowed, nil
+}
+
 // collectHostnameClaims lists HTTPRoutes and TLSRoutes cluster-wide
 // and returns a map of hostname -> []routeRef of routes claiming
 // it via parentRefs targeting this TenantGateway's Gateway. Routes
@@ -264,46 +343,23 @@ func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gate
 // limits and leaks the operator's reachable hostname set). Empty
 // map in DNS-01 mode (wildcard handles everything).
 //
-// A namespace is allowed to attach when:
-//   - It is the TenantGateway's own namespace, OR
-//   - It is in Spec.AttachedNamespaces (static admin-configured
-//     attach list of cozy-* system namespaces), OR
-//   - It carries the label namespace.cozystack.io/gateway pointing
-//     at this Gateway's namespace (inheritance — apps/tenant chart
-//     writes the label on every tenant namespace, inherited or
-//     self-owning, so child tenants reach the parent Gateway).
-//
-// The third source is what makes HTTP-01 inheritance work end-to-end:
-// without it, a child tenant's HTTPRoute would be silently dropped
-// here and no per-listener Certificate would be issued — the
-// Gateway's label-based allowedRoutes selector would let the route
-// through at runtime but no listener would accept it (no matching
-// hostname), so Accepted stays False indefinitely.
+// The attach set comes from allowedAttachNamespaces, and its label
+// source is what makes HTTP-01 inheritance work end-to-end: without
+// it, a child tenant's HTTPRoute would be silently dropped here and no
+// per-listener Certificate would be issued — the Gateway's label-based
+// allowedRoutes selector would let the route through at runtime but no
+// listener would accept it (no matching hostname), so Accepted stays
+// False indefinitely.
 func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (map[string][]routeRef, error) {
-	// DNS-01 and existingSecret both serve every hostname off a single
-	// wildcard listener, so neither needs per-host listeners or claims.
-	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 || tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
+	// DNS-01, existingSecret and edge all serve every hostname off
+	// apex-wide listeners, so none needs per-host listeners or claims.
+	if servesWholeApex(tgw) {
 		return nil, nil
 	}
 
-	allowed := map[string]struct{}{tgw.Namespace: {}}
-	for _, ns := range tgw.Spec.AttachedNamespaces {
-		if ns == "" {
-			continue
-		}
-		allowed[ns] = struct{}{}
-	}
-	// Inheritance: every namespace pointing at this Gateway via the
-	// label is also allowed. The same label drives the Gateway's
-	// allowedRoutes selector, so the two paths agree on which
-	// namespaces can attach.
-	nsList := &corev1.NamespaceList{}
-	selector := labels.SelectorFromSet(labels.Set{namespaceGatewayLabel: tgw.Namespace})
-	if err := r.List(ctx, nsList, client.MatchingLabelsSelector{Selector: selector}); err != nil {
-		return nil, fmt.Errorf("list namespaces by gateway label: %w", err)
-	}
-	for i := range nsList.Items {
-		allowed[nsList.Items[i].Name] = struct{}{}
+	allowed, err := r.allowedAttachNamespaces(ctx, tgw)
+	if err != nil {
+		return nil, err
 	}
 
 	out := map[string][]routeRef{}
@@ -598,11 +654,12 @@ func labelsEqual(a, b map[string]string) bool {
 func (r *Reconciler) reconcileIssuer(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
 	logger := log.FromContext(ctx)
 
-	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
-		// existingSecret mode references an operator-supplied Secret and
-		// mints no ACME Issuer. Delete any owned Issuer left from a
-		// previous http01/dns01 phase so the mode switch doesn't leak
-		// ACME machinery. Same ownership-guarded cleanup contract as
+	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret || tgw.Spec.CertMode == gatewayv1alpha1.CertModeEdge {
+		// existingSecret references an operator-supplied Secret and edge
+		// has TLS terminated upstream; neither mints an ACME Issuer.
+		// Delete any owned Issuer left from a previous http01/dns01
+		// phase so the mode switch doesn't leak ACME machinery. Same
+		// ownership-guarded cleanup contract as
 		// reconcileWildcardCertificate's HTTP-01 branch.
 		stale := &cmv1.Issuer{}
 		err := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: gatewayIssuerName(tgw)}, stale)
@@ -618,7 +675,7 @@ func (r *Reconciler) reconcileIssuer(ctx context.Context, tgw *gatewayv1alpha1.T
 		if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete stale Issuer %s: %w", stale.Name, err)
 		}
-		logger.V(1).Info("deleted stale Issuer after switch to existingSecret", "name", stale.Name)
+		logger.V(1).Info("deleted stale Issuer after switch to a mode without ACME", "name", stale.Name)
 		return nil
 	}
 
@@ -664,9 +721,11 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 	logger := log.FromContext(ctx)
 
 	if tgw.Spec.CertMode != gatewayv1alpha1.CertModeDNS01 {
-		// HTTP-01 mode: wildcard cert must not exist. Delete any
-		// stale wildcard cert left over from a previous DNS-01
-		// reconcile so a mode toggle doesn't leak Certificates.
+		// Only DNS-01 mints a wildcard Certificate, so in every other
+		// mode that object must not exist — existingSecret references
+		// an operator-supplied Secret without one. Delete a stale
+		// Certificate left over from a previous DNS-01 reconcile so a
+		// mode toggle doesn't leak them.
 		stale := &cmv1.Certificate{}
 		err := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: gatewayCertificateName(tgw)}, stale)
 		if apierrors.IsNotFound(err) {
@@ -681,7 +740,7 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 		if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete stale wildcard Certificate %s: %w", stale.Name, err)
 		}
-		logger.V(1).Info("deleted stale wildcard Certificate after switch to HTTP-01", "name", stale.Name)
+		logger.V(1).Info("deleted stale wildcard Certificate after switch away from DNS-01", "name", stale.Name)
 		return nil
 	}
 	childApexes, err := r.collectInheritingChildApexes(ctx, tgw)
@@ -743,13 +802,21 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string, childApexes []string) (*gatewayv1.Gateway, error) {
 	allowedRoutes := buildAllowedRoutes(tgw)
 	httpAllowedRoutes := buildHTTPListenerAllowedRoutes(tgw)
-	listeners := []gatewayv1.Listener{
-		{
+	listeners := []gatewayv1.Listener{}
+	// The hostname-less :80 listener carries the ACME HTTP-01 challenge
+	// route and the http->https redirect, neither of which exists in edge
+	// mode, where it would only be a catch-all admitting any hostname.
+	// Leaving it out also keeps a hostname-pinned listener at index 0,
+	// which is what Cilium's first-listener-wins namespace check reads
+	// (cilium#42159, fixed in 1.19.6): with the narrow :80 selector first,
+	// an inheriting tenant's route attaches to no listener at all.
+	if tgw.Spec.CertMode != gatewayv1alpha1.CertModeEdge {
+		listeners = append(listeners, gatewayv1.Listener{
 			Name:          "http",
 			Port:          80,
 			Protocol:      gatewayv1.HTTPProtocolType,
 			AllowedRoutes: httpAllowedRoutes,
-		},
+		})
 	}
 
 	// All port-443 listeners (HTTPS-terminate and TLS-passthrough) share
@@ -767,7 +834,54 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	httpsAllowedRoutes := allowedRoutes.DeepCopy()
 	httpsAllowedRoutes.Kinds = port443Kinds
 
-	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 || tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
+	switch tgw.Spec.CertMode {
+	case gatewayv1alpha1.CertModeEdge:
+		// TLS ends at the class provider's edge, so the apex, its
+		// wildcard and every inheriting child apex are plain HTTP
+		// listeners: same hostnames and the same label-based
+		// allowedRoutes as the HTTPS listeners of the other modes, so
+		// app HTTPRoutes attach by hostname unchanged, but no
+		// certificateRefs. HTTPRoute only: TLSRoute has nothing to
+		// carry it, and GRPCRoute stays out for parity with the HTTPS
+		// listeners. TLS-passthrough listeners are skipped below for
+		// the same reason.
+		edgeAllowedRoutes := allowedRoutes.DeepCopy()
+		edgeAllowedRoutes.Kinds = []gatewayv1.RouteGroupKind{
+			{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"},
+		}
+		wildcardHost := gatewayv1.Hostname("*." + tgw.Spec.Apex)
+		apexHost := gatewayv1.Hostname(tgw.Spec.Apex)
+		listeners = append(listeners,
+			gatewayv1.Listener{
+				Name:          "edge",
+				Port:          80,
+				Protocol:      gatewayv1.HTTPProtocolType,
+				Hostname:      &wildcardHost,
+				AllowedRoutes: edgeAllowedRoutes,
+			},
+			gatewayv1.Listener{
+				Name:          "edge-apex",
+				Port:          80,
+				Protocol:      gatewayv1.HTTPProtocolType,
+				Hostname:      &apexHost,
+				AllowedRoutes: edgeAllowedRoutes.DeepCopy(),
+			},
+		)
+		// Same 2+N fan-out as the DNS-01 branch below, and the same
+		// 64-listener Gateway API cap applies: an operator whose child
+		// fan-out approaches it moves that subtree onto its own Gateway
+		// with tenant.spec.gateway=true.
+		for _, apex := range childApexes {
+			childWildcard := gatewayv1.Hostname("*." + apex)
+			listeners = append(listeners, gatewayv1.Listener{
+				Name:          edgeChildListenerName(apex),
+				Port:          80,
+				Protocol:      gatewayv1.HTTPProtocolType,
+				Hostname:      &childWildcard,
+				AllowedRoutes: edgeAllowedRoutes.DeepCopy(),
+			})
+		}
+	case gatewayv1alpha1.CertModeDNS01, gatewayv1alpha1.CertModeExistingSecret:
 		// Both modes serve the apex and every subdomain off a single
 		// wildcard cert. The only difference is the Secret name: DNS-01
 		// mints it; existingSecret references the operator-supplied one.
@@ -833,7 +947,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 				AllowedRoutes: httpsAllowedRoutes.DeepCopy(),
 			})
 		}
-	} else {
+	default:
 		// HTTP-01 (default): per-app HTTPS listener per attached
 		// HTTPRoute / TLSRoute hostname. Names + cert refs are
 		// derived from the hostname's first label.
@@ -872,7 +986,11 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// cilium#45693 ships.
 	// The corresponding TLSRoute templates (cozystack-api, vm-exportproxy,
 	// cdi-uploadproxy) attach to these listeners by sectionName.
-	for _, svc := range tgw.Spec.TLSPassthroughServices {
+	passthroughServices := tgw.Spec.TLSPassthroughServices
+	if !rendersTLSPassthrough(tgw) {
+		passthroughServices = nil
+	}
+	for _, svc := range passthroughServices {
 		host := gatewayv1.Hostname(svc + "." + tgw.Spec.Apex)
 		passthroughAllowed := *allowedRoutes
 		passthroughAllowed.Kinds = port443Kinds

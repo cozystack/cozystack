@@ -348,3 +348,354 @@ tests:
             - api
             - vm-exportproxy
             - cdi-uploadproxy
+
+  - it: gateway-class-name from _cluster is the default when the tenant picks none
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cloudflare-tunnel
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cloudflare-tunnel
+
+  - it: the tenant's own class wins over the platform default
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-tenant-classes: cloudflare-tunnel
+      _namespace:
+        host: example.org
+      gatewayClassName: cloudflare-tunnel
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cloudflare-tunnel
+
+  - it: falls back to cilium against a platform that predates gateway.className
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cilium
+
+  - it: a class listed as edge-terminated switches the tenant to certMode=edge
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: cloudflare
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-edge-classes: cloudflare-tunnel,some-other-tunnel
+        gateway-tenant-classes: cloudflare-tunnel
+      _namespace:
+        host: alice.example.org
+      gatewayClassName: cloudflare-tunnel
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: edge
+      - equal:
+          path: spec.gatewayClassName
+          value: cloudflare-tunnel
+      - notExists:
+          path: spec.dns01
+      - notExists:
+          path: spec.issuerName
+      - notExists:
+          path: spec.wildcardSecretRef
+
+  - it: the same tenant on a class that is not listed keeps issuing certificates
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: cloudflare
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-edge-classes: cloudflare-tunnel
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: dns01
+      - equal:
+          path: spec.gatewayClassName
+          value: cilium
+      - exists:
+          path: spec.dns01.cloudflare
+
+  - it: the platform default class being edge-terminated reaches a tenant that picks nothing
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cloudflare-tunnel
+        gateway-edge-classes: cloudflare-tunnel
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: edge
+
+  - it: a padded platform default class still matches the edge list and renders trimmed
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: "  cloudflare-tunnel  "
+        gateway-edge-classes: cloudflare-tunnel
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cloudflare-tunnel
+      - equal:
+          path: spec.certMode
+          value: edge
+
+  - it: a padded tenant-selected class passes the allowlist and renders trimmed
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-edge-classes: cloudflare-tunnel
+        gateway-tenant-classes: cloudflare-tunnel
+      _namespace:
+        host: alice.example.org
+      gatewayClassName: "  cloudflare-tunnel  "
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cloudflare-tunnel
+      - equal:
+          path: spec.certMode
+          value: edge
+
+  - it: an unset platform default falls back to the bundled class
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cilium
+
+  - it: a whitespace-only platform default is refused rather than resolved
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: "   "
+      _namespace:
+        host: example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: 'packages/extra/gateway: _cluster.gateway-class-name is only whitespace. The platform writes this from gateway.className; leave that unset for the bundled cilium class rather than blank.'
+
+  - it: a whitespace-only tenant class is refused rather than silently defaulted
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+      _namespace:
+        host: alice.example.org
+      gatewayClassName: "   "
+    asserts:
+      - failedTemplate:
+          errorMessage: 'packages/extra/gateway: gatewayClass is only whitespace. Leave tenant.spec.gatewayClass unset to take the platform default, or name a class the operator lists in gateway.tenantSelectableClasses.'
+
+  - it: an edge class wins over wildcard-secret-name
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        wildcard-secret-name: wildcard-tls
+        gateway-class-name: cloudflare-tunnel
+        gateway-edge-classes: cloudflare-tunnel
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: edge
+      - notExists:
+          path: spec.wildcardSecretRef
+
+  - it: an edge class skips the ACME validations (custom issuer-name ignored)
+    set:
+      _cluster:
+        solver: bogus
+        expose-ingress: tenant-root
+        issuer-name: my-corp-ca
+        gateway-class-name: cloudflare-tunnel
+        gateway-edge-classes: cloudflare-tunnel
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: edge
+
+  - it: a tenant cannot select a class the operator did not allow
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-tenant-classes: cloudflare-tunnel
+      _namespace:
+        host: example.org
+      gatewayClassName: admin-internal
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gatewayClass="admin-internal" is not selectable by tenants'
+
+  - it: a tenant may always select the platform default explicitly
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+      _namespace:
+        host: example.org
+      gatewayClassName: cilium
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cilium
+
+  - it: the publishing tenant cannot select a class that terminates TLS differently
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-edge-classes: cloudflare-tunnel
+        gateway-tenant-classes: cloudflare-tunnel
+      _namespace:
+        host: example.org
+      gatewayClassName: cloudflare-tunnel
+    asserts:
+      - failedTemplate:
+          errorPattern: 'the publishing tenant \(tenant-root\) cannot select gatewayClass="cloudflare-tunnel"'
+
+  - it: a non-publishing tenant may select that same class
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-edge-classes: cloudflare-tunnel
+        gateway-tenant-classes: cloudflare-tunnel
+      _namespace:
+        host: alice.example.org
+      gatewayClassName: cloudflare-tunnel
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: edge
+
+  - it: the publishing tenant may select a class that matches the default's termination
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-edge-classes: cloudflare-tunnel
+        gateway-tenant-classes: another-terminating-class
+      _namespace:
+        host: example.org
+      gatewayClassName: another-terminating-class
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: another-terminating-class
+      - equal:
+          path: spec.certMode
+          value: http01
+
+  - it: the publishing tenant may select another edge class when the default is edge too
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cloudflare-tunnel
+        gateway-edge-classes: cloudflare-tunnel,some-other-tunnel
+        gateway-tenant-classes: some-other-tunnel
+      _namespace:
+        host: example.org
+      gatewayClassName: some-other-tunnel
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: some-other-tunnel
+      - equal:
+          path: spec.certMode
+          value: edge
+
+  - it: an edge tenant advertises no tlsPassthroughServices in its CR
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-edge-classes: cloudflare-tunnel
+        gateway-tenant-classes: cloudflare-tunnel
+      _namespace:
+        host: alice.example.org
+      gatewayClassName: cloudflare-tunnel
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: edge
+      - notExists:
+          path: spec.tlsPassthroughServices

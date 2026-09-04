@@ -192,6 +192,15 @@ func hostnameSuffix(hostname string) string {
 // two distinct hostnames a 1-in-2^32 event — well below any
 // realistic chart load. The first-label prefix is kept for
 // human readability when reading Gateway.spec.listeners.
+//
+// Do not truncate. Listener.name is a SectionName, capped at 253, not at
+// the 63 of a DNS label: gateway-api v1.4.1 declares MaxLength=253 on the
+// type, and the CRD bundle this repo ships carries maxLength: 253 on
+// spec.listeners[].name. The longest name the builders here produce is a
+// 12-character prefix plus a DNS label (≤63) plus a dash and 8 hex, so
+// ≤84 — already inside the cap. Truncating would shorten names that are
+// valid today, and renaming a listener on a live Gateway is a delete plus
+// a create.
 func perListenerName(hostname string) string {
 	return "https-" + hostnameFirstLabel(hostname) + "-" + hostnameSuffix(hostname)
 }
@@ -204,6 +213,12 @@ func perListenerName(hostname string) string {
 // listener whose first-label happens to be "alice".
 func childListenerName(childApex string) gatewayv1.SectionName {
 	return gatewayv1.SectionName("https-child-" + hostnameFirstLabel(childApex) + "-" + hostnameSuffix(childApex))
+}
+
+// edgeChildListenerName is childListenerName's counterpart for the
+// plain-HTTP per-child-apex listener rendered in edge mode.
+func edgeChildListenerName(childApex string) gatewayv1.SectionName {
+	return gatewayv1.SectionName("edge-child-" + hostnameFirstLabel(childApex) + "-" + hostnameSuffix(childApex))
 }
 
 // perListenerCertName produces the cert-manager Certificate name for
@@ -360,12 +375,12 @@ func buildSolver(tgw *gatewayv1alpha1.TenantGateway) (*cmacmev1.ACMEChallengeSol
 			return nil, fmt.Errorf("unsupported dns01.provider=%q (supported: cloudflare, route53, digitalocean, rfc2136)", tgw.Spec.DNS01.Provider)
 		}
 
-	case gatewayv1alpha1.CertModeExistingSecret:
-		// existingSecret mode mints no Issuer, so reconcileIssuer never
-		// calls buildSolver in this mode. Guard defensively so a future
-		// caller gets a clear contract error instead of silently
-		// falling through to the unknown-certMode default below.
-		return nil, fmt.Errorf("certMode=existingSecret does not use an ACME solver")
+	case gatewayv1alpha1.CertModeExistingSecret, gatewayv1alpha1.CertModeEdge:
+		// Neither mode mints an Issuer, so reconcileIssuer never calls
+		// buildSolver for them. Guard defensively so a future caller
+		// gets a clear contract error instead of silently falling
+		// through to the unknown-certMode default below.
+		return nil, fmt.Errorf("certMode=%s does not use an ACME solver", tgw.Spec.CertMode)
 
 	default:
 		return nil, fmt.Errorf("unknown certMode=%q", tgw.Spec.CertMode)
@@ -387,8 +402,8 @@ func buildSolver(tgw *gatewayv1alpha1.TenantGateway) (*cmacmev1.ACMEChallengeSol
 func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGateway, childApexes []string) (*cmv1.Certificate, error) {
 	dnsNames := []string{tgw.Spec.Apex, "*." + tgw.Spec.Apex}
 	seen := map[string]struct{}{
-		tgw.Spec.Apex:           {},
-		"*." + tgw.Spec.Apex:    {},
+		tgw.Spec.Apex:        {},
+		"*." + tgw.Spec.Apex: {},
 	}
 	for _, apex := range childApexes {
 		if apex == "" {

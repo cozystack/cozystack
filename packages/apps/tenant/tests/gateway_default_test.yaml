@@ -117,3 +117,21 @@ tests:
         equal:
           path: kind
           value: HelmRelease
+
+  - it: passes a tenant-selected gatewayClass into the gateway release
+    set:
+      gateway: true
+      gatewayClass: cloudflare-tunnel
+    asserts:
+      - template: templates/gateway.yaml
+        equal:
+          path: spec.values.gatewayClassName
+          value: cloudflare-tunnel
+
+  - it: leaves the release values absent when the tenant selects no class
+    set:
+      gateway: true
+    asserts:
+      - template: templates/gateway.yaml
+        notExists:
+          path: spec.values

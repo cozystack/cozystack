@@ -26,6 +26,11 @@
       "description": "Deploy own Gateway API Gateway (backed by Cilium Gateway API controller). When unset (the default), the chart auto-enables the Gateway for tenants whose apex is derived from the parent (i.e. `host` is empty), and leaves it off for tenants with a custom non-derived apex. Set to `true` or `false` explicitly to override that auto-behaviour. Note: leave the key absent (do not write `gateway: null`) — the chart distinguishes \"unset\" via missing-key, not via null value, to satisfy the JSON schema generated from this comment.",
       "type": "boolean"
     },
+    "gatewayClass": {
+      "description": "GatewayClass for this tenant's own Gateway. Empty uses the platform default (`gateway.className`). Only the classes the operator lists in the platform's `gateway.tenantSelectableClasses`, plus that default, may be named here — anything else fails this tenant's own gateway release and reaches no other tenant. Read only when this tenant owns a Gateway; an inheriting tenant uses its ancestor's. Whether a class terminates TLS itself or at its provider's edge is declared once per class on the platform, not here.",
+      "type": "string",
+      "default": ""
+    },
     "seaweedfs": {
       "description": "Deploy own SeaweedFS.",
       "type": "boolean",
