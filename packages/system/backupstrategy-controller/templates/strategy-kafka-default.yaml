@@ -75,11 +75,30 @@ spec:
               key="${SRC_NAMESPACE}/${SRC_NAME}/${RUN_NAME}/kafka-metadata.txt"
 
               case "${S3_ENDPOINT}" in
-                http://*|https://*) base="${S3_ENDPOINT}" ;;
-                *) base="https://${S3_ENDPOINT}" ;;
+                http://*|https://*) full="${S3_ENDPOINT}" ;;
+                *) full="https://${S3_ENDPOINT}" ;;
               esac
-              obj_url="${base}/${S3_BUCKET}/${key}"
-              s3() { curl -fsS --aws-sigv4 "aws:amz:${S3_REGION}:s3" --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"; }
+              # This image ships curl 7.76.1, whose --aws-sigv4 omits a
+              # non-default port from the SigV4 canonical Host but still sends it
+              # in the Host header (a bug fixed in curl 7.87.0), so seaweedfs
+              # recomputes a different signature and 403s. Sign/send the bare host
+              # and redirect the connection to the real port with --connect-to,
+              # so signed, sent and server-side Host all agree. Correct on
+              # curl >= 7.87 too, which drops the default port anyway.
+              scheme="${full%%://*}"
+              hostport="${full#*://}"; hostport="${hostport%%/*}"
+              host="${hostport%%:*}"
+              port="${hostport##*:}"
+              [ "${port}" = "${hostport}" ] && port=""
+              if [ "${scheme}" = http ]; then defport=80; else defport=443; fi
+              connect_to=""
+              if [ -n "${port}" ] && [ "${port}" != "${defport}" ]; then
+                connect_to="--connect-to ${host}:${defport}:${host}:${port}"
+              fi
+              obj_url="${scheme}://${host}/${S3_BUCKET}/${key}"
+              # -k accepts the in-cluster S3 self-signed cert; ${connect_to} is
+              # unquoted so an empty value expands to no argument.
+              s3() { curl -fsS -k ${connect_to} --aws-sigv4 "aws:amz:${S3_REGION}:s3" --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"; }
 
               # Extract PartitionCount / ReplicationFactor from a --describe
               # summary line; empty output means an unparsable describe.
@@ -99,7 +118,11 @@ spec:
                 # swallow exits into a subshell).
                 for t in ${all}; do
                   [ -n "${t}" ] || continue
-                  if ! desc=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --describe --topic "${t}"); then
+                  # kafka-topics --topic is a Java REGEX filter, not a literal
+                  # name: "audit.events" would also match "audit-events". Wrap
+                  # the name in \Q...\E so it matches exactly the one topic
+                  # (a missing topic still yields exit 1 / empty, preserved).
+                  if ! desc=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --describe --topic "\Q${t}\E"); then
                     echo "cannot describe topic ${t}" >&2; exit 1
                   fi
                   line=${desc%%$'\n'*}
@@ -114,7 +137,13 @@ spec:
                   if ! cfgout=$("${BIN}"/kafka-configs.sh --bootstrap-server "${BOOTSTRAP}" --describe --entity-type topics --entity-name "${t}"); then
                     echo "cannot describe configs for ${t}" >&2; exit 1
                   fi
-                  cfglines=$(printf '%s\n' "${cfgout}" | grep -E '^[[:space:]]+[^[:space:]=]+=' || true)
+                  # Fail closed like the --list guard: grep exit 1 is "no
+                  # non-default configs" (fine); any other exit is an I/O error
+                  # and must abort, not silently drop the topic's configs.
+                  if cfglines=$(printf '%s\n' "${cfgout}" | grep -E '^[[:space:]]+[^[:space:]=]+='); then :; else
+                    rc=$?; [ "${rc}" -eq 1 ] || { echo "cannot parse configs for ${t}" >&2; exit 1; }
+                    cfglines=""
+                  fi
                   if [ -n "${cfglines}" ]; then
                     printf '%s\n' "${cfglines}" | while read -r cl; do
                       kv=${cl%% sensitive=*}
@@ -135,7 +164,7 @@ spec:
                   case "${kind}" in
                   T)
                     t=$a; parts=$b; rf=$c
-                    if desc=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --describe --topic "${t}" 2>/dev/null); then
+                    if desc=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --describe --topic "\Q${t}\E" 2>/dev/null); then
                       line=${desc%%$'\n'*}
                       lp=$(describe_field "${line}" PartitionCount)
                       lrf=$(describe_field "${line}" ReplicationFactor)
@@ -145,7 +174,7 @@ spec:
                         echo "topic ${t}: replication factor differs (live=${lrf} backup=${rf}); cannot reconcile" >&2; exit 1
                       fi
                       if [ "${lp}" -lt "${parts}" ]; then
-                        "${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --alter --topic "${t}" --partitions "${parts}"
+                        "${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --alter --topic "\Q${t}\E" --partitions "${parts}"
                       elif [ "${lp}" -gt "${parts}" ]; then
                         echo "topic ${t}: live has ${lp} partitions, backup ${parts}; Kafka cannot decrease partitions" >&2; exit 1
                       fi

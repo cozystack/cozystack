@@ -58,9 +58,13 @@ backupStrategyController:
   # packages/apps/kafka sets no spec.kafka.version, so the operator picks its
   # default from templates/_kafka_image_map.tpl (kafka 3.9.1 at operator
   # 0.45.1-rc1), and that image is already cached on the nodes — so the backup
-  # Pod reuses it rather than pulling a second version. Pinned by digest; keep
-  # the tag in step with the kafka-operator default when it bumps. A dedicated
-  # small client image is a possible follow-up.
+  # Pod reuses it rather than pulling a second version. Pinned by digest. Note
+  # this ref has no automated producer: no Makefile stamps it and Renovate does
+  # not manage helm-values here, so it must be bumped by hand together with the
+  # kafka-operator default (same tracking gap as chBackupClientImage above). It
+  # is an upstream Strimzi image, not routed through `include "cozy-lib.image"`
+  # (the chart declares no cozy-lib dependency); a dedicated small client image
+  # with its own producer is a possible follow-up.
   kafkaBackupClientImage: "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1@sha256:ba52ed046b1dccdbd96f4e68057ce014d862a7c9c1fc670760c023b9aa09f23f"
   replicas: 2
   debug: false
