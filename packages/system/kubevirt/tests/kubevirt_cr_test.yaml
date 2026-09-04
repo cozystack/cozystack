@@ -23,6 +23,8 @@ tests:
           path: spec.configuration.permittedHostDevices
       - notExists:
           path: spec.configuration.mediatedDevicesConfiguration
+      - notExists:
+          path: spec.configuration.vmStateStorageClass
 
   - it: emits cpuAllocationRatio under developerConfiguration when set
     set:
@@ -116,3 +118,11 @@ tests:
       - matchRegex:
           path: spec.customizeComponents.patches[0].patch
           pattern: '"requests":\{"cpu":"100m","memory":"128Mi"\}'
+
+  - it: emits vmStateStorageClass when set so persistent EFI/TPM state can land on an RWX-Filesystem class
+    set:
+      vmStateStorageClass: nfs-csi
+    asserts:
+      - equal:
+          path: spec.configuration.vmStateStorageClass
+          value: nfs-csi

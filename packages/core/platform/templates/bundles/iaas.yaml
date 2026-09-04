@@ -14,6 +14,9 @@
 {{- if .Values.resources.cpuAllocationRatio -}}
 {{- $_ := set $kubevirtValues "cpuAllocationRatio" (.Values.resources.cpuAllocationRatio | int) -}}
 {{- end -}}
+{{- if .Values.vmStateStorageClass -}}
+{{- $_ := set $kubevirtValues "vmStateStorageClass" .Values.vmStateStorageClass -}}
+{{- end -}}
 {{- /*
   When cozystack.gpu-operator is enabled the platform mirrors the variant
   into the KubeVirt CR: the HostDevices feature gate plus a starter

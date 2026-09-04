@@ -55,6 +55,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 PHD='{{- with .Values.permittedHostDevices }}'
 MDC='{{- with .Values.mediatedDevicesConfiguration }}'
+VMS='{{- with .Values.vmStateStorageClass }}'
 
 # --- case 1: a hand-merge dropped ONLY the mediatedDevicesConfiguration block.
 # `make update` must reinsert it without duplicating permittedHostDevices.
@@ -80,7 +81,22 @@ fi
 assert_present "$PHD" "$missing_phd"
 assert_count 1 "$MDC" "$missing_phd"
 
-# --- case 3: an already-parameterized template is a no-op (idempotent).
+# --- case 3: a hand-merge dropped ONLY the vmStateStorageClass block. It keys
+# off the same evictionStrategy: anchor as the two blocks above, so a guard
+# shared with either of them would skip this insert while they are present.
+missing_vms="$tmpdir/missing-vms.yaml"
+sed '/{{- with .Values.vmStateStorageClass }}/,/{{- end }}/d' "$src" >"$missing_vms"
+assert_absent "$VMS" "$missing_vms"
+assert_present "$PHD" "$missing_vms"
+assert_present "$MDC" "$missing_vms"
+if ! run_update "$missing_vms"; then
+	fail "make update exited non-zero on a template missing only vmStateStorageClass"
+fi
+assert_present "$VMS" "$missing_vms"
+assert_count 1 "$PHD" "$missing_vms"
+assert_count 1 "$MDC" "$missing_vms"
+
+# --- case 4: an already-parameterized template is a no-op (idempotent).
 full="$tmpdir/full.yaml"
 cp "$src" "$full"
 if ! run_update "$full"; then
@@ -90,13 +106,14 @@ if ! diff -u "$src" "$full" >/dev/null; then
 	fail "make update mutated an already-parameterized template"
 fi
 
-# --- case 4: repeated runs never duplicate a guard directive.
+# --- case 5: repeated runs never duplicate a guard directive.
 run_update "$missing_mdev"
 for guard in \
 	'{{- if .Values.cpuAllocationRatio }}' \
 	'{{- range .Values.extraFeatureGates }}' \
 	"$PHD" \
-	"$MDC"; do
+	"$MDC" \
+	"$VMS"; do
 	assert_count 1 "$guard" "$missing_mdev"
 done
 
