@@ -7,6 +7,7 @@
 #
 # Usage:
 #   hack/select-install.sh <suites> [<sources-dir>]
+#   hack/select-install.sh --disabled <suites> [<sources-dir>]
 #   hack/select-install.sh --validate [<sources-dir> [<suites-dir>]]
 #
 # Defaults: sources-dir = packages/core/platform/sources
@@ -16,8 +17,31 @@
 #           (e.g. "postgres harbor"). "-" reads the list from stdin.
 #
 # Output (closure mode): space-separated PackageSource names (cozystack.*) that
-#   the run must enable, seeds + the engine + all transitive dependsOn. Empty
-#   when <suites> is empty. A suite with no known mapping is a HARD ERROR (fail
+#   the run must enable, seeds + the platform baseline + all transitive
+#   dependsOn. Empty when <suites> is empty.
+#
+# Output (--disabled): the COMPLEMENT of that closure, for bundles.disabledPackages
+#   in the platform chart. The base package helper in
+#   packages/core/platform/templates/_helpers.tpl consults disabledPackages for
+#   every package rather than only the optional ones, so an ordinary variant
+#   reduces to the closure by subtraction with no new variant. Refuses on an
+#   empty selection, where the complement would be the whole platform.
+#
+#   Two limits worth knowing before consuming it.
+#
+#   Subtraction governs a FRESH install only. Both package defines stamp
+#   `helm.sh/resource-policy: keep`, so adding a name on a live cluster stops
+#   emitting the Package CR but does not remove the one already there; the
+#   package stays installed. Fine for a per-run E2E install, wrong as a way to
+#   uninstall.
+#
+#   Packages emitted through package.optional (nfs-driver, telepresence,
+#   external-dns, external-dns-application, and the others gated the same way)
+#   need bundles.enabledPackages as well. Keeping one in the closure is
+#   therefore not enough to install it, and a suite whose closure contains one
+#   needs that list set separately. Subtraction is correct for them either way,
+#   since an optional package absent from enabledPackages is not installed
+#   regardless. A suite with no known mapping is a HARD ERROR (fail
 #   closed) — a silently-skipped suite would install nothing and let the test
 #   pass vacuously or fail later on a missing CRD.
 #
@@ -43,7 +67,17 @@ SUITES_DIR="hack/e2e-chainsaw"
 MODE="closure"
 SUITES=""
 
-if [ "${1:-}" = "--validate" ]; then
+if [ "${1:-}" = "--disabled" ]; then
+  MODE="disabled"
+  shift
+  suites_arg="${1?usage: select-install.sh --disabled <suites> [sources-dir]}"
+  SOURCES_DIR="${2:-$SOURCES_DIR}"
+  if [ "$suites_arg" = "-" ]; then
+    SUITES="$(cat)"
+  else
+    SUITES="$suites_arg"
+  fi
+elif [ "${1:-}" = "--validate" ]; then
   MODE="validate"
   SOURCES_DIR="${2:-$SOURCES_DIR}"
   SUITES_DIR="${3:-$SUITES_DIR}"
@@ -191,7 +225,17 @@ for suite in $SUITES; do
 done
 [ "$map_rc" = 0 ] || exit "$map_rc"
 
-[ -z "$seeds" ] && exit 0
+# An empty seed set means no suite was selected. In closure mode that is a valid
+# answer -- install nothing extra. In disabled mode it is not: the complement of
+# an empty closure is the whole platform, which as an install instruction is a
+# platform with no packages at all, so refuse rather than emit it.
+if [ -z "$seeds" ]; then
+  if [ "$MODE" = "disabled" ]; then
+    echo "select-install: refusing to emit a disable list for an empty suite selection — the complement would be the entire platform" >&2
+    exit 1
+  fi
+  exit 0
+fi
 
 # Any non-empty install set needs the engine up: it registers the
 # ApplicationDefinition CRD every *-rd HelmRelease reconciles against, and its
@@ -200,11 +244,40 @@ done
 # a dependsOn edge to it; system-package-backed suites reach it via no edge, so
 # seed it explicitly here. Its absence from the graph is a hard error — nothing
 # can install without it.
-engine="cozystack.cozystack-engine"
-if echo "$NODES" | grep -Fxq "$engine"; then
-  case " $seeds " in *" $engine "*) ;; *) seeds="$seeds $engine" ;; esac
-else
-  echo "select-install: error: required engine PackageSource '$engine' not found in $SOURCES_DIR" >&2
+# The engine, plus the platform baseline every run needs whatever it selected.
+#
+# The engine registers the ApplicationDefinition CRD, so no *-rd HelmRelease can
+# reconcile without it. The rest carry no dependsOn edge to any app either, and
+# are just as unconditional: hack/e2e-install-cozystack.bats waits for the root
+# Tenant and then for the etcd, ingress, monitoring, seaweedfs and tenant-root
+# HelmReleases before any suite runs, and the app suites themselves live in the
+# tenant-root namespace and reach seaweedfs-s3.tenant-root for object storage.
+# Without these the reduced platform has nowhere to install anything and the
+# install step times out, which is a graph-shaped answer that is nonetheless
+# wrong -- exactly the case this seed list exists to cover.
+#
+# Seeded rather than given edges in the graph: they are a property of how the
+# platform is installed, not a dependency any single app declares, and inventing
+# edges for them would fan every app out to all of them in the reverse walk that
+# select-e2e.sh does.
+baseline="cozystack.cozystack-engine
+cozystack.cozystack-basics
+cozystack.tenant-application
+cozystack.etcd-application
+cozystack.ingress-application
+cozystack.monitoring-application
+cozystack.seaweedfs-application"
+
+missing=""
+for b in $baseline; do
+  if echo "$NODES" | grep -Fxq "$b"; then
+    case " $seeds " in *" $b "*) ;; *) seeds="$seeds $b" ;; esac
+  else
+    missing="${missing:+$missing }$b"
+  fi
+done
+if [ -n "$missing" ]; then
+  echo "select-install: error: required baseline PackageSource(s) not found in $SOURCES_DIR: $missing" >&2
   exit 1
 fi
 
@@ -220,4 +293,29 @@ while :; do
   all="$all $new"
 done
 
-echo "$all" | tr ' ' '\n' | grep -v '^$' | sort -u | paste -sd ' ' -
+closure="$(echo "$all" | tr ' ' '\n' | grep -v '^$' | sort -u)"
+
+if [ "$MODE" = "disabled" ]; then
+  # The complement: every PackageSource the platform knows, minus the closure the
+  # selected suites need. This is what goes into bundles.disabledPackages, and it
+  # is why no new platform variant is required -- the base package helper
+  # (packages/core/platform/templates/_helpers.tpl) consults disabledPackages for
+  # EVERY package, not only the ones declared optional, so an ordinary variant can
+  # be reduced to the closure by subtraction.
+  #
+  # Subtracting is safe by construction because the closure is a FORWARD walk over
+  # dependsOn: anything the kept set needs is already in it, so the complement can
+  # never contain a dependency of something kept. The hard pairs this protects are
+  # real -- backupstrategy-controller depends on velero, and there is a unit test
+  # in packages/core/platform guarding exactly that -- and they survive without
+  # being special-cased here.
+  #
+  # An empty closure yields the full node list, which would disable everything.
+  # That is a legitimate answer to "no suites selected" only if the caller then
+  # installs nothing at all; as an INSTALL instruction it is a platform with no
+  # packages, so refuse it rather than emit it.
+  echo "$NODES" | grep -vxF "$closure" | paste -sd ' ' -
+  exit 0
+fi
+
+echo "$closure" | paste -sd ' ' -
