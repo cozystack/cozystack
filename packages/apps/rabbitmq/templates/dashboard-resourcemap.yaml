@@ -1,7 +1,3 @@
-{{/*
-This Role deliberately does not branch on whether TLS is enabled: no TLS Secret is
-granted in either state, so there is nothing here for a TLS condition to gate.
-*/}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
