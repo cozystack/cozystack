@@ -205,6 +205,11 @@
       "description": "Seed string to generate SMBIOS UUID for the VM.",
       "type": "string",
       "default": ""
+    },
+    "terminationGracePeriodSeconds": {
+      "description": "Seconds the guest is given to shut down cleanly on an ACPI powerdown before the domain is destroyed. Applies to every shutdown path: an explicit stop, a node drain, an eviction, a workload update.",
+      "type": "integer",
+      "default": 30
     }
   }
 }

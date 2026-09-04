@@ -106,3 +106,17 @@ cloudInit: ""
 cloudInitSeed: ""
 ## Example:
 ## cloudInitSeed: "upd1"
+
+## @param {int} terminationGracePeriodSeconds - Seconds the guest is given to shut down cleanly on an ACPI powerdown before the domain is destroyed. Applies to every shutdown path: an explicit stop, a node drain, an eviction, a workload update.
+terminationGracePeriodSeconds: 30
+## The default of 30 seconds is enough for a Linux guest, which hands back control in a few seconds. It is
+## often too short for Windows, which applies pending updates during shutdown ("Do not turn off your
+## computer"): the domain is destroyed mid-update, which is an unclean shutdown of the guest filesystem.
+##
+## Raise it per VM when the guest needs longer. It bounds the wait on EVERY shutdown path, including the
+## ones a user never triggers — a node drain, an eviction, or a workload update rolled out by KubeVirt.
+##
+## Example:
+## terminationGracePeriodSeconds: 300
+## Example:
+## cloudInitSeed: "upd1"
