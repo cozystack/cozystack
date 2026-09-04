@@ -76,6 +76,45 @@ spec:
                       "s2", "snappy", "lz4", "pgzip", "none"). Defaults to the operator-side
                       default when empty. Templating is supported.
                     type: string
+                  s3:
+                    description: |-
+                      S3 carries the system-bucket storage coordinates the driver SSA-patches
+                      onto the source PerconaServerMongoDB's spec.backup.storages[StorageName]
+                      on the useSystemBucket flow. PBM takes these as static CR fields (not
+                      secret refs), and the platform bucket name / endpoint are only known at
+                      BackupJob time, so the cozy-default strategy carries them (endpointUrl
+                      already scheme'd by the endpoint helper) and the driver injects them. Nil
+                      means the legacy flow: rely on the storage the app chart rendered
+                      statically, and patch nothing.
+                    properties:
+                      bucket:
+                        description: Bucket is the S3 bucket name (the COSI-assigned
+                          system bucket).
+                        type: string
+                      credentialsSecret:
+                        description: |-
+                          CredentialsSecret names the Secret carrying AWS_ACCESS_KEY_ID /
+                          AWS_SECRET_ACCESS_KEY. Defaults to cozy-backups-creds when empty.
+                        type: string
+                      endpointUrl:
+                        description: EndpointURL is the full S3 endpoint URL including
+                          scheme.
+                        type: string
+                      forcePathStyle:
+                        description: ForcePathStyle selects path-style S3 addressing.
+                        type: boolean
+                      insecureSkipTLSVerify:
+                        description: InsecureSkipTLSVerify disables S3 endpoint certificate
+                          verification.
+                        type: boolean
+                      prefix:
+                        description: Prefix scopes this release's backups under the
+                          bucket.
+                        type: string
+                      region:
+                        description: Region is the S3 region.
+                        type: string
+                    type: object
                   storageName:
                     description: |-
                       StorageName names a storage entry declared in the source cluster's

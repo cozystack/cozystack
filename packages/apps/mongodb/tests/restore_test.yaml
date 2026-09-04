@@ -59,6 +59,20 @@ tests:
       - failedTemplate:
           errorMessage: "bootstrap.backupName is required when bootstrap.enabled is true"
 
+  - it: fails when bootstrap and useSystemBucket are both enabled
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "my-backup"
+      backup:
+        useSystemBucket: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "mongodb: bootstrap.enabled=true is incompatible with backup.useSystemBucket=true. Restore from the system bucket with a backups.cozystack.io/RestoreJob against the cozy-default BackupClass; see docs/operations/backup-classes.md."
+
   - it: fails when destinationPath is missing
     release:
       name: test-mongodb

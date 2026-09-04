@@ -163,7 +163,9 @@ rules:
 # cleanup) by tenants / explicit teardown flows, never by this controller.
 - apiGroups: ["psmdb.percona.com"]
   resources: ["perconaservermongodbs"]
-  verbs: ["get", "list", "watch"]
+  # patch/update: the useSystemBucket flow SSA-injects spec.backup.storages
+  # onto the live PerconaServerMongoDB at BackupJob time.
+  verbs: ["get", "list", "watch", "patch", "update"]
 - apiGroups: ["psmdb.percona.com"]
   resources: ["perconaservermongodbbackups", "perconaservermongodbrestores"]
   verbs: ["get", "list", "watch", "create"]
