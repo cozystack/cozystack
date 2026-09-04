@@ -38,7 +38,13 @@
 {{-     $pending := list }}
 {{-     range $kind := list "User" "Vhost" "Permission" }}
 {{-       range dig "items" (list) (lookup "rabbitmq.com/v1beta1" $kind $.Release.Namespace "" | default dict) }}
-{{-         $pending = append $pending (printf "%s/%s" $kind .metadata.name) }}
+{{- /* A tenant namespace holds every RabbitMQ application the tenant runs, so
+     the listing has to be narrowed to this release. A sibling's topology
+     objects are reached through their own broker, whose listeners this flag
+     does not touch. */}}
+{{-         if eq (dig "spec" "rabbitmqClusterReference" "name" "" .) $.Release.Name }}
+{{-           $pending = append $pending (printf "%s/%s" $kind .metadata.name) }}
+{{-         end }}
 {{-       end }}
 {{-     end }}
 {{-     if $pending }}

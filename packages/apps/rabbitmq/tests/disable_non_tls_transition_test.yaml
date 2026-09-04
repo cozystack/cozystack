@@ -12,6 +12,10 @@ release:
 # is still in the namespace decides it, so every firing case below mocks the
 # objects Helm would prune only after applying the closed-listener cluster.
 #
+# A tenant namespace holds several RabbitMQ applications, so the objects also
+# carry `spec.rabbitmqClusterReference.name` and the guard has to read it: a
+# sibling release's User must not stop this release from closing its listeners.
+#
 # The `registrar` objects sit in an unrelated namespace. The fake dynamic
 # client learns a kind from the objects it is given rather than from `scheme`,
 # and refuses to LIST a kind it has never seen instead of returning an empty
@@ -55,6 +59,7 @@ tests:
         - apiVersion: rabbitmq.com/v1beta1
           kind: User
           metadata: { name: myrabbitmq-alice, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: myrabbitmq } }
     set:
       tls.enabled: true
       tls.disableNonTLSListeners: true
@@ -73,12 +78,15 @@ tests:
         - apiVersion: rabbitmq.com/v1beta1
           kind: User
           metadata: { name: myrabbitmq-alice, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: myrabbitmq } }
         - apiVersion: rabbitmq.com/v1beta1
           kind: Vhost
           metadata: { name: myrabbitmq-orders, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: myrabbitmq } }
         - apiVersion: rabbitmq.com/v1beta1
           kind: Permission
           metadata: { name: myrabbitmq-orders-alice, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: myrabbitmq } }
     set:
       tls.enabled: true
       tls.disableNonTLSListeners: true
@@ -97,6 +105,7 @@ tests:
         - apiVersion: rabbitmq.com/v1beta1
           kind: Vhost
           metadata: { name: written-by-hand, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: myrabbitmq } }
     set:
       tls.enabled: true
       tls.disableNonTLSListeners: true
@@ -115,6 +124,7 @@ tests:
         - apiVersion: rabbitmq.com/v1beta1
           kind: User
           metadata: { name: myrabbitmq-alice, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: myrabbitmq } }
     set:
       tls.enabled: true
       tls.disableNonTLSListeners: true
@@ -131,6 +141,33 @@ tests:
   # -----------------------------------------------------------------------
   # Silent paths: the refusal must not outlive the transition it guards.
   # -----------------------------------------------------------------------
+
+  - it: ignores topology objects belonging to another release in the same namespace
+    kubernetesProvider:
+      scheme: *topologyScheme
+      objects:
+        - *registrarUser
+        - *registrarVhost
+        - *registrarPermission
+        - *openCluster
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: User
+          metadata: { name: othermq-alice, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: othermq } }
+        - apiVersion: rabbitmq.com/v1beta1
+          kind: Vhost
+          metadata: { name: othermq-orders, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: othermq } }
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.disableNonTLSListeners
+          value: true
 
   - it: renders once the live cluster already has the listeners closed, even with a stray User
     kubernetesProvider:
@@ -149,6 +186,7 @@ tests:
         - apiVersion: rabbitmq.com/v1beta1
           kind: User
           metadata: { name: created-later-by-the-tenant, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: myrabbitmq } }
     set:
       tls.enabled: true
       tls.disableNonTLSListeners: true
@@ -200,6 +238,7 @@ tests:
         - apiVersion: rabbitmq.com/v1beta1
           kind: User
           metadata: { name: myrabbitmq-alice, namespace: tenant-test }
+          spec: { rabbitmqClusterReference: { name: myrabbitmq } }
     set:
       tls.enabled: true
     documentSelector:
