@@ -462,6 +462,73 @@ func TestReconcileBucketClaimCreatesWorkload(t *testing.T) {
 	}
 }
 
+func TestReconcileBucketClaim_BucketClassLabelPropagated(t *testing.T) {
+	s := newTestScheme()
+
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-bucket",
+			Namespace: "tenant-demo",
+		},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Kind: "bucket",
+			Type: "s3",
+			Selector: map[string]string{
+				"app.kubernetes.io/instance": "my-bucket",
+			},
+		},
+	}
+
+	bc := &cosiv1alpha1.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-bucket",
+			Namespace: "tenant-demo",
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": "my-bucket",
+			},
+		},
+		Spec: cosiv1alpha1.BucketClaimSpec{
+			BucketClassName: "seaweedfs-encrypted",
+			Protocols:       []cosiv1alpha1.Protocol{cosiv1alpha1.ProtocolS3},
+		},
+		Status: cosiv1alpha1.BucketClaimStatus{
+			BucketReady: true,
+			BucketName:  "cosi-abc123",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(monitor, bc).
+		WithStatusSubresource(monitor).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{
+		Name:      "my-bucket",
+		Namespace: "tenant-demo",
+	}}
+
+	_, err := reconciler.Reconcile(context.TODO(), req)
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	workload := &cozyv1alpha1.Workload{}
+	err = fakeClient.Get(context.TODO(), types.NamespacedName{
+		Name:      "bucket-my-bucket",
+		Namespace: "tenant-demo",
+	}, workload)
+	if err != nil {
+		t.Fatalf("expected Workload to be created, got error: %v", err)
+	}
+
+	got := workload.Labels["workloads.cozystack.io/bucket-class"]
+	if got != "seaweedfs-encrypted" {
+		t.Errorf("expected workloads.cozystack.io/bucket-class=%q, got %q", "seaweedfs-encrypted", got)
+	}
+}
+
 func TestReconcileBucketClaimNotReady(t *testing.T) {
 	s := newTestScheme()
 
