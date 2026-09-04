@@ -2,12 +2,10 @@
 # Sourced by the chainsaw kubernetes-latest/previous Tests after cd to repo root.
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
 . hack/e2e-chainsaw/_lib/talos-image-cache.sh
-. hack/e2e-chainsaw/_lib/ghcr-mirror.sh
 
-# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block combining the
-# Talos OS image cache (imageFactoryURL) and the ghcr.io worker image-pull mirror
-# (registryMirrors), each included only when its in-sandbox mirror is up. Prints
-# nothing when both fall back to the public defaults, so the chart defaults apply.
+# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block with the Talos
+# OS image cache (imageFactoryURL) when the in-sandbox cache is up. Prints nothing
+# when it falls back to the public default, so the chart default applies.
 # Indented for insertion directly under `spec:` in the heredoc below.
 #
 # No trailing newline, unlike the single-key helper this replaced: the caller reads
@@ -15,14 +13,11 @@
 # of its own in the heredoc, which supplies the break before the next `spec` key.
 # An empty result therefore leaves a blank line, which is valid YAML.
 talos_spec_block() {
-  local url ghcr mirrors
+  local url
   url=$(resolve_talos_image_factory_url)
-  ghcr=$(resolve_ghcr_mirror_endpoint)
-  mirrors=$(ghcr_registry_mirrors_block "$ghcr")
-  [ -n "$url" ] || [ -n "$mirrors" ] || return 0
+  [ -n "$url" ] || return 0
   printf '  talos:\n'
-  [ -n "$url" ] && printf '    imageFactoryURL: %s\n' "$url"
-  [ -n "$mirrors" ] && printf '%s' "$mirrors"
+  printf '    imageFactoryURL: %s\n' "$url"
   return 0
 }
 
@@ -3745,11 +3740,8 @@ COZY_DIAG_RATE_INTERVAL_DEFAULT=12
 # snapshot past the end of the window.
 #
 # What a budget of this size gives up first is what is gated last --
-# ghcr_mirror_diagnose and talos_image_cache_diagnose. Neither loses its subject
-# entirely: the mirror's state is partly recoverable from the request counts and
-# response durations the mirror capture records against its own log, and from
-# the kube-system snapshot the host report takes. The image cache's re-probe has
-# no substitute, and it is the collector this budget gives up first.
+# talos_image_cache_diagnose. Its re-probe has no substitute, so it is the
+# collector this budget gives up first.
 #
 # Only part of what runs ahead of the console is held mechanically, and the
 # boundary is worth naming rather than leaving a reader to trust the whole of
@@ -3905,7 +3897,7 @@ cozy_diag_phase_start() {
   # an unchecked list sitting beside a checked one, drifting from it at whatever
   # rate collectors are added.
   command -v timeout >/dev/null 2>&1 || \
-    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, worker block IO counter, sandbox node CPU time, sandbox kernel KVM counters, runner kernel CPU time, sandbox QEMU per-thread CPU time, runner fixed-work canary, worker per-thread CPU time, ghcr-mirror and talos-image-cache captures -- keep collecting instead, unbounded" >&2
+    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing; the ones that guard the call with command -v -- the worker CPU throttling, worker network counter, worker block IO counter, sandbox node CPU time, sandbox kernel KVM counters, runner kernel CPU time, sandbox QEMU per-thread CPU time, runner fixed-work canary, worker per-thread CPU time and the talos-image-cache capture -- keep collecting instead, unbounded" >&2
   # Re-checked here, not only at assignment: a value set after this file is sourced
   # -- which is how a test sets it -- would otherwise reach the arithmetic below
   # unvalidated, and that is the one failure that costs the whole block.
@@ -4473,27 +4465,6 @@ cozy_report_node_join_failure() {
     cozy_capture_tenant_talos "${test_name}" || true
   fi
 
-  # The OS-image cache and the ghcr.io mirror fail independently and produce the
-  # same symptom from outside the guest, so both get dumped: this one answers
-  # whether the worker's kubelet-image pull reached the mirror or fell back to
-  # public ghcr.io, which the node-join failure alone cannot distinguish. Gated
-  # like its neighbours, and after the guest captures. Bounded read by read
-  # like the collector at (d2), but five of them at COZY_DIAG_READ_TIMEOUT plus
-  # grace, so it can spend a quarter of the phase budget -- and time is the
-  # only thing the gate rations, so a quarter spent here is a quarter the
-  # guest captures do not get. Cost is not what settles the order, though, or
-  # (d2) would sit here too: what settles it is whether the answer survives
-  # being declined. The console evidence this would starve is irreplaceable
-  # and (d2)'s question has no other answer in the tree, while the mirror's
-  # state is partly recoverable from the reads above -- so those two go first
-  # and this one waits, whichever of them is cheaper. Cheaper than the
-  # talos-image-cache re-probe below, which creates a Pod and waits on curl
-  # retries, so it goes ahead of it.
-  if cozy_diag_phase_has_time 'ghcr-mirror state, access log and warm-up Job'; then
-    echo "--- ghcr-mirror state, access log and warm-up Job ---"
-    ghcr_mirror_diagnose || true
-  fi
-
   # Last, and gated on the phase as well as bounded per read, because it is the
   # collector that most needs both: its reachability re-probe creates a Pod, waits
   # on curl retries, and makes seven unbounded management-cluster calls of its own,
@@ -4669,11 +4640,9 @@ YAML
 )
   fi
 
-  # Point worker DataVolume imports at the in-sandbox Talos OS image cache and
-  # worker image pulls at the in-sandbox ghcr.io mirror when each is up (falls back
-  # to the public defaults otherwise). Emitted right under spec: as
-  # `talos: { imageFactoryURL: ..., registryMirrors: {...} }`, or nothing when both
-  # defaults apply.
+  # Point worker DataVolume imports at the in-sandbox Talos OS image cache when it
+  # is up (falls back to the public default otherwise). Emitted right under spec:
+  # as `talos: { imageFactoryURL: ... }`, or nothing when the default applies.
   local talos_block
   talos_block=$(talos_spec_block)
 

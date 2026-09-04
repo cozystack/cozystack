@@ -69,56 +69,6 @@
   fi
 }
 
-@test "Deploy ghcr.io pull-through mirror (best-effort e2e mirror)" {
-  # Tenant Kubernetes worker Talos nodes pull ghcr.io/siderolabs/kubelet straight
-  # from public ghcr.io. That egress is intermittently rate-limited from the CI
-  # runner, the pull dies on a TLS handshake timeout, the kubelet service never
-  # starts and no tenant node joins (cozystack/cozystack#3513). This Deployment
-  # caches ghcr.io locally; tenant CRs point spec.talos.registryMirrors at its
-  # Service. Readiness is gated at point-of-use in
-  # hack/e2e-chainsaw/_lib/ghcr-mirror.sh, which falls back to direct pulls.
-  #
-  # Its own @test, not folded into the Talos image factory cache above: that step
-  # returns early when it cannot read talos.schematicID/version, and this manifest
-  # substitutes no placeholders and needs neither value. Sharing a block would let
-  # a values.yaml restructure silently stop deploying this mirror.
-  #
-  # The CiliumClusterwideNetworkPolicy in the manifest is deferred to point-of-use
-  # for the same reason as above: Cilium's CRDs do not exist until Cozystack is
-  # installed.
-  yq 'select(.kind != "CiliumClusterwideNetworkPolicy")' hack/e2e-ghcr-mirror.yaml \
-    | kubectl apply -f - || echo "WARNING: failed to apply ghcr-mirror (fallback to direct ghcr.io pulls)"
-  if kubectl -n kube-system get deploy ghcr-mirror >/dev/null 2>&1; then
-    echo "ghcr-mirror Deployment created (pull-through cache for ghcr.io)"
-  else
-    echo "WARNING: ghcr-mirror Deployment NOT created — tenant workers will pull ghcr.io directly"
-  fi
-  # Start filling the cache now, not when the first tenant worker asks for it.
-  # An empty pull-through cache makes the first pull a live fetch from ghcr.io, and
-  # that leg is what the tenant worker cannot afford: measured at 40-165 KB/s for a
-  # 61 MiB image, with some blob streams dying mid-transfer. At the low end that
-  # single pull runs about twenty-six minutes, and it is one leg of a join that
-  # also has to boot Talos and get a CNI onto the node inside the same node-Ready
-  # budget. Deliberately not stated as a fraction of that budget: the figure is a
-  # measured transfer rate and stays true whatever the deadline is set to, while a
-  # ratio would have to be re-derived every time the deadline moves and would read
-  # as comfortable the moment it did. The kubernetes suites start tens of minutes
-  # after this step, so a background Job has time to finish.
-  #
-  # What is guaranteed: a warm-up that fails, times out or never starts does not
-  # fail this step, and the suites behave as they did before it existed.
-  #
-  # What is NOT guaranteed, because it would be untrue: that this is free. The Job
-  # pulls the two selected kubelet tags across the same throttled egress the rest of
-  # the install and the pre-pull step below are using, and if a worker cannot reach
-  # the mirror (assumption 2 in hack/e2e-ghcr-mirror.yaml) Talos falls back to public
-  # ghcr.io and the two then compete for it. That is why the warm set is the suites'
-  # two minors (~61 MiB each, one platform) rather than the whole version map, which
-  # would be ~300 MiB at the same one-platform walk.
-  . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
-  warm_ghcr_mirror || true
-}
-
 @test "Required installer chart exists" {
   if [ ! -f packages/core/installer/Chart.yaml ]; then
     echo "Missing: packages/core/installer/Chart.yaml" >&2
