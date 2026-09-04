@@ -21,9 +21,9 @@ cozystackOperator:
   # well, or the opt-out is partial. Declared here rather than left implicit
   # because the documented opt-out is a `--set` against this key.
   disableTelemetry: false
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.6.2@sha256:41ea5ca9c6a7d471105920b09fc8ed68279b8ca0dbffe7f839dccd530b42e4c7
+  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.6.3@sha256:ac60e57ab47868c552ae6d1a6195ea7dd7633afbc828a68d1a2b1ce4ba5d0dac
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
-  platformSourceRef: 'digest=sha256:251626e80efad3e87561b138e03301d8b63c15a42895359716aa18802b04fed5'
+  platformSourceRef: 'digest=sha256:b05b99f2dbfeedf29babf00b8bd0dc69b31dcfc0c3298786c95d625d8e64fe5a'
   # When non-empty, overrides the operator's --helmrelease-interval flag
   # (operator default: 5m). E2E sets this to 30s; production should leave empty.
   helmReleaseInterval: ""
