@@ -466,10 +466,22 @@ spec:
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: {{ $infraKind }}
 metadata:
+  {{- if not $isProxmox }}
+  {{- /* KubevirtCluster carries managed-by: nothing has to reconcile it, and
+        the annotation keeps CAPI from waiting on an infrastructure controller
+        that will never answer.
+
+        ProxmoxCluster must NOT carry it. The annotation tells CAPI the object
+        is owned by something outside Cluster API, so the Cluster controller
+        never sets the ownerRef on it — and capmox's reconciler exits at
+        "Waiting for Cluster Controller to set OwnerRef on ProxmoxCluster"
+        without ever building the InClusterIPPool the workers draw addresses
+        from. The control plane being external is expressed instead by
+        spec.externalManagedControlPlane below, which is the field capmox
+        actually reads. */}}
   annotations:
-    {{- /* Kamaji owns the control plane on both substrates, so neither infra
-          provider should try to reconcile a control-plane endpoint of its own. */}}
     cluster.x-k8s.io/managed-by: kamaji
+  {{- end }}
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
 {{- if $isProxmox }}
@@ -478,8 +490,17 @@ spec:
         reach the apiserver over the pod network. A ProxmoxCluster addresses an
         external hypervisor, so it carries what capmox cannot infer — where VMs
         may be placed, which addresses they may take, and who resolves names for
-        them. controlPlaneEndpoint is deliberately absent: the managed-by
-        annotation above hands that to Kamaji. */}}
+        them.
+
+        externalManagedControlPlane is not decoration next to the managed-by
+        annotation above: capmox reads the FIELD, not the annotation. Its
+        ProxmoxCluster webhook skips endpoint validation only when the field is
+        set, and on an absent controlPlaneEndpoint it does not return a
+        validation error — it panics
+        (internal/webhook/proxmoxcluster_webhook.go:105), so the admission
+        request fails with a nil-pointer stack trace instead of a message.
+        Kamaji owns the endpoint here, so the field is simply true. */}}
+  externalManagedControlPlane: true
   {{- with .Values.proxmox.allowedNodes }}
   allowedNodes:
     {{- toYaml . | nindent 4 }}
