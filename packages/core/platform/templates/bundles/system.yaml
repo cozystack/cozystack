@@ -173,7 +173,24 @@
 
 # Common Packages
 {{include "cozystack.platform.package.default" (list "cozystack.gateway-api-crds" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
+{{- /* The ClusterIssuers of cert-manager-issuers and the per-tenant Issuers
+       rendered for TenantGateway both use an http01.gatewayHTTPRoute solver
+       when the Gateway is enabled, and the controller refuses that solver
+       unless Gateway API support is switched on: every such challenge fails
+       with "gateway api is not enabled" and no certificate is issued. Safe to
+       switch on for every host variant because cozystack.gateway-api-crds is
+       emitted above unconditionally and the cert-manager source depends on
+       it. Threaded here rather than set as a default of system/cert-manager:
+       the same chart is installed into tenant clusters, where the CRDs are an
+       opt-in addon and a controller started with enableGatewayAPI and no
+       CRDs exits at startup. */ -}}
+{{- $certManagerConfig := dict
+  "apiVersion" "controller.config.cert-manager.io/v1alpha1"
+  "kind" "ControllerConfiguration"
+  "enableGatewayAPI" true -}}
+{{- $certManagerValues := dict "cert-manager" (dict "config" $certManagerConfig) -}}
+{{- $certManagerComponents := dict "cert-manager" (dict "values" $certManagerValues) -}}
+{{include "cozystack.platform.package" (list "cozystack.cert-manager" "default" $ $certManagerComponents) }}
 {{- /* Disable hazard guard. The vendored cozy-ouroboros chart (0.8.0)
        ships a pre-delete Helm hook that sed-strips the BEGIN/END
        block from kube-system/coredns Corefile when the chart is

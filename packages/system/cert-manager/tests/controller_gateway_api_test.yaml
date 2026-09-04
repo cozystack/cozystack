@@ -1,0 +1,82 @@
+suite: cert-manager controller config wiring
+
+# The host enables the Gateway API solver by passing a ControllerConfiguration
+# through this chart's `config` value from the platform bundle. It is not a
+# default of this package on purpose: the same chart is installed into tenant
+# clusters, where the Gateway API CRDs are an opt-in addon, and a controller
+# started with enableGatewayAPI and no CRDs exits at startup and crashloops.
+#
+# The first two tests pin the chart side of that contract with the exact
+# payload the host passes: a re-vendored chart that stops rendering `config`
+# into the ConfigMap, or stops mounting it and naming it in --config, would
+# turn the host flag into a silent no-op. The third pins the neutral default,
+# which is what keeps tenant clusters without the CRDs alive.
+
+templates:
+  - charts/cert-manager/templates/controller-config.yaml
+  - charts/cert-manager/templates/deployment.yaml
+
+release:
+  name: cert-manager
+  namespace: cozy-cert-manager
+
+tests:
+  - it: renders a ControllerConfiguration passed through config into the controller ConfigMap
+    template: charts/cert-manager/templates/controller-config.yaml
+    set:
+      cert-manager:
+        config:
+          apiVersion: controller.config.cert-manager.io/v1alpha1
+          kind: ControllerConfiguration
+          enableGatewayAPI: true
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: cert-manager
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^apiVersion: controller\.config\.cert-manager\.io/v1alpha1$'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^kind: ControllerConfiguration$'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^enableGatewayAPI: true$'
+
+  - it: mounts that ConfigMap into the controller and names it in --config
+    template: charts/cert-manager/templates/deployment.yaml
+    set:
+      cert-manager:
+        config:
+          apiVersion: controller.config.cert-manager.io/v1alpha1
+          kind: ControllerConfiguration
+          enableGatewayAPI: true
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --config=/var/cert-manager/config/config.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: config
+            mountPath: /var/cert-manager/config
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: config
+            configMap:
+              name: cert-manager
+
+  - it: ships no controller config by default, so the Gateway API solver stays off unless the installer asks
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: charts/cert-manager/templates/controller-config.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --config=/var/cert-manager/config/config.yaml
+        template: charts/cert-manager/templates/deployment.yaml
