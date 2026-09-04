@@ -1,4 +1,5 @@
 import type { TenantNamespace } from "@cozystack/types"
+import { ROOT_TENANT_NAMESPACE } from "./constants.ts"
 import { tenantDisplayName } from "./tenant-context.tsx"
 
 const ANCESTOR_LABEL_PREFIX = "tenant.cozystack.io/"
@@ -76,11 +77,18 @@ export function flattenTenantForest(
 /**
  * Row label relative to the visible parent: `tenant-whmcs-crpjxhwm` under
  * `tenant-whmcs` shows as `crpjxhwm`. Forest roots keep their full display
- * name — there is no parent on screen to be relative to.
+ * name — there is no parent on screen to be relative to, and neither do the
+ * root's own children, whose namespace never carries the parent's name: under
+ * `tenant-root` the tenant `root-x` owns `tenant-root-x`, and stripping the
+ * prefix there would label it `x` while its CR is `root-x`.
  */
 export function relativeTenantName(node: TenantTreeNode): string {
   const ns = node.tn.metadata.name
-  if (node.parentNs && ns.startsWith(`${node.parentNs}-`)) {
+  if (
+    node.parentNs &&
+    node.parentNs !== ROOT_TENANT_NAMESPACE &&
+    ns.startsWith(`${node.parentNs}-`)
+  ) {
     return ns.slice(node.parentNs.length + 1)
   }
   return tenantDisplayName(node.tn)
@@ -96,7 +104,16 @@ export function relativeTenantName(node: TenantTreeNode): string {
  */
 export function realParentNamespace(tn: TenantNamespace): string | undefined {
   const ns = tn.metadata.name
-  return ancestorNamespaces(tn)
+  const ancestors = ancestorNamespaces(tn)
+  const nested = ancestors
     .filter((ancestor) => ns.startsWith(`${ancestor}-`))
     .sort((a, b) => b.length - a.length)[0]
+  if (nested) return nested
+  // The root is the one level the naming rule skips: a tenant `x` ordered in
+  // `tenant-root` owns `tenant-x`, not `tenant-root-x`, so the prefix test
+  // never matches and every top-level tenant — most tenants on a normal
+  // cluster — looked parentless. The ancestor labels still say otherwise.
+  return ancestors.includes(ROOT_TENANT_NAMESPACE)
+    ? ROOT_TENANT_NAMESPACE
+    : undefined
 }
