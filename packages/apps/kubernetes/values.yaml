@@ -80,6 +80,30 @@ version: "v1.35"
 host: ""
 
 ##
+## @section Substrate
+
+## @param {string} substrate="kubevirt" - Which infrastructure provider backs this cluster's worker VMs. `kubevirt` runs them inside this cluster; `proxmox` runs them on an external Proxmox VE cluster through capmox. The control plane is Kamaji either way — this selects the infrastructure half only. Must match the `substrate` of every KubernetesNodes pool attached to this cluster: the pools reference this cluster's infrastructure object by kind, and a mismatch leaves their Machines unreconciled. Switching an existing cluster is not supported; create a new one.
+substrate: kubevirt
+
+## @typedef {struct} ProxmoxIPv4 - Address range capmox allocates worker addresses from.
+## @field {[]string} addresses - Ranges or CIDRs, e.g. `["10.0.0.120-10.0.0.170"]`. capmox turns these into an InClusterIPPool, so they must not overlap any DHCP range on the same L2 or two workers will answer to one address.
+## @field {string} gateway - Default gateway for the workers.
+## @field {int} prefix - Netmask prefix length.
+
+## @typedef {struct} Proxmox - Proxmox substrate settings for the cluster's infrastructure object. Ignored unless `substrate` is `proxmox`.
+## @field {[]string} allowedNodes - Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
+## @field {[]string} dnsServers - Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
+## @field {ProxmoxIPv4} ipv4Config - Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
+
+## @param {Proxmox} proxmox - Proxmox substrate settings.
+proxmox:
+  allowedNodes: []
+  dnsServers: []
+  ipv4Config:
+    addresses: []
+    gateway: ""
+    prefix: 24
+
 ## @section Cluster Addons
 ##
 

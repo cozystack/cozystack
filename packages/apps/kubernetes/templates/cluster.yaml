@@ -25,6 +25,32 @@
 {{-   end }}
 {{- end }}
 {{- $etcd := .Values._namespace.etcd }}
+{{- /* Substrate selects the infrastructure half of the cluster. The control
+       plane is Kamaji either way, so this changes exactly one object — the
+       one Cluster.infrastructureRef points at — plus the two tenant addons
+       that only exist because the workers are KubeVirt VMs (the kubevirt-csi
+       driver and the KubeVirt cloud-controller-manager RBAC). */}}
+{{- $substrate := .Values.substrate | default "kubevirt" }}
+{{- if not (has $substrate (list "kubevirt" "proxmox")) }}
+{{- fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
+{{- end }}
+{{- $isProxmox := eq $substrate "proxmox" }}
+{{- if $isProxmox }}
+{{- /* capmox assigns static addresses from an InClusterIPPool it builds out of
+       these fields and has no DHCP mode, so an unset pool is not a default —
+       it is a ProxmoxCluster that never reaches Ready and worker Machines that
+       wait on it forever. Refuse at render time instead. */}}
+{{- if not .Values.proxmox.ipv4Config.addresses }}
+{{- fail "substrate proxmox requires proxmox.ipv4Config.addresses: capmox allocates static addresses and has no DHCP mode" }}
+{{- end }}
+{{- if not .Values.proxmox.ipv4Config.gateway }}
+{{- fail "substrate proxmox requires proxmox.ipv4Config.gateway" }}
+{{- end }}
+{{- if not .Values.proxmox.dnsServers }}
+{{- fail "substrate proxmox requires proxmox.dnsServers: the ProxmoxCluster schema makes it mandatory" }}
+{{- end }}
+{{- end }}
+{{- $infraKind := ternary "ProxmoxCluster" "KubevirtCluster" $isProxmox }}
 {{- /*
   When $etcd is empty, the parent Tenant application has not populated
   _namespace.etcd in cozystack-values yet - either the operator forgot to
@@ -214,7 +240,7 @@ spec:
     name: {{ .Release.Name }}
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-    kind: KubevirtCluster
+    kind: {{ $infraKind }}
     name: {{ .Release.Name }}
     namespace: {{ .Release.Namespace }}
 ---
@@ -438,10 +464,32 @@ spec:
   version: {{ $.Chart.Version }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: KubevirtCluster
+kind: {{ $infraKind }}
 metadata:
   annotations:
+    {{- /* Kamaji owns the control plane on both substrates, so neither infra
+          provider should try to reconcile a control-plane endpoint of its own. */}}
     cluster.x-k8s.io/managed-by: kamaji
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
+{{- if $isProxmox }}
+spec:
+  {{- /* KubevirtCluster needs no spec: its workers live in this cluster and
+        reach the apiserver over the pod network. A ProxmoxCluster addresses an
+        external hypervisor, so it carries what capmox cannot infer — where VMs
+        may be placed, which addresses they may take, and who resolves names for
+        them. controlPlaneEndpoint is deliberately absent: the managed-by
+        annotation above hands that to Kamaji. */}}
+  {{- with .Values.proxmox.allowedNodes }}
+  allowedNodes:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  dnsServers:
+    {{- toYaml .Values.proxmox.dnsServers | nindent 4 }}
+  ipv4Config:
+    addresses:
+      {{- toYaml .Values.proxmox.ipv4Config.addresses | nindent 6 }}
+    gateway: {{ .Values.proxmox.ipv4Config.gateway | quote }}
+    prefix: {{ .Values.proxmox.ipv4Config.prefix }}
+{{- end }}
 {{- end }}
