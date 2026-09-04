@@ -74,7 +74,7 @@
           }
         },
         "cilium": {
-          "description": "Cilium CNI plugin.",
+          "description": "Cilium CNI plugin. Always installed as the tenant cluster's CNI; this section only overrides its Helm values.",
           "type": "object",
           "default": {},
           "required": [
@@ -87,10 +87,11 @@
               "default": {},
               "x-kubernetes-preserve-unknown-fields": true
             }
-          }
+          },
+          "x-cozystack-no-enable-switch": true
         },
         "coredns": {
-          "description": "CoreDNS addon.",
+          "description": "CoreDNS addon. Always installed as the tenant cluster's DNS; this section only overrides its Helm values.",
           "type": "object",
           "default": {},
           "required": [
@@ -103,7 +104,8 @@
               "default": {},
               "x-kubernetes-preserve-unknown-fields": true
             }
-          }
+          },
+          "x-cozystack-no-enable-switch": true
         },
         "gatewayAPI": {
           "description": "Gateway API addon.",
@@ -271,7 +273,7 @@
           }
         },
         "verticalPodAutoscaler": {
-          "description": "Vertical Pod Autoscaler.",
+          "description": "Vertical Pod Autoscaler. Installed and removed together with addons.monitoringAgents.enabled; this section only overrides its Helm values.",
           "type": "object",
           "default": {},
           "required": [
@@ -284,7 +286,8 @@
               "default": {},
               "x-kubernetes-preserve-unknown-fields": true
             }
-          }
+          },
+          "x-cozystack-no-enable-switch": true
         }
       }
     },

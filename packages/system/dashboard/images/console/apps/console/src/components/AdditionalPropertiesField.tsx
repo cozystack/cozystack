@@ -1,12 +1,14 @@
 import { useState, useMemo } from "react"
 import type { FieldProps, RJSFSchema, TemplatesType } from "@rjsf/utils"
+import { RJSF_ID_SEPARATOR } from "../lib/rjsf-ids.ts"
 import Form from "@rjsf/core"
 import validator from "@rjsf/validator-ajv8"
 import { customTemplates, customWidgets } from "./rjsf-templates.tsx"
 import { addDynamicOptionWidgets } from "../lib/dynamic-options.ts"
 
 export function AdditionalPropertiesField(props: FieldProps) {
-  const { schema, formData, onChange, readonly, disabled, name, required } = props
+  const { schema, formData, onChange, readonly, disabled, name, required, idSchema } =
+    props
   const [newKey, setNewKey] = useState("")
 
   // Get the schema for items from additionalProperties
@@ -87,6 +89,12 @@ export function AdditionalPropertiesField(props: FieldProps) {
             <div className="rounded-md bg-white p-3">
               <Form
                 tagName="div"
+                // Continue the outer form's id namespace into this entry.
+                // Without it the nested form restarts at "root", so a map
+                // entry's field renders as root_<field> while its validation
+                // error names <outer>.<key>.<field>, and nothing resolves it.
+                idPrefix={`${idSchema.$id}${RJSF_ID_SEPARATOR}${key}`}
+                idSeparator={RJSF_ID_SEPARATOR}
                 schema={itemSchema}
                 uiSchema={itemUiSchema}
                 formData={formData[key]}

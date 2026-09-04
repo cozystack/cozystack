@@ -377,20 +377,77 @@ describe("overlayImmutable", () => {
     })
   })
 
-  it("does NOT materialise an immutable leaf when its ancestor is missing in target (pinned current behaviour)", () => {
-    // Tracked in cozystack/cozystack-ui#9.
-    // Defence-in-depth gap: if the YAML editor strips the parent object
-    // entirely, overlay cannot reach the leaf to copy the original value.
-    // Pin behaviour so a future contributor fixing the gap notices the
-    // test and revises it.
+  it("materialises an immutable leaf when its ancestor is missing in target", () => {
+    // A YAML edit that strips the parent object must not strip the immutable
+    // leaf with it. foundationdb's storage.storageClass is a shipped path of
+    // this shape.
     const submitted = { spec: {} } as Record<string, unknown>
     const original = {
-      spec: { backup: { storageClass: "slow" } },
+      spec: { storage: { storageClass: "replicated", size: "10Gi" } },
     }
     const result = overlayImmutable(submitted, original, [
-      ["spec", "backup", "storageClass"],
+      ["spec", "storage", "storageClass"],
     ])
-    expect(result).toEqual({ spec: {} })
+    expect(result).toEqual({ spec: { storage: { storageClass: "replicated" } } })
+  })
+
+  it("materialises an immutable leaf when its ancestor is null in target", () => {
+    // `storage:` with nothing under it parses to null, not to a missing key,
+    // so the walker has to treat it the same as absent.
+    const submitted = { spec: { storage: null } } as Record<string, unknown>
+    const original = {
+      spec: { storage: { storageClass: "replicated", size: "10Gi" } },
+    }
+    const result = overlayImmutable(submitted, original, [
+      ["spec", "storage", "storageClass"],
+    ])
+    expect(result).toEqual({ spec: { storage: { storageClass: "replicated" } } })
+  })
+
+  it("preserves a scalar submitted at an immutable leaf's ancestor", () => {
+    const submitted = { spec: { storage: "keep-me" } } as Record<string, unknown>
+    const original = {
+      spec: { storage: { storageClass: "replicated", size: "10Gi" } },
+    }
+    const result = overlayImmutable(submitted, original, [
+      ["spec", "storage", "storageClass"],
+    ])
+    expect(result).toEqual({ spec: { storage: "keep-me" } })
+  })
+
+  it("leaves a null ancestor alone when original has no leaf to restore", () => {
+    // Materialising on the ancestor merely existing would trade the user's
+    // explicit null for an empty object with nothing put back into it.
+    const submitted = { spec: null } as Record<string, unknown>
+    const original = { spec: { storage: { size: "10Gi" } } }
+    const result = overlayImmutable(submitted, original, [
+      ["spec", "storage", "storageClass"],
+    ])
+    expect(result).toEqual({ spec: null })
+  })
+
+  // No shipped schema nests a wildcard under an immutable path yet; these pin
+  // the two answers the leaf check gives when one does. A granular wildcard
+  // overlays element by element against what the user submitted, so an
+  // ancestor they deleted is not rebuilt to hold entries they removed.
+  it("leaves a deleted ancestor alone when a granular wildcard sits under it", () => {
+    const submitted = { spec: null } as Record<string, unknown>
+    const original = { spec: { items: [{ storageClass: "replicated" }] } }
+    const result = overlayImmutable(submitted, original, [
+      ["spec", "items", "*", "storageClass"],
+    ])
+    expect(result).toEqual({ spec: null })
+  })
+
+  // A trailing wildcard freezes the whole collection instead, so there the
+  // ancestor is rebuilt and the collection comes back.
+  it("rebuilds a deleted ancestor when the wildcard is the immutable leaf", () => {
+    const submitted = { spec: null } as Record<string, unknown>
+    const original = { spec: { items: [{ storageClass: "replicated" }] } }
+    const result = overlayImmutable(submitted, original, [["spec", "items", "*"]])
+    expect(result).toEqual({
+      spec: { items: [{ storageClass: "replicated" }] },
+    })
   })
 
   it("array reordering by the user with index-aligned overlay re-anchors source values to the new index (pinned current behaviour)", () => {

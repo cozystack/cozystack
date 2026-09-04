@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll } from "vitest"
-import { screen } from "@testing-library/react"
+import { screen, waitFor } from "@testing-library/react"
 import {
   K8sClient,
   type K8sList,
@@ -8,14 +8,14 @@ import {
 import App from "./App.tsx"
 import { renderWithK8sProvider } from "./test-utils/render.tsx"
 
-function makeClient(): K8sClient {
+function makeClient(tenants: unknown[] = []): K8sClient {
   const client = new K8sClient()
   vi.spyOn(client, "list").mockImplementation(async (_g, _v, plural) => {
     return {
       apiVersion: "v1",
       kind: `${plural}List`,
       metadata: {},
-      items: [],
+      items: plural === "tenantnamespaces" ? tenants : [],
     } as K8sList<unknown>
   })
   vi.spyOn(client, "getApiGroups").mockResolvedValue({
@@ -69,5 +69,56 @@ describe("default landing", () => {
     expect(
       await screen.findByRole("heading", { name: "Marketplace", level: 1 }),
     ).toBeTruthy()
+  })
+})
+
+describe("shell subtitle", () => {
+  // The picker only renders its "Tenant /" label once a tenant list has
+  // arrived; asserting against an empty list passes whether or not the picker
+  // is there, because its empty and loading branches say something else.
+  // The picker labels itself "Tenant"; the admin route is Modules rather than
+  // the tenant list, whose own "Tenant" create button would match too.
+  const TENANTS = ["tenant-acme", "tenant-globex"].map((name) => ({
+    apiVersion: "core.cozystack.io/v1alpha1",
+    kind: "TenantNamespace",
+    metadata: { name, labels: {} },
+  }))
+
+  // Every cluster-scoped prefix, and a deeper path under each, so dropping one
+  // from the list fails here instead of passing quietly.
+  const CLUSTER_SCOPED = [
+    "/admin/capacity/cluster",
+    "/admin/backups/backupclasses",
+    "/admin/external-ips",
+    "/admin/modules",
+  ]
+
+  it.each(CLUSTER_SCOPED)("hides the tenant picker on %s", async (route) => {
+    const client = makeClient(TENANTS)
+    renderWithK8sProvider(<App />, { client, initialRoute: route })
+
+    // The marker is on every Breadcrumb branch, so absence means the subtitle
+    // was not rendered at all rather than that the list had not arrived.
+    await waitFor(() => expect(screen.queryByText("Loading tenants…")).toBeNull())
+    expect(screen.queryByTestId("tenant-picker")).toBeNull()
+  })
+
+  // The tenant list is scoped by the picker's own selection, so it needs the
+  // picker even though it lives under /admin.
+  it.each(["/admin/tenants", "/admin/vminstances", "/admin/vminstances/db1"])(
+    "keeps the tenant picker on %s",
+    async (route) => {
+      const client = makeClient(TENANTS)
+      renderWithK8sProvider(<App />, { client, initialRoute: route })
+
+      expect(await screen.findByTestId("tenant-picker")).toBeTruthy()
+    },
+  )
+
+  it("still shows the tenant picker outside the admin portal", async () => {
+    const client = makeClient(TENANTS)
+    renderWithK8sProvider(<App />, { client, initialRoute: "/console" })
+
+    expect(await screen.findByTestId("tenant-picker")).toBeTruthy()
   })
 })

@@ -67,10 +67,10 @@ type Addons struct {
 	// Cert-manager addon.
 	// +kubebuilder:default:={}
 	CertManager CertManagerAddon `json:"certManager"`
-	// Cilium CNI plugin.
+	// Cilium CNI plugin. Always installed as the tenant cluster's CNI; this section only overrides its Helm values.
 	// +kubebuilder:default:={}
 	Cilium CiliumAddon `json:"cilium"`
-	// CoreDNS addon.
+	// CoreDNS addon. Always installed as the tenant cluster's DNS; this section only overrides its Helm values.
 	// +kubebuilder:default:={}
 	Coredns CoreDNSAddon `json:"coredns"`
 	// Gateway API addon.
@@ -94,7 +94,7 @@ type Addons struct {
 	// Velero backup/restore addon.
 	// +kubebuilder:default:={}
 	Velero VeleroAddon `json:"velero"`
-	// Vertical Pod Autoscaler.
+	// Vertical Pod Autoscaler. Installed and removed together with addons.monitoringAgents.enabled; this section only overrides its Helm values.
 	// +kubebuilder:default:={}
 	VerticalPodAutoscaler VerticalPodAutoscalerAddon `json:"verticalPodAutoscaler"`
 }
