@@ -312,9 +312,23 @@ EOF
   # wait in the previous test does not cover that. Prove an AUTHENTICATED
   # request against the actual resource succeeds before the patch's own GET.
   timeout 120 sh -ec 'until kubectl get tenants.apps.cozystack.io root -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
+  # monitoring stays OFF. Nothing in the suite looks at it: no Chainsaw suite
+  # touches a monitoring object, and the two BATS files that did
+  # (hack/e2e-apps/monitoring-oidc-*.bats) were orphaned by #2979 and removed in
+  # #4019 once their assertions turned out to be covered by
+  # packages/system/monitoring/tests/oidc_test.yaml. Bringing the stack up cost
+  # the install four separate 15m waits (vmalert/vmalertmanager, vlclusters,
+  # vmcluster shortterm+longterm, the grafana-db CNPG cluster and the Grafana
+  # Deployment) for a component the run never inspects, and the comment those
+  # waits carried said as much: a slow VictoriaLogs bring-up could fail the
+  # install on a pull request that never touched monitoring.
+  #
+  # The monitoring PACKAGE stays installed -- tenant-application declares
+  # dependsOn cozystack.monitoring-application, so removing it would strand the
+  # root Tenant. This turns off the tenant-root INSTANCE only.
+  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":false,"etcd":true,"isolated":true, "seaweedfs": true}}'
 
-  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
+  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
   # tenant-root parent HR only flips Ready after every child HR is Ready,
   # so listing all four top-level children plus the parent gives precise
   # failure messages without redundant separate waits. seaweedfs now
@@ -325,7 +339,7 @@ EOF
   # parent's Ready can land past the HR's single 15m timeout window; the HR
   # re-reconciles every 1m until it converges, so this wait is 20m to observe
   # that eventual Ready rather than expiring first.
-  kubectl wait hr/etcd hr/ingress hr/monitoring hr/seaweedfs hr/tenant-root \
+  kubectl wait hr/etcd hr/ingress hr/seaweedfs hr/tenant-root \
     -n tenant-root --timeout=20m --for=condition=ready
 
 
@@ -346,77 +360,19 @@ EOF
     -l app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator \
     --for=condition=ready --timeout=10m
 
-  # VictoriaMetrics components. vmalert/vmalertmanager, vlclusters/generic and
-  # vmcluster/shortterm+longterm are all vm-operator-managed resources that flip
-  # updateStatus=operational only once their workloads are scheduled and Ready.
-  # During platform bring-up they contend for node resources with the rest of
-  # the install, so convergence is load-sensitive: on a calm sandbox each reaches
-  # operational in under a second, but under install-time load (concurrent e2e
-  # sandboxes on one runner) monitoring bring-up is slow. vmalert already uses a
-  # 15m budget; vlclusters and vmcluster used 10m, so this block carried a
-  # 10m/15m split even though all three contend for the same node capacity and a
-  # slow VictoriaLogs bring-up can fail the install on a PR that never touched
-  # monitoring. Unify the block on one 15m budget (near-zero cost in the happy
-  # path, comfortably inside the E2E job budget) and dump live status on timeout
-  # so a genuine stuck-not-slow regression stays legible instead of surfacing as
-  # a bare "timed out" line.
-  timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  timeout 60 sh -ec 'until kubectl get vmalertmanager/alertmanager -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vmalert/vmalert-shortterm, vmalertmanager/alertmanager did not reach updateStatus=operational ==="
-    kubectl get vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get vlclusters/generic -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vlclusters/generic did not reach updateStatus=operational ==="
-    kubectl get vlclusters/generic -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vmcluster/shortterm,longterm did not reach updateStatus=operational ==="
-    kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
+  # The monitoring instance is off (see the Tenant patch above), so the waits
+  # that used to sit here are gone: vmalert, vmalertmanager, vlclusters/generic,
+  # vmcluster shortterm+longterm, the grafana-db CNPG cluster and the Grafana
+  # Deployment, each on a 15m budget.
+  #
+  # One real check went with them and is worth naming rather than quietly
+  # losing: a curl through root-ingress-controller at Host: grafana.example.org,
+  # which was the only assertion that the root ingress actually routes to a
+  # backend. Grafana was its target by availability, not by design. Restoring it
+  # wants a target the run installs anyway -- seaweedfs publishes
+  # s3.<root-host> and filer.<root-host> -- and picking the response to match
+  # needs a live stand, so it is a follow-up rather than a guess made here.
 
-  # Grafana. The grafana-db CNPG cluster and the grafana-deployment Deployment
-  # complete the tenant-root monitoring bring-up and contend for the same node
-  # resources as the VictoriaMetrics stack above during install. Under
-  # install-time load (concurrent e2e sandboxes on one runner) either can be slow
-  # and fail the install on a PR that never touched monitoring, so both move from
-  # their 10m budget to the same uniform 15m as the vm-operator waits above and
-  # dump live status on timeout to keep a genuine stuck-not-slow regression
-  # legible instead of surfacing as a bare "timed out" line.
-  timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=15m || {
-    echo "=== clusters.postgresql.cnpg.io/grafana-db did not reach condition=ready ==="
-    kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=15m || {
-    echo "=== deploy/grafana-deployment did not reach condition=available ==="
-    kubectl get deploy/grafana-deployment -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-
-  # Verify Grafana via ingress
-  ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-  if ! curl -sS -k "https://${ingress_ip}" -H 'Host: grafana.example.org' --max-time 30 | grep -q Found; then
-    echo "Failed to access Grafana via ingress at ${ingress_ip}" >&2
-    exit 1
-  fi
 }
 
 @test "Keycloak OIDC stack is healthy" {
