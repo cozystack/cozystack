@@ -2235,11 +2235,42 @@ func TestReconcile_TLSPassthroughListenerObjects(t *testing.T) {
 	}
 }
 
+// tlsRouteBackendName is the Service every TLSRoute fixture forwards
+// to. One name for all of them, so tlsRouteBackends can seed it from
+// the routes alone.
+const tlsRouteBackendName = "backend"
+
+// tlsRouteBackends returns the backend Services the given routes name,
+// one per namespace. A test seeds these alongside its routes: a
+// TLSRoute whose backendRef resolves to nothing puts no filter chain
+// on its SNI, so without them a fixture asserting a withdrawal would
+// be asserting it for a route the passthrough listener cannot carry.
+func tlsRouteBackends(routes ...*gatewayv1alpha2.TLSRoute) []client.Object {
+	seen := map[string]struct{}{}
+	out := []client.Object{}
+	for _, route := range routes {
+		if _, dup := seen[route.Namespace]; dup {
+			continue
+		}
+		seen[route.Namespace] = struct{}{}
+		out = append(out, &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: tlsRouteBackendName, Namespace: route.Namespace},
+		})
+	}
+	return out
+}
+
 // tlsRouteAttached builds a TLSRoute in ns that attaches to the
 // "cozystack" Gateway in parentNs by sectionName and claims hostname.
 // Counterpart to httpRouteAttached: a passthrough listener accepts
 // TLSRoute alone, so this is the only shape that reaches the TLSRoute
 // branch of collectHostnameClaims.
+//
+// The single rule names a same-namespace Service, which is the shape
+// the three shipped platform TLSRoutes have and the only one that
+// forwards anywhere. Tests seed that Service with tlsRouteBackends;
+// one that leaves it out is stating a route whose backend does not
+// resolve, and should say so.
 func tlsRouteAttached(name, ns, hostname, sectionName, parentNs string) *gatewayv1alpha2.TLSRoute {
 	gwGroup := gatewayv1.Group(gatewayv1.GroupName)
 	gwKind := gatewayv1.Kind("Gateway")
@@ -2260,8 +2291,34 @@ func tlsRouteAttached(name, ns, hostname, sectionName, parentNs string) *gateway
 				},
 			},
 			Hostnames: []gatewayv1.Hostname{gatewayv1.Hostname(hostname)},
+			Rules: []gatewayv1alpha2.TLSRouteRule{
+				{BackendRefs: []gatewayv1alpha2.BackendRef{tlsBackendRef(tlsRouteBackendName, "")}},
+			},
 		},
 	}
+}
+
+// tlsBackendRef builds a backendRef to a Service, with namespace ""
+// meaning the route's own namespace — the distinction the reference
+// rules turn on, since a ref that names no namespace can never need a
+// ReferenceGrant.
+func tlsBackendRef(name, namespace string) gatewayv1alpha2.BackendRef {
+	svcGroup := gatewayv1.Group("")
+	svcKind := gatewayv1.Kind("Service")
+	port := gatewayv1.PortNumber(443)
+	ref := gatewayv1alpha2.BackendRef{
+		BackendObjectReference: gatewayv1.BackendObjectReference{
+			Group: &svcGroup,
+			Kind:  &svcKind,
+			Name:  gatewayv1.ObjectName(name),
+			Port:  &port,
+		},
+	}
+	if namespace != "" {
+		ns := gatewayv1.Namespace(namespace)
+		ref.Namespace = &ns
+	}
+	return ref
 }
 
 // passthroughTLSRoute is a TLSRoute attached by name to the listener a
@@ -2455,6 +2512,7 @@ func TestReconcile_HTTPRouteOnPassthroughHostnameTerminatesNothing(t *testing.T)
 			c := fake.NewClientBuilder().
 				WithScheme(s).
 				WithObjects(tgw, route, claimant).
+				WithObjects(tlsRouteBackends(claimant)...).
 				WithStatusSubresource(tgw, route, claimant).
 				Build()
 
@@ -2579,6 +2637,7 @@ func TestReconcile_PassthroughServiceShedsAnExistingTerminateListenerAndCert(t *
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, route, claimant).
+		WithObjects(tlsRouteBackends(claimant)...).
 		WithStatusSubresource(tgw, route, claimant).
 		Build()
 	r := &Reconciler{Client: c, Scheme: s}
@@ -2857,6 +2916,7 @@ func TestReconcile_WildcardPassthroughWithdrawsTheNamesBeneathIt(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, route, claimant).
+		WithObjects(tlsRouteBackends(claimant)...).
 		WithStatusSubresource(tgw, route, claimant).
 		Build()
 
@@ -2946,6 +3006,7 @@ func TestReconcile_WithdrawnHostnameIsReportedOnTheRoute(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, route, claimant).
+		WithObjects(tlsRouteBackends(claimant)...).
 		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}, &gatewayv1alpha2.TLSRoute{}).
 		Build()
 
@@ -3047,6 +3108,7 @@ func TestReconcile_WithdrawnHostnameOutranksTheHostnameRace(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, winner, loser, claimant).
+		WithObjects(tlsRouteBackends(claimant)...).
 		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}, &gatewayv1alpha2.TLSRoute{}).
 		Build()
 
@@ -3617,6 +3679,7 @@ func TestReconcile_UnservableSectionDoesNotTakeTheHostnameFromAWorkingRoute(t *t
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, ghost, working).
+		WithObjects(tlsRouteBackends(ghost, working)...).
 		WithStatusSubresource(tgw, ghost, working).
 		Build()
 
@@ -3673,6 +3736,7 @@ func TestReconcile_UnservableSectionDoesNotTakeAServiceHostname(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, ghost, working).
+		WithObjects(tlsRouteBackends(ghost, working)...).
 		WithStatusSubresource(tgw, ghost, working).
 		Build()
 
@@ -3733,6 +3797,7 @@ func TestReconcile_TenantTLSRouteWinsAgainstOneTheListenerRefuses(t *testing.T) 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, outside, eligible).
+		WithObjects(tlsRouteBackends(outside, eligible)...).
 		WithStatusSubresource(tgw, outside, eligible).
 		Build()
 
@@ -3807,6 +3872,7 @@ func TestReconcile_WithdrawnHostnameDoesNotTakeTheRoutesOtherNames(t *testing.T)
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, route, claimant).
+		WithObjects(tlsRouteBackends(claimant)...).
 		WithStatusSubresource(tgw, route, claimant).
 		Build()
 
@@ -4240,6 +4306,7 @@ func TestReconcile_SameNamespaceTLSRoutesDoNotConflictAfterTheRecount(t *testing
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, httpWinner, aaa, bbb).
+		WithObjects(tlsRouteBackends(aaa, bbb)...).
 		WithStatusSubresource(tgw, httpWinner, aaa, bbb).
 		Build()
 
@@ -4592,6 +4659,7 @@ func TestReconcile_TLSRouteKeepsAcceptedWhenAnHTTPRouteWinsAPassthroughName(t *t
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, served, outranking).
+		WithObjects(tlsRouteBackends(served)...).
 		WithStatusSubresource(tgw, served, &gatewayv1.HTTPRoute{}).
 		Build()
 
@@ -4656,6 +4724,7 @@ func TestReconcile_RouteLosingOneHostnameAndWithdrawnOnAnother(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, winner, mixed, claimant).
+		WithObjects(tlsRouteBackends(claimant)...).
 		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}, &gatewayv1alpha2.TLSRoute{}).
 		Build()
 
@@ -4756,6 +4825,7 @@ func TestReconcile_RepeatedHostnameIsNamedOnce(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, route, claimant).
+		WithObjects(tlsRouteBackends(claimant)...).
 		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}, &gatewayv1alpha2.TLSRoute{}).
 		Build()
 
