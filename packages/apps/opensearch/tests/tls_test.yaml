@@ -89,7 +89,11 @@ tests:
           content: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards
         documentIndex: 4
 
-  - it: accepts that same name when dashboards is off and -discovery binds instead
+  # The -discovery bound itself cannot be observed from a test: its cap is 53 and Helm
+  # rejects a release name above 53, so the branch never fires whatever is rendered here.
+  # Deleting it leaves this case green. What is pinned is the SAN that gives the suffix
+  # its reason to be in the table at all.
+  - it: covers the discovery SAN at the longest admissible name with dashboards off
     release:
       name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       namespace: tenant-test
