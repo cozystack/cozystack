@@ -137,7 +137,7 @@
           "type": "boolean"
         },
         "enabled": {
-          "description": "Enable TLS for AMQPS (5671) and Management HTTPS (15671). Applies whether or not `external` is set. Defaults to false.",
+          "description": "Enable TLS for AMQPS (5671) and Management HTTPS (15671). Applies whether or not `external` is set. Plaintext AMQP (5672) and management (15672) keep serving unless `disableNonTLSListeners` is set as well. Moves the `port` key of the `\u003crelease\u003e-default-user` Secret from 5672 to 5671, and the metrics port from 15692 to 15691. Defaults to false.",
           "type": "boolean"
         }
       }
