@@ -1,0 +1,96 @@
+suite: vm-instance hotpluggable disks
+
+# The disks loop resolves every disk against a DataVolume in the cluster, so the
+# suite mocks one per disk it declares. instanceType and instanceProfile are
+# cleared (and resources given instead) so the two cluster lookups at the top of
+# the template do not need mocks of their own.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+set:
+  fullnameOverride: test-vm
+  _cluster: {}
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: "2"
+    sockets: "1"
+    memory: 2Gi
+kubernetesProvider:
+  scheme:
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr:
+        group: "cdi.kubevirt.io"
+        version: "v1beta1"
+        resource: "datavolumes"
+      namespaced: true
+  objects:
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: vm-disk-test-boot
+        namespace: tenant-test
+        annotations: {}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: vm-disk-test-data
+        namespace: tenant-test
+        annotations: {}
+tests:
+  - it: leaves the volume untouched when hotpluggable is not set
+    set:
+      disks:
+        - name: test-boot
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].dataVolume.name
+          value: vm-disk-test-boot
+      - notExists:
+          path: spec.template.spec.volumes[0].dataVolume.hotpluggable
+
+  - it: marks the volume hotpluggable when asked
+    set:
+      disks:
+        - name: test-boot
+        - name: test-data
+          bus: scsi
+          hotpluggable: true
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[1].dataVolume.hotpluggable
+          value: true
+      - notExists:
+          path: spec.template.spec.volumes[0].dataVolume.hotpluggable
+
+  - it: accepts the virtio bus as well
+    set:
+      disks:
+        - name: test-data
+          bus: virtio
+          hotpluggable: true
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].dataVolume.hotpluggable
+          value: true
+
+  - it: refuses a hotpluggable disk on a bus KubeVirt would reject
+    set:
+      disks:
+        - name: test-data
+          bus: sata
+          hotpluggable: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "Disk test-data: hotpluggable requires bus to be 'scsi' or 'virtio', got \"sata\""
+
+  - it: refuses a hotpluggable disk with no bus at all
+    set:
+      disks:
+        - name: test-data
+          hotpluggable: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "Disk test-data: hotpluggable requires bus to be 'scsi' or 'virtio', got \"\""

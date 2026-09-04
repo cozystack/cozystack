@@ -73,6 +73,10 @@
             "description": "Disk bus type (e.g. \"sata\").",
             "type": "string"
           },
+          "hotpluggable": {
+            "description": "Allow attaching and detaching the disk while the VM is running. Requires the DeclarativeHotplugVolumes feature gate on the cluster, and bus to be \"scsi\" or \"virtio\".",
+            "type": "boolean"
+          },
           "name": {
             "description": "Disk name.",
             "type": "string",
