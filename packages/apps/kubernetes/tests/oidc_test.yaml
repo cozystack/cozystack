@@ -82,6 +82,39 @@ tests:
           pattern: 'if \[ "\$OIDC_MODE" = "None" \]'
         documentIndex: 3
 
+  - it: mode=None Keycloak cleanup probes the CRDs by output, not by exit code
+    # Regression guard. `kubectl api-resources --api-group=<absent group>` exits 0
+    # and prints an empty list, so an exit-code guard always falls through and the
+    # delete fails with `the server doesn't have a resource type "keycloakclient"`
+    # (--ignore-not-found covers a missing object, not an unknown type). As this
+    # Job is a post-install/post-upgrade hook, that failure blocks the Helm
+    # upgrade of every kubernetes-* release on clusters without the Keycloak
+    # operator — the default configuration.
+    release:
+      name: test
+      namespace: tenant-test
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      # The probe captures the discovery output ...
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'EDP_RESOURCES=\$\(kubectl api-resources --api-group=v1\.edp\.epam\.com --output=name'
+        documentIndex: 3
+      # ... and each delete is gated on its own resource type being present.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if echo "\$EDP_RESOURCES" \| grep -q ..keycloakclients\\\.'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if echo "\$EDP_RESOURCES" \| grep -q ..keycloakclientscopes\\\.'
+        documentIndex: 3
+      # The broken exit-code guard must not come back.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if kubectl api-resources --api-group=v1\.edp\.epam\.com >/dev/null'
+        documentIndex: 3
+
   - it: emits no OIDC kubeconfig placeholder Secret when oidc.mode is None
     release:
       name: test
