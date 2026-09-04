@@ -25,24 +25,26 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spf13/cobra"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
 var addCmdFlags struct {
 	files      []string
 	kubeconfig string
+	yes        bool
+	variants   []string
 }
 
 var addCmd = &cobra.Command{
@@ -51,15 +53,27 @@ var addCmd = &cobra.Command{
 	Long: `Install PackageSource and its dependencies interactively.
 
 You can specify packages as arguments or use -f flag to read from files.
-Multiple -f flags can be specified, and they can point to files or directories.`,
+Multiple -f flags can be specified, and they can point to files or directories.
+
+By default, when a dependency offers more than one variant, you will be
+input interactively to choose one. For non-interactive use,
+pass --yes to auto-select a default variant for every dependency,
+and/or use --set-variant pkg=variant (repeatable) to pin specific packages
+to specific variants. --set-variant always takes precedence over --yes and
+over the interactive input.`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 
+		presetVariants, err := parseVariantFlags(addCmdFlags.variants)
+		if err != nil {
+			return err
+		}
+
 		// Collect package names from arguments and files
 		packageNames := make(map[string]bool)
 		packagesFromFiles := make(map[string]string) // packageName -> filePath
-		
+
 		for _, arg := range args {
 			packageNames[arg] = true
 		}
@@ -85,7 +99,6 @@ Multiple -f flags can be specified, and they can point to files or directories.`
 
 		// Create Kubernetes client config
 		var config *rest.Config
-		var err error
 
 		if addCmdFlags.kubeconfig != "" {
 			config, err = clientcmd.BuildConfigFromFlags("", addCmdFlags.kubeconfig)
@@ -119,15 +132,35 @@ Multiple -f flags can be specified, and they can point to files or directories.`
 				}
 				// If failed, fall back to interactive installation
 			}
-			
-			// Interactive installation from PackageSource
-			if err := installPackage(ctx, k8sClient, packageName); err != nil {
+
+			// Install from PackageSource (interactive unless --yes/--set-variant apply)
+			if err := installPackage(ctx, k8sClient, packageName, addCmdFlags.yes, presetVariants); err != nil {
 				return err
 			}
 		}
 
 		return nil
 	},
+}
+
+// parseVariantFlags parses repeated --set-variant pkg=variant values into a map.
+func parseVariantFlags(raw []string) (map[string]string, error) {
+	result := make(map[string]string, len(raw))
+	for _, entry := range raw {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid --set-variant value %q, expected format pkg=variant", entry)
+		}
+		pkg, variant := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		if pkg == "" || variant == "" {
+			return nil, fmt.Errorf("invalid --set-variant value %q, expected format pkg=variant", entry)
+		}
+		if existing, ok := result[pkg]; ok && existing != variant {
+			return nil, fmt.Errorf("conflicting --set-variant values for %q: %q and %q", pkg, existing, variant)
+		}
+		result[pkg] = variant
+	}
+	return result, nil
 }
 
 func readPackagesFromFile(filePath string) ([]string, error) {
@@ -178,7 +211,7 @@ func readPackagesFromYAMLFile(filePath string) ([]string, error) {
 
 	// Split YAML documents (in case of multiple resources)
 	documents := strings.Split(string(data), "---")
-	
+
 	for _, doc := range documents {
 		doc = strings.TrimSpace(doc)
 		if doc == "" {
@@ -240,7 +273,7 @@ func buildDependencyTree(ctx context.Context, k8sClient client.Client, rootName 
 	tree := make(map[string][]string)
 	dependencyRequesters := make(map[string]string) // dep -> requester
 	visited := make(map[string]bool)
-	
+
 	// Ensure root is in tree even if it has no dependencies
 	tree[rootName] = []string{}
 
@@ -354,7 +387,7 @@ func createPackageFromFile(ctx context.Context, k8sClient client.Client, filePat
 
 	// Split YAML documents
 	documents := strings.Split(string(data), "---")
-	
+
 	for _, doc := range documents {
 		doc = strings.TrimSpace(doc)
 		if doc == "" {
@@ -389,7 +422,7 @@ func createPackageFromFile(ctx context.Context, k8sClient client.Client, filePat
 	return fmt.Errorf("Package %s not found in file", packageName)
 }
 
-func installPackage(ctx context.Context, k8sClient client.Client, packageSourceName string) error {
+func installPackage(ctx context.Context, k8sClient client.Client, packageSourceName string, yes bool, presetVariants map[string]string) error {
 	// Get PackageSource
 	packageSource := &cozyv1alpha1.PackageSource{}
 	if err := k8sClient.Get(ctx, client.ObjectKey{Name: packageSourceName}, packageSource); err != nil {
@@ -456,8 +489,7 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 			return fmt.Errorf("PackageSource %s not found", pkgName)
 		}
 
-		// Select variant interactively
-		variant, err := selectVariantInteractive(ps)
+		variant, err := resolveVariant(ps, pkgName, yes, presetVariants)
 		if err != nil {
 			return fmt.Errorf("failed to select variant for %s: %w", pkgName, err)
 		}
@@ -488,10 +520,44 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 			return fmt.Errorf("failed to create Package %s: %w", pkgName, err)
 		}
 
-		fmt.Fprintf(os.Stderr, "✓ Added Package %s\n", pkgName)
+		fmt.Fprintf(os.Stderr, "✓ Added Package %s (variant: %s)\n", pkgName, variant)
 	}
 
 	return nil
+}
+
+// resolveVariant determines which variant to use for a package that is about to be installed. Resolution order (highest priority first):
+func resolveVariant(ps *cozyv1alpha1.PackageSource, pkgName string, yes bool, presetVariants map[string]string) (string, error) {
+	if len(ps.Spec.Variants) == 0 {
+		return "", fmt.Errorf("no variants available for PackageSource %s", ps.Name)
+	}
+
+	if preset, ok := presetVariants[pkgName]; ok {
+		for _, v := range ps.Spec.Variants {
+			if v.Name == preset {
+				return preset, nil
+			}
+		}
+		available := make([]string, 0, len(ps.Spec.Variants))
+		for _, v := range ps.Spec.Variants {
+			available = append(available, v.Name)
+		}
+		return "", fmt.Errorf("variant %q is not valid for package %s (available: %s)", preset, pkgName, strings.Join(available, ", "))
+	}
+
+	if yes {
+		defaultVariant := ps.Spec.Variants[0].Name
+		for _, v := range ps.Spec.Variants {
+			if v.Name == "default" {
+				defaultVariant = "default"
+				break
+			}
+		}
+		fmt.Fprintf(os.Stderr, "✓ %s: auto-selected variant %q (--yes, no --set-variant override)\n", pkgName, defaultVariant)
+		return defaultVariant, nil
+	}
+
+	return selectVariantInteractive(ps)
 }
 
 // selectVariantInteractive prompts user to select a variant
@@ -545,5 +611,7 @@ func init() {
 	rootCmd.AddCommand(addCmd)
 	addCmd.Flags().StringArrayVarP(&addCmdFlags.files, "file", "f", []string{}, "Read packages from file or directory (can be specified multiple times)")
 	addCmd.Flags().StringVar(&addCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file (defaults to ~/.kube/config or KUBECONFIG env var)")
+	addCmd.Flags().BoolVarP(&addCmdFlags.yes, "yes", "y", false, "Non-interactive mode: auto-select a default variant for any dependency that requires a choice (overridden per-package by --set-variant)")
+	addCmd.Flags().StringArrayVar(&addCmdFlags.variants, "set-variant", []string{}, "Pin a package to a specific variant as pkg=variant (repeatable). Takes precedence over --yes and the interactive prompt")
 }
 
