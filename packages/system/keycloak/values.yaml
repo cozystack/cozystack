@@ -21,6 +21,13 @@ ingress:
   # the network/path separation here is what restricts access.
   # If left empty, the admin console stays on the main hostname (default).
   adminHost: ""
+  # Optional: hostname to 302-redirect the bare "/" of the login hostname to
+  # (e.g. "dashboard.example.com"). Without it, "/" reaches Keycloak and
+  # redirects to the admin console — undesirable on a public login host.
+  # Only the exact "/" is redirected; OIDC paths still reach Keycloak. Best
+  # combined with adminHost (which narrows the login route off "/"). Applies
+  # to the Gateway API HTTPRoute (gateway-enabled); empty disables it.
+  rootRedirect: ""
   annotations:
     nginx.ingress.kubernetes.io/affinity: "cookie"
     nginx.ingress.kubernetes.io/session-cookie-expires: "86400"
