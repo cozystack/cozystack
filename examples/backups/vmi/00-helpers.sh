@@ -15,7 +15,11 @@ export BOLD='\033[1m'
 
 # Default settings
 export NAMESPACE="${NAMESPACE:-tenant-root}"
-export BACKUP_STORAGE_LOCATION="${BACKUP_STORAGE_LOCATION:-default}"
+# The platform ships the SeaweedFS-backed BackupStorageLocation as cozy-default
+# (packages/system/backupstrategy-controller). Point the demo/e2e strategies at
+# it by default so the flow works out of the box on a backups-enabled cluster;
+# override for an external S3 whose BSL carries a different name.
+export BACKUP_STORAGE_LOCATION="${BACKUP_STORAGE_LOCATION:-cozy-default}"
 
 # Logging functions (output to stderr to avoid polluting captured output)
 log_info() {
@@ -73,6 +77,10 @@ wait_for_field() {
     local desired="$4"
     local namespace="${5:-}"
     local timeout="${6:-300}"
+    # Optional terminal-failure value: when the field reaches it, stop
+    # immediately instead of polling out the timeout. Fail fast, fail loud —
+    # a BackupJob/RestoreJob that flips to Failed is a real bug, not a flake.
+    local fail_value="${7:-}"
 
     log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
 
@@ -87,6 +95,10 @@ wait_for_field() {
         if [[ "$current" == "$desired" ]]; then
             log_success "$resource_type/$resource_name reached '$desired'"
             return 0
+        fi
+        if [[ -n "$fail_value" && "$current" == "$fail_value" ]]; then
+            log_error "$resource_type/$resource_name reached terminal failure state '$fail_value'"
+            return 1
         fi
         if [[ $elapsed -ge $timeout ]]; then
             log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"

@@ -30,7 +30,9 @@ log_success "BackupJob created"
 separator
 
 log_step "Waiting for BackupJob to complete..."
-wait_for_field backupjob test-backup '{.status.phase}' Succeeded "$NAMESPACE" 600
+# 1800s: the Velero CSI data mover copies the whole VM disk (20Gi) to S3, which
+# is far heavier than a database dump. Fail fast if the job flips to Failed.
+wait_for_field backupjob test-backup '{.status.phase}' Succeeded "$NAMESPACE" 1800 Failed
 
 separator
 

@@ -49,7 +49,7 @@ log_success "RestoreJob created"
 separator
 
 log_step "Waiting for RestoreJob to complete..."
-wait_for_field restorejob restore-to-copy-test '{.status.phase}' Succeeded "$NAMESPACE" 600
+wait_for_field restorejob restore-to-copy-test '{.status.phase}' Succeeded "$NAMESPACE" 1800 Failed
 
 separator
 

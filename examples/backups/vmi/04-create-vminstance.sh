@@ -10,6 +10,11 @@ print_header "Step 4: Create VMInstance"
 log_step "Creating VMInstance 'test' in namespace $NAMESPACE..."
 log_command "kubectl apply -f - (VMInstance: test)"
 
+# Profile + instance type are overridable so the same flow can boot a heavy
+# ubuntu demo or a tiny cirros VM for a lightweight e2e (u1.nano = 1 vCPU/512Mi).
+VMI_INSTANCE_PROFILE="${VMI_INSTANCE_PROFILE:-ubuntu}"
+VMI_INSTANCE_TYPE="${VMI_INSTANCE_TYPE:-u1.medium}"
+
 kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VMInstance
@@ -19,8 +24,8 @@ metadata:
 spec:
   disks:
     - name: ubuntu-source
-  instanceProfile: ubuntu
-  instanceType: "u1.medium"
+  instanceProfile: ${VMI_INSTANCE_PROFILE}
+  instanceType: "${VMI_INSTANCE_TYPE}"
   running: true
   sshKeys:
     #- <paste your ssh public key here>
@@ -34,11 +39,25 @@ log_success "VMInstance created"
 
 separator
 
+# Wait for the VM to be fully booted before backing it up. Backing up a VM that
+# is still importing its disk or has not started yields an incomplete, useless
+# backup — so, like the etcd/postgres source steps, block on readiness here.
+# The Ubuntu cloud image download (~700MB) plus nested KubeVirt boot is slow,
+# hence the generous 900s bound.
+log_step "Waiting for the VMInstance to boot (HelmRelease + VirtualMachine Ready)..."
+log_command "kubectl -n $NAMESPACE wait hr vm-instance-test --for=condition=ready"
+kubectl -n "$NAMESPACE" wait hr vm-instance-test --for=condition=ready --timeout=900s
+log_command "kubectl -n $NAMESPACE wait virtualmachine.kubevirt.io/vm-instance-test --for=condition=Ready"
+kubectl -n "$NAMESPACE" wait virtualmachine.kubevirt.io/vm-instance-test \
+    --for=condition=Ready --timeout=600s
+
+separator
+
 log_step "Verifying VMInstance..."
 log_command "kubectl get vminstance test -n $NAMESPACE"
 kubectl get vminstance test -n "$NAMESPACE"
 
 separator
 
-log_success "VMInstance is ready"
+log_success "VMInstance is running and ready to back up"
 echo -e "\n${GREEN}${BOLD}Next step:${NC} ./05-create-backupjob.sh"
