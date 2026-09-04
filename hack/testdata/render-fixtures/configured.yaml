@@ -1,0 +1,30 @@
+# OIDC on, per-host ACME through http01, services exposed. The other side of the
+# branches fresh.yaml leaves off.
+_cluster:
+  root-host: "example.org"
+  bundle-name: "paas-full"
+  solver: "http01"
+  issuer-name: "letsencrypt-prod"
+  wildcard-secret-name: ""
+  wildcard-issue: "false"
+  oidc-enabled: "true"
+  oidc-insecure-skip-verify: "false"
+  keycloak-internal-url: "https://keycloak.cozy-keycloak.svc.cluster.local"
+  extra-keycloak-redirect-uri-for-dashboard: ""
+  expose-ingress: "tenant-root"
+  expose-services: "tenant-root"
+  cluster-domain: "cluster.local"
+  scheduling:
+    nodeSelector: {}
+    tolerations: []
+# The value is the NAMESPACE providing the service, not a boolean: tenant's
+# namespace.yaml sets `$etcd = $tenantName`. A non-empty value is the on side of
+# the nine `{{- if .Values._namespace.<svc> }}` branches, and it renders 15
+# manifests in packages/apps/kubernetes that the off side does not.
+_namespace:
+  etcd: "tenant-test"
+  ingress: "tenant-test"
+  gateway: "tenant-test"
+  monitoring: "tenant-test"
+  seaweedfs: "tenant-test"
+  host: "example.org"

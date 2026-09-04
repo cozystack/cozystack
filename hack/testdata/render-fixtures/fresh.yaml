@@ -1,0 +1,25 @@
+# A cluster right after install: nothing configured yet.
+_cluster:
+  root-host: "example.org"
+  bundle-name: "paas-full"
+  solver: ""
+  issuer-name: ""
+  wildcard-secret-name: ""
+  wildcard-issue: "false"
+  oidc-enabled: "false"
+  oidc-insecure-skip-verify: "false"
+  keycloak-internal-url: ""
+  extra-keycloak-redirect-uri-for-dashboard: ""
+  expose-ingress: ""
+  expose-services: ""
+  cluster-domain: "cluster.local"
+# Empty string means "this tenant has no such shared service"; the charts test it
+# with a bare `{{- if .Values._namespace.etcd }}`, and "" is false. This is the
+# off side of nine such branches.
+_namespace:
+  etcd: ""
+  ingress: ""
+  gateway: ""
+  monitoring: ""
+  seaweedfs: ""
+  host: "example.org"
