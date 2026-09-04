@@ -128,6 +128,35 @@ talos:
   registryMirrors: {}
 
 ##
+## @section Substrate
+##
+
+## @param {string} substrate="kubevirt" - Which infrastructure provider backs this pool's worker VMs. `kubevirt` runs them inside this cluster on KubeVirt, sized by `instanceType` and booted from a Talos disk image CDI streams from the image factory. `proxmox` runs them on an external Proxmox VE cluster through capmox, sized by `resources`, and cloned from a Talos VM template that already exists on the hypervisor. The two substrates take different Talos platform images and different sizing inputs, so switching an existing pool is not a supported in-place change: create a new pool instead. Changing it rolls the pool, because the worker machine template is named by a hash of its content.
+substrate: kubevirt
+
+## @typedef {struct} ProxmoxNetwork - Network attachment for a Proxmox worker VM.
+## @field {string} bridge - Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox`.
+## @field {int} [vlan] - L2 VLAN tag. Omitted when unset.
+## @field {int} [mtu] - NIC MTU. Omitted when unset.
+
+## @typedef {struct} Proxmox - Proxmox substrate settings. Ignored unless `substrate` is `proxmox`.
+## @field {[]string} templateTags - Tags identifying the Talos VM template to clone. capmox matches a template when its tag set is EQUAL to this list, not when it contains it, so every tag on the template must be listed here — a missing one yields `found 0 VM templates with tags ...` while the tags are plainly present. Required when `substrate` is `proxmox`.
+## @field {bool} [full] - Full clone rather than linked. A linked clone is faster and thinner but ties the worker's disk to the template's lifetime; full is the safe default for a pool that outlives template rotation.
+## @field {ProxmoxNetwork} network - NIC configuration.
+## @field {string} [storage] - Proxmox storage for the cloned disk. Empty keeps the template's storage.
+
+## @param {Proxmox} proxmox - Proxmox substrate settings.
+proxmox:
+  templateTags: []
+  full: true
+  # vlan and mtu stay absent rather than null: the schema types them as
+  # integers, so a null default fails validation for every pool that does
+  # not set them.
+  network:
+    bridge: ""
+  storage: ""
+
+##
 ## @section Images
 ##
 

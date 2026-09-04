@@ -261,6 +261,62 @@
         }
       }
     },
+    "substrate": {
+      "description": "Which infrastructure provider backs this pool's worker VMs. `kubevirt` runs them inside this cluster on KubeVirt, sized by `instanceType` and booted from a Talos disk image CDI streams from the image factory. `proxmox` runs them on an external Proxmox VE cluster through capmox, sized by `resources`, and cloned from a Talos VM template that already exists on the hypervisor. The two substrates take different Talos platform images and different sizing inputs, so switching an existing pool is not a supported in-place change: create a new pool instead. Changing it rolls the pool, because the worker machine template is named by a hash of its content.",
+      "type": "string",
+      "default": "kubevirt"
+    },
+    "proxmox": {
+      "description": "Proxmox substrate settings.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "network"
+      ],
+      "properties": {
+        "full": {
+          "description": "Full clone rather than linked. A linked clone is faster and thinner but ties the worker's disk to the template's lifetime; full is the safe default for a pool that outlives template rotation.",
+          "type": "boolean",
+          "default": true
+        },
+        "network": {
+          "description": "NIC configuration.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "bridge"
+          ],
+          "properties": {
+            "bridge": {
+              "description": "Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox`.",
+              "type": "string",
+              "default": ""
+            },
+            "mtu": {
+              "description": "NIC MTU. Omitted when unset.",
+              "type": "integer"
+            },
+            "vlan": {
+              "description": "L2 VLAN tag. Omitted when unset.",
+              "type": "integer"
+            }
+          }
+        },
+        "storage": {
+          "description": "Proxmox storage for the cloned disk. Empty keeps the template's storage.",
+          "type": "string",
+          "default": ""
+        },
+        "templateTags": {
+          "description": "Tags identifying the Talos VM template to clone. capmox matches a template when its tag set is EQUAL to this list, not when it contains it, so every tag on the template must be listed here — a missing one yields `found 0 VM templates with tags ...` while the tags are plainly present. Required when `substrate` is `proxmox`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "images": {
       "description": "Optional image overrides for air-gapped or rate-limited registries.",
       "type": "object",
