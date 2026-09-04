@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 )
@@ -57,6 +58,9 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	}
 	if err := gatewayv1alpha2.Install(s); err != nil {
 		t.Fatalf("gateway v1alpha2 scheme: %v", err)
+	}
+	if err := gatewayv1beta1.Install(s); err != nil {
+		t.Fatalf("gateway v1beta1 scheme: %v", err)
 	}
 	if err := cmv1.AddToScheme(s); err != nil {
 		t.Fatalf("cert-manager scheme: %v", err)
@@ -7842,5 +7846,265 @@ func TestReconcile_ExistingSecretModeRendersChildApexListenerWithOperatorSecret(
 	}
 	if !sawChild {
 		t.Errorf("expected per-child-apex listener *.alice.example.org in existingSecret mode, got %+v", gw.Spec.Listeners)
+	}
+}
+
+// TestReconcile_TerminateListenerSurvivesATLSRouteThatForwardsNowhere
+// pins the second half of the rule the routeless case pins, on the
+// same mechanism: whether the passthrough listener carries a filter
+// chain for the SNI, not whether a route declared that it should.
+//
+// At the pinned v1.19.5 a TLSRoute reaches the translator with the
+// backends that survived resolution: toTLSRoutes
+// (operator/pkg/model/ingestion/gateway.go:587-616) keeps a backendRef
+// only when IsBackendReferenceAllowed passes and getServiceSpec finds
+// the Service, and tlsPassthroughFilterChains
+// (operator/pkg/model/translation/envoy_listener.go:408-411) then skips
+// a route whose surviving list is empty. An attached route that
+// forwards nowhere therefore matches no ClientHello, exactly like no
+// route at all, and the terminate listener is the only thing left
+// answering the hostname.
+//
+// The cross-namespace pair is the discriminator that keeps this from
+// passing on a rule that merely refuses every backendRef naming a
+// namespace: the grant is what Cilium consults, so the same reference
+// resolves with one and not without.
+func TestReconcile_TerminateListenerSurvivesATLSRouteThatForwardsNowhere(t *testing.T) {
+	const (
+		hostname   = "api.foo.example.com"
+		backendsNS = "cozy-public"
+	)
+	grant := &gatewayv1beta1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo-to-services", Namespace: backendsNS},
+		Spec: gatewayv1beta1.ReferenceGrantSpec{
+			From: []gatewayv1beta1.ReferenceGrantFrom{{
+				Group:     gatewayv1.GroupName,
+				Kind:      "TLSRoute",
+				Namespace: "tenant-foo",
+			}},
+			To: []gatewayv1beta1.ReferenceGrantTo{{Group: "", Kind: "Service"}},
+		},
+	}
+	cases := []struct {
+		name    string
+		backend gatewayv1alpha2.BackendRef
+		// extra is seeded next to the TenantGateway and the routes.
+		extra []client.Object
+		// sheds says whether Cilium would carry the SNI on the
+		// passthrough listener, which is what decides whether the
+		// terminate listener may go.
+		sheds  bool
+		reason string
+	}{
+		{
+			name:   "same-namespace Service",
+			extra:  []client.Object{&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api-backend", Namespace: "tenant-foo"}}},
+			sheds:  true,
+			reason: "the reference needs no grant and the Service is there, so the route forwards and carries the SNI",
+		},
+		{
+			name:   "Service that does not exist",
+			sheds:  false,
+			reason: "getServiceSpec finds nothing, so the route reaches the translator with no backends",
+		},
+		{
+			name:    "cross-namespace Service with no ReferenceGrant",
+			backend: tlsBackendRef("api-backend", backendsNS),
+			extra:   []client.Object{&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api-backend", Namespace: backendsNS}}},
+			sheds:   false,
+			reason:  "isReferenceAllowed refuses a cross-namespace reference with no grant, whatever the Service is",
+		},
+		{
+			name:    "cross-namespace Service with a ReferenceGrant",
+			backend: tlsBackendRef("api-backend", backendsNS),
+			extra: []client.Object{
+				&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api-backend", Namespace: backendsNS}},
+				grant,
+			},
+			sheds:  true,
+			reason: "the grant is what makes the same reference resolve, so the route forwards and carries the SNI",
+		},
+		{
+			name:   "rule with no backendRefs",
+			sheds:  false,
+			reason: "a rule naming no backend forwards nowhere on any implementation",
+		},
+		{
+			name:   "backendRef naming an empty namespace",
+			extra:  []client.Object{&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api-backend", Namespace: "tenant-foo"}}},
+			sheds:  true,
+			reason: "NamespaceDerefOr reads an empty namespace as the route's own, so this needs no grant",
+		},
+		{
+			name:   "ServiceImport backend",
+			extra:  []client.Object{&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api-backend", Namespace: "tenant-foo"}}},
+			sheds:  false,
+			reason: "a ServiceImport resolves through mcs-api, whose CRDs this platform does not install",
+		},
+		{
+			name:   "second rule resolves",
+			extra:  []client.Object{&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api-backend", Namespace: "tenant-foo"}}},
+			sheds:  true,
+			reason: "Cilium appends one model route per rule, so one resolving rule carries the SNI",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScheme(t)
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                   "foo.example.com",
+					CertMode:               gatewayv1alpha1.CertModeHTTP01,
+					GatewayClassName:       "cilium",
+					TLSPassthroughServices: []string{"api"},
+				},
+			}
+			route := httpRouteAttached("api", "tenant-foo", hostname)
+			claimant := passthroughTLSRoute("api-tls", "tenant-foo", hostname, "api")
+			switch tc.name {
+			case "rule with no backendRefs":
+				claimant.Spec.Rules = []gatewayv1alpha2.TLSRouteRule{{}}
+			case "Service that does not exist":
+				claimant.Spec.Rules[0].BackendRefs = []gatewayv1alpha2.BackendRef{tlsBackendRef("absent", "")}
+			case "backendRef naming an empty namespace":
+				empty := tlsBackendRef("api-backend", "")
+				blank := gatewayv1.Namespace("")
+				empty.Namespace = &blank
+				claimant.Spec.Rules[0].BackendRefs = []gatewayv1alpha2.BackendRef{empty}
+			case "ServiceImport backend":
+				imported := tlsBackendRef("api-backend", "")
+				group := gatewayv1.Group("multicluster.x-k8s.io")
+				kind := gatewayv1.Kind("ServiceImport")
+				imported.Group, imported.Kind = &group, &kind
+				claimant.Spec.Rules[0].BackendRefs = []gatewayv1alpha2.BackendRef{imported}
+			case "second rule resolves":
+				claimant.Spec.Rules = []gatewayv1alpha2.TLSRouteRule{
+					{BackendRefs: []gatewayv1alpha2.BackendRef{tlsBackendRef("absent", "")}},
+					{BackendRefs: []gatewayv1alpha2.BackendRef{tlsBackendRef("api-backend", "")}},
+				}
+			default:
+				if tc.backend.Name == "" {
+					tc.backend = tlsBackendRef("api-backend", "")
+				}
+				claimant.Spec.Rules[0].BackendRefs = []gatewayv1alpha2.BackendRef{tc.backend}
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(s).
+				WithObjects(tgw, route, claimant).
+				WithObjects(tc.extra...).
+				WithStatusSubresource(tgw, route, claimant).
+				Build()
+
+			r := &Reconciler{Client: c, Scheme: s}
+			key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
+			if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			gw := &gatewayv1.Gateway{}
+			if err := c.Get(context.TODO(), key, gw); err != nil {
+				t.Fatalf("get Gateway: %v", err)
+			}
+			terminate, passthrough := listenerNamesByProtocol(gw, hostname)
+			// The passthrough listener is declared either way: the
+			// spec asked for it, and asserting it keeps this from
+			// passing on a render that dropped the passthrough half.
+			if want := []string{passthroughListenerPrefix + "api"}; !reflect.DeepEqual(passthrough, want) {
+				t.Errorf("passthrough listeners for %s = %v, want %v: %+v", hostname, passthrough, want, gw.Spec.Listeners)
+			}
+			certs := &cmv1.CertificateList{}
+			if err := c.List(context.TODO(), certs); err != nil {
+				t.Fatalf("list Certificates: %v", err)
+			}
+			gotCerts := certNamesOrdering(certs, hostname)
+			if tc.sheds {
+				if len(terminate) != 0 {
+					t.Errorf("terminate listeners %v for %s survived: %s: %+v", terminate, hostname, tc.reason, gw.Spec.Listeners)
+				}
+				if len(gotCerts) != 0 {
+					t.Errorf("Certificates %v still order %s: %s", gotCerts, hostname, tc.reason)
+				}
+				return
+			}
+			if want := []string{perListenerName(hostname)}; !reflect.DeepEqual(terminate, want) {
+				t.Errorf("terminate listeners for %s = %v, want %v: %s, so withdrawing it takes the endpoint offline: %+v", hostname, terminate, want, tc.reason, gw.Spec.Listeners)
+			}
+			if want := []string{perListenerCertName(tgw, hostname)}; !reflect.DeepEqual(gotCerts, want) {
+				t.Errorf("Certificates ordering %s = %v, want %v; the terminate listener that survives has nothing to present without one", hostname, gotCerts, want)
+			}
+		})
+	}
+}
+
+// TestReconcile_TerminateListenerGoesOnceTheBackendAppears pins the
+// deferral the rule above rests on: the withdrawal is not skipped for
+// good, it waits for the route to be able to carry the hostname.
+//
+// Manifests apply in no particular order, so a TLSRoute naming a
+// Service that does not exist yet is the ordinary transient state, not
+// a mistake. The Service arriving has to land the withdrawal, which is
+// what the Service watch is for; here the reconcile stands in for the
+// requeue that watch produces.
+func TestReconcile_TerminateListenerGoesOnceTheBackendAppears(t *testing.T) {
+	const hostname = "api.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	route := httpRouteAttached("api", "tenant-foo", hostname)
+	claimant := passthroughTLSRoute("api-tls", "tenant-foo", hostname, "api")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route, claimant).
+		WithStatusSubresource(tgw, route, claimant).
+		Build()
+	r := &Reconciler{Client: c, Scheme: s}
+	key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
+
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("phase 1 reconcile: %v", err)
+	}
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), key, gw); err != nil {
+		t.Fatalf("phase 1 get Gateway: %v", err)
+	}
+	terminate, _ := listenerNamesByProtocol(gw, hostname)
+	if want := []string{perListenerName(hostname)}; !reflect.DeepEqual(terminate, want) {
+		t.Fatalf("phase 1 terminate listeners for %s = %v, want %v; without one there is nothing for phase 2 to shed", hostname, terminate, want)
+	}
+
+	if err := c.Create(context.TODO(), &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: tlsRouteBackendName, Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("create backend Service: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("phase 2 reconcile: %v", err)
+	}
+	if err := c.Get(context.TODO(), key, gw); err != nil {
+		t.Fatalf("phase 2 get Gateway: %v", err)
+	}
+	terminate, passthrough := listenerNamesByProtocol(gw, hostname)
+	if len(terminate) != 0 {
+		t.Errorf("terminate listeners %v for %s survived a route that now forwards: %+v", terminate, hostname, gw.Spec.Listeners)
+	}
+	if want := []string{passthroughListenerPrefix + "api"}; !reflect.DeepEqual(passthrough, want) {
+		t.Errorf("passthrough listeners for %s = %v, want %v; with none the absent terminate listener proves nothing", hostname, passthrough, want)
+	}
+	certs := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certs); err != nil {
+		t.Fatalf("phase 2 list Certificates: %v", err)
+	}
+	if got := certNamesOrdering(certs, hostname); len(got) != 0 {
+		t.Errorf("Certificates %v still order %s, which the passthrough listener now serves", got, hostname)
 	}
 }
