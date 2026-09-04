@@ -314,6 +314,8 @@ tests:
           path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
       - notExists:
           path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
+      - notExists:
+          path: spec.secretTemplate
 
   - it: keeps the key-bearing API leaf off every tenant-visible label
     set:
@@ -327,6 +329,8 @@ tests:
           path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
       - notExists:
           path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
+      - notExists:
+          path: spec.secretTemplate
 
   - it: keeps the key-bearing Dashboards leaf off every tenant-visible label
     set:
