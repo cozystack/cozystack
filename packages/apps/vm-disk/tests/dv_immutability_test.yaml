@@ -190,6 +190,14 @@ tests:
       - equal:
           path: metadata.annotations["vm-disk.cozystack.io/storage-class"]
           value: replicated
+      # The immediate-bind annotation is emitted on this path too, so `helm
+      # upgrade` retrofits it onto DataVolumes created before it was
+      # unconditional. Inert for a volume that has already bound -- CDI reads
+      # the annotation when it provisions -- and pinned here so the retrofit is
+      # a recorded decision rather than a side effect nobody asserted.
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
+          value: "true"
 
   - it: does not false-reject an unchanged http disk whose URL has query-string special chars
     # Round-trip lock: the recorded annotation holds toJson-escaped & < >; an

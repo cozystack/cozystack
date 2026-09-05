@@ -43,6 +43,14 @@ tests:
       - equal:
           path: metadata.annotations["vm-disk.cozystack.io/source"]
           value: '{}'
+      # Immediate binding is requested for every source type, not only upload.
+      # A standalone VMDisk has no consumer to wait for, so on a
+      # WaitForFirstConsumer class the volume would otherwise never populate;
+      # the placement trade-off that buys is in README.md. Pinned per source so
+      # a regression to the old upload-only condition reddens here.
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
+          value: "true"
 
   - it: renders an http source from values and records it in the source annotation
     set:
@@ -97,6 +105,14 @@ tests:
       - equal:
           path: metadata.annotations["vm-disk.cozystack.io/source"]
           value: '{"image":{"name":"ubuntu"}}'
+      # Immediate binding is requested for every source type, not only upload.
+      # A standalone VMDisk has no consumer to wait for, so on a
+      # WaitForFirstConsumer class the volume would otherwise never populate;
+      # the placement trade-off that buys is in README.md. Pinned per source so
+      # a regression to the old upload-only condition reddens here.
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
+          value: "true"
 
   - it: renders a disk source as an in-namespace pvc clone
     set:
@@ -113,6 +129,14 @@ tests:
       - equal:
           path: metadata.annotations["vm-disk.cozystack.io/source"]
           value: '{"disk":{"name":"other"}}'
+      # Immediate binding is requested for every source type, not only upload.
+      # A standalone VMDisk has no consumer to wait for, so on a
+      # WaitForFirstConsumer class the volume would otherwise never populate;
+      # the placement trade-off that buys is in README.md. Pinned per source so
+      # a regression to the old upload-only condition reddens here.
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
+          value: "true"
 
   - it: renders an upload source and requests immediate bind
     set:
