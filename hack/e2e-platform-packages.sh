@@ -5,8 +5,16 @@ api_server_endpoint=${COZY_APISERVER_ENDPOINT:-https://192.168.123.10:6443}
 linstor_drbd_enabled=${COZY_LINSTOR_DRBD_ENABLED:-true}
 
 # Container-mode Talos shares the runner kernel and cannot load DRBD. Keep the
-# normal package graph for QEMU, but let that lane replace only LINSTOR with an
-# otherwise-identical Package whose logger sidecar is disabled.
+# normal package graph for QEMU, and let that lane replace two Packages instead:
+# LINSTOR, otherwise identical with its logger sidecar disabled, and kubevirt-cdi,
+# which is NOT identical -- it raises the importer memory limit from CDI's 600M
+# to 4Gi and the request from 60M to 256Mi, for the reason stated above that
+# override below.
+#
+# The consequence is worth stating where it is made: the merge-gating lane
+# therefore does not exercise the shipped CDI default. Whether a tenant worker
+# disk imports at 600M is answered by the QEMU lanes (nightly.yaml, e2e-tag.yaml),
+# which take no override, and not here.
 case "$linstor_drbd_enabled" in
   true|false) ;;
   *)
