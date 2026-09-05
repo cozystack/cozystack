@@ -441,6 +441,107 @@ func TestDeleteDryRunReportsPolicyWithoutFinalizerAsInstant(t *testing.T) {
 	if !deleted {
 		t.Fatalf("dry-run Delete of a finalizer-less policy reported deleted=false; want true (instant)")
 	}
+
+	// Explicitly disabled orphaning must not synthesize a finalizer either; the
+	// dry-run object survives, so the same storage serves the second call.
+	orphanDisabled := false
+	//nolint:staticcheck // SA1019: the apiserver still honours the deprecated OrphanDependents, so the dry-run mirror is exercised with it.
+	_, deleted, err = r.Delete(ctxNS(), "sg-db", nil, &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}, OrphanDependents: &orphanDisabled})
+	if err != nil {
+		t.Fatalf("dry-run Delete with orphanDependents=false returned error: %v", err)
+	}
+	if !deleted {
+		t.Fatalf("dry-run Delete with orphanDependents=false reported deleted=false; want true (instant)")
+	}
+}
+
+func TestDeleteDryRunReportsProspectiveAsyncState(t *testing.T) {
+	foreground := metav1.DeletePropagationForeground
+	orphan := metav1.DeletePropagationOrphan
+	orphanDependents := true
+	tests := []struct {
+		name              string
+		initialFinalizers []string
+		options           *metav1.DeleteOptions
+		wantFinalizer     string
+		absentFinalizer   string
+	}{
+		{
+			name:              "existing membership finalizer",
+			initialFinalizers: []string{sdnv1alpha1.MembershipFinalizer},
+			options:           &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}},
+			wantFinalizer:     sdnv1alpha1.MembershipFinalizer,
+		},
+		{
+			name:          "foreground propagation",
+			options:       &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}, PropagationPolicy: &foreground},
+			wantFinalizer: metav1.FinalizerDeleteDependents,
+		},
+		{
+			name:          "orphan propagation",
+			options:       &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}, PropagationPolicy: &orphan},
+			wantFinalizer: metav1.FinalizerOrphanDependents,
+		},
+		{
+			name: "explicit orphanDependents",
+			//nolint:staticcheck // SA1019: the apiserver still honours the deprecated OrphanDependents, so the dry-run mirror is exercised with it.
+			options:       &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}, OrphanDependents: &orphanDependents},
+			wantFinalizer: metav1.FinalizerOrphanDependents,
+		},
+		{
+			name:              "pre-existing orphan finalizer preserved without explicit policy",
+			initialFinalizers: []string{metav1.FinalizerOrphanDependents},
+			options:           &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}},
+			wantFinalizer:     metav1.FinalizerOrphanDependents,
+		},
+		{
+			name:              "pre-existing foregroundDeletion finalizer preserved without explicit policy",
+			initialFinalizers: []string{metav1.FinalizerDeleteDependents},
+			options:           &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}},
+			wantFinalizer:     metav1.FinalizerDeleteDependents,
+		},
+		{
+			name:              "conflicting explicit policy replaces the pre-existing GC finalizer",
+			initialFinalizers: []string{metav1.FinalizerOrphanDependents},
+			options:           &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}, PropagationPolicy: &foreground},
+			wantFinalizer:     metav1.FinalizerDeleteDependents,
+			absentFinalizer:   metav1.FinalizerOrphanDependents,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cnp := markedPolicy("sg-db")
+			cnp.Finalizers = append([]string(nil), tt.initialFinalizers...)
+			r := newTestREST(t, cnp)
+
+			obj, deleted, err := r.Delete(ctxNS(), "sg-db", nil, tt.options)
+			if err != nil {
+				t.Fatalf("dry-run Delete returned error: %v", err)
+			}
+			if deleted {
+				t.Fatal("dry-run Delete reported deleted=true for a prospective finalizer-held delete")
+			}
+			sg, ok := obj.(*sdnv1alpha1.SecurityGroup)
+			if !ok {
+				t.Fatalf("dry-run Delete returned %T, want *SecurityGroup", obj)
+			}
+			if sg.DeletionTimestamp == nil || !hasFinalizer(sg.Finalizers, tt.wantFinalizer) {
+				t.Fatalf("prospective result missing deletion state: timestamp=%v finalizers=%v", sg.DeletionTimestamp, sg.Finalizers)
+			}
+			if tt.absentFinalizer != "" && hasFinalizer(sg.Finalizers, tt.absentFinalizer) {
+				t.Fatalf("prospective result kept the finalizer the explicit policy replaces: finalizers=%v", sg.Finalizers)
+			}
+
+			stored := &CiliumNetworkPolicy{}
+			if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-db"}, stored); err != nil {
+				t.Fatalf("dry-run changed object existence: %v", err)
+			}
+			if stored.DeletionTimestamp != nil || !reflect.DeepEqual(stored.Finalizers, tt.initialFinalizers) {
+				t.Fatalf("dry-run persisted prospective state: timestamp=%v finalizers=%v", stored.DeletionTimestamp, stored.Finalizers)
+			}
+		})
+	}
 }
 
 func TestCreateOverExistingUnmarkedPolicyFails(t *testing.T) {
@@ -763,11 +864,8 @@ func TestUpdateForceCreatePropagatesDryRun(t *testing.T) {
 		WithInterceptorFuncs(interceptor.Funcs{
 			// Capture the create options the force-create path passes through.
 			Create: func(_ context.Context, _ client.WithWatch, _ client.Object, opts ...client.CreateOption) error {
-				for _, o := range opts {
-					if co, ok := o.(*client.CreateOptions); ok && co.Raw != nil {
-						captured = co.Raw.DryRun
-					}
-				}
+				converted := (&client.CreateOptions{}).ApplyOptions(opts)
+				captured = converted.AsCreateOptions().DryRun
 				return nil
 			},
 		}).

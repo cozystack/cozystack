@@ -242,10 +242,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
 
 	// Create HelmRelease in Kubernetes
-	err = r.c.Create(ctx, helmRelease, &client.CreateOptions{Raw: options})
+	err = r.c.Create(ctx, helmRelease, registry.ClientCreateOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
-		return nil, fmt.Errorf("failed to create HelmRelease: %v", err)
+		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err)
 	}
 
 	// Convert the created HelmRelease back to Application
@@ -499,7 +499,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 				klog.Errorf("Failed to get updated object: %v", err)
 				return nil, false, err
 			}
-			createdObj, err := r.Create(ctx, obj, createValidation, &metav1.CreateOptions{})
+			createdObj, err := r.Create(ctx, obj, createValidation, registry.CreateOptionsFromUpdate(options))
 			if err != nil {
 				klog.Errorf("Failed to create new Application: %v", err)
 				return nil, false, err
@@ -565,7 +565,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// over from it below.
 	cur := &helmv2.HelmRelease{}
 	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
-		return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
+		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err)
 	}
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
@@ -606,7 +606,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// real spec conflict here: refresh the resourceVersion from the live object
 	// and retry.
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		updateErr := r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
 		if apierrors.IsConflict(updateErr) {
 			cur := &helmv2.HelmRelease{}
 			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
@@ -618,7 +618,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	})
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
-		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
+		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err)
 	}
 
 	// Convert the updated HelmRelease back to Application
@@ -688,10 +688,10 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	klog.V(6).Infof("Deleting HelmRelease %s in namespace %s", helmReleaseName, namespace)
 
 	// Delete the HelmRelease corresponding to the Application
-	err = r.c.Delete(ctx, helmRelease, &client.DeleteOptions{Raw: options})
+	err = r.c.Delete(ctx, helmRelease, registry.ClientDeleteOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
-		return nil, false, fmt.Errorf("failed to delete HelmRelease: %v", err)
+		return nil, false, registry.WrapPreservingStatus("failed to delete HelmRelease", err)
 	}
 
 	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)
