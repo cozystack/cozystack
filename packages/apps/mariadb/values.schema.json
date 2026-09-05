@@ -159,26 +159,26 @@
       ]
     },
     "users": {
-      "description": "Users configuration map.",
+      "description": "Users configuration map. Passwords (including the `root` account) are always auto-generated and stored in the `\u003crelease\u003e-credentials` Secret; they cannot be set from values. Read a user's password from that Secret, or rotate every managed password by bumping `passwordRotation`. A `password` left over in values from before the field was removed is ignored by the chart but stays the live credential until a `passwordRotation` bump retires it.",
       "type": "object",
       "default": {},
       "additionalProperties": {
         "type": "object",
         "required": [
-          "maxUserConnections",
-          "password"
+          "maxUserConnections"
         ],
         "properties": {
           "maxUserConnections": {
             "description": "Maximum number of connections.",
             "type": "integer"
-          },
-          "password": {
-            "description": "Password for the user.",
-            "type": "string"
           }
         }
       }
+    },
+    "passwordRotation": {
+      "description": "Rotation counter for auto-generated application-user passwords. Change it to any new value (0 -\u003e 1 -\u003e 2 ...; any change, not only an increment, triggers a rotation) to regenerate every managed user password on the next reconcile; leaving it unchanged keeps the passwords already stored in the `\u003crelease\u003e-credentials` Secret. Existing releases adopt their current passwords as the baseline on first upgrade: the counter value is recorded without rotating, so a bump requested during that same first upgrade does not rotate — bump it once more afterwards to rotate a legacy release. The `root` password is auto-generated but not rotated by this counter, since mariadb-operator only applies it at datadir bootstrap.",
+      "type": "integer",
+      "default": 0
     },
     "databases": {
       "description": "Databases configuration map.",

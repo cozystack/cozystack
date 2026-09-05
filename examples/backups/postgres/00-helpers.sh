@@ -33,8 +33,6 @@ export RESTOREJOB_PITR_NAME="${RESTOREJOB_PITR_NAME:-pg-src-to-pg-target-pitr}"
 export RESTOREJOB_UNREACHABLE_NAME="${RESTOREJOB_UNREACHABLE_NAME:-pg-src-to-pg-target-unreachable}"
 export RESTOREJOB_INPLACE_NAME="${RESTOREJOB_INPLACE_NAME:-pg-src-in-place}"
 export PLAN_NAME="${PLAN_NAME:-pg-src-daily}"
-# App user password baked into 05-postgres-src.yaml (REPLACE_WITH_PASSWORD).
-export PG_PASSWORD="${PG_PASSWORD:-Xai7Wepo0aeThie8}"
 
 # S3 endpoint CA. cozystack's default seaweedfs serves its S3 endpoint with a
 # self-signed certificate whose CA lives in this Secret; the demo copies its
@@ -155,4 +153,50 @@ psql_exec() {
     [[ -n "$pod" ]] || { log_error "no primary pod for cnpg cluster '$cluster'"; return 1; }
     kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
         psql -U postgres -d "$db" -tAc "$sql"
+}
+
+# Run a psql statement AS the application user over TCP (via the cluster's -rw
+# Service), forcing password authentication. psql_exec above connects as the
+# in-pod postgres superuser through the local socket (peer auth) and so never
+# exercises a user's password; only this path proves the password the
+# <release>-credentials Secret advertises actually authenticates. The password
+# is read from that chart-managed Secret; the bracket jsonpath form tolerates a
+# '.' in the username. Args: <cluster> <release> <user> <db> <sql>
+psql_app_exec() {
+    local cluster="$1" release="$2" user="$3" db="$4" sql="$5"
+    local pod pw
+    pod=$(cnpg_primary_pod "$cluster")
+    [[ -n "$pod" ]] || { log_error "no primary pod for cnpg cluster '$cluster'"; return 1; }
+    pw=$(kubectl -n "$NAMESPACE" get secret "${release}-credentials" \
+        -o "jsonpath={.data['${user}']}" | base64 -d)
+    [[ -n "$pw" ]] || { log_error "no password for user '${user}' in ${release}-credentials"; return 1; }
+    kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+        env PGPASSWORD="$pw" psql -h "${cluster}-rw" -U "$user" -d "$db" -tAc "$sql"
+}
+
+# Block until the application user can authenticate against a cluster, or fail
+# after <timeout>s. Needed after a to-copy restore: the driver clears
+# bootstrap.enabled once recovery converges so the chart's init-job re-runs
+# ALTER ROLE ... WITH PASSWORD, converging the recovered roles (which carry the
+# source's password hashes) onto the freshly generated <release>-credentials
+# Secret. That convergence is asynchronous - a HelmRelease upgrade plus its
+# post-upgrade init-job hook - so this is a readiness wait on an eventually
+# consistent property, not a retry over a deterministic step.
+# Args: <cluster> <release> <user> <db> <timeout>
+wait_for_app_login() {
+    local cluster="$1" release="$2" user="$3" db="$4" timeout="${5:-300}"
+    local elapsed=0
+    log_substep "Waiting for user '${user}' to authenticate against ${cluster}..."
+    while true; do
+        if [[ "$(psql_app_exec "$cluster" "$release" "$user" "$db" 'SELECT 1;' 2>/dev/null | tr -d '[:space:]')" == "1" ]]; then
+            log_success "user '${user}' authenticated against ${cluster}"
+            return 0
+        fi
+        if [[ $elapsed -ge $timeout ]]; then
+            log_error "Timeout waiting for user '${user}' to authenticate against ${cluster}: the credentials Secret advertises a password the roles never received (bootstrap not cleared, or the init-job did not reconcile)"
+            return 1
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
 }

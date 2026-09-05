@@ -25,13 +25,13 @@ source "$SCRIPT_DIR/00-helpers.sh"
 RECOVERY_TIME="${RECOVERY_TIME:-}"
 
 # Substitute the manifest placeholders. $BUCKET / $S3_HOST are resolved from the
-# Bucket below; $PG_PASSWORD is the app user's password; $RECOVERY_TIME is the
-# PITR target (empty for every manifest except 45-restorejob-pitr.yaml).
+# Bucket below; $RECOVERY_TIME is the PITR target (empty for every manifest
+# except 45-restorejob-pitr.yaml). The app user's password is chart-generated,
+# not substituted.
 subst() {
     sed \
         -e "s|REPLACE_WITH_COSI_BUCKET_NAME|${BUCKET}|g" \
         -e "s|REPLACE_WITH_S3_ENDPOINT|${S3_HOST}|g" \
-        -e "s|REPLACE_WITH_PASSWORD|${PG_PASSWORD}|g" \
         -e "s|REPLACE_WITH_RECOVERY_TIME|${RECOVERY_TIME}|g" \
         "$SCRIPT_DIR/$1"
 }
@@ -179,6 +179,21 @@ if [[ "$GOT" != "$SENTINEL_TOKEN" ]]; then
     exit 1
 fi
 log_success "Round-trip verified: '${PG_TARGET_NAME}' restored sentinel '${GOT}' from S3."
+
+# The passwords in <target>-credentials are chart-generated and do not match the
+# password hashes recovery brought back with the roles; the driver clears
+# bootstrap.enabled so the init-job reconciles them. Prove the app user can
+# actually log in against the restored copy - psql_exec above only ever used the
+# in-pod postgres superuser, so a broken credential would otherwise pass silently.
+print_header "Step 40 verify: the app user authenticates against the restored copy"
+wait_for_app_login "$PG_TARGET_CLUSTER" "$PG_TARGET_NAME" app demo 360
+APP_GOT=$(psql_app_exec "$PG_TARGET_CLUSTER" "$PG_TARGET_NAME" app demo \
+    "SELECT token FROM e2e_sentinel WHERE id = 1;" | tr -d '[:space:]')
+if [[ "$APP_GOT" != "$SENTINEL_TOKEN" ]]; then
+    log_error "app-user read mismatch: target has '${APP_GOT}', expected '${SENTINEL_TOKEN}'"
+    exit 1
+fi
+log_success "App-user login verified: 'app' authenticated and read sentinel '${APP_GOT}' from '${PG_TARGET_NAME}'."
 
 if [[ "${SKIP_PITR:-0}" == "1" ]]; then
     log_warning "SKIP_PITR=1: stopping after the latest-point restore."

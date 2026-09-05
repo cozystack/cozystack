@@ -1,0 +1,15 @@
+{{- if .Values.bootstrap.enabled }}
+WARNING: this PostgreSQL was provisioned as a restore (bootstrap.enabled=true).
+
+The roles recovered from the backup keep their original password hashes, but the
+{{ .Release.Name }}-credentials Secret now holds freshly generated passwords that
+are NOT yet applied to the database — the init-job that runs ALTER ROLE is skipped
+while bootstrap is on. The credentials Secret is flagged
+postgres.cozystack.io/credentials-pending: "true" until this converges.
+
+The restore driver clears bootstrap.enabled automatically once recovery is healthy,
+and the next reconcile runs the init-job to apply the Secret's passwords onto the
+recovered roles — no action is required. Until that convergence completes, do not
+treat the advertised application passwords as usable; the database is reachable as
+the CloudNativePG superuser.
+{{- end }}

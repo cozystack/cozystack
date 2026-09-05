@@ -10,7 +10,6 @@ spec:
   users:
     testuser:
       maxUserConnections: 1000
-      password: xai7Wepo
   databases:
     testdb:
       roles:

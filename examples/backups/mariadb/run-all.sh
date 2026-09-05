@@ -27,12 +27,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/00-helpers.sh"
 
 # Substitute the manifest placeholders. $BUCKET / $S3_HOST are resolved from the
-# Bucket below; $MARIADB_PASSWORD is the app user's password.
+# Bucket below. The app user's password is chart-generated, not substituted.
 subst() {
     sed \
         -e "s|REPLACE_WITH_COSI_BUCKET_NAME|${BUCKET}|g" \
         -e "s|REPLACE_WITH_S3_ENDPOINT|${S3_HOST}|g" \
-        -e "s|REPLACE_WITH_PASSWORD|${MARIADB_PASSWORD}|g" \
         "$SCRIPT_DIR/$1"
 }
 
@@ -186,6 +185,17 @@ if [[ "$GOT" != "$SENTINEL_TOKEN" ]]; then
     exit 1
 fi
 log_success "Round-trip verified: '${MARIADB_TARGET_NAME}' restored sentinel '${GOT}' from S3."
+
+# The app-user read above already proves the restore did not overwrite the
+# target's grant table with the source's. root is the one the operator can never
+# repair after bootstrap, so assert it too: its login must still match the
+# chart-generated password in the target Secret.
+print_header "Step 40 verify: root still authenticates against the restored copy"
+if ! mysql_root_login "$MARIADB_TARGET_CR" >/dev/null; then
+    log_error "root cannot authenticate against '${MARIADB_TARGET_NAME}': the restore overwrote the grant table and the target Secret's root password no longer matches"
+    exit 1
+fi
+log_success "root login verified against '${MARIADB_TARGET_NAME}'."
 
 # To-copy must not mutate the source. Regressing into a source-touching restore
 # would corrupt the running instance, so assert the source still reads back.
