@@ -1,0 +1,21 @@
+suite: haproxy default render
+templates:
+  - templates/haproxy/deployment.yaml
+  - templates/haproxy/configmap.yaml
+
+release:
+  name: http-cache-test
+  namespace: tenant-test
+
+tests:
+  - it: renders the haproxy Deployment with the default replica count
+    template: templates/haproxy/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: haproxy:latest

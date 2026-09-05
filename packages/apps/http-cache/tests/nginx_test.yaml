@@ -1,0 +1,37 @@
+suite: nginx cache default render
+templates:
+  - templates/nginx/deployment.yaml
+  - templates/nginx/configmap.yaml
+
+release:
+  name: http-cache-test
+  namespace: tenant-test
+
+tests:
+  - it: renders a PodDisruptionBudget plus a Deployment, PVC and Service per nginx replica
+    template: templates/nginx/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 7
+
+  - it: pins the nginx cache image on the first replica's Deployment
+    template: templates/nginx/deployment.yaml
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: kind
+          value: Deployment
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/cozystack/cozystack/nginx-cache:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: sizes the first replica's PVC from values.size
+    template: templates/nginx/deployment.yaml
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: PersistentVolumeClaim
+      - equal:
+          path: spec.resources.requests.storage
+          value: 10Gi
