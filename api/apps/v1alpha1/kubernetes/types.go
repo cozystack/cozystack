@@ -28,6 +28,12 @@ type ConfigSpec struct {
 	// External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.
 	// +kubebuilder:default:=""
 	Host string `json:"host"`
+	// Which infrastructure provider backs this cluster's worker VMs. `kubevirt` runs them inside this cluster; `proxmox` runs them on an external Proxmox VE cluster through capmox. The control plane is Kamaji either way — this selects the infrastructure half only. Must match the `substrate` of every KubernetesNodes pool attached to this cluster: the pools reference this cluster's infrastructure object by kind, and a mismatch leaves their Machines unreconciled. Switching an existing cluster is not supported; create a new one.
+	// +kubebuilder:default:="kubevirt"
+	Substrate string `json:"substrate"`
+	// Proxmox substrate settings.
+	// +kubebuilder:default:={}
+	Proxmox Proxmox `json:"proxmox"`
 	// Cluster addons configuration.
 	// +kubebuilder:default:={}
 	Addons Addons `json:"addons"`
@@ -263,6 +269,30 @@ type OuroborosAddon struct {
 	// Custom Helm values overrides. Operator-key wins over cozystack defaults.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
+}
+
+type Proxmox struct {
+	// Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
+	// +kubebuilder:default:={}
+	AllowedNodes []string `json:"allowedNodes,omitempty"`
+	// Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
+	// +kubebuilder:default:={}
+	DnsServers []string `json:"dnsServers,omitempty"`
+	// Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
+	// +kubebuilder:default:={}
+	Ipv4Config ProxmoxIPv4 `json:"ipv4Config"`
+}
+
+type ProxmoxIPv4 struct {
+	// Ranges or CIDRs, e.g. `["10.0.0.120-10.0.0.170"]`. capmox turns these into an InClusterIPPool, so they must not overlap any DHCP range on the same L2 or two workers will answer to one address.
+	// +kubebuilder:default:={}
+	Addresses []string `json:"addresses,omitempty"`
+	// Default gateway for the workers.
+	// +kubebuilder:default:=""
+	Gateway string `json:"gateway"`
+	// Netmask prefix length.
+	// +kubebuilder:default:=24
+	Prefix int `json:"prefix"`
 }
 
 type Resources struct {

@@ -1,0 +1,136 @@
+suite: proxmox substrate
+# The control plane is Kamaji on both substrates, so this switch changes exactly
+# one object — the one Cluster.infrastructureRef points at — plus the two tenant
+# addons that exist only because the workers are KubeVirt VMs in this cluster.
+# What is asserted here is that it changes those and nothing else.
+templates:
+  - templates/cluster.yaml
+  - templates/kccm/manager.yaml
+  - templates/csi/deploy.yaml
+  - templates/cloud-config.yaml
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+set:
+  _namespace:
+    etcd: etcd-test
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  substrate: proxmox
+  proxmox:
+    allowedNodes: [prox-home]
+    dnsServers: ["8.8.8.8"]
+    ipv4Config:
+      addresses: ["10.0.0.160-10.0.0.170"]
+      gateway: "10.0.0.1"
+      prefix: 24
+tests:
+  - it: builds a ProxmoxCluster carrying what capmox cannot infer
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: ProxmoxCluster
+    asserts:
+      - equal:
+          path: spec.allowedNodes
+          value: [prox-home]
+      - equal:
+          path: spec.ipv4Config.gateway
+          value: "10.0.0.1"
+      - equal:
+          path: spec.dnsServers
+          value: ["8.8.8.8"]
+      # Kamaji owns the endpoint, and capmox reads the FIELD for that — not the
+      # managed-by annotation, which must be absent here. With the annotation
+      # present CAPI never sets an ownerRef on this object and capmox stops at
+      # "Waiting for Cluster Controller to set OwnerRef", leaving the address
+      # pool uncreated and every worker Machine waiting on infrastructure.
+      - equal:
+          path: spec.externalManagedControlPlane
+          value: true
+      - notExists:
+          path: metadata.annotations["cluster.x-k8s.io/managed-by"]
+
+  - it: points the Cluster at the Proxmox infrastructure object
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.infrastructureRef.kind
+          value: ProxmoxCluster
+
+  - it: publishes the apiserver, which an off-cluster worker can actually reach
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.serviceType
+          value: LoadBalancer
+
+  - it: keeps the KubeVirt path on a ClusterIP, where its in-cluster workers reach it
+    template: templates/cluster.yaml
+    set:
+      substrate: kubevirt
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.serviceType
+          value: ClusterIP
+
+  - it: keeps the KubeVirt path on its own infrastructure object
+    template: templates/cluster.yaml
+    set:
+      substrate: kubevirt
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.infrastructureRef.kind
+          value: KubevirtCluster
+
+  - it: drops the KubeVirt cloud-controller-manager, which has nothing to reconcile here
+    template: templates/kccm/manager.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: drops the kubevirt-csi driver, whose DataVolumes do not exist on this substrate
+    template: templates/csi/deploy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: drops the cloud-config the KubeVirt CCM reads
+    template: templates/cloud-config.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses an address pool it cannot invent
+    template: templates/cluster.yaml
+    set:
+      proxmox:
+        ipv4Config:
+          addresses: []
+          gateway: "10.0.0.1"
+          prefix: 24
+        dnsServers: ["8.8.8.8"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "substrate proxmox requires proxmox.ipv4Config.addresses: capmox allocates static addresses and has no DHCP mode"
+
+  - it: rejects an unknown substrate
+    template: templates/cluster.yaml
+    set:
+      substrate: vsphere
+    asserts:
+      - failedTemplate:
+          errorMessage: 'substrate "vsphere" is not supported; use "kubevirt" or "proxmox"'
