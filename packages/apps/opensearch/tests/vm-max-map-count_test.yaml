@@ -1,0 +1,40 @@
+suite: setVMMaxMapCount knob
+
+# The operator injects a privileged `init-sysctl` initContainer when
+# spec.general.setVMMaxMapCount is true, which a tenant namespace under the
+# default `baseline` PodSecurity rejects. See cozystack/cozystack#3022.
+
+templates:
+  - templates/opensearch.yaml
+
+tests:
+  - it: defaults to true so existing clusters keep the operator-managed sysctl
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.general.setVMMaxMapCount
+          value: true
+        documentSelector:
+          path: kind
+          value: OpenSearchCluster
+
+  - it: can be disabled when the node already provides the sysctl
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      setVMMaxMapCount: false
+    asserts:
+      - equal:
+          path: spec.general.setVMMaxMapCount
+          value: false
+        documentSelector:
+          path: kind
+          value: OpenSearchCluster
