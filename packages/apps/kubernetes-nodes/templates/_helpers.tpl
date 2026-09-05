@@ -267,8 +267,23 @@ dict the result is written into), groupName (named in every error message).
 {{- if not (regexMatch "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9a-z.]+)?$" ($version | toString)) -}}
 {{-   fail (printf "nodeGroup %q: Talos version %q is not a vMAJOR.MINOR.PATCH release. It is interpolated into the worker DataVolume name and the image URL, so it must carry no whitespace or YAML metacharacters." .groupName ($version | toString)) -}}
 {{- end -}}
-{{- if not (regexMatch "^https?://[A-Za-z0-9._~:/?#\\[\\]@!&'()*+,;=%-]+$" ($factoryURL | toString)) -}}
-{{-   fail (printf "nodeGroup %q: imageFactoryURL %q is not a plain http(s) URL. It is interpolated into the worker DataVolume source URL, so it must carry no whitespace, backtick, dollar sign or YAML metacharacters." .groupName ($factoryURL | toString)) -}}
+{{- /* Only the paths that build an HTTP source URL are held to this. A builtin
+       pool clones a golden PVC: its DataVolume carries source.pvc and no
+       source.http at all, so imageFactoryURL is never interpolated into
+       anything it renders. Validating it there refused a value the pool does
+       not consume, and the operator it refused is the one the feature is for --
+       somebody moving to osImage.builtin to stop depending on the Factory is
+       exactly the person likely to blank imageFactoryURL, and the message they
+       got named a source URL this path never builds. The field is a bare string
+       in values.schema.json and in the cozyrds openAPISchema, so an empty or
+       malformed one reaches the render rather than being rejected at admission.
+       Reviewed as [MINOR] on cozystack/cozystack#3294. The check itself stays
+       exactly as strict for osImage.factory and for the no-osImage default,
+       which are the two arms that do interpolate it. */ -}}
+{{- if not $clone -}}
+{{-   if not (regexMatch "^https?://[A-Za-z0-9._~:/?#\\[\\]@!&'()*+,;=%-]+$" ($factoryURL | toString)) -}}
+{{-     fail (printf "nodeGroup %q: imageFactoryURL %q is not a plain http(s) URL. It is interpolated into the worker DataVolume source URL, so it must carry no whitespace, backtick, dollar sign or YAML metacharacters." .groupName ($factoryURL | toString)) -}}
+{{-   end -}}
 {{- end -}}
 {{- $_ := set .out "schematicID" $schematicID -}}
 {{- $_ := set .out "version" $version -}}

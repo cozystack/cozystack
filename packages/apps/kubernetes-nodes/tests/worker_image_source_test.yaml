@@ -420,3 +420,49 @@ tests:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
           value: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # A builtin pool never builds a source URL -- its DataVolume carries source.pvc
+  # and no source.http -- so imageFactoryURL is not an input on that path and is
+  # not held to the URL pattern. Before this the check ran before the branch and
+  # refused a field the pool does not consume, which landed on exactly the
+  # operator moving to builtin to stop depending on the Factory. Reviewed as
+  # [MINOR] on cozystack/cozystack#3294.
+  - it: a builtin pool renders with a blanked imageFactoryURL
+    set:
+      osImage:
+        builtin: {}
+      talos:
+        imageFactoryURL: ""
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # Same for a malformed one: the value is unreachable from the clone path, so
+  # refusing it would be refusing a field this render never reads.
+  - it: a builtin pool renders with a malformed imageFactoryURL
+    set:
+      osImage:
+        builtin: {}
+      talos:
+        imageFactoryURL: "not a url"
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # The no-osImage default DOES interpolate it, so it stays refused there. This
+  # is the arm a running cluster is already on, and the sibling cases above must
+  # not be read as relaxing it.
+  - it: a pool with osImage omitted still refuses a malformed imageFactoryURL
+    set:
+      talos:
+        imageFactoryURL: "not a url"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a plain http\(s\) URL'
