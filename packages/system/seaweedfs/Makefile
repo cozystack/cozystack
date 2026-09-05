@@ -27,8 +27,10 @@ update:
 	curl -sSL https://github.com/seaweedfs/seaweedfs/archive/refs/tags/$${version}.tar.gz | \
 	tar xzvf - --strip 3 -C charts seaweedfs-$${version}/k8s/charts/seaweedfs
 	patch --no-backup-if-mismatch -p4 < patches/resize-api-server-annotation.diff
+	patch --no-backup-if-mismatch -p4 < patches/volume-resize-quantity.diff
 	patch --no-backup-if-mismatch -p4 < patches/disable-ca-key-rotation.patch
 	patch --no-backup-if-mismatch -p4 < patches/s3-tls-main-port.patch
+	patch --no-backup-if-mismatch -p4 < patches/s3-iceberg-port-explicit.patch
 	patch --no-backup-if-mismatch -p4 < patches/cosi-provisioner-sa-name.patch
 	patch --no-backup-if-mismatch -p4 < patches/cosi-bucket-class-lock-readonly.patch
 	patch --no-backup-if-mismatch -p4 < patches/s3-service-name.patch

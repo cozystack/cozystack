@@ -61,6 +61,9 @@ spec:
       {{- if .Values.sftp.priorityClassName }}
       priorityClassName: {{ .Values.sftp.priorityClassName | quote }}
       {{- end }}
+      {{- if .Values.sftp.schedulerName }}
+      schedulerName: {{ .Values.sftp.schedulerName | quote }}
+      {{- end }}
       enableServiceLinks: false
       {{- if .Values.sftp.serviceAccountName }}
       serviceAccountName: {{ .Values.sftp.serviceAccountName | quote }}
@@ -135,6 +138,9 @@ spec:
               {{- end }}
               {{- if .Values.sftp.authMethods }}
               -authMethods={{ .Values.sftp.authMethods }} \
+              {{- if contains "certificate" .Values.sftp.authMethods }}
+              -trustedUserCAKeysFile=/etc/sw/sftp_ca/ca_user.pub \
+              {{- end }}
               {{- end }}
               {{- if .Values.sftp.maxAuthTries }}
               -maxAuthTries={{ .Values.sftp.maxAuthTries }} \
@@ -173,9 +179,14 @@ spec:
               name: config-users
               readOnly: true
             {{- end }}
-            - mountPath: /etc/sw/ssh
+            - mountPath: {{ .Values.sftp.hostKeysFolder | default "/etc/sw/ssh" }}
               name: config-ssh
               readOnly: true
+            {{- if and .Values.sftp.authMethods (contains "certificate" .Values.sftp.authMethods) }}
+            - mountPath: /etc/sw/sftp_ca
+              name: config-sftp-ca
+              readOnly: true
+            {{- end }}
             {{- if include "seaweedfs.securityConfigEnabled" . }}
             - name: security-config
               readOnly: true
@@ -256,6 +267,19 @@ spec:
             {{- else }}
             secretName: {{ include "seaweedfs.fullname" . }}-sftp-ssh-secret
             {{- end }}
+        {{- if and .Values.sftp.authMethods (contains "certificate" .Values.sftp.authMethods) }}
+        {{- if and (not .Values.sftp.existingCAKeysSecret) (not .Values.sftp.trustedUserCAKeys) }}
+        {{- fail "sftp.authMethods includes \"certificate\" but neither sftp.trustedUserCAKeys nor sftp.existingCAKeysSecret is set" }}
+        {{- end }}
+        - name: config-sftp-ca
+          secret:
+            defaultMode: 420
+            {{- if .Values.sftp.existingCAKeysSecret }}
+            secretName: {{ .Values.sftp.existingCAKeysSecret }}
+            {{- else }}
+            secretName: {{ include "seaweedfs.fullname" . }}-sftp-ca-secret
+            {{- end }}
+        {{- end }}
         {{- if eq .Values.sftp.logs.type "hostPath" }}
         - name: logs
           hostPath:

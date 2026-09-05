@@ -69,6 +69,23 @@ Inject extra environment vars in the format key:value, if populated
 {{- range $key, $value := $component }}
 {{- $_ := set $target $key $value }}
 {{- end }}
+{{/* the license block owns SEAWEED_LICENSE; letting one through here too would
+     render the key twice in one container */}}
+{{- if ((.global | default dict).license | default dict).existingSecret }}
+{{- $_ := unset $target "SEAWEED_LICENSE" }}
+{{- end }}
+{{- end -}}
+
+{{/* Whether the mysql filer store is selected; a flag the chart cannot read counts as selected. */}}
+{{- define "seaweedfs.filer.mysqlEnabled" -}}
+{{- $merged := dict -}}
+{{- $_ := include "seaweedfs.mergeExtraEnvironmentVars" (dict "global" .Values.global.seaweedfs "component" .Values.filer "target" $merged) -}}
+{{- $enabled := index $merged "WEED_MYSQL_ENABLED" -}}
+{{- if or (kindIs "map" $enabled) (hasKey (.Values.filer.secretExtraEnvironmentVars | default dict) "WEED_MYSQL_ENABLED") -}}
+true
+{{- else if and $enabled (eq (lower (toString $enabled)) "true") -}}
+true
+{{- end -}}
 {{- end -}}
 
 {{/* Return the proper filer image */}}
@@ -128,6 +145,15 @@ Inject extra environment vars in the format key:value, if populated
 {{- printf "%s" $imageOverride -}}
 {{- else -}}
 {{- include "seaweedfs.image" . }}
+{{- end -}}
+{{- end -}}
+
+{{/* Lance namespace URL the worker's Lance container maintains; empty when unreachable */}}
+{{- define "seaweedfs.worker.lanceNamespaceUrl" -}}
+{{- if .Values.worker.namespaceUrl -}}
+{{- .Values.worker.namespaceUrl -}}
+{{- else if and .Values.s3.enabled .Values.s3.lancePort -}}
+{{- printf "http://%s.%s:%d" (include "seaweedfs.componentName" (list . "s3")) .Release.Namespace (int .Values.s3.lancePort) -}}
 {{- end -}}
 {{- end -}}
 
@@ -333,13 +359,98 @@ Create the name of the service account to use
 {{- end -}}
 
 {{/* True when security.toml should be rendered and mounted. volumeWrite is
-     excluded since it defaults to true. */}}
+     excluded unless its non-default expiration is configured. */}}
 {{- define "seaweedfs.securityConfigEnabled" -}}
 {{- $sec := (.Values.global.seaweedfs).securityConfig | default dict -}}
 {{- $jwt := $sec.jwtSigning | default dict -}}
-{{- if or .Values.global.seaweedfs.enableSecurity $jwt.volumeRead $jwt.filerWrite $jwt.filerRead -}}
+{{- $expiresAfterSeconds := $jwt.expiresAfterSeconds | default dict -}}
+{{- $volumeWriteExpirationConfigured := and $jwt.volumeWrite (gt (int $expiresAfterSeconds.volumeWrite) 0) -}}
+{{- if or .Values.global.seaweedfs.enableSecurity $volumeWriteExpirationConfigured $jwt.volumeRead $jwt.filerWrite $jwt.filerRead -}}
 true
 {{- end -}}
+{{- end -}}
+
+{{/* True when the post-install bucket hook Job renders: an S3 endpoint, plus
+     buckets to create on it. Read by the Job itself and by its NetworkPolicy,
+     which has to appear exactly when the Job does - a Job without its policy
+     hangs in a default-deny namespace. */}}
+{{- define "seaweedfs.bucketHookEnabled" -}}
+{{- if .Values.allInOne.enabled -}}
+{{-   if and .Values.allInOne.s3.enabled .Values.allInOne.s3.createBuckets -}}
+true
+{{-   end -}}
+{{- else if .Values.master.enabled -}}
+{{-   if and (or .Values.filer.s3.enabled .Values.s3.enabled) (or .Values.s3.createBuckets .Values.filer.s3.createBuckets) -}}
+true
+{{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The kubectl commands the volume resize hook has to run, one per line: a
+     cascade-orphan delete for every StatefulSet whose volumeClaimTemplates no
+     longer match the values, and a patch for every PVC the values grew.
+
+     Empty when there is nothing to resize, which is what gates the Job. Read by
+     its NetworkPolicy too, which has to appear exactly when the Job does - a Job
+     without its policy hangs in a default-deny namespace, and a policy without
+     its Job is an orphaned hook resource on every install.
+
+     Built on lookup, so it is always empty under helm template and on a fresh
+     install, where there is no StatefulSet to compare against yet. */}}
+{{- define "seaweedfs.volumeResizeHookCommands" -}}
+{{- $seaweedfsName := include "seaweedfs.fullname" $ }}
+{{- $volumes := deepCopy .Values.volumes | mergeOverwrite (dict "" .Values.volume) }}
+{{- $commands := list }}
+{{- if .Values.volume.resizeHook.enabled }}
+{{-   range $vname, $volume := $volumes }}
+{{-     $volumeName := trimSuffix "-" (printf "volume-%s" $vname) }}
+{{-     $volume := mergeOverwrite (deepCopy $.Values.volume) (dict "enabled" true) $volume }}
+{{-     if $volume.enabled }}
+{{-       $replicas := int $volume.replicas }}
+{{-       $statefulsetName := printf "%s-%s" $seaweedfsName $volumeName }}
+{{-       $statefulset := (lookup "apps/v1" "StatefulSet" $.Release.Namespace $statefulsetName) }}
+{{- /* Check for changes in volumeClaimTemplates */}}
+{{-       if $statefulset }}
+{{-         range $dir := $volume.dataDirs }}
+{{-           if eq .type "persistentVolumeClaim" }}
+{{-             $desiredSize := .size }}
+{{-             range $statefulset.spec.volumeClaimTemplates }}
+{{- /* normalise both sides: the API server re-emits a quantity in its canonical
+       form, so values saying 10240Mi come back from the cluster as 10Gi and a raw
+       string compare deletes the statefulset on EVERY upgrade for a size that
+       never changed. */}}
+{{-               if and (eq .metadata.name $dir.name) (ne (include "seaweedfs.resource-quantity" .spec.resources.requests.storage) (include "seaweedfs.resource-quantity" $desiredSize)) }}
+{{-                 $commands = append $commands (printf "kubectl delete statefulset %s --cascade=orphan" $statefulsetName) }}
+{{-               end }}
+{{-             end }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{- /* Check for the need for patching existing PVCs */}}
+{{-       range $dir := $volume.dataDirs }}
+{{-         if eq .type "persistentVolumeClaim" }}
+{{-           $desiredSize := .size }}
+{{-           range $i, $e := until $replicas }}
+{{-             $pvcName := printf "%s-%s-%s-%d" $dir.name $seaweedfsName $volumeName $e }}
+{{-             $currentPVC := (lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $pvcName) }}
+{{-             if $currentPVC }}
+{{-               $oldSize := include "seaweedfs.resource-quantity" $currentPVC.spec.resources.requests.storage }}
+{{-               $newSize := include "seaweedfs.resource-quantity" $desiredSize }}
+{{- /* both sides come from an include, so they are STRINGS: gt would compare
+       them lexicographically and read 1.073741824e+10 (10Gi) as smaller than
+       5.36870912e+09 (5Gi), skipping the patch while the statefulset delete
+       above still runs. Compare as numbers. */}}
+{{-               if gt (float64 $newSize) (float64 $oldSize) }}
+{{-                 $commands = append $commands (printf "kubectl patch pvc %s-%s-%s-%d -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"%s\"}}}}'" $dir.name $seaweedfsName $volumeName $e $desiredSize) }}
+{{-               end }}
+{{-             end }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+{{- join "\n" $commands }}
 {{- end -}}
 
 {{/* S3 TLS cert/key arguments, using custom secret if s3.tlsSecret is set */}}
@@ -373,10 +484,104 @@ true
 {{- end }}
 {{- end -}}
 
+{{/* True when an enterprise license Secret is configured. */}}
+{{- define "seaweedfs.licenseEnabled" -}}
+{{- if ((.Values.global.seaweedfs).license).existingSecret -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Enterprise license volume. Projects just the license key. */}}
+{{- define "seaweedfs.licenseVolume" -}}
+{{- if include "seaweedfs.licenseEnabled" . -}}
+- name: seaweedfs-license
+  secret:
+    secretName: {{ .Values.global.seaweedfs.license.existingSecret }}
+    defaultMode: 0444
+    items:
+      - key: {{ .Values.global.seaweedfs.license.secretKey | default "seaweed-license.json" | quote }}
+        path: {{ .Values.global.seaweedfs.license.secretKey | default "seaweed-license.json" | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* Enterprise license volume mount. Never a subPath: that is resolved once at
+     container start, so a renewed Secret would not reach a running master. */}}
+{{- define "seaweedfs.licenseVolumeMount" -}}
+{{- if include "seaweedfs.licenseEnabled" . -}}
+- name: seaweedfs-license
+  readOnly: true
+  mountPath: {{ .Values.global.seaweedfs.license.mountPath | default "/etc/seaweedfs/license" | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* SEAWEED_LICENSE, set explicitly rather than relying on the binary's search
+     paths, which depend on the working directory. */}}
+{{- define "seaweedfs.licenseEnv" -}}
+{{- if include "seaweedfs.licenseEnabled" . -}}
+- name: SEAWEED_LICENSE
+  value: {{ printf "%s/%s"
+      (.Values.global.seaweedfs.license.mountPath | default "/etc/seaweedfs/license")
+      (.Values.global.seaweedfs.license.secretKey | default "seaweed-license.json") | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* Name of the environment variable carrying one generated S3 credential
+     field, e.g. SEAWEEDFS_S3_ADMIN_ACCESS_KEY_ID. The generated identities file
+     names it in place of the key when the key lives in an existing Secret.
+     Usage: include "seaweedfs.s3.credentialEnvName" (list "admin" "accessKey") */}}
+{{- define "seaweedfs.s3.credentialEnvName" -}}
+{{- $identity := index . 0 -}}
+{{- $field := index . 1 -}}
+{{- printf "SEAWEEDFS_S3_%s_%s" (upper $identity) (ternary "ACCESS_KEY_ID" "SECRET_ACCESS_KEY" (eq $field "accessKey")) -}}
+{{- end -}}
+
+{{/* Environment for the S3 identities the chart generates from an existing
+     Secret. The gateway resolves the ${VAR} references the identities file
+     carries, so the keys never enter the rendered manifests and a dry run
+     renders the same as an install. */}}
+{{- define "seaweedfs.s3.credentialEnv" -}}
+{{- $creds := $.Values.s3.credentials | default dict -}}
+{{- range $identity := list "admin" "read" -}}
+{{- $identityCreds := index $creds $identity | default dict -}}
+{{- if $identityCreds.existingSecret }}
+- name: {{ include "seaweedfs.s3.credentialEnvName" (list $identity "accessKey") }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $identityCreds.existingSecret | quote }}
+      key: {{ default (printf "%s_access_key_id" $identity) $identityCreds.accessKeyKey | quote }}
+- name: {{ include "seaweedfs.s3.credentialEnvName" (list $identity "secretKey") }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $identityCreds.existingSecret | quote }}
+      key: {{ default (printf "%s_secret_access_key" $identity) $identityCreds.secretKeyKey | quote }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Generate a compatible trafficDistribution value due to "PreferClose" fast deprecation in k8s v1.35.
      Accepts a dict with "value" (the trafficDistribution string) and "Capabilities". */}}
 {{- define "seaweedfs.trafficDistribution" -}}
 {{- if .value -}}
 {{- and (eq .value "PreferClose") (semverCompare ">=1.35-0" .Capabilities.KubeVersion.GitVersion) | ternary "PreferSameZone" .value -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Render LoadBalancer-specific service fields (loadBalancerClass, loadBalancerIP,
+loadBalancerSourceRanges), only when the service type is LoadBalancer.
+Usage: {{ include "seaweedfs.service.loadBalancerFields" .Values.s3.service }}
+*/}}
+{{- define "seaweedfs.service.loadBalancerFields" -}}
+{{- if eq (.type | default "ClusterIP") "LoadBalancer" }}
+{{- with .loadBalancerClass }}
+  loadBalancerClass: {{ . }}
+{{- end }}
+{{- with .loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+{{- end }}
+{{- with .loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- end }}
 {{- end -}}
