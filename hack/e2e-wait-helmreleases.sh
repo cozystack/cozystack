@@ -24,12 +24,23 @@ cozy_wait_all_helmreleases_ready() {
 
   echo "Waiting for at least ${minimum_count} HelmReleases to become Ready and remain a stable set for ${quiet_seconds}s..."
   while :; do
-    now=$(date +%s)
-    if ! snapshot=$(kubectl get helmreleases.helm.toolkit.fluxcd.io -A -o json); then
+    # Bounded by kubectl's own request timeout rather than by a `timeout`
+    # wrapper: the unit suite substitutes a `kubectl` shell function, and
+    # `timeout` execs a binary, so a wrapper here would run the real client
+    # against whatever cluster the runner is pointed at. kubectl defaults to no
+    # request timeout at all, and this read sits above the deadline test at the
+    # bottom of the loop -- so unbounded, a wedged apiserver blocks here and
+    # ${timeout_seconds} stops being a ceiling.
+    if ! snapshot=$(kubectl get helmreleases.helm.toolkit.fluxcd.io -A --request-timeout=30s -o json); then
+      now=$(date +%s)
       echo "HelmRelease readiness list failed; keeping the gate closed" >&2
       stable_fingerprint=
       stable_since=0
     else
+      # Sampled after the read, not before it: a read that costs more than the
+      # poll interval would otherwise be priced at zero against the deadline and
+      # buy the loop another whole iteration past it.
+      now=$(date +%s)
       if ! count=$(printf '%s\n' "${snapshot}" | jq -r '.items | length'); then
         echo "Could not parse the HelmRelease readiness list" >&2
         return 1
@@ -82,7 +93,7 @@ cozy_wait_all_helmreleases_ready() {
       if [ -n "${not_ready}" ]; then
         printf '%s\n' "${not_ready}" | sed 's/^/  /' >&2
       fi
-      if ! kubectl get helmreleases.helm.toolkit.fluxcd.io -A >&2; then
+      if ! kubectl get helmreleases.helm.toolkit.fluxcd.io -A --request-timeout=30s >&2; then
         echo "The final HelmRelease diagnostic list also failed" >&2
       fi
       return 1
