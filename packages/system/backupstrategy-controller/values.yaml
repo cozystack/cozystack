@@ -49,6 +49,16 @@ backupStrategyController:
   # Makefile, which also lets this pin move on its own.
   # DO NOT hand-edit: stamped by packages/core/platform/Makefile.
   rabbitmqBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
+  # redisBackupClientImage is rendered into the Redis strategy Pod. The
+  # spotahome operator ships no backup CRD, so the strategy runs a one-shot Job
+  # that dumps an RDB snapshot to S3 and, on restore, loads it into a throwaway
+  # redis to emit a faithful replay stream. It ships its own image (redis 8 +
+  # curl) built from images/redis-backup/; `make image` re-digests this value.
+  redisBackupClientImage: "ghcr.io/cozystack/cozystack/redis-backup:v1.6.0"
+  # redisBackupActiveDeadlineSeconds bounds one backup/restore Job so a run that
+  # wedges (e.g. a --rdb dump blocking on a stalled master) becomes a Failed Job
+  # the driver reports, rather than a Running BackupJob a cron Plan stacks behind.
+  redisBackupActiveDeadlineSeconds: 3600
   replicas: 2
   debug: false
   metrics:
@@ -125,6 +135,19 @@ backupStorage:
   # tolerates the raw COSI Secret format (single BucketInfo JSON key) so a
   # cluster that wires an external S3 Secret manually still works.
   systemSecretName: bucket-cozy-backups-system-credentials
+  # endpointCASecretName — optional Secret (key ca.crt) in the app namespace
+  # that the Redis strategy Pod trusts when the S3 endpoint is https with a
+  # self-signed cert (e.g. SeaweedFS). Empty by default: the projected endpoint
+  # is always https and the platform bucket's ACME cert verifies against the
+  # image's system CA store unaided, so no CA override is needed. Set it only for
+  # a private-CA endpoint. When set, the Secret is required — a missing one fails
+  # the Pod loudly rather than silently skipping verification.
+  endpointCASecretName: ""
+  # insecureSkipTLSVerify disables S3 certificate verification (curl -k). Off by
+  # default and an explicit opt-in, never a fallback: leaving it false keeps an
+  # untrusted-cert endpoint failing closed instead of silently insecure. Prefer
+  # endpointCASecretName for a self-signed endpoint.
+  insecureSkipTLSVerify: false
   # systemNamespaces — namespaces where the controller eagerly projects
   # cozy-backups-creds so long-lived static references (Velero BSL, FDB
   # operator deployments) keep finding the Secret without on-demand
