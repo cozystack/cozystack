@@ -567,9 +567,6 @@ jobs:
     name: "Resolve assets"
     runs-on: ubuntu-latest
     if: contains(github.event.pull_request.labels.*.name, 'release')
-    outputs:
-      disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
-
     permissions:
       contents: read
     steps:
@@ -604,9 +601,14 @@ jobs:
             }
             core.setOutput('tag', `v${m[1]}`);
 
-      - name: Find draft release & asset IDs (release PR)
+      # The draft release has to exist for a release PR's e2e run to mean
+      # anything, and this job is what proves it. It used to also resolve the
+      # nocloud disk asset and export its id; the container lane boots no disk,
+      # so nothing in this workflow reads that id any more and resolving it only
+      # added a way to fail a release PR over an asset it does not use. The
+      # asset is still resolved where it is still consumed, in e2e-tag.yaml.
+      - name: Verify draft release exists (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
-        id: fetch_assets
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -622,22 +624,17 @@ jobs:
               core.setFailed(`Draft release '${tag}' not found`);
               return;
             }
-            const find = (n) => draft.assets.find(a => a.name === n)?.id;
-            const diskId     = find('nocloud-amd64.raw.xz');
-            if (!diskId) {
-              core.setFailed('Required assets missing in draft release');
-              return;
-            }
-            core.setOutput('disk_id',     diskId);
 
 
   # In-tree e2e, on Talos nodes running as CONTAINERS. The QEMU substrate this
-  # lane used to boot is not wired into any workflow now;
-  # `make -C packages/core/testing prepare-cluster` and hack/e2e-prepare-cluster.bats
-  # stay in the tree for the trimmed nightly lane that will carry the coverage
-  # containers cannot: DRBD, and with it the `replicated` StorageClass, its
-  # Immediate binding mode and the tenant StorageClass propagation that only
-  # applies to remotely-accessible classes.
+  # lane used to boot is off the per-PR path only: it is still wired into
+  # e2e-tag.yaml, which runs `make prepare-env` -> `make -C packages/core/testing
+  # prepare-cluster`. That target and hack/e2e-prepare-cluster.bats are
+  # therefore live code, not leftovers, and deleting them takes every
+  # release-candidate run with them. They carry the coverage containers cannot:
+  # DRBD, and with it the `replicated` StorageClass, its Immediate binding mode
+  # and the tenant StorageClass propagation that only applies to
+  # remotely-accessible classes.
   e2e:
     name: "E2E Tests"
     # hack/e2e-compose.yaml gives each of the three nodes `cpus: 8` and
