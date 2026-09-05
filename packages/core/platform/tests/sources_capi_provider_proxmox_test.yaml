@@ -1,0 +1,73 @@
+suite: proxmox infrastructure provider and its IPAM dependency
+# Two edges here are easy to get wrong and expensive when wrong, so they are
+# asserted rather than left to review.
+#
+# 1. The proxmox provider depends on the in-cluster IPAM provider. capmox does
+#    not lease addresses over DHCP the way KubeVirt workers do — it allocates
+#    them from an InClusterIPPool built out of ProxmoxCluster.spec.ipv4Config.
+#    Without the IPAM provider the pool kind does not resolve, ProxmoxCluster
+#    never reaches Ready, and every ProxmoxMachine sits forever in
+#    WaitingForClusterInfrastructure.
+#
+# 2. The proxmox provider must NOT depend on cozystack.kubevirt. The kubevirt
+#    infra provider does, because its VMs run inside this cluster; the Proxmox
+#    hypervisor is external and reached over its API.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: makes the proxmox provider depend on IPAM, the operator and networking
+    documentSelector:
+      path: metadata.name
+      value: cozystack.capi-provider-infra-proxmox
+    asserts:
+      - equal:
+          path: spec.variants[0].name
+          value: default
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.capi-provider-ipam-in-cluster
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.capi-operator
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - notContains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.kubevirt
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: capi-providers-infraprovider-proxmox
+            path: system/capi-providers-infraprovider-proxmox
+            install:
+              privileged: true
+              namespace: cozy-cluster-api
+              releaseName: capi-providers-infraprovider-proxmox
+
+  - it: keeps the IPAM provider generic, with no edge back to proxmox
+    documentSelector:
+      path: metadata.name
+      value: cozystack.capi-provider-ipam-in-cluster
+    asserts:
+      - equal:
+          path: spec.variants[0].name
+          value: default
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.capi-operator
+      - notContains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.capi-provider-infra-proxmox
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: capi-providers-ipam-in-cluster
+            path: system/capi-providers-ipam-in-cluster
+            install:
+              privileged: true
+              namespace: cozy-cluster-api
+              releaseName: capi-providers-ipam-in-cluster

@@ -56,6 +56,22 @@ bundles:
   naas:
     enabled: false
   disabledPackages: []
+  # Packages the platform ships but does not deploy unless named here. Two of
+  # them belong to the Proxmox substrate, where worker VMs run on an external
+  # hypervisor instead of on KubeVirt in this cluster:
+  #
+  #   cozystack.capi-provider-infra-proxmox
+  #     capmox, the Cluster API infrastructure provider for Proxmox VE. Needs a
+  #     capmox-config Secret with a Proxmox API token before it can do anything;
+  #     enabling it pulls in the IPAM provider below automatically.
+  #   cozystack.capi-provider-ipam-in-cluster
+  #     Cluster API in-cluster IPAM. Required by capmox, which assigns static
+  #     addresses and has no DHCP mode. Listed separately because it is a
+  #     generic addon, not a Proxmox one.
+  #
+  # Both are emitted by the iaas bundle. disabledPackages still wins over this
+  # list, except that disabling IPAM while capmox is enabled stops the render
+  # rather than shipping a provider that cannot reconcile.
   enabledPackages: []
 # Network configuration
 networking:
