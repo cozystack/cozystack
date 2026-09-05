@@ -1,0 +1,104 @@
+suite: opensearch upgrade off operator-managed HTTP TLS
+
+# An external release created before this chart stored no tls key at all -- the field
+# did not exist -- so on upgrade the tri-state resolves it from external and the
+# release moves from operator-managed to chart-managed HTTP TLS on its first
+# reconcile. The three halves of that transition have to move together on one values
+# path: the CR must name the cert-manager Secrets in the same render that mints them,
+# and the sentinel that publishes the anchor to the tenant must appear with them. Each
+# half is asserted on its own elsewhere; what is pinned here is that one set of values
+# produces all of them, and that declining TLS produces none.
+#
+# What a render cannot observe is the live transition: whether server-side apply
+# converges when http.generate is removed from a running CR, whether the operator
+# re-mints the admin certificate once the CA subject changes, and whether the nodePool
+# StatefulSet finishes rolling when the mount plan moves from one whole-secret volume
+# to three subPath mounts. Those need a cluster.
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+templates:
+  - templates/opensearch.yaml
+  - templates/certmanager.yaml
+  - templates/tenant-projection.yaml
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+tests:
+  - it: moves an existing external release onto the chart-managed chain
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      # The CR stops asking the operator to generate and names both Secrets.
+      - notExists:
+          path: spec.security.tls.http.generate
+        template: templates/opensearch.yaml
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.http.secret.name
+          value: os-test-http-server
+        template: templates/opensearch.yaml
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.http.caSecret.name
+          value: os-test.http-ca
+        template: templates/opensearch.yaml
+        documentIndex: 0
+      # The same values mint exactly those two Secrets.
+      - hasDocuments:
+          count: 4
+        template: templates/certmanager.yaml
+      - equal:
+          path: spec.secretName
+          value: os-test.http-ca
+        template: templates/certmanager.yaml
+        documentIndex: 1
+      - equal:
+          path: spec.secretName
+          value: os-test-http-server
+        template: templates/certmanager.yaml
+        documentIndex: 3
+      # And the tenant gains the anchor for the CA the listener moved to.
+      - hasDocuments:
+          count: 1
+        template: templates/tenant-projection.yaml
+      - equal:
+          path: spec.projections[0].sourceSecretName
+          value: os-test.http-ca
+        template: templates/tenant-projection.yaml
+        documentIndex: 0
+
+  - it: keeps an external release on the operator listener when TLS is declined
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    asserts:
+      - equal:
+          path: spec.security.tls.http.generate
+          value: true
+        template: templates/opensearch.yaml
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.secret
+        template: templates/opensearch.yaml
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.caSecret
+        template: templates/opensearch.yaml
+        documentIndex: 0
+      - hasDocuments:
+          count: 0
+        template: templates/certmanager.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/tenant-projection.yaml

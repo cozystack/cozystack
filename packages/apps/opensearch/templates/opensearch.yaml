@@ -3,6 +3,12 @@
 {{- if eq $topologyMode "hard" }}
 {{- $whenUnsatisfiable = "DoNotSchedule" }}
 {{- end }}
+{{- /*
+Transport mTLS is always operator-managed and is not affected by tls.enabled.
+*/}}
+{{- $tlsEnabled := (include "opensearch.tls.enabled" .) | eq "true" -}}
+{{- /* Renders unconditionally, so the guard is evaluated on the paths where neither certmanager.yaml nor external-svc.yaml renders anything. No reachable bound is unique to those paths today; this invocation is what keeps the check unconditional if one is added. */ -}}
+{{- include "opensearch.validateReleaseName" . -}}
 ---
 apiVersion: opensearch.opster.io/v1
 kind: OpenSearchCluster
@@ -26,7 +32,26 @@ spec:
         generate: true
         perNode: true
       http:
+        {{- if $tlsEnabled }}
+        secret:
+          name: {{ .Release.Name }}-http-server
+        {{- /*
+        Feed the cert-manager HTTP CA to the operator so it (a) signs the admin
+        certificate with this CA and (b) sets the HTTP listener trust anchor to it.
+        That puts one CA under both the server cert securityadmin validates and the
+        admin cert it presents; users and roles apply once the operator's DNS base
+        matches the cluster domain, which packages/system/opensearch-operator does
+        not yet set.
+
+        The dot before http-ca is load-bearing: hyphenated, this is also the name the
+        operator composes for its own transport CA on the sibling release one -http
+        longer. templates/certmanager.yaml carries the mechanism.
+        */}}
+        caSecret:
+          name: {{ .Release.Name }}.http-ca
+        {{- else }}
         generate: true
+        {{- end }}
     config:
       securityConfigSecret:
         name: {{ .Release.Name }}-security-config
@@ -39,7 +64,16 @@ spec:
     replicas: {{ .Values.dashboards.replicas | default 1 }}
     tls:
       enable: true
+      {{- if $tlsEnabled }}
+      {{- /*
+      Dashboards gets its own certificate, not the API one: sharing a key would let
+      a compromised Dashboards impersonate the OpenSearch API endpoint.
+      */}}
+      secret:
+        name: {{ .Release.Name }}-dashboards-server
+      {{- else }}
       generate: true
+      {{- end }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list (.Values.dashboards.resourcesPreset | default "c1.small") .Values.dashboards.resources $) | nindent 6 }}
   {{- end }}
   nodePools:
