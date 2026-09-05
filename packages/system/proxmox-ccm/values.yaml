@@ -30,4 +30,14 @@ proxmox-cloud-controller-manager:
     - cloud-node-lifecycle
 
   config:
+    features:
+      # capmox mode. Not cosmetic: it selects the providerID this controller
+      # writes onto a Node. The default emits proxmox://<region>/<vmid>, while
+      # capmox stamps proxmox://<SMBIOS UUID> on the ProxmoxMachine — and CAPI
+      # pairs a Machine with its Node by matching that field exactly. Left at
+      # the default the two never match, so the Machine gets no nodeRef, stops
+      # at Provisioned, and its MachineDeployment reports ScalingUp forever
+      # while the tenant cluster itself runs perfectly well. The CSI chart
+      # spells the same mode `proxmox`; this one spells it `capmox`.
+      provider: capmox
     clusters: []
