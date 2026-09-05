@@ -32,6 +32,17 @@ talos:
 # `allowRemoteVolumeAccess: "false"`); the install docs say so beside the
 # examples.
 #
+# What it REQUIRES: talos.enabled must stay true. Removing the sidecar is not the
+# whole job — the satellite DaemonSet also carries two DRBD-only initContainers
+# that piraeus-operator contributes unconditionally (drbd-module-loader, which
+# fails outright when the module is absent, and drbd-shutdown-guard), and the
+# only configuration that deletes them is the Talos one. On generic Linux the
+# satellite would therefore still never reach Ready, so the chart refuses the
+# combination at render time rather than shipping a DaemonSet that cannot come
+# up. A DRBD-less substrate has to be Talos today; making generic Linux work
+# means moving those two deletions out from under talos.enabled, tracked in
+# cozystack/cozystack#4092.
+#
 # Leaving it true on a DRBD-capable node is always correct; this only ever needs
 # disabling where DRBD genuinely cannot work.
 drbd:
