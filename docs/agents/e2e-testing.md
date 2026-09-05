@@ -175,7 +175,7 @@ The suite is pinned to Chainsaw **v0.2.15** (the latest release as of May 2026);
 4. No test-level `EXIT`/`RETURN` trap — rely on Chainsaw cleanup; a self-contained trap is allowed inside a single `script` step (port-forward / temp dir), and inside an explicit subshell within a BATS `@test`, where it does not displace the runner's own handler. A BATS file that still carries test-level traps declares the count itself in `# EXIT-TRAP DEBT: N`; do not ask for one to be removed without checking that line, because the count is exact in both directions.
 5. Controller-created artifacts the test cannot reclaim are pruned explicitly; nested tenants delete child → parent with a wait-for-deletion between.
 6. Standard HR-Ready assert timeout is **5–6m**; longer waits (harbor 10m, NFS 10m, VM image pulls, platform-wide install 15m) are justified in-line.
-7. Failure path attaches scoped diagnostics via a `catch:` block, never a silent pass. The node-join carve-out in §1 does not bend this: that suite still fails and still runs its catch, and only the lane's verdict changes.
+7. Failure path attaches scoped diagnostics via a `catch:` block, never a silent pass. The node-join deadline is no exception, and no longer has one: with the soft-red marker gone it fails its suite like any other deadline and its diagnostics run from the same `catch:`.
 8. If it touches parent-HR behavior, add the `status.history` remediation guard (`hack/e2e-chainsaw/_lib/remediation-guard.sh`).
 
 ## The container lane: what the srv nodes are, and what that costs
