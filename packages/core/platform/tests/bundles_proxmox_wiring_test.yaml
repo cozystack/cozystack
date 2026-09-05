@@ -1,0 +1,123 @@
+suite: bundles.iaas proxmox substrate wiring
+# capmox is opt-in where the KubeVirt infra provider is not: it drives a
+# hypervisor outside this cluster and does nothing without a Proxmox API token.
+# What is pinned here is that opting in is enough — the IPAM provider it cannot
+# work without comes along — and that opting in halfway stops the render instead
+# of shipping a provider that silently reconciles nothing.
+templates:
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: ships neither package by default
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-infra-proxmox
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-ipam-in-cluster
+        not: true
+      # The KubeVirt provider stays unconditional — this wiring must not have
+      # made the default substrate opt-in by accident.
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-infra-kubevirt
+          any: true
+
+  - it: pulls in the IPAM provider when capmox is enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.capi-provider-infra-proxmox
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-infra-proxmox
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-ipam-in-cluster
+          any: true
+
+  - it: emits the IPAM provider on its own, without dragging capmox in
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.capi-provider-ipam-in-cluster
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-ipam-in-cluster
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-infra-proxmox
+        not: true
+
+  - it: emits neither when capmox is enabled and disabled at once
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.capi-provider-infra-proxmox
+        disabledPackages:
+          - cozystack.capi-provider-infra-proxmox
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-infra-proxmox
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-ipam-in-cluster
+        not: true
+
+  - it: refuses to ship capmox with its IPAM provider disabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.capi-provider-infra-proxmox
+        disabledPackages:
+          - cozystack.capi-provider-ipam-in-cluster
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozystack.capi-provider-infra-proxmox requires cozystack.capi-provider-ipam-in-cluster, which is listed in bundles.disabledPackages: capmox allocates worker addresses from an InClusterIPPool and has no DHCP mode, so without the IPAM provider no ProxmoxCluster ever becomes Ready"
