@@ -118,6 +118,60 @@ helmrelease_snapshot() {
     }
 }
 
+@test "a Ready but short release set keeps the gate closed" {
+    # The minimum-count half of the gate is what replaced the `wc -l` existence
+    # backstop removed from hack/e2e-install-cozystack.bats, and it is the only
+    # thing separating "everything is Ready" from "almost nothing got created":
+    # an install that produced three HelmReleases and stopped has every one of
+    # them Ready. Every other case here passes 11 or 12 items against a minimum
+    # of 11, so without this one the condition can be deleted outright and the
+    # suite stays green.
+    . hack/e2e-wait-helmreleases.sh
+    clock=$(mktemp)
+    printf '0\n' > "$clock"
+    date() { sed -n '1p' "$clock"; }
+    sleep() {
+        now=$(sed -n '1p' "$clock")
+        printf '%s\n' "$(( now + $1 ))" > "$clock"
+    }
+    kubectl() { helmrelease_snapshot 3; }
+
+    if cozy_wait_all_helmreleases_ready 30 11 4 2 >/dev/null 2>&1; then
+        echo "the gate opened on 3 Ready HelmReleases against a minimum of 11" >&2
+        exit 1
+    fi
+}
+
+@test "a read slower than the poll interval is charged against the deadline" {
+    # `now` is sampled after the list read, not before it. Sampled before, a read
+    # that costs more than the poll interval is priced at zero and the loop buys
+    # another full iteration past the deadline -- so the ceiling the caller asked
+    # for is not one. Counted in kubectl calls: one snapshot plus the final
+    # diagnostic read is the whole run; a third call means a second poll happened
+    # after the deadline had already passed.
+    . hack/e2e-wait-helmreleases.sh
+    clock=$(mktemp)
+    calls=$(mktemp)
+    printf '0\n' > "$clock"
+    date() { sed -n '1p' "$clock"; }
+    sleep() {
+        now=$(sed -n '1p' "$clock")
+        printf '%s\n' "$(( now + $1 ))" > "$clock"
+    }
+    kubectl() {
+        printf 'call\n' >> "$calls"
+        now=$(sed -n '1p' "$clock")
+        printf '%s\n' "$(( now + 40 ))" > "$clock"
+        helmrelease_snapshot 11 1
+    }
+
+    cozy_wait_all_helmreleases_ready 30 11 4 2 >/dev/null 2>&1 || true
+    if [ "$(wc -l < "$calls")" -ne 2 ]; then
+        echo "expected one snapshot read and one diagnostic read, got $(wc -l < "$calls")" >&2
+        exit 1
+    fi
+}
+
 @test "install suite has one unmasked HelmRelease gate" {
     [ "$(grep -c 'cozy_wait_all_helmreleases_ready 900 11 5 2' hack/e2e-install-cozystack.bats)" -eq 1 ]
     if grep -q 'kubectl wait hr --all -A.*|| true' hack/e2e-install-cozystack.bats; then
