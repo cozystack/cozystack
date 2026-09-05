@@ -1,0 +1,83 @@
+suite: database-autoscaling alert rules
+templates:
+  - templates/alerts.yaml
+release:
+  name: keda
+  namespace: cozy-keda
+tests:
+  - it: renders a PrometheusRule with the database-autoscaling alerts by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PrometheusRule
+      - equal:
+          path: spec.groups[0].name
+          value: database-autoscaling.rules
+      # stuck scale-up (quota / unschedulable / unbindable PVC): desired > current
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerScaleStuck
+          any: true
+      # at the ceiling: desired >= maxReplicas (NOT the ScalingLimited condition, which is
+      # also true at the floor for an idle cluster and would make this fire on quiet DBs)
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerAtMax
+          any: true
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: kube_horizontalpodautoscaler_spec_max_replicas
+      # must NOT key on ScalingLimited (that regressed to firing at the floor)
+      - notMatchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: ScalingLimited
+      # KEDA cannot read the metric (vmselect down / bad query): scaler errors
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerScalerErrors
+          any: true
+      # Guard the metric name: KEDA 2.20 renamed keda_scaler_errors_total away;
+      # the per-ScaledObject error counter is keda_scaled_object_errors_total
+      # (verified on a live 2.20.2 operator). A regression here makes the alert
+      # silently never fire.
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: keda_scaled_object_errors_total
+      # operator-down alert covers the "ScaledObject never became an HPA" gap
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerKedaOperatorDown
+          any: true
+      - matchRegex:
+          path: spec.groups[0].rules[3].expr
+          pattern: absent\(keda_build_info\)
+      # ...gated on keda-hpa-* existence so it cannot false-fire in a tenant vmselect that
+      # never scrapes keda_build_info (own-monitoring tenants); fires only where KEDA HPAs
+      # exist. A bare absent() would alert forever in every such tenant.
+      - matchRegex:
+          path: spec.groups[0].rules[3].expr
+          pattern: count\(kube_horizontalpodautoscaler_status_current_replicas\{.*keda-hpa
+      # ScaleStuck must intersect with a Pending pod so a healthy long basebackup
+      # (Running pod, desired > current for >15m) does not false-fire
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: kube_pod_status_phase\{phase="Pending"\}
+      # ...and that Pending term is scoped to CNPG pods (label_cnpg_io_cluster) so an
+      # unrelated Pending pod in the tenant namespace cannot trip the alert
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: kube_pod_labels\{label_cnpg_io_cluster!=
+
+  - it: can be disabled
+    set:
+      databaseAutoscaling:
+        alerts:
+          enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

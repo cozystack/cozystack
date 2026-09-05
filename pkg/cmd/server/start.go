@@ -315,6 +315,17 @@ func (o *CozyServerOptions) Complete() error {
 			)
 		}
 		release.HelmInstallDisableWait = disableWait
+
+		serverSideApply, err := config.ParseHelmServerSideApplyAnnotation(
+			crd.Annotations[config.HelmServerSideApplyAnnotation],
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"ApplicationDefinition %q has invalid %s annotation: %w",
+				crd.Name, config.HelmServerSideApplyAnnotation, err,
+			)
+		}
+		release.HelmServerSideApply = serverSideApply
 		resource := config.Resource{
 			Application: config.ApplicationConfig{
 				Kind:          crd.Spec.Application.Kind,

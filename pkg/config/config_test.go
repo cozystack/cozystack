@@ -272,3 +272,50 @@ func TestParseHelmInstallDisableWaitAnnotation(t *testing.T) {
 		})
 	}
 }
+
+func TestParseHelmServerSideApplyAnnotation(t *testing.T) {
+	tru := true
+	fls := false
+	cases := []struct {
+		name     string
+		input    string
+		want     *bool
+		wantErr  bool
+		errMatch string
+	}{
+		{name: "empty leaves helm-controller default", input: "", want: nil},
+		{name: "false forces client-side", input: "false", want: &fls},
+		{name: "disabled forces client-side", input: "disabled", want: &fls},
+		{name: "true forces server-side", input: "true", want: &tru},
+		{name: "enabled forces server-side", input: "enabled", want: &tru},
+		{name: "mixed-case accepted", input: "  Disabled  ", want: &fls},
+		{name: "auto rejected (only true/false accepted here)", input: "auto", wantErr: true, errMatch: `must be`},
+		{name: "garbage rejected", input: "abc", wantErr: true, errMatch: `must be`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseHelmServerSideApplyAnnotation(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %v", got)
+				}
+				if tc.errMatch != "" && !strings.Contains(err.Error(), tc.errMatch) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.errMatch)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			switch {
+			case tc.want == nil && got != nil:
+				t.Errorf("got %v, want nil", *got)
+			case tc.want != nil && got == nil:
+				t.Errorf("got nil, want %v", *tc.want)
+			case tc.want != nil && got != nil && *got != *tc.want:
+				t.Errorf("got %v, want %v", *got, *tc.want)
+			}
+		})
+	}
+}

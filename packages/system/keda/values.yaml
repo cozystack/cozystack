@@ -1,0 +1,79 @@
+# cozystack-owned autoscaling observability, rendered by this umbrella chart's
+# own templates (templates/alerts.yaml) — NOT passed to the vendored KEDA subchart.
+# The Grafana dashboard is NOT shipped from here: cozystack provisions dashboards
+# via grafana-operator from the grafana-dashboards image, so it lives at
+# dashboards/db/database-autoscaling.json and is registered in
+# packages/system/monitoring/dashboards.list like every other db/* dashboard.
+databaseAutoscaling:
+  alerts:
+    enabled: true
+
+keda:
+  # Keep the KEDA CRDs on package uninstall. They render as ordinary templates (not
+  # under Helm's protected crds/ dir), so without this an admin who removes the keda
+  # package would delete the ScaledObject CRD and cascade-delete EVERY tenant's
+  # ScaledObject, wedging every autoscaled database at its next reconcile. resource-policy
+  # keep orphans the CRDs instead; a deliberate CRD cleanup is then a manual step.
+  crds:
+    additionalAnnotations:
+      helm.sh/resource-policy: keep
+  # Least-privilege the cluster-wide operator RBAC. Upstream defaults grant the
+  # operator get/list/patch/update/watch on `*/scale` across ALL apiGroups (from the
+  # default scaledRefKinds [{apiGroup: "*", kind: "*"}]) plus cluster-wide
+  # secrets:[list,watch]. cozystack's only ScaledObject target is the CNPG Cluster and
+  # no cozystack ScaledObject uses a TriggerAuthentication, so narrow both:
+  #   - scaledRefKinds -> only clusters.postgresql.cnpg.io/scale (enabledCustomScaledRefKinds
+  #     is already true upstream). Add engines here as MariaDB/Redis/Mongo autoscaling lands.
+  #   - restrict.secret -> operator can read Secrets only in its own namespace, dropping the
+  #     cluster-wide secrets:[list,watch] that could stream every tenant's DB creds/TLS keys.
+  rbac:
+    scaledRefKinds:
+      - apiGroup: postgresql.cnpg.io
+        kind: clusters
+  permissions:
+    operator:
+      restrict:
+        secret: true
+  # NOTE (image digests): the three KEDA images render tag-only
+  # (kedacore/keda{,-metrics-apiserver,-admission-webhooks}:<appVersion>) — the vendored
+  # chart's image helper is `repository:tag` with no digest field, so a @sha256 pin cannot
+  # be set from these shim values without patching the subchart. Version is pinned via the
+  # chart appVersion (2.20.2) + the make-update lockstep assert; a digest pin is a
+  # follow-up that needs an upstream chart change (Renovate's helm-values manager is off
+  # repo-wide, so this is a supply-chain pin, not an automation gap).
+  # Cozystack's cluster domain, not the upstream chart default "cluster.local".
+  # KEDA's metrics-apiserver dials the operator's metrics gRPC service at
+  # keda-operator.<ns>.svc.<clusterDomain>:9666 and the operator mints that
+  # service's serving-cert SANs from the same domain; a wrong domain makes the
+  # external-metrics path NXDOMAIN and every HPA reports FailedGetExternalMetric.
+  # This literal is only the fallback default: on a real platform install
+  # core/platform injects the authoritative networking.clusterDomain into this key
+  # via the shared cozystack-values Secret (see apps.yaml), so a cluster with a
+  # non-default domain works without editing this file. cozy.local matches the
+  # platform default, so a standalone `helm template`/unittest still renders correctly.
+  clusterDomain: cozy.local
+  # Raise the operator's client-go throttle above the upstream 20 QPS / 30 burst.
+  # The operator polls every ScaledObject's /scale subresource on the scale loop;
+  # at the default QPS those polls queue in the client rate limiter ahead of the
+  # leader-election lease renewal, which then misses its deadline and the manager
+  # exits with "leader election lost" (observed crash-looping the single-replica
+  # operator on dev9). A higher ceiling keeps the renewal call from starving.
+  extraArgs:
+    keda:
+      kube-api-qps: 50
+      kube-api-burst: 100
+  # Cozystack ships a Prometheus (VictoriaMetrics) stack by default, so surface
+  # KEDA's operator, metrics-server and webhook metrics through ServiceMonitors.
+  prometheus:
+    operator:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+    metricServer:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+    webhooks:
+      enabled: true
+      serviceMonitor:
+        enabled: true

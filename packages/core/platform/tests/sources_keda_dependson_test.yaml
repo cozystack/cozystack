@@ -1,0 +1,30 @@
+suite: keda PackageSource dependencies
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: keda PackageSource installs into cozy-keda and depends on networking + prometheus-operator-crds
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keda
+    asserts:
+      - equal:
+          path: kind
+          value: PackageSource
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.prometheus-operator-crds
+      - equal:
+          path: spec.variants[0].components[0].name
+          value: keda
+      - equal:
+          path: spec.variants[0].components[0].path
+          value: system/keda
+      - equal:
+          path: spec.variants[0].components[0].install.namespace
+          value: cozy-keda

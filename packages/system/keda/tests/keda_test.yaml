@@ -1,0 +1,96 @@
+suite: keda package renders the external-metrics APIService and cozystack ServiceMonitors
+release:
+  name: keda
+  namespace: cozy-keda
+tests:
+  # The whole database-autoscaling design rests on KEDA claiming the cluster-wide
+  # external.metrics.k8s.io APIService. Guard that the vendored chart still emits it.
+  - it: registers the v1beta1.external.metrics.k8s.io APIService
+    templates:
+      - charts/keda/templates/metrics-server/apiservice.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: APIService
+      - equal:
+          path: metadata.name
+          value: v1beta1.external.metrics.k8s.io
+      - equal:
+          path: spec.group
+          value: external.metrics.k8s.io
+
+  # The shim turns ServiceMonitors on; guard the override survives a re-vendor.
+  - it: emits the metrics-server ServiceMonitor enabled by the cozystack shim
+    templates:
+      - charts/keda/templates/metrics-server/servicemonitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ServiceMonitor
+
+  # cozystack runs on the cozy.local cluster domain, not the upstream default
+  # cluster.local. The metrics-apiserver dials the operator's metrics gRPC
+  # service at keda-operator.<ns>.svc.<clusterDomain>:9666, so an unset override
+  # resolves to NXDOMAIN and every HPA hangs on FailedGetExternalMetric. Guard the
+  # shim's clusterDomain so a re-vendor cannot silently drop it.
+  - it: dials the operator metrics gRPC service on the cozy.local cluster domain
+    templates:
+      - charts/keda/templates/metrics-server/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-service-address=keda-operator.cozy-keda.svc.cozy.local:9666
+
+  # A single-replica operator at the upstream 20 QPS / 30 burst loses its leader
+  # lease under scale-subresource polling (client rate limiter starves the renewal)
+  # and crash-loops. Guard the raised throttle the shim sets via extraArgs.
+  - it: raises the operator client-go throttle above the upstream default
+    templates:
+      - charts/keda/templates/manager/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kube-api-qps=50
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kube-api-burst=100
+
+  # An admin removing the keda package must not cascade-delete every tenant's
+  # ScaledObject: the CRDs render as ordinary templates (not under the protected
+  # crds/ dir), so the shim stamps resource-policy: keep to orphan them on uninstall.
+  - it: keeps the KEDA CRDs on package uninstall
+    templates:
+      - charts/keda/templates/crds/crd-scaledobjects.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  # Least-privilege: the shim narrows scaledRefKinds to CNPG clusters and restricts
+  # secret access, so the operator ClusterRole must NOT carry the upstream wildcard
+  # */scale nor cluster-wide secrets:[list,watch] (which would expose every tenant's
+  # DB credentials/TLS keys).
+  - it: narrows the operator ClusterRole to clusters/scale and drops cluster-wide secret access
+    templates:
+      - charts/keda/templates/manager/clusterrole.yaml
+    documentSelector:
+      path: metadata.name
+      value: keda-operator
+    asserts:
+      - contains:
+          path: rules
+          content:
+            resources: ["clusters/scale"]
+          any: true
+      - notContains:
+          path: rules
+          content:
+            resources: ["*/scale"]
+          any: true
+      - notContains:
+          path: rules
+          content:
+            resources: ["secrets"]
+          any: true

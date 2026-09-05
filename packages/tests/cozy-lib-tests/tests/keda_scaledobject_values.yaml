@@ -1,0 +1,14 @@
+render: true
+minReplicaCount: 3
+maxReplicaCount: 6
+serverAddress: http://vmselect-shortterm.tenant-root.svc:8481/select/0/prometheus
+query: 'sum(cnpg_backends_total{state="active"}) + 150'
+threshold: "150"
+paused: false
+behavior:
+  scaleDown:
+    stabilizationWindowSeconds: 1800
+    policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 600

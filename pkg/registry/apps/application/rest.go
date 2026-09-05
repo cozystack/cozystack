@@ -1670,6 +1670,28 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 		helmRelease.Spec.Upgrade.DisableWait = true
 	}
 
+	// Helm apply-strategy override (release.cozystack.io/helm-server-side-apply).
+	// helm-controller v1.5.0 defaults to server-side apply, which force-owns every
+	// field the chart renders and reverts a value a runtime co-writer later sets. A
+	// kind that has such a co-writer — the postgres read-replica autoscaler, where
+	// KEDA's HPA writes the CNPG Cluster's /scale subresource (spec.instances) while
+	// the chart renders a constant seed — sets this false to get client-side apply,
+	// under which helm-controller patches the Cluster (a CRD) from the previous-vs-new
+	// rendered manifest and does not consult live state, so the unchanged constant
+	// render yields no patch and KEDA's live value survives. Left unset, the
+	// helm-controller default applies.
+	if r.releaseConfig.HelmServerSideApply != nil {
+		// Copy into a fresh local rather than aliasing the shared ReleaseConfig pointer
+		// across every emitted HelmRelease (defense-in-depth; matches the maxHistory pattern).
+		ssa := *r.releaseConfig.HelmServerSideApply
+		helmRelease.Spec.Install.ServerSideApply = &ssa
+		if ssa {
+			helmRelease.Spec.Upgrade.ServerSideApply = helmv2.ServerSideApplyEnabled
+		} else {
+			helmRelease.Spec.Upgrade.ServerSideApply = helmv2.ServerSideApplyDisabled
+		}
+	}
+
 	// kstatus readiness (issue #2642): set the wait strategy + CEL health
 	// expressions so the release reports Ready only when the rendered CR is
 	// actually healthy instead of as soon as helm applies it. ResolveWaitStrategy

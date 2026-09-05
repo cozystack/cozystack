@@ -1,0 +1,163 @@
+{{/*
+cozy-lib.keda.scaledObject renders a KEDA ScaledObject that drives an engine
+operator's /scale subresource from a single VictoriaMetrics query.
+
+This is the whole runtime of database read-replica autoscaling in cozystack:
+the app chart renders this object, and stock KEDA queries VictoriaMetrics,
+computes the desired count with an HPA it manages, and writes the engine CR's
+scale subresource. There is no bespoke controller (see the design proposal
+"database-horizontal-autoscaling"). The helper is engine-agnostic: the caller
+supplies the already-computed effective bounds (the synchronous-quorum floor is
+engine-specific and belongs in the chart, not here), the scale target, and the
+metric query.
+
+Invoked with a single dict argument:
+
+  {{ include "cozy-lib.keda.scaledObject" (dict
+       "name"            .Release.Name
+       "namespace"       .Release.Namespace
+       "scaleTargetRef"  (dict "apiVersion" "postgresql.cnpg.io/v1" "kind" "Cluster" "name" .Release.Name)
+       "minReplicaCount" $effectiveMin
+       "maxReplicaCount" $effectiveMax
+       "serverAddress"   $vmselectURL
+       "query"           $promql
+       "threshold"       "150"
+       "behavior"        $hpaBehavior      # optional; HPA behavior block, carried verbatim
+       "paused"          $paused           # true to render paused; a caller pauses for BOTH dry-run AND migration transition, not dry-run alone
+       "labels"          (dict "app.kubernetes.io/instance" .Release.Name)
+  ) }}
+
+Parameters:
+  - name            (required) ScaledObject name. Convention: the release name.
+  - scaleTargetRef  (required) dict with apiVersion, kind, name of the CR to scale.
+  - minReplicaCount (required) effective lower bound (chart computes the quorum floor).
+  - maxReplicaCount (required) effective upper bound; must be >= minReplicaCount.
+  - serverAddress   (required) Prometheus-API URL of the tenant's vmselect.
+  - query           (required) PromQL whose value / threshold is the desired count.
+  - threshold       (required) AverageValue target; desired = ceil(query / threshold).
+  - namespace       (optional) metadata.namespace.
+  - behavior        (optional) HPA behavior block (scale-down pacing etc.), carried verbatim.
+  - paused          (optional) when true, stamps autoscaling.keda.sh/paused-scale-in
+                    AND paused-scale-out =true (dry-run / recommendation mode — KEDA
+                    keeps the HPA and keeps serving its metric but actuates in neither
+                    direction). Deliberately not the full paused=true, which in KEDA
+                    2.20.2 deletes the HPA and blinds the dashboard/alerts. Because both
+                    scaling policies are disabled, the HPA's desiredReplicas is frozen to
+                    the current count; read the recommendation from the served metric
+                    (desired = ceil(metric / threshold)), not from desiredReplicas.
+  - labels          (optional) extra labels, merged onto the mandatory ones.
+  - annotations     (optional) extra annotations, merged under the pause annotations.
+*/}}
+{{- define "cozy-lib.keda.scaledObject" -}}
+{{-   if not (kindIs "map" .) -}}
+{{-     fail "cozy-lib.keda.scaledObject: expected a single dict argument" -}}
+{{-   end -}}
+{{-   $name := default "" .name -}}
+{{-   if eq $name "" -}}
+{{-     fail "cozy-lib.keda.scaledObject: name is required" -}}
+{{-   end -}}
+{{-   $ref := default (dict) .scaleTargetRef -}}
+{{-   if not (kindIs "map" $ref) -}}
+{{-     fail "cozy-lib.keda.scaledObject: scaleTargetRef must be a dict" -}}
+{{-   end -}}
+{{-   if eq (default "" $ref.name) "" -}}
+{{-     fail "cozy-lib.keda.scaledObject: scaleTargetRef.name is required" -}}
+{{-   end -}}
+{{-   if eq (default "" $ref.kind) "" -}}
+{{-     fail "cozy-lib.keda.scaledObject: scaleTargetRef.kind is required" -}}
+{{-   end -}}
+{{-   if eq (default "" $ref.apiVersion) "" -}}
+{{-     fail "cozy-lib.keda.scaledObject: scaleTargetRef.apiVersion is required" -}}
+{{-   end -}}
+{{-   if eq (printf "%v" (default "" .query)) "" -}}
+{{-     fail "cozy-lib.keda.scaledObject: query is required" -}}
+{{-   end -}}
+{{-   if eq (printf "%v" (default "" .threshold)) "" -}}
+{{-     fail "cozy-lib.keda.scaledObject: threshold is required" -}}
+{{-   end -}}
+{{-   if eq (default "" .serverAddress) "" -}}
+{{-     fail "cozy-lib.keda.scaledObject: serverAddress is required" -}}
+{{-   end -}}
+{{- /* Bounds are required NUMBERS. A nil is "invalid"; a non-numeric string like
+       "two" must also fail rather than coerce through `int` to 0 (which would sail
+       past the ordering guard and render a scale-to-zero-capable ScaledObject). */ -}}
+{{-   if not (or (kindIs "int" .minReplicaCount) (kindIs "float64" .minReplicaCount)) -}}
+{{-     fail "cozy-lib.keda.scaledObject: minReplicaCount is required and must be a number" -}}
+{{-   end -}}
+{{-   if not (or (kindIs "int" .maxReplicaCount) (kindIs "float64" .maxReplicaCount)) -}}
+{{-     fail "cozy-lib.keda.scaledObject: maxReplicaCount is required and must be a number" -}}
+{{-   end -}}
+{{-   $min := int .minReplicaCount -}}
+{{-   $max := int .maxReplicaCount -}}
+{{-   if lt $max $min -}}
+{{-     fail "cozy-lib.keda.scaledObject: maxReplicaCount must be >= minReplicaCount" -}}
+{{-   end -}}
+{{-   $labels := merge (dict "app.kubernetes.io/managed-by" "cozystack") (default (dict) .labels) -}}
+{{-   $annotations := default (dict) .annotations -}}
+{{- /* Coerce rather than truthiness-test: a caller passing the string "false"
+       (easy to produce from an include without an `| eq "true"` guard) must NOT
+       pause. Only a real true / "true" pauses. */ -}}
+{{-   if eq (printf "%v" (default false .paused)) "true" -}}
+{{- /* Recommendation / warm-standby pause via the UNIDIRECTIONAL pair, deliberately
+       NOT autoscaling.keda.sh/paused. In KEDA 2.20.2 the full paused annotation runs
+       handlePause -> stopScaleLoop + ensureHPAForScaledObjectIsDeleted, i.e. it DELETES
+       the HPA — which erases the keda-hpa-* series the dashboard and alerts ride on and
+       leaves nothing to observe. Pausing BOTH directions instead keeps KEDA's scale loop
+       running and the HPA in place (verified against v2.20.2 controllers/keda/hpa.go: the
+       pair sets the HPA's ScaleUp AND ScaleDown SelectPolicy to Disabled), so the HPA is
+       retained and KEDA keeps serving/scraping the trigger metric. NOTE: with both
+       directions disabled the k8s HPA normalizes status.desiredReplicas to
+       currentReplicas, so desired does NOT diverge here — the recommendation is read from
+       the served metric (keda_scaler_metrics_value, or the read-load panel: desired =
+       ceil(metric / threshold)), not from the HPA's desiredReplicas. For the migration
+       transition this still makes KEDA genuinely warm: un-pausing hands off without
+       recreating the HPA (the HPA's scaleUp stabilization window still applies to the
+       first move). */ -}}
+{{-     $annotations = merge (dict "autoscaling.keda.sh/paused-scale-in" "true" "autoscaling.keda.sh/paused-scale-out" "true") $annotations -}}
+{{-   end -}}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $name }}
+{{-   with .namespace }}
+  namespace: {{ . }}
+{{-   end }}
+  labels: {{- toYaml $labels | nindent 4 }}
+{{-   if $annotations }}
+  annotations: {{- toYaml $annotations | nindent 4 }}
+{{-   end }}
+spec:
+  scaleTargetRef:
+    apiVersion: {{ $ref.apiVersion }}
+    kind: {{ $ref.kind }}
+    name: {{ $ref.name }}
+  minReplicaCount: {{ $min }}
+  maxReplicaCount: {{ $max }}
+{{-   with .behavior }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior: {{- toYaml . | nindent 8 }}
+{{-   end }}
+  triggers:
+    - type: prometheus
+      {{- /* Explicit, not relying on KEDA's default: the desired-count identity
+             desired = ceil(query / threshold) holds only for an AverageValue
+             external metric (no per-pod divisor). Pinning it keeps a KEDA
+             re-vendor or default change from silently breaking the arithmetic. */}}
+      metricType: AverageValue
+      metadata:
+        serverAddress: {{ .serverAddress | quote }}
+        query: {{ .query | quote }}
+        threshold: {{ .threshold | quote }}
+        {{- /* Fail-safe: KEDA's prometheus scaler defaults ignoreNullValues=true, which
+               turns an EMPTY query result into metric value 0 (not an error) — the HPA
+               would then compute desired 0 and clamp to minReplicaCount, i.e. silently
+               scale a cluster DOWN to the floor when the metrics pipeline is broken. Set
+               it false so an empty result is an error (FailedGetExternalMetric) and the
+               HPA HOLDS the current count instead. Callers must ensure a HEALTHY query
+               never returns empty — e.g. floor the load term to vector(0) when the target
+               workload exists — so only a genuinely broken pipeline (or no series) trips
+               this. This is what makes the "must not read a missing sample as zero"
+               contract actually hold; without it the idle-floor gymnastics are moot. */}}
+        ignoreNullValues: "false"
+{{- end -}}

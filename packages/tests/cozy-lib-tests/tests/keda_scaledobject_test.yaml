@@ -1,0 +1,205 @@
+# ./tests/keda_scaledobject_test.yaml
+suite: keda scaledObject helper
+
+templates:
+  - templates/tests/keda-scaledobject.yaml
+  - templates/tests/keda-scaledobject-nondict.yaml
+  - templates/tests/keda-scaledobject-params.yaml
+  - templates/tests/keda-scaledobject-bounds.yaml
+  - templates/tests/keda-scaledobject-arg.yaml
+
+release:
+  name: postgres-db
+  namespace: tenant-acme
+  revision: 1
+  isUpgrade: false
+
+tests:
+  - it: renders a KEDA ScaledObject with the given target, bounds and prometheus trigger
+    templates:
+      - templates/tests/keda-scaledobject.yaml
+    values:
+      - keda_scaledobject_values.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ScaledObject
+      - equal:
+          path: apiVersion
+          value: keda.sh/v1alpha1
+      - equal:
+          path: metadata.name
+          value: postgres-db
+      - equal:
+          path: metadata.namespace
+          value: tenant-acme
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: postgres-db
+      - equal:
+          path: spec.scaleTargetRef.apiVersion
+          value: postgresql.cnpg.io/v1
+      - equal:
+          path: spec.scaleTargetRef.kind
+          value: Cluster
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: postgres-db
+      - equal:
+          path: spec.minReplicaCount
+          value: 3
+      - equal:
+          path: spec.maxReplicaCount
+          value: 6
+      - equal:
+          path: spec.triggers[0].type
+          value: prometheus
+      # AverageValue is load-bearing: desired = ceil(query / threshold) only holds
+      # for an AverageValue external metric. Pinned explicitly, not left to KEDA's default.
+      - equal:
+          path: spec.triggers[0].metricType
+          value: AverageValue
+      - equal:
+          path: spec.triggers[0].metadata.serverAddress
+          value: http://vmselect-shortterm.tenant-root.svc:8481/select/0/prometheus
+      - equal:
+          path: spec.triggers[0].metadata.query
+          value: 'sum(cnpg_backends_total{state="active"}) + 150'
+      - equal:
+          path: spec.triggers[0].metadata.threshold
+          value: "150"
+      # Fail-safe: ignoreNullValues MUST be "false" so an empty query errors (HPA holds)
+      # instead of KEDA's default of reading empty as 0 (which scales down to the floor).
+      - equal:
+          path: spec.triggers[0].metadata.ignoreNullValues
+          value: "false"
+      # scale-down pacing is carried through verbatim into the HPA behavior
+      - equal:
+          path: spec.advanced.horizontalPodAutoscalerConfig.behavior.scaleDown.policies[0].type
+          value: Pods
+      - equal:
+          path: spec.advanced.horizontalPodAutoscalerConfig.behavior.scaleDown.policies[0].value
+          value: 1
+      # not paused by default (neither the unidirectional pair nor the full pause)
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-in"]
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-out"]
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused"]
+
+  - it: stamps the unidirectional pause pair in dry-run / recommendation mode
+    templates:
+      - templates/tests/keda-scaledobject.yaml
+    values:
+      - keda_scaledobject_values.yaml
+    set:
+      paused: true
+    asserts:
+      # both directions paused → KEDA keeps the HPA and keeps serving the metric
+      # (desired frozen to current), actuates neither
+      - equal:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-in"]
+          value: "true"
+      - equal:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-out"]
+          value: "true"
+      # never the full paused annotation, which in KEDA 2.20.2 deletes the HPA
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused"]
+
+  - it: does not pause when paused is the string "false" (coerced, not truthiness-tested)
+    templates:
+      - templates/tests/keda-scaledobject.yaml
+    values:
+      - keda_scaledobject_values.yaml
+    set:
+      paused: "false"
+    asserts:
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-in"]
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-out"]
+
+  - it: fails closed when the argument is not a dict
+    templates:
+      - templates/tests/keda-scaledobject-nondict.yaml
+    set:
+      nonDict: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.keda.scaledObject: expected a single dict argument"
+
+  - it: fails closed when scaleTargetRef is missing
+    templates:
+      - templates/tests/keda-scaledobject-params.yaml
+    set:
+      useParams: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.keda.scaledObject: scaleTargetRef.name is required"
+
+  - it: fails closed when maxReplicaCount is below minReplicaCount
+    templates:
+      - templates/tests/keda-scaledobject-bounds.yaml
+    set:
+      useBounds: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.keda.scaledObject: maxReplicaCount must be >= minReplicaCount"
+
+
+  # Remaining fail-closed guards (one required field dropped per case via the
+  # keda-scaledobject-arg fixture) so the helper's full rejection contract is
+  # executable-documented, not just sampled.
+  - it: fails closed when name is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: name}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: name is required"}
+  - it: fails closed when scaleTargetRef.kind is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: kind}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: scaleTargetRef.kind is required"}
+  - it: fails closed when scaleTargetRef.apiVersion is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: apiVersion}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: scaleTargetRef.apiVersion is required"}
+  - it: fails closed when query is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: query}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: query is required"}
+  - it: fails closed when threshold is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: threshold}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: threshold is required"}
+  - it: fails closed when serverAddress is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: serverAddress}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: serverAddress is required"}
+  - it: fails closed when minReplicaCount is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: minReplicaCount}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: minReplicaCount is required and must be a number"}
+  - it: fails closed when maxReplicaCount is missing
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {omit: maxReplicaCount}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: maxReplicaCount is required and must be a number"}
+  - it: fails closed when scaleTargetRef is not a dict
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {badRef: true}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: scaleTargetRef must be a dict"}
+  - it: fails closed when a bound is a non-numeric string
+    templates: [templates/tests/keda-scaledobject-arg.yaml]
+    set: {badMin: true}
+    asserts:
+      - failedTemplate: {errorMessage: "cozy-lib.keda.scaledObject: minReplicaCount is required and must be a number"}

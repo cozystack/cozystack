@@ -18,6 +18,10 @@ metadata:
 type: Opaque
 stringData:
   values.yaml: |
+    # keda.clusterDomain: authoritative cluster domain injected into the KEDA subchart
+    # (a subchart value a template cannot derive from _cluster). Rationale: packages/system/keda.
+    keda:
+      clusterDomain: {{ .Values.networking.clusterDomain | quote }}
     _cluster:
       root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}

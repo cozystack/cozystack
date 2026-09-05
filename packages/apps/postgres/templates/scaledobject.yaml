@@ -1,0 +1,53 @@
+{{- if .Values.autoscaling.enabled }}
+{{- /*
+Fail closed when KEDA is not installed. KEDA is an optional platform package and
+is NOT enabled by default, but autoscaling.enabled is a tenant-facing knob, so a
+tenant can turn it on against a cluster where the admin never enabled `keda`.
+Without this guard the ScaledObject renders against an unknown kind and the whole
+database HelmRelease fails with an opaque `no matches for kind "ScaledObject"`.
+We must NOT instead skip rendering: db.yaml already drops the static
+`.spec.instances` under active autoscaling, so a missing ScaledObject would let
+CNPG collapse the cluster to 1 instance. Stop with an actionable message instead.
+*/ -}}
+{{- if not (.Capabilities.APIVersions.Has "keda.sh/v1alpha1") }}
+{{- fail "postgres: autoscaling.enabled is set, but the KEDA platform package is not installed (keda.sh/v1alpha1 is unknown to the cluster). Ask your platform admin to enable the 'keda' package before enabling database autoscaling." }}
+{{- end }}
+{{- /* The HPA divides read load by target; 0 is undefined and negatives invert scaling. */ -}}
+{{- if lt (int .Values.autoscaling.target) 1 }}
+{{- fail "postgres: autoscaling.target must be a positive integer (the desired-replica formula divides the read load by it)." }}
+{{- end }}
+{{- /* Reject a contradictory range rather than silently resolving it. The effective
+       lower bound folds in the quorum floor (maxSyncReplicas+1) and the read floor (2),
+       so if it exceeds maxReplicas the cost ceiling sits below the count the chart is
+       forced to run; effectiveMax would then silently raise the ceiling to that floor —
+       a possibly large, unbounded instance count — with no signal. Fail closed and tell
+       the operator to raise maxReplicas. This covers both minReplicas > maxReplicas and
+       a quorum floor above maxReplicas. */ -}}
+{{- $emin := int (include "postgres.autoscaling.effectiveMin" .) }}
+{{- if gt $emin (int .Values.autoscaling.maxReplicas) }}
+{{- fail (printf "postgres: the effective minimum instance count (%d = max(minReplicas %d, maxSyncReplicas+1 %d, 2)) exceeds autoscaling.maxReplicas (%d); raise maxReplicas to at least the quorum floor." $emin (int .Values.autoscaling.minReplicas) (add (int .Values.quorum.maxSyncReplicas) 1) (int .Values.autoscaling.maxReplicas)) }}
+{{- end }}
+{{- /* The trigger query is served from vmselect in the tenant's monitoring namespace.
+       If it is unset the serverAddress would render as the malformed
+       `vmselect-shortterm..svc:8481`, which surfaces late as a KEDA scaler error
+       rather than a clear failure. The platform always injects it; fail closed here
+       (mirroring the guards above) for a hand-rendered / misconfigured tenant. */ -}}
+{{- if not (include "cozy-lib.ns-monitoring" .) }}
+{{- fail "postgres: autoscaling requires a monitoring namespace to reach vmselect, but none is set (_namespace.monitoring is empty). The platform normally injects it; ensure the tenant has monitoring enabled." }}
+{{- end }}
+{{- include "cozy-lib.keda.scaledObject" (dict
+     "name" .Release.Name
+     "namespace" .Release.Namespace
+     "scaleTargetRef" (dict "apiVersion" "postgresql.cnpg.io/v1" "kind" "Cluster" "name" .Release.Name)
+     "minReplicaCount" (int (include "postgres.autoscaling.effectiveMin" .))
+     "maxReplicaCount" (int (include "postgres.autoscaling.effectiveMax" .))
+     "serverAddress" (include "postgres.autoscaling.serverAddress" .)
+     "query" (include "postgres.autoscaling.query" .)
+     "threshold" (.Values.autoscaling.target | toString)
+     "behavior" (dict
+       "scaleUp" (dict "stabilizationWindowSeconds" 300)
+       "scaleDown" (dict "stabilizationWindowSeconds" 1800 "policies" (list (dict "type" "Pods" "value" 1 "periodSeconds" 600))))
+     "paused" ((include "postgres.autoscaling.paused" .) | eq "true")
+     "labels" (dict "app.kubernetes.io/name" "postgres.apps.cozystack.io" "app.kubernetes.io/instance" .Release.Name)
+) }}
+{{- end }}
