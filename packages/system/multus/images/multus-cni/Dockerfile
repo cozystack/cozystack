@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.26@sha256:079e59808d2d252516e27e3f3a9c003740dee7f75e55aa71528766d52bcfc16a AS build
+FROM --platform=$BUILDPLATFORM golang:1.26@sha256:9d2f36f06329b2a141b9db99ffa32765cf695ee57b813ca29e245e8670bcbfff AS build
 
 ARG VERSION=v4.3.0
 ARG TARGETPLATFORM
@@ -67,7 +67,7 @@ RUN set -eux; \
     tar -xz -C /cni-plugins-licenses -f /tmp/cni-plugins.tgz ./LICENSE; \
     rm -f /tmp/cni-plugins.tgz
 
-FROM debian:stable-slim@sha256:ee12ffb55625b99d62837a72f037d9b2f18fd0c787a89c2b9a4f09666c48776c
+FROM debian:stable-slim@sha256:04634311a8d5fc442b6eb06d792293c4f3e2268652ca7634e00ce8ef5cc0a28a
 LABEL org.opencontainers.image.source=https://github.com/cozystack/cozystack
 COPY --from=build /usr/src/multus-cni/bin /usr/src/multus-cni/bin
 COPY --from=build /usr/src/multus-cni/LICENSE /usr/src/multus-cni/LICENSE

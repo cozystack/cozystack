@@ -387,7 +387,7 @@ jobs:
 
       # The rc's digest-vendored tree (the staging branch the rc build pushed).
       - name: Checkout rc staging branch
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.parse.outputs.rc_branch }}
           fetch-depth: 0
@@ -464,7 +464,7 @@ jobs:
       # actions/checkout rather than by shelling out to the repo's own tooling.
       # Gitignored, so promote's `git add -A` never stages it.
       - name: Checkout release tooling from the dispatch ref
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.ref_name }}
           path: .release-tooling
@@ -683,7 +683,7 @@ jobs:
           owner: cozystack
 
       - name: Checkout website repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: cozystack/website
           ref: main
@@ -851,7 +851,7 @@ jobs:
       # whether or not the changelog step ran, so it cannot rely on the
       # `git remote set-url` that only the conditional commit step performs.
       - name: Checkout stable staging branch
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.promote.outputs.stable_branch }}
           fetch-depth: 0
@@ -869,7 +869,7 @@ jobs:
       # actions/checkout rather than by shelling out to the repo's own tooling.
       # Gitignored, so promote's `git add -A` never stages it.
       - name: Checkout release tooling from the dispatch ref
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.ref_name }}
           path: .release-tooling
