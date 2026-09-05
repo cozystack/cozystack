@@ -82,7 +82,13 @@ spec:
   - name: verify-processes-and-security-context
     try:
     - script:
-        timeout: 5m
+        # Three sequential inner deadlines -- 240s for the process counts, then
+        # 120s for connectionString and 120s for generations.reconciled -- sum to
+        # 480s. Pre-existing overrun, found by applying the same .chainsaw.yaml
+        # rule to the step next door: at 5m the op fired first and took the whole
+        # script out by SIGKILL, so a slow-but-recovering cluster reported
+        # `signal: killed` instead of naming the stage that was still waiting.
+        timeout: 9m
         content: |
           set -eu
           ns="$NAMESPACE"
@@ -131,7 +137,12 @@ spec:
   - name: refresh-and-assert-full-health
     try:
     - script:
-        timeout: 5m
+        # 270s poll deadline + one 25s in-loop read that may start just under it
+        # + one 25s diagnostic read on the failure branch = 320s of inner bounds.
+        # Keep the op above that sum, per .chainsaw.yaml: at 5m Chainsaw SIGKILLs
+        # the script instead, and the diagnostic that the failure branch exists
+        # to print is exactly what gets lost.
+        timeout: 6m
         content: |
           set -eu
           ns="$NAMESPACE"
