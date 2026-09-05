@@ -1,0 +1,58 @@
+suite: blockstor apiserver PKI (blockstor backend)
+
+# The operator's own API client is wired by NAME, from
+# LinstorCluster.spec.apiTLS.clientSecretName, and piraeus-operator does not
+# create that secret in external mode — it only reads it. So the name has to
+# match a Certificate this chart issues from the blockstor CA, and nothing in
+# the cluster tells you when it stops matching: the operator falls back on
+# whatever secret carries that name, validates against the ca.crt in it, and
+# the probe fails at runtime with "certificate signed by unknown authority"
+# while every HelmRelease still reports Ready.
+#
+# That is exactly how the bug shipped. The default name, linstor-client-tls,
+# is a real secret on any cluster switched over from the LINSTOR backend —
+# issued from linstor-api-ca, which cannot verify the blockstor serving cert.
+
+templates:
+  - templates/blockstor-apiserver-tls.yaml
+
+set:
+  backend: blockstor
+
+tests:
+  - it: "issues the client certificate the operator is pointed at, from the blockstor CA"
+    template: templates/blockstor-apiserver-tls.yaml
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.name
+          value: blockstor-apiserver-client
+      # The name cluster.yaml hands the operator. A rename on either side
+      # leaves the operator reading some other secret's CA.
+      - equal:
+          path: spec.secretName
+          value: blockstor-apiserver-client-tls
+      - equal:
+          path: spec.issuerRef.name
+          value: blockstor-api-ca
+      # Without client auth the :3371 listener, which is
+      # RequireAndVerifyClientCert, rejects the operator's connection even
+      # once it trusts the CA.
+      - contains:
+          path: spec.usages
+          content: client auth
+
+  - it: "serves from the same CA the client certificate validates against"
+    template: templates/blockstor-apiserver-tls.yaml
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.name
+          value: blockstor-apiserver-server
+      - equal:
+          path: spec.issuerRef.name
+          value: blockstor-api-ca

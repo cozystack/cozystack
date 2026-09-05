@@ -1,4 +1,12 @@
-{{- if .Values.talos.enabled }}
+# Talos compatibility for the satellite DaemonSet piraeus-operator
+# generates. Deliberately NOT gated on .Values.backend: in external mode
+# (backend: blockstor) there is no in-cluster linstor-controller, but
+# piraeus still creates linstor-satellite.<node> DaemonSets, and on Talos
+# they wedge at Init:0/3 without this patch —
+#   MountVolume.SetUp failed for volume "run-systemd-system":
+#   hostPath type check failed: /run/systemd/system/ is not a directory
+# which then churns linstor-csi-node and blocks every PVC attach, while
+# every HelmRelease still reports Ready.
 apiVersion: piraeus.io/v1
 kind: LinstorSatelliteConfiguration
 metadata:
@@ -42,4 +50,3 @@ spec:
               hostPath:
                 path: /var/etc/lvm/archive
                 type: DirectoryOrCreate
-{{- end }}

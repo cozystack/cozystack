@@ -1,3 +1,4 @@
+{{- if eq .Values.backend "linstor" }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -27,3 +28,4 @@ metadata:
 spec:
   ca:
     secretName: linstor-api-ca
+{{- end }}

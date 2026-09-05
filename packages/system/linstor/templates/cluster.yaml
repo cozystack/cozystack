@@ -1,3 +1,114 @@
+{{- if eq .Values.backend "blockstor" }}
+apiVersion: piraeus.io/v1
+kind: LinstorCluster
+metadata:
+  name: linstorcluster
+  labels:
+    platform.cozystack.io/no-delete: "true"
+spec:
+  #nodeSelector:
+  #  node-role.kubernetes.io/linstor: ""
+  #
+  # External mode: piraeus-operator does NOT run its own in-cluster Java
+  # linstor-controller. Instead linstor-csi talks to the blockstor
+  # apiserver, which serves the LINSTOR-compatible REST API. The
+  # apiserver Service lives in this namespace and exposes ONLY the mTLS
+  # port :3371 (RequireAndVerifyClientCert). The externalController.url
+  # below MUST match the blockstor-apiserver Service DNS and one of the
+  # serving-cert SANs (see blockstor-apiserver-tls.yaml).
+  externalController:
+    url: https://blockstor-apiserver.cozy-linstor.svc:3371
+  # apiTLS.certManager makes the operator issue linstor-csi-{controller,node}-tls
+  # client-cert Secrets from the blockstor-api-ca Issuer (created in
+  # blockstor-apiserver-tls.yaml). The operator then wires
+  # LS_USER_CERTIFICATE / LS_USER_KEY / LS_ROOT_CA onto the CSI pods so
+  # they present a client cert chained to blockstor-api-ca to the
+  # apiserver's RequireAndVerifyClientCert :3371 listener.
+  apiTLS:
+    certManager:
+      name: blockstor-api-ca
+      kind: Issuer
+    # The operator ALSO talks to the API itself, to probe
+    # /v1/controller/version before every LinstorCluster and
+    # LinstorSatellite reconcile, and that client is not one of the ones
+    # certManager provisions here: in external mode piraeus-operator
+    # returns from kustomizeControllerResources before it emits any
+    # controller-side Certificate, so the secret this name points at is
+    # the operator's to find, not to create.
+    #
+    # Its default names linstor-client-tls. On a cluster switched over
+    # from the LINSTOR backend that secret is still there, issued 46 days
+    # earlier from linstor-api-ca, and the operator validates against the
+    # ca.crt it carries — the OLD CA, which cannot verify a serving cert
+    # signed by blockstor-api-ca. On a fresh install the secret is absent
+    # instead. Either way the probe fails, and it fails the same way. The
+    # probe then fails with "certificate signed by unknown authority",
+    # and because it runs first, the reconcile stops there: satellite
+    # DaemonSets freeze at whatever spec they last had, keeping volumes
+    # and mounts the chart no longer renders. Nothing shows until a pod
+    # is recreated, and then that node loses its satellite for good.
+    #
+    # Point it at the client cert this package already issues from the
+    # same CA. Its ca.crt is what the operator validates the apiserver
+    # against; the cert itself satisfies the :3371 listener, which is
+    # RequireAndVerifyClientCert.
+    clientSecretName: blockstor-apiserver-client-tls
+  # Controller-level DRBD properties. piraeus-operator applies these to the
+  # external controller (the blockstor apiserver) over the LINSTOR REST API,
+  # so DRBD tuning is honoured regardless of who serves the API. In external
+  # mode there is no in-cluster linstor-controller Deployment (and thus no
+  # controller podTemplate / plunger sidecar) — blockstor serves the API.
+  properties:
+  {{- if .Values.linstor.autoDiskful.enabled }}
+  - name: DrbdOptions/auto-diskful
+    value: {{ .Values.linstor.autoDiskful.minutes | quote }}
+  - name: DrbdOptions/auto-diskful-allow-cleanup
+    value: {{ .Values.linstor.autoDiskful.allowCleanup | quote }}
+  {{- end }}
+  - name: DrbdOptions/Net/verify-alg
+    value: "crc32c"
+  - name: DrbdOptions/Net/connect-int
+    value: "15"
+  - name: DrbdOptions/Net/ping-int
+    value: "15"
+  - name: DrbdOptions/Net/ping-timeout
+    value: "20"
+  - name: DrbdOptions/Net/timeout
+    value: "100"
+  csiController:
+    podTemplate:
+      spec:
+        initContainers:
+        - name: linstor-wait-api-online
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+        containers:
+        - name: linstor-csi
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+  csiNode:
+    podTemplate:
+      spec:
+        initContainers:
+        - name: linstor-wait-node-online
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+        containers:
+        - name: linstor-csi
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+  patches:
+    - target:
+        kind: Deployment
+        name: linstor-csi-controller
+      patch: |-
+        - op: add
+          path: /metadata/annotations/reloader.stakater.com~1auto
+          value: "true"
+    - target:
+        kind: DaemonSet
+        name: linstor-csi-node
+      patch: |-
+        - op: add
+          path: /metadata/annotations/reloader.stakater.com~1auto
+          value: "true"
+{{- else }}
 apiVersion: piraeus.io/v1
 kind: LinstorCluster
 metadata:
@@ -114,3 +225,4 @@ spec:
         - op: add
           path: /metadata/annotations/reloader.stakater.com~1auto
           value: "true"
+{{- end }}

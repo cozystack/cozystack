@@ -1,3 +1,4 @@
+{{- if eq .Values.backend "linstor" }}
 apiVersion: piraeus.io/v1
 kind: LinstorSatelliteConfiguration
 metadata:
@@ -40,3 +41,4 @@ spec:
         securityContext:
           # real-world installations need some debugging from time to time
           readOnlyRootFilesystem: false
+{{- end }}

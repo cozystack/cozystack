@@ -51,7 +51,8 @@
        the chart default, so the rendered Package states which way it went. */ -}}
 {{- $multusComponents := dict "multus" (dict "values" (dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" (list $ true)) "true"))) -}}
 {{include "cozystack.platform.package" (list "cozystack.multus" "default" $ $multusComponents) }}
-{{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
+{{- $linstorComponents := dict "linstor" (dict "values" (dict "backend" (include "cozystack.platform.storage.backend" $))) -}}
+{{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
 
@@ -137,7 +138,9 @@
 {{- $multusComponents := dict "multus" (dict "values" (dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" (list $ true)) "true"))) -}}
 {{include "cozystack.platform.package" (list "cozystack.multus" "default" $ $multusComponents) }}
 {{- /* Pass talos.enabled: false to linstor for generic Linux */ -}}
-{{- $linstorComponents := dict "linstor" (dict "values" (dict "talos" (dict "enabled" false))) -}}
+{{- $linstorComponents := dict "linstor" (dict "values" (dict
+  "talos" (dict "enabled" false)
+  "backend" (include "cozystack.platform.storage.backend" $))) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}

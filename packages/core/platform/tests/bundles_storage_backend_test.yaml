@@ -1,0 +1,77 @@
+suite: storage backend selection reaches the linstor package
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+
+# The operator picks the storage control plane at install time. The choice has
+# to arrive at the linstor package as a value, because that package renders one
+# backend or the other from it — a choice that stayed in the platform chart
+# would be inert. LINSTOR is the default: every existing cluster runs it, and a
+# silent flip would swap the storage control plane under live data.
+tests:
+  - it: defaults to the linstor backend
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - equal:
+          path: spec.components.linstor.values.backend
+          value: linstor
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor
+
+  - it: passes blockstor through when the operator asks for it
+    set:
+      storage:
+        backend: blockstor
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - equal:
+          path: spec.components.linstor.values.backend
+          value: blockstor
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor
+
+  - it: keeps the generic variant's talos override alongside the backend
+    set:
+      storage:
+        backend: blockstor
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+    asserts:
+      - equal:
+          path: spec.components.linstor.values.backend
+          value: blockstor
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor
+      - equal:
+          path: spec.components.linstor.values.talos.enabled
+          value: false
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor
+
+  # A typo must not quietly deploy the wrong storage control plane.
+  - it: fails the render on an unrecognised backend
+    set:
+      storage:
+        backend: blockstore
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - failedTemplate:
+          errorMessage: 'storage.backend must be "linstor" or "blockstor", got "blockstore"'

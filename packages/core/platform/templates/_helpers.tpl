@@ -120,3 +120,22 @@ cozystack-scheduler (emitted with its own variant in both branches)
        common-packages and has no cilium.io CRD for the controller to watch. */ -}}
 {{include "cozystack.platform.package.default" (list "cozystack.securitygroup-controller" $root) }}
 {{- end }}
+
+{{- /*
+Resolve the storage backend for the linstor package.
+
+Defaults to `linstor`, which is what every existing cluster runs.
+`blockstor` is experimental and must be asked for explicitly. An
+unrecognised value fails the render rather than silently falling back:
+a typo here would otherwise deploy the wrong storage control plane.
+*/ -}}
+{{- define "cozystack.platform.storage.backend" -}}
+{{- $backend := "linstor" -}}
+{{- if .Values.storage -}}
+{{- $backend = default "linstor" .Values.storage.backend -}}
+{{- end -}}
+{{- if not (has $backend (list "linstor" "blockstor")) -}}
+{{- fail (printf "storage.backend must be \"linstor\" or \"blockstor\", got %q" $backend) -}}
+{{- end -}}
+{{- $backend -}}
+{{- end -}}
