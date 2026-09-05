@@ -1,0 +1,59 @@
+suite: RabbitMQ default resources
+
+templates:
+  - templates/rabbitmq.yaml
+
+tests:
+  - it: defaults each RabbitMQ replica to the s1.nano preset
+    release:
+      name: rabbitmq-test
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: 250m
+      - equal:
+          path: spec.resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.resources.requests.cpu
+          value: "0.025"
+      - equal:
+          path: spec.resources.requests.memory
+          value: "536870912"
+
+  - it: preserves t1.nano as an explicit backward-compatible override
+    release:
+      name: rabbitmq-test
+      namespace: tenant-test
+    set:
+      resourcesPreset: t1.nano
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: 250m
+      - equal:
+          path: spec.resources.limits.memory
+          value: 128Mi
+
+  - it: prefers explicit resources over the default preset
+    release:
+      name: rabbitmq-test
+      namespace: tenant-test
+    set:
+      resources:
+        cpu: 700m
+        memory: 2Gi
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: 700m
+      - equal:
+          path: spec.resources.limits.memory
+          value: 2Gi
+      - equal:
+          path: spec.resources.requests.cpu
+          value: "0.07"
+      - equal:
+          path: spec.resources.requests.memory
+          value: "2147483648"
