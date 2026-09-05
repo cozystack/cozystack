@@ -21,9 +21,21 @@ tests:
           content: --strict-topology
 
   # The whole argument list is restated by the patch because `args` has no
-  # patchMergeKey and a strategic merge replaces it. If a piraeus-operator bump
-  # adds an upstream flag, this list silently drops it -- so pin the count as a
-  # tripwire that forces a re-check rather than letting the loss go unnoticed.
+  # patchMergeKey and a strategic merge replaces it, so a piraeus-operator bump
+  # that adds an upstream flag silently drops it here.
+  #
+  # This case does NOT catch that, and it is worth being explicit about why: the
+  # assertion reads the chart's own rendered args, and those do not move when
+  # upstream adds a flag, so the count stays 12 and the suite stays green. What
+  # it catches is an edit to this chart that changes the list without changing
+  # the count with it. Catching the upstream half would mean diffing against the
+  # operator's own defaults, and the tree vendors the piraeus chart but not the
+  # operator resources that carry them, so there is nothing in-tree to diff.
+  # Until there is, the re-check on a bump is a human obligation, stated in
+  # templates/cluster.yaml beside the list.
+  #
+  # The list was last verified complete against piraeus-operator v2.10.2:
+  # eleven upstream flags plus --strict-topology.
   - it: the restated argument list is complete
     template: templates/cluster.yaml
     asserts:

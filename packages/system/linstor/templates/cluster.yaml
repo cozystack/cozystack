@@ -84,14 +84,20 @@ spec:
         - name: linstor-csi
           image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
         {{- if .Values.linstorCSI.strictTopology }}
-        # See values.yaml linstorCSI.strictTopology for what this prevents.
-        #
-        # The full argument list is restated because `args` has no patchMergeKey,
-        # so a strategic merge REPLACES it rather than appending. That makes this
-        # list a drift hazard: re-check it against the operator's defaults on
-        # every piraeus-operator bump, or a newly added upstream flag is silently
-        # dropped. The $(VAR) references are resolved from the container's env by
-        # Kubernetes and are stable across versions.
+        {{- /* A `#` comment in a rendered template is part of the output: it
+               is applied to the live LinstorCluster and read back on every
+               `kubectl get`. Explanations therefore live in a template comment,
+               which is stripped at render, and not in a YAML one.
+
+               See values.yaml linstorCSI.strictTopology for what this prevents.
+               The full argument list is restated because `args` has no
+               patchMergeKey, so a strategic merge REPLACES it rather than
+               appending. That makes this list a drift hazard: re-check it
+               against the operator's defaults on every piraeus-operator bump,
+               or a newly added upstream flag is silently dropped -- nothing in
+               the suite can observe that, see tests/csi-topology_test.yaml. The
+               $(VAR) references are resolved from the container's env by
+               Kubernetes and are stable across versions. */}}
         - name: csi-provisioner
           args:
           - --v=$(VERBOSE)
