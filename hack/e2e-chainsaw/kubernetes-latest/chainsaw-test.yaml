@@ -19,6 +19,13 @@ spec:
     try:
     - script:
         # ~25m Kamaji bringup + worker join + LB/NFS/ouroboros assertions.
+        #
+        # The OIDC lifecycle folded onto this cluster by the 5th argument adds up
+        # to 1m of job wait, a 600s cozy_wait_helmrelease_upgrade and another 1m
+        # of job wait, all on the passing path. This op does not price them, any
+        # more than it prices the bringup's own waits in run_kubernetes_test,
+        # whose ceilings alone already sum past it: it binds only once something
+        # is already hung.
         timeout: 40m
         # Co-locate the tenant crust-gather snapshot (captured by
         # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as
