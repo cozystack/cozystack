@@ -20,8 +20,6 @@ spec:
     - name: testResults
       partitions: 1
       replicas: 2
-      config:
-        min.insync.replicas: 2
     - name: testOrders
       config:
         cleanup.policy: compact
