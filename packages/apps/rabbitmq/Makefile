@@ -7,3 +7,7 @@ generate:
 update:
 	hack/update-versions.sh
 	make generate
+
+.PHONY: test
+test:
+	helm unittest .
