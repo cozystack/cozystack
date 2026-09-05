@@ -1,0 +1,21 @@
+suite: Deployed-version ConfigMap tests
+
+templates:
+  - templates/version.yaml
+
+tests:
+  - it: stamps the release version
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: test-kafka-kafka-deployed-version
+      - equal:
+          path: data.version
+          value: "1"

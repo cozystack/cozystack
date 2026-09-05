@@ -1,9 +1,11 @@
-# Chainsaw port of hack/e2e-apps/kafka.bats ("Create Kafka").
+# Chainsaw port of hack/e2e-apps/kafka.bats ("Create Kafka"), KRaft edition.
 #
-# The final step replaces the BATS check that Strimzi reclaims the ZooKeeper
-# PVCs on delete: instead of a manual kubectl delete, an explicit delete of the
-# Kafka CR followed by `error` ops asserts both PVCs disappear (a regression in
-# the operator's deleteClaim handling would leave them behind).
+# The chart deploys Kafka in KRaft mode (no ZooKeeper): a combined-free layout
+# of separate broker + controller KafkaNodePools. This test asserts the KRaft
+# topology renders and converges (both node pools present, the Strimzi Kafka CR
+# reaches kafkaMetadataState=KRaft) and that no ZooKeeper resources remain.
+# Chainsaw's built-in cleanup deletes the applied Kafka CR and fails the test if
+# the teardown hangs, so no explicit delete step is needed.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -47,69 +49,285 @@ spec:
             (conditions[?type == 'Ready']):
             - status: "True"
 
-  - name: verify-zookeeper
+  - name: verify-kraft
     try:
+    # Fresh pools use short release-hashed names (b-<hash>/c-<hash>), so match by
+    # the cluster label + role rather than a hard-coded name.
     - assert:
         timeout: 2m
         resource:
-          apiVersion: v1
-          kind: PersistentVolumeClaim
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
           metadata:
-            name: data-kafka-test-zookeeper-0
-          status:
-            phase: Bound
+            labels:
+              strimzi.io/cluster: kafka-test
+          spec:
+            roles:
+            - broker
     - assert:
         timeout: 2m
         resource:
-          apiVersion: v1
-          kind: PersistentVolumeClaim
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
           metadata:
-            name: data-kafka-test-zookeeper-1
-          status:
-            phase: Bound
+            labels:
+              strimzi.io/cluster: kafka-test
+          spec:
+            roles:
+            - controller
     - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: Kafka
+          metadata:
+            name: kafka-test
+            annotations:
+              strimzi.io/kraft: enabled
+              strimzi.io/node-pools: enabled
+          status:
+            kafkaMetadataState: KRaft
+    # KRaft mode ships no ZooKeeper: the client Service must never exist.
+    - error:
         resource:
           apiVersion: v1
           kind: Service
           metadata:
             name: kafka-test-zookeeper-client
-          spec:
-            (ports[0].port): 2181
     - assert:
-        resource:
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: kafka-test-zookeeper-nodes
-          spec:
-            (ports[*].port): [2181, 2888, 3888]
-    - assert:
-        timeout: 2m
+        timeout: 3m
         resource:
           apiVersion: v1
           kind: Endpoints
           metadata:
-            name: kafka-test-zookeeper-nodes
+            name: kafka-test-kafka-bootstrap
           (subsets[0].addresses[0].ip != null): true
-
-  - name: verify-pvc-reclaim-on-delete
+---
+# ZK->KRaft in-place migration (the CRITICAL data-adoption path).
+#
+# An existing ZooKeeper cluster must be adopted by a broker KafkaNodePool named
+# exactly "kafka": Strimzi derives broker/PVC names as <cluster>-<pool>-<id>, so
+# only that name reuses the running <cluster>-kafka-N brokers and their PVCs. A
+# wrong name (e.g. <release>-broker) provisions fresh empty brokers and orphans
+# the tenant's data. This test seeds a ZK cluster, drives the same migration the
+# pre-upgrade hook performs, and asserts the original broker PVC survives (same
+# object, never recreated) and the cluster reaches KRaft. This sequence was also
+# validated by hand against a live cluster.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kafka-zk-to-kraft-migration
+spec:
+  # Run in a dedicated namespace, not the shared tenant-test the other app suites
+  # use: this test raw-applies Strimzi resources and a namespace-wide LimitRange
+  # and leaves deleteClaim:false PVCs behind, which would pollute a sibling suite
+  # sharing the namespace. Raw Strimzi needs no tenant labels, so an own namespace
+  # is fine; Chainsaw creates and tears it down.
+  namespace: kafka-migration-e2e
+  catch:
+  - events: {}
+  - podLogs:
+      selector: strimzi.io/cluster=kafka-migz
+      tail: 50
+  steps:
+  - name: seed-zookeeper-cluster
     try:
-    - delete:
-        ref:
-          apiVersion: apps.cozystack.io/v1alpha1
+    # Mirror a real tenant namespace: a LimitRange that defaults every container
+    # to 128Mi. This is what makes resource-less pods OOM — the migration node
+    # pools must set their own resources to survive it (regression guard).
+    - apply:
+        resource:
+          apiVersion: v1
+          kind: LimitRange
+          metadata:
+            name: tenant-defaults
+          spec:
+            limits:
+            - type: Container
+              default:
+                memory: 128Mi
+              defaultRequest:
+                memory: 128Mi
+    - apply:
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
           kind: Kafka
-          name: test
-    - error:
-        timeout: 2m
+          metadata:
+            name: kafka-migz
+            annotations:
+              strimzi.io/node-pools: disabled
+              strimzi.io/kraft: disabled
+          spec:
+            kafka:
+              version: 3.9.0
+              replicas: 1
+              # Explicit resources so the seed survives the LimitRange above,
+              # mirroring a real chart-deployed ZooKeeper cluster.
+              resources:
+                requests:
+                  memory: 1Gi
+                limits:
+                  memory: 1Gi
+              listeners:
+              - name: plain
+                port: 9092
+                type: internal
+                tls: false
+              config:
+                offsets.topic.replication.factor: 1
+                transaction.state.log.replication.factor: 1
+                transaction.state.log.min.isr: 1
+                default.replication.factor: 1
+                min.insync.replicas: 1
+              storage:
+                type: jbod
+                volumes:
+                - id: 0
+                  type: persistent-claim
+                  size: 5Gi
+                  deleteClaim: false
+            zookeeper:
+              replicas: 1
+              resources:
+                requests:
+                  memory: 512Mi
+                limits:
+                  memory: 512Mi
+              storage:
+                type: persistent-claim
+                size: 5Gi
+                deleteClaim: false
+            entityOperator:
+              topicOperator:
+                resources:
+                  requests:
+                    memory: 256Mi
+                  limits:
+                    memory: 512Mi
+              userOperator:
+                resources:
+                  requests:
+                    memory: 256Mi
+                  limits:
+                    memory: 512Mi
+    - assert:
+        timeout: 12m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: Kafka
+          metadata:
+            name: kafka-migz
+          status:
+            kafkaMetadataState: ZooKeeper
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # Baseline: the classic broker PVC that must survive the migration.
+    - assert:
         resource:
           apiVersion: v1
           kind: PersistentVolumeClaim
           metadata:
-            name: data-kafka-test-zookeeper-0
-    - error:
-        timeout: 2m
+            name: data-0-kafka-migz-kafka-0
+          status:
+            phase: Bound
+
+  - name: migrate-to-kraft
+    try:
+    # The adopting broker pool MUST be named "kafka" (mirrors migration-hook.yaml).
+    - apply:
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
+          metadata:
+            name: kafka
+            labels:
+              strimzi.io/cluster: kafka-migz
+          spec:
+            replicas: 1
+            roles:
+            - broker
+            storage:
+              type: jbod
+              volumes:
+              - id: 0
+                type: persistent-claim
+                size: 5Gi
+                deleteClaim: false
+    - apply:
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
+          metadata:
+            name: controller
+            labels:
+              strimzi.io/cluster: kafka-migz
+          spec:
+            replicas: 1
+            roles:
+            - controller
+            storage:
+              type: jbod
+              volumes:
+              - id: 0
+                type: persistent-claim
+                size: 5Gi
+                kraftMetadata: shared
+                deleteClaim: false
+    # Drive the migration exactly as the pre-upgrade hook does: enable node
+    # pools + kraft=migration, wait for KRaftPostMigration, then finalize.
+    - script:
+        timeout: 12m
+        content: |
+          set -eu
+          kubectl -n "$NAMESPACE" annotate kafka.kafka.strimzi.io kafka-migz strimzi.io/node-pools=enabled --overwrite
+          kubectl -n "$NAMESPACE" annotate kafka.kafka.strimzi.io kafka-migz strimzi.io/kraft=migration --overwrite
+          for i in $(seq 1 60); do
+            s=$(kubectl -n "$NAMESPACE" get kafka.kafka.strimzi.io kafka-migz -o jsonpath='{.status.kafkaMetadataState}' 2>/dev/null || echo "")
+            echo "[$i/60] kafkaMetadataState=$s"
+            case "$s" in KRaftPostMigration|PreKRaft|KRaft) break ;; esac
+            sleep 10
+          done
+          kubectl -n "$NAMESPACE" annotate kafka.kafka.strimzi.io kafka-migz strimzi.io/kraft=enabled --overwrite
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: Kafka
+          metadata:
+            name: kafka-migz
+          status:
+            kafkaMetadataState: KRaft
+
+  - name: verify-adoption
+    try:
+    # The original broker PVC is still Bound — adopted in place, not recreated.
+    - assert:
         resource:
           apiVersion: v1
           kind: PersistentVolumeClaim
           metadata:
-            name: data-kafka-test-zookeeper-1
+            name: data-0-kafka-migz-kafka-0
+          status:
+            phase: Bound
+    # A wrong (<release>-broker) pool name would have created this PVC instead.
+    - error:
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-0-kafka-migz-broker-0
+    # The adopted brokers live under a pool named exactly "kafka" (that name is
+    # what preserved the data-0-kafka-migz-kafka-0 PVC above). Asserting the pool
+    # rather than a broker Pod avoids racing the final KRaft roll.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
+          metadata:
+            name: kafka
+            labels:
+              strimzi.io/cluster: kafka-migz
+          spec:
+            roles:
+            - broker

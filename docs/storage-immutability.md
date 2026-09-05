@@ -18,7 +18,7 @@ Every stateful Cozystack application that exposes a `storageClass` parameter dec
 
 The following charts annotate at least one `storageClass` field as immutable:
 
-- `clickhouse`, `foundationdb`, `harbor`, `http-cache`, `kafka` (Kafka + ZooKeeper), `kubernetes`, `kubernetes-nodes`, `mariadb`, `mongodb`, `nats`, `openbao`, `opensearch`, `postgres`, `qdrant`, `rabbitmq`, `redis`, `valkey`, `vm-disk`.
+- `clickhouse`, `foundationdb`, `harbor`, `http-cache`, `kafka` (Kafka broker + KRaft controller), `kubernetes`, `kubernetes-nodes`, `mariadb`, `mongodb`, `nats`, `openbao`, `opensearch`, `postgres`, `qdrant`, `rabbitmq`, `redis`, `valkey`, `vm-disk`.
 
 The `kubernetes-nodes` chart annotates both its per-pool `storageClass` (the worker node system-disk class, defaulted `replicated`) and its `cluster` field immutable. `storageClass` binds the same PVC-template contract as every other chart in the table, so the plain `self == oldSelf` rule applies for the reason in "Why" above. `cluster` is immutable for a different reason: it wires the pool's CAPI objects to one parent cluster `kubernetes-<cluster>`, and repointing a live pool at another cluster would orphan its running worker VMs rather than migrate them.
 
