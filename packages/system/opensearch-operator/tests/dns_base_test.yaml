@@ -1,0 +1,52 @@
+suite: opensearch-operator DNS_BASE follows the platform cluster domain
+
+# The operator builds in-cluster service FQDNs from the DNS_BASE env var — the
+# securityadmin bootstrap job connects to `<svc>.<ns>.svc.<DNS_BASE>` and the
+# OpenSearch Dashboards Deployment points OPENSEARCH_HOSTS at the same suffix.
+# The upstream chart defaults DNS_BASE to cluster.local. Cozystack's cluster
+# domain is configurable (networking.clusterDomain, cozy.local by default), and
+# the platform emits it as `global.clusterDomain` so Helm propagates it into this
+# vendored subchart. DNS_BASE must therefore FOLLOW that value rather than a
+# hardcoded string: pinning a literal would re-break clusters that keep
+# cluster.local (e.g. Cozystack layered on an existing kubeadm/k3s/RKE2), only
+# mirrored. These cases assert the operator tracks the platform domain and falls
+# back to the upstream default when none is set — not that it equals any one
+# domain.
+templates:
+  - charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
+release:
+  name: opensearch-operator
+  namespace: cozy-opensearch-operator
+tests:
+  - it: follows global.clusterDomain when the platform sets it
+    set:
+      global:
+        clusterDomain: example.test
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      # Guard container ordering: kube-rbac-proxy is [0], manager is [1].
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: operator-controller-manager
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DNS_BASE
+            value: example.test
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DNS_BASE
+            value: cluster.local
+  - it: falls back to the upstream default when no platform domain is set
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DNS_BASE
+            value: cluster.local

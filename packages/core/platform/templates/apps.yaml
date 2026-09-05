@@ -18,6 +18,13 @@ metadata:
 type: Opaque
 stringData:
   values.yaml: |
+    global:
+      # Emitted at the top level so Helm propagates it into subcharts via the
+      # reserved `global` key. _cluster (below) is a plain value and reaches only
+      # each package's own templates, so vendored operator subcharts that build
+      # in-cluster FQDNs from it (e.g. opensearch-operator's DNS_BASE) cannot see
+      # it. Keep in sync with _cluster.cluster-domain.
+      clusterDomain: {{ .Values.networking.clusterDomain | quote }}
     _cluster:
       root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}
