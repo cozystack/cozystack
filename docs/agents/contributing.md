@@ -94,7 +94,9 @@ Each item below is decided by the text alone, and each one on its own makes a re
 
 ## PR Title Auto-Labeling
 
-`.github/workflows/pr-labeler.yaml` parses the PR title on `opened`, `edited`, `reopened`, and `synchronize` events and applies labels additively (never removes). The title is expected to follow Conventional Commits — same format as commit messages above.
+`.github/workflows/pr-labeler.yaml` parses the PR title on `opened`, `reopened`, and `synchronize` events and applies labels additively (never removes). The title is expected to follow Conventional Commits — same format as commit messages above.
+
+Editing the title does not re-run it. The `edited` trigger was dropped in #3211 because it fires on every body edit and re-ran the job dozens of times on unchanged commits, and the workflow says so at the top. Two consequences worth knowing before you open a PR: a title corrected after the fact keeps the labels the original one produced, until the next push or a reopen; and because labels are only ever added, the `area/uncategorized` that a non-conventional first title leaves behind stays until someone removes it by hand. Getting the title right in `gh pr create` is cheaper than either.
 
 **Type → `kind/*`:**
 
