@@ -7,6 +7,14 @@ COZY_E2E_NODE_CPUS ?= 8
 COZY_E2E_NODE_MEMORY_MIB ?= 24576
 
 ROOT_DIR = $(dir $(abspath $(firstword $(MAKEFILE_LIST))/../../..))
+# One container lane per host. Unlike SANDBOX_NAME above, these names are not
+# per-checkout, and hack/e2e-compose.yaml's `container_name: srv1..3` and the
+# `data-srvN` zpools are global besides -- so a second checkout on the same host
+# adopts this one's nodes and pools, and its delete-cluster-container destroys
+# them. Not reachable in CI, where the lane already fills the largest runner
+# shape (3 x 8 vCPU / 24 GiB against 32 / 128), and left as a known limit rather
+# than fixed because isolating it properly means renaming the pools, which the
+# LINSTOR storage-pool registration reads.
 COMPOSE_PROJECT ?= cozy-e2e
 COMPOSE_FILE ?= $(ROOT_DIR)hack/e2e-compose.yaml
 ZPOOL_BACKING_DIR ?= /var/lib/cozy-e2e-zpools
