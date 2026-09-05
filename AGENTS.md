@@ -22,9 +22,9 @@ This file provides structured guidance for AI coding assistants and agents worki
   - Read: [`image-refs.md`](./docs/agents/image-refs.md)
   - Action: Read the entire file. Image refs live in three storage shapes and carry three classes of tag; a tool that knows only one shape skips images silently rather than failing. `hack/lib/image-refs.sh` is the enumeration shared by the promote, retag, mirror and candidate-verify tooling — extend it there rather than teaching an individual script a new path. The one exception is `hack/overlay-main-images.sh`, which reads refs but walks the tree itself, so a newly declared file does not reach it; `hack/promote-packages-artifact.sh` sources nothing because it publishes the whole tree and consumes no refs at all — the doc carries both cases
 
-- **Project structure, conventions, code layout** (e.g., "where should I put X", "what's the convention for Y", "how is the project organized")
+- **Go code, Helm charts, build and test commands, project structure** (e.g., "add a field to this CRD", "fix this controller", "add a value to the postgres chart", "regenerate the values schema", "how do I build/test this", "where should I put X", "what's the convention for Y", "how is the project organized")
   - Read: [`overview.md`](./docs/agents/overview.md)
-  - Action: Read relevant sections to understand project structure and conventions
+  - Action: Read the section that matches — `Go Code` (controller-runtime patterns, kubebuilder markers), `Helm Charts` (umbrella pattern, vendored upstream charts), `Values schema generation`, `Build and Development Commands`, `Testing`, `Package Structure`
 
 - **E2E tests and E2E CI** (e.g., "write/fix an e2e test", "stabilize a flaky test", "add a bats test", "change the e2e workflow", "why did e2e fail")
   - Read: [`e2e-testing.md`](./docs/agents/e2e-testing.md)
@@ -42,13 +42,9 @@ This file provides structured guidance for AI coding assistants and agents worki
   - PR titles: a Conventional Commits header (`type(scope): description`, types from [`contributing.md`](./docs/agents/contributing.md)) auto-applies `kind/*` and `area/*` via `.github/workflows/pr-labeler.yaml`. Append `!` (or add a `BREAKING CHANGE:` footer) to apply `kind/breaking-change`
 
 **Important rules:**
-- ✅ **ONLY read the file if the task matches the documented process scope** - do not read files for tasks that don't match their purpose
-- ✅ **ALWAYS read the file FIRST** before starting the task (when applicable)
-- ✅ **Follow instructions EXACTLY** as written in the documentation
-- ✅ **Do NOT skip mandatory steps** (especially in changelog.md)
-- ✅ **Do NOT assume** you know the process - always check the documentation when the task matches
-- ❌ **Do NOT read files** for tasks that are outside their documented scope
-- 📖 **Note**: [`overview.md`](./docs/agents/overview.md) can be useful as a reference to understand project structure and conventions, even when not explicitly required by the task
+- **Match scope, then read first.** Load a process file only when the task genuinely falls in its scope, and load it before starting work — not midway through. Tasks outside a file's scope should not pull it into context.
+- **Follow it exactly.** Do not assume you already know the process, and do not skip steps (`changelog.md` especially). Where the documentation and your instinct disagree, the documentation wins.
+- **[`overview.md`](./docs/agents/overview.md) is the standing reference** for structure and conventions, useful even when no route above points at it.
 
 ## Project Overview
 
