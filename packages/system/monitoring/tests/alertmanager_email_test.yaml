@@ -1,0 +1,275 @@
+suite: Alertmanager email receiver
+templates:
+  - templates/alerta/alerta.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# Baseline `_cluster` / `_namespace` values wired by cozystack-basics
+# at install time. Individual tests override `alerta.alerts.email.*`.
+set:
+  _cluster:
+    root-host: example.org
+  _namespace:
+    host: tenant-root.example.org
+    ingress: tenant-root
+
+# Email delivery is opt-in twice: the receiver only renders when
+# alerta.alerts.email is configured, and even then only alerts labelled
+# notify_email="true" with severity critical|major are routed to it. The
+# explicit alerta route with `continue: true` ahead of the email route keeps
+# Alerta receiving every alert the email route matches, so a broken SMTP path
+# can never swallow an alert from the primary channel.
+tests:
+  - it: renders no email receiver, email routes or secrets mount by default
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "name: email"
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "receiver: email"
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "notify_email"
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        notExists:
+          path: spec.secrets
+
+  - it: renders the email receiver, both routes and the secrets mount when configured
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
+            secretName: "alertmanager-smtp"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:465"\n    auth_username: "mailer@example\.org"\n    auth_password_file: /etc/vm/secrets/alertmanager-smtp/password\n    send_resolved: true'
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: email\n    group_by: \[alertname, cluster\]\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".'
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        equal:
+          path: spec.secrets
+          value:
+            - alertmanager-smtp
+
+  - it: works without SMTP auth when authUsername is omitted
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:25"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:25"\n    send_resolved: true'
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "auth_username"
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "auth_password_file"
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        notExists:
+          path: spec.secrets
+
+  - it: renders custom subject header and html body when set
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            subject: "[{{ .Status }}] {{ .CommonLabels.alertname }}"
+            bodyHtml: "<b>{{ .Status }}</b>"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    headers:\n      Subject: "\[\{\{ \.Status \}\}\] \{\{ \.CommonLabels\.alertname \}\}"'
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: 'html: "<b>\{\{ \.Status \}\}</b>"'
+
+  - it: renders no custom subject or html by default
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "Subject:"
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "html:"
+
+  - it: fails the render when the email block is only partially configured
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when only authUsername is set
+    set:
+      alerta:
+        alerts:
+          email:
+            authUsername: "mailer@example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when only secretName is set
+    set:
+      alerta:
+        alerts:
+          email:
+            secretName: "alertmanager-smtp"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when only subject is set
+    set:
+      alerta:
+        alerts:
+          email:
+            subject: "[{{ .Status }}] {{ .CommonLabels.alertname }}"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when only bodyHtml is set
+    set:
+      alerta:
+        alerts:
+          email:
+            bodyHtml: "<b>{{ .Status }}</b>"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when authUsername is set without secretName
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.secretName is required when authUsername is set"
+
+  - it: fails the render when secretName is set without authUsername
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            secretName: "alertmanager-smtp"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.authUsername is required when secretName is set"
+
+  - it: fails the render when only repeatInterval is set
+    set:
+      alerta:
+        alerts:
+          email:
+            repeatInterval: "6h"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when repeatInterval is not a duration
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "tomorrow"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval must be a duration such as 30s, 5m or 12h, got "tomorrow"'
+
+  - it: quotes a custom repeatInterval so a stray value cannot break out of the config
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "1h30m"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    repeat_interval: "1h30m"\n'
