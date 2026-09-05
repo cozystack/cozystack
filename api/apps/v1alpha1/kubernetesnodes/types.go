@@ -78,6 +78,12 @@ type ConfigSpec struct {
 	// Talos worker image configuration. Keep in sync with the parent cluster's `talos`.
 	// +kubebuilder:default:={}
 	Talos Talos `json:"talos"`
+	// Which infrastructure provider backs this pool's worker VMs. `kubevirt` runs them inside this cluster on KubeVirt, sized by `instanceType` and booted from a Talos disk image CDI streams from the image factory. `proxmox` runs them on an external Proxmox VE cluster through capmox, sized by `resources`, and cloned from a Talos VM template that already exists on the hypervisor. The two substrates take different Talos platform images and different sizing inputs, so switching an existing pool is not a supported in-place change: create a new pool instead. Changing it rolls the pool, because the worker machine template is named by a hash of its content.
+	// +kubebuilder:default:="kubevirt"
+	Substrate string `json:"substrate"`
+	// Proxmox substrate settings.
+	// +kubebuilder:default:={}
+	Proxmox Proxmox `json:"proxmox"`
 	// Optional image overrides for air-gapped or rate-limited registries.
 	// +kubebuilder:default:={}
 	Images Images `json:"images"`
@@ -109,6 +115,34 @@ type Kubelet struct {
 	SystemReservedCpu string `json:"systemReservedCpu,omitempty"`
 	// Memory reserved for host OS. Auto-computed from instanceType if empty.
 	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
+}
+
+type Proxmox struct {
+	// Nameservers written into the worker machineconfig. On kubevirt the workers use the management cluster's CoreDNS, which they reach over the pod network; an off-cluster Proxmox worker cannot, so it needs reachable resolvers of its own. Required when `substrate` is `proxmox`. Keep in sync with the parent kubernetes chart's `proxmox.dnsServers`.
+	// +kubebuilder:default:={}
+	DnsServers []string `json:"dnsServers,omitempty"`
+	// Full clone rather than linked. Default is a linked clone: it costs kilobytes at creation instead of the whole disk, because a ZFS-backed linked clone writes only its own increment (measured: 8K against 10.2G for the same worker full-cloned onto a `sparse 0` pool). The cost is that the clone holds the template's base snapshot, so the template cannot be rotated while any linked clone still references it — which is what the consolidation CronJob resolves 24h after creation. Set true for a pool that must be independent of the template from the first second.
+	// +kubebuilder:default:=false
+	Full bool `json:"full,omitempty"`
+	// NIC configuration.
+	// +kubebuilder:default:={}
+	Network ProxmoxNetwork `json:"network"`
+	// Proxmox storage for the cloned disk. Empty keeps the template's storage.
+	// +kubebuilder:default:=""
+	Storage string `json:"storage,omitempty"`
+	// Tags identifying the Talos VM template to clone. capmox matches a template when its tag set is EQUAL to this list, not when it contains it, so every tag on the template must be listed here — a missing one yields `found 0 VM templates with tags ...` while the tags are plainly present. Required when `substrate` is `proxmox`.
+	// +kubebuilder:default:={}
+	TemplateTags []string `json:"templateTags,omitempty"`
+}
+
+type ProxmoxNetwork struct {
+	// Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox`.
+	// +kubebuilder:default:=""
+	Bridge string `json:"bridge"`
+	// NIC MTU. Omitted when unset.
+	Mtu int `json:"mtu,omitempty"`
+	// L2 VLAN tag. Omitted when unset.
+	Vlan int `json:"vlan,omitempty"`
 }
 
 type Resources struct {

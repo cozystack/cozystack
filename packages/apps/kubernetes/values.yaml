@@ -80,6 +80,55 @@ version: "v1.35"
 host: ""
 
 ##
+## @section Substrate
+
+## @param {string} substrate="kubevirt" - Which infrastructure provider backs this cluster's worker VMs. `kubevirt` runs them inside this cluster; `proxmox` runs them on an external Proxmox VE cluster through capmox. The control plane is Kamaji either way — this selects the infrastructure half only. Must match the `substrate` of every KubernetesNodes pool attached to this cluster: the pools reference this cluster's infrastructure object by kind, and a mismatch leaves their Machines unreconciled. Switching an existing cluster is not supported; create a new one.
+substrate: kubevirt
+
+## @typedef {struct} ProxmoxIPv4 - Address range capmox allocates worker addresses from.
+## @field {[]string} addresses - Ranges or CIDRs, e.g. `["10.0.0.120-10.0.0.170"]`. capmox turns these into an InClusterIPPool, so they must not overlap any DHCP range on the same L2 or two workers will answer to one address.
+## @field {string} gateway - Default gateway for the workers.
+## @field {int} prefix - Netmask prefix length.
+
+## @typedef {struct} ProxmoxStorageClass - A StorageClass backed by a Proxmox storage.
+## @field {string} name - StorageClass name inside the tenant cluster.
+## @field {string} storage - Proxmox storage id the volumes are created on (as it appears in `pvesm status`).
+## @field {string} [fstype] - Filesystem the driver formats volumes with: ext4 or xfs.
+## @field {bool} [ssd] - Mark volumes as SSD-backed, which changes the discard/cache defaults Proxmox applies.
+## @field {string} [reclaimPolicy] - Delete or Retain.
+
+## @typedef {struct} ProxmoxCCM - Proxmox cloud-controller-manager, deployed into the tenant cluster. Not optional on this substrate: the worker kubelet runs with `--cloud-provider=external`, so every node carries the `uninitialized` taint until this controller clears it, and the CSI node plugin needs the topology labels it applies.
+## @field {string} credentialsSecretName - Secret in THIS namespace holding the controller's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. May name the same Secret as `csi.credentialsSecretName`; it is a separate knob so the two can hold separate tokens, since this one only reads VM inventory while the driver attaches and detaches disks.
+
+## @typedef {struct} ProxmoxCSI - Proxmox CSI driver, deployed into the tenant cluster.
+## @field {bool} enabled - Install the driver. Without it a Proxmox-backed tenant has no way to provision PersistentVolumes at all.
+## @field {string} credentialsSecretName - Secret in THIS namespace holding the driver's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. Flux injects them into the tenant release, so the token is never written into a rendered manifest. Distinct from the capmox credentials on purpose: the driver attaches and detaches disks, which is a different blast radius from creating VMs.
+## @field {[]ProxmoxStorageClass} storageClasses - StorageClasses to create in the tenant.
+
+## @typedef {struct} Proxmox - Proxmox substrate settings. Ignored unless `substrate` is `proxmox`.
+## @field {[]string} allowedNodes - Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
+## @field {[]string} dnsServers - Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
+## @field {bool} insecure - Skip verification of the Proxmox API server certificate in the CCM and the CSI driver. Default true because a stock Proxmox VE install serves a self-signed certificate; set false once the hypervisor presents one the tenant can verify.
+## @field {ProxmoxIPv4} ipv4Config - Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
+## @field {ProxmoxCCM} ccm - Proxmox cloud-controller-manager settings.
+## @field {ProxmoxCSI} csi - Proxmox CSI driver settings.
+
+## @param {Proxmox} proxmox - Proxmox substrate settings.
+proxmox:
+  allowedNodes: []
+  dnsServers: []
+  insecure: true
+  ccm:
+    credentialsSecretName: ""
+  csi:
+    enabled: true
+    credentialsSecretName: ""
+    storageClasses: []
+  ipv4Config:
+    addresses: []
+    gateway: ""
+    prefix: 24
+
 ## @section Cluster Addons
 ##
 

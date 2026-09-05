@@ -199,9 +199,19 @@ spec:
             - sh
             - -ec
             - |
-              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for Service ClusterIP, Talos CA, K8s CA, management CoreDNS"
+              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for apiserver Service address, Talos CA, K8s CA, management CoreDNS"
               for i in $(seq 1 120); do
+                {{- /* Which address the workers must resolve the apiserver to.
+                      On kubevirt they are Pods in this cluster and the ClusterIP
+                      works. On proxmox they are VMs off-cluster, for which a
+                      ClusterIP is unroutable — the control-plane release
+                      publishes the Service instead, and its LoadBalancer address
+                      is the one that has to reach the guests. */}}
+                {{- if eq ($.Values.substrate | default "kubevirt") "proxmox" }}
+                SVC_IP=$(kubectl -n "$NS" get svc "$RELEASE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+                {{- else }}
                 SVC_IP=$(kubectl -n "$NS" get svc "$RELEASE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+                {{- end }}
                 TALOS_CA_B64=$(kubectl -n "$NS" get secret "${RELEASE}-talos-ca" -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)
                 K8S_CA_B64=$(kubectl -n "$NS" get secret "${RELEASE}-ca" -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
                 COREDNS_IP=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
@@ -276,7 +286,18 @@ spec:
                           # resolution (kubelet mount syscalls, image
                           # pulls, pods opted out of cluster DNS).
                           nameservers:
+                            {{- /* A kubevirt worker resolves through the management
+                                  cluster's CoreDNS over the pod network. A proxmox
+                                  worker is off-cluster and cannot reach that
+                                  ClusterIP any more than it can reach the
+                                  apiserver's, so it carries its own resolvers. */}}
+                            {{- if eq ($.Values.substrate | default "kubevirt") "proxmox" }}
+                            {{- range $.Values.proxmox.dnsServers }}
+                            - {{ . | quote }}
+                            {{- end }}
+                            {{- else }}
                             - ${COREDNS_IP}
+                            {{- end }}
                           searchDomains:
                             - svc.{{ .mgmtClusterDomain }}
                             - {{ .mgmtClusterDomain }}
@@ -305,6 +326,22 @@ spec:
                         {{- end }}
                         kubelet:
                           image: ghcr.io/siderolabs/kubelet:{{ .kubeletVersion }}
+                          {{- /* Without this the kubelet never applies the
+                                node.cloudprovider.kubernetes.io/uninitialized
+                                taint, the Proxmox cloud-controller-manager
+                                never gets to initialise the Node, and the
+                                topology.kubernetes.io/{region,zone} labels are
+                                never set. The CSI node plugin then exits
+                                fatally on "Failed to get region or zone for
+                                node", so the tenant ends up with a
+                                StorageClass and no way to attach a volume.
+                                The kubevirt path has no cloud provider and
+                                must not carry the flag: it would taint every
+                                worker with nothing to remove the taint. */}}
+                          {{- if eq ($.Values.substrate | default "kubevirt") "proxmox" }}
+                          extraArgs:
+                            cloud-provider: external
+                          {{- end }}
                           extraConfig:
                             systemReserved:
                               cpu: "{{ .systemReservedCpu }}"
