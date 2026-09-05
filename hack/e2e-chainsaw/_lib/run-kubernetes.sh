@@ -1247,11 +1247,16 @@ EOF
   # the management-cluster state is always restored before any assertion exits.
   # The release namespace must be a valid tenant identifier (the chart's
   # dashboard-resourcemap template enforces this), so render under tenant-test.
-  local raw rc
+  #
+  # `|| rc=$?` rather than a bare assignment followed by `rc=$?`: the caller runs
+  # under `set -e`, so a failed render would exit the function on the assignment
+  # itself -- before rc is read and before the restore below puts `replicated`
+  # back, leaving the management cluster with no default StorageClass for every
+  # later suite. That is the opposite of what the restore comment promises.
+  local raw rc=0
   raw=$(timeout 120 helm install scprobe packages/apps/kubernetes \
     --dry-run=server -n tenant-test \
-    -f packages/apps/kubernetes/tests/values/common.yaml -o json 2>/tmp/sc-fallback-render.err)
-  rc=$?
+    -f packages/apps/kubernetes/tests/values/common.yaml -o json 2>/tmp/sc-fallback-render.err) || rc=$?
 
   # Restore management-cluster StorageClasses (inline, unconditional). This MUST
   # run before any assertion `exit 1` below, so no EXIT/RETURN trap is used
