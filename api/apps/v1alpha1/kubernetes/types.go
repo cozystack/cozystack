@@ -275,15 +275,27 @@ type Proxmox struct {
 	// Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
 	// +kubebuilder:default:={}
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
+	// Proxmox cloud-controller-manager settings.
+	// +kubebuilder:default:={}
+	Ccm ProxmoxCCM `json:"ccm"`
 	// Proxmox CSI driver settings.
 	// +kubebuilder:default:={}
 	Csi ProxmoxCSI `json:"csi"`
 	// Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
 	// +kubebuilder:default:={}
 	DnsServers []string `json:"dnsServers,omitempty"`
+	// Skip verification of the Proxmox API server certificate in the CCM and the CSI driver. Default true because a stock Proxmox VE install serves a self-signed certificate; set false once the hypervisor presents one the tenant can verify.
+	// +kubebuilder:default:=true
+	Insecure bool `json:"insecure"`
 	// Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
 	// +kubebuilder:default:={}
 	Ipv4Config ProxmoxIPv4 `json:"ipv4Config"`
+}
+
+type ProxmoxCCM struct {
+	// Secret in THIS namespace holding the controller's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. May name the same Secret as `csi.credentialsSecretName`; it is a separate knob so the two can hold separate tokens, since this one only reads VM inventory while the driver attaches and detaches disks.
+	// +kubebuilder:default:=""
+	CredentialsSecretName string `json:"credentialsSecretName"`
 }
 
 type ProxmoxCSI struct {

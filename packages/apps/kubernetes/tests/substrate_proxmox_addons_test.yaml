@@ -1,0 +1,155 @@
+suite: proxmox substrate tenant addons
+# The two releases a Proxmox-backed tenant cannot run without, and the order
+# between them. The CSI node plugin reads topology.kubernetes.io/region and
+# zone off its own Node and exits fatally when they are absent; those labels
+# come from the cloud-controller-manager; and the CCM only acts on a Node once
+# the kubelet's --cloud-provider=external has tainted it. One chain, asserted
+# from the end that operators see first.
+templates:
+  - templates/helmreleases/ccm-proxmox.yaml
+  - templates/helmreleases/csi-proxmox.yaml
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+set:
+  _namespace:
+    etcd: etcd-test
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  substrate: proxmox
+  proxmox:
+    dnsServers: ["8.8.8.8"]
+    ccm:
+      credentialsSecretName: proxmox-ccm-credentials
+    csi:
+      enabled: true
+      credentialsSecretName: proxmox-csi-credentials
+      storageClasses:
+        - name: proxmox
+          storage: vm-disks1
+          fstype: ext4
+          reclaimPolicy: Delete
+tests:
+  - it: deploys the cloud-controller-manager into the tenant's kube-system
+    template: templates/helmreleases/ccm-proxmox.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HelmRelease
+      - equal:
+          path: metadata.name
+          value: kubernetes-test-ccm
+      - equal:
+          path: spec.targetNamespace
+          value: kube-system
+      - equal:
+          path: spec.kubeConfig.secretRef.name
+          value: kubernetes-test-admin-kubeconfig
+
+  - it: hands the CCM its credentials by reference, never by value
+    template: templates/helmreleases/ccm-proxmox.yaml
+    asserts:
+      - contains:
+          path: spec.valuesFrom
+          content:
+            kind: Secret
+            name: proxmox-ccm-credentials
+            valuesKey: token_secret
+            targetPath: proxmox-cloud-controller-manager.config.clusters[0].token_secret
+      - contains:
+          path: spec.valuesFrom
+          content:
+            kind: Secret
+            name: proxmox-ccm-credentials
+            valuesKey: region
+            targetPath: proxmox-cloud-controller-manager.config.clusters[0].region
+      # Nothing resembling a token may appear in the rendered values.
+      - equal:
+          path: spec.values.proxmox-cloud-controller-manager.config.clusters
+          value:
+            - insecure: true
+
+  # A Proxmox tenant without a CCM is not a tenant with one component missing:
+  # every worker keeps the uninitialized taint, so nothing schedules at all.
+  # Failing the render says that; a silently absent release does not.
+  - it: refuses to render a proxmox cluster with no CCM credentials
+    template: templates/helmreleases/ccm-proxmox.yaml
+    set:
+      proxmox:
+        ccm:
+          credentialsSecretName: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox.ccm.credentialsSecretName is required on the proxmox substrate: without a cloud-controller-manager every worker keeps the uninitialized taint and the cluster schedules nothing"
+
+  - it: leaves the KubeVirt substrate untouched
+    set:
+      substrate: kubevirt
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/helmreleases/ccm-proxmox.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/helmreleases/csi-proxmox.yaml
+
+  - it: orders the CSI driver behind the CCM that labels its nodes
+    template: templates/helmreleases/csi-proxmox.yaml
+    asserts:
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: kubernetes-test-ccm
+            namespace: tenant-test
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: kubernetes-test-cilium
+            namespace: tenant-test
+
+  - it: carries the storage classes and the capmox provider mode
+    template: templates/helmreleases/csi-proxmox.yaml
+    asserts:
+      - equal:
+          path: spec.values.proxmox-csi-plugin.config.features.provider
+          value: proxmox
+      - equal:
+          path: spec.values.proxmox-csi-plugin.storageClass
+          value:
+            - name: proxmox
+              storage: vm-disks1
+              fstype: ext4
+              reclaimPolicy: Delete
+
+  # One knob, both consumers: a hypervisor that presents a verifiable
+  # certificate should not need the driver and the controller flipped apart.
+  - it: propagates a verifiable hypervisor certificate to both releases
+    set:
+      proxmox:
+        insecure: false
+    asserts:
+      - equal:
+          path: spec.values.proxmox-cloud-controller-manager.config.clusters[0].insecure
+          value: false
+        template: templates/helmreleases/ccm-proxmox.yaml
+      - equal:
+          path: spec.values.proxmox-csi-plugin.config.clusters[0].insecure
+          value: false
+        template: templates/helmreleases/csi-proxmox.yaml
+
+  # The CSI driver is genuinely optional — a tenant may bring its own storage —
+  # but the CCM is not, so disabling one must not take the other with it.
+  - it: keeps the CCM when the CSI driver is switched off
+    set:
+      proxmox:
+        csi:
+          enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/helmreleases/csi-proxmox.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/helmreleases/ccm-proxmox.yaml

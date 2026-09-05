@@ -77,14 +77,17 @@ spec:
       config:
         features:
           {{- /* Documented by the upstream chart as the setting for clusters
-                provisioned by capmox: the driver then resolves a node's
+                provisioned by capmox: the CONTROLLER then resolves a node's
                 hypervisor placement from the Machine's providerID instead of
-                the topology labels a cloud-controller-manager would apply.
-                Without it the tenant needs a CCM before it can attach a single
-                volume. */}}
+                the topology labels a cloud-controller-manager applies. It does
+                not remove the need for a CCM — the node plugin reads
+                topology.kubernetes.io/region and zone off its own Node and
+                exits fatally without them ("Failed to get region or zone for
+                node"), so helmreleases/ccm-proxmox.yaml is a hard prerequisite
+                and this release waits on it below. */}}
           provider: proxmox
         clusters:
-          - insecure: true
+          - insecure: {{ .Values.proxmox.insecure }}
       storageClass:
         {{- range .Values.proxmox.csi.storageClasses }}
         - name: {{ .name | quote }}
@@ -101,6 +104,11 @@ spec:
         {{- end }}
   dependsOn:
   - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+  {{- /* Ordering, not decoration: the node plugin CrashLoops until the CCM has
+        labelled the Nodes, and a CrashLooping DaemonSet is a much harder thing
+        to read than a release that has not started yet. */}}
+  - name: {{ .Release.Name }}-ccm
     namespace: {{ .Release.Namespace }}
 {{- end }}
 {{- end }}

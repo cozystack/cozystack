@@ -43,7 +43,9 @@
       "type": "object",
       "default": {},
       "required": [
+        "ccm",
         "csi",
+        "insecure",
         "ipv4Config"
       ],
       "properties": {
@@ -53,6 +55,21 @@
           "default": [],
           "items": {
             "type": "string"
+          }
+        },
+        "ccm": {
+          "description": "Proxmox cloud-controller-manager settings.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "credentialsSecretName"
+          ],
+          "properties": {
+            "credentialsSecretName": {
+              "description": "Secret in THIS namespace holding the controller's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. May name the same Secret as `csi.credentialsSecretName`; it is a separate knob so the two can hold separate tokens, since this one only reads VM inventory while the driver attaches and detaches disks.",
+              "type": "string",
+              "default": ""
+            }
           }
         },
         "csi": {
@@ -117,6 +134,11 @@
           "items": {
             "type": "string"
           }
+        },
+        "insecure": {
+          "description": "Skip verification of the Proxmox API server certificate in the CCM and the CSI driver. Default true because a stock Proxmox VE install serves a self-signed certificate; set false once the hypervisor presents one the tenant can verify.",
+          "type": "boolean",
+          "default": true
         },
         "ipv4Config": {
           "description": "Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.",

@@ -44,6 +44,12 @@ spec:
         # differs between the two substrates.
         - name: kubernetes-proxmox-csi
           path: system/proxmox-csi
+        # The cloud-controller-manager that same substrate cannot go without:
+        # its worker kubelets run with --cloud-provider=external, so the nodes
+        # stay tainted until this clears them, and the CSI node plugin needs
+        # the topology labels it applies.
+        - name: kubernetes-proxmox-ccm
+          path: system/proxmox-ccm
         - name: kubernetes-vertical-pod-autoscaler-crds
           path: system/vertical-pod-autoscaler-crds
         - name: kubernetes-coredns
