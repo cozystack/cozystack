@@ -1,0 +1,14 @@
+# Ad-hoc BackupJob routed to the platform cozy-default BackupClass, which maps
+# apps.cozystack.io/Kafka to the cozy-default-kafka strategy. The produced
+# Backup is named after this BackupJob.
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: kafka-meta-src-adhoc
+  namespace: tenant-root
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Kafka
+    name: kafka-meta-src
+  backupClassName: cozy-default

@@ -14,6 +14,7 @@ Tenants reference `cozy-default` from `BackupJob`, `Plan`, and `RestoreJob` reso
 | `apps.cozystack.io/MariaDB`      | mariadb-operator dump                | `strategy.backups.cozystack.io/MariaDB` `cozy-default-mariadb`             |
 | `apps.cozystack.io/ClickHouse`   | Altinity `clickhouse-backup` sidecar | `strategy.backups.cozystack.io/Altinity` `cozy-default-altinity`           |
 | `apps.cozystack.io/MongoDB`      | Percona psmdb operator (pbm) dump    | `strategy.backups.cozystack.io/MongoDB` `cozy-default-mongodb`             |
+| `apps.cozystack.io/Kafka`        | Kafka Admin API (topic metadata)     | `strategy.backups.cozystack.io/Kafka` `cozy-default-kafka`                 |
 | `apps.cozystack.io/Etcd`         | etcd-operator snapshot               | `strategy.backups.cozystack.io/Etcd` `cozy-default-etcd`                   |
 | `apps.cozystack.io/RabbitMQ`     | RabbitMQ definitions (management API) | `strategy.backups.cozystack.io/Rabbitmq` `cozy-default-rabbitmq`          |
 | `apps.cozystack.io/VMInstance`   | Velero + kubevirt-velero-plugin      | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vminstance`    |
@@ -40,6 +41,7 @@ Different operators expect different endpoint shapes; the strategy templates ren
 | FoundationDB    | `blobStoreConfiguration.accountName` + `urlParameters.secure_connection` | bare host:port + derived secure flag |
 | Velero          | `BackupStorageLocation.spec.config.s3Url` | full URL (scheme preserved) |
 | ClickHouse sidecar | `S3_ENDPOINT` env | bare host:port (from projected Secret) |
+| Kafka           | `S3_ENDPOINT` env on the strategy Job | full URL (scheme preserved); the Job's `curl --aws-sigv4` prepends `https://` if the endpoint carries no scheme |
 
 The projected `cozy-backups-creds.endpoint` key is **stripped of scheme** so chart-emitted sidecars (ClickHouse) consume it directly. Drivers that need the full URL receive the resolved endpoint described above — derived from the COSI system Secret (forced `https://`) for a provisioned bucket, or the `backupStorage.endpoint` fallback for external S3.
 
@@ -350,3 +352,11 @@ The upper bound — the latest archived WAL — is whatever the source has shipp
 ### Idempotency under GitOps
 
 An in-progress restore is safe to reconcile. The driver purges the target `Cluster` + PVCs exactly once per RestoreJob (guarded by the `TargetPurged` condition and a freshly-recovered check), suspends the target's HelmRelease across the purge so Flux cannot race the bootstrap swap, and resumes it once the recovery cluster is rendered. A Flux reconcile (or a controller restart) mid-restore therefore re-attaches to the recovering cluster rather than deleting it and starting over.
+
+## Kafka: topic metadata only
+
+The `cozy-default-kafka` strategy backs up **topic metadata**, not message data. Its Job talks to the Kafka Admin API (`kafka-topics --describe` on backup, `kafka-topics --create` + `kafka-configs --alter` on restore) and stores one small object per run at `s3://<bucket>/<namespace>/<application>/<backup-name>/kafka-metadata.txt`. It captures every non-internal topic's partition count, replication factor and non-default configs; message payloads, consumer-group offsets, ACLs, quotas and `KafkaUser`s are out of scope, and there is no point-in-time recovery. The driver gates each run on the Strimzi `Kafka` cluster reporting `Ready` and never mutates it.
+
+This is the "reconstruct a cluster's topic topology" flow: an in-place restore recreates dropped topics into the source, and a to-copy restore applies the source's topics onto a freshly-bootstrapped empty `Kafka` (partitions and configs preserved). Restore is additive at the topic-set level — it never deletes topics that exist live but not in the backup — but it does not silently accept a divergent existing topic: it grows the partition count when the backup asks for more, and fails loudly (naming the topic and both values) when the backup asks for fewer partitions or a different replication factor, since Kafka cannot shrink partitions or change RF in place and a restore that cannot reach the recorded state must not report `Succeeded`. Restored topics are created directly through the Admin API, so on the target they are **unmanaged** (no `KafkaTopic` CR); that is the accepted tradeoff of an Admin-API-only driver. Restoring a topic whose replication factor exceeds the target cluster's broker count fails at `--create`.
+
+One consequence of the Admin-API approach: if a topic is declared in the Kafka app's `spec.topics`, the Strimzi Topic Operator owns it and reconciles its config from the `KafkaTopic` CR, reverting any dynamic config an in-place restore sets that the CR does not list. So this strategy is durable for **out-of-band** topics (created directly, no CR); for CR-declared topics the `KafkaTopic` CR / GitOps is the source of truth. A to-copy restore onto a fresh empty cluster is unaffected. For message-data durability, use a volume-snapshot strategy instead. See `examples/backups/kafka-metadata/` for the end-to-end flow.
