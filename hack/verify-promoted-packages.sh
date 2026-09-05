@@ -206,7 +206,44 @@ normalized_refs() {
     digest="${raw##*@}"
     image="${without_digest##*/}"
     if [ "$without_digest" = "$image" ]; then
-      repo="${image%:*}"
+      # No `/` anywhere ahead of the digest, so nothing in this ref names a
+      # registry host or a repository path — it is a bare scalar sitting in
+      # front of a digest, and the collector emits those by design. Shape 3
+      # (`repository:` on one key, `tag: <tag>@sha256:<digest>` on another) is
+      # the dominant shape in the tree, and shape 1's recursive descent sees
+      # that `tag` scalar on its own, so every shape-3 map arrives here twice:
+      # once correctly joined, once as the bare tag. hack/lib/image-refs.sh
+      # documents that degeneracy and leaves host-less refs to its callers —
+      # promote-retag.sh drops them through its ownership filter, and this
+      # function had no equivalent. `${image%:*}` is then a no-op (a tag holds
+      # no colon) and the TAG arrives as the repository. Promotion rewrites
+      # exactly those tags, which is how a promotion that moved no container
+      # bytes at all reported six changed "repositories" whose digests were
+      # identical on both sides.
+      #
+      # Compare such a ref on its digest alone. The digest is the whole of the
+      # container identity a host-less ref carries, and it is the only part
+      # promotion must not move; the empty repository yields a leading `@`,
+      # which no real repository name can produce, so these cannot collide with
+      # a host-bearing entry. Where a repository name does exist behind one of
+      # them — kube-ovn's `global.images.kubeovn`, whose host lives in
+      # `global.registry.address` — the same image also arrives host-bearing
+      # from shape 4, so a repository change stays visible through that entry.
+      #
+      # Dropping host-less refs outright would be wrong rather than merely
+      # blunter: packages/system/kuberture/values.yaml carries an `image:` map
+      # with a `tag:` and no `repository:`, so shape 1 is the only rule that
+      # ever sees its digest. Skipping it would silently stop proving that
+      # digest is unchanged — a hole in the very guard this branch repairs.
+      #
+      # Do NOT reach for promote-retag.sh's `${REGISTRY}/` ownership filter to
+      # do this job. The verify job's REGISTRY names the private build registry
+      # while both artifacts under comparison live on the public one, so that
+      # filter drops every ref; and the emptiness guard above tests the RAW
+      # collection rather than the filtered set, so the proof would then pass
+      # by comparing two empty sets — failing open on the one invariant it
+      # exists to establish.
+      repo=""
     else
       repo="${without_digest%/*}/${image%:*}"
     fi
