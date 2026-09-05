@@ -48,7 +48,6 @@ spec:
         #     (those alternate rather than run to completion in turn: each takes
         #     its first reading, one wait passes, each takes its second)
         #   guest Talos capture
-        #   ghcr-mirror state, access log and warm-up Job
         #   talos-image-cache diagnosis
         # The four collectors that bracket the node-join wait -- the sandbox
         # kernel KVM counters, the runner kernel CPU time, the sandbox QEMU
@@ -73,6 +72,18 @@ spec:
         # diagnostic runs, and the pre-wait halves of the four readings above spend
         # inside that bringup rather than inside this phase. Those residuals are
         # tracked in cozystack/cozystack#3666.
+        #
+        # The OIDC lifecycle folded onto this cluster by the 5th argument joins
+        # that list rather than being priced into the ceiling: it adds up to 1m
+        # of job wait, a 600s cozy_wait_helmrelease_upgrade and another 1m of job
+        # wait, all on the passing path. Raising the ceiling to cover them is not
+        # available -- the guard in hack/run-kubernetes-serial-console_test.bats
+        # holds COZY_OP_CEILING equal to BOTH suites' `timeout:`, and two suites
+        # at 79m plus their 22m teardowns exceed the job's own 215-minute cap.
+        # What is available is a measurement: on the green run of this branch
+        # (33724179053) the whole Test took 569.72s against this 4020s op, with
+        # kubernetes-previous, which carries no OIDC fold, at 470.19s. The
+        # ceilings only bind when something is already hung.
         timeout: 67m
         # Co-locate the tenant crust-gather snapshot (captured by
         # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as
@@ -84,24 +95,30 @@ spec:
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-          # 4th arg "true" folds the ouroboros hairpin-NAT assertions onto this
-          # cluster instead of a second ~25m bringup.
-          run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true'
+          # 4th arg folds the ouroboros hairpin-NAT assertions onto this cluster;
+          # the 5th folds the System -> CustomConfig OIDC lifecycle onto the same
+          # ready workers. Neither feature needs another tenant-cluster bringup.
+          run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true' 'true'
         check:
           ($error == null): true
     finally:
     # Always runs after try/catch — i.e. after the crust-gather snapshots on a
     # failed run. Reclaims the tenant Kubernetes cluster, which run_kubernetes_test
     # applies imperatively (kubectl), so Chainsaw's auto-cleanup does not track it.
-    # On success run_kubernetes_test already tore it down, so this is a no-op then.
+    # This is the single authoritative child -> parent teardown on both success
+    # and failure, followed by the compute/storage reclamation barriers.
     - description: tear down the tenant Kubernetes cluster
       script:
-        timeout: 10m
+        # 30s diagnostic Certificate + 5m child + 5m parent + 5m compute/PVC
+        # drain + 5m LINSTOR reclamation = 20m30s of inner bounds. Keep the op
+        # above that sum so an inner timeout reports its stage instead of a
+        # Chainsaw SIGKILL hiding it; normal cleanup returns immediately.
+        timeout: 22m
         content: |
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-          cozy_cleanup
+          cozy_cleanup test-latest-version
 ---
 # Version-independent regression guard for PR #2872 B1 (runs once, here, not
 # in kubernetes-previous): with the `replicated` StorageClass absent on the

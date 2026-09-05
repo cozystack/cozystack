@@ -250,11 +250,10 @@ stub_collectors() {
 # reached it outside a `timeout` wrapper. Stubbing a collector there does not
 # make that test pass more easily; it removes the collector from the audit
 # entirely, and the test stays green because there is nothing left to audit.
-# Each of them carries reads the audit is the only instrument that sees:
-# ghcr_mirror_diagnose issues five, and every cadvisor capture issues a Pod
-# listing and a node read apiece. Their own suites substitute a grep over the
-# source, which by construction cannot see a read that was added without a
-# bound.
+# Each of them carries reads the audit is the only instrument that sees: every
+# cAdvisor capture issues a Pod listing and a node read apiece. Their own suites
+# substitute a grep over the source, which by construction cannot see a read
+# that was added without a bound.
 #
 # They are stubbed only where the test is about the phase budget rather than
 # about the reads, which is the one place their real bodies would drown the
@@ -265,7 +264,6 @@ stub_gated_collectors() {
   cozy_capture_tenant_worker_block_io() { printf 'block-io-stub\n'; }
   cozy_capture_sandbox_node_cpu_time() { printf 'sandbox-cpu-time-stub\n'; }
   cozy_capture_tenant_worker_thread_cpu() { printf 'thread-cpu-stub\n'; }
-  ghcr_mirror_diagnose() { printf 'ghcr-mirror-stub\n'; }
 }
 
 assert_file_contains() {
@@ -411,10 +409,6 @@ read_cost_inputs() {
   # listing-keyed pin is satisfied by whichever of them ran, and stays green
   # with the other absent from the audit entirely. The directory is the one
   # thing each produces alone.
-  if ! grep -q 'get deploy ghcr-mirror' "$kubectl_calls"; then
-    echo "FAIL: ghcr_mirror_diagnose did not run, so its reads were not audited" >&2
-    false
-  fi
   # Keyed on the directory having CONTENT, not on the directory existing. Each
   # capture mkdir -p's its report directory before it lists anything, so an
   # empty one is exactly what a capture that issued no read leaves behind -- and
@@ -797,8 +791,7 @@ read_cost_inputs() {
   # A rule written for additions does not catch a removal, so both directions
   # are named here.
   for marker in serial-console-stub talos-stub image-cache-stub cpu-throttle-stub \
-    network-counters-stub block-io-stub sandbox-cpu-time-stub thread-cpu-stub \
-    ghcr-mirror-stub; do
+    network-counters-stub block-io-stub sandbox-cpu-time-stub thread-cpu-stub; do
     if grep -q "$marker" "$tmp/out"; then
       echo "FAIL: $marker ran after the phase ran out of budget" >&2
       false
@@ -810,7 +803,6 @@ read_cost_inputs() {
   assert_file_contains '(d) tenant worker CPU counters, sandbox node CPU time and worker per-thread CPU time: not collected' "$tmp/out"
   assert_file_contains '(d2) tenant worker network counters: not collected' "$tmp/out"
   assert_file_contains '(d3) tenant worker block IO counters: not collected' "$tmp/out"
-  assert_file_contains 'ghcr-mirror state, access log and warm-up Job: not collected' "$tmp/out"
   rm -rf "$tmp"
 }
 
@@ -966,7 +958,6 @@ read_cost_inputs() {
       cozy_capture_runner_kernel_cpu_time() { :; }
       cozy_capture_sandbox_qemu_thread_cpu() { :; }
       cozy_capture_runner_canary() { :; }
-      ghcr_mirror_diagnose() { :; }
       kubectl() { :; }
       cozy_report_node_join_failure test-latest-version
     ' 2>&1) || true
@@ -1037,7 +1028,6 @@ read_cost_inputs() {
     cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_runner_canary() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
-    ghcr_mirror_diagnose() { :; }
     cozy_capture_sandbox_node_cpu_time() { :; }
     cozy_capture_tenant_worker_thread_cpu() { :; }
     kubectl() { printf "KUBECTL_RAN\n" >&2; }
@@ -1116,7 +1106,6 @@ read_cost_inputs() {
     cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_runner_canary() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
-    ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
   printf '%s\n' "$out" >"$tmp/postsource"
@@ -1153,7 +1142,6 @@ read_cost_inputs() {
     cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_runner_canary() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
-    ghcr_mirror_diagnose() { :; }
     cozy_report_node_join_failure test-latest-version
   ' 2>&1) || true
   printf '%s\n' "$out" >"$tmp/empty"
@@ -1252,16 +1240,15 @@ read_cost_inputs() {
   console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
-  mirror=$(grep -n 'ghcr_mirror_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
   cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
-  for v in volumes console cpu talos mirror cache; do
+  for v in volumes console cpu talos cache; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to locate $v in $lib" >&2
       exit 1
     fi
   done
-  for later in console cpu talos mirror cache; do
+  for later in console cpu talos cache; do
     eval "n=\$$later"
     if [ "$volumes" -ge "$n" ]; then
       echo "the volume state read (line $volumes) must precede $later (line $n), or a tight run declines it" >&2
@@ -1284,16 +1271,15 @@ read_cost_inputs() {
   console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
-  mirror=$(grep -n 'ghcr_mirror_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
   cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
-  for v in block console cpu talos mirror cache; do
+  for v in block console cpu talos cache; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to locate $v in $lib" >&2
       exit 1
     fi
   done
-  for later in console cpu talos mirror cache; do
+  for later in console cpu talos cache; do
     eval "n=\$$later"
     if [ "$block" -ge "$n" ]; then
       echo "the block IO counters (line $block) must precede $later (line $n), or a tight run declines them" >&2
@@ -1329,16 +1315,15 @@ read_cost_inputs() {
   console=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
   cpu=$(grep -n 'cozy_capture_tenant_worker_cpu_throttle "${_sample}" || true' "$lib" | head -n 1 | cut -d: -f1)
   talos=$(grep -n 'cozy_capture_tenant_talos "${test_name}" || true' "$lib" | head -n 1 | cut -d: -f1)
-  mirror=$(grep -n 'ghcr_mirror_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
   cache=$(grep -n 'talos_image_cache_diagnose || true' "$lib" | head -n 1 | cut -d: -f1)
-  for v in cpu net console talos mirror cache; do
+  for v in cpu net console talos cache; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to locate $v in $lib" >&2
       exit 1
     fi
   done
-  for later in console cpu talos mirror cache; do
+  for later in console cpu talos cache; do
     eval "n=\$$later"
     if [ "$net" -ge "$n" ]; then
       echo "the network counters (line $net) must precede $later (line $n), or a tight run declines them" >&2
@@ -1545,13 +1530,11 @@ read_cost_inputs() {
   # enclosing definition so the name reported is the function's, not the line's.
   #
   # Over the sourced libraries as well as this file, and the list of them is
-  # read from the source rather than written out here. Two of the four captures
-  # the sentence names -- the ghcr-mirror and talos-image-cache diagnoses --
-  # live in libraries this file sources, so a scan of this file alone finds
-  # neither, and their arms in the table below sat unreachable while reading as
-  # coverage. A guarded read added to any sourced library is what this has to
-  # see, and hardcoding today's two would put the next library outside the scan
-  # in exactly the same silent way.
+  # read from the source rather than written out here. The talos-image-cache
+  # diagnosis named by the sentence lives in a library this file sources, so a
+  # scan of this file alone would not find it. A guarded read added to any
+  # sourced library is what this has to see, and hardcoding today's library
+  # would put the next one outside the scan in exactly the same silent way.
   libs="$lib $(awk '/^\. hack\/e2e-chainsaw\/_lib\/[a-z-]+\.sh$/ { print $2 }' "$lib")"
   for f in $libs; do
     if [ ! -f "$f" ]; then
@@ -1599,7 +1582,6 @@ read_cost_inputs() {
     'cozy_capture_sandbox_qemu_thread_cpu:sandbox QEMU per-thread CPU time:cozy_capture_sandbox_qemu_thread_cpu' \
     'cozy_capture_runner_canary:runner fixed-work canary:_cozy_canary_run_arm' \
     'cozy_capture_tenant_worker_thread_cpu:worker per-thread CPU time:cozy_capture_tenant_worker_thread_cpu _cozy_virt_launcher_listing' \
-    'ghcr_mirror_diagnose:ghcr-mirror:ghcr_mirror_diagnose _ghcr_mirror_bounded_read' \
     'talos_image_cache_diagnose:talos-image-cache:talos_image_cache_diagnose _talos_image_cache_bounded_read'; do
     fn=${entry%%:*}
     rest=${entry#*:}
@@ -1644,7 +1626,6 @@ ${carrier}
       # and the arm body is exempted below rather than given a phrase of its own.
       cozy_capture_runner_canary) phrase='runner fixed-work canary' ;;
       cozy_capture_tenant_worker_thread_cpu) phrase='worker per-thread CPU time' ;;
-      ghcr_mirror_diagnose) phrase='ghcr-mirror' ;;
       talos_image_cache_diagnose) phrase='talos-image-cache' ;;
       # The sentence enumerates the CAPTURES. Two other kinds of function guard
       # the same way and are deliberately not in it, each exempt for a stated
@@ -1654,12 +1635,16 @@ ${carrier}
       # them in the sentence too would be a second copy of that claim to keep in
       # step. A function that is neither still fails below, which is what makes
       # this a list of exemptions rather than a list of everything.
-      cozy_diag_read | _ghcr_mirror_bounded_read | _talos_image_cache_bounded_read) continue ;;
+      cozy_diag_read | _talos_image_cache_bounded_read) continue ;;
       _cozy_cadvisor_node_stream | _cozy_virt_launcher_listing) continue ;;
       # The canary carries its guard in the body that runs one arm, the way the
       # cAdvisor captures carry theirs in the stream they share, so the sentence
       # names the capture and the table above names what makes it true of it.
       _cozy_canary_run_arm) continue ;;
+      # This is the successful-path timing report, called only after the join
+      # completed. Its bounds protect optional reads without belonging to the
+      # failure diagnostics phase whose missing-timeout warning is under test.
+      cozy_report_node_join_timing) continue ;;
       cozy_report_node_join_failure | _talos_image_cache_deploy_state) continue ;;
       *)
         echo "$fn guards its call with command -v but this test has no phrase for it; add one here and to the warning" >&2
@@ -1716,7 +1701,6 @@ ${carrier}
       cozy_capture_tenant_worker_block_io) phrase='worker block IO counters' ;;
       cozy_capture_tenant_serial_console) phrase='serial-console family' ;;
       cozy_capture_tenant_talos) phrase='guest Talos capture' ;;
-      ghcr_mirror_diagnose) phrase='ghcr-mirror state' ;;
       talos_image_cache_diagnose) phrase='talos-image-cache diagnosis' ;;
       # Called with the same suffix but not behind the phase gate: it runs ahead
       # of the headline so the console experiment's own failure is named before
@@ -1736,6 +1720,9 @@ ${carrier}
       cozy_capture_sandbox_qemu_thread_cpu) continue ;;
       # The fourth bracket half, and also not behind the gate.
       cozy_capture_runner_canary) continue ;;
+      # This is outside the failure diagnostics phase and deliberately remains
+      # best-effort: a missing timing report must not turn a completed join red.
+      cozy_report_node_join_timing) continue ;;
       *)
         echo "$fn runs in the diagnostics block but this test has no phrase for it; add one here and to both chainsaw comments" >&2
         exit 1
@@ -1978,7 +1965,6 @@ EOF
     cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_runner_canary() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
-    ghcr_mirror_diagnose() { :; }
     kubectl() { :; }
     COZY_DIAG_PHASE_BUDGET=0
     cozy_report_node_join_failure test-latest-version
@@ -2128,53 +2114,46 @@ EOF
   rm -rf "$tmp"
 }
 
-@test "the node-join deadline leaves an annotation and a marker, and does not touch the exit" {
+@test "the node-join deadline leaves an annotation and does not touch the exit" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
   use_temp_report_dir "$tmp"
   export COZY_SNAPSHOT_NAME=kubernetes-latest
-  _COZY_NODE_JOIN_SOFT_RED=0
 
   # `set +x` like every other capture in this file, and here it is the assertion
   # that depends on it rather than the readability: cozytest.sh runs each test
   # under `set -x`, the trace of the `echo` carries the annotation text verbatim,
-  # and it lands in the same file this test then greps. Left traced, all three
+  # and it lands in the same file this test then greps. Left traced, the
   # assertions below pass against a collector that emits nothing -- and only
   # under the runner CI actually uses.
   rc=0
-  ( set +x; cozy_soft_red_node_join test-latest-version ) >"$tmp/out" 2>&1 || rc=$?
+  ( set +x; cozy_note_node_join_deadline test-latest-version ) >"$tmp/out" 2>&1 || rc=$?
 
   # This function records; the caller fails. A non-zero return here would reach
   # the caller under `set -e` and replace the exit it chose, which is the one
   # thing a recorder must not do.
   [ "$rc" -eq 0 ]
-  # The annotation is the only surface that reaches a reader who sees a green
-  # job and never opens the log, so it is asserted as an annotation and not
-  # merely as a line of text.
+  # Asserted as an annotation and not merely as a line of text: the `::warning`
+  # has to start the line or GitHub renders it as ordinary log output.
   assert_file_contains '::warning title=node-join::' "$tmp/out"
   # And it carries the deadline it is about. A warning that says only "the join
   # failed" leaves a reader unable to tell it from the wait having been raised.
   assert_file_contains 'Ready within 29m' "$tmp/out"
+  # It names the suite, because the report holds one directory per suite and a
+  # run carries more than one tenant cluster.
+  assert_file_contains 'test-latest-version' "$tmp/out"
   # `::error` over a step that exits zero states a contradiction, and GitHub
   # renders it beside genuine failures.
   assert_file_lacks_pattern '::error' "$tmp/out"
-
-  marker="$tmp/report/snapshots/kubernetes-latest/SOFT-RED-node-join.txt"
-  [ -f "$marker" ]
-  # Named for the run it belongs to: the report holds one directory per suite,
-  # and a marker that does not say which cluster it is about cannot be counted
-  # across runs, which is the only reason it is written to a file at all.
-  assert_file_contains 'test-latest-version' "$marker"
 
   unset COZY_SNAPSHOT_NAME
   rm -rf "$tmp"
 }
 
-@test "no exit in the suite body is a zero, and the marker is written under the deadline test" {
+@test "no exit in the suite body is a zero, and the deadline annotation is gated" {
   lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
   # The suite fails on every failure it has, the node-join deadline included.
-  # That is what keeps Chainsaw's catch running and the report honest, and it is
-  # what the lane's tolerance is built on top of rather than instead of: a zero
+  # That is what keeps Chainsaw's catch running and the report honest: a zero
   # exit here would buy a green check by throwing away the four collectors keyed
   # on the test failing, which is the shape this design exists to avoid.
   #
@@ -2212,15 +2191,15 @@ EOF
     echo "run_kubernetes_test has $zeros zero exits of its own; a failure that exits zero takes Chainsaw's catch, the previous-instance logs, the host snapshot and the event dump with it, and buys a green check with the evidence" >&2
     return 1
   fi
-  # And the marker call sits inside the branch the node-join wait opens, under
+  # And the annotation sits inside the branch the node-join wait opens, under
   # the test that says which non-zero the wrapper gave. Without that gate the
-  # branch marks a wait that could not run at all as a deadline the lane
-  # tolerates, which is a different claim about a different failure.
+  # branch announces an expired deadline for a wait that could not run at all,
+  # which is a different claim about a different failure.
   # Anchored on the wait's own body rather than on its shape: `timeout Nm bash -c`
   # matches more than one line in the library, and picking the first would
   # re-anchor this check the day another one is added above it.
   wait_line=$(awk '/^  timeout [0-9]+m bash -c/ { cand = NR; next } cand && NR == cand + 1 && /get nodes --no-headers/ { print cand; exit } { cand = 0 }' "$lib")
-  call_line=$(grep -n 'cozy_soft_red_node_join "' "$lib" | head -n 1 | cut -d: -f1)
+  call_line=$(grep -n 'cozy_note_node_join_deadline "' "$lib" | head -n 1 | cut -d: -f1)
   gate_line=$(grep -n 'if cozy_node_join_deadline_expired ' "$lib" | head -n 1 | cut -d: -f1)
   for v in wait_line call_line gate_line; do
     eval "n=\$$v"
@@ -2231,11 +2210,11 @@ EOF
   done
   # The discriminator is 124, which `timeout` gives when it fired. A `-k` on this
   # call -- the house idiom on every other bounded read in the file -- makes a
-  # child that ignores SIGTERM come back as 137 instead, and the softening then
-  # silently stops applying to the case it was written for. It fails toward hard
-  # red, so it breaks nothing; it just stops working with no sign.
+  # child that ignores SIGTERM come back as 137 instead, and the branch then
+  # silently stops recognising the case it was written for: the run still fails,
+  # but it stops saying the deadline is why.
   if sed -n "${wait_line}p" "$lib" | grep -q ' -k '; then
-    echo "the node-join wait carries -k; a child that ignores SIGTERM then returns 137 rather than 124, and the softened deadline stops recognising its own case" >&2
+    echo "the node-join wait carries -k; a child that ignores SIGTERM then returns 137 rather than 124, and the deadline branch stops recognising its own case" >&2
     return 1
   fi
   end_line=$(awk -v s="$wait_line" 'NR > s && /^  fi$/ { print NR; exit }' "$lib")
@@ -2244,44 +2223,31 @@ EOF
     return 1
   fi
   if [ "$call_line" -lt "$wait_line" ] || [ "$call_line" -gt "$end_line" ]; then
-    echo "cozy_soft_red_node_join is called at line $call_line, outside the node-join wait's failure branch (lines $wait_line to $end_line); the softening covers that deadline and nothing else" >&2
+    echo "cozy_note_node_join_deadline is called at line $call_line, outside the node-join wait's failure branch (lines $wait_line to $end_line); the annotation covers that deadline and nothing else" >&2
     return 1
   fi
   if [ "$gate_line" -lt "$wait_line" ] || [ "$gate_line" -gt "$call_line" ]; then
-    echo "the softening at line $call_line is not gated by cozy_node_join_deadline_expired between the wait (line $wait_line) and itself; a branch that softens whatever the wrapper returned reports slow workers for a wait that never ran" >&2
-    return 1
-  fi
-  # And it is written before the diagnostics rather than after them. That phase
-  # spends minutes under a job cap that can end the run inside it, and a marker
-  # written on the far side of it is missing on exactly the runs that spent
-  # longest -- which the lane reads as a failure it cannot attribute.
-  diag_line=$(awk -v s="$wait_line" 'NR > s && /^    cozy_report_node_join_failure "/ { print NR; exit }' "$lib")
-  if [ -z "$diag_line" ]; then
-    echo "expected the node-join failure diagnostics to be called from the wait's branch in $lib; without it this guard reports success for having lost its input" >&2
-    return 1
-  fi
-  if [ "$call_line" -gt "$diag_line" ]; then
-    echo "the marker is written at line $call_line, after the diagnostics phase at line $diag_line; a run the job cap ends inside that phase then carries no marker and blocks as an unattributable red" >&2
+    echo "the annotation at line $call_line is not gated by cozy_node_join_deadline_expired between the wait (line $wait_line) and itself; a branch that annotates whatever the wrapper returned reports slow workers for a wait that never ran" >&2
     return 1
   fi
 }
 
-@test "only the status that means the deadline expired is softened" {
+@test "only the status that means the deadline expired is reported as one" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   # 124 is what `timeout` returns when it fired, and it is the whole of what the
-  # softening is about. The wrapper's other failures arrive in the same shape
-  # and mean the wait did not run: 125 is `timeout` itself failing, 126 and 127
-  # are the shell being unusable or absent, and 128+n is that shell killed by a
-  # signal -- 137 above all, which on this path is the OOM killer on the loaded
-  # runner the whole change is about. Reporting any of those as "the workers
-  # were slow" is the one claim this must not start making.
+  # deadline branch is about. The wrapper's other failures arrive in the same
+  # shape and mean the wait did not run: 125 is `timeout` itself failing, 126 and
+  # 127 are the shell being unusable or absent, and 128+n is that shell killed by
+  # a signal -- 137 above all, which on this path is the OOM killer on a loaded
+  # runner. Reporting any of those as "the workers were slow" is the one claim
+  # this must not start making.
   if ! cozy_node_join_deadline_expired 124; then
-    echo "exit 124 is timeout firing, and it is the status the softening exists for" >&2
+    echo "exit 124 is timeout firing, and it is the status the deadline branch exists for" >&2
     return 1
   fi
   for rc in 1 2 125 126 127 137 143; do
     if cozy_node_join_deadline_expired "$rc"; then
-      echo "exit $rc was read as the node-join deadline expiring; that status means the wait did not run, and softening it reports a slow cluster for a broken harness" >&2
+      echo "exit $rc was read as the node-join deadline expiring; that status means the wait did not run, and announcing it reports a slow cluster for a broken harness" >&2
       return 1
     fi
   done
@@ -2318,7 +2284,7 @@ EOF
   # being written anywhere, and every branch below would then agree vacuously.
   # Set just under what the tree carries today, so a copy going out of reach is
   # noticed while a copy legitimately deleted is not a failure.
-  if [ "$count" -lt 18 ]; then
+  if [ "$count" -lt 15 ]; then
     echo "this pattern found the node-join deadline quoted in $count places, and the tree quotes it in more than that; it has stopped matching what it was written to sweep, so the check below would pass over whatever it no longer sees" >&2
     return 1
   fi

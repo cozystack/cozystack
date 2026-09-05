@@ -1044,7 +1044,7 @@ run_capture() {
   fi
 }
 
-@test "the passing path captures the console too, before the tenant is torn down" {
+@test "the passing path captures the console and leaves teardown to Chainsaw finally" {
   lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
   # An instrument that only runs on the failure path answers in one direction.
   # Every console this tree has ever captured came from a run that failed, so
@@ -1054,8 +1054,8 @@ run_capture() {
   # that value comes from, and it exists only until the tenant is deleted.
   gate=$(grep -n '^ *cozy_assert_guest_console_attached || attach_rc=$?$' "$lib" | head -n 1 | cut -d: -f1)
   green=$(grep -n "^ *if ! cozy_capture_tenant_serial_console 'the suite passed" "$lib" | head -n 1 | cut -d: -f1)
-  teardown=$(grep -n '^ *kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false' "$lib" | tail -n 1 | cut -d: -f1)
-  for v in gate green teardown; do
+  function_end=$(awk -v start="$green" 'NR > start && /^}$/ { print NR; exit }' "$lib")
+  for v in gate green function_end; do
     eval "n=\$$v"
     if [ -z "$n" ]; then
       echo "expected to locate $v in $lib" >&2
@@ -1063,12 +1063,22 @@ run_capture() {
     fi
   done
   # After the attach check, because that check is what says there is a container
-  # to read; before the delete, because the Pod holding the stream goes with the
-  # tenant and nothing recovers it afterwards.
-  if [ "$green" -le "$gate" ] || [ "$green" -ge "$teardown" ]; then
-    echo "the passing-path capture (line $green) must sit between the attach check ($gate) and the teardown ($teardown)" >&2
+  # to read. The function must not start an asynchronous tenant teardown after
+  # the capture: each suite's finally block owns the single authoritative delete.
+  if [ "$green" -le "$gate" ]; then
+    echo "the passing-path capture (line $green) must sit after the attach check ($gate)" >&2
     return 1
   fi
+  if sed -n "${green},${function_end}p" "$lib" | grep -Eq 'delete kubernetes(nodeses|es)[.]apps[.]cozystack[.]io'; then
+    echo "run_kubernetes_test still starts tenant teardown on its success path" >&2
+    return 1
+  fi
+  for suite in latest previous; do
+    grep -Fq "cozy_cleanup test-${suite}-version" "hack/e2e-chainsaw/kubernetes-${suite}/chainsaw-test.yaml" || {
+      echo "kubernetes-${suite} finally does not own authoritative tenant teardown" >&2
+      return 1
+    }
+  done
 }
 
 @test "the passing path asks for the pool minimum, not the pool" {

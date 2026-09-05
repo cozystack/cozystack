@@ -3,6 +3,12 @@ export NAMESPACE=cozy-$(NAME)
 
 include ../../../hack/package.mk
 
+# hack/package.mk defines no `test` target and hack/helm-unit-tests.sh only runs
+# a package whose `make -n test` resolves, so a tests/ directory without this
+# line is collected by nothing and the suite is skipped in silence.
+test:
+	helm unittest .
+
 update:
 	rm -rf templates
 	mkdir templates

@@ -172,11 +172,10 @@ run_capture() {
     *'exit 127 and collect nothing'*) ;;
     *) echo "expected the warning to still name the 127 class it is contrasting against" >&2; return 1 ;;
   esac
-  # The sentence went through two false shapes before this one: "except the
-  # worker CPU throttling capture" (reads as sole exception, and ghcr-mirror has
-  # the same shape) and then "the two that carry a fallback" (there are three --
-  # talos-image-cache guards its call too). Both were enumerations, and an
-  # enumeration of a growing set is wrong the next time someone adds to it.
+  # The sentence went through false shapes before this one, including "except
+  # the worker CPU throttling capture", which read as a sole exception even
+  # though talos-image-cache has the same shape. An enumeration of a growing set
+  # is wrong the next time someone adds to it.
   # What is pinned now is the DISCRIMINATOR: guarding the call with command -v
   # is what separates the two outcomes, and every collector that guards is
   # named. A fourth one added without a mention fails this.
@@ -184,7 +183,7 @@ run_capture() {
     *'guard the call with command -v'*) ;;
     *) echo "expected the warning to state what separates the two outcomes" >&2; return 1 ;;
   esac
-  for c in 'CPU throttling' 'ghcr-mirror' 'talos-image-cache'; do
+  for c in 'CPU throttling' 'talos-image-cache'; do
     case "$line" in
       *"$c"*) ;;
       *) echo "expected the warning to name the guarded collector: $c" >&2; return 1 ;;
@@ -714,7 +713,6 @@ run_capture() {
   # count on purpose: the loop below is the enumeration, and a sentence that
   # also counted would go stale the first time a leg is added to it.
   for leg in 'cozy_capture_tenant_talos "${test_name}" || true' \
-             'ghcr_mirror_diagnose || true' \
              'talos_image_cache_diagnose || true'; do
     line=$(grep -n -F -x "    ${leg}" "$lib" | head -n 1 | cut -d: -f1)
     if [ -z "$line" ]; then

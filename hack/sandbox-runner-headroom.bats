@@ -190,6 +190,15 @@ GUEST_DEMAND_AWK='
 '
 
 @test "every workflow job that boots the e2e sandbox leaves spare host capacity" {
+  # Read from the QEMU sandbox file for every lane, container lanes included:
+  # the `prepare-env` substring also matches `prepare-env-container`, and the
+  # compose file gives its three nodes the same 8 CPU / 24576 MiB the QEMU
+  # guests get, by design (packages/core/testing/Makefile). So the figures are
+  # right for both substrates, but only because the two agree -- and that they
+  # agree is itself pinned, in hack/container-lane-capacity_test.bats, which
+  # holds hack/e2e-compose.yaml to the same literals. If the container lane is
+  # ever sized differently, this test has to start reading e2e-compose.yaml for
+  # those jobs; it will not notice on its own.
   sandbox_file=hack/e2e-prepare-cluster.bats
   workflow_dir=.github/workflows
 

@@ -471,7 +471,7 @@ assert_file_lacks_pattern() {
   tmp=$(mktemp -d)
   kubectl_calls="$tmp/kubectl.calls"
 
-  cozy_cleanup
+  cozy_cleanup test-latest-version
 
   [ "$(sed -n '2p' "$kubectl_calls")" = '-n tenant-test delete certificates.cert-manager.io -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=true --timeout=30s' ]
   [ "$(sed -n '3p' "$kubectl_calls")" = '-n tenant-test delete pod,secret -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=false' ]

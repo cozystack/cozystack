@@ -194,7 +194,7 @@ assert_full_suite() {
     [ -z "$output" ]
 }
 
-@test "kubernetes-application maps to the four kubernetes suites" {
+@test "kubernetes-application maps to the two kubernetes suites" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -202,10 +202,8 @@ assert_full_suite() {
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     echo "$output" | grep -q "kubernetes-latest"
     echo "$output" | grep -q "kubernetes-previous"
-    # The OIDC render-side suites exercise the same kubernetes app chart, so a
-    # chart-only change must select them too.
-    echo "$output" | grep -q "kubernetes-oidc-system"
-    echo "$output" | grep -q "kubernetes-oidc-customconfig"
+    # OIDC System -> CustomConfig lifecycle coverage is folded into latest.
+    ! echo "$output" | grep -q "kubernetes-oidc-"
 }
 
 @test "dashboards-only diff selects nothing (path is plural)" {
@@ -870,14 +868,15 @@ assert_full_suite() {
 @test "an ingress-nginx change selects the gateway admission regression" {
     # system/ingress-nginx is shared by the root ingress package, the tenant
     # ingress application, and tenant Kubernetes clusters. The gateway suite
-    # owns the host-cluster Ingress admission regression, while the four
-    # Kubernetes suites cover the copies installed inside tenant clusters.
+    # owns the host-cluster Ingress admission regression, while the two
+    # Kubernetes suites cover the copies installed inside tenant clusters --
+    # two, not four, since the OIDC pair was folded into kubernetes-latest.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/ingress-nginx/templates/admission-webhook-egress-policy.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_selection "an ingress-nginx change must exercise every installed copy" \
-        "$output" "gateway kubernetes-latest kubernetes-oidc-customconfig kubernetes-oidc-system kubernetes-previous"
+        "$output" "gateway kubernetes-latest kubernetes-previous"
     rm -rf "$tmp"
 }
 

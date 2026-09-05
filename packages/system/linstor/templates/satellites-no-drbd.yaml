@@ -1,0 +1,41 @@
+{{- if not .Values.drbd.enabled }}
+{{- if not .Values.talos.enabled }}
+{{- /* Turning DRBD off removes the drbd-logger sidecar below, and nothing else.
+       The satellite DaemonSet also carries two DRBD-only initContainers that
+       piraeus-operator contributes unconditionally -- drbd-module-loader, which
+       fails when the module is absent, and drbd-shutdown-guard -- and the only
+       configuration that deletes them is satellites-talos.yaml, gated on
+       talos.enabled. So with both flags off the satellite renders and can never
+       reach Ready, which is the exact state drbd.enabled=false exists to avoid.
+       Refuse the combination rather than shipping a DaemonSet that cannot come
+       up: a render error names the problem, an unschedulable satellite does
+       not. */}}
+{{- fail "linstor: drbd.enabled=false requires talos.enabled=true. The DRBD-only initContainers (drbd-module-loader, drbd-shutdown-guard) are contributed unconditionally by piraeus-operator and are removed only by the Talos satellite configuration, so on a generic-Linux substrate the satellite would never become Ready. Run a DRBD-less substrate on Talos nodes, or keep drbd.enabled=true and make the DRBD module loadable on the host. Support for other substrates is tracked in cozystack/cozystack#4092." }}
+{{- end }}
+apiVersion: piraeus.io/v1
+kind: LinstorSatelliteConfiguration
+metadata:
+  name: cozystack-no-drbd
+spec:
+  # podTemplate is a sparse strategic-merge input. Omitting a container there
+  # does not delete one contributed by another configuration or retained in the
+  # effective Satellite spec, so remove the DRBD-only logger from the generated
+  # DaemonSet explicitly.
+  patches:
+  - target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+      name: linstor-satellite
+    patch: |
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: linstor-satellite
+      spec:
+        template:
+          spec:
+            containers:
+            - name: drbd-logger
+              $patch: delete
+{{- end }}

@@ -135,10 +135,7 @@ jobs:
     # agent while the full platform installs across all three guests.
     runs-on: oracle-vm-32cpu-128gb-x86-64
     # Sized above what the tenant-Kubernetes pair can spend on a failing run, and
-    # held to one figure across every lane that runs the suite. That bound, the
-    # measured run the rest of the margin comes from, and what neither of them
-    # covers are all in hack/node-join-soft-red_test.bats rather than restated
-    # here in four workflows that would then drift apart.
+    # held to one figure across every lane that runs the suite.
     timeout-minutes: 215
     permissions:
       contents: read

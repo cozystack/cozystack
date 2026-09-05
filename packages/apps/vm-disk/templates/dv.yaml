@@ -90,9 +90,18 @@ apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
 metadata:
   annotations:
-    {{- if hasKey (.Values.source | default dict) "upload" }}
-    cdi.kubevirt.io/storage.bind.immediate.requested: ""
-    {{- end }}
+    # Unconditional, every source type included, and emitted on the existing-DV
+    # path as well so an upgrade retrofits it. A VMDisk is a standalone object
+    # populated before any VM consumes it, so on a WaitForFirstConsumer
+    # StorageClass a disk with no VM attached would never populate at all
+    # without this signal -- CDI reads it by presence and schedules its worker.
+    #
+    # The trade-off, on a node-pinned class only: the worker pod then chooses
+    # the node, so the volume binds where CDI landed rather than where the VM
+    # will run, and a VM constrained to other nodes stays unschedulable against
+    # a node-affinity conflict. Deliberate -- see README.md. The default class
+    # `replicated` binds Immediate regardless, so the default path does not move.
+    cdi.kubevirt.io/storage.bind.immediate.requested: "true"
     {{- if $existingDV }}
     {{- if hasKey ($existingDV.metadata.annotations | default dict) $sourceAnnotation }}
     {{ $sourceAnnotation }}: {{ index ($existingDV.metadata.annotations | default dict) $sourceAnnotation | quote }}
