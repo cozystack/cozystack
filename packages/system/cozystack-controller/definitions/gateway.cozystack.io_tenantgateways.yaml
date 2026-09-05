@@ -62,7 +62,11 @@ spec:
               apex:
                 description: |-
                   Apex is the tenant's apex hostname. The Gateway listeners are
-                  constrained to this apex and its subdomains.
+                  constrained to this apex and its subdomains, and the
+                  controller-owned http-to-https redirect route declares this apex
+                  and its wildcard as its hostnames, so an empty value renders a
+                  route the apiserver rejects on its hostname schema.
+                minLength: 1
                 type: string
               attachedNamespaces:
                 description: |-
