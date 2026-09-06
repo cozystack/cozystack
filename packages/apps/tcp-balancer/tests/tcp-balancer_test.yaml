@@ -1,0 +1,21 @@
+suite: tcp-balancer default render
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+
+release:
+  name: tcp-balancer-test
+  namespace: tenant-test
+
+tests:
+  - it: renders a Deployment with the default replica count and haproxy image
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "haproxy:latest"
