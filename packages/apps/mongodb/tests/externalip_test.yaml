@@ -1,0 +1,93 @@
+suite: reserved external addresses (externalIPs)
+
+# The chart's only job here is to turn an externalIPs entry into the address
+# substrate's consumption annotation on the mongos LoadBalancer Service it
+# renders, and to refuse a value that would otherwise be silently ignored or
+# quietly collide. Nothing about the address itself is chart business: the
+# annotation is inert until a per-class driver acts on it.
+
+templates:
+  - templates/external-svc.yaml
+
+release:
+  name: mongodb-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: "external without externalIPs: no annotation, so the load balancer keeps auto-assigning"
+    set:
+      external: true
+      sharding: true
+    asserts:
+      - notExists:
+          path: metadata.annotations
+
+  - it: "an entry pins the mongos Service to its claim"
+    set:
+      external: true
+      sharding: true
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - equal:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+
+  - it: "an explicit target: mongos is the same as omitting it"
+    set:
+      external: true
+      sharding: true
+      externalIPs:
+        - claim: reserved-address
+          target: mongos
+    asserts:
+      - equal:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+
+  - it: "a replica set is refused, because one claim cannot serve one LoadBalancer per pod"
+    set:
+      external: true
+      sharding: false
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs is only supported with sharding: true. A MongoDB replica set is published as one LoadBalancer per pod and the operator applies one annotation map to all of them, so a single claim cannot give each pod its own reserved address."
+
+  - it: "externalIPs without external is refused rather than ignored"
+    set:
+      external: false
+      sharding: true
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs requires external: true — there is no external endpoint to pin an address to otherwise"
+
+  - it: "a target this chart does not publish is refused, and the message names the ones it does"
+    set:
+      external: true
+      sharding: true
+      externalIPs:
+        - claim: reserved-address
+          target: rs0
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[0] targets "rs0", which this application does not publish; valid targets: mongos'
+
+  - it: "two entries for the same endpoint are refused"
+    set:
+      external: true
+      sharding: true
+      externalIPs:
+        - claim: first
+        - claim: second
+          target: mongos
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[1] targets "mongos" a second time: one endpoint wears one address, so use one entry per target'
