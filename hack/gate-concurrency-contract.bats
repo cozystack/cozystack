@@ -94,6 +94,30 @@ label_names() {
     | sort -u
 }
 
+# One guard's review-axis predicates, normalised to the fact each one asserts.
+# The admission side is written with `==`/`contains` and the concurrency key's
+# complement with `!=`/`!contains`, so both reduce to the same three tokens and
+# the same requirement can be put to either. Normalising rather than matching
+# the whole clause is deliberate: the whole-clause pin this replaces lived in
+# promote-gate-contract.bats, broke on every unrelated edit to `plan`'s guard,
+# and still could not tell a weakened clause from a reworded one.
+review_predicates() {
+  grep -oE "github\.event\.review\.state [!=]= 'approved'|github\.event\.pull_request\.state [!=]= 'open'|!?contains\(fromJSON\('\[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"\]'\), github\.event\.review\.author_association\)" \
+    | sed -e 's/.*review\.state.*/approved/' \
+          -e 's/.*pull_request\.state.*/open/' \
+          -e 's/.*author_association.*/write-access/' \
+    | sort -u
+}
+
+# Which way round those predicates are written, so the key cannot pass by
+# carrying the admission form. A key that admits what `plan` admits puts the
+# publishing run in the `-noop` group and skips the run that was going to post.
+review_polarity() {
+  grep -oE "github\.event\.review\.state [!=]= 'approved'" \
+    | sed -E 's/.*state (..) .*/\1/' \
+    | sort -u
+}
+
 # Conclusions `resolve` treats as "not a verdict" and posts nothing for.
 resolve_silent_conclusions() {
   code_lines < "$FORK" \
@@ -212,8 +236,17 @@ resolve_silent_conclusions() {
   # steps in several other jobs, and `plan`'s own `if:` now names the same
   # expression too, so counting the identifier inside this block would be
   # satisfied by that one with the step's guard deleted.
+  #
+  # The second half of that guard is what stops the opener wedging the gate on
+  # the good path. A run that neither re-verifies the SHA nor concludes the
+  # context — a second approving review, a reopen, a re-run of a run that
+  # passed — has to leave the existing green alone, because `e2e-report`
+  # deliberately posts nothing for it and the `pending` this call would write
+  # would then have nothing to conclude it. Pinned together with the fork term
+  # rather than beside it: the two halves are one decision about whether this
+  # run owns the status.
   count="$(printf '%s\n' "$plan_block" \
-    | grep -cF 'if: ${{ !github.event.pull_request.head.repo.fork }}' || true)"
+    | grep -cF "if: \${{ !github.event.pull_request.head.repo.fork && !(steps.heavy.outputs.heavy != 'true' && steps.heavy.outputs.prior == 'success') }}" || true)"
   [ "${count:-0}" -eq 1 ]
 
   block="$(job_block e2e-report "$PULL_REQUESTS" | code_lines)"
@@ -327,4 +360,113 @@ resolve_silent_conclusions() {
   # Nothing outside a job block may introduce a name none of them know.
   all="$(code_lines < "$PULL_REQUESTS" | label_names '==')"
   [ "$all" = "$expected" ]
+}
+
+@test "same-repo gate: every publishing guard names the same review term" {
+  # The review axis is the second dimension of the same decision the label
+  # tests above pin, and it was invisible to all of them: `label_names()` reads
+  # `github.event.label.name` and a review submission carries none, so a guard
+  # could gain, lose or weaken its review clause without moving a single
+  # assertion. `plan` is the reference here as it is there.
+  expected="$(job_block plan "$PULL_REQUESTS" | code_lines | review_predicates)"
+  [ -n "$expected" ]
+
+  # Three facts, not one. `approved` alone admits a review from any account
+  # with read access, which on a public repository is everyone, and each
+  # submission re-fires the event, so it would let anyone start the 215-minute
+  # job on any open same-repo PR as often as they liked; `pull_request_review`
+  # also fires on a closed PR as readily as an open one. The ruleset counts
+  # approvals from write access only, so a guard that admits less than all
+  # three is looser than the gate it stands in for.
+  [ "$(printf '%s\n' "$expected" | wc -l | tr -d ' ')" -eq 3 ]
+
+  # Required per job, for the reason the label test gives: `verify-release-candidate`
+  # and `resolve_assets` reach `plan` through no `needs`, so a missing clause
+  # there is not a disagreement between guards but a job that runs when `plan`
+  # does not. `e2e-report` is the one that shipped without it and posted red on
+  # a `changes_requested` submission (run 33750114876).
+  for job in plan verify-release-candidate resolve_assets e2e-report; do
+    block="$(job_block "$job" "$PULL_REQUESTS" | code_lines)"
+    [ -n "$block" ]
+
+    names="$(printf '%s\n' "$block" | review_predicates)"
+    [ "$names" = "$expected" ]
+
+    polarity="$(printf '%s\n' "$block" | review_polarity)"
+    [ "$polarity" = "==" ]
+
+    count="$(printf '%s\n' "$block" | grep -c "github\.event_name != 'pull_request_review'" || true)"
+    [ "${count:-0}" -eq 1 ]
+  done
+
+  # …and the key is the complement, term for term and the other way round.
+  line="$(code_lines < "$PULL_REQUESTS" | grep '^  group: pr-')"
+  [ -n "$line" ]
+
+  names="$(printf '%s\n' "$line" | review_predicates)"
+  [ "$names" = "$expected" ]
+
+  polarity="$(printf '%s\n' "$line" | review_polarity)"
+  [ "$polarity" = "!=" ]
+
+  count="$(printf '%s\n' "$line" | grep -c "github\.event_name == 'pull_request_review'" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # Every OTHER job either carries the same term or reaches `plan` through its
+  # `needs`. Unlike the label loop this requires one or the other rather than
+  # tolerating neither, which closes the enumeration hole that loop documents:
+  # a job added with no guard and no dependency on `plan` is exactly the job
+  # that runs on a discarded submission, and nobody has to remember to name it
+  # here.
+  for job in $(job_names "$PULL_REQUESTS"); do
+    block="$(job_block "$job" "$PULL_REQUESTS" | code_lines)"
+    names="$(printf '%s\n' "$block" | review_predicates)"
+    if [ -n "$names" ]; then
+      [ "$names" = "$expected" ]
+    else
+      count="$(printf '%s\n' "$block" | grep -c '^    needs:.*"plan"' || true)"
+      [ "${count:-0}" -eq 1 ]
+    fi
+  done
+}
+
+@test "the expensive lane is gated on plan's decision, and that decision is computed" {
+  # What moves the suite off "every push" is one term in `e2e`'s guard reading
+  # one output of `plan`. Both halves are pinned because either can be undone
+  # without touching the other, and undoing either restores per-push running —
+  # the change this whole contract exists to hold in place — while every
+  # assertion above stays green.
+  block="$(job_block e2e "$PULL_REQUESTS" | code_lines)"
+  [ -n "$block" ]
+  count="$(printf '%s\n' "$block" | grep -cF "needs.plan.outputs.heavy == 'true'" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  plan_block="$(job_block plan "$PULL_REQUESTS" | code_lines)"
+  [ -n "$plan_block" ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF 'heavy: ${{ steps.heavy.outputs.heavy }}' || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # …and the step decides rather than asserts. Every write of the output is
+  # computed — there are two, one per axis, and both go through `String()` — so
+  # replacing the decision with a constant cannot leave both counts intact.
+  # That mutation is the one worth pinning: it silently restores per-push
+  # running and reads like a simplification.
+  count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('heavy'" || true)"
+  [ "${count:-0}" -eq 2 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('heavy', String(" || true)"
+  [ "${count:-0}" -eq 2 ]
+
+  # The two axes it decides from: the label EVENT, and whether this head SHA
+  # already carries a green verdict to reuse. The status read happens once and
+  # is published as `prior`, because the opener's guard needs the same reading
+  # and the opener has already overwritten it by the time anything else could
+  # look.
+  count="$(printf '%s\n' "$plan_block" | grep -cF "context.eventName !== 'pull_request_review'" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF 'getCombinedStatusForRef' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF "prior !== 'success'" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('prior', prior)" || true)"
+  [ "${count:-0}" -eq 1 ]
 }
