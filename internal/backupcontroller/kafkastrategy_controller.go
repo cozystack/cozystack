@@ -409,6 +409,18 @@ func (r *BackupJobReconciler) createKafkaBackupArtifact(
 		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
 			return nil, getErr
 		}
+		// Adopt an existing Backup only when it describes the same application.
+		// A retained Backup whose BackupJob was reaped, then reused for a
+		// different application of the same name, would otherwise be reported as
+		// this run's success while describing something else (mirrors the
+		// RabbitMQ driver's guard).
+		if existing.Spec.ApplicationRef.Kind != backup.Spec.ApplicationRef.Kind ||
+			existing.Spec.ApplicationRef.Name != backup.Spec.ApplicationRef.Name {
+			return nil, fmt.Errorf("Backup %s/%s already exists for a different application (%s/%s, not %s/%s)",
+				backup.Namespace, backup.Name,
+				existing.Spec.ApplicationRef.Kind, existing.Spec.ApplicationRef.Name,
+				backup.Spec.ApplicationRef.Kind, backup.Spec.ApplicationRef.Name)
+		}
 		return existing, nil
 	}
 	return backup, nil

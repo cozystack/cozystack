@@ -307,6 +307,37 @@ func TestCreateKafkaBackupArtifact_StampsScope(t *testing.T) {
 	}
 }
 
+// TestCreateKafkaBackupArtifact_RejectsDifferentApp pins the adoption guard: a
+// same-named Backup left over for a different application is not reported as this
+// run's success (mirrors the RabbitMQ driver).
+func TestCreateKafkaBackupArtifact_RejectsDifferentApp(t *testing.T) {
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	_ = backupsv1alpha1.AddToScheme(testScheme)
+
+	// A retained Backup named "bj" that describes application "other".
+	stale := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec:       backupsv1alpha1.BackupSpec{ApplicationRef: kafkaAppRef("other")},
+	}
+	c := clientfake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&backupsv1alpha1.Backup{}).WithObjects(stale).Build()
+	r := &BackupJobReconciler{Client: c, Scheme: testScheme, Recorder: record.NewFakeRecorder(10)}
+
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: kafkaAppRef("src")},
+	}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+	}
+	if _, err := r.createKafkaBackupArtifact(context.Background(), bj, resolved, "s3://bkt/tenant/src/bj/kafka-metadata.txt"); err == nil {
+		t.Fatal("expected an error adopting a same-named Backup for a different application, got nil")
+	} else if !strings.Contains(err.Error(), "different application") {
+		t.Fatalf("error = %v, want it to mention a different application", err)
+	}
+}
+
 // kafkaBackup builds a Backup fixture that has already recorded its metadata
 // object, for the cleanup path (whose delete is keyed on status.artifact.uri).
 func kafkaBackup(name, namespace string) *backupsv1alpha1.Backup {

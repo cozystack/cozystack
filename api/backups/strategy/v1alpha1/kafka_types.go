@@ -80,10 +80,13 @@ type KafkaSpec struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	Template corev1.PodTemplateSpec `json:"template"`
 
-	// ArtifactURITemplate is rendered against the same context on a successful
-	// backup and recorded on the produced Backup's status.artifact.uri, so the
-	// stored object's location is introspectable. Ignored on restore; empty
-	// leaves status.artifact unset.
+	// ArtifactURITemplate is rendered against the same context, injected into the
+	// Job as ARTIFACT_URI (the single source of truth for the object location),
+	// and recorded on the produced Backup's status.artifact.uri so restore and
+	// cleanup act on the exact object the backup wrote. The driver requires it:
+	// reconcileKafka fails the BackupJob when it is empty, since nothing would
+	// record where the export is stored. The shipped cozy-default-kafka strategy
+	// always sets it; a custom Kafka strategy that stores backups must too.
 	// +optional
 	ArtifactURITemplate string `json:"artifactURITemplate,omitempty"`
 }
