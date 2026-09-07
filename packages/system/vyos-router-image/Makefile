@@ -61,15 +61,49 @@ QCOW2 = ../../../_out/assets/vyos-router-$(VYOS_ARCH).qcow2
 # build stamps bootbox/images/matchbox.tag. In CI the build-vyos job's `git diff`
 # captures that stamped .tag as a patch fragment, which `finalize` reassembles
 # into pr.patch so e2e resolves the freshly-built digest.
+# The appliance is content-keyed by VYOS_VERSION, and the pins above make that a
+# function of VYOS_BUILD_REF. So the live-build below runs exactly ONCE per pin:
+# every later build resolves the already-published manifest and stamps its digest
+# instead. That is what keeps the floating rolling apt mirror off the critical
+# path of `make build` — which matters because this package must STAY in the root
+# `build:` list (docs/agents/image-refs.md: a package that stamps a reference and
+# is not in that list never gets rebuilt by any path and its pin freezes), and
+# `build:` runs on every push to main.
+#
+# The cache tag is suppressed under OCI_EXPORT_DIR for the reason image-tags
+# documents: a multi-`--tag` `--output type=oci` build writes every ref into the
+# archive's index.json and `skopeo copy oci-archive:` then refuses it (#3257).
+# published-appliance-digest.sh declines to answer in that case too, so an export
+# build always builds and always produces its archive.
+APPLIANCE_TAG = appliance-$(VYOS_VERSION)
+APPLIANCE_REF = $(REGISTRY)/vyos-router-disk:$(APPLIANCE_TAG)
+APPLIANCE_CACHE_TAG = $(if $(strip $(OCI_EXPORT_DIR)),,--tag $(APPLIANCE_REF))
+STAMP = ../../apps/site-router/images/vyos-router-disk.tag
+
 image: image-vyos-router-disk
 
-image-vyos-router-disk: qcow2
+# Each branch stamps a tag that provably exists in its own context: the hit path
+# stamps the appliance tag it just resolved, the build path stamps the
+# build-unique tag image-tags always emits. The digest decides what runs either
+# way, and nightly-mirror.sh keys on repo+digest rather than on the tag text.
+image-vyos-router-disk:
+	@digest="$$(hack/published-appliance-digest.sh "$(APPLIANCE_REF)" || true)"; \
+	if [ -n "$$digest" ]; then \
+		echo "I: appliance $(VYOS_VERSION) already published, reusing $$digest"; \
+		printf '%s@%s\n' "$(APPLIANCE_REF)" "$$digest" > $(STAMP); \
+	else \
+		echo "I: appliance $(VYOS_VERSION) not published yet, building it"; \
+		$(MAKE) appliance-publish; \
+	fi
+
+appliance-publish: qcow2
 	docker buildx build -f images/vyos-router-disk/Dockerfile ../../.. \
+		$(APPLIANCE_CACHE_TAG) \
 		$(call image-tags,vyos-router-disk,$(VYOS_VERSION)) \
 		--metadata-file images/vyos-router-disk.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/vyos-router-disk:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/vyos-router-disk.json -o json -r)" \
-		> ../../apps/site-router/images/vyos-router-disk.tag
+		> $(STAMP)
 	rm -f images/vyos-router-disk.json
 
 # Heavy privileged live-build step; produces $(QCOW2). Kept idempotent so a rerun
