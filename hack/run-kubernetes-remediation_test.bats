@@ -119,6 +119,14 @@ for m in $markers; do
   fi
 done
 for m in $markers; do
+  if [ -f "$FIXTURES/$m.KILLED" ]; then
+    # 128+SIGKILL. The `-k` grace produces it when the read ignores the first
+    # signal, and so does anything else that kills the process. Like the
+    # wall-clock kill above, nothing reaches either stream first.
+    exit 137
+  fi
+done
+for m in $markers; do
   if [ -f "$FIXTURES/$m.FAILS" ]; then
     echo "Error from server: the server was unable to return a response in the time allotted" >&2
     exit 1
@@ -920,6 +928,37 @@ STUB
     rm -rf "$tmp"
 }
 
+@test "addon selection anchors the prefix at the start of the name" {
+    # The literal-match case above and the outside-the-prefix case below both
+    # stay green if index($0, p) == 1 is relaxed to index($0, p) > 0: neither
+    # listing holds a name that CONTAINS the prefix somewhere other than the
+    # start, so neither separates a prefix reading from a substring one. That
+    # is the reading the selection actually depends on, so it gets a listing
+    # that distinguishes them.
+    #
+    # tenant-test holds releases of other suites and of the previous version,
+    # and nothing constrains their names to begin with this parent's prefix.
+    # A release whose name merely embeds it is not something the chart emits
+    # today, which is exactly why nothing else here would notice the widening.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'old-kubernetes-test-latest-version-cilium\nkubernetes-test-latest-version-cilium\n' > "$FIXTURES/ALL_HR"
+
+    out=$(PATH="$tmp/bin:$PATH" cozy_addon_helmrelease_names tenant-test kubernetes-test-latest-version-)
+    if ! printf '%s\n' "$out" | grep -qx 'kubernetes-test-latest-version-cilium'; then
+        echo "expected the parent's own addon to be selected, got: $out" >&2
+        exit 1
+    fi
+    if printf '%s\n' "$out" | grep -qx 'old-kubernetes-test-latest-version-cilium'; then
+        echo "expected a name that only embeds the prefix to be left out, got: $out" >&2
+        exit 1
+    fi
+
+    rm -rf "$tmp"
+}
+
 @test "addon guard ignores HelmReleases outside the prefix" {
     # tenant-test also holds releases of other suites and of the previous
     # version's cluster. A teardown there is not this test's finding.
@@ -969,6 +1008,45 @@ STUB
     fi
     if ! printf '%s\n' "$out" | grep -q 'NOTE: kubernetes-test-latest-version-coredns carries a failed Snapshot'; then
         echo "expected the addon to be classified too, got: $out" >&2
+        exit 1
+    fi
+
+    rm -rf "$tmp"
+}
+
+@test "the failure-path report survives an addon verdict, not only a parent one" {
+    # The case above fails the PARENT and lets its addon earn a note, so the
+    # addons half of the walk never returns non-zero and the guard against a
+    # collector deciding the run is only half exercised. Here the parent is
+    # clean and the ADDON is the torn-down one, which is the arrangement that
+    # reaches the loop's own suppression.
+    #
+    # What it protects is the same thing throughout: the callers are collectors
+    # on a path whose exit status the tenant crust-gather snapshot hangs off,
+    # and a verdict escaping from here would replace it.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-cilium\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+    # The addon is the shape the guard fails a run on: removed although its
+    # strategy says it never removes itself to recover.
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version-cilium.strategy"
+    printf 'uninstalled\ndeployed\n' > "$FIXTURES/kubernetes-test-latest-version-cilium.history"
+
+    rc=0
+    out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "expected the report to return zero so the caller keeps its exit, got rc=$rc: $out" >&2
+        exit 1
+    fi
+    # And the verdict is still reported: suppressed for the caller's status, not
+    # suppressed out of the log, or the collector would be silent about the one
+    # release it had something to say about.
+    if ! printf '%s\n' "$out" | grep -q 'kubernetes-test-latest-version-cilium was uninstalled and reinstalled, though its install strategy is RetryOnFailure'; then
+        echo "expected the addon teardown to be classified, got: $out" >&2
         exit 1
     fi
 
@@ -1137,6 +1215,51 @@ $out" >&2
     fi
     if [ "$report" -ge "$snapshot" ]; then
         echo "expected the classification (line $report) before the snapshot (line $snapshot)" >&2
+        exit 1
+    fi
+}
+
+@test "the exit handler is given the release name it classifies" {
+    lib=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    # The ordering pin above proves the handler is armed early and that it
+    # classifies before it snapshots. Neither says the handler has anything to
+    # classify: it reads the parent release from CURRENT_TENANT_PARENT_HR, and
+    # with that assignment gone the name arrives empty, the collector returns on
+    # its empty-parent gate, and every failure path goes quiet while the whole
+    # suite stays green. That is the assignment carrying the behaviour of this
+    # change on its own, so it is pinned on its own.
+    #
+    # Keyword and signal assembled from separate arguments, as the pin above
+    # does it, because hack/bats-no-exit-trap.bats scans this file lexically and
+    # a spelled-out pair reads as a handler this file installs.
+    arm_re=$(printf "^  %s '_tenant_failure_on_exit' %s\$" 'trap' 'EXIT')
+    arm=$(grep -n "$arm_re" "$lib" | head -n 1 | cut -d: -f1)
+    if [ -z "$arm" ]; then
+        echo "expected run_kubernetes_test to arm the composite failure handler" >&2
+        exit 1
+    fi
+    assign=$(grep -n '^ *CURRENT_TENANT_PARENT_HR=' "$lib" | head -n 1 | cut -d: -f1)
+    if [ -z "$assign" ]; then
+        echo "expected run_kubernetes_test to record the parent release name for the exit handler" >&2
+        exit 1
+    fi
+    # Before the arming and not merely present: armed first, a failure in the
+    # window between the two lines enters the handler with the name still unset,
+    # which is the same silence as never assigning it.
+    if [ "$assign" -ge "$arm" ]; then
+        echo "expected the parent release name recorded (line $assign) before the handler is armed (line $arm)" >&2
+        exit 1
+    fi
+
+    # And the handler must read that variable rather than a name of its own, so
+    # the two cannot drift apart.
+    if ! grep -q 'CURRENT_TENANT_PARENT_HR' "$lib"; then
+        echo "expected the exit handler to read the recorded parent release name" >&2
+        exit 1
+    fi
+    reader=$(grep -n 'cozy_report_helmrelease_remediation tenant-test "\${CURRENT_TENANT_PARENT_HR' "$lib" | head -n 1 | cut -d: -f1)
+    if [ -z "$reader" ]; then
+        echo "expected the exit handler to pass the recorded parent release name to the classification" >&2
         exit 1
     fi
 }
@@ -1436,6 +1559,41 @@ $out" >&2
         exit 1
     fi
 
+    rm -rf "$tmp"
+}
+
+@test "a read killed before it finished does not send the reader after a kubectl error" {
+    # Same rule as the wall-clock cut-off above, at the other status the bound
+    # produces. `timeout -k` escalates to SIGKILL when the read ignores the
+    # first signal, and the shell reports that as 137. Nothing is written on
+    # either stream before the process dies, so a note ending in "kubectl's
+    # error is above" sends the reader to an empty screen. The arm exists to
+    # say what happened instead, and without a fixture that reaches 137 it was
+    # unreachable: deleting it changed no test's verdict.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-cilium\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+
+    : > "$FIXTURES/kubernetes-test-latest-version-cilium.history.KILLED"
+    rc=0
+    out=$(PATH="$tmp/bin:$PATH" cozy_guard_helmrelease tenant-test kubernetes-test-latest-version-cilium 2>&1) || rc=$?
+    rm -f "$FIXTURES/kubernetes-test-latest-version-cilium.history.KILLED"
+    if [ "$rc" -eq 0 ]; then
+        echo "expected a killed read to fail the guard, got rc=0: $out" >&2
+        exit 1
+    fi
+    if printf '%s\n' "$out" | grep -q "kubectl's error is above"; then
+        echo "expected no claim of a kubectl error on a read that printed nothing, got: $out" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q 'was killed before it finished'; then
+        echo "expected the note to name the kill, got: $out" >&2
+        exit 1
+    fi
     rm -rf "$tmp"
 }
 
