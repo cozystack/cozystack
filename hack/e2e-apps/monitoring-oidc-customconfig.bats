@@ -120,8 +120,12 @@ EOF
   # exists. Chart-owned KeycloakRealmGroups were removed entirely (see
   # design note in docs/oidc-grafana.md) so no group assertions here.
   sleep 5
-  ! kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${CID}" 2>/dev/null
-  ! kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "${CID}-audience" 2>/dev/null
+  if kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${CID}" 2>/dev/null; then
+    echo "FAIL: no KeycloakClient must exist in the cozy realm"; false
+  fi
+  if kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "${CID}-audience" 2>/dev/null; then
+    echo "FAIL: no KeycloakClientScope must exist in the cozy realm"; false
+  fi
 }
 
 @test "secretRef variant mounts operator Secret under /etc/grafana/oidc" {

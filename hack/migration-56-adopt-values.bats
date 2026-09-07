@@ -219,7 +219,7 @@ JSON
   rc=0
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
   [ "$rc" -eq 0 ]
-  ! grep -qE 'label helmrelease' "$FAKE_CMDLOG"
+  if grep -qE 'label helmrelease' "$FAKE_CMDLOG"; then echo "FAIL: no HelmRelease must be labelled"; false; fi
   rm -rf "$WORK"
 }
 
@@ -249,7 +249,7 @@ JSON
   rc=0
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
   [ "$rc" -eq 0 ]
-  ! grep -qF -- "APPLY-UNADOPTED-CM" "$FAKE_CMDLOG"
+  if grep -qF -- "APPLY-UNADOPTED-CM" "$FAKE_CMDLOG"; then echo "FAIL: no unadopted ConfigMap must be applied"; false; fi
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -304,6 +304,6 @@ JSON
   rc=0
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
   [ "$rc" -eq 0 ]
-  ! grep -qE 'label helmrelease kubernetes-decoy' "$FAKE_CMDLOG"
+  if grep -qE 'label helmrelease kubernetes-decoy' "$FAKE_CMDLOG"; then echo "FAIL: the decoy HelmRelease must not be labelled"; false; fi
   rm -rf "$WORK"
 }
