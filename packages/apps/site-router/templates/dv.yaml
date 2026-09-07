@@ -17,8 +17,12 @@
   that produced it in lockstep: change the digest and the next gateway gets the
   new appliance, with nothing shared to go stale and nothing to keep in sync.
 
-  storageClass is pinned to `replicated` (DRBD/LINSTOR) so the boot disk stays
-  live-migratable.
+  storageClass defaults to `replicated` (DRBD/LINSTOR) because that is the only
+  class the boot disk is live-migratable on, so a production gateway kept there
+  can be evacuated off a node without dropping the tunnel. It is a parameter
+  rather than a pin only so a substrate with no DRBD can run this chart at all —
+  the e2e container lane, whose management nodes are Talos containers. See the
+  @param in values.yaml.
 */ -}}
 apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
@@ -49,4 +53,12 @@ spec:
         # import with "virtual image size larger than reported available
         # storage" (validated live on VyOS 1.5-rolling). The headroom absorbs it.
         storage: 12Gi
-    storageClassName: replicated
+    {{- /*
+      Omitted entirely when empty, never emitted as "": an explicit empty
+      storageClassName means "bind only a pre-provisioned PV" to Kubernetes,
+      which disables dynamic provisioning instead of selecting the cluster
+      default. Absent is what selects the default.
+    */}}
+    {{- with .Values.storageClass }}
+    storageClassName: {{ . }}
+    {{- end }}
