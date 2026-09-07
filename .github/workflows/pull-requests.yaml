@@ -318,9 +318,14 @@ jobs:
           path: _out/fragments/${{ steps.frag.outputs.safe }}.patch
           if-no-files-found: error
 
-  # Talos is its own leg: the nocloud disk and the installer tarball are heavy
-  # and shared through _out/assets, so the talos image and the disk are built in
-  # one job. Always runs on non-docs PRs — e2e needs the disk regardless of the
+  # Talos is its own leg: the installer tarball is heavy and the talos image is
+  # built from it, so both live in one job. No nocloud disk is built here any
+  # more, and e2e no longer downloads one -- the container lane boots the Talos
+  # image directly. `images/talos/profiles/nocloud.yaml` is therefore compiled
+  # by the tag build's `make assets` rather than per PR; what a PR still
+  # compiles is installer.yaml, which shares every input with it bar the
+  # platform and the output format. Always runs on non-docs PRs, because the
+  # patch fragment and the installer chain need it regardless of the
   # per-package matrix scope.
   build-talos:
     name: Build Talos
@@ -974,10 +979,19 @@ jobs:
       - name: Tear down sandbox
         if: always()
         run: |
+          # Loud, but never the job's verdict. A failed teardown means a dirty
+          # host, and this runner is discarded after the job, so there is no next
+          # run to protect -- while failing the job here turns the required
+          # "E2E Tests" check red in a way no reader can tell apart from a real
+          # failure. The annotation is what a reused host (a developer machine)
+          # needs; `delete-cluster-container` returning non-zero is not evidence
+          # about the product.
           cleanup_rc=0
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-          exit "$cleanup_rc"
+          if [ "$cleanup_rc" -ne 0 ]; then
+            echo "::error title=sandbox teardown::teardown exited $cleanup_rc; the host may hold a stale compose project or zpool"
+          fi
 
       - name: Remove workspace
         if: always()
