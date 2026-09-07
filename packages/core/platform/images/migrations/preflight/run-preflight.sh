@@ -42,15 +42,25 @@ if [ "$ENABLED" != "true" ]; then
   exit 0
 fi
 
-# Normalise the id lists: accept both comma- and space-separated ids.
-SKIP=$(printf '%s' "$SKIP" | tr ',' ' ')
-ADVISORY=$(printf '%s' "$ADVISORY" | tr ',' ' ')
+# Normalise the id lists: accept comma-, space- or newline-separated ids.
+SKIP=$(printf '%s' "$SKIP" | tr ',\n\t' '   ')
+ADVISORY=$(printf '%s' "$ADVISORY" | tr ',\n\t' '   ')
+
+# in_list <needle> <space-separated list> - membership test on an
+# operator-supplied list.
+#
+# The list is matched as DATA, never re-expanded: it is the word being matched
+# and the pattern is built from the check id, so a glob character in an
+# operator's skipChecks entry cannot expand against the runner's working
+# directory (/migrations in the image) and silently disable a check whose id
+# happens to name a file there. That also drops the word-splitting the earlier
+# "$@" form needed.
 in_list() {
   needle=$1
-  shift
-  for s in "$@"; do
-    [ "$s" = "$needle" ] && return 0
-  done
+  haystack=" $2 "
+  case "$haystack" in
+    *" $needle "*) return 0 ;;
+  esac
   return 1
 }
 
@@ -62,13 +72,15 @@ skip_checks=""
 fail_checks=""
 advisory_checks=""
 
+discovered=0
+
 for chk in "$CHECKS_DIR"/*; do
   [ -f "$chk" ] || continue
+  discovered=$((discovered + 1))
   # id = filename with the numeric ordering prefix and .sh suffix stripped.
   id=$(basename "$chk" | sed 's/^[0-9]*-//; s/\.sh$//')
 
-  # shellcheck disable=SC2086  # SKIP/ADVISORY are intentionally word-split into args
-  if in_list "$id" $SKIP; then
+  if in_list "$id" "$SKIP"; then
     echo "--- SKIP (operator-skipped via preflight.skipChecks): $id"
     skip_checks="$skip_checks $id"
     continue
@@ -82,8 +94,7 @@ for chk in "$CHECKS_DIR"/*; do
     0) ok_checks="$ok_checks $id" ;;
     3) na_checks="$na_checks $id" ;;
     *)
-      # shellcheck disable=SC2086  # ADVISORY is intentionally word-split into args
-      if in_list "$id" $ADVISORY; then
+      if in_list "$id" "$ADVISORY"; then
         echo "    (advisory: $id reported a problem but is non-blocking by config; not gating the upgrade)"
         advisory_checks="$advisory_checks $id"
       else
@@ -92,6 +103,20 @@ for chk in "$CHECKS_DIR"/*; do
       ;;
   esac
 done
+
+# A gate that ran nothing must not report the verdict it exists to withhold.
+# The image build already fails when checks/ is empty (RUN chmod +x
+# /preflight/checks/*), but the fail-closed property must hold in the runner
+# itself and not depend on a neighbouring build step: a refactor of the copy
+# layout, or an operator pointing PREFLIGHT_CHECKS_DIR somewhere wrong, must
+# block rather than wave the upgrade through.
+if [ "$discovered" -eq 0 ]; then
+  echo ""
+  echo "No preflight checks were found in $CHECKS_DIR."
+  echo "The gate cannot vouch for a cluster it never inspected, so the upgrade"
+  echo "is BLOCKED. Check the image contents and PREFLIGHT_CHECKS_DIR."
+  exit 1
+fi
 
 echo ""
 echo "===== PREFLIGHT SUMMARY ====="

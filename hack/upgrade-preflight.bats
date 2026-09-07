@@ -176,10 +176,11 @@ run_pf() {
   # localhost:8080 instead of the in-cluster ServiceAccount config, which fails
   # every call on a healthy cluster. Bounding is done with a timeout wrapper.
   # Match the invocation form "kubectl --request-timeout" so the lib comment
-  # that names the flag as forbidden does not trip the guard. An explicit
+  # that names the flag as forbidden does not trip the guard. The runner is
+  # covered too: it is as free to grow a kubectl call as the checks are. An explicit
   # return-on-match is used because a bare "! grep" would not fail the test
   # under set -e.
-  if grep -rn 'kubectl --request-timeout' "$CHECKS" "$LIB"; then
+  if grep -rn 'kubectl --request-timeout' "$PF" "$CHECKS" "$LIB"; then
     echo "found a kubectl --request-timeout invocation; use the kubectl_t timeout wrapper instead" >&2
     return 1
   fi
@@ -217,4 +218,33 @@ run_pf() {
   run_pf
   [ "$RC" -eq 0 ]
   grep -qi "cordoned" "$WORK/out"
+}
+
+@test "a checks directory with no checks fails closed, not open" {
+  prep
+  # A gate that ran nothing must not report the verdict it exists to withhold.
+  # The image build (RUN chmod +x /preflight/checks/*) is the other guard on
+  # this, but the runner must not depend on a neighbouring build step for its
+  # fail-closed property.
+  mkdir -p "$WORK/empty-checks"
+  export PREFLIGHT_CHECKS_DIR="$WORK/empty-checks"
+  run_pf
+  [ "$RC" -ne 0 ]
+  grep -qi "no preflight checks" "$WORK/out"
+}
+
+@test "a glob in skipChecks does not match a file in the working directory" {
+  prep
+  # $SKIP is deliberately word-split; pathname expansion is not wanted. Without
+  # `set -f` a skipChecks entry of "*" expands against the runner's working
+  # directory (/migrations in the image) and can silently disable a check whose
+  # id happens to name a file there.
+  mkdir -p "$WORK/cwd"
+  : > "$WORK/cwd/nodes-ready"
+  export PREFLIGHT_SKIP='*'
+  export FAKE_NODES_JSON='{"items":[{"metadata":{"name":"n2"},"spec":{},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}'
+  cd "$WORK/cwd"
+  run_pf
+  [ "$RC" -eq 1 ]
+  grep -q "nodes-ready" "$WORK/out"
 }
