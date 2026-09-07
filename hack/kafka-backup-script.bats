@@ -5,25 +5,35 @@
 #
 # The chart's helm-unittest suite can only assert the rendered Strategy CR's
 # shape (kind, name, artifactURITemplate); the driver script that does the
-# actual backup/restore/cleanup work is otherwise unpinned, so a regression
-# in it (a stripped \Q, a reinstated -k, a fail-open --list) passes the chart
-# suite untouched. This test closes that gap the way the contract is really
-# defined: it EXECUTES the script against stubbed kafka-topics.sh /
-# kafka-configs.sh (BIN override) and a stubbed curl (on PATH), and asserts what
-# the script does. It is not a template grep — a comment cannot satisfy it.
+# actual backup/restore/cleanup work is otherwise unpinned, so a regression in
+# it (a stripped \Q, a reinstated -k, a fail-open --list) passes the chart suite
+# untouched. This test closes that gap the way the contract is really defined:
+# it EXECUTES the script against stubbed kafka-topics.sh / kafka-configs.sh (BIN
+# override) and a stubbed curl (on PATH), and asserts what the script does. It
+# is not a template grep — a comment cannot satisfy it.
+#
+# Runner note: the repo's bats runner is hack/cozytest.sh, which knows only
+# @test + bash — no setup()/teardown() and no run/$status/$output. So each test
+# calls init_stubs itself, and assertions use plain command exit codes and
+# $(...) capture (set -e makes a failed command fail the test).
 #
 # Each named guard below corresponds to a mutation the script must not survive:
 # \Q literal-match on describe and alter, the --connect-to port workaround with
-# no -k, the fail-closed --list, the comma-value bracket grouping, the
-# replication-factor divergence guard, and the cleanup delete's HTTP handling.
+# no -k (keyed off the request host in both addressing modes), the fail-closed
+# --list, the comma-value bracket grouping, the replication-factor divergence
+# guard, and the cleanup delete's HTTP handling.
 
 SCRIPT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)/packages/system/backupstrategy-controller/files/kafka-backup.sh"
 
-setup() {
-  STATE="$BATS_TEST_TMPDIR/state"
-  BINDIR="$BATS_TEST_TMPDIR/bin"     # stub kafka CLIs (script's $BIN)
-  PATHDIR="$BATS_TEST_TMPDIR/path"   # stub curl (first on PATH)
-  mkdir -p "$STATE" "$BINDIR" "$PATHDIR"
+# init_stubs builds a fresh workspace with stub kafka CLIs (the script's $BIN)
+# and a stub curl (first on PATH), and exports the common env. It sets STATE,
+# BINDIR, PATHDIR in the caller's shell — each @test runs in its own subshell,
+# so calling it first gives that test an isolated sandbox.
+init_stubs() {
+  STATE="$(mktemp -d)"
+  BINDIR="$STATE/bin"
+  PATHDIR="$STATE/path"
+  mkdir -p "$BINDIR" "$PATHDIR"
 
   cat > "$BINDIR/kafka-topics.sh" <<STUB
 #!/usr/bin/env bash
@@ -49,9 +59,8 @@ if [ "\$mode" = describe ]; then
   echo "\$topic" >> "$STATE/describe_args"
   name="\${topic#'\\Q'}"; name="\${name%'\\E'}"
   if [ "\$name" = "\$topic" ]; then
-    # No \\Q...\\E wrapping: --topic is a Java regex, so emit every stored
-    # topic whose name matches it as an ERE (this is the collision a stripped
-    # \\Q reintroduces).
+    # No \\Q...\\E wrapping: --topic is a Java regex, so emit every stored topic
+    # whose name matches it as an ERE (the collision a stripped \\Q reintroduces).
     hit=0
     for f in "$STATE"/desc.*; do
       [ -e "\$f" ] || continue
@@ -88,16 +97,15 @@ if [ "\$mode" = alter ]; then echo "\$name \$add" >> "$STATE/configs_applied"; e
 exit 0
 STUB
 
-  # curl stub: records argv, simulates a tiny S3 (PUT stores the body, GET
-  # serves it back), and prints an HTTP code for the -w cleanup DELETE.
+  # curl stub: records argv, simulates a tiny S3 (PUT stores the body, GET serves
+  # it back), and prints an HTTP code for the -w cleanup DELETE.
   cat > "$PATHDIR/curl" <<STUB
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "\$*" >> "$STATE/curl_args"
-up=""; out=""; wfmt=""; method=""
-prev=""
+up=""; out=""; wfmt=""; prev=""
 for a in "\$@"; do
-  case "\$prev" in --upload-file) up="\$a" ;; -o) out="\$a" ;; -w) wfmt="\$a" ;; -X) method="\$a" ;; esac
+  case "\$prev" in --upload-file) up="\$a" ;; -o) out="\$a" ;; -w) wfmt="\$a" ;; esac
   prev="\$a"
 done
 if [ -n "\$wfmt" ]; then echo "\${DELETE_CODE:-204}"; exit 0; fi
@@ -117,75 +125,73 @@ STUB
   export S3_FORCE_PATH_STYLE="true"
   export AWS_ACCESS_KEY_ID="k"
   export AWS_SECRET_ACCESS_KEY="s"
+  export ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt"
+}
+
+seed_three() {
+  printf 'orders\naudit.events\naudit-events\n' > "$STATE/topics"
+  printf 'Topic: orders\tPartitionCount: 3\tReplicationFactor: 1\n' > "$STATE/desc.orders"
+  printf 'Topic: audit.events\tPartitionCount: 2\tReplicationFactor: 1\n' > "$STATE/desc.audit.events"
+  printf 'Topic: audit-events\tPartitionCount: 5\tReplicationFactor: 1\n' > "$STATE/desc.audit-events"
+  printf '  retention.ms=1234567890000 sensitive=false\n' > "$STATE/cfg.orders"
+}
+
+# expect_fail <env-prefixed command...>: succeeds when the command exits non-zero.
+expect_fail() {
+  if "$@" >/dev/null 2>&1; then
+    echo "expected a non-zero exit, got success" >&2; return 1
+  fi
+  return 0
 }
 
 # ---- backup ---------------------------------------------------------------
 
-seed_three() {
-  printf 'orders\naudit.events\naudit-events\n' > "$STATE/topics"
-  echo "Topic: orders	PartitionCount: 3	ReplicationFactor: 1" > "$STATE/desc.orders"
-  echo "Topic: audit.events	PartitionCount: 2	ReplicationFactor: 1" > "$STATE/desc.audit.events"
-  echo "Topic: audit-events	PartitionCount: 5	ReplicationFactor: 1" > "$STATE/desc.audit-events"
-  printf '  retention.ms=1234567890000 sensitive=false\n' > "$STATE/cfg.orders"
-}
-
-@test "backup records each colliding topic's own partition count (\\Q literal match)" {
-  seed_three
-  MODE=backup ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org" run bash "$SCRIPT"
-  [ "$status" -eq 0 ]
+@test "backup records each colliding topic's own partition count (literal Q match)" {
+  init_stubs; seed_three
+  MODE=backup S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
   # The uploaded object must carry each topic's true partition count. A stripped
   # \Q makes the describe of audit.events match audit-events too, taking the
   # wrong first line — this assertion goes red then.
-  grep -qx "T	orders	3	1" "$STATE/s3_object"
-  grep -qx "T	audit.events	2	1" "$STATE/s3_object"
-  grep -qx "T	audit-events	5	1" "$STATE/s3_object"
+  grep -qxF "$(printf 'T\torders\t3\t1')" "$STATE/s3_object"
+  grep -qxF "$(printf 'T\taudit.events\t2\t1')" "$STATE/s3_object"
+  grep -qxF "$(printf 'T\taudit-events\t5\t1')" "$STATE/s3_object"
   # And the describe was invoked with the literal \Q...\E wrapper.
   grep -qxF '\Qaudit.events\E' "$STATE/describe_args"
 }
 
-@test "backup fails closed when --list errors (no empty backup reported as success)" {
-  seed_three
-  MODE=backup LIST_FAIL=1 ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org" run bash "$SCRIPT"
-  [ "$status" -ne 0 ]
+@test "backup fails closed when --list errors (no empty backup as success)" {
+  init_stubs; seed_three
+  expect_fail env MODE=backup LIST_FAIL=1 S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
   [ ! -f "$STATE/s3_object" ]
 }
 
 @test "backup stores a comma-valued config in its own tab field" {
+  init_stubs
   printf 'orders\n' > "$STATE/topics"
-  echo "Topic: orders	PartitionCount: 1	ReplicationFactor: 1" > "$STATE/desc.orders"
+  printf 'Topic: orders\tPartitionCount: 1\tReplicationFactor: 1\n' > "$STATE/desc.orders"
   printf '  cleanup.policy=compact,delete sensitive=false\n' > "$STATE/cfg.orders"
-  MODE=backup ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org" run bash "$SCRIPT"
-  [ "$status" -eq 0 ]
-  grep -qx "C	orders	cleanup.policy	compact,delete" "$STATE/s3_object"
+  MODE=backup S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  grep -qxF "$(printf 'C\torders\tcleanup.policy\tcompact,delete')" "$STATE/s3_object"
 }
 
 # ---- S3 signing (curl 7.76.1 port workaround, no -k) -----------------------
 
 @test "ported endpoint signs with --connect-to and never -k" {
-  seed_three
-  MODE=backup ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org:8333" run bash "$SCRIPT"
-  [ "$status" -eq 0 ]
+  init_stubs; seed_three
+  MODE=backup S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
   grep -qF -- '--connect-to s3.example.org:443:s3.example.org:8333' "$STATE/curl_args"
   ! grep -qE -- '(^| )-k( |$)' "$STATE/curl_args"
 }
 
 @test "default-port endpoint needs no --connect-to" {
-  seed_three
-  MODE=backup ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org" run bash "$SCRIPT"
-  [ "$status" -eq 0 ]
+  init_stubs; seed_three
+  MODE=backup S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
   ! grep -qF -- '--connect-to' "$STATE/curl_args"
 }
 
 @test "virtual-hosted ported endpoint keys --connect-to off the bucket host" {
-  seed_three
-  MODE=backup S3_FORCE_PATH_STYLE=false ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org:8333" run bash "$SCRIPT"
-  [ "$status" -eq 0 ]
+  init_stubs; seed_three
+  MODE=backup S3_FORCE_PATH_STYLE=false S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
   # HOST1 must be the request host (bkt.s3.example.org), else curl never
   # redirects and the request hits the wrong port.
   grep -qF -- '--connect-to bkt.s3.example.org:443:s3.example.org:8333' "$STATE/curl_args"
@@ -199,31 +205,29 @@ write_backup_object() {
 }
 
 @test "restore of an absent topic creates it and brackets a comma-valued config" {
-  write_backup_object
+  init_stubs; write_backup_object
   : > "$STATE/topics"   # nothing live -> create path
-  MODE=restore ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org" run bash "$SCRIPT"
-  [ "$status" -eq 0 ]
+  MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
   grep -qxF "create orders 3" "$STATE/actions"
   # comma value must be bracket-grouped so kafka-configs does not split it.
   grep -qxF "orders cleanup.policy=[compact,delete]" "$STATE/configs_applied"
 }
 
 @test "restore fails loudly on a replication-factor mismatch" {
+  init_stubs
   printf 'T\torders\t3\t2\n' > "$STATE/s3_object"   # backup wants RF 2
   printf 'orders\n' > "$STATE/topics"               # live exists
-  echo "Topic: orders	PartitionCount: 3	ReplicationFactor: 1" > "$STATE/desc.orders"
-  MODE=restore ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org" run bash "$SCRIPT"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"replication factor differs"* ]]
+  printf 'Topic: orders\tPartitionCount: 3\tReplicationFactor: 1\n' > "$STATE/desc.orders"
+  out=""
+  if out=$(MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT" 2>&1); then
+    echo "restore unexpectedly succeeded: $out" >&2; return 1
+  fi
+  printf '%s\n' "$out" | grep -q "replication factor differs"
 }
 
 @test "restore aborts when the broker is unreachable (fail-closed --list)" {
-  write_backup_object
-  MODE=restore LIST_FAIL=1 ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org" run bash "$SCRIPT"
-  [ "$status" -ne 0 ]
+  init_stubs; write_backup_object
+  expect_fail env MODE=restore LIST_FAIL=1 S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
   # Must not have routed the unreachable broker into --create.
   [ ! -f "$STATE/actions" ]
 }
@@ -231,13 +235,11 @@ write_backup_object() {
 # ---- cleanup --------------------------------------------------------------
 
 @test "cleanup treats 204 as success" {
-  MODE=cleanup DELETE_CODE=204 ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org" run bash "$SCRIPT"
-  [ "$status" -eq 0 ]
+  init_stubs
+  MODE=cleanup DELETE_CODE=204 S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
 }
 
 @test "cleanup treats a 500 as a retryable failure" {
-  MODE=cleanup DELETE_CODE=500 ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
-    S3_ENDPOINT="https://s3.example.org" run bash "$SCRIPT"
-  [ "$status" -ne 0 ]
+  init_stubs
+  expect_fail env MODE=cleanup DELETE_CODE=500 S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
 }
