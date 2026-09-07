@@ -307,3 +307,22 @@ run_pf() {
   [ "$RC" -eq 0 ]
   [ ! -s "$WORK/published" ]
 }
+
+@test "a cordoned NotReady node is a warning, not a block" {
+  prep
+  # cordon, drain, power off is the normal maintenance sequence and leaves the
+  # node at Ready=Unknown. The operator already signalled it is out of service.
+  export FAKE_NODES_JSON='{"items":[{"metadata":{"name":"n1"},"spec":{},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"n2"},"spec":{"unschedulable":true},"status":{"conditions":[{"type":"Ready","status":"Unknown"}]}}]}'
+  run_pf
+  [ "$RC" -eq 0 ]
+  grep -q "n2 (Ready=Unknown)" "$WORK/out"
+  grep -qi "cordoned" "$WORK/out"
+}
+
+@test "an uncordoned NotReady node still blocks when another node is cordoned" {
+  prep
+  export FAKE_NODES_JSON='{"items":[{"metadata":{"name":"n1"},"spec":{"unschedulable":true},"status":{"conditions":[{"type":"Ready","status":"Unknown"}]}},{"metadata":{"name":"n2"},"spec":{},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}'
+  run_pf
+  [ "$RC" -eq 1 ]
+  grep -q "failedChecks=nodes-ready" "$WORK/published"
+}

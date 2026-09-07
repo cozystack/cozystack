@@ -36,7 +36,21 @@ migrations:
 # Upgrade preflight health gate. Runs as a pre-upgrade hook BEFORE the schema
 # migrations and refuses to start an upgrade on an unhealthy cluster, so a
 # broken storage/node state is surfaced up front instead of mid-rollout. It
-# reuses migrations.image. See templates/preflight-hook.yaml.
+# reuses migrations.image. See templates/preflight-hook.yaml and
+# docs/operations/upgrade-preflight.md.
+#
+# WHEN IT RUNS: only on a version-advancing upgrade, i.e. when the
+# cozystack-version ConfigMap reports a version below migrations.targetVersion.
+# A release that ships no new migration is not gated, and a fresh install never
+# is. That keeps a live `linstor` exec off every Flux reconcile.
+#
+# WHERE THE VERDICT GOES: the ConfigMap cozystack-preflight-status in this
+# release's namespace, written by every run. Read it rather than the hook Job:
+# a failed upgrade is retried automatically every 30s and each attempt deletes
+# the previous Job.
+#
+# THESE KEYS LIVE UNDER spec.components.platform.values on the
+# cozystack.cozystack-platform Package CR.
 preflight:
   # Master toggle. When false the pre-upgrade gate is not rendered at all.
   enabled: true
@@ -50,6 +64,17 @@ preflight:
   # Skip individual checks by id (e.g. [linstor, nodes-ready]) instead of
   # overriding the whole gate. Empty runs every check.
   skipChecks: []
+  # Checks in brief:
+  #   nodes-ready  every Node is Ready. Cordoned nodes are EXEMPT whatever
+  #                their readiness, because a cordon is the operator declaring
+  #                the node out of service and the normal maintenance sequence
+  #                (cordon, drain, power off) leaves it at Ready=Unknown. The
+  #                trade-off is deliberate: a node that failed and was then
+  #                cordoned is waved through on that same signal, and shows up
+  #                in the run's warnings rather than blocking.
+  #   linstor      all LINSTOR satellites online and no faulty DRBD volume
+  #                state. N/A when LINSTOR is not installed. Advisory by
+  #                default, see below.
   # Checks whose FAILURES are downgraded to non-blocking warnings: the check
   # still runs and reports, it just does not block the upgrade. Use this for a
   # check whose blocking behaviour is not yet trusted enough to hard-block an
