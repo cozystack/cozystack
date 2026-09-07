@@ -596,9 +596,16 @@ EOF
   kubectl delete configmap cozystack-version -n cozy-system
   # A bare `! kubectl get` is vacuous under cozytest's `set -e` (errexit is
   # suppressed for any command whose status is inverted with `!`), so a
-  # delete that silently failed would not fail the test; assert the absence
-  # via `if kubectl get; then ...; false`.
-  if kubectl get configmap cozystack-version -n cozy-system 2>/dev/null; then echo "FAIL: cozystack-version configmap must be gone after delete with the no-delete label removed"; false; fi
+  # delete that silently failed would not fail the test. Nor may the absence
+  # rest on the exit status alone: `kubectl get` exits 1 for a NotFound and 1
+  # for a connection, auth or discovery failure, so an api-server the test
+  # cannot reach would read as proof the delete worked. `--ignore-not-found`
+  # collapses the NotFound alone into success with empty output, leaving the
+  # status free to mean a failed read.
+  if ! still_there=$(kubectl get configmap cozystack-version -n cozy-system --ignore-not-found -o name); then
+    echo "FAIL: reading the cozystack-version configmap did not answer"; false
+  fi
+  if [ -n "$still_there" ]; then echo "FAIL: cozystack-version configmap must be gone after delete with the no-delete label removed"; false; fi
   # Reconstruct: declarative apply matches the chart template at
   # packages/core/platform/templates/cozystack-version.yaml — same label set
   # AND the helm.sh/resource-policy: keep annotation that pins the ConfigMap
