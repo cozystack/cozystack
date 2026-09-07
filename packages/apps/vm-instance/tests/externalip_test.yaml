@@ -1,0 +1,91 @@
+suite: reserved external addresses (externalIPs)
+
+# The chart's only job here is to turn an externalIPs entry into the address
+# substrate's consumption annotation on the VM's own Service, alongside the
+# cozy-proxy datapath annotations that are already there. The two are
+# independent: whole-IP NAT works with an auto-assigned address just as it does
+# with a held one.
+#
+# Scoped to the Service template so the chart's instanceType lookups elsewhere
+# do not need a live cluster.
+
+templates:
+  - templates/service.yaml
+
+release:
+  name: vm-test
+  namespace: tenant-test
+
+set:
+  fullnameOverride: vm-test
+
+tests:
+  - it: "external without externalIPs: only the datapath annotations, so the load balancer keeps auto-assigning"
+    set:
+      external: true
+    asserts:
+      - exists:
+          path: metadata.annotations["networking.cozystack.io/wholeIP"]
+      - notExists:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+
+  - it: "an entry pins the VM's Service to its claim, next to the datapath annotations"
+    set:
+      external: true
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - equal:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+      - equal:
+          path: metadata.annotations["networking.cozystack.io/wholeIP"]
+          value: "false"
+      - equal:
+          path: metadata.annotations["networking.cozystack.io/allowICMP"]
+          value: "true"
+
+  - it: "whole-IP keeps its datapath annotations and takes a reserved address too"
+    set:
+      external: true
+      externalMethod: WholeIP
+      externalIPs:
+        - claim: reserved-address
+          target: default
+    asserts:
+      - equal:
+          path: metadata.annotations["networking.cozystack.io/wholeIP"]
+          value: "true"
+      - equal:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+
+  - it: "externalIPs without external is refused rather than ignored"
+    set:
+      external: false
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs requires external: true — there is no external endpoint to pin an address to otherwise"
+
+  - it: "a target this chart does not publish is refused, and the message names the ones it does"
+    set:
+      external: true
+      externalIPs:
+        - claim: reserved-address
+          target: secondary
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[0] targets "secondary", which this application does not publish; valid targets: default'
+
+  - it: "two entries for the same endpoint are refused"
+    set:
+      external: true
+      externalIPs:
+        - claim: first
+        - claim: second
+          target: default
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[1] targets "default" a second time: one endpoint wears one address, so use one entry per target'
