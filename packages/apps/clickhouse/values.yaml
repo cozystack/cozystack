@@ -75,6 +75,19 @@ size: 10Gi
 ## @x-cozystack-options {source: storageclass}
 storageClass: ""
 
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
+
+## @typedef {struct} ExternalIP - A reserved external address for one of the application's external endpoints.
+## @field {string} claim - Name of an IPAddressClaim in this namespace whose address the endpoint should wear. Until the claim binds, the endpoint keeps whatever address the load balancer assigned.
+## @field {string} [target] - Which external endpoint to pin. `endpoint` is the installation-wide Service covering every replica, the endpoint `external: true` publishes, and is the default.
+
+## @param {[]ExternalIP} externalIPs - Reserved addresses for the endpoints `external: true` publishes. Each entry pins one endpoint to an address held by an IPAddressClaim, so the address survives a rebuild of this application. Empty lets the load balancer assign any free address, as before.
+externalIPs: []
+## Example:
+## externalIPs:
+## - claim: clickhouse-address
+
 ## @enum {string} Version
 ## @value v25.8
 ## @value v25.3
