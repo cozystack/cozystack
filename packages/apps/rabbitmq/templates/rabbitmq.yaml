@@ -10,6 +10,11 @@
 {{- end }}
 {{- $disableNonTLS := and $tlsEnabled $wantDisableNonTLS }}
 
+{{- /* Validated unconditionally: externalIPs without external: true is a
+     configuration mistake worth reporting, and this file is the only place in
+     the chart that consumes the value. */}}
+{{- $externalIPs := include "cozy-lib.externalIP.claims" (list .Values.externalIPs .Values.external "client" (list "client") $) | fromYaml }}
+
 {{- /* The flag forces messaging-topology-operator onto TLS, where it verifies the
      per-release CA against x509.SystemCertPool() and fails, so every kind the
      operator owns stops reconciling. The .Values check understates the breakage:
@@ -84,6 +89,14 @@ spec:
   {{- if .Values.external }}
   service:
     type: LoadBalancer
+    {{- /* The operator copies spec.service.annotations onto the client Service
+         it owns, which is the Service that gets the load-balancer address, so
+         the substrate's claim annotation reaches its consumer without the chart
+         owning a Service of its own. */}}
+    {{- with (include "cozy-lib.externalIP.annotations" (list $externalIPs "client" $)) }}
+    annotations:
+      {{- . | nindent 6 }}
+    {{- end }}
   {{- end }}
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
   {{- if $tlsEnabled }}
