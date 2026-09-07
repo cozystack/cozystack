@@ -7,6 +7,27 @@
       "type": "boolean",
       "default": false
     },
+    "externalIPs": {
+      "description": "Reserved addresses for the endpoints `external: true` publishes. Each entry pins one endpoint to an address held by an IPAddressClaim, so the address survives a rebuild of this application. Empty lets the load balancer assign any free address, as before.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "claim"
+        ],
+        "properties": {
+          "claim": {
+            "description": "Name of an IPAddressClaim in this namespace whose address the endpoint should wear. Until the claim binds, the endpoint keeps whatever address the load balancer assigned.",
+            "type": "string"
+          },
+          "target": {
+            "description": "Which external endpoint to pin: `bootstrap` (the default) for the bootstrap Service clients connect to first, or `broker-N` for the per-broker Service of broker N. Kafka advertises every broker's own address, so pinning the bootstrap address alone does not make the whole cluster reachable at fixed addresses — pin one entry per broker for that.",
+            "type": "string"
+          }
+        }
+      }
+    },
     "tls": {
       "description": "TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `\u003crelease\u003e-cluster-ca-cert` and `\u003crelease\u003e-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.",
       "type": "object",

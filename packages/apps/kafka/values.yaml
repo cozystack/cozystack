@@ -5,6 +5,18 @@
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+## @typedef {struct} ExternalIP - A reserved external address for one of the application's external endpoints.
+## @field {string} claim - Name of an IPAddressClaim in this namespace whose address the endpoint should wear. Until the claim binds, the endpoint keeps whatever address the load balancer assigned.
+## @field {string} [target] - Which external endpoint to pin: `bootstrap` (the default) for the bootstrap Service clients connect to first, or `broker-N` for the per-broker Service of broker N. Kafka advertises every broker's own address, so pinning the bootstrap address alone does not make the whole cluster reachable at fixed addresses — pin one entry per broker for that.
+
+## @param {[]ExternalIP} externalIPs - Reserved addresses for the endpoints `external: true` publishes. Each entry pins one endpoint to an address held by an IPAddressClaim, so the address survives a rebuild of this application. Empty lets the load balancer assign any free address, as before.
+externalIPs: []
+## Example:
+## externalIPs:
+## - claim: kafka-bootstrap-address
+## - target: broker-0
+##   claim: kafka-broker-0-address
+
 ## @typedef {struct} TLS - TLS configuration for the external listener.
 ## @field {*bool} enabled - Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). Warning: setting this to false while external is true exposes Kafka over plaintext on a public IP via LoadBalancer. Strimzi does not provide authentication on this listener unless SCRAM, mTLS, or OAuth is separately configured. Use only in controlled networks.
 
