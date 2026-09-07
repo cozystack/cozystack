@@ -127,6 +127,32 @@
         "source": "storageclass"
       }
     },
+    "external": {
+      "description": "Enable external access from outside the cluster.",
+      "type": "boolean",
+      "default": false
+    },
+    "externalIPs": {
+      "description": "Reserved addresses for the endpoints `external: true` publishes. Each entry pins one endpoint to an address held by an IPAddressClaim, so the address survives a rebuild of this application. Empty lets the load balancer assign any free address, as before.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "claim"
+        ],
+        "properties": {
+          "claim": {
+            "description": "Name of an IPAddressClaim in this namespace whose address the endpoint should wear. Until the claim binds, the endpoint keeps whatever address the load balancer assigned.",
+            "type": "string"
+          },
+          "target": {
+            "description": "Which external endpoint to pin. `endpoint` is the installation-wide Service covering every replica, the endpoint `external: true` publishes, and is the default.",
+            "type": "string"
+          }
+        }
+      }
+    },
     "version": {
       "description": "ClickHouse major.minor version to deploy. Applies to both the ClickHouse server and ClickHouse Keeper images. Downgrading to an older major is unsafe (ClickHouse cannot read data written by a newer server and Keeper snapshots are not backward compatible) — only increase this value.",
       "type": "string",

@@ -36,6 +36,12 @@ type ConfigSpec struct {
 	// +kubebuilder:default:=""
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
+	// Enable external access from outside the cluster.
+	// +kubebuilder:default:=false
+	External bool `json:"external"`
+	// Reserved addresses for the endpoints `external: true` publishes. Each entry pins one endpoint to an address held by an IPAddressClaim, so the address survives a rebuild of this application. Empty lets the load balancer assign any free address, as before.
+	// +kubebuilder:default:={}
+	ExternalIPs []ExternalIP `json:"externalIPs,omitempty"`
 	// ClickHouse major.minor version to deploy. Applies to both the ClickHouse server and ClickHouse Keeper images. Downgrading to an older major is unsafe (ClickHouse cannot read data written by a newer server and Keeper snapshots are not backward compatible) — only increase this value.
 	// +kubebuilder:default:="v24.9"
 	Version Version `json:"version"`
@@ -120,6 +126,13 @@ type EndpointCA struct {
 	// Name of the Secret in the application namespace. Empty (default) mounts nothing and leaves the sidecar on the system trust store only.
 	// +kubebuilder:default:=""
 	Name string `json:"name,omitempty"`
+}
+
+type ExternalIP struct {
+	// Name of an IPAddressClaim in this namespace whose address the endpoint should wear. Until the claim binds, the endpoint keeps whatever address the load balancer assigned.
+	Claim string `json:"claim"`
+	// Which external endpoint to pin. `endpoint` is the installation-wide Service covering every replica, the endpoint `external: true` publishes, and is the default.
+	Target string `json:"target,omitempty"`
 }
 
 type Resources struct {
