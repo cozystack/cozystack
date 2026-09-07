@@ -1,0 +1,108 @@
+suite: reserved external addresses (externalIPs)
+
+# The chart's only job here is to turn an externalIPs entry into the address
+# substrate's consumption annotation on the Strimzi listener configuration, and
+# to refuse a value that would otherwise be silently ignored. Nothing about the
+# address itself is chart business: the annotation is inert until a per-class
+# driver acts on it.
+#
+# Kafka is the one app in the catalog with several external endpoints — the
+# bootstrap Service and one Service per broker — so it is also where the
+# per-target shape of externalIPs earns its keep.
+
+templates:
+  - templates/kafka.yaml
+
+release:
+  name: kafka-test
+  namespace: tenant-test
+
+tests:
+  - it: "external without externalIPs: no listener configuration, so the load balancer keeps auto-assigning"
+    set:
+      external: true
+    asserts:
+      - notExists:
+          path: spec.kafka.listeners[2].configuration
+        documentSelector:
+          path: kind
+          value: Kafka
+
+  - it: "an entry pins the bootstrap Service to its claim"
+    set:
+      external: true
+      externalIPs:
+        - claim: kafka-bootstrap-address
+    asserts:
+      - equal:
+          path: spec.kafka.listeners[2].configuration.bootstrap.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: kafka-bootstrap-address
+        documentSelector:
+          path: kind
+          value: Kafka
+      - notExists:
+          path: spec.kafka.listeners[2].configuration.brokers
+        documentSelector:
+          path: kind
+          value: Kafka
+
+  - it: "brokers can be pinned individually, and only the ones named are configured"
+    set:
+      external: true
+      kafka:
+        replicas: 3
+      externalIPs:
+        - target: broker-0
+          claim: kafka-broker-0-address
+        - target: broker-2
+          claim: kafka-broker-2-address
+    asserts:
+      - notExists:
+          path: spec.kafka.listeners[2].configuration.bootstrap
+        documentSelector:
+          path: kind
+          value: Kafka
+      - equal:
+          path: spec.kafka.listeners[2].configuration.brokers
+          value:
+            - broker: 0
+              annotations:
+                local.sdn.cozystack.io/ip-address-claim: kafka-broker-0-address
+            - broker: 2
+              annotations:
+                local.sdn.cozystack.io/ip-address-claim: kafka-broker-2-address
+        documentSelector:
+          path: kind
+          value: Kafka
+
+  - it: "externalIPs without external is refused rather than ignored"
+    set:
+      external: false
+      externalIPs:
+        - claim: kafka-bootstrap-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs requires external: true — there is no external endpoint to pin an address to otherwise"
+
+  - it: "a broker beyond the replica count is refused, and the message names the brokers that exist"
+    set:
+      external: true
+      kafka:
+        replicas: 3
+      externalIPs:
+        - target: broker-9
+          claim: kafka-broker-9-address
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[0] targets "broker-9", which this application does not publish; valid targets: bootstrap, broker-0, broker-1, broker-2'
+
+  - it: "two entries for the same endpoint are refused"
+    set:
+      external: true
+      externalIPs:
+        - claim: first
+        - claim: second
+          target: bootstrap
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[1] targets "bootstrap" a second time: one endpoint wears one address, so use one entry per target'
