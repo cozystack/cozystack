@@ -152,11 +152,18 @@ run_checks() {
     echo "Preflight FAILED for:${fail_checks}"
     echo "The upgrade is BLOCKED because the cluster is not in a safe state."
     echo ""
-    echo "Fix the issues reported above and retry the upgrade."
-    echo "If this degraded state is expected and you accept the risk, re-run with"
-    echo "either:"
-    echo "  preflight.override: true            # proceed past all failing checks"
-    echo "  preflight.skipChecks: [<check-id>]  # skip specific checks only"
+    echo "Fix the issues reported above and retry the upgrade. The upgrade is"
+    echo "retried automatically, so there is nothing to re-run by hand."
+    echo ""
+    echo "This verdict is also in configmap/${STATUS_CM:-cozystack-preflight-status}"
+    echo "in namespace ${STATUS_NS:-<release namespace>}, which outlives this Job."
+    echo ""
+    echo "If this degraded state is expected and you accept the risk, set one of"
+    echo "these under spec.components.platform.values.preflight on the"
+    echo "cozystack.cozystack-platform Package CR:"
+    echo "  override: true            # proceed past all failing checks"
+    echo "  skipChecks: [<check-id>]  # skip specific checks only"
+    echo "See docs/operations/upgrade-preflight.md."
     return 1
   fi
 

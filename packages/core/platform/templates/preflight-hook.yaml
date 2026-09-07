@@ -70,6 +70,12 @@ spec:
   # check bounds its own kubectl calls with a `timeout` wrapper, so a healthy
   # run finishes far under this; the deadline only fires on a pathological hang
   # the per-call timeouts somehow did not bound.
+  #
+  # The budget covers pulling the image too, and this Job is the first thing to
+  # pull it on an upgrade. That is deliberate rather than a hazard: the
+  # migration hook pulls the same image seconds later, under the release's own
+  # 10m upgrade timeout, so a cluster that cannot fetch it inside 5 minutes was
+  # not going to finish the upgrade either.
   activeDeadlineSeconds: 300
   template:
     metadata:
