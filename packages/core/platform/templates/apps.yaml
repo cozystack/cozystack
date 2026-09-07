@@ -186,6 +186,9 @@ stringData:
       {{- end }}
       gateway-edge-classes: {{ $edgeClasses | join "," | quote }}
       gateway-tenant-classes: {{ $tenantClasses | join "," | quote }}
+      gateway-reserved-hosts: {{ .Values.gateway.reservedHosts | default (list) | join "," | quote }}
+      gateway-host-grant-groups: {{ .Values.gateway.hostGrantGroups | default (list) | join "," | quote }}
+      gateway-tenant-host-delegation: {{ .Values.gateway.tenantHostDelegation | default false | quote }}
       {{- /* Whether the root tenant hosts the platform monitoring stack
              (Tenant/root spec.monitoring). cozystack-basics gates the
              cozy-monitoring -> tenant-root vlinsert/vminsert ExternalName
