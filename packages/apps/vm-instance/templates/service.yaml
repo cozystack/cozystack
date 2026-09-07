@@ -1,3 +1,7 @@
+{{- /* Validated unconditionally: externalIPs without external: true is a
+     configuration mistake worth reporting, and this file is the only place in
+     the chart that consumes the value. */}}
+{{- $externalIPs := include "cozy-lib.externalIP.claims" (list .Values.externalIPs .Values.external "default" (list "default") $) | fromYaml }}
 ---
 apiVersion: v1
 kind: Service
@@ -12,6 +16,13 @@ metadata:
     networking.cozystack.io/wholeIP: {{ ternary "true" "false" (eq .Values.externalMethod "WholeIP") | quote }}
     {{- if eq .Values.externalMethod "PortList" }}
     networking.cozystack.io/allowICMP: {{ ternary "true" "false" (ne .Values.externalAllowICMP false) | quote }}
+    {{- end }}
+    {{- /* cozy-proxy carries the datapath; the claim annotation is read by the
+         address substrate's driver, which pins the reserved address onto this
+         same Service. The two are independent — whole-IP NAT works with an
+         auto-assigned address just as it does with a held one. */}}
+    {{- with (include "cozy-lib.externalIP.annotations" (list $externalIPs "default" $)) }}
+    {{- . | nindent 4 }}
     {{- end }}
 {{- end }}
 spec:
