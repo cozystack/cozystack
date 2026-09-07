@@ -127,6 +127,27 @@
       "type": "boolean",
       "default": false
     },
+    "externalIPs": {
+      "description": "Reserved addresses for the endpoints `external: true` publishes. Each entry pins one endpoint to an address held by an IPAddressClaim, so the address survives a rebuild of this application. Empty lets the load balancer assign any free address, as before.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "claim"
+        ],
+        "properties": {
+          "claim": {
+            "description": "Name of an IPAddressClaim in this namespace whose address the endpoint should wear. Until the claim binds, the endpoint keeps whatever address the load balancer assigned.",
+            "type": "string"
+          },
+          "target": {
+            "description": "Which external endpoint to pin. `master` is the Sentinel-elected master, the endpoint `external: true` publishes, and is the default.",
+            "type": "string"
+          }
+        }
+      }
+    },
     "version": {
       "description": "Redis major version to deploy",
       "type": "string",
