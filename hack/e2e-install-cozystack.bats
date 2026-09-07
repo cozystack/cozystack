@@ -246,6 +246,10 @@ spec:
         bundles:
           enabledPackages:
             - cozystack.external-dns-application
+        gateway:
+          reservedHosts:
+            - example.com
+          tenantHostDelegation: true
 EOF
 
   # Launch storage + LB configuration in the background. It waits for its
