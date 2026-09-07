@@ -35,11 +35,46 @@ spec:
     metadata:
       annotations:
         kubevirt.io/allow-pod-bridge-network-live-migration: "true"
+        {{- if .Capabilities.APIVersions.Has "kubeovn.io/v1/IP" }}
         {{- $ovnIPName := printf "%s.%s" (include "virtual-machine.fullname" .) .Release.Namespace }}
         {{- $ovnIP := lookup "kubeovn.io/v1" "IP" "" $ovnIPName }}
         {{- if $ovnIP }}
         ovn.kubernetes.io/mac_address: {{ $ovnIP.spec.macAddress | quote }}
         ovn.kubernetes.io/ip_address: {{ $ovnIP.spec.ipAddress | quote }}
+        {{- end }}
+        {{- end }}
+        {{- /*
+        networks[].ipAddress pins the address of a secondary NIC through whichever
+        backend the cluster serves. Kube-OVN reads a per-network annotation key,
+        <nad>.<namespace>.ovn.kubernetes.io/ip_address. Cozyplane reads one launcher
+        pod annotation, sdn.cozystack.io/networks: a JSON list with an entry per
+        pinned NIC, selected by the interface name Multus hands to the CNI. KubeVirt
+        names a secondary interface "pod" plus the first 11 hex digits of the
+        sha256 of the network name, so the entry carries that name and the VPC the
+        NAD names; an entry without a name would be read as a leg of the pod itself.
+        Both keys reuse the <namespace>/<network> the multus reference below is
+        composed from, so a pinned network and an attached network cannot disagree.
+        With neither backend served the render fails: a value that would be dropped
+        silently is worse than a render that says why it stopped.
+        */}}
+        {{- $pinned := list }}
+        {{- range $net := $networks }}
+        {{- if $net.ipAddress }}
+        {{- $pinned = append $pinned (dict "name" (printf "pod%s" (sha256sum $net.name | trunc 11)) "vpc" (printf "%s/%s" $.Release.Namespace $net.name) "ip" $net.ipAddress) }}
+        {{- end }}
+        {{- end }}
+        {{- if $pinned }}
+        {{- if .Capabilities.APIVersions.Has "kubeovn.io/v1/IP" }}
+        {{- range $net := $networks }}
+        {{- if $net.ipAddress }}
+        {{ printf "%s.%s.ovn.kubernetes.io/ip_address" $net.name $.Release.Namespace }}: {{ $net.ipAddress | quote }}
+        {{- end }}
+        {{- end }}
+        {{- else if .Capabilities.APIVersions.Has "sdn.cozystack.io/v1alpha1/VPC" }}
+        sdn.cozystack.io/networks: {{ $pinned | toJson | quote }}
+        {{- else }}
+        {{-   fail "networks[].ipAddress needs a network backend that pins addresses: neither kubeovn.io/v1 IP nor sdn.cozystack.io/v1alpha1 VPC is served" }}
+        {{- end }}
         {{- end }}
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}

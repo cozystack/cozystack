@@ -1,0 +1,269 @@
+suite: vm-instance static IP address on secondary interfaces
+
+# `networks[].ipAddress` pins the address of a secondary NIC through whichever network
+# backend the cluster serves, and the backend is picked from API discovery
+# (`.Capabilities.APIVersions`), never from a `lookup`.
+#
+# Kube-OVN reads a PER-NETWORK annotation key, `<nad>.<namespace>.ovn.kubernetes.io/ip_address`.
+# Cozyplane reads ONE launcher pod annotation, `sdn.cozystack.io/networks`: a JSON list with an
+# entry per pinned NIC, selected by the interface name Multus hands to the CNI — KubeVirt names a
+# secondary interface `pod` + the first 11 hex digits of sha256(network name) — and carrying the
+# VPC the NetworkAttachmentDefinition names (an entry without a name would be read as a leg of the
+# pod itself). Both keys are composed from the same two expressions the chart already uses for
+# the multus reference `<namespace>/<nad>`, so a network pinned here and a network attached
+# below can never disagree. A key the backend does not recognise is ignored silently — no admission error —
+# which is why the exact form is asserted rather than described. The Cozyplane annotation is
+# asserted as a string: a JSON list left unquoted would be read as a YAML sequence and refused
+# by the API server.
+#
+# helm-unittest's fake `lookup` returns nothing for an unserved kind and never errors, so the
+# capability toggle is what drives each branch here, and the Kube-OVN case that mocks an `IP`
+# object pins that the historical lookup-based annotations and the new key coexist. Every
+# pinning case is red on the template without this feature.
+#
+# `instanceType` is left empty and `resources` supplied instead: the guards at the top of
+# vm.yaml resolve instance types through `lookup`, which no live cluster backs here.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+set:
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 2
+    sockets: 1
+    memory: 4Gi
+  _cluster:
+    scheduling: {}
+tests:
+  # ── Kube-OVN ──────────────────────────────────────────────────────────────
+  - it: pins the requested address through the Kube-OVN per-network annotation
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/IP
+    set:
+      networks:
+        - name: subnet-a
+          ipAddress: 10.77.7.5
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+          value: "10.77.7.5"
+      - notExists:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/networks"]
+      - equal:
+          path: spec.template.spec.networks[1].multus.networkName
+          value: tenant-test/subnet-a
+
+  - it: annotates only the Kube-OVN interfaces that ask for an address
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/IP
+    set:
+      networks:
+        - name: subnet-a
+          ipAddress: 10.77.7.5
+        - name: subnet-b
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+          value: "10.77.7.5"
+      - notExists:
+          path: spec.template.metadata.annotations["subnet-b.tenant-test.ovn.kubernetes.io/ip_address"]
+
+  # The pod-network pin that Kube-OVN's IP object carries is a different annotation
+  # and must keep rendering next to the per-network one.
+  - it: keeps the Kube-OVN pod-network pin next to a per-network address
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/IP
+    kubernetesProvider:
+      scheme:
+        "kubeovn.io/v1/IP":
+          gvr:
+            group: kubeovn.io
+            version: v1
+            resource: ips
+          namespaced: false
+      objects:
+        - apiVersion: kubeovn.io/v1
+          kind: IP
+          metadata:
+            name: test-vm-vm-instance.tenant-test
+          spec:
+            macAddress: "00:00:5E:00:53:01"
+            ipAddress: "192.0.2.10"
+    set:
+      networks:
+        - name: subnet-a
+          ipAddress: 10.77.7.5
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/ip_address"]
+          value: "192.0.2.10"
+      - equal:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/mac_address"]
+          value: "00:00:5E:00:53:01"
+      - equal:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+          value: "10.77.7.5"
+
+  # `subnets` is the deprecated alias of `networks` and shares its type, so it gains the
+  # field too. It resolves to the same variable, and this pins that it keeps doing so.
+  - it: honours the address through the deprecated subnets alias on Kube-OVN
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/IP
+    set:
+      subnets:
+        - name: subnet-a
+          ipAddress: 10.77.7.9
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+          value: "10.77.7.9"
+
+  # Kube-OVN keeps priority on a cluster that serves both APIs.
+  - it: uses the Kube-OVN annotation when both backends are served
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/IP
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: subnet-a
+          ipAddress: 10.77.7.5
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+          value: "10.77.7.5"
+      - notExists:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/networks"]
+
+  # ── Cozyplane ─────────────────────────────────────────────────────────────
+  - it: pins the requested address through the Cozyplane networks annotation
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: subnet-a
+          ipAddress: 10.77.7.5
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/networks"]
+          value: '[{"ip":"10.77.7.5","name":"pod56bdf0204ff","vpc":"tenant-test/subnet-a"}]'
+      - notExists:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+      - equal:
+          path: spec.template.spec.networks[1].multus.networkName
+          value: tenant-test/subnet-a
+
+  - it: lists only the Cozyplane interfaces that ask for an address
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: subnet-a
+          ipAddress: 10.77.7.5
+        - name: subnet-b
+        - name: subnet-c
+          ipAddress: 10.77.9.7
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/networks"]
+          value: '[{"ip":"10.77.7.5","name":"pod56bdf0204ff","vpc":"tenant-test/subnet-a"},{"ip":"10.77.9.7","name":"podad12f2caffd","vpc":"tenant-test/subnet-c"}]'
+
+  - it: honours the address through the deprecated subnets alias on Cozyplane
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      subnets:
+        - name: subnet-a
+          ipAddress: 10.77.7.9
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/networks"]
+          value: '[{"ip":"10.77.7.9","name":"pod56bdf0204ff","vpc":"tenant-test/subnet-a"}]'
+
+  # ── No backend, no address ────────────────────────────────────────────────
+  # A value that would be dropped silently is worse than a render that says why it stopped.
+  - it: refuses a pinned address when no supported backend is served
+    set:
+      networks:
+        - name: subnet-a
+          ipAddress: 10.77.7.5
+    asserts:
+      - failedTemplate:
+          errorPattern: needs a network backend that pins addresses
+
+  - it: adds nothing on Kube-OVN when no address is requested
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/IP
+    set:
+      networks:
+        - name: subnet-a
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]
+      - notExists:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/networks"]
+
+  - it: adds nothing on Cozyplane when no address is requested
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: subnet-a
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/networks"]
+      - notExists:
+          path: spec.template.metadata.annotations["subnet-a.tenant-test.ovn.kubernetes.io/ip_address"]

@@ -90,6 +90,10 @@
       "items": {
         "type": "object",
         "properties": {
+          "ipAddress": {
+            "description": "Static IPv4 address for this interface, pinned through the network backend the cluster serves (Kube-OVN or Cozyplane). Empty lets IPAM allocate one. The address must be free and inside the network CIDR; the backend refuses the VM otherwise.",
+            "type": "string"
+          },
           "name": {
             "description": "Network attachment name.",
             "type": "string",
@@ -107,6 +111,10 @@
       "items": {
         "type": "object",
         "properties": {
+          "ipAddress": {
+            "description": "Static IPv4 address for this interface, pinned through the network backend the cluster serves (Kube-OVN or Cozyplane). Empty lets IPAM allocate one. The address must be free and inside the network CIDR; the backend refuses the VM otherwise.",
+            "type": "string"
+          },
           "name": {
             "description": "Network attachment name.",
             "type": "string",

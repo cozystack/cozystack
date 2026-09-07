@@ -1,0 +1,61 @@
+suite: vm-instance Kube-OVN IP pinning follows API discovery
+
+# On a live cluster Helm's `lookup` propagates the discovery error when the
+# requested API group is not served, so the chart could not render at all
+# without the Kube-OVN CRDs. helm-unittest's fake lookup never errors: it just
+# returns nothing for an unserved kind, so an IP object is mocked here to pin
+# both sides. With the API advertised the annotations must carry the mocked
+# values; with the API absent they must be missing even though the object
+# exists, which is the branch the discovery guard adds.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+set:
+  fullnameOverride: test-vm
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 1
+    sockets: 1
+    memory: 1Gi
+  _cluster:
+    scheduling:
+      dedicatedNodesForWindowsVMs: "false"
+kubernetesProvider:
+  scheme:
+    "kubeovn.io/v1/IP":
+      gvr:
+        group: kubeovn.io
+        version: v1
+        resource: ips
+      namespaced: false
+  objects:
+    - apiVersion: kubeovn.io/v1
+      kind: IP
+      metadata:
+        name: test-vm.tenant-test
+      spec:
+        macAddress: "00:00:5E:00:53:01"
+        ipAddress: "192.0.2.10"
+tests:
+  - it: pins the Kube-OVN IP and MAC when the IP API is served
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1/IP
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/mac_address"]
+          value: "00:00:5E:00:53:01"
+      - equal:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/ip_address"]
+          value: "192.0.2.10"
+  - it: skips the lookup when the IP API is not served, even if an IP object exists
+    capabilities:
+      apiVersions: []
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/mac_address"]
+      - notExists:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/ip_address"]
