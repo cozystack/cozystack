@@ -1,5 +1,4 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 14 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # -----------------------------------------------------------------------------
 # Unit tests for hack/select-e2e.sh
 #
@@ -8,6 +7,15 @@
 # function under `set -eu -x`, so assertions are direct shell tests that exit
 # non-zero on failure. setup()/teardown() are not honored — each test creates
 # and cleans its own scratch dir.
+#
+# Each fixture test removes its scratch directory at the last reachable cleanup
+# point of the body and never from a `trap ... EXIT`. A handler installed inside
+# an @test body replaces the one the bats binary keeps its bookkeeping in, and a
+# test that then FAILS prints no TAP line at all — the run only reports having
+# executed fewer tests than it planned, which reads as a green suite. Every
+# converted body reaches cleanup only after an assertion whose failure aborts
+# the body, so the scratch directory survives for inspection on failure. See
+# hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 #
 # Run with: hack/cozytest.sh hack/select-e2e_test.bats
 # -----------------------------------------------------------------------------
@@ -48,11 +56,11 @@ assert_full_suite() {
 
 @test "single app diff selects only that suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/apps/postgres/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "postgres" ]
+    rm -rf "$tmp"
 }
 
 @test "operator diff selects all dependent app suites" {
@@ -60,7 +68,6 @@ assert_full_suite() {
     # (Harbor uses postgres as its backing DB), and monitoring-application (Grafana
     # DB). monitoring has no chainsaw suite so it's filtered out by the selector.
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/postgres-operator/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
@@ -70,6 +77,7 @@ assert_full_suite() {
         echo "operator diff must not trigger full suite; got: $output" >&2
         exit 1
     fi
+    rm -rf "$tmp"
 }
 
 @test "engine-dependency change does not fan out via the ordering edge" {
@@ -80,7 +88,6 @@ assert_full_suite() {
     # genuine direct dependents (postgres, harbor, ...), never unrelated apps
     # like kafka that reach cert-manager solely through the engine.
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/cert-manager/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
@@ -90,6 +97,7 @@ assert_full_suite() {
         echo "cert-manager change must not fan out via engine; got: $output" >&2
         exit 1
     fi
+    rm -rf "$tmp"
 }
 
 @test "cozystack-basics does not narrow to a suite that lands downstream of it" {
@@ -168,7 +176,6 @@ assert_full_suite() {
 
 @test "library change triggers full suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/library/cozy-lib/templates/_helpers.tpl" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
@@ -183,20 +190,20 @@ assert_full_suite() {
         cat "$tmp/err" >&2
         exit 1
     fi
+    rm -rf "$tmp"
 }
 
 @test "docs-only diff selects nothing" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "docs/README.md" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ -z "$output" ]
+    rm -rf "$tmp"
 }
 
 @test "kubernetes-application maps to the four kubernetes suites" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/apps/kubernetes/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
@@ -206,20 +213,20 @@ assert_full_suite() {
     # chart-only change must select them too.
     echo "$output" | grep -q "kubernetes-oidc-system"
     echo "$output" | grep -q "kubernetes-oidc-customconfig"
+    rm -rf "$tmp"
 }
 
 @test "dashboards-only diff selects nothing (path is plural)" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "dashboards/gpu/gpu-fleet.json" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ -z "$output" ]
+    rm -rf "$tmp"
 }
 
 @test "shared E2E helper script triggers full suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-chainsaw/_lib/run-kubernetes.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
@@ -229,60 +236,61 @@ assert_full_suite() {
         cat "$tmp/err" >&2
         exit 1
     fi
+    rm -rf "$tmp"
 }
 
 @test "chainsaw config change triggers full suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-chainsaw/.chainsaw.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
+    rm -rf "$tmp"
 }
 
 @test "install bats triggers full suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-install-cozystack.bats" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
+    rm -rf "$tmp"
 }
 
 @test "per-suite edit selects only that suite, never escalates" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-chainsaw/redis/chainsaw-test.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "redis" ]
+    rm -rf "$tmp"
 }
 
 @test "pull-requests workflow change triggers full suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo ".github/workflows/pull-requests.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
+    rm -rf "$tmp"
 }
 
 @test "backup example harness edit selects its app suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "examples/backups/postgres/run-all.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "postgres" ]
+    rm -rf "$tmp"
 }
 
 @test "backup example without a matching suite selects nothing" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "examples/backups/no-such-app/run.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources") || true
     [ -z "$output" ]
+    rm -rf "$tmp"
 }
 
 # --- #3392: every path is classified; unclassified escalates -----------------
@@ -409,12 +417,12 @@ assert_full_suite() {
 # invisible to a caller that pipes it; a caller assembling the list itself sees
 # it immediately. Both cases below are red without `|| [ -n "$file" ]`.
 #
-# Cleanup here, as in every test added with this change, is the last statement
-# of the body rather than a `trap ... EXIT`: that trap replaces the one the bats
-# binary installs for its own bookkeeping, and a test failing under it can print
-# no TAP line at all, which is the opposite of what a regression pin is for.
-# Last, not before the assertion, so that `set -e` leaves the scratch directory
-# behind on failure for inspection (docs/agents/e2e-testing.md §3).
+# Cleanup here, as everywhere in this file, is the last statement of the body
+# rather than a `trap ... EXIT`: that trap replaces the one the bats binary
+# installs for its own bookkeeping, and a test failing under it can print no TAP
+# line at all, which is the opposite of what a regression pin is for. Last, not
+# before the assertion, so that `set -e` leaves the scratch directory behind on
+# failure for inspection (docs/agents/e2e-testing.md §3).
 
 @test "editing a disabled chainsaw suite selects nothing" {
     # A .disabled suite runs nowhere, so its edits are the one file class that

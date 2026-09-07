@@ -1,5 +1,4 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 1 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # -----------------------------------------------------------------------------
 # Unit tests for the pure decision/parsing helpers in
 # hack/e2e-capture-dataplane.sh -- specifically the LoadBalancer-datapath
@@ -37,6 +36,16 @@
 # the LB heavy-capture path, which only runs when the probe reports the address
 # unreachable, so their stubs answer `nc -z` with a failure on purpose. A stub
 # that stops short leaves the test green against every implementation.
+#
+# Tests of the second shape remove their scratch directories at the last
+# reachable cleanup point of the body, never from a `trap ... EXIT`. A handler
+# installed inside an @test body replaces the one the bats binary keeps its
+# bookkeeping in, and a test that then FAILS prints no TAP line at all — the run
+# only reports having executed fewer tests than it planned, which reads as a
+# green suite. Their cleanup follows an assertion or explicit failure branch
+# whose failure aborts the body, so the scratch directory survives for
+# inspection on failure, which for a capture test is the artifact under
+# assertion. See hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 #
 # Title syntax constraints (inherited from cozytest.sh's awk parser):
 #   - Titles delimited by ASCII double quotes; embedded quotes truncate.
@@ -205,7 +214,6 @@ E2E_CAPTURE_DATAPLANE_LIB=1
 
 @test "runtime checks LoadBalancers when there are no affected pods" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   calls="$tmp/kubectl.calls"
   mkdir -p "$tmp/bin"
   cat > "$tmp/bin/kubectl" <<'EOF'
@@ -221,6 +229,7 @@ EOF
   awk '$0 ~ /^get svc -A / { found = 1 } END { exit !found }' "$calls"
   awk 'index($0, "checking LoadBalancers independently") { found = 1 } END { exit !found }' "$tmp/stdout"
   awk 'index($0, "no Service type=LoadBalancer") { found = 1 } END { exit !found }' "$tmp/stdout"
+  rm -rf "$tmp"
 }
 
 @test "lb_filter_services keeps only LoadBalancer rows that have an ingress IP" {
