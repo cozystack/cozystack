@@ -1,0 +1,37 @@
+suite: gateway host delegation wiring into _cluster
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+tests:
+  - it: defaults are inert (backwards compatibility)
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-reserved-hosts:\s*""'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-host-grant-groups:\s*""'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-tenant-host-delegation:\s*"false"'
+
+  - it: lists are flattened with commas
+    set:
+      gateway:
+        reservedHosts: ["hikube.cloud", "hikube.internal"]
+        hostGrantGroups: ["system:serviceaccounts:hikube-api"]
+        tenantHostDelegation: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-reserved-hosts:\s*"hikube\.cloud,hikube\.internal"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-host-grant-groups:\s*"system:serviceaccounts:hikube-api"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-tenant-host-delegation:\s*"true"'

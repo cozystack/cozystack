@@ -24,6 +24,23 @@
 {{- $computedHost = printf "%s.%s" (splitList "-" $tenantName | last) $parentHost }}
 {{- end }}
 
+{{/* Compute the effective allowed-hosts list: parent's list, plus this
+     tenant's own apex when the platform enables delegation, plus any
+     explicit grants. Space-separated: label values cannot hold a list
+     (63 chars, no commas), so this rides on an annotation. */}}
+{{- $delegation := eq (toString (index .Values._cluster "gateway-tenant-host-delegation" | default "false")) "true" }}
+{{- $allowed := list }}
+{{- with $parentNamespace.allowedHosts }}
+{{-   $allowed = splitList " " . }}
+{{- end }}
+{{- if and $delegation $computedHost }}
+{{-   $allowed = append $allowed $computedHost }}
+{{- end }}
+{{- range .Values.allowedHosts }}
+{{-   $allowed = append $allowed . }}
+{{- end }}
+{{- $allowedStr := join " " (uniq (compact $allowed)) }}
+
 {{/* Compute service references */}}
 {{- $etcd := $parentNamespace.etcd | default "" }}
 {{- if .Values.etcd }}
@@ -93,6 +110,8 @@ metadata:
     scheduler.cozystack.io/scheduling-class: {{ . | quote }}
     {{- end }}
     alpha.kubevirt.io/auto-memory-limits-ratio: "1.0"
+  annotations:
+    namespace.cozystack.io/allowed-hosts: {{ $allowedStr | quote }}
   {{- if $existingNS }}
   ownerReferences:
   - apiVersion: v1
@@ -123,6 +142,7 @@ stringData:
       monitoring: {{ $monitoring | quote }}
       seaweedfs: {{ $seaweedfs | quote }}
       host: {{ $computedHost | quote }}
+      allowedHosts: {{ $allowedStr | quote }}
       {{- with $schedulingClass }}
       schedulingClass: {{ . | quote }}
       {{- end }}

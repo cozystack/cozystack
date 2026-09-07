@@ -560,6 +560,33 @@ gateway:
     - cozy-monitoring
     - cozy-linstor-gui
     - default
+  # Hostname suffixes the platform never delegates to any tenant. A tenant may
+  # not set spec.host to one of these, or to a subdomain of one, even when its
+  # allowlist would otherwise cover it. Cluster-admins (system:masters) are not
+  # affected — tenant-root's own apex normally lives under one of these.
+  # This is the platform owner's absolute veto, and the backstop against a
+  # faulty grant written by a delegated grant service account.
+  reservedHosts: []
+  # Groups allowed to write Tenant.spec.allowedHosts, in addition to
+  # system:masters and the cozy-* service accounts. Entries are Kubernetes
+  # group names, e.g. "system:serviceaccounts:hikube-api" — the policy checks
+  # request.userInfo.groups, so a username form such as
+  # "system:serviceaccount:hikube-api:controller" never matches and silently
+  # grants nothing. A platform whose control panel performs its own
+  # domain-ownership verification lists its API service account's group
+  # here — which trusts every service account in that namespace, present and
+  # future, not just the one API account; there is no way to grant a single
+  # account. These accounts grant domains; they do NOT gain the ability to
+  # set spec.host themselves. This is unsafe to enable unless reservedHosts
+  # above is also non-empty and covers the platform's own hostnames: without
+  # that, a listed group's authority is effectively unbounded — it can grant
+  # any domain to a tenant, and that tenant's subtenants can then claim
+  # hostnames under it too, with no platform-side backstop.
+  hostGrantGroups: []
+  # Seed each tenant's own apex into its allowlist, so a tenant may set
+  # spec.host anywhere under the hostname already delegated to it. Off by
+  # default: enabling it grants every tenant a capability it did not have.
+  tenantHostDelegation: false
 # Platform monitoring configuration.
 monitoring:
   # Whether the root tenant (tenant-root) hosts the platform

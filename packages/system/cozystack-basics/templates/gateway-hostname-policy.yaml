@@ -1,5 +1,15 @@
 {{- /* Render only where the ValidatingAdmissionPolicy API is served (GA since Kubernetes 1.30; the management cluster requires 1.33+). Same guard as packages/core/platform/templates/deletion-protection.yaml. */}}
 {{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
+{{- $reservedItems := list }}
+{{- range (splitList "," (index .Values._cluster "gateway-reserved-hosts" | default "")) }}
+{{-   if . }}{{ $reservedItems = append $reservedItems (printf "%q" .) }}{{ end }}
+{{- end }}
+{{- $reservedCel := printf "[%s]" (join "," $reservedItems) }}
+{{- $grantItems := list }}
+{{- range (splitList "," (index .Values._cluster "gateway-host-grant-groups" | default "")) }}
+{{-   if . }}{{ $grantItems = append $grantItems (printf "%q" .) }}{{ end }}
+{{- end }}
+{{- $grantCel := printf "[%s]" (join "," $grantItems) }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -100,10 +110,58 @@ spec:
         g == "system:serviceaccounts:cozy-cert-manager" ||
         g == "system:serviceaccounts:cozy-fluxcd" ||
         g == "system:serviceaccounts:kube-system")
+  # Both operands of the reserved/allowed comparisons are normalized with
+  # .lowerAscii(): newHost comes from tenant.spec.host, which the CRD does
+  # not constrain to lowercase, and the reserved/allowed list entries come
+  # from the platform's gateway-reserved-hosts and the namespace's
+  # allowed-hosts annotation, either of which can carry uppercase too.
+  # Without normalizing both sides, a mixed-case host such as
+  # svc.INTERNAL.example.com bypasses a reserved entry internal.example.com
+  # while still matching a lowercase allowlist grant of example.com, and
+  # downstream consumers (which do normalize) then accept it.
+  - name: denied
+    expression: >-
+      {{ $reservedCel }}.exists(d,
+        variables.newHost.lowerAscii() == d.lowerAscii() || variables.newHost.lowerAscii().endsWith("." + d.lowerAscii()))
+  - name: allowedHosts
+    expression: >-
+      (namespaceObject != null && has(namespaceObject.metadata.annotations) &&
+       "namespace.cozystack.io/allowed-hosts" in namespaceObject.metadata.annotations)
+        ? namespaceObject.metadata.annotations["namespace.cozystack.io/allowed-hosts"].split(" ")
+        : []
+  - name: allowed
+    # The `a != ""` guard is load-bearing, not defensive filler: splitting
+    # an empty annotation still yields a one-element list [""], and without
+    # this guard that empty entry's endsWith("." + "") matches ANY host
+    # ending in ".", so a hostname with a trailing dot (e.g.
+    # "dashboard.example.org.") would be granted against a default install
+    # with no allowlist annotation at all.
+    expression: >-
+      variables.allowedHosts.exists(a, a != "" &&
+        (variables.newHost.lowerAscii() == a.lowerAscii() || variables.newHost.lowerAscii().endsWith("." + a.lowerAscii())))
+  # spec.host, like each allowedHosts entry, must be a single hostname: when
+  # gateway.tenantHostDelegation is on, this tenant's own computed host is
+  # seeded verbatim into the space-separated namespace.cozystack.io/
+  # allowed-hosts annotation the tenant chart writes for its children (see
+  # namespace.yaml). A host such as "b.other.org a.example.com" passes the
+  # `allowed` check above as one opaque string (it ends with
+  # ".example.com"), then splits into two allowlist entries once written,
+  # handing "b.other.org" to every child of this tenant unchecked.
+  - name: malformedHost
+    expression: >-
+      variables.newHost.contains(" ")
   validations:
-  - expression: "!variables.hostChanged || variables.trustedCaller"
+  - expression: >-
+      !variables.hostChanged || variables.trustedCaller || variables.newHost == "" ||
+      (!variables.denied && variables.allowed)
     messageExpression: >-
-      "tenant.spec.host can only be set or changed by cluster-admins (system:masters) or by cozystack/Flux service accounts; request user is " + request.userInfo.username + ". A tenant with empty spec.host inherits the apex from its parent tenant."
+      "tenant.spec.host " + variables.newHost + " is not permitted. It must fall under a hostname
+       delegated to this tenant, and must not fall under a platform-reserved zone. A tenant with
+       empty spec.host inherits the apex from its parent tenant."
+    reason: Forbidden
+  - expression: "!variables.hostChanged || !variables.malformedHost"
+    messageExpression: >-
+      "tenant.spec.host must be a single hostname with no whitespace."
     reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -131,10 +189,18 @@ spec:
       operations: ["CREATE", "UPDATE"]
       resources: ["namespaces"]
   matchConditions:
-  - name: touches-host-label
+  # Widened to also match a write that only touches the allowed-hosts
+  # annotation, without touching the host label at all: the annotation
+  # governs which hostnames this namespace's children may claim for their
+  # own spec.host, which makes it strictly more powerful than the label it
+  # sits beside (the label records one committed value; the annotation
+  # gates every future write). It gets the same immutability guarantee.
+  - name: touches-host-label-or-allowed-hosts
     expression: >-
       (has(object.metadata.labels) && "namespace.cozystack.io/host" in object.metadata.labels) ||
-      (oldObject != null && has(oldObject.metadata.labels) && "namespace.cozystack.io/host" in oldObject.metadata.labels)
+      (oldObject != null && has(oldObject.metadata.labels) && "namespace.cozystack.io/host" in oldObject.metadata.labels) ||
+      (has(object.metadata.annotations) && "namespace.cozystack.io/allowed-hosts" in object.metadata.annotations) ||
+      (oldObject != null && has(oldObject.metadata.annotations) && "namespace.cozystack.io/allowed-hosts" in oldObject.metadata.annotations)
   variables:
   - name: oldHost
     expression: >-
@@ -145,6 +211,16 @@ spec:
     expression: >-
       has(object.metadata.labels) && "namespace.cozystack.io/host" in object.metadata.labels
         ? object.metadata.labels["namespace.cozystack.io/host"]
+        : ""
+  - name: oldAllowedHosts
+    expression: >-
+      (oldObject != null && has(oldObject.metadata.annotations) && "namespace.cozystack.io/allowed-hosts" in oldObject.metadata.annotations)
+        ? oldObject.metadata.annotations["namespace.cozystack.io/allowed-hosts"]
+        : ""
+  - name: newAllowedHosts
+    expression: >-
+      has(object.metadata.annotations) && "namespace.cozystack.io/allowed-hosts" in object.metadata.annotations
+        ? object.metadata.annotations["namespace.cozystack.io/allowed-hosts"]
         : ""
   - name: trustedCaller
     expression: >-
@@ -159,6 +235,10 @@ spec:
     messageExpression: >-
       "namespace label namespace.cozystack.io/host is immutable once set (was " + variables.oldHost + ", requested " + variables.newHost + "); only cluster-admins and cozystack/Flux service accounts may change it. Request user: " + request.userInfo.username
     reason: Forbidden
+  - expression: "variables.newAllowedHosts == variables.oldAllowedHosts || variables.trustedCaller"
+    messageExpression: >-
+      "namespace annotation namespace.cozystack.io/allowed-hosts is immutable once set (was " + variables.oldAllowedHosts + ", requested " + variables.newAllowedHosts + "); only cluster-admins and cozystack/Flux service accounts may change it. Request user: " + request.userInfo.username
+    reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -168,5 +248,96 @@ metadata:
     internal.cozystack.io/managed-by-cozystack: ""
 spec:
   policyName: cozystack-namespace-host-label-policy
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-tenant-allowed-hosts-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["apps.cozystack.io"]
+      apiVersions: ["v1alpha1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["tenants"]
+  matchConditions:
+  - name: has-allowed-hosts
+    expression: >-
+      (has(object.spec.allowedHosts) && object.spec.allowedHosts.size() > 0) ||
+      (oldObject != null && has(oldObject.spec.allowedHosts) && oldObject.spec.allowedHosts.size() > 0)
+  variables:
+  - name: oldList
+    expression: >-
+      (oldObject != null && has(oldObject.spec.allowedHosts)) ? oldObject.spec.allowedHosts : []
+  - name: newList
+    expression: >-
+      has(object.spec.allowedHosts) ? object.spec.allowedHosts : []
+  - name: changed
+    expression: variables.oldList != variables.newList
+  - name: clusterAdmin
+    expression: >-
+      has(request.userInfo.groups) && request.userInfo.groups.exists(g, g == "system:masters")
+  - name: grantCaller
+    expression: >-
+      has(request.userInfo.groups) && request.userInfo.groups.exists(g,
+        g == "system:masters" ||
+        g == "system:serviceaccounts:cozy-system" ||
+        g == "system:serviceaccounts:cozy-cert-manager" ||
+        g == "system:serviceaccounts:cozy-fluxcd" ||
+        g == "system:serviceaccounts:kube-system" ||
+        {{ $grantCel }}.exists(s, g == s))
+  # Both operands normalized with .lowerAscii(), matching the tenant-host
+  # policy's denied/allowed variables above: a grant entry (h) can carry
+  # uppercase (tenant.spec.allowedHosts is free-form), and so can a
+  # reserved entry (d, from gateway-reserved-hosts). Un-normalized, a grant
+  # such as "INTERNAL.example.com" would slip past a reserved entry
+  # "internal.example.com" here and later match it case-insensitively at
+  # every downstream consumer.
+  - name: grantsReserved
+    expression: >-
+      variables.newList.exists(h, {{ $reservedCel }}.exists(d, h.lowerAscii() == d.lowerAscii() || h.lowerAscii().endsWith("." + d.lowerAscii())))
+  # The annotation that carries this list to child namespaces
+  # (namespace.cozystack.io/allowed-hosts) is space-separated, and the
+  # tenant-host-policy above reads it back with .split(" "). An entry that
+  # itself contains whitespace therefore splits into two allowlist entries
+  # on the wire, one of which was never individually checked against
+  # grantsReserved above -- a grant of "x internal.example.com" passes that
+  # check as one opaque string, then becomes the two entries "x" and
+  # "internal.example.com" once written, silently handing a reserved zone
+  # to every child of this tenant. An empty entry is rejected on the same
+  # ground: it is not a hostname.
+  - name: malformedEntries
+    expression: >-
+      variables.newList.exists(h, h == "" || h.contains(" "))
+  validations:
+  - expression: "!variables.changed || variables.grantCaller"
+    messageExpression: >-
+      "tenant.spec.allowedHosts can only be set or changed by the platform operator. A tenant
+       cannot grant itself a domain; ask the platform operator to delegate one."
+    reason: Forbidden
+  - expression: "!variables.grantsReserved || variables.clusterAdmin"
+    messageExpression: >-
+      "tenant.spec.allowedHosts contains a platform-reserved hostname. Reserved zones are never
+       delegated."
+    reason: Forbidden
+  - expression: "!variables.changed || !variables.malformedEntries"
+    messageExpression: >-
+      "tenant.spec.allowedHosts entries must each be a single hostname with no whitespace: the
+       annotation that carries this list to child namespaces is space-separated, so an entry
+       containing whitespace splits into multiple entries once written."
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-tenant-allowed-hosts-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-tenant-allowed-hosts-policy
   validationActions: [Deny]
 {{- end }}

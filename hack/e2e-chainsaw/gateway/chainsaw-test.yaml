@@ -255,7 +255,7 @@ spec:
           echo "rc=$rc out=$out"
           [ "$rc" -ne 0 ]
           echo "$out" | grep -qi "ValidatingAdmissionPolicy"
-          echo "$out" | grep -q "spec.host can only be set"
+          echo "$out" | grep -q "is not permitted"
         check:
           ($error == null): true
 ---
@@ -1889,3 +1889,242 @@ spec:
           apiVersion: v1
           kind: Pod
           name: admission-deny-probe
+---
+# Coverage for the tenant host allowlist (Tenant.spec.allowedHosts,
+# namespace.cozystack.io/allowed-hosts, and the two VAPs in
+# packages/system/cozystack-basics/templates/gateway-hostname-policy.yaml
+# that gate the grant and the resulting spec.host). namespaceObject in a VAP
+# resolves to the namespace the Tenant CR lives in -- the PARENT's namespace,
+# not the tenant's own -- so a grant written on a tenant governs that
+# tenant's CHILDREN, never the tenant's own spec.host. This suite therefore
+# uses two levels: hostallow (parent, created in $NAMESPACE) carries the
+# grants, hostsub (child, created in hostallow's namespace) is what performs
+# the spec.host writes.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenant-host-allowlist
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: create-parent-tenant-with-a-grant
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: hostallow
+          spec:
+            allowedHosts:
+            - e2e.example.net
+
+  - name: parent-annotation-carries-the-effective-allowlist
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          deadline=$(( $(date +%s) + 90 ))
+          until kubectl get namespace "${NAMESPACE}-hostallow" >/dev/null 2>&1; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "child namespace never appeared" >&2; exit 1; }
+            sleep 2
+          done
+          ann=$(kubectl get namespace "${NAMESPACE}-hostallow" \
+                  -o jsonpath='{.metadata.annotations.namespace\.cozystack\.io/allowed-hosts}')
+          echo "allowed-hosts=${ann}"
+          # the explicit grant must be there; with tenantHostDelegation on, so must hostallow's own apex
+          echo "$ann" | grep -q 'e2e.example.net' || { echo "BUG  explicit grant missing" >&2; exit 1; }
+          echo "$ann" | grep -q 'hostallow\.' || { echo "BUG  own apex not seeded" >&2; exit 1; }
+        check:
+          ($error == null): true
+
+  - name: tenant-cannot-grant-itself-a-domain
+    try:
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          # Authorization runs before admission; grant the SA RBAC to patch
+          # Tenants so the request reaches the VAP rather than failing on RBAC.
+          kubectl apply -f - <<EOF
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: vap-probe-tenant-patch
+            namespace: ${ns}
+          rules:
+          - apiGroups: ["apps.cozystack.io"]
+            resources: ["tenants"]
+            verbs: ["get","list","watch","update","patch"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: vap-probe-tenant-patch
+            namespace: ${ns}
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: vap-probe-tenant-patch
+          subjects:
+          - kind: ServiceAccount
+            name: default
+            namespace: ${ns}
+          EOF
+          cleanup() {
+            # || true each delete: the trap runs under set -eu, and one
+            # transient delete failure must not skip the remaining cleanup.
+            kubectl -n "$ns" delete rolebinding vap-probe-tenant-patch --ignore-not-found || true
+            kubectl -n "$ns" delete role vap-probe-tenant-patch --ignore-not-found || true
+          }
+          trap cleanup EXIT
+          out=$(kubectl --as="system:serviceaccount:${ns}:default" \
+                        --as-group=system:serviceaccounts \
+                        --as-group="system:serviceaccounts:${ns}" \
+                        patch tenant.apps.cozystack.io hostallow -n "$ns" \
+                        --type merge -p '{"spec":{"allowedHosts":["grabbed.example.org"]}}' 2>&1) && rc=0 || rc=$?
+          echo "rc=$rc out=$out"
+          if [ "$rc" -eq 0 ]; then
+            echo "BUG  a tenant granted itself a domain" >&2
+            exit 1
+          fi
+          echo "$out" | grep -q 'allowedHosts' || { echo "BUG  denied, but not by the grant policy" >&2; exit 1; }
+        check:
+          ($error == null): true
+
+  - name: create-child-tenant-under-the-grant
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: hostsub
+            namespace: tenant-test-hostallow
+          spec: {}
+    - script:
+        content: |
+          set -eu
+          sub_ns="${NAMESPACE}-hostallow"
+          # Same RBAC gap as the grant policy above: the impersonated default
+          # SA of the child namespace has no permissions on its own Tenant CR
+          # until granted. This one is not trapped -- hostallow is apply:-created,
+          # so Chainsaw's own test-scoped cleanup deletes it (and cascades to
+          # tenant-test-hostallow, this Role/RoleBinding included) regardless of
+          # which step the Test stops at, unlike tenant-test above which
+          # outlives this Test and Chainsaw never touches.
+          kubectl apply -f - <<EOF
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: vap-probe-tenant-patch
+            namespace: ${sub_ns}
+          rules:
+          - apiGroups: ["apps.cozystack.io"]
+            resources: ["tenants"]
+            verbs: ["get","list","watch","update","patch"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: vap-probe-tenant-patch
+            namespace: ${sub_ns}
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: vap-probe-tenant-patch
+          subjects:
+          - kind: ServiceAccount
+            name: default
+            namespace: ${sub_ns}
+          EOF
+        check:
+          ($error == null): true
+
+  - name: covered-host-is-accepted
+    try:
+    - script:
+        content: |
+          set -eu
+          sub_ns="${NAMESPACE}-hostallow"
+          kubectl --as="system:serviceaccount:${sub_ns}:default" \
+                  --as-group=system:serviceaccounts \
+                  --as-group="system:serviceaccounts:${sub_ns}" \
+                  patch tenant.apps.cozystack.io hostsub -n "$sub_ns" \
+                  --type merge -p '{"spec":{"host":"sub.e2e.example.net"}}'
+        check:
+          ($error == null): true
+
+  - name: uncovered-host-is-denied
+    try:
+    - script:
+        content: |
+          set -eu
+          sub_ns="${NAMESPACE}-hostallow"
+          out=$(kubectl --as="system:serviceaccount:${sub_ns}:default" \
+                        --as-group=system:serviceaccounts \
+                        --as-group="system:serviceaccounts:${sub_ns}" \
+                        patch tenant.apps.cozystack.io hostsub -n "$sub_ns" \
+                        --type merge -p '{"spec":{"host":"elsewhere.example.org"}}' 2>&1) && rc=0 || rc=$?
+          echo "rc=$rc out=$out"
+          if [ "$rc" -eq 0 ]; then
+            echo "BUG  admission accepted a host outside the allowlist" >&2
+            exit 1
+          fi
+          echo "$out" | grep -q 'is not permitted' || { echo "BUG  denied, but not by the host policy" >&2; exit 1; }
+        check:
+          ($error == null): true
+
+  - name: reserved-host-is-denied-even-when-granted
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          sub_ns="${ns}-hostallow"
+          # Grant the reserved zone itself, as the admin identity Chainsaw runs
+          # as (system:masters) -- the only identity cozystack-tenant-allowed-hosts-policy
+          # lets place a reserved zone in an allowlist.
+          kubectl patch tenant.apps.cozystack.io hostallow -n "$ns" \
+                  --type merge -p '{"spec":{"allowedHosts":["e2e.example.net","example.com"]}}'
+          # Wait for the grant to propagate to hostsub's namespace annotation:
+          # without this, app.example.com below would be denied simply for not
+          # being allowed yet, which proves nothing about the reserved veto.
+          deadline=$(( $(date +%s) + 90 ))
+          until kubectl get namespace "$sub_ns" \
+                  -o jsonpath='{.metadata.annotations.namespace\.cozystack\.io/allowed-hosts}' \
+                  2>/dev/null | grep -q 'example.com'; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "SETUP FAILURE: example.com grant never propagated to $sub_ns" >&2; exit 1; }
+            sleep 2
+          done
+          # app.example.com is now genuinely allowlisted for hostsub, so a
+          # denial here can only come from the reserved-zone veto, not from a
+          # missing grant.
+          out=$(kubectl --as="system:serviceaccount:${sub_ns}:default" \
+                        --as-group=system:serviceaccounts \
+                        --as-group="system:serviceaccounts:${sub_ns}" \
+                        patch tenant.apps.cozystack.io hostsub -n "$sub_ns" \
+                        --type merge -p '{"spec":{"host":"app.example.com"}}' 2>&1) && rc=0 || rc=$?
+          echo "rc=$rc out=$out"
+          if [ "$rc" -eq 0 ]; then
+            echo "BUG  reserved zone was claimable through an allowlist grant" >&2
+            exit 1
+          fi
+          echo "$out" | grep -q 'is not permitted' || { echo "BUG  denied, but not by the host policy" >&2; exit 1; }
+        check:
+          ($error == null): true
+    finally:
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          name: hostsub
+          namespace: tenant-test-hostallow
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          name: hostallow
