@@ -181,6 +181,17 @@ seed_three() {
   ! grep -qF -- '--connect-to' "$STATE/curl_args"
 }
 
+@test "virtual-hosted ported endpoint keys --connect-to off the bucket host" {
+  seed_three
+  MODE=backup S3_FORCE_PATH_STYLE=false ARTIFACT_URI="s3://bkt/ns/app/run/kafka-metadata.txt" \
+    S3_ENDPOINT="https://s3.example.org:8333" run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  # HOST1 must be the request host (bkt.s3.example.org), else curl never
+  # redirects and the request hits the wrong port.
+  grep -qF -- '--connect-to bkt.s3.example.org:443:s3.example.org:8333' "$STATE/curl_args"
+  grep -qF 'https://bkt.s3.example.org/ns/app/run/kafka-metadata.txt' "$STATE/curl_args"
+}
+
 # ---- restore --------------------------------------------------------------
 
 write_backup_object() {

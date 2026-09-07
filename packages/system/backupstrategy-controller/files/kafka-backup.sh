@@ -36,14 +36,20 @@ if [ "${scheme}" = http ]; then defport=80; else defport=443; fi
 # curl >= 7.86 too (which drops the default port anyway). No -k: TLS is
 # verified against the endpoint's certificate (the platform endpoint is the
 # ACME-valid ingress), matching strategy-rabbitmq-default.yaml.
+if [ "${S3_FORCE_PATH_STYLE}" = "false" ]; then
+  reqhost="${bucket}.${host}"
+  obj_url="${scheme}://${reqhost}${pathpart}/${key}"
+else
+  reqhost="${host}"
+  obj_url="${scheme}://${reqhost}${pathpart}/${bucket}/${key}"
+fi
+# --connect-to matches HOST1 against the request host, which differs between
+# path-style (${host}) and virtual-hosted (${bucket}.${host}) — key it off the
+# host the URL actually uses so the redirect fires in both modes; the real
+# connection target stays ${host}:${port}.
 connect_to=""
 if [ -n "${port}" ] && [ "${port}" != "${defport}" ]; then
-  connect_to="--connect-to ${host}:${defport}:${host}:${port}"
-fi
-if [ "${S3_FORCE_PATH_STYLE}" = "false" ]; then
-  obj_url="${scheme}://${bucket}.${host}${pathpart}/${key}"
-else
-  obj_url="${scheme}://${host}${pathpart}/${bucket}/${key}"
+  connect_to="--connect-to ${reqhost}:${defport}:${host}:${port}"
 fi
 # ${connect_to} is unquoted so an empty value expands to no argument.
 s3() { curl -fsS ${connect_to} --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
