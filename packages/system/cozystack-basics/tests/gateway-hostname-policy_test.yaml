@@ -27,10 +27,10 @@ capabilities:
     - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
 
 tests:
-  - it: renders 3 VAPs + 3 Bindings (6 documents total)
+  - it: renders 4 VAPs + 4 Bindings (8 documents total)
     asserts:
       - hasDocuments:
-          count: 6
+          count: 8
 
   - it: cozystack-gateway-hostname-policy targets gateway resources
     asserts:
@@ -175,6 +175,100 @@ tests:
           path: spec.validationActions
           value: [Deny]
 
+  - it: tenant-host-policy consults the allow-hosts annotation and the reserved list
+    set:
+      _cluster:
+        gateway-reserved-hosts: "hikube.cloud"
+    asserts:
+      - matchRegex:
+          path: spec.variables[?(@.name=="allowedHosts")].expression
+          pattern: 'namespace.cozystack.io/allowed-hosts'
+        documentIndex: 2
+      - matchRegex:
+          path: spec.variables[?(@.name=="denied")].expression
+          pattern: 'hikube.cloud'
+        documentIndex: 2
+      # `trustedCaller` must be OR-ed at the top level, evaluated before the
+      # denylist/allowlist term, not AND-gated behind `!variables.denied` --
+      # otherwise a cluster-admin could no longer set a reserved zone (e.g.
+      # hikube.cloud) on tenant-root, which is precisely their job. Anchored
+      # on the `|| variables.trustedCaller ||` substring rather than a bare
+      # `trustedCaller` search, so a regression like
+      # `!hostChanged || (!denied && (trustedCaller || allowed))` -- which an
+      # unanchored search for "trustedCaller" would miss -- fails this
+      # assertion instead of passing.
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: '\|\| variables\.trustedCaller \|\|'
+        documentIndex: 2
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'variables.denied'
+        documentIndex: 2
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'variables.allowed'
+        documentIndex: 2
+
+  - it: tenant-host-policy normalizes case on both the denylist and allowlist comparisons
+    # Regression guard for the case-sensitivity bypass: newHost, and each
+    # entry of the reserved/allowed lists, must all be run through
+    # .lowerAscii() before comparison, or a mixed-case host slips past a
+    # lowercase reserved entry while still matching a lowercase grant.
+    asserts:
+      - documentIndex: 2
+        matchRegex:
+          path: spec.variables[?(@.name=="denied")].expression
+          pattern: 'lowerAscii'
+      - documentIndex: 2
+        matchRegex:
+          path: spec.variables[?(@.name=="allowed")].expression
+          pattern: 'lowerAscii'
+
+  - it: tenant-host-policy rejects a spec.host entry containing whitespace
+    # "b.other.org a.example.com" would pass the allowed check as one
+    # opaque string (it ends with .example.com) and then split into two
+    # allowlist entries once seeded into a child's annotation. Appended as
+    # validations[1] so validations[0]'s pinned trustedCaller ordering is
+    # untouched.
+    asserts:
+      - documentIndex: 2
+        matchRegex:
+          path: spec.variables[?(@.name=="malformedHost")].expression
+          pattern: 'newHost\.contains\(" "\)'
+      - documentIndex: 2
+        # Anchored on the exact gated prefix, not a bare "malformedHost"
+        # substring search: an ungated "!variables.malformedHost" also
+        # contains that substring, so a loose pattern would still pass on
+        # the regression this guards against -- a spec.host that already
+        # carries whitespace bricking every future unrelated update to the
+        # Tenant, since malformedHost is computed from the current value
+        # and matchConditions fire whenever host is non-empty on either
+        # side, not only when it changes.
+        matchRegex:
+          path: spec.validations[1].expression
+          pattern: '!variables\.hostChanged \|\| !variables\.malformedHost'
+
+  - it: tenant-host-policy permits clearing spec.host back to the derived apex
+    # Privilege reduction, not a grant: newHost == "" must be an OR-disjunct
+    # so an untrusted caller can always clear the field, matching the
+    # message's claim that an empty spec.host inherits the parent apex.
+    # `|| variables.trustedCaller ||` stays intact regardless of where this
+    # disjunct lands, so it does not double as an ordering guard.
+    asserts:
+      - documentIndex: 2
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'variables\.newHost == ""'
+
+  - it: tenant-host-policy no longer leaks the requesting username
+    asserts:
+      - matchRegex:
+          path: spec.validations[0].messageExpression
+          pattern: 'request.userInfo.username'
+        not: true
+        documentIndex: 2
+
   - it: cozystack-namespace-host-label-policy targets core/v1 Namespace
     asserts:
       - documentIndex: 4
@@ -193,6 +287,26 @@ tests:
         matchRegex:
           path: spec.validations[0].messageExpression
           pattern: 'immutable'
+
+  - it: cozystack-namespace-host-label-policy also gates the allowed-hosts annotation
+    # The annotation governs every future host a child namespace may claim,
+    # which makes it strictly more powerful than the label it sits beside,
+    # so it gets the same immutability guarantee under the same
+    # trusted-caller set. matchConditions must catch a write that touches
+    # only the annotation, not just the label.
+    asserts:
+      - documentIndex: 4
+        matchRegex:
+          path: spec.matchConditions[0].expression
+          pattern: 'namespace\.cozystack\.io/allowed-hosts'
+      - documentIndex: 4
+        matchRegex:
+          path: spec.variables[?(@.name=="newAllowedHosts")].expression
+          pattern: 'namespace\.cozystack\.io/allowed-hosts'
+      - documentIndex: 4
+        matchRegex:
+          path: spec.validations[1].expression
+          pattern: 'variables\.newAllowedHosts == variables\.oldAllowedHosts \|\| variables\.trustedCaller'
 
   - it: cozystack-namespace-host-label-policy Binding is fail-closed
     asserts:
@@ -217,7 +331,7 @@ tests:
         gateway-attached-namespaces: "cozy-cert-manager,tenant-alice"
     asserts:
       - hasDocuments:
-          count: 6
+          count: 8
 
   - it: cozystack-gateway-attached-namespaces-policy VAP is no longer rendered
     # Regression guard: the dropped VAP must not reappear in a
@@ -236,3 +350,74 @@ tests:
         notEqual:
           path: metadata.name
           value: cozystack-gateway-attached-namespaces-policy
+
+  - it: renders cozystack-tenant-allowed-hosts-policy gated on the grant set
+    set:
+      _cluster:
+        gateway-host-grant-groups: "system:serviceaccounts:hikube-api"
+        gateway-reserved-hosts: "hikube.cloud"
+    asserts:
+      - documentIndex: 6
+        matchRegex:
+          path: metadata.name
+          pattern: 'cozystack-tenant-allowed-hosts-policy'
+      - documentIndex: 6
+        matchRegex:
+          path: spec.variables[?(@.name=="grantCaller")].expression
+          pattern: 'system:masters'
+      - documentIndex: 6
+        matchRegex:
+          path: spec.variables[?(@.name=="grantCaller")].expression
+          pattern: 'cozy-fluxcd'
+      - documentIndex: 6
+        matchRegex:
+          path: spec.variables[?(@.name=="grantCaller")].expression
+          pattern: 'system:serviceaccounts:hikube-api'
+      - documentIndex: 6
+        matchRegex:
+          path: spec.variables[?(@.name=="grantsReserved")].expression
+          pattern: 'hikube.cloud'
+      - documentIndex: 6
+        matchRegex:
+          path: spec.variables[?(@.name=="grantsReserved")].expression
+          pattern: 'lowerAscii'
+      - documentIndex: 6
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'grantCaller'
+      - documentIndex: 6
+        matchRegex:
+          path: spec.validations[1].expression
+          pattern: 'clusterAdmin'
+
+  - it: cozystack-tenant-allowed-hosts-policy rejects an entry containing whitespace or an empty entry
+    # The allowed-hosts annotation is space-separated and split(" ") on read,
+    # so a single grant entry containing whitespace becomes two allowlist
+    # entries downstream -- one of which never went through grantsReserved
+    # above as its own string. Appended as validations[2] so the existing
+    # grantCaller (validations[0]) and clusterAdmin (validations[1]) checks
+    # above keep their indices.
+    asserts:
+      - documentIndex: 6
+        matchRegex:
+          path: spec.variables[?(@.name=="malformedEntries")].expression
+          pattern: 'h\.contains\(" "\)'
+      - documentIndex: 6
+        # Anchored on the exact gated prefix, not a bare "malformedEntries"
+        # substring search: an ungated "!variables.malformedEntries" also
+        # contains that substring, so a loose pattern would still pass on
+        # the regression this guards against -- an allowedHosts list that
+        # already carries a malformed entry bricking every future unrelated
+        # update to the Tenant, since malformedEntries is computed from the
+        # current value and matchConditions fire whenever the list is
+        # non-empty on either side, not only when it changes.
+        matchRegex:
+          path: spec.validations[2].expression
+          pattern: '!variables\.changed \|\| !variables\.malformedEntries'
+
+  - it: allowed-hosts Binding is fail-closed
+    asserts:
+      - documentIndex: 7
+        equal:
+          path: spec.validationActions
+          value: [Deny]
