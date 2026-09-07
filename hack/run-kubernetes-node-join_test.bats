@@ -2138,7 +2138,10 @@ EOF
   assert_file_contains '::warning title=node-join::' "$tmp/out"
   # And it carries the deadline it is about. A warning that says only "the join
   # failed" leaves a reader unable to tell it from the wait having been raised.
-  assert_file_contains 'Ready within 29m' "$tmp/out"
+  # The subject is asserted along with the figure, because a bare "Ready within
+  # 29m" is a sentence about nothing in particular and the sweep below reads
+  # this line as one of the tree's copies of the deadline.
+  assert_file_contains 'nodes Ready within 29m' "$tmp/out"
   # It names the suite, because the report holds one directory per suite and a
   # run carries more than one tenant cluster.
   assert_file_contains 'test-latest-version' "$tmp/out"
@@ -2277,7 +2280,15 @@ EOF
   # Both spellings of the unit are in, `29m` and `29 minutes`, because prose
   # written for a reader tends to the second and a sweep that saw only the first
   # would leave the documentation quoting a deadline that moved.
-  pattern='(node-join|node-Ready|nodes Ready|become Ready|became Ready|Ready within)[^0-9]{0,60}[0-9]+ ?m|[0-9]+ ?m[^0-9]{0,30}(node-join|node-Ready|nodes Ready)'
+  #
+  # Every referent names a node. "become Ready" and "Ready within" on their own
+  # do not: they are what a HelmRelease, a LoadBalancer or a PVC is also said to
+  # do, each on a deadline of its own, and read as node-join referents they make
+  # this guard fail over a 5m HelmRelease wait having a different figure than the
+  # node-join wait -- which is correct of both waits and a defect in neither. The
+  # set of other things that become Ready on a clock is open and grows with the
+  # suite, so the referents are enumerated rather than the exceptions.
+  pattern='(node-join|node-Ready|nodes Ready|nodes become Ready|nodes became Ready)[^0-9]{0,60}[0-9]+ ?m|[0-9]+ ?m[^0-9]{0,30}(node-join|node-Ready|nodes Ready)'
   quoted=$(grep -rnE "$pattern" hack/ docs/ || true)
   count=$(printf '%s\n' "$quoted" | grep -c . || true)
   # A floor, not a count: the sweep is worth nothing if the sentence stopped
