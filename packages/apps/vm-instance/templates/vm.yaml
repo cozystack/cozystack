@@ -109,9 +109,15 @@ spec:
 
       volumes:
       {{- range .Values.disks }}
+      {{- if and .hotpluggable (not (has (default "" .bus) (list "scsi" "virtio"))) }}
+      {{-   fail (printf "Disk %s: hotpluggable requires bus to be 'scsi' or 'virtio', got %q" .name (default "" .bus)) }}
+      {{- end }}
       - name: disk-{{ .name }}
         dataVolume:
           name: vm-disk-{{ .name }}
+          {{- if .hotpluggable }}
+          hotpluggable: true
+          {{- end }}
       {{- end }}
       {{- if or .Values.cloudInit .Values.sshKeys }}
       - name: cloudinitdisk

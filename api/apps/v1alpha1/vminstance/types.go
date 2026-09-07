@@ -70,6 +70,8 @@ type ConfigSpec struct {
 type Disk struct {
 	// Disk bus type (e.g. "sata").
 	Bus string `json:"bus,omitempty"`
+	// Allow attaching and detaching the disk while the VM is running. Requires the DeclarativeHotplugVolumes feature gate on the cluster, and bus to be "scsi" or "virtio".
+	Hotpluggable bool `json:"hotpluggable,omitempty"`
 	// Disk name.
 	Name string `json:"name"`
 }

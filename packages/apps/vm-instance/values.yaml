@@ -10,6 +10,7 @@
 ## @field {string} name - Disk name.
 ## @x-cozystack-options {source: vmdisk}
 ## @field {string} [bus] - Disk bus type (e.g. "sata").
+## @field {bool} [hotpluggable] - Allow attaching and detaching the disk while the VM is running. Requires the DeclarativeHotplugVolumes feature gate on the cluster, and bus to be "scsi" or "virtio".
 
 ## @typedef {struct} Network - Network to attach the VM to.
 ## @field {string} [name] - Network attachment name.
@@ -62,6 +63,9 @@ disks: []
 ## - name: example-system
 ## - name: example-data
 ##   bus: sata
+## - name: example-hotplug
+##   bus: scsi
+##   hotpluggable: true
 
 ## @param {[]Network} networks - Networks to attach the VM to.
 networks: []
