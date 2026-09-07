@@ -36,7 +36,13 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
   missing=()
   for want in "${EXPECTED[@]}"; do
     # -F: literal match so the `.` in t1.nano does not match any character.
-    if ! printf '%s\n' "$enums" | grep -Fqx -- "$want"; then
+    # A here-string, not a pipe: `grep -q` exits on its first match, so a pipe
+    # leaves the writer with unwritten output and kills it with SIGPIPE. Under
+    # `set -o pipefail` that becomes exit 141 for the whole pipeline, which
+    # reads exactly like "not found" — so a preset that IS present is reported
+    # missing, on a different file and a different preset each run. Measured at
+    # roughly one spurious failure per run of this script.
+    if ! grep -Fqx -- "$want" <<<"$enums"; then
       missing+=("$want")
     fi
   done
