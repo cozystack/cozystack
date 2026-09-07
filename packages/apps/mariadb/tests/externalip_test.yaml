@@ -1,0 +1,95 @@
+suite: reserved external addresses (externalIPs)
+
+# The chart's only job here is to turn an externalIPs entry into the address
+# substrate's consumption annotation on whichever operator-owned Service
+# actually receives the load-balancer address, and to refuse a value that would
+# otherwise be silently ignored. Which Service that is depends on the replica
+# count, which is the only thing worth locking down here.
+
+templates:
+  - templates/mariadb.yaml
+
+release:
+  name: mariadb-test
+  namespace: tenant-test
+
+tests:
+  - it: "external without externalIPs: no annotation, so the load balancer keeps auto-assigning"
+    set:
+      external: true
+      replicas: 1
+    asserts:
+      - notExists:
+          path: spec.service.metadata.annotations
+        documentSelector:
+          path: kind
+          value: MariaDB
+
+  - it: "single replica: the address lands on the cluster Service the operator publishes"
+    set:
+      external: true
+      replicas: 1
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - equal:
+          path: spec.service.metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+        documentSelector:
+          path: kind
+          value: MariaDB
+      - notExists:
+          path: spec.primaryService
+        documentSelector:
+          path: kind
+          value: MariaDB
+
+  - it: "replicated: the address lands on primaryService, which is the one published"
+    set:
+      external: true
+      replicas: 3
+      externalIPs:
+        - claim: reserved-address
+          target: primary
+    asserts:
+      - equal:
+          path: spec.primaryService.metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+        documentSelector:
+          path: kind
+          value: MariaDB
+      - notExists:
+          path: spec.service.metadata.annotations
+        documentSelector:
+          path: kind
+          value: MariaDB
+
+  - it: "externalIPs without external is refused rather than ignored"
+    set:
+      external: false
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs requires external: true — there is no external endpoint to pin an address to otherwise"
+
+  - it: "a target this chart does not publish is refused, and the message names the ones it does"
+    set:
+      external: true
+      externalIPs:
+        - claim: reserved-address
+          target: secondary
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[0] targets "secondary", which this application does not publish; valid targets: primary'
+
+  - it: "two entries for the same endpoint are refused"
+    set:
+      external: true
+      externalIPs:
+        - claim: first
+        - claim: second
+          target: primary
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[1] targets "primary" a second time: one endpoint wears one address, so use one entry per target'
