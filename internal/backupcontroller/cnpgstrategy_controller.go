@@ -974,7 +974,22 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 	// re-runs it on the next reconcile.
 	if apimeta.IsStatusConditionTrue(restoreJob.Status.Conditions, restoreCondRecoveryConverged) {
 		if err := r.disablePostgresAppBootstrap(ctx, target.Namespace, target.AppName); err != nil {
-			return ctrl.Result{}, err
+			// Recovery already converged - the data is restored and reachable as
+			// the CNPG superuser; only clearing bootstrap.enabled (the trigger for
+			// the init-job that reconciles the generated passwords onto the
+			// recovered roles) is failing. Bound the retries by the restore
+			// deadline so a persistent failure - the app deleted/renamed
+			// mid-restore, or a GitOps source that keeps re-asserting
+			// bootstrap.enabled - surfaces as Failed instead of sitting Running
+			// with RecoveryConverged=True forever with no terminal signal.
+			deadline := options.effectiveRestoreDeadline()
+			if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
+				return r.markRestoreJobFailedReason(ctx, restoreJob, "BootstrapDisableFailed", fmt.Sprintf(
+					"recovery converged but clearing spec.bootstrap.enabled on Postgres app %s/%s kept failing for %s, so the restored copy's application credentials will not converge on their own: %v. "+
+						"The data is restored and reachable as the CNPG superuser; clear bootstrap.enabled on the app - and stop any GitOps source from re-asserting it - so the init-job reconciles the passwords.",
+					target.Namespace, target.AppName, deadline, err))
+			}
+			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 		}
 		now := metav1.Now()
 		restoreJob.Status.CompletedAt = &now
