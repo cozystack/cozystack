@@ -76,3 +76,32 @@ Does NOT include: networking (variant differs), linstor (talos.enabled differs)
        common-packages and has no cilium.io CRD for the controller to watch. */ -}}
 {{include "cozystack.platform.package.default" (list "cozystack.securitygroup-controller" $root) }}
 {{- end }}
+
+{{- /*
+Boolean coercion for operator-facing toggles.
+
+Values reach this chart as JSON from the Package CR
+(spec.components.platform.values, typed *apiextensionsv1.JSON with no schema),
+so a toggle can arrive as a bool, a number, or a quoted string. A bare `if` on
+that value is truthy for ANY non-empty string, which turns a quoted "false"
+into "on" and a typo into a silent behaviour change.
+
+Two helpers, because a toggle's default decides which spelling has to be
+proven:
+  - affirmative: default-off switches (an override, an escape hatch). Only an
+    explicit yes turns them on; anything unrecognised stays off.
+  - negative: default-on switches (a safety gate). Only an explicit no turns
+    them off; anything unrecognised leaves the gate up.
+
+Both render the string "true"/"false", so callers compare with eq/ne rather
+than relying on template truthiness. The accepted spellings match
+migrations.etcdAdoptSkipBackup (templates/migration-hook.yaml), so an operator
+who learned one hatch is not refused by the next.
+*/ -}}
+{{- define "cozystack.platform.affirmative" -}}
+{{- if has (lower (printf "%v" .)) (list "1" "true" "yes" "on") }}true{{ else }}false{{ end }}
+{{- end }}
+
+{{- define "cozystack.platform.negative" -}}
+{{- if has (lower (printf "%v" .)) (list "0" "false" "no" "off") }}true{{ else }}false{{ end }}
+{{- end }}

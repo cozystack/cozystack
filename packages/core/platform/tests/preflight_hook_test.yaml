@@ -196,3 +196,98 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # The master toggle takes the same shapes as the override hatch below it.
+  # Values reach this chart as JSON from the Package CR
+  # (spec.components.platform.values), where a quoted boolean is an easy
+  # mistake and a bare `if` on a non-empty string is always truthy: an
+  # operator switching the gate off would be silently ignored, at the exact
+  # moment their upgrade is already blocked.
+  - it: disables the gate for a bool false
+    set:
+      preflight:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: disables the gate for a stringified false from the Package CR Values JSON
+    set:
+      preflight:
+        enabled: "false"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: disables the gate for a numeric 0
+    set:
+      preflight:
+        enabled: 0
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: disables the gate for a stringified "0"
+    set:
+      preflight:
+        enabled: "0"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: keeps the gate on for an unrecognised enabled value, never silently off
+    set:
+      preflight:
+        enabled: "banana"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cozystack-preflight-hook
+
+  # The two safety valves in this values file must accept the same spellings.
+  # migrations.etcdAdoptSkipBackup already takes 1/true/yes; an operator
+  # reaching for the second hatch after using the first must not be told "no"
+  # by a narrower parser.
+  - it: accepts a numeric 1 as an affirmative override
+    set:
+      preflight:
+        override: 1
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: "true"
+
+  - it: accepts yes as an affirmative override
+    set:
+      preflight:
+        override: "yes"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: "true"
+
+  # preflight: null must land on the shipped defaults, not on a different set.
+  # The template carries its own inline fallbacks for the case where the whole
+  # key is nil; this pins them to what values.yaml documents.
+  - it: falls back to the shipped defaults when the whole preflight key is null
+    set:
+      preflight: null
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: "false"
+      - equal:
+          path: spec.template.spec.containers[0].env[2].value
+          value: linstor

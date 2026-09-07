@@ -21,7 +21,15 @@ to one pod name, but scoping it to the one namespace the check targets keeps
 the blast radius contained; that Role renders only when cozy-linstor exists.
 */ -}}
 {{- $pf := .Values.preflight | default dict }}
-{{- if dig "enabled" true $pf }}
+{{- /*
+  The master toggle is default-ON, so it is coerced through the "negative"
+  helper: only an explicit no (false/0/no/off, in any of the shapes the Package
+  CR's untyped JSON can deliver) takes the gate down. A bare `if` here would be
+  truthy for a quoted "false" and keep blocking an operator who believes they
+  switched the gate off, which is exactly the moment their upgrade is already
+  stuck.
+*/}}
+{{- if ne (include "cozystack.platform.negative" (dig "enabled" true $pf)) "true" }}
 {{- $currentVersion := 0 }}
 {{- $targetVersion := .Values.migrations.targetVersion | int }}
 {{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace "cozystack-version" }}
@@ -72,11 +80,12 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           env:
-            # Only affirmative "true" takes the override; a stringified value
-            # from the Package CR JSON or an unrecognised token resolves to
-            # "false" so the gate is never bypassed by accident.
+            # Default-OFF hatch, so only an affirmative spelling (1/true/yes/on,
+            # the same set migrations.etcdAdoptSkipBackup accepts) takes it. An
+            # unrecognised token resolves to "false": the gate is never bypassed
+            # by a typo.
             - name: PREFLIGHT_OVERRIDE
-              value: "{{ if eq (toString (dig "override" false $pf)) "true" }}true{{ else }}false{{ end }}"
+              value: {{ include "cozystack.platform.affirmative" (dig "override" false $pf) | quote }}
             - name: PREFLIGHT_SKIP
               value: {{ join "," (dig "skipChecks" (list) $pf) | quote }}
             # Advisory checks warn instead of blocking. linstor is advisory by
