@@ -7,7 +7,9 @@
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 
 {{- $email := ((.Values.alerta.alerts).email) | default dict }}
-{{- $emailEnabled := or $email.to $email.smarthost $email.from $email.authUsername $email.secretName $email.subject $email.bodyHtml $email.repeatInterval }}
+{{- $emailAlertnames := $email.alertnames | default list }}
+{{- $emailSeverities := $email.severities | default (list "critical" "major") }}
+{{- $emailEnabled := or $email.to $email.smarthost $email.from $email.authUsername $email.secretName $email.subject $email.bodyHtml $email.repeatInterval $email.alertnames $email.severities }}
 {{- if $emailEnabled }}
 {{- if not (and $email.to $email.smarthost $email.from) }}
 {{- fail "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts" }}
@@ -20,6 +22,16 @@
 {{- end }}
 {{- if and $email.repeatInterval (not (regexMatch "^([0-9]+(ms|[smhdwy]))+$" (toString $email.repeatInterval))) }}
 {{- fail (printf "alerta.alerts.email.repeatInterval must be a duration such as 30s, 5m or 12h, got %q" (toString $email.repeatInterval)) }}
+{{- end }}
+{{- range $name := $emailAlertnames }}
+{{- if not (regexMatch "^[a-zA-Z_:][a-zA-Z0-9_:]*$" (toString $name)) }}
+{{- fail (printf "alerta.alerts.email.alertnames entries must be Prometheus alert names, got %q" (toString $name)) }}
+{{- end }}
+{{- end }}
+{{- range $severity := $emailSeverities }}
+{{- if not (regexMatch "^[a-zA-Z0-9_-]+$" (toString $severity)) }}
+{{- fail (printf "alerta.alerts.email.severities entries must be plain severity names, got %q" (toString $severity)) }}
+{{- end }}
 {{- end }}
 {{- end }}
 
@@ -284,7 +296,7 @@ stringData:
       - receiver: alerta
         continue: true
         matchers:
-        - 'severity=~"critical|major"'
+        - 'severity=~"{{ join "|" $emailSeverities }}"'
         - 'notify_email="true"'
       - receiver: email
         group_by: [alertname, cluster]
@@ -292,8 +304,21 @@ stringData:
         group_interval: 5m
         repeat_interval: {{ $email.repeatInterval | default "12h" | quote }}
         matchers:
-        - 'severity=~"critical|major"'
+        - 'severity=~"{{ join "|" $emailSeverities }}"'
         - 'notify_email="true"'
+      {{- if $emailAlertnames }}
+      - receiver: alerta
+        continue: true
+        matchers:
+        - 'alertname=~"^({{ join "|" $emailAlertnames }})$"'
+      - receiver: email
+        group_by: [alertname, cluster]
+        group_wait: 1m
+        group_interval: 5m
+        repeat_interval: {{ $email.repeatInterval | default "12h" | quote }}
+        matchers:
+        - 'alertname=~"^({{ join "|" $emailAlertnames }})$"'
+      {{- end }}
       {{- end }}
     receivers:
     - name: blackhole

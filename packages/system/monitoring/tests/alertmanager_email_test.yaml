@@ -17,10 +17,12 @@ set:
 
 # Email delivery is opt-in twice: the receiver only renders when
 # alerta.alerts.email is configured, and even then only alerts labelled
-# notify_email="true" with severity critical|major are routed to it. The
-# explicit alerta route with `continue: true` ahead of the email route keeps
-# Alerta receiving every alert the email route matches, so a broken SMTP path
-# can never swallow an alert from the primary channel.
+# notify_email="true" with a severity from the severities list (default
+# critical|major) are routed to it. The alertnames list is the values-side
+# producer: names on it are emailed with no label or severity requirement, so
+# platform-shipped rules can be opted in per cluster. Every route to email is
+# preceded by an alerta route with `continue: true`, so a broken SMTP path can
+# never swallow an alert from the primary channel.
 tests:
   - it: renders no email receiver, email routes or secrets mount by default
     asserts:
@@ -273,3 +275,99 @@ tests:
         matchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: '    repeat_interval: "1h30m"\n'
+
+  - it: renders the alertname routes after the notify_email routes when alertnames is set
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            alertnames: ["KubeAPIDown", "etcdMembersDown"]
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: email\n    group_by: \[alertname, cluster\]\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: alerta\n    continue: true\n    matchers:\n    - .alertname=~"\^\(KubeAPIDown\|etcdMembersDown\)\$".\n  - receiver: email\n    group_by: \[alertname, cluster\]\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .alertname=~"\^\(KubeAPIDown\|etcdMembersDown\)\$".'
+
+  - it: renders no alertname route when alertnames is empty
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: 'alertname=~"\^'
+
+  - it: renders a custom severities matcher on both notify_email routes
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            severities: ["critical", "major", "warning"]
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major\|warning".\n    - .notify_email="true".\n  - receiver: email\n    group_by: \[alertname, cluster\]\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major\|warning".\n    - .notify_email="true".'
+
+  - it: fails the render when an alertnames entry is not a plain alert name
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            alertnames: ["bad name"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.alertnames entries must be Prometheus alert names, got "bad name"'
+
+  - it: fails the render when a severities entry is not a plain severity name
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            severities: ['critical"']
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.severities entries must be plain severity names, got "critical\""'
+
+  - it: fails the render when only alertnames is set
+    set:
+      alerta:
+        alerts:
+          email:
+            alertnames: ["KubeAPIDown"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when only severities is set
+    set:
+      alerta:
+        alerts:
+          email:
+            severities: ["critical"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
