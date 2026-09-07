@@ -1981,8 +1981,8 @@ func (r *REST) warnRemovedKubernetesFields(ctx context.Context, app *appsv1alpha
 // the <release>-credentials Secret. Like the Kubernetes fields above the key is
 // still accepted and stored (the user object's schema keeps additionalProperties
 // open, and the render preserves an existing password through lookup), so a value
-// left from before the upgrade stays the LIVE credential until a passwordRotation
-// bump retires it. Warn so an operator editing it to rotate is told it has no
+// left from before the upgrade stays the LIVE credential and there is no longer a
+// values knob to change it. Warn so an operator editing it is told it has no
 // effect instead of getting a silent 200.
 var removedUserPasswordKinds = map[string]bool{
 	postgresKind: true,
@@ -2009,7 +2009,7 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 	for user, u := range values.Users {
 		if _, present := u["password"]; present {
 			warning.AddWarning(ctx, "", fmt.Sprintf(
-				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. A value left from before the upgrade is still the live password until you retire it with a passwordRotation bump.", user))
+				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.", user))
 		}
 	}
 }
