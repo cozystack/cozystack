@@ -37,6 +37,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// Reserved addresses for the endpoints `external: true` publishes. Each entry pins one endpoint to an address held by an IPAddressClaim, so the address survives a rebuild of this application. Empty lets the load balancer assign any free address, as before.
+	// +kubebuilder:default:={}
+	ExternalIPs []ExternalIP `json:"externalIPs,omitempty"`
 	// PostgreSQL major version to deploy
 	// +kubebuilder:default:="v18"
 	Version Version `json:"version"`
@@ -135,6 +138,13 @@ type EndpointCA struct {
 	// Name of the Secret in the application namespace. Empty means no endpointCA is emitted (the plugin uses the system trust store).
 	// +kubebuilder:default:=""
 	Name string `json:"name,omitempty"`
+}
+
+type ExternalIP struct {
+	// Name of an IPAddressClaim in this namespace whose address the endpoint should wear. Until the claim binds, the endpoint keeps whatever address the load balancer assigned.
+	Claim string `json:"claim"`
+	// Which external endpoint to pin. `rw` is the primary, the endpoint `external: true` publishes, and is the default.
+	Target string `json:"target,omitempty"`
 }
 
 type PostgreSQL struct {
