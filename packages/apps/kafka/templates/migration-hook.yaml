@@ -1,20 +1,26 @@
-{{- $shouldRun := true }}
-{{- $cm := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-kafka-deployed-version" .Release.Name) }}
-{{- if $cm }}
-  {{- /* Integer compare: a future threshold like "10" must not read as < "2". */}}
-  {{- if ge (int (dig "data" "version" "0" $cm)) 1 }}
-    {{- $shouldRun = false }}
-  {{- end }}
-{{- end }}
-{{- if $shouldRun }}
+{{- /*
+  Node pools are managed entirely by this hook, NOT by a regular chart manifest.
+
+  Reason: an in-place ZooKeeper->KRaft migration must create the broker and
+  controller KafkaNodePools BEFORE the main release apply (Strimzi has to walk
+  the migration state machine while the old ZooKeeper Kafka CR is still live).
+  If the pools were also regular chart manifests, Helm's main apply would try to
+  reconcile a resource that exists in the cluster but was absent from the
+  previous (ZooKeeper) release revision, and fail the upgrade with
+  "original object KafkaNodePool ... not found" — leaving the HelmRelease stuck
+  in a failed state even though the Kafka cluster migrated fine. Keeping the
+  pools out of the main manifest and applying them here (idempotently, on every
+  install and upgrade) avoids that whole class of Helm 3-way-merge conflict.
+*/ -}}
 {{- $controllerReplicas := include "kafka.controllerReplicas" . }}
+{{- $brokerPool := include "kafka.brokerPoolName" . }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ .Release.Name }}-kafka-migration
   annotations:
-    helm.sh/hook: pre-upgrade
+    helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "1"
     helm.sh/hook-delete-policy: before-hook-creation
 ---
@@ -23,7 +29,7 @@ kind: Role
 metadata:
   name: {{ .Release.Name }}-kafka-migration
   annotations:
-    helm.sh/hook: pre-upgrade
+    helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "1"
     helm.sh/hook-delete-policy: before-hook-creation
 rules:
@@ -36,7 +42,7 @@ kind: RoleBinding
 metadata:
   name: {{ .Release.Name }}-kafka-migration
   annotations:
-    helm.sh/hook: pre-upgrade
+    helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "1"
     helm.sh/hook-delete-policy: before-hook-creation
 roleRef:
@@ -53,7 +59,7 @@ kind: Job
 metadata:
   name: {{ .Release.Name }}-kafka-migration
   annotations:
-    helm.sh/hook: pre-upgrade
+    helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "2"
     # Only before-hook-creation: keep the previous (possibly failed) Job and its
     # pod logs around for a post-mortem until the next attempt recreates it.
@@ -62,10 +68,9 @@ spec:
   backoffLimit: 0
   # Budget chain: in-script waits total ~1800s (240x5s + 120x5s) < this Job
   # deadline (2400s) < the release's helm-install-timeout (45m, set on the kafka
-  # ApplicationDefinition). helm-controller waits on this pre-upgrade hook within
-  # the release timeout, so that ceiling must exceed the Job deadline or the
-  # migration is aborted before it can finish. Keep the three in this order if
-  # any is changed.
+  # ApplicationDefinition). helm-controller waits on this hook within the release
+  # timeout, so that ceiling must exceed the Job deadline or the migration is
+  # aborted before it can finish. Keep the three in this order if any is changed.
   activeDeadlineSeconds: 2400
   template:
     metadata:
@@ -84,87 +89,27 @@ spec:
 
               ns={{ .Release.Namespace | quote }}
               name={{ .Release.Name | quote }}
-              # Fully qualify the resource: the plural "kafkas" also exists in this
+              brokerPool={{ $brokerPool | quote }}
+              # Fully qualify the resources: the plural "kafkas" also exists in this
               # chart's own apps.cozystack.io group, so a bare "kafka" would resolve
               # by per-cluster discovery priority and could hit the tenant kind —
               # which this hook's Role does not grant, failing it deterministically.
               kafka=kafkas.kafka.strimzi.io
               np=kafkanodepools.kafka.strimzi.io
 
-              # Fail closed. --ignore-not-found makes kubectl exit 0 with empty
-              # output on a genuine NotFound (legitimate fresh install) and exit
-              # non-zero only on a real error (apiserver/RBAC/timeout) — no fragile
-              # stderr substring matching that a stray "... not found" could trip.
-              if ! found=$(kubectl -n "$ns" get "$kafka" "$name" --ignore-not-found -o name 2>&1); then
-                echo "ERROR: reading Kafka CR failed: $found" >&2
-                exit 1
-              fi
-              if [ -z "$found" ]; then
-                echo "No existing Kafka CR — fresh install, skipping migration."
-                exit 0
-              fi
-
-              # A KRaft-native cluster (a fresh install, or one already migrated) is
-              # annotated strimzi.io/kraft=enabled. Never drive it through the
-              # migration state machine: re-issuing kraft=migration from there is an
-              # invalid backward transition Strimzi rejects.
-              # Fail closed, like the reads above: the CR exists, so a genuine
-              # "no annotation/status yet" is an empty string with exit 0, while a
-              # real read error is non-zero. Masking a transient error as "" here
-              # would skip the "already KRaft, nothing to do" exits below and
-              # re-issue kraft=migration against a live, already-migrated cluster.
-              if ! kraft=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.metadata.annotations.strimzi\.io/kraft}' 2>&1); then
-                echo "ERROR: reading the strimzi.io/kraft annotation failed: $kraft" >&2
-                exit 1
-              fi
-              if [ "$kraft" = "enabled" ]; then
-                echo "Kafka is already KRaft (strimzi.io/kraft=enabled) — nothing to do."
-                exit 0
-              fi
-
-              if ! state=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.status.kafkaMetadataState}' 2>&1); then
-                echo "ERROR: reading kafkaMetadataState failed: $state" >&2
-                exit 1
-              fi
-              echo "Current kafkaMetadataState: '${state}'"
-              # A cluster already fully in KRaft is done. An EMPTY state on an
-              # EXISTING ZooKeeper CR is NOT "migrated" (status may simply not be
-              # populated yet) — proceed; the steps below are idempotent.
-              if [ "$state" = "KRaft" ]; then
-                echo "Already in KRaft — nothing to do."
-                exit 0
-              fi
-
-              # Fail closed on the namespace-unique broker pool name. The adopting
-              # broker pool must be named "kafka" (Strimzi derives broker/PVC names
-              # as <cluster>-kafka-N). If a "kafka" pool already exists for a
-              # DIFFERENT cluster, a second Kafka is being migrated in this
-              # namespace — unsupported, since node pool names are namespace-unique.
-              # Fail closed like the Kafka CR read above: --ignore-not-found makes
-              # a genuine "no kafka pool yet" exit 0 with empty output, while a real
-              # apiserver/RBAC/timeout error exits non-zero and aborts — never
-              # silently waiving the collision check on a transient kubectl failure.
-              if ! owner=$(kubectl -n "$ns" get "$np" kafka --ignore-not-found -o jsonpath='{.metadata.labels.strimzi\.io/cluster}' 2>&1); then
-                echo "ERROR: reading the \"kafka\" node pool owner label failed: $owner" >&2
-                exit 1
-              fi
-              if [ -n "$owner" ] && [ "$owner" != "$name" ]; then
-                echo "ERROR: KafkaNodePool 'kafka' in namespace '$ns' already belongs to cluster '$owner'." >&2
-                echo "In-place ZK->KRaft migration of more than one Kafka per namespace is unsupported (Strimzi node pool names are namespace-unique). Migrate one at a time or in separate namespaces." >&2
-                exit 1
-              fi
-
-              echo "Ensuring broker + controller KafkaNodePools exist (Helm-owned)..."
-              cat <<MANIFEST | kubectl apply -f -
+              # Capture the pool manifests once; the broker pool is applied via a
+              # create-then-apply sequence (see the ownership guard below), so its
+              # body is reused.
+              broker_manifest=$(cat <<MANIFEST
               apiVersion: kafka.strimzi.io/v1beta2
               kind: KafkaNodePool
               metadata:
-                # Must be exactly "kafka": Strimzi derives broker/PVC names as
-                # <cluster>-<pool>-<id>, and a pre-node-pool ZooKeeper cluster has
-                # brokers <cluster>-kafka-N. Only a pool named "kafka" adopts them
-                # (and their data) in place; any other name provisions fresh empty
-                # brokers and orphans the tenant's data.
-                name: kafka
+                # "kafka" for a cluster migrating from ZooKeeper (Strimzi derives
+                # broker/PVC names as <cluster>-<pool>-<id>, so only a pool named
+                # exactly "kafka" adopts the existing <cluster>-kafka-N brokers and
+                # their data in place); "b-<hash>" for a fresh KRaft cluster. Which
+                # one is resolved at render time by kafka.brokerPoolName.
+                name: ${brokerPool}
                 namespace: ${ns}
                 labels:
                   strimzi.io/cluster: ${name}
@@ -176,12 +121,9 @@ spec:
                 replicas: {{ .Values.kafka.replicas }}
                 roles:
                   - broker
-                # Set the same resources the steady-state pool gets: these
-                # hook-created pools govern the pods for the entire migration
-                # window (Helm applies the resourced kafkanodepools.yaml only
-                # after this pre-upgrade hook finishes). Without them a tenant
-                # LimitRange defaults the Kafka JVMs to 128Mi and they OOM,
-                # stalling the migration.
+                # These pools govern the pods for the whole migration window and
+                # steady state. Without explicit resources a tenant LimitRange
+                # defaults the Kafka JVMs to 128Mi and they OOM, stalling migration.
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
                 storage:
                   type: jbod
@@ -195,7 +137,10 @@ spec:
                     class: {{ . }}
                     {{- end }}
                     deleteClaim: false
-              ---
+              MANIFEST
+              )
+
+              controller_manifest=$(cat <<MANIFEST
               apiVersion: kafka.strimzi.io/v1beta2
               kind: KafkaNodePool
               metadata:
@@ -207,6 +152,13 @@ spec:
                 annotations:
                   meta.helm.sh/release-name: ${name}
                   meta.helm.sh/release-namespace: ${ns}
+                  # Pin controller node IDs above the broker range so the adopting
+                  # "kafka" broker pool keeps [0..replicas-1] and reuses the existing
+                  # <cluster>-kafka-N brokers and their PVCs in place. Both pools are
+                  # created together here; without this Strimzi hands the controller
+                  # pool the lowest free IDs — the broker IDs — recreating brokers
+                  # empty at [replicas..] and orphaning the tenant's data.
+                  strimzi.io/next-node-ids: "[{{ .Values.kafka.replicas }}-999]"
               spec:
                 replicas: {{ $controllerReplicas }}
                 roles:
@@ -225,6 +177,94 @@ spec:
                     kraftMetadata: shared
                     deleteClaim: false
               MANIFEST
+              )
+
+              # Broker pool ownership FIRST, before any apply, so a "kafka" pool
+              # owned by another cluster aborts without mutating anything. For a
+              # fresh cluster the name is the release-unique "b-<hash>" and there is
+              # no collision — a plain apply is safe. For a cluster migrating from
+              # ZooKeeper the name is the namespace-unique "kafka"; enforce one
+              # migration per namespace ATOMICALLY. A plain read-then-apply would
+              # race: two ZooKeeper Kafkas in one namespace upgraded together could
+              # both observe no owner and both apply, the second silently
+              # re-parenting the first's brokers. Instead, when the pool is absent,
+              # "kubectl create" is the atomic arbiter: exactly one concurrent
+              # creator wins; the loser's create fails, re-reads the owner, aborts.
+              if [ "$brokerPool" = "kafka" ]; then
+                if ! owner=$(kubectl -n "$ns" get "$np" kafka --ignore-not-found -o jsonpath='{.metadata.labels.strimzi\.io/cluster}' 2>&1); then
+                  echo "ERROR: reading the \"kafka\" node pool owner label failed: $owner" >&2
+                  exit 1
+                fi
+                if [ -z "$owner" ]; then
+                  echo "Creating broker pool \"kafka\"..."
+                  if echo "$broker_manifest" | kubectl create -f - 2>/tmp/createerr; then
+                    owner="$name"
+                  else
+                    if ! owner=$(kubectl -n "$ns" get "$np" kafka --ignore-not-found -o jsonpath='{.metadata.labels.strimzi\.io/cluster}' 2>&1); then
+                      echo "ERROR: re-reading the \"kafka\" node pool owner after create failure failed: $owner" >&2
+                      exit 1
+                    fi
+                    if [ -z "$owner" ]; then
+                      echo "ERROR: creating broker pool \"kafka\" failed: $(cat /tmp/createerr)" >&2
+                      exit 1
+                    fi
+                  fi
+                fi
+                if [ "$owner" != "$name" ]; then
+                  echo "ERROR: KafkaNodePool 'kafka' in namespace '$ns' already belongs to cluster '$owner'." >&2
+                  echo "In-place ZK->KRaft migration of more than one Kafka per namespace is unsupported (Strimzi node pool names are namespace-unique). Migrate one at a time or in separate namespaces." >&2
+                  exit 1
+                fi
+              fi
+              echo "Ensuring broker KafkaNodePool \"$brokerPool\" exists..."
+              echo "$broker_manifest" | kubectl apply -f -
+
+              echo "Ensuring controller KafkaNodePool exists..."
+              echo "$controller_manifest" | kubectl apply -f -
+
+              # Fail closed. --ignore-not-found makes kubectl exit 0 with empty
+              # output on a genuine NotFound (fresh install: the Kafka CR is created
+              # by the main release apply, after this hook) and exit non-zero only on
+              # a real error (apiserver/RBAC/timeout) — no fragile stderr matching.
+              if ! found=$(kubectl -n "$ns" get "$kafka" "$name" --ignore-not-found -o name 2>&1); then
+                echo "ERROR: reading Kafka CR failed: $found" >&2
+                exit 1
+              fi
+              if [ -z "$found" ]; then
+                echo "No existing Kafka CR — fresh install. Node pools ensured; the main release apply will create the KRaft Kafka CR. Nothing to migrate."
+                exit 0
+              fi
+
+              # A KRaft-native cluster (a fresh install, or one already migrated) is
+              # annotated strimzi.io/kraft=enabled. Never drive it through the
+              # migration state machine: re-issuing kraft=migration from there is an
+              # invalid backward transition Strimzi rejects.
+              # Fail closed, like the reads above: the CR exists, so a genuine
+              # "no annotation/status yet" is an empty string with exit 0, while a
+              # real read error is non-zero. Masking a transient error as "" here
+              # would skip the "already KRaft, nothing to do" exits below and
+              # re-issue kraft=migration against a live, already-migrated cluster.
+              if ! kraft=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.metadata.annotations.strimzi\.io/kraft}' 2>&1); then
+                echo "ERROR: reading the strimzi.io/kraft annotation failed: $kraft" >&2
+                exit 1
+              fi
+              if [ "$kraft" = "enabled" ]; then
+                echo "Kafka is already KRaft (strimzi.io/kraft=enabled) — node pools ensured, nothing to migrate."
+                exit 0
+              fi
+
+              if ! state=$(kubectl -n "$ns" get "$kafka" "$name" -o jsonpath='{.status.kafkaMetadataState}' 2>&1); then
+                echo "ERROR: reading kafkaMetadataState failed: $state" >&2
+                exit 1
+              fi
+              echo "Current kafkaMetadataState: '${state}'"
+              # A cluster already fully in KRaft is done. An EMPTY state on an
+              # EXISTING ZooKeeper CR is NOT "migrated" (status may simply not be
+              # populated yet) — proceed; the steps below are idempotent.
+              if [ "$state" = "KRaft" ]; then
+                echo "Already in KRaft — nothing to do."
+                exit 0
+              fi
 
               # Enabling node pools is idempotent. Only issue kraft=migration from a
               # genuine pre-migration state: on a retry (Helm timed out and recreated
@@ -262,9 +302,8 @@ spec:
               # reached KRaftPostMigration. Applying it earlier — while brokers still
               # depend on ZooKeeper — is unsafe and irreversible (kraft=rollback is no
               # longer available past that point). If the wait timed out in an
-              # intermediate state, abort without finalising and without stamping the
-              # deployed-version ConfigMap, so Helm fails the upgrade and the next
-              # reconcile retries from where the migration left off.
+              # intermediate state, abort without finalising so Helm fails the upgrade
+              # and the next reconcile retries from where the migration left off.
               if [ "$migration_ready" != "true" ]; then
                 echo "ERROR: migration did not reach KRaftPostMigration (last state: ${state:-unknown})."
                 echo "Refusing to apply strimzi.io/kraft=enabled in an unsafe state."
@@ -287,4 +326,3 @@ spec:
 
               echo "ERROR: migration did not complete in time."
               exit 1
-{{- end }}
