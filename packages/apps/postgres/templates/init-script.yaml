@@ -9,22 +9,11 @@
 
 {{/*
   Passwords are always chart-generated and preserved across reconciles via the
-  lookup above. Rotation is an explicit, data-driven trigger: the counter is
-  persisted in the Secret's annotation (kept out of stringData so it can never
-  collide with a user named after the marker) and compared with
-  .Values.passwordRotation. A missing marker (pre-rotation releases) is treated
-  as "adopt current baseline", so an in-place upgrade never regenerates a live
-  password on its own — only a counter bump does.
+  lookup above: a user keeps whatever password is already stored in the Secret,
+  and only a user without one yet gets a freshly generated value.
 */}}
-{{- $rotationAnnotation := "postgres.cozystack.io/password-rotation" }}
-{{- $existingMeta := (index $existingSecret "metadata") | default dict }}
-{{- $existingAnnotations := (index $existingMeta "annotations") | default dict }}
-{{- $storedRotation := index $existingAnnotations $rotationAnnotation | default "" }}
-{{- $wantRotation := .Values.passwordRotation | toString }}
-{{- $rotate := and (ne $storedRotation "") (ne $wantRotation $storedRotation) }}
-
 {{- range $user, $u := .Values.users }}
-  {{- if or (not (index $passwords $user)) $rotate }}
+  {{- if not (index $passwords $user) }}
     {{- $_ := set $passwords $user (randAlphaNum 16) }}
   {{- end }}
 {{- end }}
@@ -34,9 +23,8 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Release.Name }}-credentials
+  {{- if .Values.bootstrap.enabled }}
   annotations:
-    {{ $rotationAnnotation }}: {{ $wantRotation | quote }}
-    {{- if .Values.bootstrap.enabled }}
     # During a restore the roles recovered from the backup keep their original
     # password hashes, but this Secret holds freshly generated passwords and the
     # init-job that would apply them (ALTER ROLE) is skipped while bootstrap is
@@ -44,7 +32,7 @@ metadata:
     # leaves bootstrap and the init-job runs. Flag it so a reader (dashboard,
     # tenant) does not treat the advertised password as usable mid-restore.
     postgres.cozystack.io/credentials-pending: "true"
-    {{- end }}
+  {{- end }}
 stringData:
   {{- range $user, $u := .Values.users }}
   {{ quote $user }}: {{ quote (index $passwords $user) }}
