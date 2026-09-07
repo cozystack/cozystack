@@ -12,10 +12,12 @@ export WHITE='\033[1;37m'
 export NC='\033[0m'
 export BOLD='\033[1m'
 
-# Default settings (override via environment). This demo uses the platform
-# cozy-default flow: no per-demo Bucket is created — the cozy-default-kafka
-# strategy carries the system-bucket coordinates and the controller projects
-# cozy-backups-creds into the namespace before each run.
+# Default settings (override via environment). The demo derives its OWN Kafka
+# strategy + BackupClass from the platform-shipped cozy-default-kafka strategy
+# (run-all.sh patches its S3_ENDPOINT and mounts the S3 CA), so the round-trip
+# can target an in-cluster, TLS-verifiable S3 endpoint the shipped strategy's
+# advertised external ingress is not in CI. The shipped cozy-default-kafka is
+# left untouched.
 export NAMESPACE="${NAMESPACE:-tenant-root}"
 export KAFKA_SRC_NAME="${KAFKA_SRC_NAME:-kafka-meta-src}"
 export KAFKA_TARGET_NAME="${KAFKA_TARGET_NAME:-kafka-meta-target}"
@@ -30,11 +32,30 @@ export COLLIDE_DOT="${COLLIDE_DOT:-audit.events}"
 export COLLIDE_DOT_PARTS="${COLLIDE_DOT_PARTS:-2}"
 export COLLIDE_DASH="${COLLIDE_DASH:-audit-events}"
 export COLLIDE_DASH_PARTS="${COLLIDE_DASH_PARTS:-5}"
-export BACKUPCLASS_NAME="${BACKUPCLASS_NAME:-cozy-default}"
+# The demo's own strategy + BackupClass, derived at run time from the shipped
+# cozy-default-kafka so the driver script stays a single source of truth. Named
+# distinctly so they never collide with the platform cozy-default class.
+export STRATEGY_NAME="${STRATEGY_NAME:-kafka-strategy-default}"
+export BACKUPCLASS_NAME="${BACKUPCLASS_NAME:-kafka-metadata}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-kafka-meta-src-adhoc}"
 export RESTOREJOB_INPLACE_NAME="${RESTOREJOB_INPLACE_NAME:-kafka-meta-src-inplace}"
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-kafka-meta-src-to-target}"
 export PLAN_NAME="${PLAN_NAME:-kafka-meta-src-daily}"
+# S3_ENDPOINT overrides the endpoint the backup Pod uses. The shipped strategy
+# advertises the EXTERNAL S3 ingress, which in-cluster Pods cannot always
+# resolve or TLS-validate (in CI it is an unroutable placeholder). The
+# in-cluster alternative is https://seaweedfs-s3.<ns>.svc:8333 — the .svc FQDN
+# is what the seaweedfs serving cert's SAN covers, so curl verifies TLS against
+# the copied CA below. CI sets this; a real cluster can leave it unset.
+export S3_ENDPOINT="${S3_ENDPOINT:-}"
+# Self-signed seaweedfs CA: run-all.sh discovers it and copies ca.crt into
+# CA_SECRET, which the demo strategy Pod mounts and points CURL_CA_BUNDLE at.
+# Set S3_CA_SECRET="" to skip on a publicly-trusted endpoint.
+export CA_SECRET="${CA_SECRET:-kafka-backup-ca}"
+export S3_CA_SECRET="${S3_CA_SECRET:-seaweedfs-ca-cert}"
+export S3_CA_NAMESPACE="${S3_CA_NAMESPACE:-tenant-root}"
+export S3_CA_KEY="${S3_CA_KEY:-ca.crt}"
+export CA_MOUNT_DIR="${CA_MOUNT_DIR:-/etc/ssl/kafka-backup-ca}"
 # The Cozystack chart names the Strimzi cluster kafka-<app>; its plaintext
 # bootstrap Service is kafka-<app>-kafka-bootstrap:9092.
 # KAFKA_IMAGE only drives the host-side throwaway CLI pods here (seed/verify);
@@ -52,6 +73,61 @@ log_substep() { echo -e "${CYAN}  -> $*${NC}" >&2; }
 
 print_header() {
     echo -e "\n${MAGENTA}${BOLD}== $1 ==${NC}\n" >&2
+}
+
+# copy_s3_ca copies the self-signed seaweedfs CA (ca.crt) into CA_SECRET in
+# NAMESPACE so the demo strategy Pod can verify TLS against the in-cluster S3
+# endpoint. Echoes "1" when a CA was copied, "0" when skipped (S3_CA_SECRET
+# empty → a publicly-trusted endpoint). Mirrors examples/backups/rabbitmq.
+copy_s3_ca() {
+    if [[ -z "$S3_CA_SECRET" ]]; then echo 0; return 0; fi
+    if ! kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" >/dev/null 2>&1; then
+        log_warning "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} not found; discovering the seaweedfs CA Certificate..."
+        local discovered
+        discovered=$(kubectl -n "$S3_CA_NAMESPACE" get certificates.cert-manager.io \
+            -l app.kubernetes.io/name=seaweedfs \
+            -o jsonpath='{range .items[*]}{.spec.isCA}{" "}{.spec.secretName}{"\n"}{end}' 2>/dev/null \
+            | awk '$1=="true"{print $2; exit}' || true)
+        [[ -n "$discovered" ]] || { log_error "No seaweedfs CA Certificate found in ${S3_CA_NAMESPACE}; set S3_CA_SECRET explicitly (or empty for a public-CA endpoint)."; return 1; }
+        log_success "Discovered seaweedfs CA secret ${S3_CA_NAMESPACE}/${discovered}"
+        S3_CA_SECRET="$discovered"
+    fi
+    local ca_pem
+    ca_pem=$(kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" \
+        -o jsonpath="{.data.${S3_CA_KEY//./\\.}}" | base64 -d)
+    [[ -n "$ca_pem" ]] || { log_error "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} has no ${S3_CA_KEY}"; return 1; }
+    kubectl -n "$NAMESPACE" create secret generic "$CA_SECRET" \
+        --from-literal="ca.crt=${ca_pem}" \
+        --dry-run=client -o yaml | kubectl -n "$NAMESPACE" apply -f - >&2
+    echo 1
+}
+
+# provision_demo_strategy derives the demo Kafka strategy from the shipped
+# cozy-default-kafka (single source of truth for the driver script), overriding
+# S3_ENDPOINT and, when $2==1, mounting CA_SECRET + pointing CURL_CA_BUNDLE at
+# it. Then applies the demo BackupClass. Args: <endpoint> <ca_present 0|1>.
+provision_demo_strategy() {
+    local endpoint="$1" ca_present="$2"
+    kubectl get kafka.strategy.backups.cozystack.io cozy-default-kafka -o json \
+      | jq \
+          --arg ep "$endpoint" --arg name "$STRATEGY_NAME" \
+          --arg caDir "$CA_MOUNT_DIR" --arg caPath "${CA_MOUNT_DIR}/ca.crt" \
+          --arg caSecret "$CA_SECRET" --argjson ca "$ca_present" '
+        .metadata = {name: $name}
+        | del(.status)
+        | .spec.template.spec.containers[0].env = (
+            ((.spec.template.spec.containers[0].env // [])
+              | map(if .name == "S3_ENDPOINT" then {name: "S3_ENDPOINT", value: $ep} else . end))
+            + (if $ca == 1 then [{name: "CURL_CA_BUNDLE", value: $caPath}] else [] end))
+        | if $ca == 1 then
+            .spec.template.spec.containers[0].volumeMounts =
+              ((.spec.template.spec.containers[0].volumeMounts // [])
+                + [{name: "s3-ca", mountPath: $caDir, readOnly: true}])
+            | .spec.template.spec.volumes =
+              ((.spec.template.spec.volumes // []) + [{name: "s3-ca", secret: {secretName: $caSecret}}])
+          else . end
+      ' | kubectl apply -f - >&2
+    kubectl apply -f "$SCRIPT_DIR/03-backupclass.yaml" >&2
 }
 
 # Wait until a JSONPath value on a resource matches the desired string. Optional

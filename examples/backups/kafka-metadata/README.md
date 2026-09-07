@@ -1,6 +1,6 @@
 # Kafka topic-metadata backup/restore demo
 
-This demo backs up and restores the **topic metadata** of a Cozystack-managed `Kafka` application through the platform **cozy-default** flow, and proves integrity by round-tripping a per-run `retention.ms` sentinel through object storage.
+This demo backs up and restores the **topic metadata** of a Cozystack-managed `Kafka` application and proves integrity by round-tripping a per-run `retention.ms` sentinel through object storage. It runs a demo `BackupClass` + strategy that `run-all.sh` derives from the platform-shipped `cozy-default-kafka` (so the driver script stays a single source of truth), pointed at an S3 endpoint the in-cluster backup Pod can actually reach — the shipped strategy's advertised external ingress is not routable from inside every cluster.
 
 ## What is backed up
 
@@ -14,13 +14,14 @@ Restore is additive at the topic-set level — it recreates absent topics and (r
 
 ## Prerequisites
 
-The platform default backups stack must be installed: the `backupstrategy-controller`, the `cozy-backups` bucket it provisions, and the `cozy-default-kafka` strategy it ships. No demo `Bucket` is created here — the strategy carries the system-bucket coordinates and the controller projects `cozy-backups-creds` into the namespace before each run.
+The platform default backups stack must be installed: the `backupstrategy-controller`, the `cozy-backups` bucket it provisions, and the `cozy-default-kafka` strategy it ships (the demo strategy is derived from it and reuses its bucket coordinates + the controller-projected `cozy-backups-creds`). No demo `Bucket` is created. Set `S3_ENDPOINT` to reach an in-cluster, TLS-verifiable endpoint when the advertised external ingress is not routable (CI uses `https://seaweedfs-s3.tenant-root.svc:8333`, and `run-all.sh` copies the self-signed seaweedfs CA so `curl` verifies it); leave it unset on a cluster whose external S3 endpoint resolves and uses a public CA.
 
 ## Flow
 
-- `00-helpers.sh` — shared bash helpers (waiters, kafka seed/verify via a throwaway CLI pod).
-- `05-kafka-src.yaml` — the source application (no `backup:` block; cozy-default carries it).
-- `10-backupjob-adhoc.yaml` — an ad-hoc `BackupJob` routed to `cozy-default`.
+- `00-helpers.sh` — shared bash helpers (waiters, kafka seed/verify via a throwaway CLI pod, the demo strategy derivation + S3 CA copy).
+- `03-backupclass.yaml` — the demo `BackupClass` (`kafka-metadata`) mapping `Kafka` to the derived `kafka-strategy-default`.
+- `05-kafka-src.yaml` — the source application (no `backup:` block; the strategy carries the coordinates).
+- `10-backupjob-adhoc.yaml` — an ad-hoc `BackupJob` routed to the demo `kafka-metadata` BackupClass.
 - `15-plan.yaml` — a cron `Plan` for scheduled backups.
 - `20-kafka-target.yaml` — a separate, empty application for restore-to-copy.
 - `25-restorejob-in-place.yaml` / `30-restorejob-to-copy.yaml` — the two restore flows.

@@ -33,6 +33,25 @@ kubectl apply -f "$SCRIPT_DIR/05-kafka-src.yaml"
 wait_hr_ready "kafka-${KAFKA_SRC_NAME}" 300
 kafka_wait_ready "$KAFKA_SRC_NAME" 600
 
+print_header "Step 05a: Derive the demo Kafka strategy '${STRATEGY_NAME}' + BackupClass '${BACKUPCLASS_NAME}'"
+# The shipped cozy-default-kafka advertises the platform's EXTERNAL S3 ingress,
+# which in-cluster Pods cannot resolve or TLS-validate in CI. Derive a demo
+# strategy from it (so the driver script stays a single source of truth) pointed
+# at an in-cluster, verifiable endpoint. With an S3_ENDPOINT override, copy the
+# self-signed seaweedfs CA and mount it (CURL_CA_BUNDLE); with none, reuse the
+# shipped endpoint and skip the CA mount (its cert is publicly trusted, and
+# CURL_CA_BUNDLE would REPLACE the system bundle rather than extend it).
+if [[ -n "$S3_ENDPOINT" ]]; then
+    CA_PRESENT=$(copy_s3_ca)
+else
+    S3_ENDPOINT=$(kubectl get kafka.strategy.backups.cozystack.io cozy-default-kafka -o json \
+        | jq -r '.spec.template.spec.containers[0].env[] | select(.name=="S3_ENDPOINT") | .value')
+    [[ -n "$S3_ENDPOINT" ]] || { log_error "shipped cozy-default-kafka has no S3_ENDPOINT; is the platform backup stack installed?"; exit 1; }
+    CA_PRESENT=0
+fi
+provision_demo_strategy "$S3_ENDPOINT" "$CA_PRESENT"
+log_success "Demo strategy at endpoint '${S3_ENDPOINT}' (CA mounted: ${CA_PRESENT})"
+
 print_header "Step 05b: Seed topic '${TOPIC}' (${PARTITIONS} partitions, retention.ms=${RETENTION})"
 seed_topic "$KAFKA_SRC_NAME" "$RETENTION"
 got=$(topic_meta "$KAFKA_SRC_NAME")

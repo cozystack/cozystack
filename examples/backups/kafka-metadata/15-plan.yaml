@@ -1,6 +1,6 @@
 # A scheduled Plan: the Plan controller stamps a BackupJob per cron tick against
-# the cozy-default BackupClass. Shown for completeness; run-all.sh drives the
-# ad-hoc BackupJob above instead, so it does not wait on the cron.
+# this demo's kafka-metadata BackupClass. Shown for completeness; run-all.sh
+# drives the ad-hoc BackupJob above instead, so it does not wait on the cron.
 apiVersion: backups.cozystack.io/v1alpha1
 kind: Plan
 metadata:
@@ -11,6 +11,6 @@ spec:
     apiGroup: apps.cozystack.io
     kind: Kafka
     name: kafka-meta-src
-  backupClassName: cozy-default
+  backupClassName: kafka-metadata
   schedule:
     cron: "0 3 * * *"

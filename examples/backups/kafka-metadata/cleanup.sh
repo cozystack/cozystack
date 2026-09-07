@@ -14,5 +14,10 @@ kubectl -n "$NAMESPACE" delete backupjob "$BACKUPJOB_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete backup "$BACKUPJOB_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete kafka.apps.cozystack.io "$KAFKA_TARGET_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete kafka.apps.cozystack.io "$KAFKA_SRC_NAME" --ignore-not-found
+# Cluster-scoped demo objects + the copied CA (the shipped cozy-default-kafka is
+# never touched).
+kubectl delete backupclass.backups.cozystack.io "$BACKUPCLASS_NAME" --ignore-not-found
+kubectl delete kafka.strategy.backups.cozystack.io "$STRATEGY_NAME" --ignore-not-found
+kubectl -n "$NAMESPACE" delete secret "$CA_SECRET" --ignore-not-found
 
 log_success "Cleanup complete."

@@ -16,8 +16,11 @@
 # pre-cleans leftover state, drives run-all.sh, and drains in an always-reached
 # finally. Runs in tenant-root (the strategy's backup Job is an in-tenant S3
 # client, and the isolated e2e tenant-test cannot egress to tenant-root's
-# seaweedfs). The system-bucket coordinates and endpoint come from the
-# cozy-default-kafka strategy, so no S3_ENDPOINT override is needed here.
+# seaweedfs). run-all.sh derives a demo strategy from the shipped
+# cozy-default-kafka; the run step overrides S3_ENDPOINT to the in-cluster
+# seaweedfs .svc FQDN because the shipped strategy's advertised external ingress
+# is an unroutable placeholder in CI, and the .svc name is the one the seaweedfs
+# serving cert's SAN covers (curl verifies TLS against the copied CA).
 # KAFKA_IMAGE for the host-side seed/verify pods is resolved from the running
 # operator so it reuses the cached broker image (the backup/restore Jobs use the
 # image pinned in the strategy regardless).
@@ -83,6 +86,7 @@ spec:
             | tr '[:space:]' '\n' | grep '=.*/kafka:' | sed 's/.*=//' | tail -n1)
           [ -n "$KAFKA_IMAGE" ] || { echo "could not resolve Kafka image from strimzi-cluster-operator" >&2; exit 1; }
           NAMESPACE="$NAMESPACE" KAFKA_IMAGE="$KAFKA_IMAGE" \
+            S3_ENDPOINT="https://seaweedfs-s3.tenant-root.svc:8333" \
             examples/backups/kafka-metadata/run-all.sh
         check:
           ($error == null): true
