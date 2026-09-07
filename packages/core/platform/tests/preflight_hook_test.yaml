@@ -166,6 +166,13 @@ tests:
             resources: ["*"]
             verbs: ["*"]
 
+  # Pins the document count so a new hook object cannot slip in unreviewed and
+  # so the without-LINSTOR suite's count of 6 stays meaningful.
+  - it: renders exactly the eight hook objects when LINSTOR is present
+    asserts:
+      - hasDocuments:
+          count: 8
+
   - it: scopes pods/exec to a namespaced Role in cozy-linstor
     # Selected by the rule it carries: there are two Roles now (this one and
     # the status-ConfigMap Role in the release namespace), so `kind: Role`
