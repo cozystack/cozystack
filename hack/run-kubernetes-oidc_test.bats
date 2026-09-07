@@ -76,6 +76,53 @@
     cozy_assert_oidc_system demo
 }
 
+@test "CustomConfig transition fails when it cannot ask whether System leftovers are gone" {
+    # The teardown probes used `if kubectl get ... >/dev/null 2>&1`, which reads
+    # every non-zero exit as "the object is gone" -- including an RBAC denial, a
+    # timeout or a missing CRD -- so the suite reported a clean System teardown
+    # for never having observed one. --ignore-not-found separates the two.
+    #
+    # One probe is broken per iteration and the other two answer "absent", so
+    # each of the three is pinned individually: reverting any single one of them
+    # to the bare form lets that iteration pass and reddens this test. A test
+    # that merely broke all three would pass on any one surviving probe.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    cozy_wait_helmrelease_upgrade() { :; }
+    cozy_oidc_bindings() { printf 'byo-admin@example.test\tcluster-admin\n'; }
+
+    for unaskable in \
+        'keycloakclient.v1.edp.epam.com tenant-test-kubernetes-demo' \
+        'keycloakclientscope.v1.edp.epam.com tenant-test-kubernetes-demo-audience' \
+        'secret kubernetes-demo-oidc-kubeconfig'; do
+        COZY_TEST_UNASKABLE="$unaskable"
+        kubectl() {
+            case "$*" in
+                *" get helmrelease kubernetes-demo "*) printf '7' ;;
+                *" patch kuberneteses.apps.cozystack.io demo "*) : ;;
+                *" wait job kubernetes-demo-oidc-bootstrap "*) return 0 ;;
+                *" get kamajicontrolplane kubernetes-demo "*)
+                    printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml]'
+                    ;;
+                *" get secret kubernetes-demo-oidc-authn-config "*)
+                    printf 'url: https://idp.byo.example.test\naudiences:\n- cozystack-byo-demo\n' | base64 | tr -d '\n'
+                    ;;
+                *"${COZY_TEST_UNASKABLE}"*--ignore-not-found*)
+                    # Cannot ask: an RBAC denial or an unreachable apiserver.
+                    return 1
+                    ;;
+                # Absent, the way kubectl reports it with the flag: exit 0, no output.
+                *--ignore-not-found*) : ;;
+                *) echo "unexpected kubectl call: $*" >&2; return 1 ;;
+            esac
+        }
+
+        if cozy_switch_and_assert_oidc_custom_config demo; then
+            echo "the transition passed while the probe for ${unaskable} could not answer" >&2
+            return 1
+        fi
+    done
+}
+
 @test "CustomConfig transition patches the live cluster waits for the new generation and rejects System leftovers" {
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     calls=$(mktemp)
@@ -102,9 +149,13 @@
             *" get secret kubernetes-demo-oidc-authn-config "*)
                 printf 'url: https://idp.byo.example.test\naudiences:\n- cozystack-byo-demo\n' | base64 | tr -d '\n'
                 ;;
-            *" get keycloakclient.v1.edp.epam.com tenant-test-kubernetes-demo") return 1 ;;
-            *" get keycloakclientscope.v1.edp.epam.com tenant-test-kubernetes-demo-audience") return 1 ;;
-            *" get secret kubernetes-demo-oidc-kubeconfig") return 1 ;;
+            # Absence the way kubectl reports it under --ignore-not-found: exit 0
+            # and no output. The fail-closed half is pinned by the next test,
+            # not by this one -- here a bare probe would read the catch-all's
+            # non-zero exit as absence and pass.
+            *" get keycloakclient.v1.edp.epam.com tenant-test-kubernetes-demo --ignore-not-found"*) : ;;
+            *" get keycloakclientscope.v1.edp.epam.com tenant-test-kubernetes-demo-audience --ignore-not-found"*) : ;;
+            *" get secret kubernetes-demo-oidc-kubeconfig --ignore-not-found"*) : ;;
             *) echo "unexpected kubectl call: $*" >&2; return 1 ;;
         esac
     }

@@ -154,6 +154,7 @@ cozy_assert_oidc_system() {
 
 cozy_switch_and_assert_oidc_custom_config() {
   local test_name="$1"
+  local probe=
   local release="kubernetes-${test_name}"
   local audience="cozystack-byo-${test_name}"
   local previous_generation authn_config bindings
@@ -196,15 +197,35 @@ cozy_switch_and_assert_oidc_custom_config() {
   bindings=$(cozy_oidc_bindings "${test_name}")
   [ "${bindings}" = "$(printf 'byo-admin@example.test\tcluster-admin')" ]
 
-  if kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "tenant-test-${release}" >/dev/null 2>&1; then
+  # `--ignore-not-found` is what separates "the object is gone" from "could not
+  # ask": absent is exit 0 with empty output, while an RBAC denial, a timeout or
+  # a missing CRD is still non-zero. A bare `if kubectl get ... >/dev/null 2>&1`
+  # reads all of those as gone, so the teardown assertions used to report
+  # success for never having observed anything.
+  if ! probe=$(kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "tenant-test-${release}" \
+    --ignore-not-found -o name); then
+    echo "could not determine whether the System-mode KeycloakClient is gone" >&2
+    return 1
+  fi
+  if [ -n "${probe}" ]; then
     echo "System-mode KeycloakClient survived the CustomConfig upgrade" >&2
     return 1
   fi
-  if kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "tenant-test-${release}-audience" >/dev/null 2>&1; then
+  if ! probe=$(kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "tenant-test-${release}-audience" \
+    --ignore-not-found -o name); then
+    echo "could not determine whether the System-mode KeycloakClientScope is gone" >&2
+    return 1
+  fi
+  if [ -n "${probe}" ]; then
     echo "System-mode KeycloakClientScope survived the CustomConfig upgrade" >&2
     return 1
   fi
-  if kubectl -n tenant-test get secret "${release}-oidc-kubeconfig" >/dev/null 2>&1; then
+  if ! probe=$(kubectl -n tenant-test get secret "${release}-oidc-kubeconfig" \
+    --ignore-not-found -o name); then
+    echo "could not determine whether the System-mode OIDC kubeconfig is gone" >&2
+    return 1
+  fi
+  if [ -n "${probe}" ]; then
     echo "System-mode OIDC kubeconfig survived the CustomConfig upgrade" >&2
     return 1
   fi
