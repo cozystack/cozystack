@@ -2,6 +2,31 @@ apiVersion: cozystack.io/v1alpha1
 kind: ApplicationDefinition
 metadata:
   name: vm-disk
+  annotations:
+    # Sets the install and the upgrade window both; install is the one a new
+    # disk runs under. The release waits for CDI to populate the disk (see
+    # healthCheckExprs below), and that is a data transfer the user sizes: a
+    # multi-gigabyte cloud image over whatever link the cluster has. On the
+    # platform default of 10m a healthy import reports as a failed release for
+    # the rest of its run. 30m is chosen for a transfer rather than a
+    # bootstrap, and it costs nothing against the failure the checks exist for:
+    # a disk that never populates never populates, so any finite window catches
+    # it, and either way the release is not-Ready from the first poll.
+    # Overrunning is not destructive -- both strategies are
+    # RetryOnFailure, which re-runs the action rather than remediating, so an
+    # import slower still than 30m converges once it finishes.
+    # The cost the wait does carry: helm-controller runs the Helm action inside
+    # its own reconcile, so a disk that is still importing holds one of its
+    # shard's five reconcile slots until it finishes, and a disk is created per
+    # workload rather than per tenant.
+    # The number here is not the lever for that: the retry interval is 30s, so
+    # a wait that ends in a timeout is re-entered almost at once and the slot
+    # stays occupied whatever the window says. The shard's concurrency is, and
+    # cozystack/cozystack#4145 is where that is decided. A disk stuck for good
+    # is the sharpest case: the clone this guards against rests in an in-flight
+    # phase rather than reaching Failed, so it holds a slot for the window,
+    # releases it for the retry interval, and takes it again, indefinitely.
+    release.cozystack.io/helm-install-timeout: "30m"
 spec:
   application:
     kind: VMDisk
@@ -17,6 +42,43 @@ spec:
       kind: ExternalArtifact
       name: cozystack-vm-disk-application-kubevirt-vm-disk
       namespace: cozy-system
+    # The release reports ready only once CDI has no work in flight on the
+    # DataVolume, and it is decided when the release is installed or upgraded
+    # rather than watched continuously. Without
+    # that, an import or clone that never completes -- a clone into a
+    # StorageClass that cannot place a replica where the source data sits is
+    # one way to get there, cozystack/cozystack#2908 -- leaves the application
+    # green while the disk is unusable.
+    # The phases below are the DataVolumePhase values that mean work is in
+    # flight. A phase outside them reads
+    # healthy, so a CDI that adds or renames one cannot turn working disks red;
+    # that includes the settled-but-not-Succeeded ones a healthy disk rests in.
+    # PendingPopulation and WaitForFirstConsumer are where a disk created with
+    # bindImmediately: false waits for the VM that will consume it, which is a
+    # deliberate resting state and may last for as long as the operator takes
+    # to attach it; UploadReady is where a disk waits on virtctl image-upload.
+    # Paused belongs to a multi-stage import.
+    # Two shapes are deliberately not healthy, because both mean CDI is not
+    # driving the disk anywhere: Unknown, which CDI writes when it cannot tell
+    # what the PVC is doing, and a status carrying no phase at all, which is
+    # where CDI parks a DataVolume whose PVC spec it could not render -- a
+    # StorageClass that does not exist, for one. Both fall through all three
+    # expressions, and flux's evaluator calls that in progress. A DataVolume
+    # with no status key at all is a third shape on a different route:
+    # has(status.phase) errors, the evaluator returns the error instead of a
+    # status, and the poller records Unknown with the message attached. The
+    # release waits in that case too, but a timeout there reports "no such
+    # attribute(s): status.phase".
+    # The three expressions overlap deliberately -- current is true for Failed
+    # and for every in-flight phase as well -- and the evaluation order makes
+    # that safe: inProgress, then failed, then current, first true wins
+    # (RFC 0009).
+    healthCheckExprs:
+      - apiVersion: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        inProgress: "has(status.phase) && status.phase in ['Pending', 'PVCBound', 'ImportScheduled', 'ImportInProgress', 'CloneScheduled', 'CloneInProgress', 'SnapshotForSmartCloneInProgress', 'CloneFromSnapshotSourceInProgress', 'SmartClonePVCInProgress', 'CSICloneInProgress', 'PrepClaimInProgress', 'RebindInProgress', 'ExpansionInProgress', 'NamespaceTransferInProgress', 'UploadScheduled']"
+        failed: "has(status.phase) && status.phase == 'Failed'"
+        current: "has(status.phase) && status.phase != 'Unknown'"
   dashboard:
     category: IaaS
     singular: VM Disk
