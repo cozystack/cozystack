@@ -2316,7 +2316,14 @@ EOF
   # set of other things that become Ready on a clock is open and grows with the
   # suite, so the referents are enumerated rather than the exceptions.
   pattern='(node-join|node-Ready|nodes Ready|nodes become Ready|nodes became Ready)[^0-9]{0,60}[0-9]+ ?m|[0-9]+ ?m[^0-9]{0,30}(node-join|node-Ready|nodes Ready)'
-  quoted=$(grep -rnE "$pattern" hack/ docs/ || true)
+  # Tracked files only. grep -r would also read whatever else is sitting in
+  # those directories, and a leftover backup -- what `sed -i.bak` and most
+  # editors write beside the original -- carries a second copy of every
+  # quotation in the file it shadows. Those copies are correct, so they do not
+  # fail the staleness check below; they inflate the count the floor tests. A
+  # stray file would then lift the count past the floor while real coverage sat
+  # under it, hiding the one thing the floor is there to catch.
+  quoted=$(git grep -nE "$pattern" -- hack/ docs/ || true)
   count=$(printf '%s\n' "$quoted" | grep -c . || true)
   # A floor, not a count: the sweep is worth nothing if the sentence stopped
   # being written anywhere, and every branch below would then agree vacuously.
