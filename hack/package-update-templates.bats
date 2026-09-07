@@ -4,19 +4,18 @@
 #
 # `update` refetches a package's vendored upstream manifests, and several
 # recipes open by deleting templates/ to guarantee a clean slate. That is safe
-# only while every file under templates/ comes back from the recipe. templates/
-# is an ordinary chart directory, so a package can also keep first-party
-# manifests there -- kubevirt-cdi keeps the CDI upload-proxy Ingress and
-# TLSRoute -- and the recipe knows nothing about those. The wipe takes them and
-# `make update` exits 0, so the deletion lands in the diff with nothing marking
-# it. Whether anything downstream notices depends on the package carrying a
-# helm-unittest suite that names the file, and where none does the loss is
-# silent all the way to a cluster. That is a property of the package, not of
-# the tree, so it is worth re-deriving rather than reading: at the time of
-# writing kubevirt-cdi has such a suite and a deletion there fails `make test`
-# as well, while three of the packages that clear their own templates/ declare
-# no `test` target at all. Adding one to any of them changes that sentence and
-# not this one.
+# only while every file under templates/ comes back from the recipe.
+# templates/ is an ordinary chart directory, so a package can also keep
+# first-party manifests there, and the recipe knows nothing about them. The
+# wipe takes them and `make update` exits 0, so the deletion lands in the diff
+# with nothing marking it. Whether anything downstream notices depends on the
+# package carrying a helm-unittest suite that names the file, and where none
+# does the loss is silent all the way to a cluster. That is a property of the
+# package, not of the tree, so it is worth re-deriving rather than reading: at
+# the time of writing kubevirt-cdi has such a suite and a deletion there fails
+# `make test` as well, while three of the packages that clear their own
+# templates/ declare no `test` target at all. Adding one to any of them
+# changes that sentence and not this one.
 #
 # The invariant: a recipe that clears templates/ must NAME every file tracked
 # under it. Both halves are approximations of the shell the recipe would run,
@@ -258,8 +257,7 @@ unnamed_templates() {
     # A tab-indented comment inside the recipe is not shell. A recipe that
     # stopped clearing templates/ tends to acquire a line saying so, and
     # searching that line would fail the package the removal protected. Both
-    # spellings are pinned because make accepts both and the tree writes both:
-    # `@#` in kubevirt-operator's own update recipe, bare `#` everywhere else.
+    # spellings are pinned because make accepts both and the tree writes both.
     for lead in '#' '@#'; do
         printf 'update:\n\tmkdir -p templates\n\t%s deliberately no rm -rf templates here: the upload-proxy files are ours\n' \
             "$lead" > "$tmp/pkg/Makefile"
@@ -330,10 +328,10 @@ unnamed_templates() {
         exit 1
     fi
 
-    # The other order, and the one this tree actually writes: kubevirt-cdi puts
-    # `test:` below its `update:` recipe. Above, `r` is still 0 and the gate
-    # does the work; here the recipe has already started and only the
-    # terminator can stop it, so without this case that half is unpinned.
+    # The other order, and one the tree writes: a `test:` below the `update:`
+    # recipe. Above, `r` is still 0 and the gate does the work; here the recipe
+    # has already started and only the terminator can stop it, so without this
+    # case that half is unpinned.
     printf 'update:\n\tmkdir -p templates\nclean:\n\trm -rf templates\n' \
         > "$tmp/pkg/Makefile"
     if [ -n "$(wipe_command "$tmp/pkg/Makefile")" ]; then
@@ -373,8 +371,8 @@ unnamed_templates() {
         exit 1
     fi
 
-    # And the shape kubevirt-cdi moved to switches the check off, so the scan
-    # is measuring the removal rather than the package.
+    # And a recipe that only creates the directory switches the check off, so
+    # the scan is measuring the removal rather than the package.
     printf 'update:\n\tmkdir -p templates\n\twget -O templates/fetched.yaml https://example.invalid/f.yaml\n' \
         > "$tmp/pkg/Makefile"
     if [ -n "$(wipe_command "$tmp/pkg/Makefile")" ]; then
