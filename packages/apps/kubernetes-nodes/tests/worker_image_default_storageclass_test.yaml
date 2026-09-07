@@ -1,0 +1,159 @@
+suite: osImage.builtin cross-StorageClass guard against a cluster default class
+
+# The sibling suite worker_image_source_test.yaml runs against a cluster with no
+# default StorageClass, which is the arm where an empty class on either side stays
+# unresolvable and the comparison is skipped. This one supplies a default class, so
+# the empty side resolves and the comparison is made — the corner reviewed as
+# [MINOR] on cozystack/cozystack#3294. It is a separate suite because helm-unittest
+# merges a per-test kubernetesProvider into the suite-level objects rather than
+# replacing them, so one file cannot present two different clusters.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 1
+  maxReplicas: 3
+  instanceType: u1.medium
+  diskSize: 20Gi
+  roles: [ingress-nginx]
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+      namespaced: true
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+      namespaced: true
+    "storage.k8s.io/v1/StorageClass":
+      gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+      namespaced: false
+    "v1/PersistentVolumeClaim":
+      gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+      namespaced: true
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata: {name: u1.medium}
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata: {name: ignored-ms, namespace: tenant-test}
+      spec: {template: {spec: {infrastructureRef: {kind: Other, name: ignored}}}}
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata: {name: ignored-kmt, namespace: tenant-test}
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata:
+        name: replicated
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "true"
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata: {name: local}
+    # A golden on the cluster default: its spec carries no storageClassName.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-nosc-v1.0.0, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+      status: {phase: Succeeded}
+    # A golden that declares no class in its spec but whose PVC was bound to an
+    # explicit one -- what a golden created before the cluster's default moved
+    # looks like. The spec says nothing; the PVC is the authority.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-pvcclass-v1.0.0, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+      status: {phase: Succeeded, claimName: talos-worker-pvcclass-v1.0.0}
+    - kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata: {name: talos-worker-pvcclass-v1.0.0, namespace: cozy-public}
+      spec: {storageClassName: local}
+    # The golden for the chart's default talos.*, on an explicit class.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        namespace: cozy-public
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status: {phase: Succeeded}
+
+tests:
+  # Guaranteed NOT to be a clone, and the case an unresolved empty class waved
+  # through: the pool is on an explicit class, the golden is on the cluster
+  # default, and the two differ. CDI would fall back to the host-assisted copy
+  # over the pod network — silently, which is the transfer this feature removes.
+  - it: fails when the golden takes a cluster default class the pool does not use
+    set:
+      storageClass: local
+      osImage:
+        builtin:
+          schematicID: nosc
+          version: v1.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storageClass "local" differs from golden image "talos-worker-nosc-v1\.0\.0" storageClass "replicated"'
+
+  # The same resolution from the other side: an empty POOL class landing on the
+  # class the golden already sits on is a clone, not a refusal.
+  - it: clones when an empty pool storageClass resolves to the golden's class
+    set:
+      storageClass: ""
+      osImage:
+        builtin: {}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # Both sides empty and both resolving to the same default is still a clone.
+  - it: clones when both the pool and the golden are on the cluster default
+    set:
+      storageClass: ""
+      osImage:
+        builtin:
+          schematicID: nosc
+          version: v1.0.0
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-nosc-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # Reading the spec alone would call this golden "on the cluster default", which
+  # is `replicated` here, and clone it for a `replicated` pool. Its PVC is on
+  # `local`, so that clone would silently be a host-assisted copy. Found by the
+  # cross-check on cozystack/cozystack#3294.
+  - it: takes a blank-spec golden's class from its PVC, not from today's default
+    set:
+      storageClass: replicated
+      osImage:
+        builtin:
+          schematicID: pvcclass
+          version: v1.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storageClass "replicated" differs from golden image "talos-worker-pvcclass-v1\.0\.0" storageClass "local"'

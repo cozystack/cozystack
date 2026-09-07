@@ -542,6 +542,24 @@ monitoring:
 # cozystack.cozystack-platform Package — see docs/operations/backup-classes.md.
 # Empty (the default) forwards nothing and keeps the child chart defaults.
 backupStorage: {}
+# Overrides for the optional cozystack.kubernetes-worker-image package (the
+# golden Talos worker OS images tenant Kubernetes node pools clone instead of
+# each worker importing the raw image over HTTP). Everything set here is
+# forwarded verbatim into the emitted Package CR as
+# components.kubernetes-worker-image.values, so it lands on that chart's
+# HelmRelease and deep-merges over its defaults
+# (packages/system/kubernetes-worker-image/values.yaml documents every knob:
+# imageFactoryURL, storageClass, storage, images). Admins set this via
+# spec.components.platform.values.kubernetesWorkerImage on the
+# cozystack.cozystack-platform Package, alongside adding
+# cozystack.kubernetes-worker-image to bundles.enabledPackages -- the package is
+# opt-in and this key alone does not enable it. The two knobs that decide
+# whether the feature is usable at all are imageFactoryURL (an air-gapped or
+# rate-limited cluster must repoint the single import) and storageClass (CDI
+# cannot clone across StorageClasses, so a cluster whose worker pools are not on
+# `replicated` must move the golden onto their class). Empty (the default)
+# forwards nothing and keeps the child chart defaults.
+kubernetesWorkerImage: {}
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

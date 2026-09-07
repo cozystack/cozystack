@@ -1,0 +1,107 @@
+suite: osImage.builtin default-StorageClass selection with two defaults
+
+# Kubernetes permits more than one StorageClass to carry the default annotation --
+# it is the normal state midway through swapping a cluster's default -- and picks
+# the most recently created. Returning every match instead concatenated their
+# names into a class that does not exist, and the clone guard then rejected a pool
+# whose class matched the default actually in force. Found by the cross-check on
+# cozystack/cozystack#3294.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 1
+  maxReplicas: 3
+  instanceType: u1.medium
+  diskSize: 20Gi
+  storageClass: ""
+  roles: [ingress-nginx]
+  osImage:
+    builtin: {}
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+      namespaced: true
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+      namespaced: true
+    "storage.k8s.io/v1/StorageClass":
+      gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+      namespaced: false
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata: {name: u1.medium}
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata: {name: ignored-ms, namespace: tenant-test}
+      spec: {template: {spec: {infrastructureRef: {kind: Other, name: ignored}}}}
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata: {name: ignored-kmt, namespace: tenant-test}
+    # The outgoing default, created first.
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata:
+        name: old
+        creationTimestamp: "2026-01-01T00:00:00Z"
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "true"
+    # The incoming one, created later, and therefore the one in force.
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata:
+        name: new
+        creationTimestamp: "2026-06-01T00:00:00Z"
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "true"
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        namespace: cozy-public
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: new
+      status: {phase: Succeeded}
+
+tests:
+  # The pool declares no class, so it resolves to the default in force -- `new`,
+  # which is what the golden sits on. Concatenating both defaults would produce
+  # `oldnew` and refuse this pool.
+  - it: resolves an empty pool storageClass to the most recently created default
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # And the name it resolved is reported as a real class, not as a concatenation,
+  # when the comparison does fail.
+  - it: names the active default in the mismatch message
+    set:
+      osImage:
+        builtin:
+          schematicID: elsewhere
+          version: v1.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'requested golden DataVolume "talos-worker-elsewhere-v1\.0\.0" not found'

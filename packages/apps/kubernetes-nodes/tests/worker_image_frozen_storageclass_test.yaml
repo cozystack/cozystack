@@ -1,0 +1,264 @@
+suite: osImage.builtin compares frozen classes for a pool that has already cloned
+
+# Resolving an empty storageClass made the cross-class comparison possible, and
+# then made its two sides different in kind: the golden's came from its bound PVC
+# and could not move, the pool's came from today's cluster default and could. An
+# admin moving storageclass.kubernetes.io/is-default-class then failed the whole
+# release of a pool whose disks were all on the right class and which had changed
+# nothing. Reviewed as [MAJOR] on cozystack/cozystack#3294.
+#
+# This cluster is mid-swap: the default annotation now sits on `fast-nvme`, while
+# the golden and one pool's disks were bound back when it sat on `replicated`.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 1
+  maxReplicas: 3
+  instanceType: u1.medium
+  diskSize: 20Gi
+  storageClass: ""
+  roles: [ingress-nginx]
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+      namespaced: true
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+      namespaced: true
+    "storage.k8s.io/v1/StorageClass":
+      gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+      namespaced: false
+    "v1/PersistentVolumeClaim":
+      gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+      namespaced: true
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata: {name: u1.medium}
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata: {name: ignored-ms, namespace: tenant-test}
+      spec: {template: {spec: {infrastructureRef: {kind: Other, name: ignored}}}}
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata: {name: ignored-kmt, namespace: tenant-test}
+    # The class the golden and md0's disks were bound on, no longer the default.
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata: {name: replicated, creationTimestamp: "2026-01-01T00:00:00Z"}
+    # Today's default, moved here after both were bound.
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata:
+        name: fast-nvme
+        creationTimestamp: "2026-06-01T00:00:00Z"
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "true"
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-aaa-v1.13.6, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status: {phase: Succeeded}
+    # md0's own worker disk, cloned while `replicated` was still the default, and
+    # its PVC, which is where the class it actually sits on is recorded.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: disk-system-kubernetes-myk8s-md0-abcde
+        namespace: tenant-test
+        annotations:
+          kubernetes-worker-image.cozystack.io/golden: talos-worker-aaa-v1.13.6
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0
+      status: {phase: Succeeded}
+    - kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata: {name: disk-system-kubernetes-myk8s-md0-abcde, namespace: tenant-test}
+      spec: {storageClassName: replicated}
+    # A golden nobody has cloned yet, for the not-yet-cloned arm.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-fresh-v1.13.6, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status: {phase: Succeeded}
+    # A golden whose spec states BOTH a class and a size, while its PVC states
+    # different ones. The spec is what the catalog declared and what a new clone is
+    # measured against, so it has to win; the PVC is consulted only when the spec is
+    # silent.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-specwins-v1.13.6, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status: {phase: Succeeded, claimName: talos-worker-specwins-v1.13.6}
+    - kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata: {name: talos-worker-specwins-v1.13.6, namespace: cozy-public}
+      spec:
+        storageClassName: local
+        resources: {requests: {storage: 20Gi}}
+    # A golden on `local`, and a disk of this pool cloned from it whose PVC says
+    # `replicated`. A pool that declares its class outright is authoritative -- the
+    # field is immutable, so the declaration is already frozen -- and the PVC must
+    # not overrule it.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-onlocal-v1.13.6, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: local
+      status: {phase: Succeeded}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: disk-system-kubernetes-myk8s-md0-fghij
+        namespace: tenant-test
+        annotations:
+          kubernetes-worker-image.cozystack.io/golden: talos-worker-onlocal-v1.13.6
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0
+      status: {phase: Succeeded}
+    - kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata: {name: disk-system-kubernetes-myk8s-md0-fghij, namespace: tenant-test}
+      spec: {storageClassName: replicated}
+    # A golden whose spec states no size at all; its PVC states the allocated one.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-sizefrompvc-v1.13.6, namespace: cozy-public}
+      spec:
+        storage:
+          storageClassName: replicated
+      status: {phase: Succeeded, claimName: talos-worker-sizefrompvc-v1.13.6}
+    - kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata: {name: talos-worker-sizefrompvc-v1.13.6, namespace: cozy-public}
+      spec:
+        storageClassName: replicated
+        resources: {requests: {storage: 6Gi}}
+
+tests:
+  # The repro. Nothing about this pool or its catalog entry changed; only the
+  # cluster's default annotation moved. Its disks are on `replicated`, the golden
+  # is on `replicated`, and the render must proceed.
+  - it: renders a cloned pool at empty storageClass after the cluster default moved
+    set:
+      osImage:
+        builtin:
+          schematicID: aaa
+          version: v1.13.6
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-aaa-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # And the guard is not simply switched off for a cloned pool: a pool with no
+  # disk yet is compared against today's default, which is the class its first
+  # clone would really land on, so this one is refused.
+  - it: still refuses a pool that has not cloned when today's default differs from the golden
+    set:
+      osImage:
+        builtin:
+          schematicID: fresh
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storageClass "fast-nvme" differs from golden image "talos-worker-fresh-v1\.13\.6" storageClass "replicated"'
+
+  # That message resolved a side from the default, so it says so and names it.
+  - it: names the cluster default when a side was resolved from it
+    set:
+      osImage:
+        builtin:
+          schematicID: fresh
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'An empty storageClass was resolved to the cluster default StorageClass "fast-nvme"'
+
+  # With both sides explicit nothing was resolved from the default, and the
+  # sentence is absent rather than reporting an empty lookup. The two sentences
+  # it used to sit between are adjacent here.
+  - it: does not name a cluster default it never consulted
+    set:
+      storageClass: local
+      osImage:
+        builtin:
+          schematicID: fresh
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'host-assisted copy over the pod network\. Neither side can be moved in place'
+
+  # The size floor reads the PVC when the DataVolume spec omits a size, so a
+  # golden it could size no longer slips past unmeasured.
+  - it: takes the golden size from its PVC when the DataVolume spec omits it
+    set:
+      diskSize: 1Gi
+      storageClass: replicated
+      osImage:
+        builtin:
+          schematicID: sizefrompvc
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'diskSize 1Gi is smaller than golden image "talos-worker-sizefrompvc-v1\.13\.6" storage 6Gi'
+
+  # The PVC is a fallback, not an override. This golden declares `replicated` and
+  # 6Gi while its PVC says `local` and 20Gi; the render must use the declared pair,
+  # so a `replicated` pool at 10Gi goes through. Reading the PVC unconditionally
+  # would refuse it twice over, on the class and on the size.
+  - it: prefers the golden's declared class and size over its PVC
+    set:
+      storageClass: replicated
+      diskSize: 10Gi
+      osImage:
+        builtin:
+          schematicID: specwins
+          version: v1.13.6
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-specwins-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # And the same precedence on the pool's side: a pool that names its class is
+  # compared on that, not on what its existing disks happen to sit on.
+  - it: prefers the pool's declared class over its own cloned disk's PVC
+    set:
+      storageClass: local
+      osImage:
+        builtin:
+          schematicID: onlocal
+          version: v1.13.6
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-onlocal-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
