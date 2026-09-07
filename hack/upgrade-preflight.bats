@@ -48,6 +48,12 @@ prep() {
   export FAKE_NODES_JSON='{"items":[{"metadata":{"name":"n1"},"spec":{},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
   export FAKE_LINSTOR_NODES_JSON='[[{"name":"n1","connection_status":"ONLINE"}]]'
   export FAKE_LINSTOR_VOL_JSON='[[{"name":"pvc-a","volumes":[{"state":{"disk_state":"UpToDate"}}]}]]'
+  # Publishing is on by default so every test below exercises the real path;
+  # the args of each publish land in $WORK/published for assertions.
+  export NAMESPACE=cozy-system
+  export PREFLIGHT_STATUS_CONFIGMAP=cozystack-preflight-status
+  export FAKE_STATUS_ARGS_OUT="$WORK/published"
+  export FAKE_STATUS_FAIL=0
 }
 
 # run_pf executes the runner, captures combined output to $WORK/out and the exit
@@ -247,4 +253,57 @@ run_pf() {
   run_pf
   [ "$RC" -eq 1 ]
   grep -q "nodes-ready" "$WORK/out"
+}
+
+@test "a passing run publishes its verdict to the status ConfigMap" {
+  prep
+  run_pf
+  [ "$RC" -eq 0 ]
+  # Two writes: one when the run starts (so a Job killed by
+  # activeDeadlineSeconds still leaves a record), one with the outcome.
+  grep -q "verdict=running" "$WORK/published"
+  grep -q "verdict=passed" "$WORK/published"
+  grep -q "namespace cozy-system" "$WORK/published"
+}
+
+@test "a blocked upgrade publishes the failing check ids, not just a bare failure" {
+  prep
+  export FAKE_NODES_JSON='{"items":[{"metadata":{"name":"n2"},"spec":{},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}'
+  run_pf
+  [ "$RC" -eq 1 ]
+  grep -q "verdict=blocked" "$WORK/published"
+  grep -q "failedChecks=nodes-ready" "$WORK/published"
+}
+
+@test "an advisory-only problem still publishes a passing verdict with the advisory id" {
+  prep
+  export PREFLIGHT_ADVISORY="linstor"
+  export FAKE_LINSTOR_VOL_JSON='[[{"name":"pvc-a","volumes":[{"state":{"disk_state":"Inconsistent"}}]}]]'
+  run_pf
+  [ "$RC" -eq 0 ]
+  grep -q "verdict=passed" "$WORK/published"
+  grep -q "advisoryChecks=linstor" "$WORK/published"
+}
+
+@test "a failure to publish the status does not change the verdict" {
+  prep
+  # Missing RBAC must not turn a healthy cluster into a blocked upgrade, nor a
+  # broken one into a permitted upgrade. Publishing is observability, never the
+  # gate itself.
+  export FAKE_STATUS_FAIL=1
+  run_pf
+  [ "$RC" -eq 0 ]
+  grep -qi "could not publish" "$WORK/out"
+
+  export FAKE_NODES_JSON='{"items":[{"metadata":{"name":"n2"},"spec":{},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}'
+  run_pf
+  [ "$RC" -eq 1 ]
+}
+
+@test "publishing is skipped when no namespace is configured" {
+  prep
+  export NAMESPACE=""
+  run_pf
+  [ "$RC" -eq 0 ]
+  [ ! -s "$WORK/published" ]
 }

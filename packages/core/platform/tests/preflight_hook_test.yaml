@@ -167,9 +167,12 @@ tests:
             verbs: ["*"]
 
   - it: scopes pods/exec to a namespaced Role in cozy-linstor
+    # Selected by the rule it carries: there are two Roles now (this one and
+    # the status-ConfigMap Role in the release namespace), so `kind: Role`
+    # alone is ambiguous.
     documentSelector:
-      path: kind
-      value: Role
+      path: rules[0].resources[0]
+      value: pods/exec
     asserts:
       - equal:
           path: metadata.namespace
@@ -291,3 +294,52 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[2].value
           value: linstor
+
+  # The verdict has to outlive the Job: helm-controller retries a failed
+  # upgrade every 30s by default and helm deletes the previous hook Job at the
+  # top of each attempt, so the Job log is not where an operator can read why
+  # their upgrade is blocked.
+  - it: tells the runner where to publish its verdict
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[3].name
+          value: NAMESPACE
+      - equal:
+          path: spec.template.spec.containers[0].env[3].value
+          value: cozy-system
+      - equal:
+          path: spec.template.spec.containers[0].env[4].name
+          value: PREFLIGHT_STATUS_CONFIGMAP
+      - equal:
+          path: spec.template.spec.containers[0].env[4].value
+          value: cozystack-preflight-status
+
+  # The one write grant in the whole gate. `create` cannot carry resourceNames
+  # in RBAC, so the other verbs must, or the gate could rewrite the
+  # cozystack-version ConfigMap that decides which migrations run.
+  - it: confines the status write to its own ConfigMap
+    documentSelector:
+      path: rules[1].resourceNames[0]
+      value: cozystack-preflight-status
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+      - equal:
+          path: metadata.namespace
+          value: cozy-system
+      - equal:
+          path: rules[0].verbs
+          value: ["create"]
+      - equal:
+          path: rules[1].verbs
+          value: ["get", "update", "patch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            verbs: ["update", "patch"]

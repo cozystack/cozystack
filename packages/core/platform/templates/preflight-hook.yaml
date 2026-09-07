@@ -42,6 +42,11 @@ the blast radius contained; that Role renders only when cozy-linstor exists.
 {{- end }}
 
 {{- if $shouldRun }}
+{{- /*
+  One name for the status ConfigMap, shared by the Job's env and the Role's
+  resourceNames below so the grant can never drift from what the runner writes.
+*/}}
+{{- $statusConfigMap := "cozystack-preflight-status" }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -52,9 +57,14 @@ metadata:
     helm.sh/hook-weight: "0"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
-  # A failed preflight is a verdict, not a flake: do not retry, and leave the
-  # failed Job in place so the operator can read exactly which check blocked the
-  # upgrade (it is cleaned up before the next upgrade attempt).
+  # A failed preflight is a verdict, not a flake, so the Job itself does not
+  # retry. It is NOT the durable record of the block, though: the platform
+  # HelmRelease retries a failed upgrade on its own (Upgrade.Strategy
+  # RetryOnFailure, --helmrelease-retry-interval, 30s by default), and helm
+  # deletes a before-hook-creation hook at the top of every attempt, so this
+  # Job and its log survive roughly one retry interval. The verdict an operator
+  # actually reads therefore lives in the status ConfigMap the runner writes;
+  # see run-preflight.sh.
   backoffLimit: 0
   # Backstop so the gate cannot wedge the pre-upgrade hook indefinitely. Each
   # check bounds its own kubectl calls with a `timeout` wrapper, so a healthy
@@ -92,6 +102,11 @@ spec:
             # default until its live -m field semantics are e2e-verified.
             - name: PREFLIGHT_ADVISORY
               value: {{ join "," (dig "advisoryChecks" (list "linstor") $pf) | quote }}
+            # Where the runner mirrors its verdict so it outlives this Job.
+            - name: NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: PREFLIGHT_STATUS_CONFIGMAP
+              value: {{ $statusConfigMap | quote }}
       restartPolicy: Never
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -130,6 +145,48 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
+  name: cozystack-preflight-hook
+subjects:
+  - kind: ServiceAccount
+    name: cozystack-preflight-hook
+    namespace: {{ .Release.Namespace | quote }}
+---
+# The one write grant the gate holds, and it is deliberately shaped so it can
+# only ever touch its own status object: `create` cannot be restricted by name
+# in RBAC, so it is granted unqualified, while get/update/patch are pinned to
+# the status ConfigMap. cozystack-version lives in this same namespace and
+# already exists, so the create verb cannot reach it and the name-restricted
+# verbs exclude it. The gate remains read-only towards everything it inspects.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozystack-preflight-hook
+  namespace: {{ .Release.Namespace | quote }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ $statusConfigMap | quote }}]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozystack-preflight-hook
+  namespace: {{ .Release.Namespace | quote }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
   name: cozystack-preflight-hook
 subjects:
   - kind: ServiceAccount

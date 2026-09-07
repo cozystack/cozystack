@@ -12,6 +12,12 @@
 #                             vs "could not ask" distinction can be tested)
 #   FAKE_LINSTOR_NODES_JSON - stdout for `linstor -m node list` (via kubectl exec)
 #   FAKE_LINSTOR_VOL_JSON   - stdout for `linstor -m volume list` (via kubectl exec)
+#   FAKE_STATUS_ARGS_OUT    - when set, every `create configmap` invocation
+#                             appends its flattened args here, so a test can
+#                             assert WHAT the runner published
+#   FAKE_STATUS_FAIL        - when "1", publishing the status ConfigMap fails
+#                             (models missing RBAC, so the "best-effort publish"
+#                             property can be tested)
 #
 # Matching is on the flattened argument string so the tests do not depend on
 # flag ordering.
@@ -41,6 +47,26 @@ case "$args" in
     fi
     echo 'Error from server (NotFound): deployments.apps "linstor-controller" not found' >&2
     exit 1
+    ;;
+  *"create configmap"*)
+    if [ -n "${FAKE_STATUS_ARGS_OUT:-}" ]; then
+      printf '%s\n' "$args" >> "$FAKE_STATUS_ARGS_OUT"
+    fi
+    if [ "${FAKE_STATUS_FAIL:-0}" = "1" ]; then
+      echo 'Error from server (Forbidden): configmaps is forbidden' >&2
+      exit 1
+    fi
+    # The runner pipes this into `kubectl apply`, so emit something applyable.
+    printf 'apiVersion: v1\nkind: ConfigMap\n'
+    exit 0
+    ;;
+  *"apply --filename -"*)
+    cat >/dev/null
+    if [ "${FAKE_STATUS_FAIL:-0}" = "1" ]; then
+      echo 'Error from server (Forbidden): configmaps is forbidden' >&2
+      exit 1
+    fi
+    exit 0
     ;;
   *"exec"*"linstor"*"node list"*)
     printf '%s' "${FAKE_LINSTOR_NODES_JSON:-[]}"
