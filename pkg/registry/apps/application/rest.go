@@ -2001,7 +2001,8 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 		return
 	}
 	var values struct {
-		Users map[string]map[string]json.RawMessage `json:"users"`
+		Users            map[string]map[string]json.RawMessage `json:"users"`
+		PasswordRotation *json.RawMessage                      `json:"passwordRotation"`
 	}
 	if err := json.Unmarshal(app.Spec.Raw, &values); err != nil {
 		return
@@ -2011,6 +2012,15 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 			warning.AddWarning(ctx, "", fmt.Sprintf(
 				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.", user))
 		}
+	}
+	// The chart-based passwordRotation counter was removed (a chart-rendered
+	// Secret keeps its cleartext in Helm release history, so a bump cannot revoke
+	// a leaked password). The key is still accepted and dropped by the schema, so
+	// without this an operator rotating after a leak gets a silent 200 and no
+	// effect. Rotation is being reworked as a controller — cozystack/community#72.
+	if values.PasswordRotation != nil {
+		warning.AddWarning(ctx, "",
+			"spec.passwordRotation is ignored: chart-based password rotation was removed because a chart-rendered Secret cannot revoke a leaked credential. Setting this field has no effect; rotation is being reworked as a controller (cozystack/community#72).")
 	}
 }
 

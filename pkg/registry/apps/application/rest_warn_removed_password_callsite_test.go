@@ -166,6 +166,9 @@ func TestWarnRemovedUserPasswords(t *testing.T) {
 		{"mariadb warns", mariadbKind, rawWithPassword, true},
 		{"other kind stays quiet", "Redis", rawWithPassword, false},
 		{"no password stays quiet", postgresKind, `{"users":{"app":{}}}`, false},
+		{"postgres warns on passwordRotation", postgresKind, `{"passwordRotation":3}`, true},
+		{"mariadb warns on passwordRotation", mariadbKind, `{"passwordRotation":1}`, true},
+		{"other kind quiet on passwordRotation", "Redis", `{"passwordRotation":3}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
