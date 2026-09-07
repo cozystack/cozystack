@@ -1,0 +1,13 @@
+# Two documents in one file: the first carries a cozystack apiVersion for a
+# different kind, the second names Kubernetes with no apiVersion of its own.
+# Neither creates a tenant cluster. Without the `---` split the scan pairs the
+# apiVersion of one document with the kind of the other and reports a creator
+# that does not exist.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: some-tenant
+---
+kind: Kubernetes
+metadata:
+  name: named-not-created

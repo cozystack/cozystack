@@ -1,0 +1,7 @@
+# A sweep root holding exactly one file, which is a creator, so the last
+# document of the last file is the only one there is. Without the END flush
+# the scan reaches the end with that document still unemitted and answers
+# nothing -- which on the other roots is hidden by whichever file readdir
+# happens to return last.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Kubernetes

@@ -1,0 +1,9 @@
+# A creator written as a YAML sequence item: the object keys are indented past
+# a dash, which is how a List document or an inline list of resources writes
+# them. The dash and the space after it are the item's indent, so these keys share a bucket
+# with each other and with nothing else.
+items:
+- apiVersion: apps.cozystack.io/v1alpha1
+  kind: Kubernetes
+  metadata:
+    name: sequence-item

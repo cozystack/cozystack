@@ -1,0 +1,11 @@
+# A creator whose sequence dash is followed by more than one space, so the keys
+# of the item sit four columns in, aligned with the first key after the dash
+# rather than two columns in. The bucket has
+# to take its width from the dash and the whitespace that follows it: adding a
+# fixed two columns puts this apiVersion in one bucket and its own kind in
+# another, and the creator goes missing without a word.
+items:
+-   apiVersion: apps.cozystack.io/v1alpha1
+    kind: Kubernetes
+    metadata:
+      name: wide-dash
