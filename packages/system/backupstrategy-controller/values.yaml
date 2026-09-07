@@ -93,11 +93,12 @@ backupStrategyController:
   # through `include "cozy-lib.image"` (the chart declares no cozy-lib
   # dependency). Two known costs make a dedicated small client image (built by
   # this package's Makefile, with its own producer) the right follow-up: the
-  # 691 MB size, and this image's curl (7.76.1), whose --aws-sigv4 signs an
-  # empty-body payload hash on upload and omits x-amz-content-sha256 — SeaweedFS
-  # and MinIO accept that, but a body-hash-recomputing backend (AWS S3, Ceph RGW)
-  # on a provisionBucket:false external endpoint may not, a narrower S3 envelope
-  # than the sibling drivers (which run curl 8.x).
+  # 691 MB size, and this image's curl (7.76.1), whose --aws-sigv4 omits a
+  # non-default port from the SigV4 canonical host (a 403 on any ported endpoint,
+  # fixed in curl 7.86.0). The strategy script works around it with --connect-to
+  # (sign a portless URL, redirect the connection to the real port); a modern
+  # curl would drop the workaround. The sibling drivers run curl 8.x and need
+  # neither.
   kafkaBackupClientImage: "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1@sha256:ba52ed046b1dccdbd96f4e68057ce014d862a7c9c1fc670760c023b9aa09f23f"
   replicas: 2
   debug: false

@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -335,6 +336,68 @@ func TestCreateKafkaBackupArtifact_RejectsDifferentApp(t *testing.T) {
 		t.Fatal("expected an error adopting a same-named Backup for a different application, got nil")
 	} else if !strings.Contains(err.Error(), "different application") {
 		t.Fatalf("error = %v, want it to mention a different application", err)
+	}
+}
+
+// TestCleanupOnDelete_Kafka_RoutesToKafkaCleanup pins the Backup-delete dispatch
+// case: a Kafka Backup must route to cleanupKafkaBackup (which spawns the delete
+// Job and requeues), not fall through to the Velero default that would release
+// the object un-deleted. Dropping the `case KafkaStrategyKind` turns this red.
+func TestCleanupOnDelete_Kafka_RoutesToKafkaCleanup(t *testing.T) {
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	_ = backupsv1alpha1.AddToScheme(testScheme)
+	_ = strategyv1alpha1.AddToScheme(testScheme)
+
+	backup := kafkaBackup("kafka-src", "tenant-test")
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+	c := clientfake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&batchv1.Job{}).
+		WithObjects(ns, backup, newKafkaStrategy("cozy-default-kafka")).Build()
+	r := &BackupReconciler{Client: c, Scheme: testScheme, Recorder: record.NewFakeRecorder(10)}
+
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatal("expected a requeue while the Kafka delete Job runs; a fall-through to the Velero default would release the object un-deleted")
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(context.Background(), jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 || jobs.Items[0].Name != "kafka-src-cleanup" {
+		t.Fatalf("expected one kafka-src-cleanup Job from the Kafka dispatch route, got %+v", jobs.Items)
+	}
+}
+
+// TestReconcileKafka_FailsAfterReadinessDeadline pins the deadline: a BackupJob
+// whose cluster never becomes Ready must terminate as Failed once
+// kafkaDefaultBackupDeadline elapses, not requeue forever. Neutralising the
+// deadline comparison turns this red.
+func TestReconcileKafka_FailsAfterReadinessDeadline(t *testing.T) {
+	old := metav1.NewTime(time.Now().Add(-(kafkaDefaultBackupDeadline + time.Minute)))
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: kafkaAppRef("src"), BackupClassName: "cozy-default"},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &old, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	// App present, but the Strimzi Kafka cluster CR absent → never Ready.
+	r, _ := newKafkaTestEnv(t, newKafkaApp("src", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(bj, newKafkaStrategy("cozy-default-kafka")))
+
+	if _, err := r.reconcileKafka(context.Background(), bj, &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+	}); err != nil {
+		t.Fatalf("reconcileKafka: %v", err)
+	}
+	got := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(bj), got); err != nil {
+		t.Fatalf("get bj: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("expected Failed after the readiness deadline, got %q", got.Status.Phase)
 	}
 }
 
