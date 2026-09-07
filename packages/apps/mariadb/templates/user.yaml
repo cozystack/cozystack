@@ -7,12 +7,12 @@ kind: User
 metadata:
   name: {{ $.Release.Name }}-{{ $dnsName }}
 spec:
-  name: {{ $name }}
+  name: {{ $name | quote }}
   mariaDbRef:
     name: {{ $.Release.Name }}
   passwordSecretKeyRef:
     name: {{ $.Release.Name }}-credentials
-    key: {{ $name }}
+    key: {{ $name | quote }}
   maxUserConnections: {{ $u.maxUserConnections }}
 {{- end }}
 {{- end }}
