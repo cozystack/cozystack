@@ -1,0 +1,56 @@
+apiVersion: chainsaw.kyverno.io/v1alpha2
+kind: Configuration
+metadata:
+  name: cozystack-e2e-upgrade
+spec:
+  # Seed + verify suites run against the pre-existing tenant-test namespace
+  # (created by hack/e2e-upgrade-install-previous.bats). Same as the app suite.
+  namespace:
+    name: tenant-test
+  # Sequential, matching the app suite.
+  execution:
+    parallel: 1
+  timeouts:
+    apply: 1m
+    assert: 5m
+    delete: 5m
+    cleanup: 5m
+    error: 5m
+    exec: 5m
+  cleanup:
+    # KEY DIFFERENCE from the app suite: keep everything Chainsaw applied. The
+    # upgrade lane runs `chainsaw test seed` (apply workloads + write canary),
+    # then an EXTERNAL `helm upgrade` (hack/e2e-upgrade-apply.bats), then
+    # `chainsaw test verify` (assert-only). Seeded CRs MUST survive the phase
+    # boundary for verify to observe them, so nothing is deleted here. The
+    # sandbox is torn down wholesale at end-of-job, so leaving resources is safe.
+    skipDelete: true
+  # Same global failure handler as hack/e2e-chainsaw/.chainsaw.yaml: on any test
+  # error, capture a crust-gather host snapshot BEFORE anything is reclaimed, so
+  # each failed test keeps its own inspectable cluster state in the cozyreport.
+  # Only the relative path to e2e-capture-dataplane.sh differs — a catch script's
+  # cwd is the failing test's suite dir, which is one level deeper here
+  # (hack/e2e-chainsaw-upgrade/<phase>/<suite>/), so ../../../ reaches hack/.
+  error:
+    catch:
+    - description: crust-gather host snapshot on failure
+      script:
+        env:
+        - name: TEST_NAME
+          value: ($test.metadata.name)
+        content: |
+          set -u
+          command -v crust-gather >/dev/null 2>&1 || exit 0
+          name="${TEST_NAME:-unknown-test}"
+          snap="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${name}"
+          if [ -d "${snap}/host" ]; then exit 0; fi
+          mkdir -p "${snap}" 2>/dev/null || true
+          echo "» capturing crust-gather host snapshot of failed ${name} -> ${snap}/host"
+          timeout -k 30 300 crust-gather collect --exclude-kind Secret -f "${snap}/host" >/dev/null 2>&1 || true
+          if [ -x ../../../e2e-capture-dataplane.sh ]; then
+            echo "» capturing host->pod data-plane for NotReady pods -> ${snap}/dataplane"
+            timeout -k 30 600 ../../../e2e-capture-dataplane.sh "${snap}/dataplane" 2>&1 || true
+          fi
+  report:
+    format: XML
+    name: chainsaw-report

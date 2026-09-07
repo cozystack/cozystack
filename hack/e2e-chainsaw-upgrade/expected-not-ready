@@ -1,0 +1,23 @@
+# Releases the upgrade lane accepts as not-Ready after the upgrade, one
+# `namespace/name` per line; everything after the reference is free text and
+# should say what it is and where it is tracked.
+#
+# This file is read ONLY by the upgrade lane (hack/e2e-upgrade-apply.bats passes
+# it to hack/e2e-wait-hr-ready.sh as EXPECTED_NOT_READY_FILE). The install gate
+# never sees it, so nothing here can weaken the per-PR e2e suite.
+#
+# It exists because that lane is advisory: red for a known reason, every run,
+# teaches reviewers to ignore it, and then it stops working on the day it finds
+# something new. An entry buys exactly one thing — a failure that is already
+# tracked stops hiding the next one.
+#
+# Entries expire on their own, and both rules are failures rather than warnings.
+# A release listed here that is Ready again fails the lane until its line is
+# deleted, and a line naming no release in the cluster fails it too. So the
+# fastest way to remove a line is to fix the defect; the second fastest is to
+# find out it was fixed already.
+#
+# Adding a line is a claim that the failure is understood well enough to be
+# tracked elsewhere. If it is not, the lane going red is the correct outcome.
+
+tenant-test/vm-instance-test  https://github.com/cozystack/cozystack/issues/3984  VM does not return to Ready across an upgrade; passes on a fresh install

@@ -1,0 +1,78 @@
+# Upgrade lane — Phase 2 (seed): PostgreSQL + canary data.
+#
+# Reuses the app suite's Postgres manifest verbatim (DRY — single source of the
+# CR) and layers the upgrade-specific canary on top. skipDelete (see
+# ../../.chainsaw.yaml) keeps the CR + its data alive for the post-upgrade
+# verify/postgres suite. The canary table lives in the default `postgres`
+# database and is written by the in-pod superuser, so it needs no app
+# credentials and is independent of the manifest's users/databases block.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-seed-postgres
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: postgres-test
+  - podLogs:
+      selector: cnpg.io/cluster=postgres-test
+      tail: 50
+  steps:
+  - name: create-postgres
+    try:
+    - apply:
+        file: ../../../e2e-chainsaw/postgres/postgres.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: postgres-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: wait-init-job-complete
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: postgres-test-init-job
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+
+  - name: seed-canary
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-test,cnpg.io/instanceRole=primary \
+            -o name | head -n1)
+          [ -n "$pod" ] || { echo "no primary pod found" >&2; exit 1; }
+          # -i is required: the SQL is fed on stdin via the heredoc, and without
+          # -i kubectl exec does not forward stdin (verified on dev10 — the
+          # CREATE/INSERT silently never runs).
+          kubectl -n "$NAMESPACE" exec -i "$pod" -c postgres -- psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE IF NOT EXISTS upgrade_canary (id serial PRIMARY KEY, data text);
+          TRUNCATE upgrade_canary;
+          INSERT INTO upgrade_canary (data) VALUES ('pre-upgrade-1'), ('pre-upgrade-2'), ('pre-upgrade-3');
+          SQL
+          count=$(kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+            psql -U postgres -tAc 'SELECT count(*) FROM upgrade_canary;')
+          echo "postgres canary rows seeded: $count"
+          [ "$count" = "3" ] || { echo "FAIL: expected 3 seeded rows, got '$count'" >&2; exit 1; }
+        check:
+          ($error == null): true

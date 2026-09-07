@@ -51,6 +51,53 @@ test-openapi:
 test-chainsaw:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && chainsaw test ${CHAINSAW_SUITES}'
 
+# ---- Release upgrade lane ---------------------------------------------------
+# Tests the "previous latest minor stable -> current" upgrade path (see
+# docs/agents/e2e-testing.md "Upgrade testing (release lane)" and #2401). Runs
+# as four steps inside a pre-provisioned sandbox: install the previous release,
+# seed workloads + canary data (Chainsaw, skipDelete), helm-upgrade to the
+# current in-tree chart, then verify survival + data integrity (Chainsaw,
+# assert-only). Deliberately NOT named `test`, like the app e2e above, so
+# hack/helm-unit-tests.sh never runs it in the unit-test phase (no sandbox then).
+#
+# UPGRADE_FROM_VERSION  baseline tag to install (e.g. v1.5.3); resolved on the
+#                       runner by hack/upgrade-prev-version.sh.
+# UPGRADE_TARGET_TAG    the version being upgraded TO (diagnostic/labelling).
+# UPGRADE_E2E_TENANT_K8S set to 1 to include the heavy, OFF-by-default tenant
+#                       Kubernetes survival suites.
+UPGRADE_FROM_VERSION ?=
+UPGRADE_TARGET_TAG ?=
+UPGRADE_E2E_TENANT_K8S ?=
+
+upgrade-install-previous:
+	docker exec \
+		-e UPGRADE_FROM_VERSION="${UPGRADE_FROM_VERSION}" \
+		-e UPGRADE_TARGET_TAG="${UPGRADE_TARGET_TAG}" \
+		"${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-upgrade-install-previous.bats'
+
+# Both Chainsaw phases take their report name from .chainsaw.yaml, so both write
+# the same chainsaw-report.xml next to it and the second overwrites the first.
+# Rename per phase: when the lane fails during seed there IS no verify run, and
+# publishing the seed report under the verify name is the one case where someone
+# is actually reading the file. `rm -f` first so a stale report from an earlier
+# phase cannot be renamed as this one's.
+upgrade-seed:
+	docker exec \
+		-e UPGRADE_E2E_TENANT_K8S="${UPGRADE_E2E_TENANT_K8S}" \
+		"${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw-upgrade && rm -f chainsaw-report.xml; chainsaw test seed; rc=$$?; if [ -f chainsaw-report.xml ]; then mv chainsaw-report.xml chainsaw-report-seed.xml; fi; exit $$rc'
+
+upgrade-apply:
+	docker exec \
+		-e UPGRADE_TARGET_TAG="${UPGRADE_TARGET_TAG}" \
+		"${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-upgrade-apply.bats'
+
+upgrade-verify:
+	docker exec \
+		-e UPGRADE_E2E_TENANT_K8S="${UPGRADE_E2E_TENANT_K8S}" \
+		"${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw-upgrade && rm -f chainsaw-report.xml; chainsaw test verify; rc=$$?; if [ -f chainsaw-report.xml ]; then mv chainsaw-report.xml chainsaw-report-verify.xml; fi; exit $$rc'
+
+upgrade-cozystack: upgrade-install-previous upgrade-seed upgrade-apply upgrade-verify ## Run the release upgrade test in an existing sandbox.
+
 collect-report: ## Collect the test report from the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'
 	mkdir -p ../../../_out

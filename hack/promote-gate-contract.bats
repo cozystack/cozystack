@@ -130,17 +130,50 @@ code_lines() {
   [ "${count:-0}" -eq 1 ]
 
   plan_header="$(job_header plan "$PULL_REQUESTS")"
-  count="$(printf '%s\n' "$plan_header" | code_lines | grep -cF "    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e'" || true)"
+  # The gate admits an allow-list of labels, not a single one: full-e2e opts a
+  # promote PR into the full suite, upgrade-e2e opts any PR into the upgrade
+  # lane. Every other label event is still discarded before it can launch work.
+  count="$(printf '%s\n' "$plan_header" | code_lines | grep -cF "    if: github.event.action != 'labeled' || contains(fromJSON('[\"full-e2e\",\"upgrade-e2e\"]'), github.event.label.name)" || true)"
   [ "${count:-0}" -eq 1 ]
 
   resolve_header="$(job_header resolve_assets "$PULL_REQUESTS")"
-  count="$(printf '%s\n' "$resolve_header" | code_lines | grep -cF "github.event.label.name == 'full-e2e'" || true)"
+  count="$(printf '%s\n' "$resolve_header" | code_lines | grep -cF "contains(fromJSON('[\"full-e2e\",\"upgrade-e2e\"]'), github.event.label.name)" || true)"
   [ "${count:-0}" -eq 1 ]
 
   e2e_header="$(job_header e2e "$PULL_REQUESTS")"
   count="$(printf '%s\n' "$e2e_header" | code_lines | grep -cF "needs.resolve_assets.result == 'success'" || true)"
   [ "${count:-0}" -eq 1 ]
   count="$(printf '%s\n' "$e2e_header" | code_lines | grep -cF "&& contains(github.event.pull_request.labels.*.name, 'full-e2e')" || true)"
+  [ "${count:-0}" -eq 1 ]
+}
+
+# The upgrade lane is opted into per-PR by label, so the label has to survive
+# BOTH halves of the gate: the `labeled` allow-list that decides whether a run
+# starts at all, and the job's own condition. Miss the first and the label
+# silently starts nothing — the job never runs, and an advisory lane that never
+# runs looks exactly like an advisory lane that passed.
+@test "upgrade-e2e label opt-in is wired end to end" {
+  # Half 1: `labeled` events carrying upgrade-e2e are admitted, not discarded.
+  # The label sits inside the JSON allow-list, so it is double-quoted there —
+  # matching on the single-quoted form silently counts zero and passes nothing.
+  plan_header="$(job_header plan "$PULL_REQUESTS")"
+  count="$(printf '%s\n' "$plan_header" | code_lines | grep -cF '"upgrade-e2e"' || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  resolve_header="$(job_header resolve_assets "$PULL_REQUESTS")"
+  count="$(printf '%s\n' "$resolve_header" | code_lines | grep -cF '"upgrade-e2e"' || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # Half 2: the job itself runs on either the release or the upgrade-e2e label.
+  upgrade_header="$(job_header upgrade-e2e "$PULL_REQUESTS")"
+  count="$(printf '%s\n' "$upgrade_header" | code_lines | grep -cF "contains(github.event.pull_request.labels.*.name, 'upgrade-e2e')" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$upgrade_header" | code_lines | grep -cF "contains(github.event.pull_request.labels.*.name, 'release')" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # The lane must stay advisory: branch protection requires "E2E Tests", so the
+  # check name here must not collide with it.
+  count="$(printf '%s\n' "$upgrade_header" | code_lines | grep -cF 'name: "Upgrade E2E Test"' || true)"
   [ "${count:-0}" -eq 1 ]
 }
 

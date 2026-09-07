@@ -1,0 +1,75 @@
+# Upgrade lane — Phase 2 (seed): a tenant Kubernetes cluster (env-gated, OFF by
+# default).
+#
+# A tenant cluster spanning the upgrade is the highest-value survival check
+# (it exercises the #2931 worker-rollover path), but also the heaviest and
+# flakiest — nested KVM workers + DRBD + a tenant Talos image import that is the
+# known #3231/#3170 flake surface. It is therefore gated behind
+# UPGRADE_E2E_TENANT_K8S and left OFF until validated on a dev stand and the
+# image-cache path is confirmed for the baseline (previous-version) chart. When
+# disabled, the single script step early-exits (Chainsaw v0.2.15 has no
+# test-level `skip:`, and an `exit 0` only skips the step it is in — so the
+# whole test lives in ONE script step, mirroring the kubernetes-* suites).
+#
+# skipDelete keeps the cluster for verify/tenant-k8s to re-assert post-upgrade.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-seed-tenant-k8s
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: seed-tenant-kubernetes
+    try:
+    - script:
+        timeout: 30m
+        content: |
+          set -eu
+          case "${UPGRADE_E2E_TENANT_K8S:-}" in
+            1|true|TRUE|yes) : ;;
+            *) echo "UPGRADE_E2E_TENANT_K8S not set — skipping tenant Kubernetes seed"; exit 0 ;;
+          esac
+
+          # Minimal single-worker tenant cluster on the replicated StorageClass.
+          # Applied under the BASELINE (previous) platform; the current platform
+          # adopts it on upgrade. Uses the public Talos Image Factory (no cache
+          # wired here) — if worker imports stall (#3231) this is where to add
+          # the talos-image-cache helper for the baseline chart's Talos version.
+          kubectl apply -f - <<'EOF'
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Kubernetes
+          metadata:
+            name: upgrade-tk8s
+            namespace: tenant-test
+          spec:
+            addons:
+              ingressNginx:
+                enabled: false
+                hosts: []
+                valuesOverride: {}
+            controlPlane:
+              replicas: 1
+              apiServer:
+                resourcesPreset: small
+            nodeGroups:
+              md0:
+                minReplicas: 1
+                maxReplicas: 1
+                instanceType: u1.medium
+                diskSize: 20Gi
+                roles: []
+            storageClass: replicated
+            version: v1.32
+          EOF
+
+          echo "waiting for tenant control plane + worker to become Ready"
+          kubectl wait --for=condition=TenantControlPlaneCreated \
+            kamajicontrolplane -n tenant-test kubernetes-upgrade-tk8s --timeout=10m
+          kubectl wait tcp -n tenant-test kubernetes-upgrade-tk8s --timeout=10m \
+            --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
+          kubectl wait machinedeployment kubernetes-upgrade-tk8s-md0 -n tenant-test \
+            --timeout=15m --for=jsonpath='{.status.v1beta2.readyReplicas}'=1
+          echo "tenant Kubernetes cluster upgrade-tk8s seeded and Ready"
+        check:
+          ($error == null): true
