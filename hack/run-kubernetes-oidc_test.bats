@@ -56,7 +56,7 @@
         case "$*" in
             *" wait job kubernetes-demo-oidc-bootstrap "*) return 0 ;;
             *" get kamajicontrolplane kubernetes-demo "*)
-                printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml]'
+                printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml --requestheader-uid-headers=X-Remote-Uid]'
                 ;;
             *" get secret kubernetes-demo-oidc-authn-config "*)
                 printf 'url: https://keycloak.example.test/realms/cozy\naudiences:\n- tenant-test-kubernetes-demo\n' | base64 | tr -d '\n'
@@ -74,6 +74,51 @@
     }
 
     cozy_assert_oidc_system demo
+}
+
+@test "System OIDC assertion fails when the aggregation-layer UID header is missing" {
+    # Same mock as the passing case, minus --requestheader-uid-headers, so that
+    # flag is the only thing left to fail on. Drop the grep for it from the helper
+    # and this case goes red, which is what stops it passing for the wrong reason.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    kubectl() {
+        case "$*" in
+            *" wait job kubernetes-demo-oidc-bootstrap "*) return 0 ;;
+            *" get kamajicontrolplane kubernetes-demo "*)
+                printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml]'
+                ;;
+            *" get secret kubernetes-demo-oidc-authn-config "*)
+                printf 'url: https://keycloak.example.test/realms/cozy\naudiences:\n- tenant-test-kubernetes-demo\n' | base64 | tr -d '\n'
+                ;;
+            *" get keycloakclient.v1.edp.epam.com tenant-test-kubernetes-demo "*) printf 'true' ;;
+            *" get keycloakclientscope.v1.edp.epam.com tenant-test-kubernetes-demo-audience "*) printf 'oidc-audience-mapper' ;;
+            *" get secret kubernetes-demo-oidc-kubeconfig "*)
+                printf 'args:\n- oidc-login\n- --oidc-client-id=tenant-test-kubernetes-demo\n' | base64 | tr -d '\n'
+                ;;
+            *) echo "unexpected kubectl call: $*" >&2; return 1 ;;
+        esac
+    }
+    cozy_oidc_bindings() {
+        printf 'e2e-admin@example.test\tcluster-admin\ne2e-viewer@example.test\tview\n'
+    }
+
+    # The subshell restores `set -e`, which the chainsaw step runs the helper
+    # under: without it a failing `grep -q` mid-function does not end the
+    # function, and the exit status comes from the last assertion instead.
+    #
+    # It has to stand as its own command, not as an `if` condition. Shells
+    # suppress errexit for a command whose status is being tested, and that
+    # suppression reaches inside the subshell too, which is why the plain
+    # `if ( set -e; ... )` spelling reports success here.
+    local rc=0
+    set +e
+    ( set -e; cozy_assert_oidc_system demo )
+    rc=$?
+    set -e
+    if [ "${rc}" -eq 0 ]; then
+        echo "the System assertion passed without --requestheader-uid-headers" >&2
+        return 1
+    fi
 }
 
 @test "CustomConfig transition fails when it cannot ask whether System leftovers are gone" {
@@ -101,7 +146,7 @@
                 *" patch kuberneteses.apps.cozystack.io demo "*) : ;;
                 *" wait job kubernetes-demo-oidc-bootstrap "*) return 0 ;;
                 *" get kamajicontrolplane kubernetes-demo "*)
-                    printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml]'
+                    printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml --requestheader-uid-headers=X-Remote-Uid]'
                     ;;
                 *" get secret kubernetes-demo-oidc-authn-config "*)
                     printf 'url: https://idp.byo.example.test\naudiences:\n- cozystack-byo-demo\n' | base64 | tr -d '\n'
@@ -121,6 +166,41 @@
             return 1
         fi
     done
+}
+
+@test "CustomConfig transition fails when the aggregation-layer UID header is missing" {
+    # The System helper's twin. Same mock as the passing transition below, minus
+    # --requestheader-uid-headers, so that flag is the only thing left to fail on.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    kubectl() {
+        case "$*" in
+            *" get helmrelease kubernetes-demo "*) printf '7' ;;
+            *" patch kuberneteses.apps.cozystack.io demo "*) : ;;
+            *" wait job kubernetes-demo-oidc-bootstrap "*) return 0 ;;
+            *" get kamajicontrolplane kubernetes-demo "*)
+                printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml]'
+                ;;
+            *" get secret kubernetes-demo-oidc-authn-config "*)
+                printf 'url: https://idp.byo.example.test\naudiences:\n- cozystack-byo-demo\n' | base64 | tr -d '\n'
+                ;;
+            *--ignore-not-found*) : ;;
+            *) echo "unexpected kubectl call: $*" >&2; return 1 ;;
+        esac
+    }
+    cozy_wait_helmrelease_upgrade() { :; }
+    cozy_oidc_bindings() { printf 'byo-admin@example.test\tcluster-admin\n'; }
+
+    # Standalone subshell, not an `if` condition: errexit is suppressed for a
+    # command whose status is tested, and that reaches inside the subshell.
+    local rc=0
+    set +e
+    ( set -e; cozy_switch_and_assert_oidc_custom_config demo )
+    rc=$?
+    set -e
+    if [ "${rc}" -eq 0 ]; then
+        echo "the transition passed without --requestheader-uid-headers" >&2
+        return 1
+    fi
 }
 
 @test "CustomConfig transition patches the live cluster waits for the new generation and rejects System leftovers" {
@@ -144,7 +224,7 @@
                 ;;
             *" wait job kubernetes-demo-oidc-bootstrap "*) return 0 ;;
             *" get kamajicontrolplane kubernetes-demo "*)
-                printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml]'
+                printf '[--authentication-config=/etc/kubernetes/authentication-config/config.yaml --requestheader-uid-headers=X-Remote-Uid]'
                 ;;
             *" get secret kubernetes-demo-oidc-authn-config "*)
                 printf 'url: https://idp.byo.example.test\naudiences:\n- cozystack-byo-demo\n' | base64 | tr -d '\n'
