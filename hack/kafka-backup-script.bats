@@ -4,8 +4,8 @@
 # embedded verbatim into strategy-kafka-default.yaml.
 #
 # The chart's helm-unittest suite can only assert the rendered Strategy CR's
-# shape (kind, name, artifactURITemplate); the 160-line driver script that does
-# the actual backup/restore/cleanup work is otherwise unpinned, so a regression
+# shape (kind, name, artifactURITemplate); the driver script that does the
+# actual backup/restore/cleanup work is otherwise unpinned, so a regression
 # in it (a stripped \Q, a reinstated -k, a fail-open --list) passes the chart
 # suite untouched. This test closes that gap the way the contract is really
 # defined: it EXECUTES the script against stubbed kafka-topics.sh /
