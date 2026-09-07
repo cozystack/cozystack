@@ -1,0 +1,82 @@
+suite: reserved external addresses (externalIPs)
+
+# The chart's only job here is to turn an externalIPs entry into the address
+# substrate's consumption annotation on the object that carries the external
+# endpoint's Service annotations, and to refuse a value that would otherwise be
+# silently ignored. Nothing about the address itself is chart business: the
+# annotation is inert until a per-class driver acts on it.
+
+templates:
+  - templates/rabbitmq.yaml
+
+release:
+  name: rabbitmq-test
+  namespace: tenant-test
+
+tests:
+  - it: "external without externalIPs: no annotation, so the load balancer keeps auto-assigning"
+    set:
+      external: true
+    asserts:
+      - notExists:
+          path: spec.service.annotations
+        documentSelector:
+          path: kind
+          value: RabbitmqCluster
+
+  - it: "an entry pins the endpoint to its claim"
+    set:
+      external: true
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - equal:
+          path: spec.service.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+        documentSelector:
+          path: kind
+          value: RabbitmqCluster
+
+  - it: "an explicit target: client is the same as omitting it"
+    set:
+      external: true
+      externalIPs:
+        - claim: reserved-address
+          target: client
+    asserts:
+      - equal:
+          path: spec.service.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+        documentSelector:
+          path: kind
+          value: RabbitmqCluster
+
+  - it: "externalIPs without external is refused rather than ignored"
+    set:
+      external: false
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs requires external: true — there is no external endpoint to pin an address to otherwise"
+
+  - it: "a target this chart does not publish is refused, and the message names the ones it does"
+    set:
+      external: true
+      externalIPs:
+        - claim: reserved-address
+          target: nosuch
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[0] targets "nosuch", which this application does not publish; valid targets: client'
+
+  - it: "two entries for the same endpoint are refused"
+    set:
+      external: true
+      externalIPs:
+        - claim: first
+        - claim: second
+          target: client
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[1] targets "client" a second time: one endpoint wears one address, so use one entry per target'
