@@ -20,6 +20,9 @@ type ConfigSpec struct {
 	// The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).
 	// +kubebuilder:default:=""
 	Host string `json:"host,omitempty"`
+	// Hostnames this tenant's subtenants may use for their own `host`. An entry covers the hostname and any subdomain of it. Combined with the hosts already delegated to this tenant and inherited by subtenants, which may be granted further entries of their own; it has no effect on this tenant's own `host`, which is governed by its parent's allowlist instead. Writable only by the platform operator (cluster-admins, cozystack service accounts, and any account whose group is listed in the platform's `gateway.hostGrantGroups`) — a tenant cannot grant itself a domain.
+	// +kubebuilder:default:={}
+	AllowedHosts []string `json:"allowedHosts,omitempty"`
 	// Deploy own Etcd cluster.
 	// +kubebuilder:default:=false
 	Etcd bool `json:"etcd"`

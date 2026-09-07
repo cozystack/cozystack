@@ -1,0 +1,65 @@
+suite: tenant allowed-hosts annotation and inheritance
+templates:
+  - templates/namespace.yaml
+
+release:
+  name: tenant-foo
+  namespace: tenant-parent
+
+tests:
+  - it: empty by default — no delegation, no explicit grant
+    set:
+      _cluster:
+        root-host: example.org
+      _namespace:
+        host: parent.example.org
+    asserts:
+      - equal:
+          path: metadata.annotations["namespace.cozystack.io/allowed-hosts"]
+          value: ""
+        documentIndex: 0
+
+  - it: seeds the tenant's own apex when delegation is on
+    set:
+      _cluster:
+        root-host: example.org
+        gateway-tenant-host-delegation: "true"
+      _namespace:
+        host: parent.example.org
+    asserts:
+      - equal:
+          path: metadata.annotations["namespace.cozystack.io/allowed-hosts"]
+          value: "foo.parent.example.org"
+        documentIndex: 0
+
+  - it: unions parent list, own apex and explicit grants, deduplicated
+    set:
+      _cluster:
+        root-host: example.org
+        gateway-tenant-host-delegation: "true"
+      _namespace:
+        host: parent.example.org
+        allowedHosts: "corp.example.net foo.parent.example.org"
+      allowedHosts:
+        - byod.example.com
+    asserts:
+      - equal:
+          path: metadata.annotations["namespace.cozystack.io/allowed-hosts"]
+          value: "corp.example.net foo.parent.example.org byod.example.com"
+        documentIndex: 0
+
+  - it: propagates the computed list to children via _namespace
+    set:
+      _cluster:
+        root-host: example.org
+        gateway-tenant-host-delegation: "true"
+      _namespace:
+        host: parent.example.org
+        allowedHosts: "corp.example.net"
+      allowedHosts:
+        - byod.example.com
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'allowedHosts: "corp.example.net foo.parent.example.org byod.example.com"'
+        documentIndex: 1
