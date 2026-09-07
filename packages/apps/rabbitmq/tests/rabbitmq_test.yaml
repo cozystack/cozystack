@@ -1,0 +1,61 @@
+suite: rabbitmq default render
+templates:
+  - templates/rabbitmq.yaml
+
+release:
+  name: rabbitmq-test
+  namespace: tenant-test
+
+tests:
+  - it: renders a RabbitmqCluster with the default version, replicas and storage size
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: RabbitmqCluster
+      - equal:
+          path: spec.replicas
+          value: 3
+      - equal:
+          path: spec.image
+          value: "rabbitmq:4.2.4-management"
+      - equal:
+          path: spec.persistence.storage
+          value: 10Gi
+
+  - it: renders a User and credentials Secret for a configured user with an explicit password
+    set:
+      users:
+        alice:
+          password: s3cr3t
+    asserts:
+      - hasDocuments:
+          count: 3
+      - equal:
+          path: kind
+          value: RabbitmqCluster
+        documentIndex: 0
+      - equal:
+          path: kind
+          value: User
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: rabbitmq-test-alice
+        documentIndex: 1
+      - equal:
+          path: kind
+          value: Secret
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: rabbitmq-test-alice-credentials
+        documentIndex: 2
+      - equal:
+          path: stringData.username
+          value: alice
+        documentIndex: 2
+      - equal:
+          path: stringData.password
+          value: s3cr3t
+        documentIndex: 2
