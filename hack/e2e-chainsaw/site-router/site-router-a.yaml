@@ -69,6 +69,11 @@ spec:
     resources:
       cpu: 2
       memory: 2Gi
+    # Empty selects the cluster default StorageClass. The chart defaults to
+    # `replicated` so a production gateway's boot disk stays live-migratable,
+    # which this lane cannot offer: its management nodes are Talos containers,
+    # DRBD is unavailable, and the only class present is the default `local`.
+    storageClass: ""
     # Guest-side diagnostics. Every gate up to and including the tunnel steps
     # depends on the VyOS guest reaching userspace and answering on 443, and the
     # cluster can see none of that: a VMI that reports Running with an address

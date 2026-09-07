@@ -85,6 +85,9 @@ resources:
   cpu: 2
   memory: 2Gi
 
+## @param {string} storageClass - StorageClass for the router boot disk. Keep the `replicated` default unless the substrate has no DRBD: the boot disk is live-migratable only on a DRBD-backed class, and without live migration the gateway cannot be evacuated off its node, so draining or losing that node drops the tunnel until the VM is rescheduled. Empty selects the cluster default StorageClass.
+storageClass: replicated
+
 ##
 ## @section Low-level materialization
 ##

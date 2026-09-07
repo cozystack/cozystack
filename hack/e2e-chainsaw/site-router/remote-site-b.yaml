@@ -142,7 +142,13 @@ spec:
           resources:
             requests:
               storage: 12Gi
-          storageClassName: replicated
+          # No storageClassName on purpose. The suite has to render on whatever
+          # substrate it runs on, and the container lane has no DRBD and so no
+          # `replicated` class; pinning one made this PVC unsatisfiable and CDI
+          # reported it as ErrClaimNotValid with an empty DataVolume status.
+          # Omitting the key selects the cluster default — an empty value would
+          # instead mean "bind only a pre-provisioned PV" and never provision.
+          # B is a fixture peer, so it has no live-migration property to keep.
         source:
           registry:
             # The same digest-pinned appliance containerDisk the site-router boot

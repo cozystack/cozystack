@@ -38,6 +38,9 @@ type ConfigSpec struct {
 	// Explicit CPU and memory sizing for the router VM.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources"`
+	// StorageClass for the router boot disk. Keep the `replicated` default unless the substrate has no DRBD: the boot disk is live-migratable only on a DRBD-backed class, and without live migration the gateway cannot be evacuated off its node, so draining or losing that node drops the tunnel until the VM is rescheduled. Empty selects the cluster default StorageClass.
+	// +kubebuilder:default:="replicated"
+	StorageClass string `json:"storageClass"`
 	// Source CIDR allowed to reach the VyOS management API (HTTPS 443) through the first-boot firewall. This value and the controller's --management-cidr flag (T05/T06) must agree: both default to the cluster pod CIDR (10.244.0.0/16, the kube-ovn default) and must be kept consistent. On a cluster with a non-default `networking.podCIDR`, set this (and the controller's managementCidr) to that pod CIDR, or the firewall will reject the real controller source. An empty value requires `allowOpenManagement=true` (fail-closed). Constrained to a strict IPv4 CIDR (or empty) so a tenant value cannot inject arbitrary text into the VyOS first-boot config.
 	// +kubebuilder:default:="10.244.0.0/16"
 	// +kubebuilder:validation:Pattern="^(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/(3[0-2]|[12]?[0-9]))?$"
