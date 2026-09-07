@@ -14,6 +14,17 @@
 */ -}}
 {{- $tlsEnabled := include "kafka.tls.enabled" . | trim -}}
 {{- $showExternal := .Values.external -}}
+{{- /* Strimzi publishes one bootstrap Service plus one Service per broker, and
+     Kafka advertises each broker's own address, so every one of them is an
+     endpoint a tenant may want to hold. The broker targets follow the replica
+     count: a claim for a broker that does not exist is a typo, not a
+     reservation for future growth. Validated unconditionally so externalIPs
+     without external: true is reported rather than ignored. */ -}}
+{{- $brokerTargets := list -}}
+{{- range $i := until (int .Values.kafka.replicas) -}}
+{{- $brokerTargets = append $brokerTargets (printf "broker-%d" $i) -}}
+{{- end -}}
+{{- $externalIPs := include "cozy-lib.externalIP.claims" (list .Values.externalIPs .Values.external "bootstrap" (concat (list "bootstrap") $brokerTargets) $) | fromYaml -}}
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:
@@ -39,6 +50,28 @@ spec:
         port: 9094
         type: loadbalancer
         tls: {{ $tlsEnabled }}
+        {{- if $externalIPs }}
+        configuration:
+          {{- with (include "cozy-lib.externalIP.annotations" (list $externalIPs "bootstrap" $)) }}
+          bootstrap:
+            annotations:
+              {{- . | nindent 14 }}
+          {{- end }}
+          {{- $brokers := list }}
+          {{- range $i := until (int $.Values.kafka.replicas) }}
+          {{- with (include "cozy-lib.externalIP.annotations" (list $externalIPs (printf "broker-%d" $i) $)) }}
+          {{- $brokers = append $brokers (dict "broker" $i "annotations" .) }}
+          {{- end }}
+          {{- end }}
+          {{- if $brokers }}
+          brokers:
+            {{- range $brokers }}
+          - broker: {{ .broker }}
+            annotations:
+              {{- .annotations | nindent 14 }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
       {{- end }}
     config:
       {{- if eq (int .Values.kafka.replicas) 1 }}

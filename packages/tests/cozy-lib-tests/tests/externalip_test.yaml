@@ -1,0 +1,123 @@
+# ./tests/externalip_test.yaml
+suite: externalIP claim helpers
+
+# The catalog charts all thread the same externalIPs value through these two
+# helpers, so the contract is worth pinning once here rather than eight times:
+# which annotation key is written, that a target with no entry gets no
+# annotation at all (an empty map is not the same as an absent one for charts
+# that pass it into an operator CR), and which malformed values are refused.
+
+templates:
+  - templates/tests/externalip.yaml
+
+release:
+  name: lib
+  namespace: tenant-acme
+
+tests:
+  - it: "no entries: every target renders without annotations"
+    set:
+      external: true
+      externalIPs: []
+    asserts:
+      - hasDocuments:
+          count: 2
+      - notExists:
+          path: metadata.annotations
+
+  - it: "an entry without a target selects the default one, and only that one"
+    set:
+      external: true
+      externalIPs:
+        - claim: primary-address
+    asserts:
+      - equal:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: primary-address
+        documentSelector:
+          path: metadata.name
+          value: lib-rw
+      - notExists:
+          path: metadata.annotations
+        documentSelector:
+          path: metadata.name
+          value: lib-ro
+
+  - it: "several targets each get their own address"
+    set:
+      external: true
+      externalIPs:
+        - claim: primary-address
+          target: rw
+        - claim: replica-address
+          target: ro
+    asserts:
+      - equal:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: primary-address
+        documentSelector:
+          path: metadata.name
+          value: lib-rw
+      - equal:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: replica-address
+        documentSelector:
+          path: metadata.name
+          value: lib-ro
+
+  - it: "entries are refused without the exposure gate they depend on"
+    set:
+      external: false
+      externalIPs:
+        - claim: primary-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs requires external: true — there is no external endpoint to pin an address to otherwise"
+
+  - it: "an entry with no claim is refused"
+    set:
+      external: true
+      externalIPs:
+        - target: rw
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs[0] has no claim: every entry must name an IPAddressClaim in this namespace"
+
+  - it: "a target outside the chart's vocabulary is refused, and the message names the vocabulary"
+    set:
+      external: true
+      externalIPs:
+        - claim: primary-address
+          target: r
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[0] targets "r", which this application does not publish; valid targets: rw, ro'
+
+  - it: "one endpoint wears one address: a repeated target is refused"
+    set:
+      external: true
+      externalIPs:
+        - claim: first
+          target: rw
+        - claim: second
+          target: rw
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[1] targets "rw" a second time: one endpoint wears one address, so use one entry per target'
+
+  - it: "a scalar where a list belongs is refused rather than coerced"
+    set:
+      external: true
+      externalIPs: primary-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs must be a list of {target, claim} entries, got string"
+
+  - it: "a bare string entry is refused rather than guessed at"
+    set:
+      external: true
+      externalIPs:
+        - primary-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs[0] must be a {target, claim} object, got string"

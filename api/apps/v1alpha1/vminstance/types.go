@@ -20,6 +20,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// Reserved addresses for the endpoints `external: true` publishes. Each entry pins one endpoint to an address held by an IPAddressClaim, so the address survives a rebuild of this VM. Empty lets the load balancer assign any free address, as before.
+	// +kubebuilder:default:={}
+	ExternalIPs []ExternalIP `json:"externalIPs,omitempty"`
 	// Method to pass through traffic to the VM.
 	// +kubebuilder:default:="PortList"
 	ExternalMethod ExternalMethod `json:"externalMethod"`
@@ -72,6 +75,13 @@ type Disk struct {
 	Bus string `json:"bus,omitempty"`
 	// Disk name.
 	Name string `json:"name"`
+}
+
+type ExternalIP struct {
+	// Name of an IPAddressClaim in this namespace whose address the endpoint should wear. Until the claim binds, the endpoint keeps whatever address the load balancer assigned.
+	Claim string `json:"claim"`
+	// Which external endpoint to pin. `default` is the VM's own Service, the endpoint `external: true` publishes, and is the default. A VM has one external endpoint, so attaching several addresses to one VM is not expressible here.
+	Target string `json:"target,omitempty"`
 }
 
 type GPU struct {

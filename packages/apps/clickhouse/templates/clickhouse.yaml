@@ -1,4 +1,8 @@
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- /* Validated unconditionally: externalIPs without external: true is a
+     configuration mistake worth reporting, and this file is the only place in
+     the chart that consumes the value. */}}
+{{- $externalIPs := include "cozy-lib.externalIP.claims" (list .Values.externalIPs .Values.external "endpoint" (list "endpoint") $) | fromYaml }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
 {{- $passwords := dict }}
 {{- $users := .Values.users }}
@@ -387,8 +391,23 @@ spec:
         metadata:
           labels:
             app.kubernetes.io/instance: {{ .Release.Name }}
+          {{- with (include "cozy-lib.externalIP.annotations" (list $externalIPs "endpoint" $)) }}
+          annotations:
+            {{- . | nindent 12 }}
+          {{- end }}
         generateName: chendpoint-{chi}
         spec:
+          {{- /* The operator owns this Service, so external access is the same
+               in-place type change mariadb and rabbitmq make on theirs. The
+               Service keeps its clusterIP, so the ClusterIP -> LoadBalancer
+               transition is one Kubernetes accepts. */}}
+          {{- if .Values.external }}
+          type: LoadBalancer
+          externalTrafficPolicy: Local
+          {{- if (include "cozy-lib.network.disableLoadBalancerNodePorts" $ | fromYaml) }}
+          allocateLoadBalancerNodePorts: false
+          {{- end }}
+          {{- end }}
           ports:
             - name: http
               port: 8123

@@ -6,11 +6,29 @@
   mode we still expose mongos through a single LoadBalancer because mongos
   is stateless and any router can route writes to the right shard primary.
 */}}
+{{- /* Validated unconditionally: externalIPs without external: true is a
+     configuration mistake worth reporting, and this file is the only place in
+     the chart that consumes the value.
+
+     Only the sharded path can be pinned. A replica set is exposed as one
+     LoadBalancer per pod and the operator takes a single serviceAnnotations map
+     for the whole replset, so one claim would be handed to every pod Service at
+     once — the pins would collide instead of giving each pod its own address.
+     That is the discovery-engine case community#45 defers; refuse it here
+     rather than render a configuration that cannot work. */}}
+{{- if and .Values.externalIPs (not .Values.sharding) }}
+{{-   fail "externalIPs is only supported with sharding: true. A MongoDB replica set is published as one LoadBalancer per pod and the operator applies one annotation map to all of them, so a single claim cannot give each pod its own reserved address." }}
+{{- end }}
+{{- $externalIPs := include "cozy-lib.externalIP.claims" (list .Values.externalIPs .Values.external "mongos" (list "mongos") $) | fromYaml }}
 {{- if and .Values.external .Values.sharding }}
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ .Release.Name }}-external
+  {{- with (include "cozy-lib.externalIP.annotations" (list $externalIPs "mongos" $)) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   type: LoadBalancer
   externalTrafficPolicy: Local

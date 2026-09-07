@@ -21,6 +21,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// Reserved addresses for the endpoints `external: true` publishes. Each entry pins one endpoint to an address held by an IPAddressClaim, so the address survives a rebuild of this application. Empty lets the load balancer assign any free address, as before.
+	// +kubebuilder:default:={}
+	ExternalIPs []ExternalIP `json:"externalIPs,omitempty"`
 	// TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls"`
@@ -33,6 +36,13 @@ type ConfigSpec struct {
 	// ZooKeeper configuration.
 	// +kubebuilder:default:={}
 	Zookeeper ZooKeeper `json:"zookeeper"`
+}
+
+type ExternalIP struct {
+	// Name of an IPAddressClaim in this namespace whose address the endpoint should wear. Until the claim binds, the endpoint keeps whatever address the load balancer assigned.
+	Claim string `json:"claim"`
+	// Which external endpoint to pin: `bootstrap` (the default) for the bootstrap Service clients connect to first, or `broker-N` for the per-broker Service of broker N. Kafka advertises every broker's own address, so pinning the bootstrap address alone does not make the whole cluster reachable at fixed addresses — pin one entry per broker for that.
+	Target string `json:"target,omitempty"`
 }
 
 type Kafka struct {

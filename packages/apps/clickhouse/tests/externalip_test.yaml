@@ -1,0 +1,110 @@
+suite: external access and reserved external addresses
+
+# ClickHouse was the only managed database in the catalog with no way to be
+# reached from outside the cluster. The installation-wide Service is
+# operator-owned, so external access is the same in-place type change mariadb
+# and rabbitmq make on theirs, and externalIPs rides along on the same object.
+
+templates:
+  - templates/clickhouse.yaml
+
+release:
+  name: clickhouse-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: "default: the endpoint Service stays ClusterIP, exactly as before"
+    asserts:
+      - notExists:
+          path: spec.templates.serviceTemplates[0].spec.type
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      - notExists:
+          path: spec.templates.serviceTemplates[0].metadata.annotations
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+
+  - it: "external publishes the installation-wide Service through a load balancer"
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: spec.templates.serviceTemplates[0].spec.type
+          value: LoadBalancer
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      - equal:
+          path: spec.templates.serviceTemplates[0].spec.externalTrafficPolicy
+          value: Local
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      - notExists:
+          path: spec.templates.serviceTemplates[0].metadata.annotations
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+
+  - it: "an entry pins the endpoint to its claim"
+    set:
+      external: true
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - equal:
+          path: spec.templates.serviceTemplates[0].metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+
+  - it: "an explicit target: endpoint is the same as omitting it"
+    set:
+      external: true
+      externalIPs:
+        - claim: reserved-address
+          target: endpoint
+    asserts:
+      - equal:
+          path: spec.templates.serviceTemplates[0].metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+
+  - it: "externalIPs without external is refused rather than ignored"
+    set:
+      external: false
+      externalIPs:
+        - claim: reserved-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs requires external: true — there is no external endpoint to pin an address to otherwise"
+
+  - it: "a target this chart does not publish is refused, and the message names the ones it does"
+    set:
+      external: true
+      externalIPs:
+        - claim: reserved-address
+          target: keeper
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[0] targets "keeper", which this application does not publish; valid targets: endpoint'
+
+  - it: "two entries for the same endpoint are refused"
+    set:
+      external: true
+      externalIPs:
+        - claim: first
+        - claim: second
+          target: endpoint
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[1] targets "endpoint" a second time: one endpoint wears one address, so use one entry per target'

@@ -1,3 +1,7 @@
+{{- /* Validated unconditionally: externalIPs without external: true is a
+     configuration mistake worth reporting, and this file is the only place in
+     the chart that consumes the value. */}}
+{{- $externalIPs := include "cozy-lib.externalIP.claims" (list .Values.externalIPs .Values.external "master" (list "master") $) | fromYaml }}
 {{- if .Values.external }}
 ---
 apiVersion: v1
@@ -7,6 +11,10 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+  {{- with (include "cozy-lib.externalIP.annotations" (list $externalIPs "master" $)) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ ternary "LoadBalancer" "ClusterIP" .Values.external }}
   {{- if .Values.external }}

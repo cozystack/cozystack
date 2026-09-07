@@ -1,8 +1,16 @@
+{{- /* Validated unconditionally: externalIPs without external: true is a
+     configuration mistake worth reporting, and this file is the only place in
+     the chart that consumes the value. */}}
+{{- $externalIPs := include "cozy-lib.externalIP.claims" (list .Values.externalIPs .Values.external "rw" (list "rw") $) | fromYaml }}
 {{- if .Values.external }}
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ .Release.Name }}-external-write
+  {{- with (include "cozy-lib.externalIP.annotations" (list $externalIPs "rw" $)) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ ternary "LoadBalancer" "ClusterIP" .Values.external }}
   {{- if .Values.external }}
