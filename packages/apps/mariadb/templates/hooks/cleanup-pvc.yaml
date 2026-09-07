@@ -105,7 +105,7 @@ rules:
   # PVCs are deleted by label selector, which requires list.
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
   # Operator-generated Secrets are deleted by name, so scope the rule to
   # exactly those two resources (least privilege — no namespace-wide secret access).
   - apiGroups: [""]
@@ -113,7 +113,7 @@ rules:
     resourceNames:
       - {{ .Release.Name }}-metrics-password
       - {{ .Release.Name }}-repl-password
-    verbs: ["get", "delete"]
+    verbs: ["get", "watch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

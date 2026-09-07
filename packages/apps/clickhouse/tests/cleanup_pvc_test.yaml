@@ -45,7 +45,7 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'exit 1'
 
-  - it: "grants only get/list/delete on persistentvolumeclaims"
+  - it: "grants get/list/watch/delete on persistentvolumeclaims"
     documentSelector:
       path: kind
       value: Role
@@ -66,6 +66,7 @@ tests:
           value:
             - get
             - list
+            - watch
             - delete
 
   - it: "binds the cleanup ServiceAccount to the cleanup Role"
