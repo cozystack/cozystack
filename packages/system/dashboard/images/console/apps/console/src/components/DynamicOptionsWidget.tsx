@@ -33,7 +33,7 @@ interface OptionObject {
 }
 
 export function DynamicOptionsWidget(props: WidgetProps) {
-  const { value, onChange, required, disabled, readonly, schema } = props
+  const { id, value, onChange, required, disabled, readonly, schema } = props
   const { tenantNamespace } = useTenantContext()
 
   const source = (schema as { "x-cozystack-options"?: { source?: string } })?.[
@@ -80,6 +80,7 @@ export function DynamicOptionsWidget(props: WidgetProps) {
 
   return (
     <select
+      id={id}
       value={currentValue}
       onChange={(e) => onChange(e.target.value || undefined)}
       disabled={disabled || readonly}

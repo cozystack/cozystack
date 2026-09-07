@@ -130,6 +130,19 @@ describe("DynamicOptionsWidget", () => {
     )
   })
 
+  // RJSF's generated id has to reach the DOM: focus-first-error resolves the
+  // offending field by that id, so a select without one leaves a blocked
+  // submit scrolling nowhere on every x-cozystack-options field.
+  it("puts the generated id on the select", async () => {
+    renderWithK8sProvider(
+      <DynamicOptionsWidget {...makeProps({ id: "root_gpus_0_name" })} />,
+      { client: clientWith(list(option("storageclass", [{ value: "fast" }]))) },
+    )
+
+    await screen.findByRole("option", { name: /^fast$/ })
+    expect(screen.getByRole("combobox")).toHaveAttribute("id", "root_gpus_0_name")
+  })
+
   it("shows an explicit placeholder instead of the first option when required and empty", async () => {
     renderWithK8sProvider(
       // No default item, so the auto-default effect stays idle and the

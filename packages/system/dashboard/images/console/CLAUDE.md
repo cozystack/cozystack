@@ -98,6 +98,7 @@ schema). The pipeline in `apps/console/src/components/SchemaForm.tsx`:
 3. A chain of `addXxxWidgets(schema, uiSchema)` walks the schema and binds
    widgets:
    - any field carrying the `x-cozystack-options` schema keyword → `DynamicOptionsWidget`, a runtime dropdown populated from the cluster's `Option` resource (`core.cozystack.io`) keyed by the keyword's `source`; `addDynamicOptionWidgets` (`lib/dynamic-options.ts`) recurses into `properties`, array `items` and `additionalProperties`, and replaces the former field-name-bound `StorageClassWidget` / `BackupClassWidget` / `VMDiskWidget`.
+   - object carrying `x-cozystack-no-enable-switch: true` → rendered by `CustomObjectFieldTemplate` as a fieldset saying it has no enable switch and that an `enabled` field in YAML does nothing. Declared in `values.yaml` as `## @x-cozystack-no-enable-switch true` on the `@field` line it belongs to, and generated through to `values.schema.json` and the ApplicationDefinition. Must be declared rather than inferred from the object's fields: an unrelated `valuesOverride`-only object would otherwise inherit the copy, and adding a second field would silently drop it.
    - object with `additionalProperties: <schema>` → `AdditionalPropertiesField`
    - credential-shaped fields (`password`, `*token`, `*accessKey`, …) →
      `SensitiveStringWidget` — see `lib/sensitive-fields.ts` and its tests for

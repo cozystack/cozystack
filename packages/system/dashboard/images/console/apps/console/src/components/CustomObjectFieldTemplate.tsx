@@ -6,6 +6,10 @@ import type {
   FormContextType,
 } from "@rjsf/utils"
 
+type CozystackSchema = RJSFSchema & {
+  "x-cozystack-no-enable-switch"?: boolean
+}
+
 function isSimpleField(schema: any): boolean {
   if (!schema) return true
   const type = schema.type
@@ -52,6 +56,32 @@ export function CustomObjectFieldTemplate<
   const hasEnabledField = props.properties.some((p) => p.name === "enabled")
   const hasOtherFields = props.properties.some((p) => p.name !== "enabled")
   const isAddon = hasEnabledField && hasOtherFields
+
+  // This must be declared by schema rather than inferred from the current
+  // fields: an unrelated valuesOverride-only object must not inherit addon
+  // copy, and adding another config field must not silently remove the notice.
+  const hasNoToggle =
+    !hasEnabledField &&
+    (props.schema as CozystackSchema)["x-cozystack-no-enable-switch"] === true
+
+  if (hasNoToggle) {
+    return (
+      <fieldset id={props.idSchema.$id} className="border border-slate-200 rounded-lg p-3 mb-3">
+        {props.title && (
+          <legend className="text-xs font-semibold text-slate-700 px-1">{props.title}</legend>
+        )}
+        <p className="text-xs text-slate-500 mb-2">
+          No enable switch. Adding an enabled field in YAML has no effect.
+        </p>
+        {props.description && (
+          <p className="field-description text-xs text-slate-400 mb-2">{props.description}</p>
+        )}
+        {props.properties.map((prop) => (
+          <div key={prop.name}>{prop.content}</div>
+        ))}
+      </fieldset>
+    )
+  }
 
   if (isAddon) {
     const isEnabled = (formData as any)?.enabled === true
