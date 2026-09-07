@@ -21,6 +21,15 @@ export KAFKA_SRC_NAME="${KAFKA_SRC_NAME:-kafka-meta-src}"
 export KAFKA_TARGET_NAME="${KAFKA_TARGET_NAME:-kafka-meta-target}"
 export TOPIC="${TOPIC:-orders}"
 export PARTITIONS="${PARTITIONS:-3}"
+# Colliding topic pair that exercises the --topic regex-vs-literal fix in the
+# strategy script: "audit.events" as a Java regex ALSO matches "audit-events"
+# (. is any char), so a describe that does not wrap the name in \Q...\E records
+# one topic's partition count against the other. Distinct counts make that
+# cross-match fail the round-trip verify.
+export COLLIDE_DOT="${COLLIDE_DOT:-audit.events}"
+export COLLIDE_DOT_PARTS="${COLLIDE_DOT_PARTS:-2}"
+export COLLIDE_DASH="${COLLIDE_DASH:-audit-events}"
+export COLLIDE_DASH_PARTS="${COLLIDE_DASH_PARTS:-5}"
 export BACKUPCLASS_NAME="${BACKUPCLASS_NAME:-cozy-default}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-kafka-meta-src-adhoc}"
 export RESTOREJOB_INPLACE_NAME="${RESTOREJOB_INPLACE_NAME:-kafka-meta-src-inplace}"
@@ -141,6 +150,41 @@ seed_topic() {
             --topic "$TOPIC" --partitions "$PARTITIONS" --replication-factor 1 \
             --config retention.ms='"$retention"'
     '
+}
+
+# Create a topic with an explicit partition count (no config sentinel). Used for
+# the colliding pair, whose distinct partition counts are the round-trip proof.
+seed_topic_partitions() {
+    local app="$1" topic="$2" partitions="$3"
+    TOPIC="$topic" PARTITIONS="$partitions" kafka_run "$app" '
+        "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --create --if-not-exists \
+            --topic "$TOPIC" --partitions "$PARTITIONS" --replication-factor 1
+    '
+}
+
+# Delete a specific topic (literal name via \Q) and wait for it to disappear.
+delete_topic() {
+    local app="$1" topic="$2"
+    TOPIC="$topic" kafka_run "$app" '
+        "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --delete --topic "\Q$TOPIC\E" || true
+        for _ in $(seq 1 60); do
+            list=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --list) || { sleep 2; continue; }
+            printf "%s\n" "$list" | grep -qx "$TOPIC" || { echo "topic $TOPIC deleted"; exit 0; }
+            sleep 2
+        done
+        echo "topic $TOPIC still present after wait" >&2; exit 1
+    '
+}
+
+# Print the partition count for a specific topic (literal \Q match), or "" if
+# absent. The literal match is what a restore of the colliding pair must honour.
+topic_partitions() {
+    local app="$1" topic="$2"
+    TOPIC="$topic" kafka_run "$app" '
+        line=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --describe --topic "\Q$TOPIC\E" 2>/dev/null | head -1) || exit 0
+        [ -n "$line" ] || exit 0
+        printf "%s" "$line" | grep -oE "PartitionCount: [0-9]+" | awk "{print \$2}"
+    ' 2>/dev/null | tr -d '\r\n'
 }
 
 # Print "<partitions> <retention.ms>" for the demo topic, or "" if absent.

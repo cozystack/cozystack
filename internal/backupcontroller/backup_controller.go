@@ -177,6 +177,14 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// Backup is removed. Without it a retention-pruned Plan grows the bucket
 		// unboundedly and the key is lost with the CR (see cleanupRedisBackup).
 		return r.cleanupRedisBackup(ctx, backup)
+	case strategyv1alpha1.KafkaStrategyKind:
+		// Same property as Rabbitmq: the Kafka driver OWNS its artifact (a plain
+		// metadata object it wrote with curl, keyed on status.artifact.uri) and
+		// no engine retention prunes it. Without an explicit delete a
+		// retention-pruned Plan would grow the bucket unboundedly, so this branch
+		// deletes the object and WAITS for that delete before the Backup is
+		// removed, so no object is orphaned (see cleanupKafkaBackup).
+		return r.cleanupKafkaBackup(ctx, backup)
 	case strategyv1alpha1.VeleroStrategyKind:
 		return ctrl.Result{}, r.cleanupVeleroBackup(ctx, backup)
 	default:

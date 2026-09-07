@@ -4,15 +4,18 @@
 # flow and the automated test cannot drift. Stops on the first failure.
 #
 # Flow (platform cozy-default, no per-demo Bucket):
-#   source Kafka -> seed topic `orders` with a distinctive retention.ms sentinel
-#   -> ad-hoc BackupJob against cozy-default (wait Succeeded)
-#   -> in-place: drop the topic, restore, assert it came back with the sentinel
+#   source Kafka -> seed topic `orders` with a distinctive retention.ms sentinel,
+#   plus a colliding pair (`audit.events` / `audit-events`) with distinct
+#   partition counts -> ad-hoc BackupJob against cozy-default (wait Succeeded)
+#   -> in-place: drop the topics, restore, assert `orders` came back with the
+#      sentinel and each colliding topic with its own partition count
 #   -> to-copy: bootstrap an empty target Kafka, restore the metadata onto it,
 #      assert the topic + sentinel landed there while the source stays intact.
 #
 # Data integrity is proven at the METADATA layer: the retention.ms sentinel is a
 # per-run value, so a restore that recreated a bare `orders` (wrong partitions or
-# default config) fails the assertion. Message payloads are out of scope.
+# default config) fails the assertion; the colliding pair proves the strategy
+# treats --topic as a literal, not a regex. Message payloads are out of scope.
 #
 # Override NAMESPACE via the environment; see 00-helpers.sh.
 # hack/e2e-chainsaw/kafka-metadata/ drives this file as kafka-3-metadata-roundtrip.
@@ -36,6 +39,18 @@ got=$(topic_meta "$KAFKA_SRC_NAME")
 [[ "$got" == "${PARTITIONS} ${RETENTION}" ]] || { log_error "seed verify failed: got '${got}', want '${PARTITIONS} ${RETENTION}'"; exit 1; }
 log_success "Seeded '${TOPIC}': ${got}"
 
+print_header "Step 05c: Seed colliding pair '${COLLIDE_DOT}' (${COLLIDE_DOT_PARTS}p) + '${COLLIDE_DASH}' (${COLLIDE_DASH_PARTS}p)"
+# These names collide under Kafka's --topic regex ("audit.events" matches
+# "audit-events"). Distinct partition counts make a backup that does not treat
+# the name literally record the wrong shape, so the restore verify below fails.
+seed_topic_partitions "$KAFKA_SRC_NAME" "$COLLIDE_DOT" "$COLLIDE_DOT_PARTS"
+seed_topic_partitions "$KAFKA_SRC_NAME" "$COLLIDE_DASH" "$COLLIDE_DASH_PARTS"
+gotdot=$(topic_partitions "$KAFKA_SRC_NAME" "$COLLIDE_DOT")
+gotdash=$(topic_partitions "$KAFKA_SRC_NAME" "$COLLIDE_DASH")
+[[ "$gotdot" == "$COLLIDE_DOT_PARTS" && "$gotdash" == "$COLLIDE_DASH_PARTS" ]] \
+    || { log_error "collision seed verify failed: ${COLLIDE_DOT}=${gotdot} (want ${COLLIDE_DOT_PARTS}), ${COLLIDE_DASH}=${gotdash} (want ${COLLIDE_DASH_PARTS})"; exit 1; }
+log_success "Seeded colliding pair: ${COLLIDE_DOT}=${gotdot} ${COLLIDE_DASH}=${gotdash}"
+
 print_header "Step 10: Submit ad-hoc BackupJob '${BACKUPJOB_NAME}' and wait for Succeeded"
 kubectl apply -f "$SCRIPT_DIR/10-backupjob-adhoc.yaml"
 wait_for_field backupjobs.backups.cozystack.io "$BACKUPJOB_NAME" \
@@ -49,22 +64,23 @@ if [[ "${SKIP_RESTORE:-0}" == "1" ]]; then
     exit 0
 fi
 
-print_header "Step 25: In-place restore — drop the topic, then restore it"
-kafka_run "$KAFKA_SRC_NAME" '
-    "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --delete --topic "\Q$TOPIC\E" || true
-    for _ in $(seq 1 60); do
-        list=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --list) || { sleep 2; continue; }
-        if ! printf "%s\n" "$list" | grep -qx "$TOPIC"; then echo "topic $TOPIC deleted"; exit 0; fi
-        sleep 2
-    done
-    echo "topic still present after wait" >&2; exit 1
-'
+print_header "Step 25: In-place restore — drop the topics, then restore them"
+delete_topic "$KAFKA_SRC_NAME" "$TOPIC"
+delete_topic "$KAFKA_SRC_NAME" "$COLLIDE_DOT"
+delete_topic "$KAFKA_SRC_NAME" "$COLLIDE_DASH"
 kubectl apply -f "$SCRIPT_DIR/25-restorejob-in-place.yaml"
 wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_INPLACE_NAME" \
     '{.status.phase}' Succeeded "$NAMESPACE" 600 Failed
 got=$(topic_meta "$KAFKA_SRC_NAME")
 [[ "$got" == "${PARTITIONS} ${RETENTION}" ]] || { log_error "in-place restore verify failed: got '${got}', want '${PARTITIONS} ${RETENTION}'"; exit 1; }
-log_success "In-place restore verified: '${TOPIC}' back with ${got}"
+# The colliding pair must each come back with their OWN partition count. If the
+# backup treated --topic as a regex, one recorded the other's shape and this
+# fails.
+gotdot=$(topic_partitions "$KAFKA_SRC_NAME" "$COLLIDE_DOT")
+gotdash=$(topic_partitions "$KAFKA_SRC_NAME" "$COLLIDE_DASH")
+[[ "$gotdot" == "$COLLIDE_DOT_PARTS" && "$gotdash" == "$COLLIDE_DASH_PARTS" ]] \
+    || { log_error "collision restore verify failed: ${COLLIDE_DOT}=${gotdot} (want ${COLLIDE_DOT_PARTS}), ${COLLIDE_DASH}=${gotdash} (want ${COLLIDE_DASH_PARTS})"; exit 1; }
+log_success "In-place restore verified: '${TOPIC}' back with ${got}; pair ${COLLIDE_DOT}=${gotdot} ${COLLIDE_DASH}=${gotdash}"
 
 print_header "Step 20/30: To-copy restore into a fresh '${KAFKA_TARGET_NAME}'"
 kubectl apply -f "$SCRIPT_DIR/20-kafka-target.yaml"

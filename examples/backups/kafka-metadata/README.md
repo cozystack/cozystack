@@ -36,6 +36,8 @@ Run the whole round-trip:
 
 ## Limitations
 
-- **RF is the source's, applied as-is.** Restoring into a cluster with fewer brokers than a topic's replication factor fails at `--create`. The demo uses single-broker clusters (RF 1).
+- **RF is the source's, applied as-is.** Restoring into a cluster with fewer brokers than a topic's replication factor fails at `--create`, and a to-copy restore onto a target with a different broker count aborts on the first replication-factor mismatch. The demo uses single-broker clusters (RF 1).
+- **Restore is not transactional.** Topics are applied one at a time as the object is read, so a failure part-way through (an RF mismatch, an unreachable broker) leaves the topics already created behind. Re-running the restore is safe — existing topics are reconciled, not recreated.
 - **Compacted/transactional specifics.** Only the topic definition and its non-default configs are captured; nothing about message contents or transaction state.
-- **Latest-only per key.** Each backup writes `s3://<bucket>/<ns>/<app>/<backup-name>/kafka-metadata.txt` — distinct backups do not overwrite each other, and a restore reads the exact object its `Backup` recorded.
+- **"Non-internal" is Kafka's own definition.** The backup excludes Kafka's internal topics (`__consumer_offsets`, `__transaction_state`, `__share_group_state`) but not operator bookkeeping topics that are not `__`-prefixed — `strimzi-store-topic` and friends are listed by the Admin API and captured. They are harmless to recreate (the operator owns them), but a to-copy restore will materialise them on the target.
+- **Latest-only per key.** Each backup writes `s3://<bucket>/<ns>/<app>/<backup-name>/kafka-metadata.txt` — distinct backups do not overwrite each other, and a restore reads the exact object its `Backup` recorded. The object is deleted from the bucket when its `Backup` is deleted (best-effort, via a one-shot Job the removal waits on), so a retention-pruned `Plan` does not accumulate objects.

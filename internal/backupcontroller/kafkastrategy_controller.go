@@ -35,6 +35,13 @@ const (
 	kafkaStrategyLabelMode   = "kafka.strategy.backups.cozystack.io/mode"
 	kafkaStrategyModeBackup  = "backup"
 	kafkaStrategyModeRestore = "restore"
+	kafkaStrategyModeCleanup = "cleanup"
+
+	// kafkaSkipArtifactCleanupAnnotation, set to "true" on a Backup, releases it
+	// without deleting (or waiting to delete) its S3 object - the operator escape
+	// hatch for a Backup left Terminating because object storage is unreachable.
+	// Shares the platform-wide key with the RabbitMQ driver's identical hatch.
+	kafkaSkipArtifactCleanupAnnotation = "backups.cozystack.io/skip-artifact-cleanup"
 
 	// Round-trips BackupClass parameters through the Backup's DriverMetadata so
 	// a later RestoreJob re-renders with the backup-time values.
@@ -116,7 +123,7 @@ func kafkaStrategyParameters(b *backupsv1alpha1.Backup) map[string]string {
 // object key and a restore reads the exact object its Backup wrote.
 func kafkaRenderContext(
 	app map[string]interface{},
-	releaseName, releaseNamespace, mode, backupName string,
+	releaseName, releaseNamespace, mode, backupName, artifactURI string,
 	parameters map[string]string,
 	backup *backupsv1alpha1.Backup,
 ) map[string]any {
@@ -128,7 +135,13 @@ func kafkaRenderContext(
 		},
 		"Mode":       mode,
 		"BackupName": backupName,
-		"Parameters": parameters,
+		// ArtifactURI is the single source of truth for the stored object's
+		// location. On backup it is the rendered artifactURITemplate (also
+		// recorded on the Backup); on restore and cleanup it is that recorded
+		// value read back from the Backup, so both act on the exact object the
+		// backup wrote and a later key-layout change cannot orphan old backups.
+		"ArtifactURI": artifactURI,
+		"Parameters":  parameters,
 	}
 	if backup != nil {
 		sourceAPIGroup := ""
@@ -153,18 +166,14 @@ func renderKafkaTemplate(tmpl corev1.PodTemplateSpec, ctxMap map[string]any) (*c
 }
 
 // renderKafkaArtifactURI renders the strategy's ArtifactURITemplate against the
-// same context. Empty template yields "" (no artifact recorded). The single
-// field is wrapped so the shared string-walking template engine can render it.
+// same context, surfacing template errors so a broken URI fails the backup
+// rather than recording a half-rendered location.
 func renderKafkaArtifactURI(tmplStr string, ctxMap map[string]any) (string, error) {
-	if strings.TrimSpace(tmplStr) == "" {
-		return "", nil
-	}
-	wrapper := struct{ URI string }{URI: tmplStr}
-	out, err := template.Template(&wrapper, ctxMap)
+	uri, err := template.String(tmplStr, ctxMap)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("artifact URI template: %w", err)
 	}
-	return strings.TrimSpace(out.URI), nil
+	return strings.TrimSpace(uri), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +248,19 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 		return r.kafkaBackupNotReady(ctx, j, "KafkaClusterNotReady", msg)
 	}
 
-	ctxMap := kafkaRenderContext(app, appName, j.Namespace, kafkaStrategyModeBackup, j.Name, resolved.Parameters, nil)
+	// The artifact URI is the single source of truth for where the export is
+	// stored: render it once, inject it into the Job (which writes exactly that
+	// object), and record the same value on the Backup so restore/cleanup act on
+	// it rather than reconstructing a key a later layout change could orphan.
+	if strategy.Spec.ArtifactURITemplate == "" {
+		return r.markBackupJobFailed(ctx, j, "Kafka strategy has no spec.artifactURITemplate; nothing records where the export is stored")
+	}
+	artifactURI, err := renderKafkaArtifactURI(strategy.Spec.ArtifactURITemplate,
+		kafkaRenderContext(app, appName, j.Namespace, kafkaStrategyModeBackup, j.Name, "", resolved.Parameters, nil))
+	if err != nil {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to render Kafka strategy artifact URI: %v", err))
+	}
+	ctxMap := kafkaRenderContext(app, appName, j.Namespace, kafkaStrategyModeBackup, j.Name, artifactURI, resolved.Parameters, nil)
 	rendered, err := renderKafkaTemplate(strategy.Spec.Template, ctxMap)
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to template Kafka strategy: %v", err))
@@ -261,10 +282,6 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 	case batchv1.JobComplete:
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
-		}
-		artifactURI, err := renderKafkaArtifactURI(strategy.Spec.ArtifactURITemplate, ctxMap)
-		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to render artifact URI: %v", err))
 		}
 		artifact, err := r.createKafkaBackupArtifact(ctx, j, resolved, artifactURI)
 		if err != nil {
@@ -495,7 +512,13 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 		return r.kafkaRestoreNotReady(ctx, restoreJob, "KafkaClusterNotReady", msg)
 	}
 
-	ctxMap := kafkaRenderContext(app, targetAppName, targetNamespace, kafkaStrategyModeRestore, backup.Name, kafkaStrategyParameters(backup), backup)
+	// Restore reads the object the Backup recorded, not a reconstruction, so a
+	// later change to the key layout cannot make older backups unrestorable.
+	if backup.Status.Artifact == nil || backup.Status.Artifact.URI == "" {
+		return r.markRestoreJobFailed(ctx, restoreJob, "Backup has no recorded artifact URI (status.artifact.uri); cannot locate the metadata object to restore")
+	}
+	artifactURI := backup.Status.Artifact.URI
+	ctxMap := kafkaRenderContext(app, targetAppName, targetNamespace, kafkaStrategyModeRestore, backup.Name, artifactURI, kafkaStrategyParameters(backup), backup)
 	rendered, err := renderKafkaTemplate(strategy.Spec.Template, ctxMap)
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to template Kafka strategy: %v", err))
@@ -592,4 +615,161 @@ func (r *RestoreJobReconciler) ensureKafkaRestoreJob(
 		return nil, err
 	}
 	return desired, nil
+}
+
+// ---------------------------------------------------------------------------
+// Backup cleanup path (best-effort object deletion on Backup delete)
+// ---------------------------------------------------------------------------
+
+// cleanupKafkaBackup deletes the metadata object a Backup recorded, and WAITS
+// for that delete to finish before the Backup is removed, so no object is
+// orphaned. Like the RabbitMQ driver, this one uniquely owns its artifact (a
+// plain object it wrote with curl, keyed on status.artifact.uri) and no engine
+// retention prunes it. The controller has no S3 client, so the delete runs as a
+// one-shot Job through the strategy's image; this returns a requeue until the
+// Job succeeds. The script treats "object already gone" as success; a genuine
+// failure keeps the Backup Terminating rather than orphaning the object.
+func (r *BackupReconciler) cleanupKafkaBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
+	logger := getLogger(ctx)
+
+	// Escape hatch: an operator releases a Backup stuck Terminating (object
+	// storage unreachable) by setting this annotation. Cleanup then skips the
+	// delete - reaping any in-flight delete Job - and lets the Backup go.
+	if backup.Annotations[kafkaSkipArtifactCleanupAnnotation] == "true" {
+		existing := &batchv1.Job{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name + "-cleanup"}, existing); err == nil {
+			_ = r.deleteKafkaCleanupJob(ctx, existing)
+		}
+		logger.Debug("skipping Kafka artifact cleanup per annotation; object left in bucket", "backup", backup.Name, "annotation", kafkaSkipArtifactCleanupAnnotation)
+		return ctrl.Result{}, nil
+	}
+
+	if backup.Status.Artifact == nil || backup.Status.Artifact.URI == "" {
+		return ctrl.Result{}, nil
+	}
+	uri := backup.Status.Artifact.URI
+
+	strategy := &strategyv1alpha1.Kafka{}
+	if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, strategy); err != nil {
+		if apierrors.IsNotFound(err) {
+			// No strategy to render the delete Job from (the shipped strategy is
+			// gated on a resolved bucket name and stops rendering if that lookup
+			// fails). Release the Backup rather than wedge it forever.
+			return r.releaseKafkaCleanup(ctx, backup, uri, "strategy CR is gone"), nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	jobName := backup.Name + "-cleanup"
+	job := &batchv1.Job{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: jobName}, job)
+	switch {
+	case apierrors.IsNotFound(err):
+		// Spawning the delete Job and projecting the credentials Secret it needs
+		// are CREATEs, which NamespaceLifecycle admission forbids in a Terminating
+		// namespace. Release the Backup then, so teardown can finish; the object
+		// cannot be deleted from a namespace that no longer exists.
+		terminating, nsErr := r.namespaceTerminating(ctx, backup.Namespace)
+		if nsErr != nil {
+			return ctrl.Result{}, nsErr
+		}
+		if terminating {
+			return r.releaseKafkaCleanup(ctx, backup, uri, "namespace is terminating"), nil
+		}
+		if perr := ProjectBackupCredentials(ctx, r.Client, r.CredentialsConfig, backup.Namespace); perr != nil {
+			return r.releaseKafkaCleanup(ctx, backup, uri, fmt.Sprintf("cannot project credentials: %v", perr)), nil
+		}
+		// The template reads only .Mode and .ArtifactURI in cleanup mode (never
+		// .Application), so the source app being gone does not matter.
+		renderCtx := kafkaRenderContext(nil, backup.Spec.ApplicationRef.Name, backup.Namespace, kafkaStrategyModeCleanup, backup.Name, uri, nil, nil)
+		rendered, rerr := renderKafkaTemplate(strategy.Spec.Template, renderCtx)
+		if rerr != nil {
+			return r.releaseKafkaCleanup(ctx, backup, uri, fmt.Sprintf("cleanup template render failed: %v", rerr)), nil
+		}
+		if cerr := r.Create(ctx, buildKafkaCleanupJob(backup.Namespace, jobName, rendered)); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
+			// Forbidden (namespace went Terminating after the check) or Invalid
+			// (an over-long <name>-cleanup Job name) cannot be fixed by retrying;
+			// release. Other errors are transient - requeue.
+			if apierrors.IsForbidden(cerr) || apierrors.IsInvalid(cerr) {
+				return r.releaseKafkaCleanup(ctx, backup, uri, fmt.Sprintf("cannot create cleanup Job: %v", cerr)), nil
+			}
+			return ctrl.Result{}, cerr
+		}
+		return ctrl.Result{RequeueAfter: kafkaStrategyPollInterval}, nil
+	case err != nil:
+		return ctrl.Result{}, err
+	}
+
+	if !job.DeletionTimestamp.IsZero() {
+		// A prior failed attempt is being collected; wait, then the NotFound
+		// branch recreates a fresh one.
+		return ctrl.Result{RequeueAfter: kafkaStrategyPollInterval}, nil
+	}
+
+	switch jobConditionState(job) {
+	case batchv1.JobComplete:
+		_ = r.deleteKafkaCleanupJob(ctx, job)
+		logger.Debug("Kafka backup object deleted", "backup", backup.Name, "uri", uri)
+		return ctrl.Result{}, nil
+	case batchv1.JobFailed:
+		// A genuine delete failure (a missing object is success in the script).
+		// Collect the failed Job so the NotFound branch recreates a fresh one,
+		// and keep the Backup Terminating.
+		logger.Debug("Kafka cleanup Job failed; retrying", "backup", backup.Name, "job", jobName)
+		_ = r.deleteKafkaCleanupJob(ctx, job)
+		return ctrl.Result{RequeueAfter: kafkaStrategyPollInterval}, nil
+	default:
+		return ctrl.Result{RequeueAfter: kafkaStrategyPollInterval}, nil
+	}
+}
+
+// deleteKafkaCleanupJob removes a finished cleanup Job together with its Pod.
+func (r *BackupReconciler) deleteKafkaCleanupJob(ctx context.Context, job *batchv1.Job) error {
+	policy := metav1.DeletePropagationBackground
+	return client.IgnoreNotFound(r.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &policy}))
+}
+
+// releaseKafkaCleanup gives up on deleting the backup object and lets the Backup
+// be removed - for the conditions under which the delete cannot run here
+// (namespace terminating, credentials/permissions unavailable, an unrenderable
+// or absent strategy). It records a Warning Event naming the object left behind
+// so the give-up is visible, then returns a zero Result so the finalizer is
+// released. The delete is best-effort, not guaranteed.
+func (r *BackupReconciler) releaseKafkaCleanup(ctx context.Context, backup *backupsv1alpha1.Backup, uri, reason string) ctrl.Result {
+	getLogger(ctx).Info("releasing Backup without deleting its object", "backup", backup.Name, "uri", uri, "reason", reason)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactNotDeleted", "left object %s in the bucket: %s", uri, reason)
+	}
+	return ctrl.Result{}
+}
+
+// buildKafkaCleanupJob wraps the cleanup-mode pod in a one-shot, ownerless Job.
+// Ownerless because cleanupKafkaBackup manages its lifecycle explicitly and it
+// must outlive the Backup being deleted; activeDeadlineSeconds + TTL are
+// backstops if the controller stops mid-wait.
+func buildKafkaCleanupJob(namespace, name string, rendered *corev1.PodTemplateSpec) *batchv1.Job {
+	pod := *rendered.DeepCopy()
+	if pod.Spec.RestartPolicy == "" {
+		pod.Spec.RestartPolicy = corev1.RestartPolicyNever
+	}
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[kafkaStrategyLabelMode] = kafkaStrategyModeCleanup
+	backoffLimit := int32(1)
+	activeDeadline := int64(300)
+	ttl := int32(300)
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+			Labels:    map[string]string{kafkaStrategyLabelMode: kafkaStrategyModeCleanup},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            &backoffLimit,
+			ActiveDeadlineSeconds:   &activeDeadline,
+			TTLSecondsAfterFinished: &ttl,
+			Template:                pod,
+		},
+	}
 }

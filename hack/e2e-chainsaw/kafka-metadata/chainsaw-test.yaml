@@ -1,13 +1,16 @@
 # Full topic-metadata backup -> in-place + to-copy restore round-trip, driving
 # the validated example scripts (examples/backups/kafka-metadata) as the harness
 # so the test and the documented flow cannot drift. run-all.sh seeds topic
-# `orders` with a per-run retention.ms sentinel, submits an ad-hoc BackupJob
-# against the cozy-default BackupClass (the Kafka strategy exports topic
-# metadata through the Admin API to the system bucket), drops the topic and
-# restores it in place, then restores the metadata onto a fresh empty target —
-# asserting at each step that the topic came back with the exact partitions and
-# retention sentinel, and that the source is left intact. This proves the
-# metadata (not just liveness) round-tripped through object storage.
+# `orders` with a per-run retention.ms sentinel plus a colliding pair
+# (`audit.events` / `audit-events`, distinct partition counts), submits an ad-hoc
+# BackupJob against the cozy-default BackupClass (the Kafka strategy exports topic
+# metadata through the Admin API to the system bucket), drops the topics and
+# restores them in place, then restores the metadata onto a fresh empty target —
+# asserting at each step that `orders` came back with the exact partitions and
+# retention sentinel, that each colliding topic kept its own partition count (so
+# the strategy treats --topic as a literal, not a regex), and that the source is
+# left intact. This proves the metadata (not just liveness) round-tripped through
+# object storage.
 #
 # Same harness-driving shape as mongodb-2-backup-roundtrip: a single run step
 # pre-cleans leftover state, drives run-all.sh, and drains in an always-reached

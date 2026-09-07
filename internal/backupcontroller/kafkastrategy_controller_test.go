@@ -98,7 +98,7 @@ func TestKafkaStrategyParameters_RoundTrip(t *testing.T) {
 func TestRenderKafkaArtifactURI(t *testing.T) {
 	tmpl := "s3://bkt/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-topics.json"
 
-	ctxA := kafkaRenderContext(nil, "kafka-test", "tenant-root", kafkaStrategyModeBackup, "run-a", nil, nil)
+	ctxA := kafkaRenderContext(nil, "kafka-test", "tenant-root", kafkaStrategyModeBackup, "run-a", "", nil, nil)
 	uriA, err := renderKafkaArtifactURI(tmpl, ctxA)
 	if err != nil {
 		t.Fatalf("renderKafkaArtifactURI: %v", err)
@@ -107,7 +107,7 @@ func TestRenderKafkaArtifactURI(t *testing.T) {
 		t.Fatalf("uriA = %q", uriA)
 	}
 
-	ctxB := kafkaRenderContext(nil, "kafka-test", "tenant-root", kafkaStrategyModeBackup, "run-b", nil, nil)
+	ctxB := kafkaRenderContext(nil, "kafka-test", "tenant-root", kafkaStrategyModeBackup, "run-b", "", nil, nil)
 	uriB, _ := renderKafkaArtifactURI(tmpl, ctxB)
 	if uriA == uriB {
 		t.Fatalf("distinct BackupName must yield distinct key: %q == %q", uriA, uriB)
@@ -185,10 +185,13 @@ func newKafkaTestEnv(t *testing.T, app *unstructured.Unstructured, builder *clie
 func newKafkaStrategy(name string) *strategyv1alpha1.Kafka {
 	return &strategyv1alpha1.Kafka{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: strategyv1alpha1.KafkaSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			Containers:    []corev1.Container{{Name: "kafka-backup", Image: "kafka:test", Args: []string{"--mode={{ .Mode }}"}}},
-		}}},
+		Spec: strategyv1alpha1.KafkaSpec{
+			ArtifactURITemplate: "s3://bkt/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-metadata.txt",
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				RestartPolicy: corev1.RestartPolicyNever,
+				Containers:    []corev1.Container{{Name: "kafka-backup", Image: "kafka:test", Args: []string{"--mode={{ .Mode }}", "--uri={{ .ArtifactURI }}"}}},
+			}},
+		},
 	}
 }
 
@@ -273,5 +276,135 @@ func TestReconcileKafkaRestore_RejectsWrongTargetKind(t *testing.T) {
 	}
 	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
 		t.Fatalf("wrong-target-kind RestoreJob phase = %q, want Failed", got.Status.Phase)
+	}
+}
+
+// TestCreateKafkaBackupArtifact_StampsScope pins that every produced Backup
+// carries strategy.backups.cozystack.io/scope=topic-metadata, so `kubectl
+// describe backup` and any consumer see the narrow scope. Dropping the stamp
+// turns this red.
+func TestCreateKafkaBackupArtifact_StampsScope(t *testing.T) {
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	_ = backupsv1alpha1.AddToScheme(testScheme)
+	c := clientfake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&backupsv1alpha1.Backup{}).Build()
+	r := &BackupJobReconciler{Client: c, Scheme: testScheme, Recorder: record.NewFakeRecorder(10)}
+
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: kafkaAppRef("src")},
+	}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+	}
+	backup, err := r.createKafkaBackupArtifact(context.Background(), bj, resolved, "s3://bkt/tenant/src/bj/kafka-metadata.txt")
+	if err != nil {
+		t.Fatalf("createKafkaBackupArtifact: %v", err)
+	}
+	if got := backup.Spec.DriverMetadata[kafkaScopeKey]; got != kafkaScopeValue {
+		t.Fatalf("scope stamp = %q, want %q (driverMetadata=%v)", got, kafkaScopeValue, backup.Spec.DriverMetadata)
+	}
+}
+
+// kafkaBackup builds a Backup fixture that has already recorded its metadata
+// object, for the cleanup path (whose delete is keyed on status.artifact.uri).
+func kafkaBackup(name, namespace string) *backupsv1alpha1.Backup {
+	return &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: kafkaAppRef("src"),
+			StrategyRef:    corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+			DriverMetadata: map[string]string{kafkaScopeKey: kafkaScopeValue},
+		},
+		Status: backupsv1alpha1.BackupStatus{
+			Phase:    backupsv1alpha1.BackupPhaseReady,
+			Artifact: &backupsv1alpha1.BackupArtifact{URI: "s3://bkt/" + namespace + "/src/" + name + "/kafka-metadata.txt"},
+		},
+	}
+}
+
+// TestCleanupKafkaBackup_SpawnsDeleteJob pins that deleting a Backup spawns an
+// ownerless, self-cleaning Job that deletes the recorded object in cleanup mode
+// (with the URI injected), so a retention-pruned Plan does not leak objects -
+// the same contract the Backup cleanup dispatcher routes KafkaStrategyKind to.
+func TestCleanupKafkaBackup_SpawnsDeleteJob(t *testing.T) {
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	_ = backupsv1alpha1.AddToScheme(testScheme)
+	_ = strategyv1alpha1.AddToScheme(testScheme)
+
+	backup := kafkaBackup("kafka-src", "tenant-test")
+	strategy := newKafkaStrategy("cozy-default-kafka")
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+	c := clientfake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&batchv1.Job{}).
+		WithObjects(ns, backup, strategy).Build()
+	// Empty CredentialsConfig: ProjectBackupCredentials is a no-op when disabled.
+	r := &BackupReconciler{Client: c, Scheme: testScheme, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+
+	res, err := r.cleanupKafkaBackup(ctx, backup)
+	if err != nil {
+		t.Fatalf("cleanupKafkaBackup() error = %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("expected a requeue while the delete Job runs (must not orphan the object)")
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected 1 cleanup Job, got %d", len(jobs.Items))
+	}
+	job := jobs.Items[0]
+	if job.Name != "kafka-src-cleanup" {
+		t.Errorf("job name = %q, want kafka-src-cleanup", job.Name)
+	}
+	if len(job.OwnerReferences) != 0 {
+		t.Errorf("cleanup Job must be ownerless so it survives Backup deletion, got %d ownerRefs", len(job.OwnerReferences))
+	}
+	if job.Labels[kafkaStrategyLabelMode] != kafkaStrategyModeCleanup {
+		t.Errorf("mode label = %q, want %q", job.Labels[kafkaStrategyLabelMode], kafkaStrategyModeCleanup)
+	}
+	if job.Spec.TTLSecondsAfterFinished == nil || job.Spec.ActiveDeadlineSeconds == nil {
+		t.Error("expected TTLSecondsAfterFinished + ActiveDeadlineSeconds on the cleanup Job")
+	}
+	args := job.Spec.Template.Spec.Containers[0].Args
+	foundMode, foundURI := false, false
+	for _, a := range args {
+		if a == "--mode=cleanup" {
+			foundMode = true
+		}
+		if a == "--uri="+backup.Status.Artifact.URI {
+			foundURI = true
+		}
+	}
+	if !foundMode {
+		t.Errorf("expected the pod rendered in cleanup mode (--mode=cleanup), got args %v", args)
+	}
+	if !foundURI {
+		t.Errorf("expected the recorded artifact URI injected into the cleanup pod, got args %v", args)
+	}
+
+	// Once the delete Job completes, cleanup finishes (zero Result) and reaps the
+	// Job - so the Backup is only released after the object is gone.
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		t.Fatalf("update job status: %v", err)
+	}
+	res, err = r.cleanupKafkaBackup(ctx, backup)
+	if err != nil {
+		t.Fatalf("cleanupKafkaBackup() second call error = %v", err)
+	}
+	if res.RequeueAfter != 0 || res.Requeue {
+		t.Errorf("expected cleanup to finish once the Job completed, got requeue %+v", res)
+	}
+	if err := c.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("expected the completed cleanup Job to be reaped, got %d", len(jobs.Items))
 	}
 }

@@ -2,9 +2,9 @@
   Two-layer templating (see strategy-altinity-default.yaml for the rationale):
   Helm renders this file at chart install time (the $bucketName gate, the
   endpoint/bucket/region); the backupstrategy-controller re-renders the
-  resulting Kafka Strategy CR per BackupJob/RestoreJob, expanding
-  `{{ .Mode | .Release | .BackupName | .Backup }}`. A literal `{{ .Foo }}` that
-  must survive Helm is passed as the string argument of `printf`.
+  resulting Kafka Strategy CR per BackupJob/RestoreJob/cleanup, expanding
+  `{{ .Mode | .Release | .BackupName | .ArtifactURI | .Backup }}`. A literal
+  `{{ .Foo }}` that must survive Helm is passed as the string argument of `printf`.
 
   Kafka topic-METADATA backup. Strimzi ships no backup CR and this strategy does
   not touch message data: it exports every non-internal topic's definition
@@ -39,15 +39,13 @@ spec:
             # on the internal plain listener). On restore .Release is the TARGET.
             - name: BOOTSTRAP
               value: {{ printf "kafka-{{ .Release.Name }}-kafka-bootstrap.{{ .Release.Namespace }}.svc:9092" | quote }}
-            # S3 key scoped by the SOURCE application and the per-run BackupName,
-            # so distinct backups do not overwrite each other and a restore reads
-            # the exact object its Backup wrote. On restore both come from .Backup.
-            - name: SRC_NAME
-              value: {{ printf "{{ if .Backup }}{{ .Backup.ApplicationRef.Name }}{{ else }}{{ .Release.Name }}{{ end }}" | quote }}
-            - name: SRC_NAMESPACE
-              value: {{ printf "{{ if .Backup }}{{ .Backup.Namespace }}{{ else }}{{ .Release.Namespace }}{{ end }}" | quote }}
-            - name: RUN_NAME
-              value: {{ printf "{{ .BackupName }}" | quote }}
+            # ARTIFACT_URI is the single source of truth for the object
+            # location: rendered from spec.artifactURITemplate, recorded on the
+            # Backup's status.artifact.uri, and read back on restore/cleanup so
+            # those fetch or delete the exact object this backup wrote — a later
+            # change to the key layout cannot orphan older backups.
+            - name: ARTIFACT_URI
+              value: {{ printf "{{ .ArtifactURI }}" | quote }}
             # S3 coordinates from the projected cozy-backups-creds Secret.
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
@@ -61,10 +59,10 @@ spec:
                   key: AWS_SECRET_ACCESS_KEY
             - name: S3_ENDPOINT
               value: {{ include "backupstrategy-controller.endpoint" . | quote }}
-            - name: S3_BUCKET
-              value: {{ $bucketName | quote }}
             - name: S3_REGION
               value: {{ .Values.backupStorage.region | quote }}
+            - name: S3_FORCE_PATH_STYLE
+              value: {{ .Values.backupStorage.forcePathStyle | quote }}
           command: ["/usr/bin/bash", "-c"]
           args:
             - |
@@ -72,33 +70,54 @@ spec:
               BIN=/opt/kafka/bin
               TAB=$(printf '\t')
               file=/tmp/kafka-metadata.txt
-              key="${SRC_NAMESPACE}/${SRC_NAME}/${RUN_NAME}/kafka-metadata.txt"
 
               case "${S3_ENDPOINT}" in
-                http://*|https://*) full="${S3_ENDPOINT}" ;;
-                *) full="https://${S3_ENDPOINT}" ;;
+                http://*|https://*) base="${S3_ENDPOINT}" ;;
+                *) base="https://${S3_ENDPOINT}" ;;
               esac
-              # This image ships curl 7.76.1, whose --aws-sigv4 omits a
-              # non-default port from the SigV4 canonical Host but still sends it
-              # in the Host header (a bug fixed in curl 7.87.0), so seaweedfs
-              # recomputes a different signature and 403s. Sign/send the bare host
-              # and redirect the connection to the real port with --connect-to,
-              # so signed, sent and server-side Host all agree. Correct on
-              # curl >= 7.87 too, which drops the default port anyway.
-              scheme="${full%%://*}"
-              hostport="${full#*://}"; hostport="${hostport%%/*}"
-              host="${hostport%%:*}"
-              port="${hostport##*:}"
-              [ "${port}" = "${hostport}" ] && port=""
-              if [ "${scheme}" = http ]; then defport=80; else defport=443; fi
-              connect_to=""
-              if [ -n "${port}" ] && [ "${port}" != "${defport}" ]; then
-                connect_to="--connect-to ${host}:${defport}:${host}:${port}"
+              # ARTIFACT_URI is s3://<bucket>/<key>. Split it and build the HTTP
+              # object URL, honouring path-style vs virtual-hosted addressing so
+              # this works against both SeaweedFS (path-style) and an external S3
+              # configured for virtual-hosted-style. The whole base URL is kept
+              # for path-style, so a host carrying a path prefix or an IPv6
+              # literal survives (mirrors strategy-rabbitmq-default.yaml).
+              case "${ARTIFACT_URI}" in
+                s3://*) rest="${ARTIFACT_URI#s3://}"; bucket="${rest%%/*}"; key="${rest#*/}" ;;
+                *) echo "expected an s3:// artifact URI, got '${ARTIFACT_URI}' (set spec.artifactURITemplate)" >&2; exit 1 ;;
+              esac
+              if [ "${S3_FORCE_PATH_STYLE}" = "false" ]; then
+                scheme="${base%%://*}"; host="${base#*://}"
+                obj_url="${scheme}://${bucket}.${host}/${key}"
+              else
+                obj_url="${base}/${bucket}/${key}"
               fi
-              obj_url="${scheme}://${host}/${S3_BUCKET}/${key}"
-              # -k accepts the in-cluster S3 self-signed cert; ${connect_to} is
-              # unquoted so an empty value expands to no argument.
-              s3() { curl -fsS -k ${connect_to} --aws-sigv4 "aws:amz:${S3_REGION}:s3" --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"; }
+              # No -k: the platform endpoint helper returns the ACME-valid
+              # external S3 ingress, so curl --aws-sigv4 verifies TLS against the
+              # image's ca-certificates - matching strategy-rabbitmq-default.yaml.
+              # This image's curl (7.76.1) signs an empty-body payload hash on
+              # --upload-file and omits x-amz-content-sha256, so its S3 envelope
+              # is narrower than the sibling drivers' (see kafkaBackupClientImage
+              # in ../values.yaml): SeaweedFS and MinIO accept it, backends that
+              # recompute the body hash may not.
+              s3() { curl -fsS --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"; }
+
+              # Cleanup runs when the owning Backup is deleted: delete the object
+              # and exit before any broker access (the source may already be
+              # gone). A missing object is success (delete is idempotent), so a
+              # non-2xx/404 exits non-zero and the controller retries rather than
+              # orphaning the object.
+              if [ "${MODE}" = cleanup ]; then
+                echo "deleting ${ARTIFACT_URI}"
+                code=$(curl -sS -o /dev/null -w '%{http_code}' \
+                  --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+                  -X DELETE "${obj_url}" || true)
+                case "${code}" in
+                  2*|404) echo "deleted (HTTP ${code})"; exit 0 ;;
+                  *) echo "delete failed: HTTP ${code}" >&2; exit 1 ;;
+                esac
+              fi
 
               # Extract PartitionCount / ReplicationFactor from a --describe
               # summary line; empty output means an unparsable describe.
@@ -155,16 +174,29 @@ spec:
                   echo "  ${t}: partitions=${parts} rf=${rf}"
                 done
                 s3 -X PUT --upload-file "${file}" "${obj_url}"
-                echo "uploaded s3://${S3_BUCKET}/${key}"
+                echo "uploaded ${ARTIFACT_URI}"
               else
-                echo "restoring Kafka topic metadata into ${BOOTSTRAP} from s3://${S3_BUCKET}/${key}"
+                echo "restoring Kafka topic metadata into ${BOOTSTRAP} from ${ARTIFACT_URI}"
                 s3 -o "${file}" "${obj_url}"
+                # Probe existence with --list, fail closed: a --describe under
+                # 2>/dev/null cannot tell "topic absent" from "broker
+                # unreachable" (Kafka 3.9.1 exits 1 for both, and the
+                # distinguishing text goes to stdout). --list instead fails the
+                # whole restore when the broker is unreachable, so a transient
+                # outage is never misread as "absent" and routed into --create.
+                if ! live=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --list); then
+                  echo "cannot list topics on ${BOOTSTRAP}" >&2; exit 1
+                fi
                 # Redirect (not a pipe) so an exit inside aborts the whole script.
                 while IFS="${TAB}" read -r kind a b c; do
                   case "${kind}" in
                   T)
                     t=$a; parts=$b; rf=$c
-                    if desc=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --describe --topic "\Q${t}\E" 2>/dev/null); then
+                    # grep -F -x: literal whole-line match against the live list.
+                    if printf '%s\n' "${live}" | grep -qxF -- "${t}"; then
+                      if ! desc=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --describe --topic "\Q${t}\E"); then
+                        echo "cannot describe existing topic ${t}" >&2; exit 1
+                      fi
                       line=${desc%%$'\n'*}
                       lp=$(describe_field "${line}" PartitionCount)
                       lrf=$(describe_field "${line}" ReplicationFactor)

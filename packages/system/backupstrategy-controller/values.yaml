@@ -83,14 +83,21 @@ backupStrategyController:
   # tag matches the broker image the cluster-operator provisions by default:
   # packages/apps/kafka sets no spec.kafka.version, so the operator picks its
   # default from templates/_kafka_image_map.tpl (kafka 3.9.1 at operator
-  # 0.45.1-rc1), and that image is already cached on the nodes — so the backup
-  # Pod reuses it rather than pulling a second version. Pinned by digest. Note
-  # this ref has no automated producer: no Makefile stamps it and Renovate does
-  # not manage helm-values here, so it must be bumped by hand together with the
-  # kafka-operator default (same tracking gap as chBackupClientImage above). It
-  # is an upstream Strimzi image, not routed through `include "cozy-lib.image"`
-  # (the chart declares no cozy-lib dependency); a dedicated small client image
-  # with its own producer is a possible follow-up.
+  # 0.45.1-rc1). Reusing that ref means a node ALREADY running a broker for the
+  # backed-up cluster has the layers cached; the strategy Pod carries no
+  # nodeSelector/affinity, so on any other node it is a fresh ~691 MB pull before
+  # the backup starts. Pinned by digest. This ref has no automated producer: no
+  # Makefile stamps it and Renovate does not manage helm-values here, so it must
+  # be bumped by hand together with the kafka-operator default (same tracking gap
+  # as chBackupClientImage above). It is an upstream Strimzi image, not routed
+  # through `include "cozy-lib.image"` (the chart declares no cozy-lib
+  # dependency). Two known costs make a dedicated small client image (built by
+  # this package's Makefile, with its own producer) the right follow-up: the
+  # 691 MB size, and this image's curl (7.76.1), whose --aws-sigv4 signs an
+  # empty-body payload hash on upload and omits x-amz-content-sha256 — SeaweedFS
+  # and MinIO accept that, but a body-hash-recomputing backend (AWS S3, Ceph RGW)
+  # on a provisionBucket:false external endpoint may not, a narrower S3 envelope
+  # than the sibling drivers (which run curl 8.x).
   kafkaBackupClientImage: "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1@sha256:ba52ed046b1dccdbd96f4e68057ce014d862a7c9c1fc670760c023b9aa09f23f"
   replicas: 2
   debug: false
