@@ -103,6 +103,6 @@ absent one.
 {{-   $claims := index . 0 }}
 {{-   $target := index . 1 }}
 {{-   with (index ($claims | default dict) $target) }}
-{{      include "cozy-lib.externalIP.claimAnnotation" $ }}: {{ . | quote }}
+{{-     include "cozy-lib.externalIP.claimAnnotation" $ }}: {{ . | quote }}
 {{-   end }}
 {{- end }}

@@ -1,0 +1,77 @@
+suite: reserved external addresses (externalIPs)
+
+# The chart's only job here is to turn an externalIPs entry into the address
+# substrate's consumption annotation on the LoadBalancer Service it already
+# renders, and to refuse a value that would otherwise be silently ignored.
+# Nothing about the address itself is chart business: the annotation is inert
+# until a driver acts on it.
+
+templates:
+  - templates/external-svc.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: "external without externalIPs: no annotation, so the load balancer keeps auto-assigning"
+    set:
+      external: true
+    asserts:
+      - notExists:
+          path: metadata.annotations
+
+  - it: "an entry pins the primary Service to its claim"
+    set:
+      external: true
+      externalIPs:
+        - claim: db-primary-address
+    asserts:
+      - equal:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: db-primary-address
+
+  - it: "an explicit target: rw is the same as omitting it"
+    set:
+      external: true
+      externalIPs:
+        - claim: db-primary-address
+          target: rw
+    asserts:
+      - equal:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: db-primary-address
+
+  - it: "externalIPs without external is refused rather than ignored"
+    set:
+      external: false
+      externalIPs:
+        - claim: db-primary-address
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs requires external: true — there is no external endpoint to pin an address to otherwise"
+
+  - it: "a target this chart does not publish is refused, and the message names the ones it does"
+    set:
+      external: true
+      externalIPs:
+        - claim: db-replica-address
+          target: ro
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[0] targets "ro", which this application does not publish; valid targets: rw'
+
+  - it: "two entries for the same endpoint are refused"
+    set:
+      external: true
+      externalIPs:
+        - claim: first
+        - claim: second
+          target: rw
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[1] targets "rw" a second time: one endpoint wears one address, so use one entry per target'
