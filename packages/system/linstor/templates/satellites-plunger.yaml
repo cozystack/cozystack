@@ -1,3 +1,4 @@
+{{- if eq .Values.backend "linstor" }}
 apiVersion: piraeus.io/v1
 kind: LinstorSatelliteConfiguration
 metadata:
@@ -92,3 +93,4 @@ spec:
         configMap:
           name: linstor-plunger
           defaultMode: 0755
+{{- end }}

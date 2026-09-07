@@ -1,3 +1,4 @@
+{{- if eq .Values.backend "linstor" }}
 apiVersion: piraeus.io/v1
 kind: LinstorSatelliteConfiguration
 metadata:
@@ -11,3 +12,4 @@ spec:
         - op: add
           path: /metadata/annotations/reloader.stakater.com~1auto
           value: "true"
+{{- end }}

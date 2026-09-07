@@ -94,6 +94,9 @@ case "$*" in
   'wait deployment/linstor-controller '*)
     [ "$STUB_DEPLOY_READY_AT" != never ] && [ "$now" -ge "$STUB_DEPLOY_READY_AT" ] ;;
   'get endpoints '*) echo 192.0.2.11 ;;
+  *'-l app=blockstor-satellite'*) printf 'True\nTrue\nTrue\n' ;;
+  *'{.items[*].metadata.name}'*) printf 'node0 node1 node2\n' ;;
+  *'InternalIP'*) echo 10.0.0.1 ;;
   'get pods '*)
     if [ -n "${STUB_PODS_FAIL:-}" ]; then
       echo "Error from server (Forbidden): pods is forbidden" >&2
@@ -121,6 +124,9 @@ case "$*" in
     fi
     echo "STUB-EVENT MountVolume.SetUp failed for volume client-tls" ;;
   *'linstor node list') printf 'Online\nOnline\nOnline\n' ;;
+  'get linstorcluster '*) echo "${STUB_LC_AVAILABLE:-True}" ;;
+  'get nodes '*) printf 'node0 x\nnode1 x\nnode2 x\n' ;;
+  'get linstorsatellite '*) printf '%s\n' "${STUB_SAT_APPLIED:-True True True}" | tr ' ' '\n' ;;
   *) exit 0 ;;
 esac
 STUB
@@ -132,11 +138,20 @@ STUB
 # Runs the script under the stubs, capturing stdout, stderr and the exit status
 # without tripping set -e. The last two are non-empty to make the corresponding
 # diagnostic read fail; pass an empty string for the fourth to reach the fifth.
+# STORAGE_BACKEND is pinned rather than left to the script's own probe. That
+# probe asks whether the blockstor-apiserver Deployment exists, and the stub
+# below answers every kubectl call it does not recognise with success — so the
+# probe reads "blockstor", the script takes a branch these tests were not
+# written for, and every one of them fails on a wait the stub never satisfies.
+#
+# These tests are about the LINSTOR path's wait budgets, so they say so. The
+# blockstor branch has its own test below.
 run_prep() {
   d=$1
   STUB_CLOCK="$d/clock" STUB_CALLS="$d/calls" \
   STUB_HR_READY_AT=$2 STUB_DEPLOY_READY_AT=$3 \
   STUB_EVENTS_FAIL="${4:-}" STUB_PODS_FAIL="${5:-}" \
+  STORAGE_BACKEND=linstor \
   PATH="$d/bin:$PATH" \
     "$SCRIPT" > "$d/out" 2> "$d/err" && echo 0 > "$d/rc" || echo $? > "$d/rc"
 }
@@ -251,5 +266,48 @@ run_prep() {
     echo "the Deployment was waited on after the HelmRelease wait failed" >&2
     return 1
   fi
+  rm -rf "$tmp"
+}
+
+# run_prep_blockstor <dir> [satellite-applied-states]
+# The blockstor branch of the same script. Everything before the satellite
+# wait is answered as ready, so a failure here is the satellite condition and
+# nothing else.
+run_prep_blockstor() {
+  d=$1
+  STUB_CLOCK="$d/clock" STUB_CALLS="$d/calls" \
+  STUB_HR_READY_AT=0 STUB_DEPLOY_READY_AT=0 \
+  STUB_SAT_APPLIED="${2:-True True True}" \
+  STORAGE_BACKEND=blockstor \
+  PATH="$d/bin:$PATH" \
+    "$SCRIPT" > "$d/out" 2> "$d/err" && echo 0 > "$d/rc" || echo $? > "$d/rc"
+}
+
+# LinstorCluster Available says the operator reached the API once. It does not
+# say a satellite reconcile finished, and the two came apart in the field: the
+# operator probes /v1/controller/version before every satellite reconcile, so a
+# probe it cannot complete leaves each satellite Applied=False with its
+# DaemonSet frozen at a spec the chart no longer renders — while every
+# HelmRelease still reports Ready.
+@test "the blockstor prep fails when a satellite never reports Applied" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  run_prep_blockstor "$tmp" "True False True"
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  grep -q "did not all reach Applied" "$tmp/err"
+
+  rm -rf "$tmp"
+}
+
+@test "the blockstor prep passes when every satellite reports Applied" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  run_prep_blockstor "$tmp" "True True True"
+
+  [ "$(cat "$tmp/rc")" -eq 0 ]
+
   rm -rf "$tmp"
 }
