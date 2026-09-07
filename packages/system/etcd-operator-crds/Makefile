@@ -4,13 +4,13 @@ export NAMESPACE=cozy-etcd-operator
 include ../../../hack/package.mk
 
 # Pinned ref of github.com/cozystack/etcd-operator to vendor CRDs from.
-ETCD_OPERATOR_REF ?= v0.5.4
+ETCD_OPERATOR_REF ?= v0.5.5
 
 # controller-gen writes the CRDs to charts/etcd-operator/crd-bases/ upstream (there
 # is no config/crd kustomization). Vendor each verbatim and stamp
 # helm.sh/resource-policy: keep so a chart uninstall never garbage-collects the
 # CRDs and, with them, every EtcdCluster/EtcdMember/EtcdSnapshot in the cluster.
-CRDS = etcdclusters etcdmembers etcdsnapshots
+CRDS = etcdclusters etcddefragpolicies etcddefrags etcdmembers etcdsnapshots
 update:
 	rm -rf templates
 	mkdir templates
