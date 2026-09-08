@@ -1,3 +1,14 @@
+{{- $seal := .Values.seal }}
+{{- $static := eq $seal.type "static" }}
+{{- if and $static (not $seal.secretName) }}
+{{- fail "seal.secretName is required when seal.type is \"static\"" }}
+{{- end }}
+{{- if and $static (not $seal.keyId) }}
+{{- fail "seal.keyId is required when seal.type is \"static\"" }}
+{{- end }}
+{{- if and $seal.previousSecretName (not $seal.previousKeyId) }}
+{{- fail "seal.previousKeyId is required when seal.previousSecretName is set" }}
+{{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -27,6 +38,12 @@ spec:
         tlsDisable: true
       server:
         podManagementPolicy: Parallel
+        # Cozystack's CiliumNetworkPolicy allow-to-apiserver only admits egress
+        # to kube-apiserver for pods carrying this label. Without it,
+        # service_registration "kubernetes" cannot reach the API server and
+        # the HA pods hang on startup. See issue #2793.
+        extraLabels:
+          policy.cozystack.io/allow-to-apiserver: "true"
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 10 }}
         # Ensure the StatefulSet's data PVC is removed when the release is
         # deleted. Without this, the upstream chart leaves the PVC orphaned
@@ -42,6 +59,16 @@ spec:
           {{- with .Values.storageClass }}
           storageClass: {{ . }}
           {{- end }}
+        {{- if $static }}
+        # The upstream chart mounts each Secret at /openbao/userconfig/<name>/.
+        extraVolumes:
+          - type: secret
+            name: {{ $seal.secretName }}
+          {{- with $seal.previousSecretName }}
+          - type: secret
+            name: {{ . }}
+          {{- end }}
+        {{- end }}
         {{- if gt (int .Values.replicas) 1 }}
         standalone:
           enabled: false
@@ -68,6 +95,17 @@ spec:
                 }
               {{- end }}
               }
+              {{- if $static }}
+
+              seal "static" {
+                current_key_id = {{ $seal.keyId | quote }}
+                current_key = "file:///openbao/userconfig/{{ $seal.secretName }}/key"
+                {{- if $seal.previousSecretName }}
+                previous_key_id = {{ $seal.previousKeyId | quote }}
+                previous_key = "file:///openbao/userconfig/{{ $seal.previousSecretName }}/key"
+                {{- end }}
+              }
+              {{- end }}
 
               service_registration "kubernetes" {}
         {{- else }}
@@ -85,6 +123,17 @@ spec:
             storage "file" {
               path = "/openbao/data"
             }
+            {{- if $static }}
+
+            seal "static" {
+              current_key_id = {{ $seal.keyId | quote }}
+              current_key = "file:///openbao/userconfig/{{ $seal.secretName }}/key"
+              {{- if $seal.previousSecretName }}
+              previous_key_id = {{ $seal.previousKeyId | quote }}
+              previous_key = "file:///openbao/userconfig/{{ $seal.previousSecretName }}/key"
+              {{- end }}
+            }
+            {{- end }}
             # Note: service_registration "kubernetes" {} is intentionally omitted
             # in standalone mode — it requires an HA-capable storage backend and
             # causes a fatal error with storage "file".

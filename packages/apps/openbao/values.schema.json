@@ -131,6 +131,47 @@
       "description": "Enable the OpenBAO web UI.",
       "type": "boolean",
       "default": true
+    },
+    "seal": {
+      "description": "Seal configuration. Defaults to Shamir key shares; set `type: static` for auto-unseal.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "keyId",
+        "secretName",
+        "type"
+      ],
+      "properties": {
+        "keyId": {
+          "description": "Permanent identifier of the current key. Change it whenever the key material changes; OpenBAO refuses a key whose identifier it has already seen with different material. Required when `type` is `static`.",
+          "type": "string",
+          "default": ""
+        },
+        "previousKeyId": {
+          "description": "Identifier of the previous key. Required when `previousSecretName` is set.",
+          "type": "string",
+          "default": ""
+        },
+        "previousSecretName": {
+          "description": "Secret holding the previous key during an n-1 key rotation.",
+          "type": "string",
+          "default": ""
+        },
+        "secretName": {
+          "description": "Existing Secret in the release namespace whose key `key` holds the base64 text of 32 random bytes (`head -c 32 /dev/urandom | base64 | tr -d '\\n'`). Required when `type` is `static`.",
+          "type": "string",
+          "default": ""
+        },
+        "type": {
+          "description": "Seal type. `shamir` keeps the current behaviour; `static` enables auto-unseal from `secretName`.",
+          "type": "string",
+          "default": "shamir",
+          "enum": [
+            "shamir",
+            "static"
+          ]
+        }
+      }
     }
   }
 }

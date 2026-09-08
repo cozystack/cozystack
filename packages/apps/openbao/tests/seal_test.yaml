@@ -1,0 +1,131 @@
+suite: seal and apiserver egress
+
+# Guards two fixes:
+#
+# - issue #2793: Cozystack's CiliumNetworkPolicy allow-to-apiserver only admits
+#   egress to kube-apiserver for pods labelled
+#   policy.cozystack.io/allow-to-apiserver=true. The upstream chart renders
+#   server.extraLabels onto the StatefulSet pods, so the wrapper must always
+#   pass the label through or service_registration "kubernetes" hangs.
+#
+# - issue #2787: optional auto-unseal with OpenBAO's `seal "static"`. The key
+#   lives in an operator-owned Secret mounted via server.extraVolumes (the
+#   upstream chart mounts each entry at /openbao/userconfig/<name>/).
+
+templates:
+  - templates/openbao.yaml
+
+release:
+  name: openbao-test
+  namespace: tenant-test
+
+tests:
+  - it: "always labels the server pods for apiserver egress"
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.openbao.server.extraLabels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+
+  - it: "keeps shamir by default: no seal stanza and no extra volumes"
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - notExists:
+          path: spec.values.openbao.server.extraVolumes
+      - notMatchRegex:
+          path: spec.values.openbao.server.standalone.config
+          pattern: 'seal "static"'
+
+  - it: "renders the static seal stanza and the key volume in HA mode"
+    set:
+      replicas: 3
+      seal:
+        type: static
+        secretName: openbao-unseal
+        keyId: key-1
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.openbao.server.extraVolumes
+          value:
+            - type: secret
+              name: openbao-unseal
+      - matchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: 'seal "static" \{\n\s+current_key_id = "key-1"\n\s+current_key = "file:///openbao/userconfig/openbao-unseal/key"\n\s*\}'
+      - notMatchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: previous_key
+
+  - it: "renders the static seal stanza in standalone mode too"
+    set:
+      seal:
+        type: static
+        secretName: openbao-unseal
+        keyId: key-1
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - matchRegex:
+          path: spec.values.openbao.server.standalone.config
+          pattern: 'seal "static" \{\n\s+current_key_id = "key-1"\n\s+current_key = "file:///openbao/userconfig/openbao-unseal/key"\n\s*\}'
+
+  - it: "mounts the previous key and renders previous_key_* during rotation"
+    set:
+      replicas: 3
+      seal:
+        type: static
+        secretName: openbao-unseal
+        keyId: key-2
+        previousSecretName: openbao-unseal-old
+        previousKeyId: key-1
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.openbao.server.extraVolumes
+          value:
+            - type: secret
+              name: openbao-unseal
+            - type: secret
+              name: openbao-unseal-old
+      - matchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: 'previous_key_id = "key-1"\n\s+previous_key = "file:///openbao/userconfig/openbao-unseal-old/key"'
+
+  - it: "rejects static without secretName"
+    set:
+      seal:
+        type: static
+        keyId: key-1
+    asserts:
+      - failedTemplate:
+          errorMessage: 'seal.secretName is required when seal.type is "static"'
+
+  - it: "rejects static without keyId"
+    set:
+      seal:
+        type: static
+        secretName: openbao-unseal
+    asserts:
+      - failedTemplate:
+          errorMessage: 'seal.keyId is required when seal.type is "static"'
+
+  - it: "rejects previousSecretName without previousKeyId"
+    set:
+      seal:
+        type: static
+        secretName: openbao-unseal
+        keyId: key-2
+        previousSecretName: openbao-unseal-old
+    asserts:
+      - failedTemplate:
+          errorMessage: "seal.previousKeyId is required when seal.previousSecretName is set"
