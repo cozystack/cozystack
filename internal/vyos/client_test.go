@@ -18,11 +18,19 @@ package vyos_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cozystack/cozystack/internal/vyos"
 )
@@ -304,5 +312,129 @@ func TestShowInterfacesDetail_EmptyOnNullData(t *testing.T) {
 
 	if len(obs) != 0 {
 		t.Errorf("expected 0 observations, got %d", len(obs))
+	}
+}
+
+// tlsFixture mints a self-signed certificate for serverName, the way the chart's
+// site-router.apiTLS helper does, and returns the PEM the controller would pin to
+// along with the tls.Certificate the gateway would present.
+func tlsFixture(t *testing.T, serverName string) ([]byte, tls.Certificate) {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: serverName},
+		DNSNames:              []string{serverName},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("build key pair: %v", err)
+	}
+	return certPEM, pair
+}
+
+// pinnedServer starts a TLS httptest server presenting present, and returns a
+// client pinned to expect. The server is dialled by its 127.0.0.1 address while
+// the pin names a DNS name it can never carry, which is exactly the production
+// shape: the controller dials a pod IP and verifies a fixed identity.
+func pinnedServer(t *testing.T, present tls.Certificate, expectPEM []byte, serverName string) *vyos.Client {
+	t.Helper()
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"success": true, "data": null, "error": null}`))
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{present}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	return vyos.NewClient(srv.URL, testAPIKey, vyos.WithPinnedCA(expectPEM, serverName))
+}
+
+// TestWithPinnedCA_AcceptsTheCertificateItWasToldToExpect is the positive half:
+// the pin must not break the ordinary path, including the part that looks wrong
+// at first glance — the address dialled (127.0.0.1) is not the name verified.
+func TestWithPinnedCA_AcceptsTheCertificateItWasToldToExpect(t *testing.T) {
+	const serverName = "demo.tenant-test.site-router.cozystack.internal"
+	certPEM, pair := tlsFixture(t, serverName)
+
+	client := pinnedServer(t, pair, certPEM, serverName)
+	if err := client.Configure(context.Background(), []vyos.Operation{{Op: vyos.OpSet, Path: []string{"system", "host-name"}, Value: "gw"}}); err != nil {
+		t.Fatalf("a pinned client must accept the certificate it pinned: %v", err)
+	}
+}
+
+// TestWithPinnedCA_RefusesACertificateItWasNotToldToExpect is the finding. The
+// controller POSTs a router-configuring token to a pod IP, and a bearer token
+// authenticates the CLIENT to the server — it says nothing about who answered.
+// Whoever holds that address gets the token unless the certificate is checked,
+// and this is the address class whose anti-spoof is deliberately off. kube-ovn
+// also recycles pod IPs, so a stale cached Pod object arranges the same thing
+// with no attacker at all.
+func TestWithPinnedCA_RefusesACertificateItWasNotToldToExpect(t *testing.T) {
+	const serverName = "demo.tenant-test.site-router.cozystack.internal"
+	expectPEM, _ := tlsFixture(t, serverName)
+	_, impostorPair := tlsFixture(t, serverName) // same name, different key
+
+	client := pinnedServer(t, impostorPair, expectPEM, serverName)
+	err := client.Configure(context.Background(), []vyos.Operation{{Op: vyos.OpSet, Path: []string{"system", "host-name"}, Value: "gw"}})
+	if err == nil {
+		t.Fatal("a pinned client must refuse a certificate signed by anything but the pinned one")
+	}
+	if !strings.Contains(err.Error(), "certificate") && !strings.Contains(err.Error(), "x509") {
+		t.Errorf("expected a certificate verification failure, got %v", err)
+	}
+}
+
+// TestWithPinnedCA_RefusesTheWrongName proves the identity half is live too: the
+// right key presented under a name the controller was not told to expect is
+// still a refusal, so a certificate minted for one instance cannot stand in for
+// another's gateway.
+func TestWithPinnedCA_RefusesTheWrongName(t *testing.T) {
+	certPEM, pair := tlsFixture(t, "other.tenant-test.site-router.cozystack.internal")
+
+	client := pinnedServer(t, pair, certPEM, "demo.tenant-test.site-router.cozystack.internal")
+	if err := client.Configure(context.Background(), []vyos.Operation{{Op: vyos.OpSet, Path: []string{"system", "host-name"}, Value: "gw"}}); err == nil {
+		t.Fatal("a pinned client must refuse a certificate issued for a different instance")
+	}
+}
+
+// TestWithPinnedCA_FailsClosedOnUnusableInput covers the case an Option cannot
+// report: Option returns nothing, so a bad CA or a missing name would otherwise
+// leave a client that looks pinned and is not. It has to fail on use instead.
+func TestWithPinnedCA_FailsClosedOnUnusableInput(t *testing.T) {
+	tests := []struct {
+		name       string
+		caPEM      []byte
+		serverName string
+	}{
+		{"not a PEM certificate", []byte("-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n"), "gw.example"},
+		{"empty CA", nil, "gw.example"},
+		{"no server name", []byte("placeholder"), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := vyos.NewClient("https://10.244.0.5", testAPIKey, vyos.WithPinnedCA(tt.caPEM, tt.serverName))
+			if err := client.Configure(context.Background(), []vyos.Operation{{Op: vyos.OpSet, Path: []string{"system", "host-name"}, Value: "gw"}}); err == nil {
+				t.Fatal("a client whose pin could not be applied must fail rather than connect unverified")
+			}
+		})
 	}
 }

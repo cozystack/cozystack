@@ -88,6 +88,51 @@ the api-key Secret and the cloud-init seed never diverge on first install.
 {{- end -}}
 
 {{/*
+Resolve the TLS material the VyOS HTTPS API presents, and that the controller
+pins to. Same lookup-preserve shape as site-router.apiToken and for the same
+reason: regenerating on every render would rotate the certificate out from under
+a controller that has already pinned it.
+
+Returns a YAML mapping (callers do `include ... | fromYaml`) with the PEM cert,
+the PEM key, and the name the certificate is issued for.
+
+WHY A FIXED NAME AND NOT THE ADDRESS. The controller dials the gateway by pod IP,
+which nothing can know at render time, so the certificate names a stable
+per-instance identity instead and the controller asks for exactly that name while
+dialling the address. Per-instance rather than shared, so one instance's
+certificate does not authenticate another's gateway.
+
+The name is carried in the Secret rather than recomputed on the Go side: two
+copies of a string-formatting rule are two things that can drift, and the failure
+mode of drift here is a TLS error nobody expects.
+*/}}
+{{- define "site-router.apiTLS" -}}
+{{- $ns := .Release.Namespace -}}
+{{- $secret := printf "%s-api-key" .Release.Name -}}
+{{- $serverName := printf "%s.%s.site-router.cozystack.internal" .Release.Name $ns -}}
+{{- $existing := lookup "v1" "Secret" $ns $secret -}}
+{{- if and $existing (hasKey $existing "data") (hasKey $existing.data "tls.crt") (hasKey $existing.data "tls.key") -}}
+{{- dict "cert" (index $existing.data "tls.crt" | b64dec) "key" (index $existing.data "tls.key" | b64dec) "serverName" $serverName | toYaml -}}
+{{- else -}}
+{{- $gen := genSelfSignedCert $serverName nil (list $serverName) 3650 -}}
+{{- dict "cert" $gen.Cert "key" $gen.Key "serverName" $serverName | toYaml -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Strip a PEM block down to the bare base64 body VyOS's `pki` nodes expect: their
+constraint is a base64 validator, so the armour lines and the newlines have to
+go. Takes the PEM string, returns one unbroken line.
+*/}}
+{{- define "site-router.pemBody" -}}
+{{- /* Not a pipeline: sprig's regexReplaceAll takes (regex, input, replacement),
+       so `. | regexReplaceAll "re" ""` binds the input to the REPLACEMENT and
+       silently yields an empty string. */ -}}
+{{- $bare := regexReplaceAll "-----[A-Z ]+-----" . "" -}}
+{{- regexReplaceAll "[[:space:]]+" $bare "" -}}
+{{- end -}}
+
+{{/*
 Build the CDI `source.registry.url` for the appliance boot disk from the stamped
 reference in images/vyos-router-disk.tag, passed in as a string.
 
@@ -249,7 +294,7 @@ network cannot reach a shell. When managementCIDR is empty (only reachable with
 allowOpenManagement=true) no firewall is stamped.
 */}}
 {{- define "site-router.cloudInitUserData" -}}
-{{- include "site-router.configBoot" (dict "ctx" .ctx "token" .token) | trim }}
+{{- include "site-router.configBoot" (dict "ctx" .ctx "token" .token "tls" .tls) | trim }}
 {{- end -}}
 
 {{- /*
@@ -315,6 +360,7 @@ with internal/vyos/render and the assertions in tests/secret_cloudinit_test.yaml
 {{- define "site-router.configBoot" -}}
 {{- $ctx := .ctx -}}
 {{- $token := .token -}}
+{{- $tls := .tls -}}
 {{- include "site-router.assertSafeVyOSInputs" $ctx -}}
 {{- if $ctx.Values.managementCIDR }}
 firewall {
@@ -376,6 +422,14 @@ interfaces {
     loopback lo {
     }
 }
+pki {
+    certificate site-router-api {
+        certificate "{{ include "site-router.pemBody" $tls.cert }}"
+        private {
+            key "{{ include "site-router.pemBody" $tls.key }}"
+        }
+    }
+}
 service {
     https {
         api {
@@ -386,6 +440,9 @@ service {
             }
             rest {
             }
+        }
+        certificates {
+            certificate "site-router-api"
         }
         listen-address "0.0.0.0"
     }
@@ -447,6 +504,6 @@ system {
 
 
 // Warning: Do not remove the following line.
-// vyos-config-version: "bgp@6:cluster@2:config-management@1:conntrack@6:conntrack-sync@2:container@3:dhcp-relay@2:dhcp-server@11:dhcpv6-server@6:dns-dynamic@4:dns-forwarding@4:firewall@20:flow-accounting@3:https@7:ids@2:interfaces@34:ipoe-server@4:ipsec@14:isis@3:l2tp@9:lldp@3:monitoring@2:nat@8:nat66@3:nhrp@1:ntp@3:openconnect@3:openvpn@5:ospf@2:pim@1:policy@8:pppoe-server@12:pptp@5:qos@2:quagga@12:reverse-proxy@3:rip@1:rpki@2:salt@1:snmp@3:ssh@3:sstp@6:system@31:vpp@6:vrf@4:vrrp@4:wanloadbalance@4:webproxy@2"
+// vyos-config-version: "bgp@6:cluster@2:config-management@1:conntrack@6:conntrack-sync@2:container@3:dhcp-relay@2:dhcp-server@11:dhcpv6-server@6:dns-dynamic@4:dns-forwarding@4:firewall@20:flow-accounting@3:https@7:ids@2:interfaces@34:ipoe-server@4:ipsec@14:isis@3:l2tp@9:lldp@3:monitoring@2:nat@8:nat66@3:nhrp@1:ntp@3:openconnect@3:openvpn@5:ospf@2:pim@1:pki@1:policy@8:pppoe-server@12:pptp@5:qos@2:quagga@12:reverse-proxy@3:rip@1:rpki@2:salt@1:snmp@3:ssh@3:sstp@6:system@31:vpp@6:vrf@4:vrrp@4:wanloadbalance@4:webproxy@2"
 // Release version: 2026.03
 {{- end -}}
