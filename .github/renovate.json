@@ -79,6 +79,34 @@
       "datasourceTemplate": "git-refs",
       "depNameTemplate": "https://github.com/vyos/vyos-build",
       "currentValueTemplate": "rolling"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the two Debian bookworm packages injected into the appliance. Unlike the Stream ISO these rot: a +deb12uN build is a security-update stream, and the superseded file leaves the pool. The build's SHA256 check makes that a loud failure rather than a silent substitution, but without a manager the first sighting is a red release build. The `+` in the pinned version is written literally in the Makefile so it is a comparable Debian version here; the pool serves both that and the percent-encoded form.",
+      "managerFilePatterns": [
+        "/^packages/system/vyos-router-image/Makefile$/"
+      ],
+      "matchStrings": [
+        "pool/main/libu/liburing/liburing2_(?<currentValue>[^_]+)_amd64\\.deb"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "liburing2",
+      "versioningTemplate": "deb",
+      "registryUrlTemplate": "https://deb.debian.org/debian?suite=bookworm&components=main&binaryArch=amd64"
+    },
+    {
+      "customType": "regex",
+      "description": "Second half of the appliance's Debian package pins; see the liburing2 manager above for why these need a manager and the vyos-build ones do not.",
+      "managerFilePatterns": [
+        "/^packages/system/vyos-router-image/Makefile$/"
+      ],
+      "matchStrings": [
+        "pool/main/q/qemu/qemu-guest-agent_(?<currentValue>[^_]+)_amd64\\.deb"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "qemu-guest-agent",
+      "versioningTemplate": "deb",
+      "registryUrlTemplate": "https://deb.debian.org/debian?suite=bookworm&components=main&binaryArch=amd64"
     }
   ],
   "packageRules": [
