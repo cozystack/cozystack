@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -55,10 +56,22 @@ const (
 
 	kafkaStrategyPollInterval = 5 * time.Second
 
-	// Cap on the Ready-precondition wait so a cluster that never comes up fails
-	// the BackupJob/RestoreJob with a legible message instead of requeuing
-	// forever.
+	// Default wall-clock bound, used for two things: the Ready-precondition wait
+	// (controller-timed, before any Job exists) and the run itself (the Job's
+	// activeDeadlineSeconds). Export time scales with topic count, so operators
+	// whose cluster legitimately runs past this raise it per BackupClass with the
+	// kafkaBackupTimeoutParam parameter rather than being capped at a fixed value.
 	kafkaDefaultBackupDeadline = 30 * time.Minute
+
+	// Floor for an operator-supplied backupTimeout: a value below this (or an
+	// unparseable one) falls back to kafkaDefaultBackupDeadline, so a typo cannot
+	// wedge every run at a near-zero deadline.
+	kafkaMinBackupDeadline = time.Minute
+
+	// BackupClass parameter overriding the wall-clock deadline (a Go duration
+	// string, e.g. "2h"). It round-trips through the Backup's DriverMetadata like
+	// every other parameter, so a restore is bounded by the same value.
+	kafkaBackupTimeoutParam = "backupTimeout"
 
 	// The Cozystack chart names the Strimzi Kafka cluster "kafka-<app>".
 	kafkaClusterNamePrefix = "kafka-"
@@ -132,6 +145,18 @@ func kafkaStrategyParameters(b *backupsv1alpha1.Backup) map[string]string {
 	return out
 }
 
+// kafkaRunDeadline resolves the wall-clock bound for a run from its parameters,
+// falling back to kafkaDefaultBackupDeadline when unset, unparseable, or below
+// the floor.
+func kafkaRunDeadline(parameters map[string]string) time.Duration {
+	if v := parameters[kafkaBackupTimeoutParam]; v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= kafkaMinBackupDeadline {
+			return d
+		}
+	}
+	return kafkaDefaultBackupDeadline
+}
+
 // kafkaRenderContext builds the template context. Unlike the Job strategy it
 // carries .BackupName (the per-run identity) so the strategy can scope the S3
 // object key and a restore reads the exact object its Backup wrote.
@@ -195,6 +220,11 @@ func renderKafkaArtifactURI(tmplStr string, ctxMap map[string]any) (string, erro
 	return strings.TrimSpace(uri), nil
 }
 
+// errNoKafkaBroker distinguishes "the cluster is Ready but no broker pod is
+// listable" (terminal - the callers gate on Ready first) from a transient List
+// error, which the caller requeues instead of failing the whole run.
+var errNoKafkaBroker = errors.New("no Kafka broker pod to resolve the client image from")
+
 // resolveKafkaBrokerImage returns the container image of a running broker of the
 // Strimzi Kafka cluster, so the backup/restore Job runs the exact Admin-API CLI
 // the broker ships rather than a separately pinned guess that drifts from it.
@@ -213,7 +243,7 @@ func resolveKafkaBrokerImage(ctx context.Context, c client.Client, namespace, cl
 			}
 		}
 	}
-	return "", fmt.Errorf("no broker pod with a %q container found for Kafka cluster %s/%s", kafkaBrokerContainerName, namespace, clusterName)
+	return "", fmt.Errorf("%w (looked for a %q container in cluster %s/%s)", errNoKafkaBroker, kafkaBrokerContainerName, namespace, clusterName)
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +262,8 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 	if err := validateKafkaApplicationRef(j.Spec.ApplicationRef); err != nil {
 		return r.markBackupJobFailed(ctx, j, err.Error())
 	}
+
+	deadline := kafkaRunDeadline(resolved.Parameters)
 
 	// First-reconcile bookkeeping (refetch guards against a stale informer
 	// sliding StartedAt forward). Mirrors reconcileJob.
@@ -281,19 +313,23 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 		if !apierrors.IsNotFound(clusterErr) {
 			return ctrl.Result{}, clusterErr
 		}
-		return r.kafkaBackupNotReady(ctx, j, "KafkaClusterNotReady",
+		return r.kafkaBackupNotReady(ctx, j, deadline, "KafkaClusterNotReady",
 			fmt.Sprintf("Kafka cluster %s not found yet", kafkaClusterName(appName)))
 	}
 	if msg := kafkaNotReadyMessage(cluster); msg != "" {
-		return r.kafkaBackupNotReady(ctx, j, "KafkaClusterNotReady", msg)
+		return r.kafkaBackupNotReady(ctx, j, deadline, "KafkaClusterNotReady", msg)
 	}
 
 	// Run the exact CLI the broker ships by resolving its image now that the
 	// cluster is Ready (so a broker pod exists), rather than from a chart pin that
-	// drifts from the broker version.
+	// drifts from the broker version. A transient List error requeues; only a
+	// Ready cluster with no listable broker is terminal.
 	clientImage, err := resolveKafkaBrokerImage(ctx, r.Client, j.Namespace, kafkaClusterName(appName))
 	if err != nil {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("cannot resolve Kafka client image: %v", err))
+		if errors.Is(err, errNoKafkaBroker) {
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("cannot resolve Kafka client image: %v", err))
+		}
+		return ctrl.Result{}, err
 	}
 
 	// The artifact URI is the single source of truth for where the export is
@@ -315,7 +351,7 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 	}
 
 	batchJob, err := r.ensureKafkaJob(ctx, j, j.Namespace, jobNameForBackupJob(j),
-		kafkaStrategyModeBackup,
+		kafkaStrategyModeBackup, deadline,
 		map[string]string{
 			backupsv1alpha1.OwningJobNameLabel:      j.Name,
 			backupsv1alpha1.OwningJobNamespaceLabel: j.Namespace,
@@ -358,21 +394,19 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 		return r.markBackupJobFailed(ctx, j, message)
 
 	default:
-		// buildJobStrategyBatchJob sets no activeDeadlineSeconds, so a Job whose
-		// pod never schedules (no capacity) would requeue in Running forever.
-		// Bound the whole run by the same deadline the readiness wait uses (from
-		// StartedAt) and fail the BackupJob legibly instead.
-		if j.Status.StartedAt != nil && time.Since(j.Status.StartedAt.Time) > kafkaDefaultBackupDeadline {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Kafka metadata backup Job did not complete within %s (its pod may be unschedulable)", kafkaDefaultBackupDeadline))
-		}
+		// The Job carries activeDeadlineSeconds (set in ensureKafkaJob), so a run
+		// that never completes - an unschedulable pod or a wedged export - is
+		// failed by Kubernetes as DeadlineExceeded and lands in the JobFailed
+		// branch above; the pod is killed before the script's final upload, so no
+		// object is left orphaned. Here we only poll while it makes progress.
 		return ctrl.Result{RequeueAfter: kafkaStrategyPollInterval}, nil
 	}
 }
 
 // kafkaBackupNotReady surfaces a precise Ready=False on the BackupJob and
 // requeues, or fails once the deadline since StartedAt is exceeded.
-func (r *BackupJobReconciler) kafkaBackupNotReady(ctx context.Context, j *backupsv1alpha1.BackupJob, reason, message string) (ctrl.Result, error) {
-	if j.Status.StartedAt != nil && time.Since(j.Status.StartedAt.Time) > kafkaDefaultBackupDeadline {
+func (r *BackupJobReconciler) kafkaBackupNotReady(ctx context.Context, j *backupsv1alpha1.BackupJob, deadline time.Duration, reason, message string) (ctrl.Result, error) {
+	if j.Status.StartedAt != nil && time.Since(j.Status.StartedAt.Time) > deadline {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("timed out waiting for Kafka cluster to become Ready: %s", message))
 	}
 	apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
@@ -391,6 +425,7 @@ func (r *BackupJobReconciler) ensureKafkaJob(
 	ctx context.Context,
 	owner client.Object,
 	namespace, name, mode string,
+	deadline time.Duration,
 	ownerLabels map[string]string,
 	rendered *corev1.PodTemplateSpec,
 ) (*batchv1.Job, error) {
@@ -409,6 +444,11 @@ func (r *BackupJobReconciler) ensureKafkaJob(
 	}
 
 	desired := buildJobStrategyBatchJob(namespace, name, labels, rendered)
+	// Bound the run at the Job layer: Kubernetes fails an unschedulable or wedged
+	// Job as DeadlineExceeded and kills its pod before the script's final upload,
+	// so a timed-out run cannot both leave the BackupJob terminal and go on to
+	// write an object no Backup ever references.
+	setKafkaJobDeadline(desired, deadline)
 	if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
 		return nil, fmt.Errorf("set controller reference on backup Job: %w", err)
 	}
@@ -503,6 +543,10 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 		return r.markRestoreJobFailed(ctx, restoreJob, err.Error())
 	}
 
+	// The deadline round-trips from backup time via the Backup's parameters, so a
+	// restore is bounded by the same value the operator set for the backup.
+	deadline := kafkaRunDeadline(kafkaStrategyParameters(backup))
+
 	// Resolve the effective target: source app by default, overridden per-field
 	// by targetApplicationRef for a to-copy restore.
 	targetNamespace := restoreJob.Namespace
@@ -577,19 +621,23 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 		if !apierrors.IsNotFound(clusterErr) {
 			return ctrl.Result{}, clusterErr
 		}
-		return r.kafkaRestoreNotReady(ctx, restoreJob, "KafkaClusterNotReady",
+		return r.kafkaRestoreNotReady(ctx, restoreJob, deadline, "KafkaClusterNotReady",
 			fmt.Sprintf("target Kafka cluster %s not found yet", kafkaClusterName(targetAppName)))
 	}
 	if msg := kafkaNotReadyMessage(cluster); msg != "" {
-		return r.kafkaRestoreNotReady(ctx, restoreJob, "KafkaClusterNotReady", msg)
+		return r.kafkaRestoreNotReady(ctx, restoreJob, deadline, "KafkaClusterNotReady", msg)
 	}
 
 	// Resolve the client image from the TARGET broker (Ready above, so a broker
 	// pod exists), so a to-copy restore into a differently-versioned cluster runs
-	// that cluster's own CLI rather than the source's.
+	// that cluster's own CLI rather than the source's. Transient List errors
+	// requeue; only a Ready cluster with no listable broker is terminal.
 	clientImage, err := resolveKafkaBrokerImage(ctx, r.Client, targetNamespace, kafkaClusterName(targetAppName))
 	if err != nil {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("cannot resolve Kafka client image: %v", err))
+		if errors.Is(err, errNoKafkaBroker) {
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("cannot resolve Kafka client image: %v", err))
+		}
+		return ctrl.Result{}, err
 	}
 
 	// Restore reads the object the Backup recorded, not a reconstruction, so a
@@ -605,7 +653,7 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 	}
 
 	batchJob, err := r.ensureKafkaRestoreJob(ctx, restoreJob, targetNamespace, jobNameForRestoreJob(restoreJob),
-		kafkaStrategyModeRestore,
+		kafkaStrategyModeRestore, deadline,
 		map[string]string{
 			backupsv1alpha1.OwningJobNameLabel:      restoreJob.Name,
 			backupsv1alpha1.OwningJobNamespaceLabel: restoreJob.Namespace,
@@ -640,17 +688,16 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 		return r.markRestoreJobFailed(ctx, restoreJob, message)
 
 	default:
-		// Same bound as the backup path: fail a restore whose Job never completes
-		// (e.g. an unschedulable pod) instead of requeuing in Running forever.
-		if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > kafkaDefaultBackupDeadline {
-			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("Kafka metadata restore Job did not complete within %s (its pod may be unschedulable)", kafkaDefaultBackupDeadline))
-		}
+		// Same bound as the backup path, at the Job layer: the restore Job carries
+		// activeDeadlineSeconds, so an unschedulable or wedged pod is failed by
+		// Kubernetes and lands in the JobFailed branch above rather than requeuing
+		// in Running forever.
 		return ctrl.Result{RequeueAfter: kafkaStrategyPollInterval}, nil
 	}
 }
 
-func (r *RestoreJobReconciler) kafkaRestoreNotReady(ctx context.Context, rj *backupsv1alpha1.RestoreJob, reason, message string) (ctrl.Result, error) {
-	if rj.Status.StartedAt != nil && time.Since(rj.Status.StartedAt.Time) > kafkaDefaultBackupDeadline {
+func (r *RestoreJobReconciler) kafkaRestoreNotReady(ctx context.Context, rj *backupsv1alpha1.RestoreJob, deadline time.Duration, reason, message string) (ctrl.Result, error) {
+	if rj.Status.StartedAt != nil && time.Since(rj.Status.StartedAt.Time) > deadline {
 		return r.markRestoreJobFailed(ctx, rj, fmt.Sprintf("timed out waiting for Kafka cluster to become Ready: %s", message))
 	}
 	apimeta.SetStatusCondition(&rj.Status.Conditions, metav1.Condition{
@@ -669,6 +716,7 @@ func (r *RestoreJobReconciler) ensureKafkaRestoreJob(
 	ctx context.Context,
 	owner client.Object,
 	namespace, name, mode string,
+	deadline time.Duration,
 	ownerLabels map[string]string,
 	rendered *corev1.PodTemplateSpec,
 ) (*batchv1.Job, error) {
@@ -687,6 +735,7 @@ func (r *RestoreJobReconciler) ensureKafkaRestoreJob(
 	}
 
 	desired := buildJobStrategyBatchJob(namespace, name, labels, rendered)
+	setKafkaJobDeadline(desired, deadline)
 	if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
 		return nil, fmt.Errorf("set controller reference on restore Job: %w", err)
 	}
@@ -835,6 +884,18 @@ func (r *BackupReconciler) releaseKafkaCleanup(ctx context.Context, backup *back
 		r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactNotDeleted", "left object %s in the bucket: %s", uri, reason)
 	}
 	return ctrl.Result{}
+}
+
+// setKafkaJobDeadline stamps activeDeadlineSeconds on a backup/restore Job. No
+// TTLSecondsAfterFinished: the controller must observe the Job's terminal
+// condition (to create the Backup, or mark the owner Failed) before it is
+// collected, and the owning BackupJob/RestoreJob garbage-collects it.
+func setKafkaJobDeadline(job *batchv1.Job, deadline time.Duration) {
+	secs := int64(deadline / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	job.Spec.ActiveDeadlineSeconds = &secs
 }
 
 // buildKafkaCleanupJob wraps the cleanup-mode pod in a one-shot, ownerless Job.

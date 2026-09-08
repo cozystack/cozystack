@@ -3,12 +3,14 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -406,33 +408,111 @@ func TestReconcileKafka_FailsAfterReadinessDeadline(t *testing.T) {
 	}
 }
 
-// TestReconcileKafka_FailsWhenJobNeverCompletes pins the running-Job deadline: a
-// Job whose pod never completes (e.g. unschedulable) must terminate the
-// BackupJob as Failed once the deadline elapses, not requeue in Running forever
-// (buildJobStrategyBatchJob sets no activeDeadlineSeconds). Neutralising the
-// default-branch deadline check turns this red.
-func TestReconcileKafka_FailsWhenJobNeverCompletes(t *testing.T) {
-	old := metav1.NewTime(time.Now().Add(-(kafkaDefaultBackupDeadline + time.Minute)))
+func getKafkaJob(t *testing.T, c client.Client, namespace, name string) *batchv1.Job {
+	t.Helper()
+	job := &batchv1.Job{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: namespace, Name: name}, job); err != nil {
+		t.Fatalf("get job %s/%s: %v", namespace, name, err)
+	}
+	return job
+}
+
+func TestKafkaRunDeadline(t *testing.T) {
+	cases := []struct {
+		name   string
+		params map[string]string
+		want   time.Duration
+	}{
+		{"unset falls back to default", nil, kafkaDefaultBackupDeadline},
+		{"valid override honoured", map[string]string{kafkaBackupTimeoutParam: "2h"}, 2 * time.Hour},
+		{"below floor falls back", map[string]string{kafkaBackupTimeoutParam: "10s"}, kafkaDefaultBackupDeadline},
+		{"unparseable falls back", map[string]string{kafkaBackupTimeoutParam: "nope"}, kafkaDefaultBackupDeadline},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := kafkaRunDeadline(tc.params); got != tc.want {
+				t.Fatalf("kafkaRunDeadline(%v) = %s, want %s", tc.params, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReconcileKafka_BoundsRunWithActiveDeadline pins that the run is bounded at
+// the Job layer: the backup Job the controller creates carries
+// activeDeadlineSeconds, so Kubernetes fails an unschedulable or wedged Job as
+// DeadlineExceeded and kills its pod before the script's final upload - rather
+// than a controller wall-clock that marks the BackupJob Failed while the Job
+// runs on and orphans its object. Dropping setKafkaJobDeadline turns this red.
+func TestReconcileKafka_BoundsRunWithActiveDeadline(t *testing.T) {
+	now := metav1.Now()
 	bj := &backupsv1alpha1.BackupJob{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
 		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: kafkaAppRef("src"), BackupClassName: "cozy-default"},
-		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &old, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
 	}
-	cluster := &kafkatypes.Kafka{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "kafka-src"},
-		Status: kafkatypes.KafkaStatus{Conditions: []metav1.Condition{
-			{Type: kafkatypes.ConditionTypeReady, Status: metav1.ConditionTrue, Reason: "Ready"},
+	r, _ := newKafkaTestEnv(t, newKafkaApp("src", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(bj, newKafkaStrategy("cozy-default-kafka"),
+			readyKafkaCluster("kafka-src", "tenant"), kafkaBrokerPod("kafka-src", "tenant", "quay.io/strimzi/kafka:test")))
+
+	if _, err := r.reconcileKafka(context.Background(), bj, &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+	}); err != nil {
+		t.Fatalf("reconcileKafka: %v", err)
+	}
+	job := getKafkaJob(t, r.Client, "tenant", "bj-backup")
+	if job.Spec.ActiveDeadlineSeconds == nil {
+		t.Fatal("backup Job must carry activeDeadlineSeconds to bound the run at the Job layer")
+	}
+	if got, want := *job.Spec.ActiveDeadlineSeconds, int64(kafkaDefaultBackupDeadline/time.Second); got != want {
+		t.Fatalf("activeDeadlineSeconds = %d, want %d", got, want)
+	}
+}
+
+// TestReconcileKafka_BackupTimeoutParameterOverridesDeadline pins that the
+// backupTimeout BackupClass parameter widens the Job's activeDeadlineSeconds, so
+// a cluster whose export legitimately runs long is not capped at the default.
+func TestReconcileKafka_BackupTimeoutParameterOverridesDeadline(t *testing.T) {
+	now := metav1.Now()
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: kafkaAppRef("src"), BackupClassName: "cozy-default"},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	r, _ := newKafkaTestEnv(t, newKafkaApp("src", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(bj, newKafkaStrategy("cozy-default-kafka"),
+			readyKafkaCluster("kafka-src", "tenant"), kafkaBrokerPod("kafka-src", "tenant", "quay.io/strimzi/kafka:test")))
+
+	if _, err := r.reconcileKafka(context.Background(), bj, &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+		Parameters:  map[string]string{kafkaBackupTimeoutParam: "2h"},
+	}); err != nil {
+		t.Fatalf("reconcileKafka: %v", err)
+	}
+	job := getKafkaJob(t, r.Client, "tenant", "bj-backup")
+	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds != int64((2*time.Hour)/time.Second) {
+		t.Fatalf("activeDeadlineSeconds = %v, want %d from backupTimeout=2h", job.Spec.ActiveDeadlineSeconds, int64((2*time.Hour)/time.Second))
+	}
+}
+
+// TestReconcileKafka_FailsWhenJobFails pins that a backup Job reported Failed -
+// which is how Kubernetes marks a run that exceeds activeDeadlineSeconds -
+// terminates the BackupJob as Failed rather than requeuing in Running forever.
+func TestReconcileKafka_FailsWhenJobFails(t *testing.T) {
+	now := metav1.Now()
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: kafkaAppRef("src"), BackupClassName: "cozy-default"},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	failedJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-backup"},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{
+			{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "DeadlineExceeded", Message: "Job was active longer than specified deadline"},
 		}},
 	}
-	// A broker pod so the client-image resolves, and a Job already running
-	// (no terminal condition) so reconcile reaches the default branch.
-	broker := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "kafka-src-kafka-0", Labels: map[string]string{"strimzi.io/cluster": "kafka-src"}},
-		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kafka", Image: "quay.io/strimzi/kafka:test"}}},
-	}
-	runningJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-backup"}}
 	r, _ := newKafkaTestEnv(t, newKafkaApp("src", "tenant"),
-		clientfake.NewClientBuilder().WithObjects(bj, newKafkaStrategy("cozy-default-kafka"), cluster, broker, runningJob))
+		clientfake.NewClientBuilder().WithObjects(bj, newKafkaStrategy("cozy-default-kafka"),
+			readyKafkaCluster("kafka-src", "tenant"), kafkaBrokerPod("kafka-src", "tenant", "quay.io/strimzi/kafka:test"), failedJob))
 
 	if _, err := r.reconcileKafka(context.Background(), bj, &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
@@ -444,7 +524,52 @@ func TestReconcileKafka_FailsWhenJobNeverCompletes(t *testing.T) {
 		t.Fatalf("get bj: %v", err)
 	}
 	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
-		t.Fatalf("expected Failed once the running Job exceeded the deadline, got %q", got.Status.Phase)
+		t.Fatalf("expected Failed once the Job reported Failed, got %q", got.Status.Phase)
+	}
+}
+
+// podListErrClient forces PodList to fail, to simulate a transient apiserver
+// error while resolving the broker image.
+type podListErrClient struct {
+	client.Client
+	err error
+}
+
+func (c podListErrClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*corev1.PodList); ok {
+		return c.err
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
+// TestReconcileKafka_RequeuesTransientBrokerImageError pins that a transient
+// List error while resolving the broker image requeues (returns an error) rather
+// than terminating the whole backup - only a Ready cluster with no listable
+// broker is terminal.
+func TestReconcileKafka_RequeuesTransientBrokerImageError(t *testing.T) {
+	now := metav1.Now()
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: kafkaAppRef("src"), BackupClassName: "cozy-default"},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	r, _ := newKafkaTestEnv(t, newKafkaApp("src", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(bj, newKafkaStrategy("cozy-default-kafka"),
+			readyKafkaCluster("kafka-src", "tenant")))
+	r.Client = podListErrClient{Client: r.Client, err: apierrors.NewInternalError(errors.New("apiserver unavailable"))}
+
+	_, err := r.reconcileKafka(context.Background(), bj, &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+	})
+	if err == nil {
+		t.Fatal("expected a requeue error on a transient broker List failure")
+	}
+	got := &backupsv1alpha1.BackupJob{}
+	if gerr := r.Get(context.Background(), client.ObjectKeyFromObject(bj), got); gerr != nil {
+		t.Fatalf("get bj: %v", gerr)
+	}
+	if got.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatal("a transient List error must not terminate the backup as Failed")
 	}
 }
 
