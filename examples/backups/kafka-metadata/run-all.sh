@@ -83,9 +83,13 @@ if [[ "${SKIP_RESTORE:-0}" == "1" ]]; then
     exit 0
 fi
 
-print_header "Step 25: In-place restore — drop the topics, then restore them"
+print_header "Step 25: In-place restore — drop two topics, keep '${COLLIDE_DOT}' live, then restore"
+# Drop orders + audit-events but LEAVE audit.events live, so the restore runs
+# the existing-topic branch (grep -qxF + --describe/--alter under \Q) for a name
+# whose regex would collide with audit-events. A stripped \Q on the restore
+# --describe would match the sibling, read the wrong partition count and fail the
+# restore here — so this path, not just --create, is exercised end to end.
 delete_topic "$KAFKA_SRC_NAME" "$TOPIC"
-delete_topic "$KAFKA_SRC_NAME" "$COLLIDE_DOT"
 delete_topic "$KAFKA_SRC_NAME" "$COLLIDE_DASH"
 kubectl apply -f "$SCRIPT_DIR/25-restorejob-in-place.yaml"
 wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_INPLACE_NAME" \

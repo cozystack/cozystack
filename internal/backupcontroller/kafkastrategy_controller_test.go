@@ -406,6 +406,48 @@ func TestReconcileKafka_FailsAfterReadinessDeadline(t *testing.T) {
 	}
 }
 
+// TestReconcileKafka_FailsWhenJobNeverCompletes pins the running-Job deadline: a
+// Job whose pod never completes (e.g. unschedulable) must terminate the
+// BackupJob as Failed once the deadline elapses, not requeue in Running forever
+// (buildJobStrategyBatchJob sets no activeDeadlineSeconds). Neutralising the
+// default-branch deadline check turns this red.
+func TestReconcileKafka_FailsWhenJobNeverCompletes(t *testing.T) {
+	old := metav1.NewTime(time.Now().Add(-(kafkaDefaultBackupDeadline + time.Minute)))
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: kafkaAppRef("src"), BackupClassName: "cozy-default"},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &old, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	cluster := &kafkatypes.Kafka{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "kafka-src"},
+		Status: kafkatypes.KafkaStatus{Conditions: []metav1.Condition{
+			{Type: kafkatypes.ConditionTypeReady, Status: metav1.ConditionTrue, Reason: "Ready"},
+		}},
+	}
+	// A broker pod so the client-image resolves, and a Job already running
+	// (no terminal condition) so reconcile reaches the default branch.
+	broker := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "kafka-src-kafka-0", Labels: map[string]string{"strimzi.io/cluster": "kafka-src"}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kafka", Image: "quay.io/strimzi/kafka:test"}}},
+	}
+	runningJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-backup"}}
+	r, _ := newKafkaTestEnv(t, newKafkaApp("src", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(bj, newKafkaStrategy("cozy-default-kafka"), cluster, broker, runningJob))
+
+	if _, err := r.reconcileKafka(context.Background(), bj, &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+	}); err != nil {
+		t.Fatalf("reconcileKafka: %v", err)
+	}
+	got := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(bj), got); err != nil {
+		t.Fatalf("get bj: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("expected Failed once the running Job exceeded the deadline, got %q", got.Status.Phase)
+	}
+}
+
 // kafkaBackup builds a Backup fixture that has already recorded its metadata
 // object, for the cleanup path (whose delete is keyed on status.artifact.uri).
 func kafkaBackup(name, namespace string) *backupsv1alpha1.Backup {

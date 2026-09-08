@@ -22,8 +22,8 @@
 # is an unroutable placeholder in CI, and the .svc name is the one the seaweedfs
 # serving cert's SAN covers (curl verifies TLS against the copied CA).
 # KAFKA_IMAGE for the host-side seed/verify pods is resolved from the running
-# operator so it reuses the cached broker image (the backup/restore Jobs use the
-# image pinned in the strategy regardless).
+# operator so it reuses the cached broker image; the backup/restore Jobs resolve
+# their own image from the target broker (the strategy's .ClientImage).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

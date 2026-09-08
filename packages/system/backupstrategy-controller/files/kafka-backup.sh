@@ -6,6 +6,15 @@ BIN="${BIN:-/opt/kafka/bin}"
 TAB=$(printf '\t')
 file=/tmp/kafka-metadata.txt
 
+# Validate MODE up front and fail closed on anything unexpected. internal/
+# template renders the input unchanged when it fails, so a broken env render
+# would ship the literal "{{ .Mode }}"; without this guard the bare `else`
+# below would run the destructive restore path under the guise of a backup.
+case "${MODE}" in
+  backup|restore|cleanup) ;;
+  *) echo "unknown MODE '${MODE}' (expected backup|restore|cleanup)" >&2; exit 1 ;;
+esac
+
 case "${S3_ENDPOINT}" in
   http://*|https://*) base="${S3_ENDPOINT}" ;;
   *) base="https://${S3_ENDPOINT}" ;;
@@ -151,6 +160,10 @@ else
         line=${desc%%$'\n'*}
         lp=$(describe_field "${line}" PartitionCount)
         lrf=$(describe_field "${line}" ReplicationFactor)
+        # Validate the live shape parsed (as the backup path does for parts/rf):
+        # an empty lp/lrf makes the numeric comparisons below exit 2, which the
+        # if/elif would swallow and report the topic restored without altering.
+        { [ -n "${lp}" ] && [ -n "${lrf}" ]; } || { echo "unparsable live describe for ${t}: ${line}" >&2; exit 1; }
         # A restore that cannot reach the recorded shape must fail loudly, not
         # report success against a divergent topic.
         if [ "${lrf}" != "${rf}" ]; then
@@ -176,6 +189,12 @@ else
       esac
       "${BIN}"/kafka-configs.sh --bootstrap-server "${BOOTSTRAP}" --alter --entity-type topics --entity-name "${t}" --add-config "${add}"
       echo "    config ${t}: ${k}"
+      ;;
+    *)
+      # Fail closed on an unrecognised record: a well-formed but wrong-content
+      # object (curl -f catches transport errors, not a wrong-content 200) must
+      # not restore a subset of topics and still report success.
+      echo "unrecognised metadata record kind '${kind}' (corrupt or wrong object?)" >&2; exit 1
       ;;
     esac
   done < "${file}"

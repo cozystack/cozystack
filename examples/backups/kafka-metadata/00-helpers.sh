@@ -58,9 +58,11 @@ export S3_CA_KEY="${S3_CA_KEY:-ca.crt}"
 export CA_MOUNT_DIR="${CA_MOUNT_DIR:-/etc/ssl/kafka-backup-ca}"
 # The Cozystack chart names the Strimzi cluster kafka-<app>; its plaintext
 # bootstrap Service is kafka-<app>-kafka-bootstrap:9092.
-# KAFKA_IMAGE only drives the host-side throwaway CLI pods here (seed/verify);
-# the backup/restore Jobs use the image pinned in the strategy. Override to
-# match your operator's Kafka image if it differs.
+# KAFKA_IMAGE only drives the host-side throwaway CLI pods here (seed/verify).
+# The backup/restore Jobs no longer use it: the controller resolves the target
+# broker's own image at reconcile time and renders it as the strategy's
+# .ClientImage. Override this only to match your operator's image for the
+# seed/verify pods if it differs.
 export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1@sha256:ba52ed046b1dccdbd96f4e68057ce014d862a7c9c1fc670760c023b9aa09f23f}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
 
@@ -245,7 +247,7 @@ delete_topic() {
         "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --delete --topic "\Q$TOPIC\E" || true
         for _ in $(seq 1 60); do
             list=$("$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --list) || { sleep 2; continue; }
-            printf "%s\n" "$list" | grep -qx "$TOPIC" || { echo "topic $TOPIC deleted"; exit 0; }
+            printf "%s\n" "$list" | grep -qxF -- "$TOPIC" || { echo "topic $TOPIC deleted"; exit 0; }
             sleep 2
         done
         echo "topic $TOPIC still present after wait" >&2; exit 1

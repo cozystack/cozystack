@@ -358,6 +358,13 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 		return r.markBackupJobFailed(ctx, j, message)
 
 	default:
+		// buildJobStrategyBatchJob sets no activeDeadlineSeconds, so a Job whose
+		// pod never schedules (no capacity) would requeue in Running forever.
+		// Bound the whole run by the same deadline the readiness wait uses (from
+		// StartedAt) and fail the BackupJob legibly instead.
+		if j.Status.StartedAt != nil && time.Since(j.Status.StartedAt.Time) > kafkaDefaultBackupDeadline {
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Kafka metadata backup Job did not complete within %s (its pod may be unschedulable)", kafkaDefaultBackupDeadline))
+		}
 		return ctrl.Result{RequeueAfter: kafkaStrategyPollInterval}, nil
 	}
 }
@@ -633,6 +640,11 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 		return r.markRestoreJobFailed(ctx, restoreJob, message)
 
 	default:
+		// Same bound as the backup path: fail a restore whose Job never completes
+		// (e.g. an unschedulable pod) instead of requeuing in Running forever.
+		if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > kafkaDefaultBackupDeadline {
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("Kafka metadata restore Job did not complete within %s (its pod may be unschedulable)", kafkaDefaultBackupDeadline))
+		}
 		return ctrl.Result{RequeueAfter: kafkaStrategyPollInterval}, nil
 	}
 }

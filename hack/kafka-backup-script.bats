@@ -38,13 +38,14 @@ init_stubs() {
   cat > "$BINDIR/kafka-topics.sh" <<STUB
 #!/usr/bin/env bash
 set -eu
-mode=""; topic=""; parts=""
+mode=""; topic=""; parts=""; excl=""
 while [ \$# -gt 0 ]; do
   case "\$1" in
     --list) mode=list ;;
     --describe) mode=describe ;;
     --create) mode=create ;;
     --alter) mode=alter ;;
+    --exclude-internal) excl=1 ;;
     --topic) topic="\$2"; shift ;;
     --partitions) parts="\$2"; shift ;;
   esac
@@ -52,7 +53,11 @@ while [ \$# -gt 0 ]; do
 done
 if [ "\$mode" = list ]; then
   [ -n "\${LIST_FAIL:-}" ] && exit 3
-  cat "$STATE/topics" 2>/dev/null || true
+  if [ -n "\$excl" ]; then
+    grep -v '^__' "$STATE/topics" 2>/dev/null || true
+  else
+    cat "$STATE/topics" 2>/dev/null || true
+  fi
   exit 0
 fi
 if [ "\$mode" = describe ]; then
@@ -103,13 +108,22 @@ STUB
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "\$*" >> "$STATE/curl_args"
-up=""; out=""; wfmt=""; prev=""
+up=""; out=""; wfmt=""; prev=""; hasf=""
 for a in "\$@"; do
   case "\$prev" in --upload-file) up="\$a" ;; -o) out="\$a" ;; -w) wfmt="\$a" ;; esac
+  case "\$a" in -fsS|-f) hasf=1 ;; esac
   prev="\$a"
 done
 if [ -n "\$wfmt" ]; then echo "\${DELETE_CODE:-204}"; exit 0; fi
-if [ -n "\$up" ]; then cp "\$up" "$STATE/s3_object"; exit 0; fi
+if [ -n "\$up" ]; then
+  # PUT_FAIL simulates a 403 on upload: with -f curl errors (exit 22) and stores
+  # nothing; without -f it would exit 0 and a bad backup would report success.
+  if [ -n "\${PUT_FAIL:-}" ]; then
+    [ -n "\$hasf" ] && exit 22
+    exit 0
+  fi
+  cp "\$up" "$STATE/s3_object"; exit 0
+fi
 if [ -n "\$out" ]; then
   [ -f "$STATE/s3_object" ] || exit 22
   cp "$STATE/s3_object" "\$out"; exit 0
@@ -180,13 +194,21 @@ expect_fail() {
   init_stubs; seed_three
   MODE=backup S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
   grep -qF -- '--connect-to s3.example.org:443:s3.example.org:8333' "$STATE/curl_args"
-  ! grep -qE -- '(^| )-k( |$)' "$STATE/curl_args"
+  # Positive form, not `! grep`: hack/cozytest.sh wraps each @test in `set -e`
+  # + a trailing `return 0`, and bash exempts a `!`-negated command from errexit,
+  # so a `! grep` guard can never fail under the runner CI uses (only real bats).
+  if grep -qE -- '(^| )-k( |$)' "$STATE/curl_args"; then
+    echo "regression: -k (insecure TLS) in curl argv: $(cat "$STATE/curl_args")" >&2; return 1
+  fi
 }
 
 @test "default-port endpoint needs no --connect-to" {
   init_stubs; seed_three
   MODE=backup S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
-  ! grep -qF -- '--connect-to' "$STATE/curl_args"
+  # Positive form (see the -k note above): a `! grep` is vacuous under cozytest.
+  if grep -qF -- '--connect-to' "$STATE/curl_args"; then
+    echo "unexpected --connect-to on a default-port endpoint: $(cat "$STATE/curl_args")" >&2; return 1
+  fi
 }
 
 @test "virtual-hosted ported endpoint keys --connect-to off the bucket host" {
@@ -230,6 +252,51 @@ write_backup_object() {
   expect_fail env MODE=restore LIST_FAIL=1 S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
   # Must not have routed the unreachable broker into --create.
   [ ! -f "$STATE/actions" ]
+}
+
+@test "restore of an existing under-partitioned topic alters it with the literal-Q wrapper" {
+  init_stubs
+  printf 'T\tpay.events\t7\t1\n' > "$STATE/s3_object"   # backup wants 7 partitions
+  printf 'pay.events\npay-events\n' > "$STATE/topics"    # both live -> the collision
+  printf 'Topic: pay.events\tPartitionCount: 2\tReplicationFactor: 1\n' > "$STATE/desc.pay.events"
+  printf 'Topic: pay-events\tPartitionCount: 2\tReplicationFactor: 1\n' > "$STATE/desc.pay-events"
+  MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  # The alter must target the literal topic (\Q...\E). A stripped wrapper sends a
+  # regex that re-partitions the colliding sibling permanently — the destructive
+  # bug this guards. Dropping \Q on the restore --alter reddens here.
+  grep -qxF 'alter \Qpay.events\E 7' "$STATE/actions"
+}
+
+@test "restore refuses to shrink partitions" {
+  init_stubs
+  printf 'T\torders\t2\t1\n' > "$STATE/s3_object"   # backup wants 2
+  printf 'orders\n' > "$STATE/topics"
+  printf 'Topic: orders\tPartitionCount: 5\tReplicationFactor: 1\n' > "$STATE/desc.orders"  # live 5 > 2
+  out=""
+  if out=$(MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT" 2>&1); then
+    echo "restore unexpectedly succeeded: $out" >&2; return 1
+  fi
+  printf '%s\n' "$out" | grep -q 'Kafka cannot decrease partitions'
+}
+
+@test "backup fails closed when the S3 upload is rejected (curl -f)" {
+  init_stubs; seed_three
+  # PUT_FAIL simulates a 403; -fsS must turn that into a non-zero exit so the
+  # backup does not report success against an object that never landed.
+  expect_fail env MODE=backup PUT_FAIL=1 S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  [ ! -f "$STATE/s3_object" ]
+}
+
+@test "backup excludes Kafka internal topics" {
+  init_stubs
+  printf 'orders\n__consumer_offsets\n' > "$STATE/topics"
+  printf 'Topic: orders\tPartitionCount: 3\tReplicationFactor: 1\n' > "$STATE/desc.orders"
+  # No desc.__consumer_offsets on purpose: with --exclude-internal it is filtered
+  # from --list; drop the flag and the backup instead tries to describe it and
+  # fails — either way it must never land in the object.
+  MODE=backup S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  grep -qxF "$(printf 'T\torders\t3\t1')" "$STATE/s3_object"
+  if grep -qF '__consumer_offsets' "$STATE/s3_object"; then echo "internal topic captured" >&2; return 1; fi
 }
 
 # ---- cleanup --------------------------------------------------------------
