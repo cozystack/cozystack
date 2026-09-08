@@ -98,6 +98,10 @@ const (
 	// certificate to pin, so the channel that carries the token is not verified.
 	reasonAPITLSUnverified = "APITLSUnverified"
 
+	// reasonNoTunnelDestinations marks an instance whose destination set resolved
+	// empty, which now means the guest accepts no new decrypted flows at all.
+	reasonNoTunnelDestinations = "NoTunnelDestinations"
+
 	// reasonTunnelNotConfigured marks an instance that carries no usable tunnel
 	// because peer.address or the PSK resolved empty. The schema requires
 	// peer.address, but `required` only means the key is present and its default
@@ -592,6 +596,20 @@ func (r *SiteRouterReconciler) resolveInputs(ctx context.Context, inst *instance
 	tenantCIDRs, err := r.tenantNetworkCIDRs(ctx, inst)
 	if err != nil {
 		return render.Inputs{}, err
+	}
+	// The renderer now refuses to emit any new-flow accept without destinations,
+	// which is the right failure but an invisible one: the tunnel comes up and
+	// carries only return traffic. The set is supposed to be non-empty on every
+	// pushing path (the chart's LoadBalancer Service always holds a ClusterIP in
+	// this namespace), so reaching this means that invariant broke — say which
+	// way rather than leaving a tunnel that mysteriously forwards nothing.
+	if len(tenantCIDRs) == 0 && len(remoteCIDRs) > 0 {
+		log.FromContext(ctx).Info("no tunnel destinations resolved; the guest will accept no new decrypted flows",
+			"instance", inst.name, "namespace", inst.namespace)
+		if r.Recorder != nil {
+			r.Recorder.Event(inst.hr, corev1.EventTypeWarning, reasonNoTunnelDestinations,
+				"no Pod IP or Service ClusterIP resolved in this namespace, so the gateway accepts no new decrypted flows; this clears itself once the tunnel Service and the tenant's workloads are present")
+		}
 	}
 
 	in := render.Inputs{

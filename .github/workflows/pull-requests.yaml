@@ -610,13 +610,25 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
       - name: Build VyOS router image (qcow2 + containerDisk)
-        run: make -C packages/system/vyos-router-image image
+        run: |
+          mkdir -p _out/oci
+          make -C packages/system/vyos-router-image image
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+          # Same fork handling as the per-package build job, and it was missing
+          # here. The login step above is correctly skipped on a fork, but nothing
+          # took its place: PUSH stayed on, so a fork PR touching the appliance or
+          # its consumers pushed with a read-only token, failed, and took finalize
+          # and e2e down with it. Export to an OCI archive instead and let the
+          # privileged e2e-fork.yaml workflow_run push it by digest. Empty on
+          # same-repo PRs → normal push path; setting it also forces PUSH/LOAD off
+          # in common-envs.mk (#3257). Absolute, because `make -C <pkg>` makes
+          # buildx resolve a relative dest against the package directory.
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
       - name: Capture VyOS patch fragment
         run: |
           mkdir -p _out/fragments
@@ -630,6 +642,16 @@ jobs:
         with:
           name: pr-patch-fragment-vyos
           path: _out/fragments/vyos.patch
+          if-no-files-found: error
+      # Fork PR only: the containerDisk was exported rather than pushed
+      # (OCI_EXPORT_DIR above). The name has to match e2e-fork.yaml's
+      # `pattern: pr-oci-*` or the archive is built and then ignored.
+      - name: Upload OCI image archives (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-oci-vyos
+          path: _out/oci/*.oci.tar
           if-no-files-found: error
 
   # Reassemble the unified pr.patch from every fragment, then build the installer

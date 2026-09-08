@@ -24,13 +24,65 @@
   the e2e container lane, whose management nodes are Talos containers. See the
   @param in values.yaml.
 */ -}}
+{{- /*
+  DataVolume.spec is immutable in CDI (#2985, docs/storage-immutability.md), so
+  an existing disk's spec is re-emitted verbatim rather than re-rendered. Without
+  this every appliance rebuild breaks `helm upgrade` for every installed
+  instance: the DataVolume keeps the name `<release>-boot` while the rendered
+  source moves to the new digest, and that is an update to an immutable spec.
+  The digest moves on every release, because the appliance package stays in the
+  root Makefile `build:` list (it stamps a reference, see image-refs.md), so this
+  is the normal path and not an edge case.
+
+  Preserving is the whole fix for the digest, and deliberately silent: the digest
+  is a platform stamp, not something an operator asked for, so failing the render
+  on it would replace a broken upgrade with a blocked one. What that leaves is
+  the lifecycle this chart already documents — a running gateway keeps the
+  appliance it was created with, and a NEW instance gets the new one. Replacing
+  the appliance under an existing instance means recreating the instance. See
+  docs/image-lifecycle.md, which also carries why the cloud-init contract and
+  the image advance together.
+
+  storageClass is the opposite case and is handled the opposite way. It IS
+  operator input, so a change to it is a request that silently would not happen,
+  which is exactly what vm-disk fails on. It fails here too, with the same
+  wording, rather than diverging the CR from the cluster.
+*/}}
+{{- $dvName := printf "%s-boot" .Release.Name }}
+{{- $existingDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" .Release.Namespace $dvName }}
+{{- $scAnnotation := "site-router.cozystack.io/storage-class" }}
+{{- $requestedSC := (.Values.storageClass | default "") | toString }}
+{{- if $existingDV }}
+  {{- $existingAnnotations := $existingDV.metadata.annotations | default dict }}
+  {{- if hasKey $existingAnnotations $scAnnotation }}
+    {{- $recordedSC := (index $existingAnnotations $scAnnotation) | toString }}
+    {{- if ne $recordedSC $requestedSC }}
+      {{- fail (printf "site-router storageClass is immutable after creation (current: %q, requested: %q). Delete and recreate the instance to change it." $recordedSC $requestedSC) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
 apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
 metadata:
-  name: {{ .Release.Name }}-boot
+  name: {{ $dvName }}
+  annotations:
+    {{- /* Recorded at creation and carried forward untouched, so the immutability
+           check above compares against what the disk was actually created with
+           rather than against a spec CDI may have defaulted. A disk created
+           before this annotation existed has none, and is left alone. */}}
+    {{- if $existingDV }}
+    {{- if hasKey ($existingDV.metadata.annotations | default dict) $scAnnotation }}
+    {{ $scAnnotation }}: {{ index ($existingDV.metadata.annotations | default dict) $scAnnotation | quote }}
+    {{- end }}
+    {{- else }}
+    {{ $scAnnotation }}: {{ $requestedSC | quote }}
+    {{- end }}
   labels:
     {{- include "site-router.labels" . | nindent 4 }}
 spec:
+{{- if $existingDV }}
+  {{- toYaml $existingDV.spec | nindent 2 }}
+{{- else }}
   contentType: kubevirt
   source:
     {{- /*
@@ -62,3 +114,4 @@ spec:
     {{- with .Values.storageClass }}
     storageClassName: {{ . }}
     {{- end }}
+{{- end }}

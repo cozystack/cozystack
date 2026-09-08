@@ -22,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/cozystack/cozystack/internal/siterouter/denyset"
@@ -778,4 +779,130 @@ func TestClassify_RecordsEveryFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestProgramNamespaceRoutes_GatewayIPChange is the write-ordering regression.
+//
+// The routes annotation is shared by every site-router in the namespace, and the
+// only thing distinguishing this gateway's entries from a co-tenant's is the gw
+// address. When the gateway pod is replaced, mergeRoutes needs BOTH the new IP
+// and the previously recorded one to migrate those entries.
+//
+// Recording the new IP before writing the entries loses that. If the namespace
+// patch then fails, the next reconcile reads the new IP as "previous", the entry
+// still keyed to the old one looks like somebody else's, and mergeRoutes returns
+// RouteConflict forever with reconcileDelete unable to identify it either.
+// Nothing short of hand-editing the namespace recovers it.
+func TestProgramNamespaceRoutes_GatewayIPChange(t *testing.T) {
+	newFixture := func(t *testing.T, failPatch bool) (*SiteRouterReconciler, *instance) {
+		t.Helper()
+		hr := siteRouterHRWithValues(t, "demo", map[string]interface{}{
+			"remoteCIDRs": []interface{}{"172.31.0.0/16"},
+		})
+		hr.Annotations = map[string]string{routeGatewayIPAnnotation: "10.244.0.5"}
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "tenant-test",
+				Annotations: map[string]string{routesAnnotation: `[{"dst":"172.31.0.0/16","gw":"10.244.0.5"}]`},
+			},
+		}
+		// The replacement gateway pod, on a different IP.
+		gateway := gwPod("virt-launcher-"+releasePrefix+"demo-fghij", "demo", "10.244.0.6")
+
+		scheme := runtime.NewScheme()
+		if err := clientgoscheme.AddToScheme(scheme); err != nil {
+			t.Fatalf("add client-go scheme: %v", err)
+		}
+		if err := helmv2.AddToScheme(scheme); err != nil {
+			t.Fatalf("add helm-controller scheme: %v", err)
+		}
+		b := fake.NewClientBuilder().WithScheme(scheme).WithObjects(hr, ns, gateway, cozystackConfigMap())
+		if failPatch {
+			b = b.WithInterceptorFuncs(interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if _, isNS := obj.(*corev1.Namespace); isNS {
+						return errors.New("simulated apiserver failure writing the namespace annotation")
+					}
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			})
+		}
+		r := &SiteRouterReconciler{Client: b.Build(), Scheme: scheme, ManagementCIDR: "10.244.0.0/16"}
+
+		live := &helmv2.HelmRelease{}
+		if err := r.Get(context.Background(), types.NamespacedName{Namespace: hr.Namespace, Name: hr.Name}, live); err != nil {
+			t.Fatalf("get HelmRelease: %v", err)
+		}
+		values, err := decodeValues(live)
+		if err != nil {
+			t.Fatalf("decode values: %v", err)
+		}
+		return r, &instance{hr: live, name: "demo", namespace: "tenant-test", values: values, gatewayPod: gateway}
+	}
+
+	t.Run("a failed namespace write leaves the previous owner recorded", func(t *testing.T) {
+		r, inst := newFixture(t, true)
+
+		if err := r.programNamespaceRoutes(context.Background(), inst); err == nil {
+			t.Fatal("expected the namespace patch failure to propagate")
+		}
+
+		hr := &helmv2.HelmRelease{}
+		if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-test", Name: releasePrefix + "demo"}, hr); err != nil {
+			t.Fatalf("get HelmRelease: %v", err)
+		}
+		if got := hr.Annotations[routeGatewayIPAnnotation]; got != "10.244.0.5" {
+			t.Fatalf("route owner = %q, want the PREVIOUS gateway IP 10.244.0.5 still recorded; "+
+				"recording %q before the entries it claims strands the old entry permanently", got, got)
+		}
+	})
+
+	t.Run("the migration converges when the namespace write succeeds", func(t *testing.T) {
+		r, inst := newFixture(t, false)
+
+		if err := r.programNamespaceRoutes(context.Background(), inst); err != nil {
+			t.Fatalf("program routes: %v", err)
+		}
+
+		ns := &corev1.Namespace{}
+		if err := r.Get(context.Background(), types.NamespacedName{Name: "tenant-test"}, ns); err != nil {
+			t.Fatalf("get namespace: %v", err)
+		}
+		if got := routeSet(t, ns.Annotations[routesAnnotation])["172.31.0.0/16"]; got != "10.244.0.6" {
+			t.Errorf("route should have migrated to the replacement gateway, got gw %q", got)
+		}
+
+		hr := &helmv2.HelmRelease{}
+		if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-test", Name: releasePrefix + "demo"}, hr); err != nil {
+			t.Fatalf("get HelmRelease: %v", err)
+		}
+		if got := hr.Annotations[routeGatewayIPAnnotation]; got != "10.244.0.6" {
+			t.Errorf("route owner = %q, want the new gateway IP 10.244.0.6 once the entries carry it", got)
+		}
+	})
+
+	t.Run("a repeated migration is idempotent, so a crash before the owner write converges", func(t *testing.T) {
+		// The state the first subtest leaves behind: entries already migrated,
+		// owner still recording the old IP. Running again must not conflict.
+		r, inst := newFixture(t, false)
+		if err := r.programNamespaceRoutes(context.Background(), inst); err != nil {
+			t.Fatalf("first pass: %v", err)
+		}
+		// Put the owner annotation back to the old IP, as a crash between the two
+		// writes would leave it, and reconcile again.
+		inst.hr.Annotations[routeGatewayIPAnnotation] = "10.244.0.5"
+		if err := r.Update(context.Background(), inst.hr); err != nil {
+			t.Fatalf("rewind owner annotation: %v", err)
+		}
+		if err := r.programNamespaceRoutes(context.Background(), inst); err != nil {
+			t.Fatalf("second pass must converge rather than conflict: %v", err)
+		}
+		ns := &corev1.Namespace{}
+		if err := r.Get(context.Background(), types.NamespacedName{Name: "tenant-test"}, ns); err != nil {
+			t.Fatalf("get namespace: %v", err)
+		}
+		if got := routeSet(t, ns.Annotations[routesAnnotation])["172.31.0.0/16"]; got != "10.244.0.6" {
+			t.Errorf("route should still point at the replacement gateway, got gw %q", got)
+		}
+	})
 }

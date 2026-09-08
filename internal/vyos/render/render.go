@@ -672,20 +672,23 @@ func renderTunnelIngressFilter(in Inputs) []vyos.Operation {
 	// the world — would be forwarded, bypassing renderForwardFilter's §3
 	// default-drop and making the gateway unintended internet egress. A decrypted
 	// packet to a non-tenant destination matches no accept and falls through to the
-	// default-action drop. When TenantNetworkCIDRs is empty the accept stays
-	// source-only — render unit tests only, since the controller never resolves an
-	// empty set on a path that pushes (see Inputs.TenantNetworkCIDRs).
+	// default-action drop.
+	//
+	// An EMPTY destination set therefore emits no new-flow accept at all, and the
+	// rule set degrades to established/related plus the default drop: the tunnel
+	// carries return traffic and nothing else. That is the only safe reading. This
+	// used to fall back to a source-only accept, guarded by a comment saying the
+	// controller never resolves an empty set on a pushing path — which is a
+	// comment where a guard belongs, and it was reachable: the set is built from
+	// this namespace's pod IPs and Service ClusterIPs, and in a namespace holding
+	// only the gateway, the tunnel Service being deleted between the LoadBalancer
+	// read and the Service list empties it. The fallback then installed exactly
+	// the world-egress hole the destination constraint exists to close, because a
+	// jumped-chain accept is a terminal verdict. Failing closed costs a tunnel
+	// that drops new flows until the next push repairs the set; failing open cost
+	// the boundary.
 	rule := 10
 	for _, cidr := range in.RemoteCIDRs {
-		if len(in.TenantNetworkCIDRs) == 0 {
-			n := strconv.Itoa(rule)
-			ops = append(ops,
-				set(tunnelIngressPath("rule", n, "action"), "accept"),
-				set(tunnelIngressPath("rule", n, "source", "address"), cidr),
-			)
-			rule += 10
-			continue
-		}
 		for _, tenantNet := range in.TenantNetworkCIDRs {
 			n := strconv.Itoa(rule)
 			ops = append(ops,

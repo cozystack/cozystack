@@ -578,22 +578,38 @@ func (r *SiteRouterReconciler) programNamespaceRoutes(ctx context.Context, inst 
 		}
 		return fmt.Errorf("merge routes for namespace %s: %w", inst.namespace, err)
 	}
-	if err := r.rememberRouteGatewayIP(ctx, inst, gatewayIP); err != nil {
-		return fmt.Errorf("remember route gateway IP: %w", err)
-	}
-	if ns.Annotations[routesAnnotation] == merged {
-		return nil // already programmed; nothing to apply
+	if ns.Annotations[routesAnnotation] != merged {
+		apply := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        inst.namespace,
+				Annotations: map[string]string{routesAnnotation: merged},
+			},
+		}
+		apply.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Namespace"))
+		if err := r.Patch(ctx, apply, client.Apply, client.FieldOwner(routesFieldOwner), client.ForceOwnership); err != nil {
+			return fmt.Errorf("apply routes annotation on namespace %s: %w", inst.namespace, err)
+		}
 	}
 
-	apply := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        inst.namespace,
-			Annotations: map[string]string{routesAnnotation: merged},
-		},
-	}
-	apply.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Namespace"))
-	if err := r.Patch(ctx, apply, client.Apply, client.FieldOwner(routesFieldOwner), client.ForceOwnership); err != nil {
-		return fmt.Errorf("apply routes annotation on namespace %s: %w", inst.namespace, err)
+	// Ownership is recorded only AFTER the entries it claims are in the
+	// namespace, and the order is the whole point. This annotation is the only
+	// way a later reconcile can tell which entries in a shared annotation are
+	// this gateway's, and mergeRoutes needs BOTH the current and the previous IP
+	// to migrate them when the gateway pod is replaced.
+	//
+	// Recording first loses that. Write the new IP, fail or crash before the
+	// namespace patch, and the next reconcile reads the new IP as "previous":
+	// the entry still keyed to the old one now looks like a co-tenant
+	// site-router's, so mergeRoutes returns RouteConflict on every attempt and
+	// reconcileDelete cannot identify it either. Nothing recovers that without
+	// hand-editing the namespace.
+	//
+	// This order fails safe instead. A crash between the patch and this write
+	// leaves the previous IP recorded, so the next reconcile migrates the same
+	// entries again and converges — mergeRoutes is idempotent under a repeated
+	// migration, which is what TestProgramNamespaceRoutes_GatewayIPChange covers.
+	if err := r.rememberRouteGatewayIP(ctx, inst, gatewayIP); err != nil {
+		return fmt.Errorf("remember route gateway IP: %w", err)
 	}
 	return nil
 }

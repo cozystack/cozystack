@@ -56,3 +56,79 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'make -C packages/system/vyos-router-image image'
+
+  # DataVolume.spec is immutable in CDI, and the appliance digest moves on every
+  # release because the image package stays in the root Makefile build: list. So
+  # the ordinary upgrade path is "the rendered source no longer matches the live
+  # one", and re-rendering it turns every release into a failed upgrade for every
+  # installed instance. These three pin the preserve-and-fail-loudly contract.
+  #
+  # They can render at all only because of that same preserve: the committed .tag
+  # is the digest-less placeholder and site-router.applianceDiskUrl refuses it,
+  # but the existing-DV branch never reaches that helper. The fresh-install
+  # assertions stay in hack/site-router-appliance-ref.bats for the reason at the
+  # top of this file.
+  - it: keeps the live DataVolume spec when the appliance digest has moved
+    kubernetesProvider:
+      scheme: &dvscheme
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr:
+            group: "cdi.kubevirt.io"
+            version: "v1beta1"
+            resource: "datavolumes"
+          namespaced: true
+      objects: &installedDV
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: site-router-test-boot
+            namespace: tenant-test
+            annotations:
+              site-router.cozystack.io/storage-class: "replicated"
+          spec:
+            contentType: kubevirt
+            source:
+              # Deliberately not a ghcr.io/cozystack/cozystack ref. What this
+              # fixture stands for is "whatever the live disk was created with",
+              # and the registry host plays no part in that — while a first-party
+              # ref here would be picked up by the image-ref enumeration oracle
+              # (hack/promote-rewrite-tags_test.bats) as an unenumerated shipped
+              # reference, which it is not.
+              registry:
+                url: "docker://registry.invalid/installed-appliance@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            storage:
+              resources:
+                requests:
+                  storage: 12Gi
+              storageClassName: replicated
+    asserts:
+      # The disk the gateway is actually running keeps its own source. Rendering
+      # the new digest here is the failed upgrade this test exists to prevent.
+      - equal:
+          path: spec.source.registry.url
+          value: "docker://registry.invalid/installed-appliance@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+
+  - it: carries the recorded storage class forward instead of restamping it
+    kubernetesProvider:
+      scheme: *dvscheme
+      objects: *installedDV
+    asserts:
+      - equal:
+          path: metadata.annotations["site-router.cozystack.io/storage-class"]
+          value: "replicated"
+
+  - it: refuses a storageClass change on an existing instance rather than ignoring it
+    # The opposite treatment from the digest, and deliberately so: this one is
+    # operator input, so silently not applying it diverges the CR from the
+    # cluster. Same contract as vm-disk (#2985, docs/storage-immutability.md).
+    set:
+      storageClass: local
+    kubernetesProvider:
+      scheme: *dvscheme
+      objects: *installedDV
+    asserts:
+      - failedTemplate:
+          errorPattern: "storageClass is immutable after creation"
