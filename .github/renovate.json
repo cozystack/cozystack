@@ -4,9 +4,20 @@
     "config:recommended",
     ":semanticCommits"
   ],
-  "enabledManagers": ["gomod", "dockerfile", "github-actions", "custom.regex"],
-  "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
-  "labels": ["automated", "do-not-merge/hold"],
+  "enabledManagers": [
+    "gomod",
+    "dockerfile",
+    "github-actions",
+    "custom.regex"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy",
+    "gomodUpdateImportPaths"
+  ],
+  "labels": [
+    "automated",
+    "do-not-merge/hold"
+  ],
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
   "automerge": false,
@@ -15,37 +26,56 @@
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
     "enabled": true,
-    "labels": ["automated", "security"]
+    "labels": [
+      "automated",
+      "security"
+    ]
   },
   "customManagers": [
     {
       "customType": "regex",
       "description": "Track the etcd image pinned in the extra/etcd EtcdCluster podTemplate. etcd-operator v0.4.5 bakes etcd 3.5.12 into its binary, and the chart overrides it with a hardcoded image string that the gomod/dockerfile managers cannot see. Without this manager the security-relevant pin (etcd 3.5.x releases are overwhelmingly security fixes) would silently age.",
-      "managerFilePatterns": ["/^packages/extra/etcd/templates/etcd-cluster\\.yaml$/"],
-      "matchStrings": ["image:\\s+(?<depName>quay\\.io/coreos/etcd):(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "managerFilePatterns": [
+        "/^packages/extra/etcd/templates/etcd-cluster\\.yaml$/"
+      ],
+      "matchStrings": [
+        "image:\\s+(?<depName>quay\\.io/coreos/etcd):(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"
+      ],
       "datasourceTemplate": "docker"
     },
     {
       "customType": "regex",
-      "description": "Track and keep fresh the clastix/kubectl image digest-pinned in the post-delete cleanup hooks. The ref is assembled at render time by the cozy-lib.image helper (routed through cozy-lib.images-registry so mirrored / air-gapped installs resolve it), so it is neither a Dockerfile nor a go.mod dependency and the built-in managers cannot see it. The helm-values manager is disabled repo-wide (see enabledManagers above), so without this regex manager the digest — a supply-chain pin — would silently age.",
-      "managerFilePatterns": ["/^packages/.+/templates/hooks/.+\\.yaml$/"],
-      "matchStrings": ["clastix/kubectl:(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "description": "Track and keep fresh the clastix/kubectl image digest-pinned in the post-delete cleanup hooks. The ref is assembled at render time by the cozy-lib.image helper (routed through cozy-lib.images-registry so mirrored / air-gapped installs resolve it), so it is neither a Dockerfile nor a go.mod dependency and the built-in managers cannot see it. The helm-values manager is disabled repo-wide (see enabledManagers above), so without this regex manager the digest \u2014 a supply-chain pin \u2014 would silently age.",
+      "managerFilePatterns": [
+        "/^packages/.+/templates/hooks/.+\\.yaml$/"
+      ],
+      "matchStrings": [
+        "clastix/kubectl:(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)@(?<currentDigest>sha256:[a-f0-9]+)"
+      ],
       "datasourceTemplate": "docker",
       "depNameTemplate": "docker.io/clastix/kubectl"
     },
     {
       "customType": "regex",
-      "description": "Track the vyos-build container the VyOS router appliance is built in. It is pinned by digest behind the floating `current` tag in a Makefile variable, so neither the dockerfile manager (it is not a FROM line) nor gomod can see it, and the package's `make update` is a deliberate no-op because there is no chart to pull. Without this manager the build-tooling pin — the reproducibility lever for an image that ships as a tenant-facing gateway OS — would silently age.",
-      "managerFilePatterns": ["/^packages/system/vyos-router-image/Makefile$/"],
-      "matchStrings": ["VYOS_BUILD_IMAGE\\s*=\\s*vyos/vyos-build:(?<currentValue>\\S+)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "description": "Track the vyos-build container the appliance conversion runs in. It is pinned by digest behind the floating `current` tag in a Makefile variable, so neither the dockerfile manager (it is not a FROM line) nor gomod can see it, and the package's `make update` is a deliberate no-op because there is no chart to pull.",
+      "managerFilePatterns": [
+        "/^packages/system/vyos-router-image/Makefile$/"
+      ],
+      "matchStrings": [
+        "VYOS_BUILD_IMAGE\\s*=\\s*vyos/vyos-build:(?<currentValue>\\S+)@(?<currentDigest>sha256:[a-f0-9]+)"
+      ],
       "datasourceTemplate": "docker",
       "depNameTemplate": "docker.io/vyos/vyos-build"
     },
     {
       "customType": "regex",
-      "description": "Track the vyos-build git ref the VyOS router appliance flavor is built from. It is a bare commit SHA in a Makefile variable with no package manifest behind it, so only a regex manager can see it. Pinned to a commit rather than a branch on purpose — the appliance and the site-router cloud-init contract advance atomically — so this raises a PR when the upstream `current` branch moves and the bump stays a reviewed decision.",
-      "managerFilePatterns": ["/^packages/system/vyos-router-image/Makefile$/"],
-      "matchStrings": ["VYOS_BUILD_REF\\s*=\\s*(?<currentDigest>[0-9a-f]{40})"],
+      "description": "Track the vyos-build git ref the appliance conversion runs from. Since the appliance is derived from a published Stream ISO with --reuse-iso, this ref no longer selects a kernel and cannot age out against a mirror \u2014 it pins scripts/image-build/raw_image.py so the ISO-to-disk conversion behaves the same way twice. A bump here is a behaviour change in that conversion, not a content change in the image, so it stays a reviewed decision rather than a deadline.",
+      "managerFilePatterns": [
+        "/^packages/system/vyos-router-image/Makefile$/"
+      ],
+      "matchStrings": [
+        "VYOS_BUILD_REF\\s*=\\s*(?<currentDigest>[0-9a-f]{40})"
+      ],
       "datasourceTemplate": "git-refs",
       "depNameTemplate": "https://github.com/vyos/vyos-build",
       "currentValueTemplate": "rolling"
@@ -54,45 +84,75 @@
   "packageRules": [
     {
       "description": "Force chore(deps) for all Go module bumps. config:recommended pulls in :semanticPrefixFixDepsChoreOthers, whose packageRule re-sets semanticCommitType=fix for direct deps (depType require), overriding the top-level chore. packageRules override top-level config, so a user rule evaluated last is required to win it back; without this, direct-dep PRs land as fix(deps) and get auto-labeled kind/bug.",
-      "matchManagers": ["gomod"],
+      "matchManagers": [
+        "gomod"
+      ],
       "semanticCommitType": "chore",
       "semanticCommitScope": "deps"
     },
     {
       "description": "Bump indirect Go modules too. Transitive deps such as golang.org/x/crypto, golang.org/x/net and golang.org/x/sys carry OSV advisories that drive the OpenSSF Scorecard Vulnerabilities check to 0, but Renovate skips indirect gomod deps by default so they never get a PR. Grouped into one rolling PR to keep volume sane; security fixes are still split out by vulnerabilityAlerts above. Placed before the kubernetes rule on purpose: an indirect k8s.io/** dep matches both, and Renovate applies last-match-wins, so the later kubernetes rule keeps it in the kubernetes lockstep group.",
-      "matchManagers": ["gomod"],
-      "matchDepTypes": ["indirect"],
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "indirect"
+      ],
       "enabled": true,
       "groupName": "indirect go modules"
     },
     {
       "description": "Keep controller-runtime and the Kubernetes libraries in lockstep. A split bump breaks compilation because a given controller-runtime release expects a matching client-go / apimachinery line.",
       "groupName": "kubernetes",
-      "matchManagers": ["gomod"],
-      "matchPackageNames": ["sigs.k8s.io/controller-runtime", "k8s.io/**"]
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "sigs.k8s.io/controller-runtime",
+        "k8s.io/**"
+      ]
     },
     {
       "description": "Never bump the Go toolchain directive. go.mod is generated and the toolchain is pinned deliberately; raising it needs a matching setup-go and a codegen run, which is out of scope for an automated dependency bump.",
-      "matchManagers": ["gomod"],
-      "matchDepTypes": ["golang"],
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "golang"
+      ],
       "enabled": false
     },
     {
       "description": "Pin Dockerfile base images and GitHub Actions to immutable digests so OpenSSF Scorecard Pinned-Dependencies passes and supply-chain refs stay reproducible. The tag is kept in front of the digest so it stays human-readable and trackable.",
-      "matchManagers": ["dockerfile", "github-actions"],
+      "matchManagers": [
+        "dockerfile",
+        "github-actions"
+      ],
       "pinDigests": true
     },
     {
       "description": "Batch the initial pin and all digest-only refreshes (same tag, rebuilt upstream) into a single weekly PR. Without this, frequently-rebuilt bases (alpine, debian, golang, distroless) would trickle in one rebuild-triggering PR each, loading the shared CI runner. Real tag bumps (major/minor/patch) are intentionally left out of this group so they get individual review.",
-      "matchManagers": ["dockerfile", "github-actions"],
-      "matchUpdateTypes": ["digest", "pinDigest"],
+      "matchManagers": [
+        "dockerfile",
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "pinDigest"
+      ],
       "groupName": "container image & action digests",
-      "schedule": ["before 6am on monday"]
+      "schedule": [
+        "before 6am on monday"
+      ]
     },
     {
       "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
-      "matchManagers": ["gomod"],
-      "matchPackageNames": ["kubevirt.io/csi-driver"],
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "kubevirt.io/csi-driver"
+      ],
       "enabled": false
     }
   ]

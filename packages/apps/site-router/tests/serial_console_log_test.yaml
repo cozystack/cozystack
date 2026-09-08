@@ -104,14 +104,21 @@ tests:
           path: stringData.userdata
           pattern: cozy-guest-diag
 
-  - it: the platform switch installs the guest emitter
+  - it: the platform switch installs the guest emitter, on its own disk
     set:
       _logSerialConsole: true
     template: templates/secret-cloudinit.yaml
     documentSelector:
       path: metadata.name
-      value: site-router-test-cloud-init
+      value: site-router-test-diag
+    # The emitter travels separately from the configuration seed so that a
+    # diagnostics change cannot break the config.boot the gateway boots on. The
+    # appliance seed installs guest-diag.cron as /etc/cron.d/cozy-guest-diag —
+    # a name with no dot, which Debian cron would otherwise skip in silence.
     asserts:
       - matchRegex:
-          path: stringData.userdata
-          pattern: /etc/cron\.d/cozy-guest-diag
+          path: stringData["guest-diag.cron"]
+          pattern: /config/scripts/cozy-guest-diag\.sh
+      - matchRegex:
+          path: stringData["guest-diag.sh"]
+          pattern: (?m)^#!/bin/sh

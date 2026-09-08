@@ -191,7 +191,7 @@
       "default": false
     },
     "cloudInitSeed": {
-      "description": "Opaque seed mixed into the VM firmware UUID. Change it to force a first-boot cloud-init re-run; clear it to preserve an existing VM's UUID across re-renders.",
+      "description": "Opaque seed mixed into the VM firmware UUID. Change it to force the first-boot seed to be applied again; clear it to preserve an existing VM's UUID across re-renders.",
       "type": "string",
       "default": ""
     }

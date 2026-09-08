@@ -79,6 +79,8 @@ render_userdata() {
     > "$TMP/rendered.yaml" 2> "$TMP/helm.err" || echo fail > "$TMP/helm.failed"
   yq e 'select(.metadata.name == "site-router-test-cloud-init") | .stringData.userdata' \
     "$TMP/rendered.yaml" > "$TMP/ud.yaml" 2>/dev/null || true
+  yq e 'select(.metadata.name == "site-router-test-diag") | .stringData' \
+    "$TMP/rendered.yaml" > "$TMP/diag.yaml" 2>/dev/null || true
 }
 
 # A stub PATH where every command the emitter reads answers instantly, so the
@@ -109,11 +111,11 @@ make_guest_stubs() {
     rm -rf "$TMP"; exit 1
   }
   # The fields that decide the open question. nginx is the :443 HTTPS-API
-  # listener on this appliance (packages/system/vyos-router-image/flavors/
-  # vyos-router.toml D4 exists because it does not start without its log dir),
+  # listener on this appliance (the seed creates its log directory because it
+  # does not start without one; see packages/system/vyos-router-image/overlay),
   # and top-cpu is what separates a slow boot from a hung service — the reading
   # the failed run could not make.
-  for field in 'cloud-init:' 'systemd:' 'failed-units:' 'seed-file:' \
+  for field in 'appliance-seed:' 'systemd:' 'failed-units:' 'seed-file:' \
                'active-https-node:' 'nginx:' 'listeners:' 'ipsec-unit:' \
                'loadavg:' 'top-cpu:' 'errors:'; do
     grep -q "\[cozy-diag\] .* $field" "$TMP/console" || {
@@ -184,10 +186,11 @@ STUB
   TMP=$(mktemp -d)
   render_userdata _logSerialConsole=true
   [ ! -f "$TMP/helm.failed" ] || { cat "$TMP/helm.err" >&2; rm -rf "$TMP"; exit 1; }
-  yq e '.write_files[] | select(.path == "/config/scripts/cozy-guest-diag.sh") | .content' \
-    "$TMP/ud.yaml" > "$TMP/shipped"
+  # The emitter travels on its own disk, not beside the configuration seed, so a
+  # mistake here cannot reach the config.boot the gateway boots on.
+  yq e '.["guest-diag.sh"]' "$TMP/diag.yaml" > "$TMP/shipped"
   [ -s "$TMP/shipped" ] || {
-    echo "the rendered cloud-init carries no emitter script" >&2
+    echo "the rendered diagnostics Secret carries no emitter script" >&2
     rm -rf "$TMP"; exit 1
   }
   # Byte-identical, not merely present. The chart embeds the file through a YAML
@@ -202,39 +205,35 @@ STUB
   }
   # Scheduled-but-absent is the quiet failure: a cron entry naming a path nothing
   # writes installs cleanly and produces silence. Assert the two agree.
-  cron=$(yq e '.write_files[] | select(.path == "/etc/cron.d/cozy-guest-diag") | .content' "$TMP/ud.yaml")
-  printf '%s\n' "$cron" | grep -q ' /config/scripts/cozy-guest-diag.sh$' || {
-    echo "the cron entry does not run the path the script is written to" >&2
-    printf '%s\n' "$cron" >&2
-    rm -rf "$TMP"; exit 1
-  }
-  # cron ignores /etc/cron.d entries whose FILENAME contains anything but
-  # [A-Za-z0-9_-], so a dot there would install cleanly and never run. Matched on
-  # the basename, not the path: /etc/cron.d/ has a dot of its own.
-  cronname=$(yq e '.write_files[].path' "$TMP/ud.yaml" | grep '^/etc/cron\.d/' | sed 's|.*/||')
-  [ -n "$cronname" ] || { echo "no /etc/cron.d entry rendered at all" >&2; rm -rf "$TMP"; exit 1; }
-  case "$cronname" in
-    *.*) echo "cron.d filename '$cronname' contains a dot, so cron will ignore it" >&2
-         rm -rf "$TMP"; exit 1 ;;
-  esac
-  # cron also refuses a group- or world-writable crontab.
-  perms=$(yq e '.write_files[] | select(.path == "/etc/cron.d/cozy-guest-diag") | .permissions' "$TMP/ud.yaml")
-  [ "$perms" = "0644" ] || {
-    echo "cron.d entry has permissions $perms, want 0644" >&2
-    rm -rf "$TMP"; exit 1
-  }
-  # And the shipped copy has to actually run, not just match. This is the whole
-  # chain: chart -> YAML -> guest file -> output.
-  make_guest_stubs
-  chmod +x "$TMP/shipped"
-  PATH="$TMP/bin:$PATH" \
-    COZY_DIAG_CONSOLE="$TMP/console" COZY_DIAG_SAMPLES=1 COZY_DIAG_WINDOW=99999999 \
-    sh "$TMP/shipped"
-  grep -q '\[cozy-diag\] .* nginx: ' "$TMP/console" || {
-    echo "the shipped emitter renders but does not run" >&2
+  yq e '.["guest-diag.cron"]' "$TMP/diag.yaml" | grep -q ' /config/scripts/cozy-guest-diag.sh$' || {
+    echo "the cron entry does not run the path the script is installed to" >&2
+    yq e '.["guest-diag.cron"]' "$TMP/diag.yaml" >&2
     rm -rf "$TMP"; exit 1
   }
   rm -rf "$TMP"
+}
+
+@test "the appliance seed installs the emitter where cron will actually read it" {
+  # Two rules cron enforces silently, and both moved from the chart to the seed
+  # when the diagnostics moved onto their own disk: it ignores /etc/cron.d
+  # entries whose FILENAME carries anything but [A-Za-z0-9_-], and it refuses a
+  # group- or world-writable crontab. Neither failure says anything at runtime,
+  # so they are pinned here against the seed script that now does the installing.
+  seed=packages/system/vyos-router-image/overlay/vyos-appliance-seed.sh
+  [ -f "$seed" ] || { echo "appliance seed script missing at $seed" >&2; exit 1; }
+
+  target=$(grep -oE '/etc/cron\.d/[A-Za-z0-9._-]+' "$seed" | head -1)
+  [ -n "$target" ] || { echo "the seed installs no /etc/cron.d entry" >&2; exit 1; }
+  case "${target##*/}" in
+    *.*) echo "seed installs cron.d entry '${target##*/}', whose dot makes cron ignore it" >&2
+         exit 1 ;;
+  esac
+
+  grep -qE "install -m 0644 [^ ]+ ${target}\$" "$seed" || {
+    echo "the seed does not install ${target} mode 0644, which cron requires" >&2
+    grep -n 'cron' "$seed" >&2 || true
+    exit 1
+  }
 }
 
 @test "a chart that lost the emitter file fails the render instead of shipping silence" {
@@ -267,16 +266,16 @@ STUB
   # Off by default is what makes it safe to couple this to the console switch: a
   # production gateway that never asked for the console must not acquire a cron
   # job that writes to it.
-  paths=$(yq e '.write_files[].path' "$TMP/ud.yaml")
-  printf '%s\n' "$paths" | grep -q '^/opt/vyatta/etc/config/config.boot$' || {
+  # The configuration seed still ships; it is the diagnostics disk that must not.
+  grep -q '^// Release version: ' "$TMP/ud.yaml" || {
     echo "the config seed disappeared, which is not what this test is about" >&2
     rm -rf "$TMP"; exit 1
   }
-  printf '%s\n' "$paths" | grep -q 'cozy-guest-diag' && {
-    echo "diagnostics installed on a gateway that did not enable the console:" >&2
-    printf '%s\n' "$paths" >&2
+  if [ -s "$TMP/diag.yaml" ] && [ "$(cat "$TMP/diag.yaml")" != "null" ]; then
+    echo "diagnostics Secret rendered for a gateway that did not enable the console:" >&2
+    cat "$TMP/diag.yaml" >&2
     rm -rf "$TMP"; exit 1
-  }
+  fi
   rm -rf "$TMP"
 }
 
@@ -291,16 +290,15 @@ STUB
   # would supply it.
   render_userdata logSerialConsole=true
   [ ! -f "$TMP/helm.failed" ] || { cat "$TMP/helm.err" >&2; rm -rf "$TMP"; exit 1; }
-  paths=$(yq e '.write_files[].path' "$TMP/ud.yaml")
-  printf '%s\n' "$paths" | grep -q '^/opt/vyatta/etc/config/config.boot$' || {
+  grep -q '^// Release version: ' "$TMP/ud.yaml" || {
     echo "the config seed disappeared, which is not what this test is about" >&2
     rm -rf "$TMP"; exit 1
   }
-  printf '%s\n' "$paths" | grep -q 'cozy-guest-diag' && {
+  if [ -s "$TMP/diag.yaml" ] && [ "$(cat "$TMP/diag.yaml")" != "null" ]; then
     echo "a TENANT-SUPPLIED logSerialConsole installed the guest emitter; the switch is tenant-reachable again:" >&2
-    printf '%s\n' "$paths" >&2
+    cat "$TMP/diag.yaml" >&2
     rm -rf "$TMP"; exit 1
-  }
+  fi
   rm -rf "$TMP"
 }
 

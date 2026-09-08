@@ -249,71 +249,55 @@ network cannot reach a shell. When managementCIDR is empty (only reachable with
 allowOpenManagement=true) no firewall is stamped.
 */}}
 {{- define "site-router.cloudInitUserData" -}}
-{{- $ctx := .ctx -}}
-{{- $token := .token -}}
-{{- $cfg := include "site-router.configBoot" (dict "ctx" $ctx "token" $token) | trim -}}
-#cloud-config
-write_files:
-  - path: /opt/vyatta/etc/config/config.boot
-    owner: root:vyattacfg
-    permissions: '0660'
-    content: |
-{{ $cfg | indent 6 }}
-{{- if $ctx.Values._logSerialConsole }}
+{{- include "site-router.configBoot" (dict "ctx" .ctx "token" .token) | trim }}
+{{- end -}}
+
 {{- /*
-  Bring-up diagnostics, installed only when the platform or the e2e suite asked
-  for the serial console (`_logSerialConsole`, which the aggregated API refuses
-  from a tenant; see the block in values.yaml) — the emitter is useless without something capturing what it prints,
-  and the capture is much weaker without it, so the two share one switch.
+The diagnostics payload, carried on its own disk (see vm.yaml) and installed by
+the appliance seed. Rendered only when `_logSerialConsole` asks for it.
 
-  Two more write_files entries and NOTHING ELSE: deliberately no addition to
-  config.boot above. That config was captured verbatim from VyOS `save` and a
-  hand-edit that mis-serialises one node makes the whole file unparseable, which
-  would leave the guest unconfigured and unreachable — a diagnostics change must
-  not be able to cause the outage it exists to explain. write_files entries are
-  independent of each other, so nothing here can affect the config seed.
+Its own disk, rather than more files beside the configuration, so a diagnostics
+change cannot affect the configuration seed. That property is worth keeping from
+the cloud-init design this replaces, where the two travelled as independent
+`write_files` entries: the config.boot is captured verbatim from VyOS `save`, and
+a payload that breaks it leaves the guest unconfigured and unreachable, which is
+the very outage the diagnostics exist to explain.
 
-  cron, rather than a systemd unit or VyOS task-scheduler, for reasons the script
-  header records in full: cloud_final_modules is empty on this image so nothing
-  executable runs from cloud-init, and cron is the only starter that needs no
-  reload and does not depend on the config committing.
-*/}}
+cron rather than a systemd unit or the VyOS task-scheduler: cron needs no daemon
+reload to pick up a new file, and unlike the task-scheduler it does not depend on
+the configuration having committed, so it still reports when the commit is what
+failed.
+*/ -}}
+{{- define "site-router.diagFiles" -}}
+{{- $ctx := .ctx -}}
 {{- $diag := $ctx.Files.Get "files/guest-diag.sh" | trimSuffix "\n" }}
 {{- /*
-  Fail the render rather than ship an empty script. .Files.Get returns "" for a
-  path that is not in the PACKAGED chart, so a .helmignore that grows a /files
-  entry would install a cron job pointing at an empty file: the guest would boot,
-  cron would fire every minute, and the console would carry nothing but kernel
-  output — the exact silence this change exists to end, arrived at with every
-  render and test still green. Same fail-loud posture as
-  site-router.applianceDiskUrl and the managementCIDR fail-closed above.
-*/}}
+Fail the render rather than ship an empty script. .Files.Get returns "" for a
+path that is not in the PACKAGED chart, so a .helmignore that grows a /files
+entry would install a cron job pointing at an empty file: the guest would boot,
+cron would fire every minute, and the console would carry nothing but kernel
+output, which is the exact silence this exists to end, with every render and test
+still green. Same fail-loud posture as site-router.applianceDiskUrl.
+*/ -}}
 {{- if not $diag }}
 {{- fail "files/guest-diag.sh is empty or missing from the packaged chart, so _logSerialConsole would install a cron job with no script; check .helmignore" }}
 {{- end }}
-  - path: /config/scripts/cozy-guest-diag.sh
-    owner: root:root
-    permissions: '0755'
-    content: |
-{{ $diag | indent 6 }}
-  - path: /etc/cron.d/cozy-guest-diag
-    owner: root:root
-    permissions: '0644'
-    content: |
-      # Managed by the cozystack site-router chart (values._logSerialConsole).
-      #
-      # The filename carries no dot ON PURPOSE: Debian cron silently ignores
-      # /etc/cron.d entries whose names contain anything other than letters,
-      # digits, underscore and hyphen, so `cozy-guest-diag.cron` would install
-      # cleanly and never run.
-      #
-      # PATH is set explicitly because cron's default is /usr/bin:/bin, and the
-      # things worth reading here — systemctl, ss, swanctl — live in sbin. Without
-      # this every one of those fields would report a bare "not found".
-      SHELL=/bin/sh
-      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      * * * * * root /config/scripts/cozy-guest-diag.sh
-{{- end }}
+guest-diag.sh: |
+{{ $diag | indent 2 }}
+guest-diag.cron: |
+  # Managed by the cozystack site-router chart (values._logSerialConsole).
+  #
+  # The appliance seed installs this as /etc/cron.d/cozy-guest-diag. That name
+  # carries no dot ON PURPOSE: Debian cron silently ignores /etc/cron.d entries
+  # whose names contain anything other than letters, digits, underscore and
+  # hyphen, so a dotted name would install cleanly and never run.
+  #
+  # PATH is set explicitly because cron's default is /usr/bin:/bin, and the
+  # things worth reading here, systemctl and ss and swanctl, live in sbin.
+  # Without this every one of those fields would report a bare "not found".
+  SHELL=/bin/sh
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  * * * * * root /config/scripts/cozy-guest-diag.sh
 {{- end -}}
 
 {{/*
@@ -463,6 +447,6 @@ system {
 
 
 // Warning: Do not remove the following line.
-// vyos-config-version: "bgp@8:broadcast-relay@1:cluster@2:config-management@1:conntrack@6:conntrack-sync@2:container@3:dhcp-relay@2:dhcp-server@11:dhcpv6-server@6:dns-dynamic@4:dns-forwarding@4:firewall@20:flow-accounting@3:https@7:ids@2:interfaces@34:ipoe-server@4:ipsec@14:isis@3:l2tp@9:lldp@3:mdns@1:monitoring@2:nat@8:nat66@3:nhrp@1:ntp@3:openconnect@3:openvpn@5:ospf@2:pim@1:pki@1:policy@9:pppoe-server@12:pptp@5:qos@3:quagga@12:reverse-proxy@3:rip@1:rpki@2:snmp@3:ssh@3:sstp@6:system@33:vpp@6:vrf@4:vrrp@4:vyos-accel-ppp@2:wanloadbalance@4:webproxy@2"
-// Release version: 1.5-rolling-20260802
+// vyos-config-version: "bgp@6:cluster@2:config-management@1:conntrack@6:conntrack-sync@2:container@3:dhcp-relay@2:dhcp-server@11:dhcpv6-server@6:dns-dynamic@4:dns-forwarding@4:firewall@20:flow-accounting@3:https@7:ids@2:interfaces@34:ipoe-server@4:ipsec@14:isis@3:l2tp@9:lldp@3:monitoring@2:nat@8:nat66@3:nhrp@1:ntp@3:openconnect@3:openvpn@5:ospf@2:pim@1:policy@8:pppoe-server@12:pptp@5:qos@2:quagga@12:reverse-proxy@3:rip@1:rpki@2:salt@1:snmp@3:ssh@3:sstp@6:system@31:vpp@6:vrf@4:vrrp@4:wanloadbalance@4:webproxy@2"
+// Release version: 2026.03
 {{- end -}}
