@@ -29,7 +29,11 @@ spec:
       restartPolicy: Never
       containers:
         - name: kafka-backup
-          image: "{{ .Values.backupStrategyController.kafkaBackupClientImage }}"
+          # The driver fills .ClientImage per job with the target Kafka broker's
+          # own image (resolved from a live broker pod), so the Admin-API CLI it
+          # runs always matches the broker version - no separately pinned image to
+          # drift. Cleanup reuses the image the backup recorded.
+          image: {{ printf "{{ .ClientImage }}" | quote }}
           imagePullPolicy: IfNotPresent
           env:
             - name: MODE

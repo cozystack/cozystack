@@ -64,6 +64,20 @@ const (
 	kafkaClusterNamePrefix = "kafka-"
 
 	kafkaApplicationKind = "Kafka"
+
+	// The Strimzi cluster-operator stamps every pod of a Kafka cluster with the
+	// cluster name; a broker pod carries a container named "kafka". The driver
+	// resolves the client image from a live broker instead of a pinned value, so
+	// the Admin-API CLI it runs always matches the broker it talks to (any Kafka
+	// version the operator provisions, not only the chart default).
+	kafkaBrokerClusterLabel  = "strimzi.io/cluster"
+	kafkaBrokerContainerName = "kafka"
+
+	// kafkaStrategyClientImageKey records, on the produced Backup, the broker
+	// image the backup Job ran. Cleanup reuses it to run the S3 delete once the
+	// source cluster (and its brokers) may be gone and no broker is left to
+	// resolve an image from; the image itself still resolves in the registry.
+	kafkaStrategyClientImageKey = "kafka.strategy.backups.cozystack.io/client-image"
 )
 
 // kafkaClusterName maps an apps.cozystack.io/Kafka name to the Strimzi Kafka
@@ -123,7 +137,7 @@ func kafkaStrategyParameters(b *backupsv1alpha1.Backup) map[string]string {
 // object key and a restore reads the exact object its Backup wrote.
 func kafkaRenderContext(
 	app map[string]interface{},
-	releaseName, releaseNamespace, mode, backupName, artifactURI string,
+	releaseName, releaseNamespace, mode, backupName, artifactURI, clientImage string,
 	parameters map[string]string,
 	backup *backupsv1alpha1.Backup,
 ) map[string]any {
@@ -135,6 +149,11 @@ func kafkaRenderContext(
 		},
 		"Mode":       mode,
 		"BackupName": backupName,
+		// ClientImage is the container image the rendered Job runs. The chart
+		// leaves the strategy template's image as the placeholder "{{ .ClientImage }}"
+		// and the driver fills it with the target Kafka broker's own image, so the
+		// Admin-API CLI version always matches the broker.
+		"ClientImage": clientImage,
 		// ArtifactURI is the single source of truth for the stored object's
 		// location. On backup it is the rendered artifactURITemplate (also
 		// recorded on the Backup); on restore and cleanup it is that recorded
@@ -174,6 +193,27 @@ func renderKafkaArtifactURI(tmplStr string, ctxMap map[string]any) (string, erro
 		return "", fmt.Errorf("artifact URI template: %w", err)
 	}
 	return strings.TrimSpace(uri), nil
+}
+
+// resolveKafkaBrokerImage returns the container image of a running broker of the
+// Strimzi Kafka cluster, so the backup/restore Job runs the exact Admin-API CLI
+// the broker ships rather than a separately pinned guess that drifts from it.
+// Callers gate on the cluster being Ready first, so at least one broker pod
+// exists; an empty result is a hard error, never a silent fallback.
+func resolveKafkaBrokerImage(ctx context.Context, c client.Client, namespace, clusterName string) (string, error) {
+	pods := &corev1.PodList{}
+	if err := c.List(ctx, pods, client.InNamespace(namespace),
+		client.MatchingLabels{kafkaBrokerClusterLabel: clusterName}); err != nil {
+		return "", err
+	}
+	for i := range pods.Items {
+		for _, ct := range pods.Items[i].Spec.Containers {
+			if ct.Name == kafkaBrokerContainerName && ct.Image != "" {
+				return ct.Image, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no broker pod with a %q container found for Kafka cluster %s/%s", kafkaBrokerContainerName, namespace, clusterName)
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +288,14 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 		return r.kafkaBackupNotReady(ctx, j, "KafkaClusterNotReady", msg)
 	}
 
+	// Run the exact CLI the broker ships by resolving its image now that the
+	// cluster is Ready (so a broker pod exists), rather than from a chart pin that
+	// drifts from the broker version.
+	clientImage, err := resolveKafkaBrokerImage(ctx, r.Client, j.Namespace, kafkaClusterName(appName))
+	if err != nil {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("cannot resolve Kafka client image: %v", err))
+	}
+
 	// The artifact URI is the single source of truth for where the export is
 	// stored: render it once, inject it into the Job (which writes exactly that
 	// object), and record the same value on the Backup so restore/cleanup act on
@@ -256,11 +304,11 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 		return r.markBackupJobFailed(ctx, j, "Kafka strategy has no spec.artifactURITemplate; nothing records where the export is stored")
 	}
 	artifactURI, err := renderKafkaArtifactURI(strategy.Spec.ArtifactURITemplate,
-		kafkaRenderContext(app, appName, j.Namespace, kafkaStrategyModeBackup, j.Name, "", resolved.Parameters, nil))
+		kafkaRenderContext(app, appName, j.Namespace, kafkaStrategyModeBackup, j.Name, "", clientImage, resolved.Parameters, nil))
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to render Kafka strategy artifact URI: %v", err))
 	}
-	ctxMap := kafkaRenderContext(app, appName, j.Namespace, kafkaStrategyModeBackup, j.Name, artifactURI, resolved.Parameters, nil)
+	ctxMap := kafkaRenderContext(app, appName, j.Namespace, kafkaStrategyModeBackup, j.Name, artifactURI, clientImage, resolved.Parameters, nil)
 	rendered, err := renderKafkaTemplate(strategy.Spec.Template, ctxMap)
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to template Kafka strategy: %v", err))
@@ -283,7 +331,7 @@ func (r *BackupJobReconciler) reconcileKafka(ctx context.Context, j *backupsv1al
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		artifact, err := r.createKafkaBackupArtifact(ctx, j, resolved, artifactURI)
+		artifact, err := r.createKafkaBackupArtifact(ctx, j, resolved, artifactURI, clientImage)
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
 		}
@@ -373,11 +421,16 @@ func (r *BackupJobReconciler) createKafkaBackupArtifact(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
-	artifactURI string,
+	artifactURI, clientImage string,
 ) (*backupsv1alpha1.Backup, error) {
 	driverMD := map[string]string{kafkaScopeKey: kafkaScopeValue}
 	for k, v := range resolved.Parameters {
 		driverMD[kafkaStrategyParamPrefix+k] = v
+	}
+	// Record the broker image this backup ran so cleanup can reuse it once the
+	// source cluster is gone (no broker left to resolve one from).
+	if clientImage != "" {
+		driverMD[kafkaStrategyClientImageKey] = clientImage
 	}
 
 	backup := &backupsv1alpha1.Backup{
@@ -524,13 +577,21 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 		return r.kafkaRestoreNotReady(ctx, restoreJob, "KafkaClusterNotReady", msg)
 	}
 
+	// Resolve the client image from the TARGET broker (Ready above, so a broker
+	// pod exists), so a to-copy restore into a differently-versioned cluster runs
+	// that cluster's own CLI rather than the source's.
+	clientImage, err := resolveKafkaBrokerImage(ctx, r.Client, targetNamespace, kafkaClusterName(targetAppName))
+	if err != nil {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("cannot resolve Kafka client image: %v", err))
+	}
+
 	// Restore reads the object the Backup recorded, not a reconstruction, so a
 	// later change to the key layout cannot make older backups unrestorable.
 	if backup.Status.Artifact == nil || backup.Status.Artifact.URI == "" {
 		return r.markRestoreJobFailed(ctx, restoreJob, "Backup has no recorded artifact URI (status.artifact.uri); cannot locate the metadata object to restore")
 	}
 	artifactURI := backup.Status.Artifact.URI
-	ctxMap := kafkaRenderContext(app, targetAppName, targetNamespace, kafkaStrategyModeRestore, backup.Name, artifactURI, kafkaStrategyParameters(backup), backup)
+	ctxMap := kafkaRenderContext(app, targetAppName, targetNamespace, kafkaStrategyModeRestore, backup.Name, artifactURI, clientImage, kafkaStrategyParameters(backup), backup)
 	rendered, err := renderKafkaTemplate(strategy.Spec.Template, ctxMap)
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to template Kafka strategy: %v", err))
@@ -661,6 +722,15 @@ func (r *BackupReconciler) cleanupKafkaBackup(ctx context.Context, backup *backu
 	}
 	uri := backup.Status.Artifact.URI
 
+	// The delete runs through the image the backup recorded: the source cluster
+	// (and its brokers) may already be gone, so there is no broker left to resolve
+	// one from. Absent it, there is nothing to run the delete with - release the
+	// Backup rather than wedge it Terminating forever.
+	clientImage := backup.Spec.DriverMetadata[kafkaStrategyClientImageKey]
+	if clientImage == "" {
+		return r.releaseKafkaCleanup(ctx, backup, uri, "no recorded client image on the Backup"), nil
+	}
+
 	strategy := &strategyv1alpha1.Kafka{}
 	if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, strategy); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -691,9 +761,9 @@ func (r *BackupReconciler) cleanupKafkaBackup(ctx context.Context, backup *backu
 		if perr := ProjectBackupCredentials(ctx, r.Client, r.CredentialsConfig, backup.Namespace); perr != nil {
 			return r.releaseKafkaCleanup(ctx, backup, uri, fmt.Sprintf("cannot project credentials: %v", perr)), nil
 		}
-		// The template reads only .Mode and .ArtifactURI in cleanup mode (never
-		// .Application), so the source app being gone does not matter.
-		renderCtx := kafkaRenderContext(nil, backup.Spec.ApplicationRef.Name, backup.Namespace, kafkaStrategyModeCleanup, backup.Name, uri, nil, nil)
+		// The template reads only .Mode, .ArtifactURI and .ClientImage in cleanup
+		// mode (never .Application), so the source app being gone does not matter.
+		renderCtx := kafkaRenderContext(nil, backup.Spec.ApplicationRef.Name, backup.Namespace, kafkaStrategyModeCleanup, backup.Name, uri, clientImage, nil, nil)
 		rendered, rerr := renderKafkaTemplate(strategy.Spec.Template, renderCtx)
 		if rerr != nil {
 			return r.releaseKafkaCleanup(ctx, backup, uri, fmt.Sprintf("cleanup template render failed: %v", rerr)), nil

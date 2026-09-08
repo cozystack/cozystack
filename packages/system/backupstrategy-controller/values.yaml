@@ -75,31 +75,13 @@ backupStrategyController:
       cpu: "1"
       memory: 1Gi
       ephemeral-storage: 4Gi
-  # kafkaBackupClientImage is rendered into the Kafka metadata strategy Pod: it
-  # runs the kafka-*.sh Admin-API CLI (kafka-topics / kafka-configs) plus curl
-  # to read/write the metadata object in the system bucket. Unlike the Altinity
-  # client above, this genuinely needs the Kafka CLI, so it is the upstream
-  # Strimzi Kafka image (which also bundles bash, curl and ca-certificates). The
-  # tag matches the broker image the cluster-operator provisions by default:
-  # packages/apps/kafka sets no spec.kafka.version, so the operator picks its
-  # default from templates/_kafka_image_map.tpl (kafka 3.9.1 at operator
-  # 0.45.1-rc1). Reusing that ref means a node ALREADY running a broker for the
-  # backed-up cluster has the layers cached; the strategy Pod carries no
-  # nodeSelector/affinity, so on any other node it is a fresh ~691 MB pull before
-  # the backup starts. Pinned by digest. This ref has no automated producer: no
-  # Makefile stamps it and Renovate does not manage helm-values here, so it must
-  # be bumped by hand together with the kafka-operator default (same tracking gap
-  # as chBackupClientImage above). It is an upstream Strimzi image, not routed
-  # through `include "cozy-lib.image"` (the chart declares no cozy-lib
-  # dependency). Two known costs make a dedicated small client image (built by
-  # this package's Makefile, with its own producer) the right follow-up: the
-  # 691 MB size, and this image's curl (7.76.1), whose --aws-sigv4 omits a
-  # non-default port from the SigV4 canonical host (a 403 on any ported endpoint,
-  # fixed in curl 7.86.0). The strategy script works around it with --connect-to
-  # (sign a portless URL, redirect the connection to the real port); a modern
-  # curl would drop the workaround. The sibling drivers run curl 8.x and need
-  # neither.
-  kafkaBackupClientImage: "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1@sha256:ba52ed046b1dccdbd96f4e68057ce014d862a7c9c1fc670760c023b9aa09f23f"
+  # The Kafka metadata strategy carries no client image here: unlike the Altinity
+  # and RabbitMQ drivers (curl-only, so a shared platform-migrations image works),
+  # its driver runs the Kafka Admin-API CLI (kafka-topics / kafka-configs), which
+  # only the Strimzi broker image ships. So the controller resolves the image from
+  # the target Kafka broker at reconcile time (strategy-kafka-default.yaml renders
+  # the container image as the "{{ .ClientImage }}" placeholder), and records it on
+  # the Backup so cleanup can reuse it once the broker is gone. No pin to drift.
   replicas: 2
   debug: false
   metrics:

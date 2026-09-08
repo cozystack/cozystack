@@ -99,7 +99,7 @@ func TestKafkaStrategyParameters_RoundTrip(t *testing.T) {
 func TestRenderKafkaArtifactURI(t *testing.T) {
 	tmpl := "s3://bkt/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-topics.json"
 
-	ctxA := kafkaRenderContext(nil, "kafka-test", "tenant-root", kafkaStrategyModeBackup, "run-a", "", nil, nil)
+	ctxA := kafkaRenderContext(nil, "kafka-test", "tenant-root", kafkaStrategyModeBackup, "run-a", "", "", nil, nil)
 	uriA, err := renderKafkaArtifactURI(tmpl, ctxA)
 	if err != nil {
 		t.Fatalf("renderKafkaArtifactURI: %v", err)
@@ -108,7 +108,7 @@ func TestRenderKafkaArtifactURI(t *testing.T) {
 		t.Fatalf("uriA = %q", uriA)
 	}
 
-	ctxB := kafkaRenderContext(nil, "kafka-test", "tenant-root", kafkaStrategyModeBackup, "run-b", "", nil, nil)
+	ctxB := kafkaRenderContext(nil, "kafka-test", "tenant-root", kafkaStrategyModeBackup, "run-b", "", "", nil, nil)
 	uriB, _ := renderKafkaArtifactURI(tmpl, ctxB)
 	if uriA == uriB {
 		t.Fatalf("distinct BackupName must yield distinct key: %q == %q", uriA, uriB)
@@ -190,7 +190,7 @@ func newKafkaStrategy(name string) *strategyv1alpha1.Kafka {
 			ArtifactURITemplate: "s3://bkt/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-metadata.txt",
 			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 				RestartPolicy: corev1.RestartPolicyNever,
-				Containers:    []corev1.Container{{Name: "kafka-backup", Image: "kafka:test", Args: []string{"--mode={{ .Mode }}", "--uri={{ .ArtifactURI }}"}}},
+				Containers:    []corev1.Container{{Name: "kafka-backup", Image: "{{ .ClientImage }}", Args: []string{"--mode={{ .Mode }}", "--uri={{ .ArtifactURI }}"}}},
 			}},
 		},
 	}
@@ -299,12 +299,17 @@ func TestCreateKafkaBackupArtifact_StampsScope(t *testing.T) {
 	resolved := &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
 	}
-	backup, err := r.createKafkaBackupArtifact(context.Background(), bj, resolved, "s3://bkt/tenant/src/bj/kafka-metadata.txt")
+	backup, err := r.createKafkaBackupArtifact(context.Background(), bj, resolved, "s3://bkt/tenant/src/bj/kafka-metadata.txt", "quay.io/strimzi/kafka:test@sha256:deadbeef")
 	if err != nil {
 		t.Fatalf("createKafkaBackupArtifact: %v", err)
 	}
 	if got := backup.Spec.DriverMetadata[kafkaScopeKey]; got != kafkaScopeValue {
 		t.Fatalf("scope stamp = %q, want %q (driverMetadata=%v)", got, kafkaScopeValue, backup.Spec.DriverMetadata)
+	}
+	// The resolved broker image is recorded so cleanup can reuse it once the
+	// source cluster is gone.
+	if got := backup.Spec.DriverMetadata[kafkaStrategyClientImageKey]; got != "quay.io/strimzi/kafka:test@sha256:deadbeef" {
+		t.Fatalf("recorded client image = %q, want the resolved broker image (driverMetadata=%v)", got, backup.Spec.DriverMetadata)
 	}
 }
 
@@ -332,7 +337,7 @@ func TestCreateKafkaBackupArtifact_RejectsDifferentApp(t *testing.T) {
 	resolved := &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
 	}
-	if _, err := r.createKafkaBackupArtifact(context.Background(), bj, resolved, "s3://bkt/tenant/src/bj/kafka-metadata.txt"); err == nil {
+	if _, err := r.createKafkaBackupArtifact(context.Background(), bj, resolved, "s3://bkt/tenant/src/bj/kafka-metadata.txt", "quay.io/strimzi/kafka:test@sha256:deadbeef"); err == nil {
 		t.Fatal("expected an error adopting a same-named Backup for a different application, got nil")
 	} else if !strings.Contains(err.Error(), "different application") {
 		t.Fatalf("error = %v, want it to mention a different application", err)
@@ -409,7 +414,10 @@ func kafkaBackup(name, namespace string) *backupsv1alpha1.Backup {
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: kafkaAppRef("src"),
 			StrategyRef:    corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
-			DriverMetadata: map[string]string{kafkaScopeKey: kafkaScopeValue},
+			DriverMetadata: map[string]string{
+				kafkaScopeKey:               kafkaScopeValue,
+				kafkaStrategyClientImageKey: "quay.io/strimzi/kafka:test@sha256:deadbeef",
+			},
 		},
 		Status: backupsv1alpha1.BackupStatus{
 			Phase:    backupsv1alpha1.BackupPhaseReady,
@@ -481,6 +489,11 @@ func TestCleanupKafkaBackup_SpawnsDeleteJob(t *testing.T) {
 	if !foundURI {
 		t.Errorf("expected the recorded artifact URI injected into the cleanup pod, got args %v", args)
 	}
+	// Cleanup runs through the image the backup recorded (the source broker may be
+	// gone), injected via the .ClientImage placeholder.
+	if img := job.Spec.Template.Spec.Containers[0].Image; img != backup.Spec.DriverMetadata[kafkaStrategyClientImageKey] {
+		t.Errorf("cleanup Job image = %q, want the recorded client image %q", img, backup.Spec.DriverMetadata[kafkaStrategyClientImageKey])
+	}
 
 	// Once the delete Job completes, cleanup finishes (zero Result) and reaps the
 	// Job - so the Backup is only released after the object is gone.
@@ -500,5 +513,97 @@ func TestCleanupKafkaBackup_SpawnsDeleteJob(t *testing.T) {
 	}
 	if len(jobs.Items) != 0 {
 		t.Errorf("expected the completed cleanup Job to be reaped, got %d", len(jobs.Items))
+	}
+}
+
+func readyKafkaCluster(name, namespace string) *kafkatypes.Kafka {
+	return &kafkatypes.Kafka{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		Status: kafkatypes.KafkaStatus{Conditions: []metav1.Condition{
+			{Type: kafkatypes.ConditionTypeReady, Status: metav1.ConditionTrue, Reason: "Ready"},
+		}},
+	}
+}
+
+// kafkaBrokerPod builds a Strimzi broker pod the way the driver locates it: by
+// the cluster label, with the image on a container named "kafka".
+func kafkaBrokerPod(cluster, namespace, image string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      cluster + "-broker-0",
+			Labels:    map[string]string{kafkaBrokerClusterLabel: cluster},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: kafkaBrokerContainerName, Image: image}}},
+	}
+}
+
+// TestReconcileKafka_ResolvesBrokerImage pins that the backup Job runs the target
+// broker's own image (resolved from a live broker pod), not a chart pin. Dropping
+// the resolver leaves the container image the unrendered ".ClientImage"
+// placeholder, turning this red.
+func TestReconcileKafka_ResolvesBrokerImage(t *testing.T) {
+	const brokerImage = "quay.io/strimzi/kafka:0.45.1-kafka-3.9.1@sha256:abc"
+	now := metav1.Now()
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: kafkaAppRef("src"), BackupClassName: "cozy-default"},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	r, _ := newKafkaTestEnv(t, newKafkaApp("src", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(bj, newKafkaStrategy("cozy-default-kafka"),
+			readyKafkaCluster("kafka-src", "tenant"), kafkaBrokerPod("kafka-src", "tenant", brokerImage)))
+
+	if _, err := r.reconcileKafka(context.Background(), bj, &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+	}); err != nil {
+		t.Fatalf("reconcileKafka: %v", err)
+	}
+	jobs := &batchv1.JobList{}
+	if err := r.List(context.Background(), jobs, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected one backup Job, got %d", len(jobs.Items))
+	}
+	if img := jobs.Items[0].Spec.Template.Spec.Containers[0].Image; img != brokerImage {
+		t.Fatalf("backup Job image = %q, want the resolved broker image %q", img, brokerImage)
+	}
+}
+
+// TestReconcileKafka_FailsWhenNoBrokerImage pins the fail-closed behaviour: a
+// Ready cluster with no resolvable broker image terminates the BackupJob Failed
+// with a legible reason and creates no Job, rather than running one with an
+// empty/placeholder image.
+func TestReconcileKafka_FailsWhenNoBrokerImage(t *testing.T) {
+	now := metav1.Now()
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: kafkaAppRef("src"), BackupClassName: "cozy-default"},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	// Ready cluster, but no broker pod to resolve the image from.
+	r, _ := newKafkaTestEnv(t, newKafkaApp("src", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(bj, newKafkaStrategy("cozy-default-kafka"),
+			readyKafkaCluster("kafka-src", "tenant")))
+
+	if _, err := r.reconcileKafka(context.Background(), bj, &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+	}); err != nil {
+		t.Fatalf("reconcileKafka: %v", err)
+	}
+	got := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(bj), got); err != nil {
+		t.Fatalf("get bj: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("phase = %q, want Failed when the client image cannot be resolved", got.Status.Phase)
+	}
+	jobs := &batchv1.JobList{}
+	if err := r.List(context.Background(), jobs, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Fatalf("expected no batch Job when the image cannot be resolved, got %d", len(jobs.Items))
 	}
 }

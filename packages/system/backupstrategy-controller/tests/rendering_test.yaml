@@ -183,6 +183,12 @@ tests:
           path: spec.artifactURITemplate
           value: "s3://test-bucket/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-metadata.txt"
         template: templates/strategy-kafka-default.yaml
+      # The chart pins no client image: the controller fills the placeholder with
+      # the target broker's own image at reconcile time.
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "{{ .ClientImage }}"
+        template: templates/strategy-kafka-default.yaml
       - hasDocuments:
           count: 1
         template: templates/strategy-foundationdb-default.yaml
