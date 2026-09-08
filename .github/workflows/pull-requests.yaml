@@ -294,6 +294,15 @@ jobs:
     name: Unit & controller tests
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
+    env:
+      # Pinned, because `helm plugin install` without a constraint installs
+      # whatever the newest release is -- the flag's own help says so, and the
+      # install hook logs `No version found` on the way there. So an upstream
+      # release re-pointed the unit-test runner for every pull request in this
+      # repository, with no commit here and nothing in any log to say it had
+      # happened. Renovate keeps this line current, which makes such a change a
+      # reviewable diff instead of a surprise.
+      HELM_UNITTEST_VERSION: v1.1.2
     permissions:
       contents: read
     needs: ["plan"]
@@ -309,11 +318,57 @@ jobs:
         with:
           fetch-depth: 0
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
-      # self-hosted runner accreted. Install if absent (idempotent).
+      # self-hosted runner accreted, so this job used to fetch it from GitHub
+      # releases, unauthenticated, on every run, on the critical path of a
+      # required check. Those downloads are rate limited per egress IP and the
+      # runner fleet shares one: a throttled response arrives as a short error
+      # body, the install hook's checksum validation correctly rejects it, and
+      # the step dies under `bash -e` before a single test has run. Measured on
+      # run 34131816440: 92 bytes in 11 seconds, then `Failed to install
+      # helm-unittest`. Nothing about the tree was wrong and a plain re-run went
+      # green. The failure class was created in #2939, which moved CI to
+      # ephemeral runners; before that the plugin was simply already there.
+      #
+      # Three parts, because there are three distinct failures and no one part
+      # covers another. The cache keeps the steady state off the network
+      # altogether. The pin (above) stops an upstream release from moving the
+      # toolchain under us. The retry covers the cold path, where a cache miss
+      # still has to fetch and can still be throttled.
+      #
+      # The cache is scoped to the version, so a bump is a miss and a fresh
+      # fetch rather than a stale binary. A miss degrades to exactly the old
+      # behaviour plus the retry, so a cache service outage cannot make this
+      # job worse than it was.
+      - name: Restore the helm-unittest plugin
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.local/share/helm/plugins
+          key: helm-unittest-${{ runner.os }}-${{ runner.arch }}-${{ env.HELM_UNITTEST_VERSION }}
       - name: Set up test toolchain
         run: |
-          helm plugin list 2>/dev/null | grep -q unittest \
-            || helm plugin install https://github.com/helm-unittest/helm-unittest
+          # Deliberately NOT under `pipefail`. `grep -q` exits on its first
+          # match and closes the pipe, so the writer can take EPIPE and return
+          # non-zero after the match was already found; under pipefail that
+          # reads as "absent" and reinstalls a plugin that is present. The same
+          # shape under pipefail is what makes hack/check-rd-presets.sh report a
+          # preset as missing at random, so it is worth not repeating here.
+          if helm plugin list 2>/dev/null | grep -q unittest; then
+            echo "helm-unittest already present, no download needed"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            if helm plugin install https://github.com/helm-unittest/helm-unittest \
+                 --version "${HELM_UNITTEST_VERSION}"; then
+              exit 0
+            fi
+            # A half-installed plugin directory would make the next attempt fail
+            # as "plugin already exists" rather than retrying the download.
+            helm plugin uninstall unittest 2>/dev/null || true
+            echo "::warning title=helm-unittest install failed::attempt ${attempt} of 3, retrying"
+            sleep $(( attempt * 10 ))
+          done
+          echo "::error title=helm-unittest install failed::three attempts against ${HELM_UNITTEST_VERSION}; see the log above" >&2
+          exit 1
       # One make process owns all four runner CPUs. Each BATS file is a separate
       # prerequisite, so the long tail no longer runs as one nine-minute shell
       # loop; Helm and Go targets share the same bounded pool. Output stays

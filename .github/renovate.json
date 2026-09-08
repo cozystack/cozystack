@@ -20,6 +20,14 @@
   "customManagers": [
     {
       "customType": "regex",
+      "description": "Track the helm-unittest plugin version the unit-test job installs. The pin is a plain workflow env var rather than a `uses:` reference, so the github-actions manager cannot see it, and the alternative is what this replaced: `helm plugin install` with no constraint takes whatever upstream released last, so a publish there re-pointed the unit-test runner for every pull request with no diff here. Pinning without this manager trades that for the same problem with the sign flipped, a pin that ages silently.",
+      "managerFilePatterns": ["/^\\.github/workflows/pull-requests\\.yaml$/"],
+      "matchStrings": ["HELM_UNITTEST_VERSION:\\s+(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "depNameTemplate": "helm-unittest/helm-unittest",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
       "description": "Track the etcd image pinned in the extra/etcd EtcdCluster podTemplate. etcd-operator v0.4.5 bakes etcd 3.5.12 into its binary, and the chart overrides it with a hardcoded image string that the gomod/dockerfile managers cannot see. Without this manager the security-relevant pin (etcd 3.5.x releases are overwhelmingly security fixes) would silently age.",
       "managerFilePatterns": ["/^packages/extra/etcd/templates/etcd-cluster\\.yaml$/"],
       "matchStrings": ["image:\\s+(?<depName>quay\\.io/coreos/etcd):(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"],
