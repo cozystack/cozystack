@@ -85,6 +85,8 @@ mkdir -p "${WORK_DIR}/cozy-overlay" "${WORK_DIR}/cozy-debs"
 cp "${OVERLAY_DIR}"/* "${WORK_DIR}/cozy-overlay/"
 cp "${DEB_DIR}"/*.deb "${WORK_DIR}/cozy-debs/"
 cp "${PKG_DIR}/hack/inject-appliance.sh" "${WORK_DIR}/cozy-inject.sh"
+# cozy-inject.sh resolves this next to itself, so the two have to travel together.
+cp "${PKG_DIR}/hack/grub-unrestrict.sed" "${WORK_DIR}/grub-unrestrict.sed"
 
 # --privileged and -v /dev are required for the loop and overlay operations in
 # both the conversion and the injection. build-vyos-image itself must run under
