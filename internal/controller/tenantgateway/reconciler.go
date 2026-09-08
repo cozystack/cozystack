@@ -869,8 +869,6 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"},
 		{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
 	}
-	httpsAllowedRoutes := allowedRoutes.DeepCopy()
-	httpsAllowedRoutes.Kinds = port443Kinds
 
 	switch tgw.Spec.CertMode {
 	case gatewayv1alpha1.CertModeEdge:
@@ -883,8 +881,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		// carry it, and GRPCRoute stays out for parity with the HTTPS
 		// listeners. TLS-passthrough listeners are skipped below for
 		// the same reason.
-		edgeAllowedRoutes := allowedRoutes.DeepCopy()
-		edgeAllowedRoutes.Kinds = []gatewayv1.RouteGroupKind{
+		edgeKinds := []gatewayv1.RouteGroupKind{
 			{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"},
 		}
 		wildcardHost := gatewayv1.Hostname("*." + tgw.Spec.Apex)
@@ -895,14 +892,14 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 				Port:          80,
 				Protocol:      gatewayv1.HTTPProtocolType,
 				Hostname:      &wildcardHost,
-				AllowedRoutes: edgeAllowedRoutes,
+				AllowedRoutes: listenerAllowedRoutes(allowedRoutes, edgeKinds),
 			},
 			gatewayv1.Listener{
 				Name:          "edge-apex",
 				Port:          80,
 				Protocol:      gatewayv1.HTTPProtocolType,
 				Hostname:      &apexHost,
-				AllowedRoutes: edgeAllowedRoutes.DeepCopy(),
+				AllowedRoutes: listenerAllowedRoutes(allowedRoutes, edgeKinds),
 			},
 		)
 		// Same 2+N fan-out as the DNS-01 branch below, and the same
@@ -916,7 +913,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 				Port:          80,
 				Protocol:      gatewayv1.HTTPProtocolType,
 				Hostname:      &childWildcard,
-				AllowedRoutes: edgeAllowedRoutes.DeepCopy(),
+				AllowedRoutes: listenerAllowedRoutes(allowedRoutes, edgeKinds),
 			})
 		}
 	case gatewayv1alpha1.CertModeDNS01, gatewayv1alpha1.CertModeExistingSecret:
@@ -941,7 +938,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: httpsAllowedRoutes,
+				AllowedRoutes: listenerAllowedRoutes(allowedRoutes, port443Kinds),
 			},
 			gatewayv1.Listener{
 				Name:     "https-apex",
@@ -954,7 +951,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: httpsAllowedRoutes,
+				AllowedRoutes: listenerAllowedRoutes(allowedRoutes, port443Kinds),
 			},
 		)
 		// Per-child-apex wildcard listeners — every inheriting
@@ -982,7 +979,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: httpsAllowedRoutes.DeepCopy(),
+				AllowedRoutes: listenerAllowedRoutes(allowedRoutes, port443Kinds),
 			})
 		}
 	default:
@@ -1004,7 +1001,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: httpsAllowedRoutes.DeepCopy(),
+				AllowedRoutes: listenerAllowedRoutes(allowedRoutes, port443Kinds),
 			})
 		}
 	}
@@ -1030,8 +1027,6 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	}
 	for _, svc := range passthroughServices {
 		host := gatewayv1.Hostname(svc + "." + tgw.Spec.Apex)
-		passthroughAllowed := *allowedRoutes
-		passthroughAllowed.Kinds = port443Kinds
 		listeners = append(listeners, gatewayv1.Listener{
 			Name:     gatewayv1.SectionName("tls-" + svc),
 			Port:     443,
@@ -1040,7 +1035,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 			TLS: &gatewayv1.ListenerTLSConfig{
 				Mode: ptrTLSMode(gatewayv1.TLSModePassthrough),
 			},
-			AllowedRoutes: &passthroughAllowed,
+			AllowedRoutes: listenerAllowedRoutes(allowedRoutes, port443Kinds),
 		})
 	}
 
