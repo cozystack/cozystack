@@ -11,6 +11,7 @@
 package denyset
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 )
@@ -41,6 +42,15 @@ const (
 	// be programmed as a route that can never match cluster traffic. Reject it
 	// outright instead.
 	NetworkUnsupported = "unsupported-address-family"
+)
+
+// Machine-readable names for the values fields the deny set judges. They appear
+// in Rejection.Field and in the message a tenant sees, so a rejection says which
+// field to fix rather than only which address is wrong.
+const (
+	FieldRemoteCIDRs = "remoteCIDRs"
+	FieldStaticRoute = "staticRoutes[].destination"
+	FieldBGPNeighbor = "bgp.neighbors[].address"
 )
 
 // Always-reserved networks enforced unconditionally, independent of the
@@ -111,16 +121,20 @@ type ClusterNetworks struct {
 	LBPools     []string
 }
 
-// Rejection describes one remoteCIDR that failed validation: the offending value
-// exactly as it was declared, a machine label for the network it collides with
-// (one of the Network* constants, or NetworkMalformed when the value does not
-// parse) and the colliding network's CIDR (empty when the value is malformed).
-// Reason() is always ReasonInvalidRemoteCIDR.
+// Rejection describes one declared value that failed validation: the offending
+// value exactly as it was declared, the values field it came from, a machine
+// label for the network it collides with (one of the Network* constants, or
+// NetworkMalformed when the value does not parse) and the colliding network's
+// CIDR (empty when the value is malformed). Reason() is always
+// ReasonInvalidRemoteCIDR.
 type Rejection struct {
-	// RemoteCIDR is the offending remoteCIDR, verbatim as declared.
-	RemoteCIDR string
+	// Value is the offending declared value, verbatim.
+	Value string
+	// Field names the values field Value came from: one of the Field* constants.
+	// Empty is read as FieldRemoteCIDRs.
+	Field string
 	// Network is the machine label of the network the value collided with, or
-	// NetworkMalformed when RemoteCIDR could not be parsed as a CIDR.
+	// NetworkMalformed when Value could not be parsed.
 	Network string
 	// Collides is the colliding network's CIDR; empty when Network is
 	// NetworkMalformed.
@@ -130,17 +144,21 @@ type Rejection struct {
 // Reason returns the stable machine-readable reason for every rejection.
 func (Rejection) Reason() string { return ReasonInvalidRemoteCIDR }
 
-// Message returns a human-readable explanation naming the offending remoteCIDR
-// and the network it collides with, suitable for a Forbidden error or a Ready
-// condition message.
+// Message returns a human-readable explanation naming the offending value, the
+// field it was declared in and the network it collides with, suitable for a
+// Forbidden error or a Ready condition message.
 func (r Rejection) Message() string {
+	field := r.Field
+	if field == "" {
+		field = FieldRemoteCIDRs
+	}
 	if r.Network == NetworkMalformed {
-		return fmt.Sprintf("remoteCIDR %q is not a valid CIDR", r.RemoteCIDR)
+		return fmt.Sprintf("%s %q is not a valid address", field, r.Value)
 	}
 	if r.Network == NetworkUnsupported {
-		return fmt.Sprintf("remoteCIDR %q uses an unsupported address family; only IPv4 is supported", r.RemoteCIDR)
+		return fmt.Sprintf("%s %q uses an unsupported address family; only IPv4 is supported", field, r.Value)
 	}
-	return fmt.Sprintf("remoteCIDR %q overlaps the cluster %s network %s", r.RemoteCIDR, r.Network, r.Collides)
+	return fmt.Sprintf("%s %q overlaps the cluster %s network %s", field, r.Value, r.Network, r.Collides)
 }
 
 // denyNet is one network a remoteCIDR must not overlap, paired with its label.
@@ -149,21 +167,59 @@ type denyNet struct {
 	prefix netip.Prefix
 }
 
-// Validate returns one Rejection per remoteCIDR that is malformed or overlaps a
-// cluster network from clusters or one of the always-reserved networks. A
-// nil/empty result means every remoteCIDR is safe to route. Overlap between two
-// declared remote CIDRs is not a concern — routes are namespace-scoped, so
-// cross-tenant remote overlap is allowed; only overlap with the cluster networks
-// is rejected. The function is pure and hermetic: no I/O, no globals. Every
-// offender is reported (validation does not stop at the first).
-func Validate(remoteCIDRs []string, clusters ClusterNetworks) []Rejection {
-	deny := buildDenyNetworks(clusters)
+// Inputs are the tenant-declared values the deny set judges. Every field that
+// programs a route or opens a firewall rule on the gateway belongs here: a guard
+// that covers one of several inputs to the same subsystem reads as covering all
+// of them. What is deliberately NOT judged is recorded in the security model
+// alongside why.
+type Inputs struct {
+	// RemoteCIDRs are the declared remote networks, as prefixes.
+	RemoteCIDRs []string
+	// StaticRouteDestinations are staticRoutes[].destination, as prefixes. They
+	// reach `protocols static route` directly, and the schema pattern admits
+	// every prefix length including /0.
+	StaticRouteDestinations []string
+	// BGPNeighborAddresses are bgp.neighbors[].address, as bare hosts judged as
+	// /32. Besides `protocols bgp neighbor` each one also writes an input-filter
+	// accept for TCP 179, so an unjudged neighbour opens the management chain
+	// for an address the deny set would have rejected as a remoteCIDR.
+	BGPNeighborAddresses []string
+}
+
+// Validate returns one Rejection per declared value that is malformed or
+// overlaps a cluster network from clusters or one of the always-reserved
+// networks. A nil/empty result means every value is safe to program. Overlap
+// between two declared remote CIDRs is not a concern — routes are
+// namespace-scoped, so cross-tenant remote overlap is allowed; only overlap with
+// the cluster networks is rejected. Every offender is reported (validation does
+// not stop at the first).
+//
+// The error return is reserved for a cluster network that does not parse, which
+// is an operator-supplied ConfigMap value rather than a tenant one. It fails the
+// whole check closed: a malformed value overrides the platform default, so
+// dropping it silently would leave the deny set narrower than the default it
+// replaced. Apart from that the function is pure and hermetic: no I/O, no globals.
+func Validate(in Inputs, clusters ClusterNetworks) ([]Rejection, error) {
+	deny, err := buildDenyNetworks(clusters)
+	if err != nil {
+		return nil, err
+	}
 
 	var rejections []Rejection
-	for _, raw := range remoteCIDRs {
-		p, err := netip.ParsePrefix(raw)
+	rejections = append(rejections, validateField(FieldRemoteCIDRs, in.RemoteCIDRs, false, deny)...)
+	rejections = append(rejections, validateField(FieldStaticRoute, in.StaticRouteDestinations, false, deny)...)
+	rejections = append(rejections, validateField(FieldBGPNeighbor, in.BGPNeighborAddresses, true, deny)...)
+	return rejections, nil
+}
+
+// validateField judges one values field. host selects the input shape: a bare
+// address judged as a /32 (BGP neighbours) rather than a prefix.
+func validateField(field string, values []string, host bool, deny []denyNet) []Rejection {
+	var rejections []Rejection
+	for _, raw := range values {
+		p, err := parseDeclared(raw, host)
 		if err != nil {
-			rejections = append(rejections, Rejection{RemoteCIDR: raw, Network: NetworkMalformed})
+			rejections = append(rejections, Rejection{Value: raw, Field: field, Network: NetworkMalformed})
 			continue
 		}
 		p = p.Masked()
@@ -173,7 +229,7 @@ func Validate(remoteCIDRs []string, clusters ClusterNetworks) []Rejection {
 		// silently; reject it before any overlap test rather than program a route
 		// that can never match cluster traffic.
 		if !p.Addr().Is4() {
-			rejections = append(rejections, Rejection{RemoteCIDR: raw, Network: NetworkUnsupported})
+			rejections = append(rejections, Rejection{Value: raw, Field: field, Network: NetworkUnsupported})
 			continue
 		}
 
@@ -182,9 +238,10 @@ func Validate(remoteCIDRs []string, clusters ClusterNetworks) []Rejection {
 		// checked first.
 		if p.Bits() == 0 {
 			rejections = append(rejections, Rejection{
-				RemoteCIDR: raw,
-				Network:    NetworkDefaultRoute,
-				Collides:   "0.0.0.0/0",
+				Value:    raw,
+				Field:    field,
+				Network:  NetworkDefaultRoute,
+				Collides: "0.0.0.0/0",
 			})
 			continue
 		}
@@ -196,9 +253,10 @@ func Validate(remoteCIDRs []string, clusters ClusterNetworks) []Rejection {
 		for _, d := range deny {
 			if p.Overlaps(d.prefix) {
 				rejections = append(rejections, Rejection{
-					RemoteCIDR: raw,
-					Network:    d.label,
-					Collides:   d.prefix.String(),
+					Value:    raw,
+					Field:    field,
+					Network:  d.label,
+					Collides: d.prefix.String(),
 				})
 				break
 			}
@@ -207,19 +265,43 @@ func Validate(remoteCIDRs []string, clusters ClusterNetworks) []Rejection {
 	return rejections
 }
 
-// buildDenyNetworks assembles the ordered list of networks a remoteCIDR must not
-// overlap: the caller-supplied cluster networks (skipping empty/unparseable
-// fields, per the empty-field-skipped contract) followed by the always-reserved
-// link-local and loopback blocks.
-func buildDenyNetworks(c ClusterNetworks) []denyNet {
+// parseDeclared parses one declared value as a prefix. A host value (a BGP
+// neighbour address) is a bare address and becomes a single-host prefix, so the
+// same overlap test judges it.
+func parseDeclared(raw string, host bool) (netip.Prefix, error) {
+	if !host {
+		return netip.ParsePrefix(raw)
+	}
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	return netip.PrefixFrom(addr, addr.BitLen()), nil
+}
+
+// buildDenyNetworks assembles the ordered list of networks a declared value must
+// not overlap: the caller-supplied cluster networks (skipping empty fields, per
+// the empty-field-skipped contract) followed by the always-reserved link-local
+// and loopback blocks.
+//
+// An empty field is skipped, but a non-empty one that does not parse is an
+// error rather than a skip. The two are not the same: ClusterNetworksFromConfigMap
+// falls back to the platform default for an absent key, so a value that is
+// present and malformed has already displaced that default, and dropping it here
+// would leave the deny set with a hole exactly where an operator typo put it.
+func buildDenyNetworks(c ClusterNetworks) ([]denyNet, error) {
 	var out []denyNet
+	var errs []error
 	add := func(label, cidr string) {
 		if cidr == "" {
 			return
 		}
-		if p, err := netip.ParsePrefix(cidr); err == nil {
-			out = append(out, denyNet{label: label, prefix: p.Masked()})
+		p, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("cluster %s network %q is not a valid CIDR: %w", label, cidr, err))
+			return
 		}
+		out = append(out, denyNet{label: label, prefix: p.Masked()})
 	}
 
 	add(NetworkPod, c.PodCIDR)
@@ -234,5 +316,8 @@ func buildDenyNetworks(c ClusterNetworks) []denyNet {
 	add(NetworkLinkLocal, linkLocalCIDR)
 	add(NetworkLoopback, loopbackCIDR)
 
-	return out
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return out, nil
 }

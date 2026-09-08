@@ -6,12 +6,14 @@ package siterouter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -20,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/cozystack/cozystack/internal/siterouter/denyset"
 )
@@ -499,7 +502,7 @@ func TestValidateRemoteCIDRs_RecordsWarningEvent(t *testing.T) {
 		namespace: "tenant-test",
 		values:    map[string]interface{}{"remoteCIDRs": []interface{}{"10.244.7.0/24"}},
 	}
-	err := r.validateRemoteCIDRs(context.Background(), inst)
+	err := r.validateDeclaredNetworks(context.Background(), inst)
 	if err == nil {
 		t.Fatalf("expected deny-set rejection, got nil")
 	}
@@ -634,5 +637,145 @@ func TestReconcile_DoesNotAimMediationAtALineageLabelledNonGatewayPod(t *testing
 		if gw != "10.244.0.5" {
 			t.Errorf("route %s -> %s, want next hop 10.244.0.5 (the gateway pod)", dst, gw)
 		}
+	}
+}
+
+// TestReconcile_DeletesEvenWithoutTheKindLabel is the ordering regression. The
+// kind-label guard used to return before the deletion branch, so an instance
+// that lost the label after the controller had already put its finalizer on it
+// could never release it: reconcileDelete was unreachable, the HelmRelease sat
+// in Terminating and the namespace behind it never finished deleting, with no
+// Event and no condition to say why.
+//
+// Deletion now runs first and acquisition stays under the guard, which is safe
+// because reconcileDelete is itself a no-op without the finalizer — the next test
+// pins that half, so the hoist cannot quietly become a widening.
+func TestReconcile_DeletesEvenWithoutTheKindLabel(t *testing.T) {
+	hr := siteRouterHRWithValues(t, "demo", map[string]interface{}{
+		"remoteCIDRs": []interface{}{"172.31.0.0/16"},
+	})
+	hr.Finalizers = []string{finalizer}
+	delete(hr.Labels, appKindLabelKey) // the flip this test is about
+
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+	r := newTestReconciler(t, hr, ns)
+
+	if err := r.Delete(context.Background(), hr); err != nil {
+		t.Fatalf("delete HR: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: hr.Namespace, Name: hr.Name},
+	}); err != nil {
+		t.Fatalf("reconcile delete: %v", err)
+	}
+
+	got := &helmv2.HelmRelease{}
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: hr.Namespace, Name: hr.Name}, got)
+	if err == nil && controllerutil.ContainsFinalizer(got, finalizer) {
+		t.Fatalf("finalizer must be released even with the kind label gone, still %v", got.Finalizers)
+	}
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("get HR: %v", err)
+	}
+}
+
+// TestReconcile_UnclaimedForeignHRIsNotTornDown is the other side of that hoist:
+// an object this controller never claimed must still be left alone on delete.
+func TestReconcile_UnclaimedForeignHRIsNotTornDown(t *testing.T) {
+	hr := siteRouterHRWithValues(t, "demo", map[string]interface{}{})
+	delete(hr.Labels, appKindLabelKey)
+	// No finalizer: never claimed. Give it one that is not ours so the fake client
+	// keeps the object around after Delete and the assertion has something to read.
+	hr.Finalizers = []string{"example.com/other-controller"}
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "tenant-test",
+			Annotations: map[string]string{routesAnnotation: `[{"dst":"172.31.0.0/16","gw":"10.244.0.5"}]`},
+		},
+	}
+	r := newTestReconciler(t, hr, ns)
+
+	if err := r.Delete(context.Background(), hr); err != nil {
+		t.Fatalf("delete HR: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: hr.Namespace, Name: hr.Name},
+	}); err != nil {
+		t.Fatalf("reconcile delete: %v", err)
+	}
+
+	gotNS := &corev1.Namespace{}
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "tenant-test"}, gotNS); err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if ann := gotNS.Annotations[routesAnnotation]; !strings.Contains(ann, "172.31.0.0/16") {
+		t.Errorf("an unclaimed HR must not trigger teardown; namespace routes were touched: %q", ann)
+	}
+	if got := gotNS.Annotations[routesAnnotation]; got == "" {
+		t.Errorf("namespace route annotation must survive untouched, got empty")
+	}
+}
+
+// TestClassify_RecordsEveryFailure pins the inversion. classify used to record
+// an Event only for six enumerated reasons, so every other failure — a denied
+// nodes list, a rejected namespace patch, any error that is not a reconcileError
+// — reached the manager with nothing written on the object. With no status
+// condition by design (D9) the Event is the only channel there is.
+func TestClassify_RecordsEveryFailure(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReason string
+		wantSilent bool
+	}{
+		{
+			name:       "plain error gets the catch-all reason",
+			err:        errors.New("nodes is forbidden: cannot list resource nodes"),
+			wantReason: reasonReconcileFailed,
+		},
+		{
+			name:       "an enumerated typed wait keeps its own reason",
+			err:        &reconcileError{reason: reasonGatewayPending, message: "no gateway pod yet"},
+			wantReason: reasonGatewayPending,
+		},
+		{
+			name:       "a reason nobody enumerated is still recorded",
+			err:        &reconcileError{reason: "SomeReasonAddedLater", message: "whatever it was"},
+			wantReason: "SomeReasonAddedLater",
+		},
+		{
+			name:       "a reason its own step already recorded is not recorded twice",
+			err:        &reconcileError{reason: reasonConfigureFailed, message: "already reported at source"},
+			wantSilent: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hr := siteRouterHR("demo")
+			r := newTestReconciler(t, hr)
+			rec := record.NewFakeRecorder(8)
+			r.Recorder = rec
+			inst := &instance{hr: hr, name: "demo", namespace: "tenant-test"}
+
+			if _, err := r.classify(context.Background(), inst, tt.err); err == nil {
+				t.Fatalf("classify must return the hard error")
+			}
+
+			events := recordedEvents(rec)
+			if tt.wantSilent {
+				if len(events) != 0 {
+					t.Fatalf("expected no Event (the step already recorded one), got %+v", events)
+				}
+				return
+			}
+			if len(events) != 1 {
+				t.Fatalf("expected exactly one Event, got %+v", events)
+			}
+			if !strings.Contains(events[0], tt.wantReason) {
+				t.Errorf("Event %q should carry reason %q", events[0], tt.wantReason)
+			}
+		})
 	}
 }

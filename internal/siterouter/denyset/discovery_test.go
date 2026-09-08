@@ -60,7 +60,10 @@ func TestDiscoverClusterNetworksIncludesLiveNodeAndServiceAddresses(t *testing.T
 		t.Errorf("LBPools = %v, want %v", got.LBPools, want)
 	}
 
-	rejections := Validate([]string{"192.168.100.0/24", "198.51.100.0/24"}, got)
+	rejections, err := Validate(Inputs{RemoteCIDRs: []string{"192.168.100.0/24", "198.51.100.0/24"}}, got)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(rejections) != 2 || rejections[0].Network != NetworkNode || rejections[1].Network != NetworkLBPool {
 		t.Fatalf("live node/LB addresses must reject containing subnets, got %+v", rejections)
 	}
