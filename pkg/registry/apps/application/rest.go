@@ -607,6 +607,41 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
 	}
 
+	// This Update is a full PUT of an object rebuilt from the Application, so
+	// anything a CONTROLLER wrote on the live HelmRelease is dropped unless it is
+	// carried over here. Two classes have to be, and neither is theoretical:
+	// Flux puts finalizers.fluxcd.io on every HelmRelease it manages, and the
+	// site-router controller adds both a finalizer and a route-ownership
+	// annotation it needs on the next reconcile.
+	//
+	// Losing them is not merely untidy. A tenant edit followed closely by a
+	// delete removes the object with no finalizer left to run cleanup on, so the
+	// gateway's entries stay in the namespace's ovn.kubernetes.io/routes pointing
+	// at a dead pod IP — every pod created afterwards inherits a blackhole route,
+	// and a replacement instance declaring the same network can never take
+	// ownership back. The controller re-adds what it owns on its next reconcile,
+	// so the exposure is the gap until then; that gap is milliseconds normally
+	// and a rollout of a single-replica leader-elected controller otherwise.
+	//
+	// Finalizers carry over wholesale: no spec edit through this API is a
+	// statement about them. Annotations carry over selectively — the conversion
+	// owns exactly the AnnotationPrefix ones (they mirror the Application's own),
+	// so an unprefixed annotation on the live object was written by something
+	// else and is not this caller's to remove. A tenant cannot set one through
+	// this API in the first place, so preserving them takes nothing away.
+	helmRelease.Finalizers = cur.Finalizers
+	for k, v := range cur.Annotations {
+		if strings.HasPrefix(k, AnnotationPrefix) {
+			continue
+		}
+		if helmRelease.Annotations == nil {
+			helmRelease.Annotations = make(map[string]string)
+		}
+		if _, set := helmRelease.Annotations[k]; !set {
+			helmRelease.Annotations[k] = v
+		}
+	}
+
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
 	// Update the HelmRelease in Kubernetes.
