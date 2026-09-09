@@ -89,7 +89,7 @@ drbd_stall_act() {
   local peer="$2"
   local pct="$3"
   log "STALL detected: res=$res sync_peer=$peer percent_in_sync=$pct -> disconnect/connect"
-  drbdadm disconnect "${res}:${peer}" && drbdadm connect "$res" || log "WARN: action failed for ${res}:${peer}"
+  drbdadm disconnect "${res}:${peer}" && drbdadm connect "${res}:${peer}" || log "WARN: action failed for ${res}:${peer}"
 }
 
 # Track percent-in-sync progress across iterations.
