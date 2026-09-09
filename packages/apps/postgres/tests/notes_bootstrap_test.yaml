@@ -18,6 +18,19 @@ tests:
           pattern: 'pg-test-credentials Secret now holds freshly generated passwords'
       - matchRegexRaw:
           pattern: 'postgres\.cozystack\.io/credentials-pending'
+      # The flag is gated on bootstrap.enabled (init-script.yaml), which the
+      # restore driver clears at the START of convergence, so it is absent for
+      # the window before the init-job finishes. NOTES must not claim the flag
+      # persists "until this converges" and must point at an application login as
+      # the real check. Restoring that overclaim turns this red.
+      - notMatchRegexRaw:
+          pattern: 'until this converges'
+      - matchRegexRaw:
+          pattern: 'That flag tracks only'
+      - matchRegexRaw:
+          pattern: 'Do not read a missing flag as "converged"'
+      - matchRegexRaw:
+          pattern: 'Confirm convergence by logging in as an'
 
   # The credentials Secret is gated on .Values.users in init-script.yaml, so a
   # users-less restore never renders it. NOTES must not then describe that Secret
