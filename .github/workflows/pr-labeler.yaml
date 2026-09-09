@@ -108,6 +108,10 @@ jobs:
               // area/cilium
               'cilium':              'area/cilium',
 
+              // area/openbao
+              'openbao':             'area/openbao',
+              'openbao-central':     'area/openbao',
+
               // area/platform
               'platform':            'area/platform',
               'cert-manager':        'area/platform',
