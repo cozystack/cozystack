@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 set -euo pipefail
 # BIN is the Kafka CLI directory; the Strimzi image ships it at /opt/kafka/bin.
 # Overridable only so hack/kafka-backup-script.bats can point it at stubbed
