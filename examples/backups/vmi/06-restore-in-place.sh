@@ -26,7 +26,7 @@ spec:
     name: test
   options:
     failIfTargetExists: true # if true, restore will fail when the target resource already exists
-    keepOriginalPVC: true # renames original VMI PVC before restore to `<name>-orig-<hash>`, only for in-place restore
+    keepOriginalPVC: true # renames original VMI PVC before restore to <name>-orig-<hash>, only for in-place restore
     keepOriginalIpAndMac: true # restores original IP and MAC address of VMI via OVN annotations
 EOF
 

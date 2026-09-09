@@ -40,7 +40,7 @@ spec:
   options: # runtime.RawExtension, typed based on targetApplicationRef and current controller implementation (for additional restore options)
     targetNamespace: ${TARGET_NAMESPACE} # when set to a different namespace, triggers cross-namespace restore via Velero namespaceMapping
     failIfTargetExists: true # if true, restore will fail when the target resource already exists
-    keepOriginalPVC: false # renames original VMI PVC before restore to `<name>-orig-<hash>`, only for in-place restore
+    keepOriginalPVC: false # renames original VMI PVC before restore to <name>-orig-<hash>, only for in-place restore
     keepOriginalIpAndMac: false # restores original IP and MAC address of VMI via OVN annotations
 EOF
 

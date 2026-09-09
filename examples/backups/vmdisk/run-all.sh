@@ -10,8 +10,8 @@
 # waits for the restored disk to be Bound + Ready).
 #
 # Override NAMESPACE / BACKUP_STORAGE_LOCATION via the environment; see
-# 00-helpers.sh. hack/e2e-chainsaw/vminstance/ drives this file as the gated
-# vmdisk-2-backup-roundtrip test (VMI_E2E_S3_ROUNDTRIP=1).
+# 00-helpers.sh. hack/e2e-chainsaw/vminstance/ drives this file as the
+# vmdisk-2-backup-roundtrip e2e test, run un-gated in CI.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
