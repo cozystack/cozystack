@@ -95,6 +95,20 @@ const (
 	// large enough that 30 minutes isn't enough.
 	cnpgDefaultRestoreDeadline = 30 * time.Minute
 
+	// Floor on the post-convergence grace window for the bootstrap-disable
+	// step. That window must NOT collapse with restoreTimeoutSeconds: the
+	// timeout is a tenant knob for bounding the *recovery* wait (a tenant sets
+	// it short to fail fast on a stuck PITR target), while the disable step's
+	// window exists to absorb a transient control-plane blip (an apiserver
+	// restart, a webhook timeout) between convergence and clearing
+	// bootstrap.enabled. Sizing the grace off the tenant's recovery timeout
+	// let a short timeout terminate a genuinely-converged restore Failed on a
+	// brief blip - and a resubmit's purge-guard would then delete the healthy
+	// restored Cluster + PVCs. Floor the window here so the disable step keeps
+	// a window wide enough to ride out those blips regardless of how short the
+	// recovery timeout is.
+	cnpgPostConvergenceGraceMin = 5 * time.Minute
+
 	// Wall-clock cap on how long the WALArchiveReady gate can stay False
 	// before the RestoreJob is marked Failed. The gate fires before the
 	// destructive purge to confirm the backup's endWal is in object
@@ -989,7 +1003,9 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			// resubmit's purge-guard would then delete the healthy restored
 			// Cluster + PVCs. Only a failure that persists across the whole window
 			// AFTER convergence terminates as Failed; a transient one requeues.
-			grace := options.effectiveRestoreDeadline()
+			// The window is floored (see cnpgPostConvergenceGraceMin) so a short
+			// restoreTimeoutSeconds cannot shrink it below what a blip needs.
+			grace := options.effectiveBootstrapDisableGrace()
 			if cond := apimeta.FindStatusCondition(restoreJob.Status.Conditions, restoreCondRecoveryConverged); cond != nil &&
 				time.Since(cond.LastTransitionTime.Time) > grace {
 				return r.markRestoreJobFailedReason(ctx, restoreJob, "BootstrapDisableFailed", fmt.Sprintf(
@@ -1878,6 +1894,16 @@ func (o CNPGRestoreOptions) effectiveRestoreDeadline() time.Duration {
 		return time.Duration(o.RestoreTimeoutSeconds) * time.Second
 	}
 	return cnpgDefaultRestoreDeadline
+}
+
+// effectiveBootstrapDisableGrace returns the window the post-convergence
+// bootstrap-disable step is allowed to keep requeueing over a transient error
+// before it terminates the restore Failed. It floors effectiveRestoreDeadline
+// at cnpgPostConvergenceGraceMin so a tenant who sets a short
+// restoreTimeoutSeconds (to fail fast on a stuck recovery) does not also shrink
+// this unrelated grace window below what a control-plane blip needs to clear.
+func (o CNPGRestoreOptions) effectiveBootstrapDisableGrace() time.Duration {
+	return max(o.effectiveRestoreDeadline(), cnpgPostConvergenceGraceMin)
 }
 
 // effectiveWALArchiveDeadline returns the configured WAL-archive gate
