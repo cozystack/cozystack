@@ -16,6 +16,8 @@ EXPECTED=(
 )
 
 fail=0
+jq_err=$(mktemp)
+trap 'rm -f "$jq_err"' EXIT
 for f in packages/system/*-rd/cozyrds/*.yaml; do
   schema=$(yq -r '.spec.application.openAPISchema // ""' "$f")
   if [ -z "$schema" ]; then
@@ -24,12 +26,30 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
   # Pull every resourcesPreset enum out of the schema. Key on the JSON
   # path ending in "resourcesPreset" rather than a description heuristic,
   # so an unrelated field with "preset" in its description does not match.
-  enums=$(printf '%s' "$schema" | jq -r '
+  #
+  # Fed by here-string rather than `printf | jq`, and its status is read rather
+  # than discarded, because the two together produced a FALSE FAILURE naming a
+  # preset that is present in the file. On a 4-CPU/16 GiB runner under `make
+  # -j4`, jq processing the largest schema here would exit early; `printf` then
+  # died of EPIPE ("write error: Broken pipe"), `2>/dev/null || true` hid the
+  # status, and $enums held the PARTIAL output -- non-empty, so the guard below
+  # passed it through, and every expected value past the truncation point was
+  # reported missing. Seen on two PRs the same day naming different files and
+  # different presets, which is the tell: a real drift names the same pair every
+  # time. A here-string cannot raise EPIPE, and a non-zero jq is now named as an
+  # unreadable schema instead of being converted into a data defect.
+  if ! enums=$(jq -r '
     [paths(type == "object" and has("enum")) as $p
      | select($p[-1] == "resourcesPreset")
      | getpath($p).enum[]]
     | .[]
-  ' 2>/dev/null || true)
+  ' <<<"$schema" 2>"$jq_err"); then
+    echo "FAIL: $f openAPISchema could not be read, so its presets were not checked: $(tr '\n' ' ' <"$jq_err")" >&2
+    fail=1
+    continue
+  fi
+  # Empty stays a skip, not a failure: most RDs define no resourcesPreset at all,
+  # and only a read that ERRORED is evidence of anything.
   if [ -z "$enums" ]; then
     continue
   fi
@@ -47,8 +67,10 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
 done
 
 if [ "$fail" -ne 0 ]; then
-  echo "Some RD schemas are out of sync with the canonical preset set." >&2
-  echo "Run 'make generate' inside the affected chart directory." >&2
+  echo "One or more RD schemas did not pass the preset check above." >&2
+  echo "A missing preset is drift: run 'make generate' inside the affected chart" >&2
+  echo "directory. A schema that could not be read is not drift and carries its" >&2
+  echo "own reason on the line that names it." >&2
   exit 1
 fi
 echo "All RD schemas carry the full 47-preset enum."
