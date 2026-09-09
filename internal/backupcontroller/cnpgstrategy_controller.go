@@ -977,17 +977,25 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			// Recovery already converged - the data is restored and reachable as
 			// the CNPG superuser; only clearing bootstrap.enabled (the trigger for
 			// the init-job that reconciles the generated passwords onto the
-			// recovered roles) is failing. Bound the retries by the restore
-			// deadline so a persistent failure - the app deleted/renamed
-			// mid-restore, or a GitOps source that keeps re-asserting
-			// bootstrap.enabled - surfaces as Failed instead of sitting Running
-			// with RecoveryConverged=True forever with no terminal signal.
-			deadline := options.effectiveRestoreDeadline()
-			if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
+			// recovered roles) is failing. Give this step its OWN grace window,
+			// measured from when recovery converged (RecoveryConverged's
+			// LastTransitionTime), NOT from the restore StartedAt: the health
+			// check wins BEFORE the restore deadline on purpose (a large-DB
+			// recovery legitimately outlives it - see the health-before-deadline
+			// ordering above), so a StartedAt-based bound is often already past
+			// the deadline the instant this step first runs and would fail it on
+			// the FIRST transient error (an apiserver restart, a webhook timeout).
+			// That is exactly the false Failed the ordering exists to prevent: a
+			// resubmit's purge-guard would then delete the healthy restored
+			// Cluster + PVCs. Only a failure that persists across the whole window
+			// AFTER convergence terminates as Failed; a transient one requeues.
+			grace := options.effectiveRestoreDeadline()
+			if cond := apimeta.FindStatusCondition(restoreJob.Status.Conditions, restoreCondRecoveryConverged); cond != nil &&
+				time.Since(cond.LastTransitionTime.Time) > grace {
 				return r.markRestoreJobFailedReason(ctx, restoreJob, "BootstrapDisableFailed", fmt.Sprintf(
-					"recovery converged but clearing spec.bootstrap.enabled on Postgres app %s/%s kept failing for %s, so the restored copy's application credentials will not converge on their own: %v. "+
+					"recovery converged but clearing spec.bootstrap.enabled on Postgres app %s/%s kept failing for %s after convergence, so the restored copy's application credentials will not converge on their own: %v. "+
 						"The data is restored and reachable as the CNPG superuser; clear bootstrap.enabled on the app - and stop any GitOps source from re-asserting it - so the init-job reconciles the passwords.",
-					target.Namespace, target.AppName, deadline, err))
+					target.Namespace, target.AppName, grace, err))
 			}
 			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 		}
