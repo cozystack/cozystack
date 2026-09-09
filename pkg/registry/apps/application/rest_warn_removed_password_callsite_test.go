@@ -169,6 +169,8 @@ func TestWarnRemovedUserPasswords(t *testing.T) {
 		{"postgres warns on passwordRotation", postgresKind, `{"passwordRotation":3}`, true},
 		{"mariadb warns on passwordRotation", mariadbKind, `{"passwordRotation":1}`, true},
 		{"other kind quiet on passwordRotation", "Redis", `{"passwordRotation":3}`, false},
+		{"warns on a good user despite a non-object user", postgresKind, `{"users":{"good":{"password":"x"},"bad":"str"}}`, true},
+		{"warns on passwordRotation despite a non-object user", postgresKind, `{"passwordRotation":1,"users":{"bad":"str"}}`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
