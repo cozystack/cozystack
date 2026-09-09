@@ -4,12 +4,15 @@ metadata:
   name: kafka
   annotations:
     # The ZK->KRaft pre-upgrade migration Job (packages/apps/kafka/templates/migration-hook.yaml)
-    # can run for tens of minutes (broker rolling restarts through the Strimzi
-    # state machine). helm-controller waits on the pre-upgrade hook within the
-    # release timeout, which defaults to 10m — far below the migration. Raise it
-    # above the Job's activeDeadlineSeconds (2400s) so a real migration is not
-    # aborted and thrashed. Keep this above that Job deadline if either changes.
-    release.cozystack.io/helm-install-timeout: "45m"
+    # can run for hours: the migration itself is tens of minutes (broker rolling
+    # restarts through the Strimzi state machine), and when several Kafkas share a
+    # namespace the Job also drains the whole dataset off the shared "kafka" pool
+    # via a Cruise Control rebalance to free the name for the next cluster.
+    # helm-controller waits on the pre-upgrade hook within the release timeout
+    # (default 10m — far below this). Raise it above the Job's
+    # activeDeadlineSeconds (21600s = 6h) so a real drain is not aborted and
+    # thrashed. Keep this above that Job deadline if either changes.
+    release.cozystack.io/helm-install-timeout: "7h"
 spec:
   application:
     kind: Kafka

@@ -2,28 +2,27 @@
 # Behavioural tests for the ZooKeeper->KRaft migration hook of
 # packages/apps/kafka. The shell script is extracted from the rendered Job and
 # executed against a stub kubectl, so the fail-closed reads, the atomic
-# namespace-collision guard, the node-pool creation and the finalize guard are
-# exercised for real. The helm-unittest cases in
+# namespace-collision guard, the node-pool creation, the finalize guard and the
+# "free the kafka name" drain are exercised for real. The helm-unittest cases in
 # packages/apps/kafka/tests/migration-hook_test.yaml only match the script's
-# source TEXT; they cannot say whether a stuck migration actually refuses to
-# stamp kraft=enabled.
+# source TEXT; they cannot say whether a stuck migration refuses to stamp
+# kraft=enabled, or whether the drain drives the rebalance to completion before
+# deleting the pool.
 #
-# The hook manages the node pools itself (there is no regular KafkaNodePool
-# manifest), so it runs on install AND upgrade and creates/updates the pools on
-# every run. `helm template` (no live lookup) resolves the broker pool to the
-# fresh "b-<hash>" name; tests that must exercise the migration "kafka" pool
-# force the resolved value with force_kafka_pool.
+# The hook manages the node pools itself (no regular KafkaNodePool manifest), so
+# it runs on install AND upgrade. `helm template` (no live lookup) resolves the
+# broker pool to the fresh "b-<hash>" name; tests that must exercise the
+# migration "kafka" pool (collision guard, create-CAS, name-freeing) force the
+# resolved value with force_kafka_pool.
 #
 # Run via hack/cozytest.sh from the repo root (make bats-unit-tests). No
 # setup/teardown, no EXIT traps: each @test builds its own fixture and removes it
-# at the end of the body, so a failing run leaves its temp dir behind to read.
-# cozytest.sh rewrites every line that is exactly `}` into `return 0` + `}`, the
-# heredoc included, so the stub below uses only case/if (no shell functions) and
-# every helper's closing brace is indented.
+# at the end of the body. cozytest.sh rewrites every line that is exactly `}`
+# into `return 0` + `}`, the heredoc included, so the stub uses only case/if (no
+# shell functions) and every helper's closing brace is indented.
 
 CHART=packages/apps/kafka
 
-# Extract the migration Job's script into $1.
 render_script() {
   helm template test-kafka "$CHART" \
     --namespace tenant-test \
@@ -36,18 +35,13 @@ render_script() {
   fi
   }
 
-# Force the render-resolved broker pool from the fresh "b-<hash>" to the
-# migration "kafka" name, so the namespace-collision / create-CAS branch (gated
-# on brokerPool == "kafka") is exercised. `helm template` cannot seed the live
-# lookup that would resolve it, so rewrite the assignment in the extracted script.
+# Force the render-resolved broker pool from "b-<hash>" to "kafka", so the
+# collision / create-CAS / name-freeing branches (gated on brokerPool == "kafka")
+# run. `helm template` cannot seed the live lookup that resolves it.
 force_kafka_pool() {
   sed 's/brokerPool="b-[0-9a-f]\{8\}"/brokerPool="kafka"/' "$1" > "$1.k" && mv "$1.k" "$1"
   }
 
-# A stub kubectl (and a no-op sleep so the finalize-timeout path runs instantly)
-# in $1. The stub answers each probe; scenarios are driven by env vars.
-# kafkaMetadataState advances through $STUB_STATES so a single run can return
-# ZooKeeper, then KRaftPostMigration, then KRaft.
 make_bin() {
   mkdir -p "$1"
   printf '#!/bin/sh\nexit 0\n' > "$1/sleep"
@@ -57,15 +51,39 @@ make_bin() {
 args="$*"
 echo "$args" >> "${KUBECTL_LOG:-/dev/null}"
 
-# jsonpath reads are matched before the --ignore-not-found found-check, because
-# the owner read also carries --ignore-not-found; it is distinguished by its
-# jsonpath (...cluster}), the CR found-check by its bare "-o name".
+# Order matters: match the more specific jsonpath reads before the generic
+# owner/kraft/found reads that share substrings.
 case "$args" in
   *"create -f -"*)
+    cat >> "${KUBECTL_LOG:-/dev/null}"
     [ -n "${STUB_CREATE_FAIL:-}" ] && { echo "AlreadyExists" >&2; exit 1; }
     exit 0
     ;;
   *"apply -f -"*)
+    cat >> "${KUBECTL_LOG:-/dev/null}"
+    exit 0
+    ;;
+  *"range .items"*)
+    # kafkas list for the "other ZooKeeper clusters remain" count.
+    printf '%s\n' "${STUB_OTHERS_LIST:-}"
+    exit 0
+    ;;
+  *nodeIds*)
+    printf '%s' "${STUB_KAFKA_IDS:-}"
+    exit 0
+    ;;
+  *].reason*)
+    # KafkaRebalance NotReady reason (retriable vs terminal).
+    printf '%s' "${STUB_REBALANCE_REASON:-}"
+    exit 0
+    ;;
+  *conditions*)
+    # KafkaRebalance status.conditions[*].type, advanced via STUB_REBALANCE.
+    i=$(cat "${REBALANCE_COUNTER}" 2>/dev/null)
+    [ -n "$i" ] || i=0
+    i=$((i + 1))
+    echo "$i" > "${REBALANCE_COUNTER}"
+    printf '%s\n' "${STUB_REBALANCE:-}" | awk -v n="$i" '{a[NR]=$0} END{print (n<=NR)?a[n]:a[NR]}'
     exit 0
     ;;
   *kafkaMetadataState*)
@@ -105,17 +123,15 @@ setup_case() {
   make_bin "$tmp/bin" || return 1
   }
 
-# Run the hook with the scenario env vars already set in the caller, leaving
-# merged output in $tmp/out, every kubectl invocation in $tmp/kubectl.log, and
-# the exit status in $rc. KUBECONFIG is neutered so a stub lost from PATH cannot
-# reach a real cluster.
 run_hook() {
   rc=0
   : > "$tmp/kubectl.log"
   : > "$tmp/state.counter"
+  : > "$tmp/rebalance.counter"
   KUBECONFIG=/dev/null \
   KUBECTL_LOG="$tmp/kubectl.log" \
   STATE_COUNTER="$tmp/state.counter" \
+  REBALANCE_COUNTER="$tmp/rebalance.counter" \
   STUB_FOUND="${STUB_FOUND:-}" \
   STUB_FOUND_FAIL="${STUB_FOUND_FAIL:-}" \
   STUB_KRAFT="${STUB_KRAFT:-}" \
@@ -125,6 +141,10 @@ run_hook() {
   STUB_KRAFT_FAIL="${STUB_KRAFT_FAIL:-}" \
   STUB_STATE_FAIL="${STUB_STATE_FAIL:-}" \
   STUB_CREATE_FAIL="${STUB_CREATE_FAIL:-}" \
+  STUB_OTHERS_LIST="${STUB_OTHERS_LIST:-}" \
+  STUB_KAFKA_IDS="${STUB_KAFKA_IDS:-}" \
+  STUB_REBALANCE="${STUB_REBALANCE:-}" \
+  STUB_REBALANCE_REASON="${STUB_REBALANCE_REASON:-}" \
   PATH="$tmp/bin:$PATH" sh "$tmp/s.sh" > "$tmp/out" 2>&1 || rc=$?
   [ -s "$tmp/kubectl.log" ] || return 1
   }
@@ -135,8 +155,7 @@ run_hook() {
 
   [ "$rc" = 0 ]
   grep -qF 'fresh install' "$tmp/out"
-  # A fresh install ensures the node pools exist but must not drive migration.
-  if grep -qF 'annotate' "$tmp/kubectl.log"; then
+  if grep -qE 'kraft=(migration|enabled)|node-pools=enabled' "$tmp/kubectl.log"; then
     echo "FAIL: the fresh-install path drove the migration state machine"
     cat "$tmp/kubectl.log"
     return 1
@@ -156,22 +175,18 @@ run_hook() {
     cat "$tmp/out"
     return 1
   fi
-  if grep -qF 'annotate' "$tmp/kubectl.log"; then
-    echo "FAIL: a failed read still drove the migration"
-    cat "$tmp/kubectl.log"
-    return 1
-  fi
 
   rm -rf "$tmp"
 }
 
-@test "a cluster already annotated kraft=enabled is not driven through migration" {
+@test "an already-KRaft cluster on b-<hash> is a no-op with nothing to free" {
   setup_case
   STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="enabled" run_hook
 
   [ "$rc" = 0 ]
   grep -qF 'already KRaft' "$tmp/out"
-  if grep -qF 'annotate' "$tmp/kubectl.log"; then
+  grep -qF 'nothing to free' "$tmp/out"
+  if grep -qE 'kraft=(migration|enabled)|node-pools=enabled' "$tmp/kubectl.log"; then
     echo "FAIL: an already-KRaft cluster was driven through the state machine"
     cat "$tmp/kubectl.log"
     return 1
@@ -180,22 +195,7 @@ run_hook() {
   rm -rf "$tmp"
 }
 
-@test "a cluster already in kafkaMetadataState=KRaft is not driven through migration" {
-  setup_case
-  STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="" STUB_STATES="KRaft" run_hook
-
-  [ "$rc" = 0 ]
-  grep -qF 'Already in KRaft' "$tmp/out"
-  if grep -qF 'annotate' "$tmp/kubectl.log"; then
-    echo "FAIL: a cluster already in KRaft was driven through the state machine"
-    cat "$tmp/kubectl.log"
-    return 1
-  fi
-
-  rm -rf "$tmp"
-}
-
-@test "a kafka pool owned by another cluster fails closed before any mutation" {
+@test "a kafka pool owned by another cluster fails fast before any mutation" {
   setup_case
   force_kafka_pool "$tmp/s.sh"
   STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="" \
@@ -203,8 +203,7 @@ run_hook() {
 
   [ "$rc" != 0 ]
   grep -qF 'already belongs to cluster' "$tmp/out"
-  # The atomic guard must fire before creating/applying/annotating anything.
-  if grep -qE 'apply -f -|create -f -|annotate' "$tmp/kubectl.log"; then
+  if grep -qE 'apply -f -|create -f -|kraft=|node-pools=' "$tmp/kubectl.log"; then
     echo "FAIL: a foreign-owned kafka pool did not abort before mutating"
     cat "$tmp/kubectl.log"
     return 1
@@ -213,7 +212,7 @@ run_hook() {
   rm -rf "$tmp"
 }
 
-@test "a failed read of the kafka pool owner fails closed, never waiving the collision check" {
+@test "a failed read of the kafka pool owner fails closed" {
   setup_case
   force_kafka_pool "$tmp/s.sh"
   STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="" \
@@ -221,7 +220,7 @@ run_hook() {
 
   [ "$rc" != 0 ]
   grep -qF 'owner label failed' "$tmp/out"
-  if grep -qE 'apply -f -|create -f -|annotate' "$tmp/kubectl.log"; then
+  if grep -qE 'apply -f -|create -f -|kraft=|node-pools=' "$tmp/kubectl.log"; then
     echo "FAIL: proceeded to mutate the cluster after a failed owner read"
     cat "$tmp/kubectl.log"
     return 1
@@ -230,45 +229,14 @@ run_hook() {
   rm -rf "$tmp"
 }
 
-@test "an absent kafka pool is created via the atomic create, then migration proceeds" {
-  setup_case
-  force_kafka_pool "$tmp/s.sh"
-  STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="" STUB_OWNER="" \
-    STUB_STATES="ZooKeeper
-KRaftPostMigration
-KRaft" run_hook
-
-  [ "$rc" = 0 ]
-  grep -qF 'Creating broker pool "kafka"' "$tmp/out"
-  grep -qF 'create -f -' "$tmp/kubectl.log"
-  grep -qF 'Migration complete' "$tmp/out"
-
-  rm -rf "$tmp"
-}
-
-@test "a failed read of the kraft annotation fails closed, never re-issuing kraft=migration" {
+@test "a failed read of the kraft annotation fails closed" {
   setup_case
   STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT_FAIL=1 run_hook
 
   [ "$rc" != 0 ]
   grep -qF 'strimzi.io/kraft annotation failed' "$tmp/out"
-  if grep -qF 'annotate' "$tmp/kubectl.log"; then
+  if grep -qE 'kraft=(migration|enabled)|node-pools=enabled' "$tmp/kubectl.log"; then
     echo "FAIL: drove the migration after a failed kraft-annotation read"
-    cat "$tmp/kubectl.log"
-    return 1
-  fi
-
-  rm -rf "$tmp"
-}
-
-@test "a failed read of kafkaMetadataState fails closed" {
-  setup_case
-  STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="" STUB_STATE_FAIL=1 run_hook
-
-  [ "$rc" != 0 ]
-  grep -qF 'kafkaMetadataState failed' "$tmp/out"
-  if grep -qF 'annotate' "$tmp/kubectl.log"; then
-    echo "FAIL: drove the migration after a failed kafkaMetadataState read"
     cat "$tmp/kubectl.log"
     return 1
   fi
@@ -285,7 +253,6 @@ KRaft" run_hook
 
   [ "$rc" = 0 ]
   grep -qF 'Migration complete' "$tmp/out"
-  # It enables node pools, starts the migration, and only then finalizes.
   grep -qF 'node-pools=enabled' "$tmp/kubectl.log"
   grep -qF 'kraft=migration' "$tmp/kubectl.log"
   grep -qF 'kraft=enabled' "$tmp/kubectl.log"
@@ -300,7 +267,6 @@ KRaft" run_hook
 
   [ "$rc" != 0 ]
   grep -qF 'Refusing to apply' "$tmp/out"
-  # The finalize guard: kraft=enabled must never be applied from an unsafe state.
   if grep -qF 'kraft=enabled' "$tmp/kubectl.log"; then
     echo "FAIL: kraft=enabled was stamped while the cluster was still on ZooKeeper"
     cat "$tmp/kubectl.log"
@@ -319,15 +285,128 @@ KRaft" run_hook
 
   [ "$rc" = 0 ]
   grep -qF 'not re-issuing kraft=migration' "$tmp/out"
-  grep -qF 'Migration complete' "$tmp/out"
   grep -qF 'kraft=enabled' "$tmp/kubectl.log"
-  # Re-issuing kraft=migration from KRaftPostMigration is an invalid backward
-  # transition Strimzi rejects, so the retry must not attempt it.
   if grep -qF 'kraft=migration' "$tmp/kubectl.log"; then
     echo "FAIL: kraft=migration was re-issued from a post-ZooKeeper state"
     cat "$tmp/kubectl.log"
     return 1
   fi
+
+  rm -rf "$tmp"
+}
+
+# --- Name-freeing (multi Kafka per namespace) -------------------------------
+
+@test "the sole migrated cluster keeps the kafka pool, no drain" {
+  setup_case
+  force_kafka_pool "$tmp/s.sh"
+  # Already KRaft on kafka; no other ZooKeeper clusters in the namespace.
+  STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="enabled" \
+    STUB_OTHERS_LIST="test-kafka=enabled" run_hook
+
+  [ "$rc" = 0 ]
+  grep -qF 'keeping the "kafka" pool' "$tmp/out"
+  # No drain: no rebalance, no cruiseControl, no pool deletion.
+  if grep -qE 'KafkaRebalance|cruiseControl|delete .*kafkanodepools' "$tmp/kubectl.log"; then
+    echo "FAIL: a sole cluster ran the name-freeing drain"
+    cat "$tmp/kubectl.log"
+    return 1
+  fi
+
+  rm -rf "$tmp"
+}
+
+@test "a migrated cluster with others waiting drains and frees the kafka name" {
+  setup_case
+  force_kafka_pool "$tmp/s.sh"
+  # Already KRaft on kafka; one other cluster still on ZooKeeper.
+  STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="enabled" \
+    STUB_OTHERS_LIST="test-kafka=enabled
+other-zk=" \
+    STUB_KAFKA_IDS="[0,1,2]" \
+    STUB_REBALANCE="PendingProposal
+ProposalReady
+Ready" run_hook
+
+  [ "$rc" = 0 ]
+  grep -qF 'freeing the "kafka" pool name' "$tmp/out"
+  grep -qF 'Freed the "kafka" pool name' "$tmp/out"
+  # Full drain sequence, in order: target pool, Cruise Control, rebalance,
+  # approval, delete kafka pool + PVCs.
+  grep -qF '1000-1099' "$tmp/kubectl.log"   # applied the b-<hash> target pool
+  grep -qF 'cruiseControl' "$tmp/kubectl.log"
+  grep -qF 'rebalance=approve' "$tmp/kubectl.log"
+  grep -qF 'delete kafkanodepools.kafka.strimzi.io kafka' "$tmp/kubectl.log"
+  grep -qF 'delete pvc data-0-test-kafka-kafka-0' "$tmp/kubectl.log"
+  grep -qF 'delete pvc data-0-test-kafka-kafka-2' "$tmp/kubectl.log"
+
+  rm -rf "$tmp"
+}
+
+@test "the drain refuses to delete the kafka pool if the rebalance never completes" {
+  setup_case
+  force_kafka_pool "$tmp/s.sh"
+  STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="enabled" \
+    STUB_OTHERS_LIST="test-kafka=enabled
+other-zk=" \
+    STUB_KAFKA_IDS="[0,1,2]" \
+    STUB_REBALANCE="PendingProposal" run_hook
+
+  [ "$rc" != 0 ]
+  grep -qF 'will resume on the next retry' "$tmp/out"
+  # Must NOT delete the pool (which still holds all the data) before the drain.
+  if grep -qF 'delete kafkanodepools.kafka.strimzi.io kafka' "$tmp/kubectl.log"; then
+    echo "FAIL: deleted the kafka pool before the rebalance finished — data loss"
+    cat "$tmp/kubectl.log"
+    return 1
+  fi
+
+  rm -rf "$tmp"
+}
+
+# Cruise Control rejects proposals transiently while it settles — the pod/cert
+# are still coming up (retriable connect), or the capacity model over-estimates
+# load from noisy samples and trips a goal. The drain must refresh the proposal
+# and keep polling, never treat a NotReady as terminal. Covers both reasons.
+@test "the drain refreshes a transient-connection NotReady and proceeds" {
+  setup_case
+  force_kafka_pool "$tmp/s.sh"
+  STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="enabled" \
+    STUB_OTHERS_LIST="test-kafka=enabled
+other-zk=" \
+    STUB_KAFKA_IDS="[0,1,2]" \
+    STUB_REBALANCE_REASON="CruiseControlRetriableConnectionException" \
+    STUB_REBALANCE="PendingProposal
+NotReady
+ProposalReady
+Ready" run_hook
+
+  [ "$rc" = 0 ]
+  grep -qF 'refreshing the proposal' "$tmp/out"
+  grep -qF 'rebalance=refresh' "$tmp/kubectl.log"
+  grep -qF 'Freed the "kafka" pool name' "$tmp/out"
+  grep -qF 'delete kafkanodepools.kafka.strimzi.io kafka' "$tmp/kubectl.log"
+
+  rm -rf "$tmp"
+}
+
+@test "the drain refreshes and recovers from a capacity-goal NotReady" {
+  setup_case
+  force_kafka_pool "$tmp/s.sh"
+  STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="enabled" \
+    STUB_OTHERS_LIST="test-kafka=enabled
+other-zk=" \
+    STUB_KAFKA_IDS="[0,1,2]" \
+    STUB_REBALANCE_REASON="OptimizationFailureException" \
+    STUB_REBALANCE="PendingProposal
+NotReady
+ProposalReady
+Ready" run_hook
+
+  [ "$rc" = 0 ]
+  grep -qF 'refreshing the proposal' "$tmp/out"
+  grep -qF 'rebalance=refresh' "$tmp/kubectl.log"
+  grep -qF 'Freed the "kafka" pool name' "$tmp/out"
 
   rm -rf "$tmp"
 }

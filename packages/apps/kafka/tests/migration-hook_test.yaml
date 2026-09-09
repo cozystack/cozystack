@@ -88,6 +88,56 @@ tests:
           path: rules[0].verbs
           content: create
         documentIndex: 1
+      # Name-freeing needs to drive rebalances, delete the drained pool, and
+      # clean up its PVCs.
+      - contains:
+          path: rules[0].resources
+          content: kafkarebalances
+        documentIndex: 1
+      - contains:
+          path: rules[0].verbs
+          content: delete
+        documentIndex: 1
+      - contains:
+          path: rules[1].resources
+          content: persistentvolumeclaims
+        documentIndex: 1
+
+  # When it holds the shared "kafka" pool and other ZooKeeper clusters remain,
+  # the hook drains all data onto its own "b-<hash>" pool via a Cruise Control
+  # KafkaRebalance and only then deletes the "kafka" pool — so the name frees for
+  # the next cluster without losing data.
+  - it: frees the kafka pool name by draining via a rebalance
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'other ZooKeeper Kafka cluster'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'kind: KafkaRebalance'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'mode: remove-brokers'
+        documentIndex: 3
+      # A mandatory broker evacuation must not be blocked by capacity hard goals.
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'skipHardGoalCheck: true'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'next-node-ids: "\[1000-1099\]"'
+        documentIndex: 3
+      # The pool is deleted only after the rebalance is Ready — never before.
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'Rebalance complete[\s\S]*delete "\$np" kafka'
+        documentIndex: 3
 
   # The hook creates the broker pool under the render-resolved name
   # (kafka.brokerPoolName): "kafka" for a migrating ZooKeeper cluster, "b-<hash>"
@@ -337,11 +387,11 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'if \[ "\$kraft" = "enabled" \]; then'
+          pattern: 'if \[ "\$kraft" != "enabled" \] && \[ "\$state" != "KRaft" \]'
         documentIndex: 3
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: "already KRaft .strimzi.io/kraft=enabled."
+          pattern: "Kafka is already KRaft"
         documentIndex: 3
 
   # Preserve failed-Job logs for a post-mortem: only before-hook-creation, never
