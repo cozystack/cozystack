@@ -329,6 +329,36 @@ func TestEffectiveRestoreDeadline(t *testing.T) {
 	}
 }
 
+// TestEffectiveBootstrapDisableGrace pins the floor on the post-convergence
+// bootstrap-disable window: a tenant who sets a short restoreTimeoutSeconds to
+// fail fast on a stuck recovery must NOT thereby shrink the disable grace below
+// cnpgPostConvergenceGraceMin, or a brief control-plane blip would terminate a
+// genuinely-converged restore Failed and expose the healthy Cluster to a
+// resubmit's purge-guard. The window still tracks a *longer* recovery timeout
+// (a big-DB restore keeps its generous window).
+func TestEffectiveBootstrapDisableGrace(t *testing.T) {
+	cases := []struct {
+		name string
+		opts CNPGRestoreOptions
+		want time.Duration
+	}{
+		{"unset uses default, above floor", CNPGRestoreOptions{}, cnpgDefaultRestoreDeadline},
+		{"short timeout floored", CNPGRestoreOptions{RestoreTimeoutSeconds: 60}, cnpgPostConvergenceGraceMin},
+		{"long timeout kept", CNPGRestoreOptions{RestoreTimeoutSeconds: 7200}, 2 * time.Hour},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.opts.effectiveBootstrapDisableGrace()
+			if got != tc.want {
+				t.Errorf("got %s want %s", got, tc.want)
+			}
+			if got < cnpgPostConvergenceGraceMin {
+				t.Errorf("grace %s fell below the floor %s", got, cnpgPostConvergenceGraceMin)
+			}
+		})
+	}
+}
+
 // TestEffectiveWALArchiveDeadline mirrors TestEffectiveRestoreDeadline for
 // the dedicated WAL-archive gate cap. The two deadlines exist independently
 // so a big-DB restore can extend RestoreTimeoutSeconds without simultaneously
@@ -2562,6 +2592,121 @@ func TestReconcileCNPGRestore_BootstrapDisableTransientErrorRequeues(t *testing.
 	}
 	if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
 		t.Fatalf("a transient disable failure within the post-convergence window must requeue, not Fail; got phase %q", got.Status.Phase)
+	}
+}
+
+// TestReconcileCNPGRestore_BootstrapDisableShortTimeoutHonorsGraceFloor is the
+// regression guard for the grace-window floor. A tenant sets
+// restoreTimeoutSeconds:60 to fail fast on a stuck recovery; recovery actually
+// converged 90s ago and the disable step is now hitting a transient error.
+// Without the floor the disable grace collapses to 60s (the recovery timeout),
+// so 90s-since-convergence terminates the restore Failed on a blip - and a
+// resubmit's purge-guard would then delete the healthy restored Cluster. With
+// the floor (cnpgPostConvergenceGraceMin) the window stays open and the
+// transient error requeues. Reverting effectiveBootstrapDisableGrace back to
+// effectiveRestoreDeadline turns this red.
+func TestReconcileCNPGRestore_BootstrapDisableShortTimeoutHonorsGraceFloor(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+		cnpgBkName  = "cnpgbk"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
+	// Converged 90s ago: past the tenant's 60s restoreTimeoutSeconds but well
+	// within the 5m post-convergence floor.
+	convergedAt := metav1.NewTime(time.Now().Add(-90 * time.Second))
+
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+			StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+			DriverMetadata: map[string]string{
+				cnpgServerNameKey:      appName,
+				cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+				cnpgBackupNameKey:      cnpgBkName,
+			},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+	}
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+			BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+		}},
+	}
+	healthyCluster := &cnpgtypes.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, CreationTimestamp: metav1.NewTime(startedAt.Add(time.Minute))},
+		Spec:       cnpgtypes.ClusterSpec{Bootstrap: &cnpgtypes.BootstrapConfiguration{Recovery: &cnpgtypes.RecoverySource{Source: appName}}},
+		Status:     cnpgtypes.ClusterStatus{Phase: cnpgClusterHealthyPhase},
+	}
+	app := newPostgresApp(appName, ns)
+	app.Spec.Bootstrap.Enabled = true
+	app.Spec.Bootstrap.OldName = appName
+	sa := startedAt
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "bk"},
+			Options:   &runtime.RawExtension{Raw: []byte(`{"restoreTimeoutSeconds":60}`)},
+		},
+		Status: backupsv1alpha1.RestoreJobStatus{
+			StartedAt: &sa,
+			Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+			Conditions: []metav1.Condition{
+				{Type: restoreCondTargetPurged, Status: metav1.ConditionTrue, Reason: "ClusterPurged", LastTransitionTime: startedAt, Message: "purged"},
+				{Type: restoreCondRecoveryConverged, Status: metav1.ConditionTrue, Reason: "RecoveryConverged", LastTransitionTime: convergedAt, Message: "converged"},
+			},
+		},
+	}
+
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = strategyv1alpha1.AddToScheme(s)
+	_ = cnpgtypes.AddToScheme(s)
+	_ = postgresapp.AddToScheme(s)
+	c := clientfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(backup, restoreJob, strategy, app, healthyCluster).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, ok := obj.(*postgresapp.Postgres); ok {
+					return fmt.Errorf("injected transient bootstrap-disable failure")
+				}
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+
+	rj := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+		t.Fatalf("get seeded RestoreJob: %v", err)
+	}
+	res, err := r.reconcileCNPGRestore(ctx, rj, backup)
+	if err != nil {
+		t.Fatalf("reconcileCNPGRestore: %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Fatalf("expected a requeue within the floored grace window, got %+v", res)
+	}
+
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, got); err != nil {
+		t.Fatalf("get RestoreJob after reconcile: %v", err)
+	}
+	if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("a short restoreTimeoutSeconds must not shrink the disable grace below the floor; a blip 90s after convergence must requeue, got phase %q", got.Status.Phase)
 	}
 }
 
