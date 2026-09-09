@@ -9,6 +9,9 @@
 {{- if and $seal.previousSecretName (not $seal.previousKeyId) }}
 {{- fail "seal.previousKeyId is required when seal.previousSecretName is set" }}
 {{- end }}
+{{- if and $seal.previousKeyId (not $seal.previousSecretName) }}
+{{- fail "seal.previousSecretName is required when seal.previousKeyId is set" }}
+{{- end }}
 {{- if and $seal.previousSecretName (not $static) }}
 {{- fail "seal.previousSecretName only applies to seal.type \"static\"" }}
 {{- end }}
@@ -24,6 +27,14 @@ returns nothing on first install and on dry-run, so the check is a no-op there.
 {{- $hcl := index ($cm.data | default dict) "extraconfig-from-values.hcl" | default "" }}
 {{- $stanza := regexFind `seal "[a-z]+"` $hcl }}
 {{- $liveSeal := ternary (trimAll "\"" (trimPrefix "seal " $stanza)) "shamir" (ne $stanza "") }}
+{{- /*
+Migrating away from static needs the old stanza kept with disabled = "true"
+and its key still mounted, which this chart does not render. Refuse the
+direction rather than emit a config the migration cannot run against.
+*/}}
+{{- if and (eq $liveSeal "static") (eq $seal.type "shamir") }}
+{{- fail "migration from seal.type \"static\" to \"shamir\" is not supported by this chart" }}
+{{- end }}
 {{- if and (ne $liveSeal $seal.type) (not $seal.allowMigration) }}
 {{- fail (printf "seal.type %q differs from the seal in use (%q). Changing the seal of an existing instance is a seal migration (bao operator unseal -migrate); set seal.allowMigration: true only while performing it." $seal.type $liveSeal) }}
 {{- end }}

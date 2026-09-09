@@ -64,7 +64,7 @@ type Seal struct {
 	// Secret holding the previous key during an n-1 key rotation.
 	// +kubebuilder:default:=""
 	PreviousSecretName string `json:"previousSecretName,omitempty"`
-	// Existing Secret in the release namespace whose key `key` holds the base64 text of 32 random bytes (`head -c 32 /dev/urandom | base64 | tr -d '\n'`). Required when `type` is `static`.
+	// Existing Secret in the release namespace whose key `key` holds the base64 text of 32 random bytes (for example `openssl rand -base64 32`). Required when `type` is `static`.
 	// +kubebuilder:default:=""
 	SecretName string `json:"secretName"`
 	// Seal type. `shamir` keeps the current behaviour; `static` enables auto-unseal from `secretName`.

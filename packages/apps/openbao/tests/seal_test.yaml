@@ -143,6 +143,17 @@ tests:
       - failedTemplate:
           errorMessage: "seal.previousKeyId is required when seal.previousSecretName is set"
 
+  - it: "rejects previousKeyId without previousSecretName"
+    set:
+      seal:
+        type: static
+        secretName: openbao-unseal
+        keyId: key-2
+        previousKeyId: key-1
+    asserts:
+      - failedTemplate:
+          errorMessage: "seal.previousSecretName is required when seal.previousKeyId is set"
+
   - it: "rejects previousSecretName with seal.type shamir"
     set:
       seal:
@@ -214,7 +225,35 @@ tests:
       replicas: 3
     asserts:
       - failedTemplate:
-          errorPattern: 'seal.type "shamir" differs from the seal in use \("static"\)'
+          errorMessage: 'migration from seal.type "static" to "shamir" is not supported by this chart'
+
+  - it: "refuses static to shamir even with allowMigration: the chart cannot render the disabled legacy stanza"
+    kubernetesProvider:
+      scheme:
+        "v1/ConfigMap":
+          gvr:
+            version: "v1"
+            resource: "configmaps"
+          namespaced: true
+      objects:
+        - kind: ConfigMap
+          apiVersion: v1
+          metadata:
+            name: openbao-test-config
+            namespace: tenant-test
+          data:
+            extraconfig-from-values.hcl: |-
+              seal "static" {
+                current_key_id = "key-1"
+                current_key = "file:///openbao/userconfig/openbao-unseal/key"
+              }
+    set:
+      replicas: 3
+      seal:
+        allowMigration: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'migration from seal.type "static" to "shamir" is not supported by this chart'
 
   - it: "renders when the requested seal matches the seal in use"
     kubernetesProvider:

@@ -92,7 +92,7 @@ ui: true
 
 ## @typedef {struct} Seal - Seal configuration. With `static`, the key is read from a Secret you create in the release namespace; the chart never generates or rotates it.
 ## @field {SealType} type - Seal type. `shamir` keeps the current behaviour; `static` enables auto-unseal from `secretName`.
-## @field {string} secretName - Existing Secret in the release namespace whose key `key` holds the base64 text of 32 random bytes (`head -c 32 /dev/urandom | base64 | tr -d '\n'`). Required when `type` is `static`.
+## @field {string} secretName - Existing Secret in the release namespace whose key `key` holds the base64 text of 32 random bytes (for example `openssl rand -base64 32`). Required when `type` is `static`.
 ## @field {string} keyId - Permanent identifier of the current key. Change it whenever the key material changes; OpenBAO refuses a key whose identifier it has already seen with different material. Required when `type` is `static`.
 ## @field {string} [previousSecretName] - Secret holding the previous key during an n-1 key rotation.
 ## @field {string} [previousKeyId] - Identifier of the previous key. Required when `previousSecretName` is set.
