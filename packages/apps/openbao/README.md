@@ -29,7 +29,7 @@ By default OpenBAO uses Shamir key shares: after every pod restart an operator h
 
 To rotate the key, create a second Secret, move the current pair to `previousSecretName`/`previousKeyId` and put the new pair in `secretName`/`keyId`. This is the n-1 rotation the static seal documents: `current_key` is used for new seal operations while `previous_key` still decrypts what was written before. Keep both Secrets in place until OpenBAO has re-wrapped storage with the new key, then drop the `previous*` values and delete the old Secret.
 
-> Switching an existing Shamir-sealed instance to `static` (or back) is a seal migration and needs `bao operator unseal -migrate`; see the OpenBAO [seal migration](https://openbao.org/docs/concepts/seal/#seal-migration) documentation. The chart does not run the migration for you.
+> Switching an existing Shamir-sealed instance to `static` is a seal migration and needs `bao operator unseal -migrate`; see the OpenBAO [seal migration](https://openbao.org/docs/concepts/seal/#seal-migration) documentation. The chart does not run the migration for you. It does refuse to change `seal.type` on an instance that already runs with another seal, because a plain config change would leave a barrier nobody can decrypt. Set `seal.allowMigration: true` only for the upgrade in which you run the migration, then remove it. Migrating away from `static` needs the old stanza kept with `disabled = "true"`, which this chart does not render.
 
 Keep a copy of the key outside the cluster: a Raft snapshot or a data PVC is unreadable without it.
 
@@ -66,4 +66,5 @@ Keep a copy of the key outside the cluster: a Raft snapshot or a data PVC is unr
 | `seal.keyId`              | Permanent identifier of the current key. Change it whenever the key material changes; OpenBAO refuses a key whose identifier it has already seen with different material. Required when `type` is `static`. | `string` | `""`     |
 | `seal.previousSecretName` | Secret holding the previous key during an n-1 key rotation.                                                                                                                                                 | `string` | `""`     |
 | `seal.previousKeyId`      | Identifier of the previous key. Required when `previousSecretName` is set.                                                                                                                                  | `string` | `""`     |
+| `seal.allowMigration`     | Acknowledge a seal migration. The chart refuses to change `type` on an existing instance unless this is `true`; set it only while running `bao operator unseal -migrate`, then remove it.                   | `bool`   | `false`  |
 

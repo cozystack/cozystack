@@ -96,6 +96,7 @@ ui: true
 ## @field {string} keyId - Permanent identifier of the current key. Change it whenever the key material changes; OpenBAO refuses a key whose identifier it has already seen with different material. Required when `type` is `static`.
 ## @field {string} [previousSecretName] - Secret holding the previous key during an n-1 key rotation.
 ## @field {string} [previousKeyId] - Identifier of the previous key. Required when `previousSecretName` is set.
+## @field {bool} [allowMigration] - Acknowledge a seal migration. The chart refuses to change `type` on an existing instance unless this is `true`; set it only while running `bao operator unseal -migrate`, then remove it.
 
 ## @param {Seal} seal - Seal configuration. Defaults to Shamir key shares; set `type: static` for auto-unseal.
 seal:
@@ -104,3 +105,4 @@ seal:
   keyId: ""
   previousSecretName: ""
   previousKeyId: ""
+  allowMigration: false

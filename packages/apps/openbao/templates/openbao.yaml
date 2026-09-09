@@ -9,6 +9,25 @@
 {{- if and $seal.previousSecretName (not $seal.previousKeyId) }}
 {{- fail "seal.previousKeyId is required when seal.previousSecretName is set" }}
 {{- end }}
+{{- if and $seal.previousSecretName (not $static) }}
+{{- fail "seal.previousSecretName only applies to seal.type \"static\"" }}
+{{- end }}
+{{- /*
+Refuse a silent seal change on an existing instance. Changing the seal of an
+initialized OpenBAO is a seal migration (`bao operator unseal -migrate`); a
+plain config change instead leaves a barrier nobody can decrypt. The seal in
+use is visible in the config ConfigMap the previous release rendered. `lookup`
+returns nothing on first install and on dry-run, so the check is a no-op there.
+*/}}
+{{- $cm := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-config" .Release.Name) }}
+{{- if $cm }}
+{{- $hcl := index ($cm.data | default dict) "extraconfig-from-values.hcl" | default "" }}
+{{- $stanza := regexFind `seal "[a-z]+"` $hcl }}
+{{- $liveSeal := ternary (trimAll "\"" (trimPrefix "seal " $stanza)) "shamir" (ne $stanza "") }}
+{{- if and (ne $liveSeal $seal.type) (not $seal.allowMigration) }}
+{{- fail (printf "seal.type %q differs from the seal in use (%q). Changing the seal of an existing instance is a seal migration (bao operator unseal -migrate); set seal.allowMigration: true only while performing it." $seal.type $liveSeal) }}
+{{- end }}
+{{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

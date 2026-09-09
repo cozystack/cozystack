@@ -142,6 +142,11 @@
         "type"
       ],
       "properties": {
+        "allowMigration": {
+          "description": "Acknowledge a seal migration. The chart refuses to change `type` on an existing instance unless this is `true`; set it only while running `bao operator unseal -migrate`, then remove it.",
+          "type": "boolean",
+          "default": false
+        },
         "keyId": {
           "description": "Permanent identifier of the current key. Change it whenever the key material changes; OpenBAO refuses a key whose identifier it has already seen with different material. Required when `type` is `static`.",
           "type": "string",

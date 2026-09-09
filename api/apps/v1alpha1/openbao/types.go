@@ -52,6 +52,9 @@ type Resources struct {
 }
 
 type Seal struct {
+	// Acknowledge a seal migration. The chart refuses to change `type` on an existing instance unless this is `true`; set it only while running `bao operator unseal -migrate`, then remove it.
+	// +kubebuilder:default:=false
+	AllowMigration bool `json:"allowMigration,omitempty"`
 	// Permanent identifier of the current key. Change it whenever the key material changes; OpenBAO refuses a key whose identifier it has already seen with different material. Required when `type` is `static`.
 	// +kubebuilder:default:=""
 	KeyId string `json:"keyId"`
