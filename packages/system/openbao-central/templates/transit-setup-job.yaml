@@ -1,0 +1,101 @@
+{{- /*
+Enables the transit secrets engine and the Kubernetes auth method on the central
+OpenBAO, so tenant OpenBAO instances can auto-unseal against it.
+
+Gated on the absence of the openbao-system-transit-ready ConfigMap (the sentinel
+written on success), so it runs once and is render-safe under Flux. Every action
+is idempotent (enable-if-absent), so a re-run after the sentinel is cleared is
+harmless. Per-tenant transit keys + scoped policies are created later by the
+cozystack operator, not here.
+*/}}
+{{- if not (lookup "v1" "ConfigMap" .Release.Namespace "openbao-system-transit-ready") }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openbao-system-transit-setup
+  namespace: {{ .Release.Namespace }}
+spec:
+  backoffLimit: 30
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openbao-system
+        app.kubernetes.io/component: transit-setup
+    spec:
+      serviceAccountName: openbao-system-bootstrap
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: keys
+          secret:
+            secretName: openbao-system-keys
+            optional: true
+        - name: tls
+          secret:
+            secretName: openbao-system-tls
+            optional: true
+      initContainers:
+        - name: setup
+          image: {{ .Values.bootstrap.openbaoImage | quote }}
+          env:
+            - name: BAO_ADDR
+              value: https://openbao-system:8200
+            - name: BAO_CACERT
+              value: /openbao/tls/ca.crt
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: keys
+              mountPath: /keys
+              readOnly: true
+            - name: tls
+              mountPath: /openbao/tls
+              readOnly: true
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "waiting for root token + unsealed cluster ..."
+              until [ -f /keys/root-token ]; do sleep 3; done
+              until bao status >/dev/null 2>&1; do sleep 3; done
+              BAO_TOKEN="$(cat /keys/root-token)"; export BAO_TOKEN
+
+              # transit engine (idempotent)
+              if ! bao secrets list -format=json 2>/dev/null | grep -q '"transit/"'; then
+                bao secrets enable -path=transit transit
+              fi
+
+              # kubernetes auth (idempotent)
+              if ! bao auth list -format=json 2>/dev/null | grep -q '"kubernetes/"'; then
+                bao auth enable kubernetes
+              fi
+              bao write auth/kubernetes/config \
+                kubernetes_host="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}" \
+                disable_iss_validation=true
+
+              touch /work/ok
+              echo "transit + kubernetes auth ready"
+      containers:
+        - name: mark
+          image: {{ .Values.bootstrap.kubectlImage | quote }}
+          volumeMounts:
+            - name: work
+              mountPath: /work
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              if [ ! -f /work/ok ]; then
+                echo "setup did not complete"
+                exit 1
+              fi
+              kubectl create configmap openbao-system-transit-ready \
+                -n {{ .Release.Namespace }} \
+                --from-literal=ready=true \
+                --dry-run=client -o yaml | kubectl apply -f -
+              echo "sentinel written"
+{{- end }}

@@ -1,0 +1,107 @@
+{{- /*
+One-time initialization of the central OpenBAO cluster.
+
+Gated on the absence of the openbao-system-keys Secret: once the cluster is
+initialized and the keys are persisted, this manifest is no longer rendered, so
+it can never re-run and re-init (which would destroy the cluster). This is safe
+under Flux's remediation.retries: -1 because the gate is evaluated at every
+render.
+
+The init container (openbao image) waits for pod-0's API, initializes if needed,
+and writes the unseal keys + root token to an emptyDir. The store container
+(kubectl image) persists them into the openbao-system-keys Secret.
+*/}}
+{{- if not (lookup "v1" "Secret" .Release.Namespace "openbao-system-keys") }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openbao-system-init
+  namespace: {{ .Release.Namespace }}
+spec:
+  backoffLimit: 30
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openbao-system
+        app.kubernetes.io/component: init
+    spec:
+      serviceAccountName: openbao-system-bootstrap
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: tls
+          secret:
+            secretName: openbao-system-tls
+            optional: true
+      initContainers:
+        - name: init
+          image: {{ .Values.bootstrap.openbaoImage | quote }}
+          env:
+            - name: BAO_ADDR
+              value: https://openbao-system-0.openbao-system-internal:8200
+            - name: BAO_CACERT
+              value: /openbao/tls/ca.crt
+            - name: KEY_SHARES
+              value: {{ .Values.bootstrap.keyShares | quote }}
+            - name: KEY_THRESHOLD
+              value: {{ .Values.bootstrap.keyThreshold | quote }}
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: tls
+              mountPath: /openbao/tls
+              readOnly: true
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "waiting for openbao-system-0 API ..."
+              until bao status >/dev/null 2>&1 || [ $? -eq 2 ]; do sleep 3; done
+              if bao status 2>/dev/null | grep -qi 'Initialized.*true'; then
+                if [ ! -f /work/done ]; then
+                  echo "ERROR: cluster already initialized but openbao-system-keys is missing — unseal keys are unrecoverable. Manual intervention required." >&2
+                  exit 1
+                fi
+                exit 0
+              fi
+              echo "initializing ..."
+              bao operator init -key-shares="$KEY_SHARES" -key-threshold="$KEY_THRESHOLD" > /work/init.txt
+              grep '^Unseal Key' /work/init.txt | sed 's/.*: //' > /work/keys.txt
+              grep '^Initial Root Token' /work/init.txt | sed 's/.*: //' | tr -d '\n' > /work/root-token
+              i=0
+              while IFS= read -r k; do
+                printf '%s' "$k" > "/work/key-$i"
+                i=$((i+1))
+              done < /work/keys.txt
+              rm -f /work/init.txt /work/keys.txt
+              touch /work/done
+              echo "init complete: wrote $i unseal keys + root token"
+      containers:
+        - name: store
+          image: {{ .Values.bootstrap.kubectlImage | quote }}
+          volumeMounts:
+            - name: work
+              mountPath: /work
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              if [ ! -f /work/root-token ]; then
+                echo "nothing to store"
+                exit 0
+              fi
+              args=""
+              for f in /work/key-*; do
+                args="$args --from-file=$(basename "$f")=$f"
+              done
+              args="$args --from-file=root-token=/work/root-token"
+              # shellcheck disable=SC2086
+              kubectl create secret generic openbao-system-keys \
+                -n {{ .Release.Namespace }} $args \
+                --dry-run=client -o yaml | kubectl apply -f -
+              echo "openbao-system-keys persisted"
+{{- end }}
