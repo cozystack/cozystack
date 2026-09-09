@@ -2000,27 +2000,38 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 	if !removedUserPasswordKinds[r.kindName] || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
 		return
 	}
+	// Decode users as raw per-entry values, not map[string]map[...], so a single
+	// non-object user value does not fail the whole unmarshal and suppress every
+	// warning (the write path accepts such a value; the schema only guards the
+	// read/defaulting path). passwordRotation is decoded independently for the
+	// same reason.
 	var values struct {
-		Users            map[string]map[string]json.RawMessage `json:"users"`
-		PasswordRotation *json.RawMessage                      `json:"passwordRotation"`
+		Users            map[string]json.RawMessage `json:"users"`
+		PasswordRotation *json.RawMessage           `json:"passwordRotation"`
 	}
 	if err := json.Unmarshal(app.Spec.Raw, &values); err != nil {
 		return
 	}
-	for user, u := range values.Users {
+	for user, raw := range values.Users {
+		var u map[string]json.RawMessage
+		// A non-object user value is not one this warning is about; skip it
+		// rather than letting one malformed entry mute the rest.
+		if json.Unmarshal(raw, &u) != nil {
+			continue
+		}
 		if _, present := u["password"]; present {
 			warning.AddWarning(ctx, "", fmt.Sprintf(
 				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.", user))
 		}
 	}
-	// The chart-based passwordRotation counter was removed (a chart-rendered
-	// Secret keeps its cleartext in Helm release history, so a bump cannot revoke
-	// a leaked password). The key is still accepted and dropped by the schema, so
-	// without this an operator rotating after a leak gets a silent 200 and no
+	// spec.passwordRotation is not a supported field: chart-based rotation cannot
+	// revoke a leaked password (a chart-rendered Secret keeps its cleartext in
+	// Helm release history). The key is still accepted and dropped by the schema,
+	// so without this an operator rotating after a leak gets a silent 200 and no
 	// effect. Rotation is being reworked as a controller — cozystack/community#72.
 	if values.PasswordRotation != nil {
 		warning.AddWarning(ctx, "",
-			"spec.passwordRotation is ignored: chart-based password rotation was removed because a chart-rendered Secret cannot revoke a leaked credential. Setting this field has no effect; rotation is being reworked as a controller (cozystack/community#72).")
+			"spec.passwordRotation is ignored: chart-based password rotation is not supported (a chart-rendered Secret cannot revoke a leaked credential). Setting this field has no effect; rotation is being reworked as a controller (cozystack/community#72).")
 	}
 }
 
