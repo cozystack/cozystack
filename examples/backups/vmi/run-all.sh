@@ -12,7 +12,7 @@
 #
 # Override NAMESPACE / BACKUP_STORAGE_LOCATION / TARGET_NAMESPACE via the
 # environment; see 00-helpers.sh. hack/e2e-chainsaw/vminstance/ drives this file
-# as the gated vminstance-2-backup-roundtrip test (VMI_E2E_S3_ROUNDTRIP=1).
+# as the vminstance-2-backup-roundtrip e2e test, run un-gated in CI.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

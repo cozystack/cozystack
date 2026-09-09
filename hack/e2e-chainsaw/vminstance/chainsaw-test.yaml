@@ -265,8 +265,12 @@ spec:
         content: |
           set -eu
           cd ../../..
-          NAMESPACE="$NAMESPACE" examples/backups/vmi/cleanup.sh
+          # Always tear down the harness-owned BSL, but keep a cleanup.sh failure
+          # fatal (convention 4): capture its rc, delete the BSL, then re-raise.
+          rc=0
+          NAMESPACE="$NAMESPACE" examples/backups/vmi/cleanup.sh || rc=$?
           kubectl -n cozy-velero delete bsl cozy-e2e-vmi --ignore-not-found
+          exit "$rc"
 ---
 # vmdisk-2-backup-roundtrip — REAL Velero backup/restore round-trip for a
 # standalone VMDisk, run un-gated in CI. This is the in-CI proof that the
@@ -395,5 +399,9 @@ spec:
         content: |
           set -eu
           cd ../../..
-          NAMESPACE="$NAMESPACE" examples/backups/vmdisk/cleanup.sh
+          # Always tear down the harness-owned BSL, but keep a cleanup.sh failure
+          # fatal (convention 4): capture its rc, delete the BSL, then re-raise.
+          rc=0
+          NAMESPACE="$NAMESPACE" examples/backups/vmdisk/cleanup.sh || rc=$?
           kubectl -n cozy-velero delete bsl cozy-e2e-vmdisk --ignore-not-found
+          exit "$rc"
