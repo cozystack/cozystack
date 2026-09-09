@@ -1,7 +1,7 @@
 {{- if .Values.deploy }}
 {{- $roleType := .Values.rbac.type }}
 {{- if .Values.global }}
-{{- $roleType = coalesce .Values.global.rbac.type .Values.rbac.type }}
+{{- $roleType = coalesce ((.Values.global).rbac).type .Values.rbac.type }}
 {{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: {{ printf "%sBinding" $roleType }}

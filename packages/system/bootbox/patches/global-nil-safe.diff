@@ -1,0 +1,60 @@
+# smee reads its own keys out of the Helm `global` namespace behind a gate on the
+# truthiness of the whole map: `{{- if .Values.global }}` and then
+# `coalesce .Values.global.rbac.type .Values.rbac.type`. Any parent that sets a
+# single unrelated key under `global` makes the gate true while `global.rbac`
+# stays nil, and indexing nil is a render error rather than an empty value, so
+# the chart dies with `nil pointer evaluating interface {}.type`.
+#
+# Cozystack hands every HelmRelease the cozystack-values Secret, and the platform
+# emits the cluster domain as `global.clusterDomain` for vendored subcharts that
+# cannot read `_cluster`. That is the parent this chart cannot survive today.
+#
+# Parenthesising each lookup makes a missing map yield nil instead of failing,
+# which is what `coalesce` already expects. `publicIP` also falls back to the
+# chart's own key, because `coalesce` returns nil when every argument is empty
+# and that nil reaches the rendered URLs as the literal `<nil>` once the gate is
+# open. With no `global` the render is byte for byte what it was, and a parent
+# that does set `global.rbac.type` or `global.publicIP` still wins.
+#
+# This belongs upstream in tinkerbell/charts, where the same gate is still on
+# main. Retire the patch when a release carrying the fix is vendored here.
+diff --git a/charts/smee/templates/deployment.yaml b/charts/smee/templates/deployment.yaml
+--- a/charts/smee/templates/deployment.yaml
++++ b/charts/smee/templates/deployment.yaml
+@@ -4,9 +4,9 @@
+ {{- $roleType := .Values.rbac.type }}
+ {{- $nodeSelector := .Values.nodeSelector }}
+ {{- if .Values.global }}
+-{{- $publicIP = coalesce .Values.publicIP .Values.global.publicIP }}
+-{{- $trustedProxies = coalesce .Values.trustedProxies .Values.global.trustedProxies }}
+-{{- $roleType = coalesce .Values.global.rbac.type .Values.rbac.type }}
++{{- $publicIP = coalesce .Values.publicIP (.Values.global).publicIP | default .Values.publicIP }}
++{{- $trustedProxies = coalesce .Values.trustedProxies (.Values.global).trustedProxies }}
++{{- $roleType = coalesce ((.Values.global).rbac).type .Values.rbac.type }}
+ {{- $nodeSelector = coalesce .Values.nodeSelector .Values.global.nodeSelector }}
+ {{- end }}
+ {{- $_ := set .Values.dhcp "syslogIp" (default $publicIP .Values.dhcp.syslogIp) }}
+diff --git a/charts/smee/templates/role-binding.yaml b/charts/smee/templates/role-binding.yaml
+--- a/charts/smee/templates/role-binding.yaml
++++ b/charts/smee/templates/role-binding.yaml
+@@ -1,7 +1,7 @@
+ {{- if .Values.deploy }}
+ {{- $roleType := .Values.rbac.type }}
+ {{- if .Values.global }}
+-{{- $roleType = coalesce .Values.global.rbac.type .Values.rbac.type }}
++{{- $roleType = coalesce ((.Values.global).rbac).type .Values.rbac.type }}
+ {{- end }}
+ apiVersion: rbac.authorization.k8s.io/v1
+ kind: {{ printf "%sBinding" $roleType }}
+diff --git a/charts/smee/templates/role.yaml b/charts/smee/templates/role.yaml
+--- a/charts/smee/templates/role.yaml
++++ b/charts/smee/templates/role.yaml
+@@ -1,7 +1,7 @@
+ {{- if .Values.deploy }}
+ {{- $roleType := .Values.rbac.type }}
+ {{- if .Values.global }}
+-{{- $roleType = coalesce .Values.global.rbac.type .Values.rbac.type }}
++{{- $roleType = coalesce ((.Values.global).rbac).type .Values.rbac.type }}
+ {{- end }}
+ apiVersion: rbac.authorization.k8s.io/v1
+ kind: {{ $roleType }}

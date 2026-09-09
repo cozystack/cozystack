@@ -14,3 +14,7 @@ update:
 	mkdir -p charts/smee/crds
 	mv charts/tink/crds/hardware-crd.yaml charts/smee/crds
 	rm -rf charts/tink
+	patch --forward --no-backup-if-mismatch -p1 < patches/global-nil-safe.diff
+
+test:
+	helm unittest .

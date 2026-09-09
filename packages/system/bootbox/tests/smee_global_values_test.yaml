@@ -1,0 +1,76 @@
+suite: smee renders when an unrelated global key is set
+
+# Every HelmRelease Cozystack creates receives the cozystack-values Secret, and
+# the platform emits the cluster domain under the reserved global key for
+# vendored subcharts that cannot read _cluster. smee gates its own global
+# lookups on the truthiness of the whole map, so a single unrelated key used to
+# make the gate true while global.rbac stayed nil and the render died. These
+# cases pin that the chart survives such a parent and that a parent which does
+# set global.rbac.type still wins over the chart's own default.
+
+templates:
+  - charts/smee/templates/role.yaml
+  - charts/smee/templates/deployment.yaml
+
+release:
+  name: bootbox
+  namespace: cozy-bootbox
+
+tests:
+  - it: keeps the chart's own role type when the parent sets only a cluster domain
+    template: charts/smee/templates/role.yaml
+    set:
+      global:
+        clusterDomain: cozy.local
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+
+  - it: lets the parent override the role type through global
+    template: charts/smee/templates/role.yaml
+    set:
+      global:
+        clusterDomain: cozy.local
+        rbac:
+          type: ClusterRole
+    asserts:
+      - equal:
+          path: kind
+          value: ClusterRole
+
+  - it: renders the deployment with only a cluster domain in global
+    template: charts/smee/templates/deployment.yaml
+    set:
+      global:
+        clusterDomain: cozy.local
+    asserts:
+      - equal:
+          path: kind
+          value: Deployment
+      # An open gate with no host value in global must leave the chart's own
+      # empty string in place. coalesce yields nil when every argument is empty,
+      # and that nil reaches the URL as the literal <nil>.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SMEE_OSIE_URL
+            value: "http://:8080"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SMEE_TINK_SERVER
+            value: ":42113"
+
+  - it: takes a host value from global when the parent sets one
+    template: charts/smee/templates/deployment.yaml
+    set:
+      global:
+        clusterDomain: cozy.local
+        publicIP: 192.0.2.10
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SMEE_TINK_SERVER
+            value: "192.0.2.10:42113"

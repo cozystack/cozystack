@@ -4,9 +4,9 @@
 {{- $roleType := .Values.rbac.type }}
 {{- $nodeSelector := .Values.nodeSelector }}
 {{- if .Values.global }}
-{{- $publicIP = coalesce .Values.publicIP .Values.global.publicIP }}
-{{- $trustedProxies = coalesce .Values.trustedProxies .Values.global.trustedProxies }}
-{{- $roleType = coalesce .Values.global.rbac.type .Values.rbac.type }}
+{{- $publicIP = coalesce .Values.publicIP (.Values.global).publicIP | default .Values.publicIP }}
+{{- $trustedProxies = coalesce .Values.trustedProxies (.Values.global).trustedProxies }}
+{{- $roleType = coalesce ((.Values.global).rbac).type .Values.rbac.type }}
 {{- $nodeSelector = coalesce .Values.nodeSelector .Values.global.nodeSelector }}
 {{- end }}
 {{- $_ := set .Values.dhcp "syslogIp" (default $publicIP .Values.dhcp.syslogIp) }}
