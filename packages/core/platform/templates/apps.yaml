@@ -18,6 +18,17 @@ metadata:
 type: Opaque
 stringData:
   values.yaml: |
+    {{- /*
+      The operator builds every in-cluster name it needs from DNS_BASE: the
+      securityconfig job target, its own OpenSearch API client URL, the
+      Dashboards host, and the SANs it writes into node certificates. This is
+      a vendored subchart value, so it travels under the subchart key; _cluster
+      stops at each package's own templates and never reaches a subchart.
+      A package rendered without this Secret falls back to cluster.local.
+    */}}
+    opensearch-operator:
+      manager:
+        dnsBase: {{ .Values.networking.clusterDomain | quote }}
     _cluster:
       root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}
