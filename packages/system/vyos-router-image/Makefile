@@ -23,7 +23,7 @@ NAMESPACE=cozy-system
 #
 # VYOS_STREAM_RELEASE is a MANUAL bump and has no Renovate manager: VyOS publishes
 # Stream releases as a page rather than a feed, and a manager pointed at a
-# datasource that does not exist is worse than an honest manual pin. It is also
+# datasource that does not exist is worse than a manual pin. It is also
 # the one bump that is never urgent — Stream releases are archived, so this pin
 # stays buildable indefinitely, which is the whole reason for using it.
 #

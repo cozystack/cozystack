@@ -12,14 +12,22 @@ rules:
   resources: ["helmreleases"]
   verbs: ["get", "list", "watch", "patch"]
 # Discover the gateway VM's virt-launcher pod (via lineage labels) and verify
-# ovn.kubernetes.io/port_security on it (T07 also patches it with a single-key
-# merge patch during cleanup). `list` additionally serves the two per-namespace
-# tenant-pod enumerations: the pending-route surfacing and the tunnel-ingress
-# destination set, which admits one /32 per tenant pod IP instead of the whole
-# cluster pod CIDR.
+# ovn.kubernetes.io/port_security on it. `list` additionally serves the two
+# per-namespace tenant-pod enumerations: the pending-route surfacing and the
+# tunnel-ingress destination set, which admits one /32 per tenant pod IP instead
+# of the whole cluster pod CIDR.
+#
+# READ ONLY, deliberately. `patch` was granted here for a cleanup step that
+# reverted the port_security annotation on delete, and that step was vestigial by
+# its own admission: kube-ovn reconciles the logical-switch-port only at pod
+# creation, so the patch had no OVN effect, and on delete the pod and its port
+# are torn down anyway. Since these grants are cluster-wide, it bought a
+# compromised controller the ability to rewrite metadata on every pod in the
+# cluster in exchange for nothing. Do not add it back without a caller that
+# needs it.
 - apiGroups: [""]
   resources: ["pods"]
-  verbs: ["get", "list", "watch", "patch"]
+  verbs: ["get", "list", "watch"]
 # Program the kube-ovn return routes: the controller patches
 # ovn.kubernetes.io/routes on the tenant namespace and the kube-ovn webhook
 # propagates it to pods (T07). Namespaces are read one at a time through the

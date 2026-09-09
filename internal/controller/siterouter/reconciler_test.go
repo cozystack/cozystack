@@ -427,14 +427,18 @@ func TestReconcile_FinalizerRestoresStateOnDelete(t *testing.T) {
 		t.Fatalf("reconcile delete: %v", err)
 	}
 
-	// port_security restored on the gateway pod (annotation cleared or flipped
-	// back to enforcing — anything but the relaxed value).
+	// Teardown does NOT touch the gateway pod. Reverting the port_security
+	// annotation was vestigial — kube-ovn reconciles the logical-switch-port only
+	// at pod creation, so the patch had no OVN effect, and on delete the pod and
+	// its port are going away regardless. It cost the controller a cluster-wide
+	// `pods patch` grant to do nothing, so it is gone; this asserts the pod is
+	// left alone, which is what makes dropping the verb safe.
 	gotPod := &corev1.Pod{}
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-test", Name: gateway.Name}, gotPod); err != nil {
 		t.Fatalf("get gateway pod: %v", err)
 	}
-	if v, set := gotPod.Annotations[portSecurityAnnotation]; set && v == portSecurityRelaxed {
-		t.Errorf("gateway pod port_security must be restored on delete, still %s=%q", portSecurityAnnotation, v)
+	if v := gotPod.Annotations[portSecurityAnnotation]; v != portSecurityRelaxed {
+		t.Errorf("teardown must not modify the gateway pod, %s=%q", portSecurityAnnotation, v)
 	}
 
 	// This instance's route entry withdrawn from the namespace annotation.
@@ -798,6 +802,10 @@ func TestProgramNamespaceRoutes_GatewayIPChange(t *testing.T) {
 		t.Helper()
 		hr := siteRouterHRWithValues(t, "demo", map[string]interface{}{
 			"remoteCIDRs": []interface{}{"172.31.0.0/16"},
+			// A peer is required for routes to be programmed at all: without a
+			// tunnel the return route would forward tenant traffic to the remote
+			// network in the clear (see programNamespaceRoutes).
+			"peer": map[string]interface{}{"address": "203.0.113.10"},
 		})
 		hr.Annotations = map[string]string{routeGatewayIPAnnotation: "10.244.0.5"}
 		ns := &corev1.Namespace{
@@ -903,6 +911,88 @@ func TestProgramNamespaceRoutes_GatewayIPChange(t *testing.T) {
 		}
 		if got := routeSet(t, ns.Annotations[routesAnnotation])["172.31.0.0/16"]; got != "10.244.0.6" {
 			t.Errorf("route should still point at the replacement gateway, got gw %q", got)
+		}
+	})
+}
+
+// TestProgramNamespaceRoutes_NoTunnelNoRoutes covers the window the documented
+// setup order makes routine. The remote side dials in to this instance's
+// LoadBalancer VIP, so a tenant creates the router, reads the address off the
+// status, and fills in the peer afterwards — and in between, remoteCIDRs is
+// declared while no tunnel exists.
+//
+// A return route in that state points tenant traffic for the remote network at
+// the gateway, and the guest forward chain accepts locally-originated non-IPsec
+// traffic deliberately, so it leaves in the clear over the default route.
+// strongSwan only traps it once a policy exists.
+func TestProgramNamespaceRoutes_NoTunnelNoRoutes(t *testing.T) {
+	t.Run("declared remoteCIDRs with no peer program nothing", func(t *testing.T) {
+		hr := siteRouterHRWithValues(t, "demo", map[string]interface{}{
+			"remoteCIDRs": []interface{}{"172.31.0.0/16"},
+		})
+		hr.Finalizers = []string{finalizer}
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+		gateway := gwPod("virt-launcher-"+releasePrefix+"demo-abcde", "demo", "10.244.0.5")
+		r := newTestReconciler(t, hr, ns, gateway, cozystackConfigMap())
+
+		values, err := decodeValues(hr)
+		if err != nil {
+			t.Fatalf("decode values: %v", err)
+		}
+		inst := &instance{hr: hr, name: "demo", namespace: "tenant-test", values: values, gatewayPod: gateway}
+		if err := r.programNamespaceRoutes(context.Background(), inst); err != nil {
+			t.Fatalf("program routes: %v", err)
+		}
+
+		got := &corev1.Namespace{}
+		if err := r.Get(context.Background(), types.NamespacedName{Name: "tenant-test"}, got); err != nil {
+			t.Fatalf("get namespace: %v", err)
+		}
+		if ann := got.Annotations[routesAnnotation]; strings.Contains(ann, "172.31.0.0/16") {
+			t.Errorf("a route to the remote network must not exist before a tunnel does; "+
+				"tenant traffic for it would leave the gateway unencrypted, got %s=%q", routesAnnotation, ann)
+		}
+	})
+
+	t.Run("removing the peer withdraws the routes rather than stranding them", func(t *testing.T) {
+		// The reason this withdraws instead of returning early. An instance whose
+		// peer is removed still owns entries in a namespace-wide annotation, and
+		// an early return would leave them pointing at a gateway that no longer
+		// carries a tunnel.
+		hr := siteRouterHRWithValues(t, "demo", map[string]interface{}{
+			"remoteCIDRs": []interface{}{"172.31.0.0/16"},
+		})
+		hr.Annotations = map[string]string{routeGatewayIPAnnotation: "10.244.0.5"}
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "tenant-test",
+				Annotations: map[string]string{
+					routesAnnotation: `[{"dst":"172.31.0.0/16","gw":"10.244.0.5"},{"dst":"192.168.50.0/24","gw":"10.244.0.9"}]`,
+				},
+			},
+		}
+		gateway := gwPod("virt-launcher-"+releasePrefix+"demo-abcde", "demo", "10.244.0.5")
+		r := newTestReconciler(t, hr, ns, gateway, cozystackConfigMap())
+
+		values, err := decodeValues(hr)
+		if err != nil {
+			t.Fatalf("decode values: %v", err)
+		}
+		inst := &instance{hr: hr, name: "demo", namespace: "tenant-test", values: values, gatewayPod: gateway}
+		if err := r.programNamespaceRoutes(context.Background(), inst); err != nil {
+			t.Fatalf("program routes: %v", err)
+		}
+
+		got := &corev1.Namespace{}
+		if err := r.Get(context.Background(), types.NamespacedName{Name: "tenant-test"}, got); err != nil {
+			t.Fatalf("get namespace: %v", err)
+		}
+		set := routeSet(t, got.Annotations[routesAnnotation])
+		if _, still := set["172.31.0.0/16"]; still {
+			t.Errorf("this gateway's entry must be withdrawn, got %q", got.Annotations[routesAnnotation])
+		}
+		if set["192.168.50.0/24"] != "10.244.0.9" {
+			t.Errorf("a co-tenant's entry must survive the withdrawal, got %q", got.Annotations[routesAnnotation])
 		}
 	})
 }

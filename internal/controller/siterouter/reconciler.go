@@ -395,11 +395,15 @@ func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 // reconcileDelete tears down the controller's kube-ovn mediation in reverse
-// order of how Reconcile establishes it, then drops the finalizer. The ordering
-// is restore port security, then remove routes. port_security restore is
-// best-effort (vestigial cleanup — see restorePortSecurity); route withdrawal is
-// fail-hard, so a stuck withdrawal never drops the finalizer while stale routes
-// linger.
+// order of how Reconcile establishes it, then drops the finalizer. What is left
+// to tear down is the namespace route withdrawal, and it is fail-hard, so a
+// stuck withdrawal never drops the finalizer while stale routes linger.
+//
+// It used to also revert the gateway pod's port_security annotation. That was
+// vestigial by its own admission — kube-ovn v1.15.10 reconciles the
+// logical-switch-port only at pod creation, so the patch had no OVN effect, and
+// on delete the pod and its port are going away anyway. It cost a cluster-wide
+// `pods patch` grant to do nothing, so both are gone.
 func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instance) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(inst.hr, finalizer) {
 		return ctrl.Result{}, nil
@@ -424,8 +428,6 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 	}
 	inst.gatewayPod = pod
 
-	// T07: best-effort revert of the port_security relax (vestigial; see func doc).
-	r.restorePortSecurity(ctx, inst)
 	if err := r.removeNamespaceRoutes(ctx, inst); err != nil { // T07: withdraw kube-ovn routes
 		return r.cleanupFailed(ctx, inst, err)
 	}
@@ -549,8 +551,25 @@ func (r *SiteRouterReconciler) validateDeclaredNetworks(ctx context.Context, ins
 // writers of the namespace's annotations (the package_reconciler idiom). It is a
 // no-op until the gateway pod has a routable IP (the pod watch re-triggers the
 // reconcile when the IP appears).
+//
+// No tunnel means no routes. A return route sends tenant traffic for a remote
+// network to the gateway, and the guest forward chain accepts locally-originated
+// non-IPsec traffic on purpose, so before a tunnel is configured that traffic
+// leaves the gateway in the clear over the default route. strongSwan only traps
+// it once a policy exists. The documented setup order makes that window a normal
+// state rather than an odd one: the remote side dials in to this instance's
+// LoadBalancer VIP, so a tenant creates the router, reads the address off the
+// status, and fills in the peer afterwards.
+//
+// This withdraws rather than skips, and the difference matters. Returning early
+// would strand the entries of an instance whose peer was REMOVED, exactly as an
+// early return on empty remoteCIDRs would; treating the desired set as empty
+// runs the same pruning path that case already relies on.
 func (r *SiteRouterReconciler) programNamespaceRoutes(ctx context.Context, inst *instance) error {
 	cidrs := stringSlice(inst.values[remoteCIDRsValueKey])
+	if stringField(inst.values["peer"], "address") == "" {
+		cidrs = nil
+	}
 	// An empty cidrs is deliberately NOT an early return: mergeRoutes supports an
 	// empty desired set (it withdraws every entry this gateway still owns), so a
 	// remoteCIDRs list emptied down to [] must still reconcile the annotation to
@@ -631,8 +650,9 @@ func (r *SiteRouterReconciler) programNamespaceRoutes(ctx context.Context, inst 
 // NOT reconcile the OVN LSP. The earlier design patched the live pod with a
 // MergeFrom; T13 proved that ineffective. The relaxation is therefore baked onto
 // the VM's pod template in the chart (templates/vm.yaml) so the virt-launcher pod
-// is born with it, and this method only VERIFIES it — it no longer patches. The
-// finalizer's restorePortSecurity still runs on delete as best-effort cleanup.
+// is born with it, and this method only VERIFIES it — it no longer patches, and
+// nothing reverts it on delete either: the pod carrying the annotation is torn
+// down with the OVN port it applied to.
 //
 // Consequence — the D8-ordering tradeoff: because the port is relaxed from boot
 // (baked at pod creation), it is open BEFORE this method confirms the guest
@@ -665,32 +685,6 @@ func (r *SiteRouterReconciler) verifyGatewayPortSecurityRelaxed(ctx context.Cont
 }
 
 // updateStatus surfaces the instance's status. It lives in status.go (T09).
-
-// restorePortSecurity is a BEST-EFFORT revert of the port_security relaxation on
-// delete: it removes the annotation the controller/chart added (its absence
-// restores OVN's default enforcing behaviour) with a single-key merge patch on
-// the gateway pod. It deliberately does NOT block finalizer removal on failure,
-// because it is vestigial cleanup. The relaxation is baked at pod creation and a
-// live annotation flip does not reconcile the OVN port on kube-ovn v1.15.10 (so
-// the patch has no OVN effect either way), and on delete the gateway pod — and
-// with it the OVN logical-switch-port — is being torn down regardless. A failed
-// patch therefore strands nothing. A missing pod or absent annotation is a clean
-// no-op.
-func (r *SiteRouterReconciler) restorePortSecurity(ctx context.Context, inst *instance) {
-	if inst.gatewayPod == nil {
-		return
-	}
-	pod := inst.gatewayPod
-	if _, set := pod.Annotations[portSecurityAnnotation]; !set {
-		return
-	}
-	patch := client.MergeFrom(pod.DeepCopy())
-	delete(pod.Annotations, portSecurityAnnotation)
-	if err := r.Patch(ctx, pod, patch); err != nil {
-		log.FromContext(ctx).Error(err, "best-effort port_security restore failed on delete; continuing (the gateway pod and its OVN port are being torn down)",
-			"pod", pod.Name, "namespace", pod.Namespace)
-	}
-}
 
 // removeNamespaceRoutes withdraws this instance's route entries from the tenant
 // namespace annotation on delete, keyed by its persisted and current gateway

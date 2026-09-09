@@ -20,7 +20,7 @@ This is a port + productization of the reference implementation's VyOS router in
 - Docs: `README.md` (prose + generated params), `docs/security-model.md`, `docs/image-lifecycle.md`, `docs/followups.md`.
 - Tests: helm-unittest chart render (9 suites) + Go unit tests (render subset/security/net-new, deny-set, CNI mediation, status mapping, VyOS push, admission).
 
-## Phase-1 acceptance checklist (honest status)
+## Phase-1 acceptance checklist
 
 Status legend: **done** = implemented and unit-tested in this PR; **deferred-to-empirical** = implemented but its live proof needs a booted gateway (blocked on the published appliance image + the e2e run); **follow-up** = tracked, out of Phase-1 scope (`docs/followups.md`).
 
@@ -48,7 +48,7 @@ Full detail in `packages/apps/site-router/docs/followups.md`. Consolidated list:
 - Tenant-baseline Cilium exclusion for the gateway (Boundary-B hardening).
 - Controller-namespace API key + post-boot rotation.
 - Tunnel byte / rekey counter metrics (guest-command + parser change).
-- `_cluster.pod-cidr` derivation for `managementCIDR` (custom-pod-CIDR clusters without manual config).
+- `_cluster.pod-cidr` derivation for `_managementCIDR` (custom-pod-CIDR clusters without manual config).
 - IPsec local-address / LB tunnel-address wiring.
 - Portal / dashboard image + configuration lock-step (external-repo hand-off).
 - Phase 2 `site-gateway` (NAT) / Phase 3 WireGuard backend / Phase 4 HA + per-tenant egress IP + initiator model.
