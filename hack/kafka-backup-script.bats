@@ -373,6 +373,18 @@ write_backup_object() {
   [ ! -f "$STATE/actions" ]
 }
 
+@test "restore fails closed on a non-numeric recorded partition count" {
+  init_stubs
+  printf 'T\torders\tabc\t1\n' > "$STATE/s3_object"   # recorded parts is not a number
+  printf 'orders\n' > "$STATE/topics"                 # live exists at 3 partitions
+  printf 'Topic: orders\tPartitionCount: 3\tReplicationFactor: 1\n' > "$STATE/desc.orders"
+  # `[ 3 -lt abc ]` / `[ 3 -gt abc ]` exit 2 and an `if` condition is exempt from
+  # errexit, so without the recorded-shape guard the topic is skipped yet the
+  # script prints its success line and exits 0.
+  expect_fail env MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  [ ! -f "$STATE/actions" ]
+}
+
 @test "restore fails closed on an unrecognised record kind" {
   init_stubs
   printf 'X\torders\t3\t1\n' > "$STATE/s3_object"   # neither T nor C

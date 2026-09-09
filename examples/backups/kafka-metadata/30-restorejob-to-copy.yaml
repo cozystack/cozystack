@@ -1,8 +1,8 @@
 # To-copy restore: apply the source's backed-up topic metadata onto a separate
 # target application, leaving the source running. This is the "bootstrap an empty
 # cluster, then apply the metadata state" flow. The strategy renders against the
-# target (its bootstrap) but reads the S3 object keyed by the SOURCE, via
-# .Backup.ApplicationRef.
+# target (its bootstrap) but reads the exact object the source backup recorded in
+# its status.artifact.uri, which the driver injects as ARTIFACT_URI.
 apiVersion: backups.cozystack.io/v1alpha1
 kind: RestoreJob
 metadata:

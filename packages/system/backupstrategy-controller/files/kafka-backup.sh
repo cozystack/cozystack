@@ -152,6 +152,14 @@ else
     case "${kind}" in
     T)
       t=$a; parts=$b; rf=$c
+      # Validate the RECORDED shape (from the stored object) before it reaches the
+      # numeric comparisons below or --create: a non-numeric parts makes
+      # `[ "${lp}" -lt "${parts}" ]` exit 2, and an `if` condition is exempt from
+      # errexit, so the topic would be skipped yet reported restored. A
+      # well-formed but wrong-content object (which curl -f cannot catch) must
+      # fail loudly, like the unrecognised-record-kind guard below.
+      case "${parts}" in ''|*[!0-9]*) echo "unparsable recorded partition count for ${t}: '${parts}'" >&2; exit 1 ;; esac
+      case "${rf}" in ''|*[!0-9]*) echo "unparsable recorded replication factor for ${t}: '${rf}'" >&2; exit 1 ;; esac
       # grep -F -x: literal whole-line match against the live list.
       if printf '%s\n' "${live}" | grep -qxF -- "${t}"; then
         if ! desc=$("${BIN}"/kafka-topics.sh --bootstrap-server "${BOOTSTRAP}" --describe --topic "\Q${t}\E"); then
