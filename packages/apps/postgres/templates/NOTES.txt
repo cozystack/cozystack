@@ -1,4 +1,4 @@
-{{- if .Values.bootstrap.enabled }}
+{{- if and .Values.bootstrap.enabled .Values.users }}
 WARNING: this PostgreSQL was provisioned as a restore (bootstrap.enabled=true).
 
 The roles recovered from the backup keep their original password hashes, but the
