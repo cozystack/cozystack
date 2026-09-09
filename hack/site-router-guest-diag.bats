@@ -319,9 +319,14 @@ STUB
     echo "a placeholder survived substitution, so B would run a placeholder as its diagnostic" >&2
     rm -rf "$TMP"; exit 1
   }
-  yq e 'select(.kind == "Secret") | .stringData.userdata' "$TMP/b.yaml" > "$TMP/ud.yaml"
-  yq e '.write_files[] | select(.path == "/config/scripts/cozy-guest-diag.sh") | .content' \
-    "$TMP/ud.yaml" > "$TMP/shipped"
+  # B stopped shipping a `#cloud-config` when the appliance stopped having
+  # cloud-init: the seed copies `user-data` verbatim into config.boot, so the
+  # diagnostics ride their own `cozydiag` Secret, keyed the way the chart's
+  # site-router.diagFiles keys A's. Reading .write_files[] here kept passing
+  # against a shape the image could no longer boot, which is why this assertion
+  # names the Secret rather than digging inside the userdata.
+  yq e 'select(.kind == "Secret" and .metadata.name == "remote-site-b-diag") | .stringData."guest-diag.sh"' \
+    "$TMP/b.yaml" > "$TMP/shipped"
   # B and A must report in the same format: the last diagnosis was credible
   # because the same symptom appeared on both ends through two different config
   # paths, and that argument needs both to say things the same way.
