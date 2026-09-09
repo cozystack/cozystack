@@ -547,6 +547,13 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 	// restore is bounded by the same value the operator set for the backup.
 	deadline := kafkaRunDeadline(kafkaStrategyParameters(backup))
 
+	// A Backup with no recorded object can never restore; fail fast, before the
+	// readiness gate, so it does not wait out the whole deadline and then report a
+	// misleading "timed out waiting for Kafka cluster to become Ready".
+	if backup.Status.Artifact == nil || backup.Status.Artifact.URI == "" {
+		return r.markRestoreJobFailed(ctx, restoreJob, "Backup has no recorded artifact URI (status.artifact.uri); cannot locate the metadata object to restore")
+	}
+
 	// Resolve the effective target: source app by default, overridden per-field
 	// by targetApplicationRef for a to-copy restore.
 	targetNamespace := restoreJob.Namespace
@@ -640,11 +647,9 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 		return ctrl.Result{}, err
 	}
 
-	// Restore reads the object the Backup recorded, not a reconstruction, so a
-	// later change to the key layout cannot make older backups unrestorable.
-	if backup.Status.Artifact == nil || backup.Status.Artifact.URI == "" {
-		return r.markRestoreJobFailed(ctx, restoreJob, "Backup has no recorded artifact URI (status.artifact.uri); cannot locate the metadata object to restore")
-	}
+	// Restore reads the object the Backup recorded (guarded non-empty above), not a
+	// reconstruction, so a later change to the key layout cannot make older backups
+	// unrestorable.
 	artifactURI := backup.Status.Artifact.URI
 	ctxMap := kafkaRenderContext(app, targetAppName, targetNamespace, kafkaStrategyModeRestore, backup.Name, artifactURI, clientImage, kafkaStrategyParameters(backup), backup)
 	rendered, err := renderKafkaTemplate(strategy.Spec.Template, ctxMap)

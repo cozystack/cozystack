@@ -97,7 +97,10 @@ while [ \$# -gt 0 ]; do
   esac
   shift
 done
-if [ "\$mode" = describe ]; then cat "$STATE/cfg.\$name" 2>/dev/null || true; exit 0; fi
+if [ "\$mode" = describe ]; then
+  [ -n "\${CFG_FAIL:-}" ] && exit 3
+  cat "$STATE/cfg.\$name" 2>/dev/null || true; exit 0
+fi
 if [ "\$mode" = alter ]; then echo "\$name \$add" >> "$STATE/configs_applied"; exit 0; fi
 exit 0
 STUB
@@ -309,4 +312,73 @@ write_backup_object() {
 @test "cleanup treats a 500 as a retryable failure" {
   init_stubs
   expect_fail env MODE=cleanup DELETE_CODE=500 S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+}
+
+@test "cleanup treats a 404 as success (idempotent delete)" {
+  init_stubs
+  # Dropping 404 from the success case routes it to the `*)` failure arm; this
+  # would then requeue the delete forever against an already-gone object.
+  MODE=cleanup DELETE_CODE=404 S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+}
+
+# ---- fail-closed guards (each reddens when its guard is removed) -----------
+
+@test "unknown MODE fails closed instead of running the restore branch" {
+  init_stubs; write_backup_object
+  : > "$STATE/topics"
+  # internal/template returns a leaf unchanged when its render fails, so an
+  # unrendered {{ .Mode }} reaches the pod literally; without the MODE case the
+  # bare `else` would run the (mutating) restore branch during a backup. With a
+  # valid object seeded, dropping the guard makes the script exit 0 here.
+  expect_fail env MODE='{{ .Mode }}' S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  [ ! -f "$STATE/actions" ]
+}
+
+@test "non-s3 ARTIFACT_URI fails closed" {
+  init_stubs; seed_three
+  # Without the s3:// prefix guard the `${ARTIFACT_URI#s3://}` split produces a
+  # garbage bucket/key and the backup uploads to the wrong place, exiting 0.
+  expect_fail env MODE=backup ARTIFACT_URI="https://bkt/ns/app/run/x.txt" S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+}
+
+@test "backup fails closed on an unparsable topic describe" {
+  init_stubs
+  printf 'orders\n' > "$STATE/topics"
+  printf 'Topic: orders no-partition-count-here\n' > "$STATE/desc.orders"
+  # Empty parts/rf must abort, not write the record `T\torders\t\t` that a later
+  # restore feeds to `--partitions ""`.
+  expect_fail env MODE=backup S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  [ ! -f "$STATE/s3_object" ]
+}
+
+@test "backup fails closed when kafka-configs --describe errors" {
+  init_stubs
+  printf 'orders\n' > "$STATE/topics"
+  printf 'Topic: orders\tPartitionCount: 1\tReplicationFactor: 1\n' > "$STATE/desc.orders"
+  # A configs describe that errors (not "no non-default configs") must abort, not
+  # silently drop the topic's configs and report success.
+  expect_fail env MODE=backup CFG_FAIL=1 S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  [ ! -f "$STATE/s3_object" ]
+}
+
+@test "restore fails closed on an unparsable live describe" {
+  init_stubs
+  printf 'T\torders\t3\t1\n' > "$STATE/s3_object"   # backup wants 3 partitions, RF 1
+  printf 'orders\n' > "$STATE/topics"               # live exists
+  printf 'Topic: orders\tReplicationFactor: 1\n' > "$STATE/desc.orders"  # RF matches, no PartitionCount
+  # An unparsable live describe must abort the restore, not report the topic
+  # restored without altering it. (set -euo pipefail already aborts at the
+  # `lp=$(describe_field ...)` assignment; the explicit guard is belt-and-braces.)
+  expect_fail env MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  [ ! -f "$STATE/actions" ]
+}
+
+@test "restore fails closed on an unrecognised record kind" {
+  init_stubs
+  printf 'X\torders\t3\t1\n' > "$STATE/s3_object"   # neither T nor C
+  : > "$STATE/topics"
+  # A well-formed but wrong-content object (curl -f catches transport errors, not
+  # a wrong-content 200) must not restore a subset and report success.
+  expect_fail env MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  [ ! -f "$STATE/actions" ]
 }

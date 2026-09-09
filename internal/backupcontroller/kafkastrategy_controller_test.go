@@ -282,6 +282,138 @@ func TestReconcileKafkaRestore_RejectsWrongTargetKind(t *testing.T) {
 	}
 }
 
+// restoreJobRunning builds a RestoreJob already past its first-reconcile
+// bookkeeping (StartedAt preset), so a test reaches the gates below it.
+func restoreJobRunning(name, namespace string, target *corev1.TypedLocalObjectReference) *backupsv1alpha1.RestoreJob {
+	now := metav1.Now()
+	return &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef:            corev1.LocalObjectReference{Name: "bk"},
+			TargetApplicationRef: target,
+		},
+		Status: backupsv1alpha1.RestoreJobStatus{StartedAt: &now, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+	}
+}
+
+// TestReconcileKafkaRestore_ToCopy pins the to-copy happy path AND the
+// target-field merge: the restore resolves the TARGET (targetApplicationRef),
+// not the source. Only "dst" is registered, so reaching Succeeded proves the
+// TargetApplicationRef.Name merge was observed - ignoring it would resolve the
+// absent source "src" and fail.
+func TestReconcileKafkaRestore_ToCopy(t *testing.T) {
+	rj := restoreJobRunning("rj", "tenant",
+		&corev1.TypedLocalObjectReference{APIGroup: strp(backupsv1alpha1.DefaultApplicationAPIGroup), Kind: "Kafka", Name: "dst"})
+	backup := kafkaBackup("bk", "tenant") // source "src", artifact URI recorded
+	completed := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "rj-restore"},
+		Status:     batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}},
+	}
+	_, r := newKafkaTestEnv(t, newKafkaApp("dst", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(rj, backup, newKafkaStrategy("cozy-default-kafka"),
+			readyKafkaCluster("kafka-dst", "tenant"), kafkaBrokerPod("kafka-dst", "tenant", "quay.io/strimzi/kafka:test"), completed))
+
+	if _, err := r.reconcileKafkaRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileKafkaRestore: %v", err)
+	}
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(rj), got); err != nil {
+		t.Fatalf("get rj: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
+		t.Fatalf("to-copy restore phase = %q, want Succeeded (target merge unobserved?)", got.Status.Phase)
+	}
+}
+
+// TestReconcileKafkaRestore_NoRecordedArtifactURI pins that a Backup with no
+// recorded object fails FAST, before the readiness gate - not after waiting out
+// the deadline and reporting a misleading readiness timeout. No cluster is
+// seeded, so the old ordering would requeue instead of failing.
+func TestReconcileKafkaRestore_NoRecordedArtifactURI(t *testing.T) {
+	rj := restoreJobRunning("rj", "tenant", nil)
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: kafkaAppRef("src"),
+			StrategyRef:    corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.KafkaStrategyKind, Name: "cozy-default-kafka"},
+		},
+	}
+	_, r := newKafkaTestEnv(t, newKafkaApp("src", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(rj, backup, newKafkaStrategy("cozy-default-kafka")))
+
+	if _, err := r.reconcileKafkaRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileKafkaRestore: %v", err)
+	}
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(rj), got); err != nil {
+		t.Fatalf("get rj: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("no-artifact restore phase = %q, want Failed fast (not a readiness timeout)", got.Status.Phase)
+	}
+	if !strings.Contains(got.Status.Message, "artifact URI") {
+		t.Fatalf("message = %q, want it to name the missing artifact URI", got.Status.Message)
+	}
+}
+
+// TestReconcileKafkaRestore_TargetClusterNotReady pins that while the target
+// Kafka cluster is not Ready the restore requeues and creates no Job.
+func TestReconcileKafkaRestore_TargetClusterNotReady(t *testing.T) {
+	rj := restoreJobRunning("rj", "tenant", nil)
+	backup := kafkaBackup("bk", "tenant")
+	notReady := &kafkatypes.Kafka{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "kafka-src"},
+		Status: kafkatypes.KafkaStatus{Conditions: []metav1.Condition{
+			{Type: kafkatypes.ConditionTypeReady, Status: metav1.ConditionFalse, Reason: "Creating", Message: "brokers starting"},
+		}},
+	}
+	_, r := newKafkaTestEnv(t, newKafkaApp("src", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(rj, backup, newKafkaStrategy("cozy-default-kafka"), notReady))
+
+	res, err := r.reconcileKafkaRestore(context.Background(), rj, backup)
+	if err != nil {
+		t.Fatalf("reconcileKafkaRestore: %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Fatalf("expected a requeue while the target cluster is not Ready, got %+v", res)
+	}
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(rj), got); err != nil {
+		t.Fatalf("get rj: %v", err)
+	}
+	if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded {
+		t.Fatal("restore reached Succeeded while target cluster not Ready")
+	}
+	jobs := &batchv1.JobList{}
+	if err := r.List(context.Background(), jobs, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Fatalf("expected no restore Job while cluster not Ready, got %d", len(jobs.Items))
+	}
+}
+
+// TestReconcileKafkaRestore_TargetNotFound pins that a restore whose target
+// application is not registered terminates as Failed rather than requeuing.
+func TestReconcileKafkaRestore_TargetNotFound(t *testing.T) {
+	rj := restoreJobRunning("rj", "tenant", nil) // target defaults to the source "src"
+	backup := kafkaBackup("bk", "tenant")
+	// Seed a different app so the target "src" resolves NotFound.
+	_, r := newKafkaTestEnv(t, newKafkaApp("other", "tenant"),
+		clientfake.NewClientBuilder().WithObjects(rj, backup, newKafkaStrategy("cozy-default-kafka")))
+
+	if _, err := r.reconcileKafkaRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileKafkaRestore: %v", err)
+	}
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(rj), got); err != nil {
+		t.Fatalf("get rj: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("missing-target restore phase = %q, want Failed", got.Status.Phase)
+	}
+}
+
 // TestCreateKafkaBackupArtifact_StampsScope pins that every produced Backup
 // carries strategy.backups.cozystack.io/scope=topic-metadata, so `kubectl
 // describe backup` and any consumer see the narrow scope. Dropping the stamp
