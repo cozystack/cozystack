@@ -35,10 +35,12 @@
 # in the audit's input the moment it exists, so the gap closes at the commit
 # that opens it rather than at whatever later date someone counts.
 #
-# A test file that needs its own fixture setup must call `strict_setup` from its
-# `setup()` rather than relying on the definition below, since a later `setup()`
-# in the file silently replaces this one. That is the second way the strictness
-# can be lost without anyone noticing, so the audit checks it too.
+# A test file that needs its own fixture setup must call `strict_setup` directly
+# as the first effective command in its `setup()` rather than relying on the
+# definition below, since a later `setup()` in the file silently replaces this
+# one. Blank and comment lines may precede the call. The audit rejects wrappers
+# and conditional placement rather than guessing whether the call changes the
+# shell that runs the test body.
 strict_setup() {
   set -u
 }

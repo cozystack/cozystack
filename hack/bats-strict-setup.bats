@@ -38,8 +38,9 @@
 #
 # THE SECOND WAY THE STRICTNESS GOES MISSING is a file that loads the helper and
 # then defines its own `setup()`, which silently replaces the helper's. That is
-# checked too: a file-local `setup()` must call `strict_setup`. No file in the
-# tree defines one today, which is precisely when a guard is cheap to add.
+# checked too: a file-local `setup()` must call `strict_setup` directly as its
+# first effective command. No file in the tree defines one today, which is
+# precisely when a guard is cheap to add.
 #
 # LIMITS, stated rather than discovered. The load scan is lexical and anchored
 # at column zero. A `load` indented inside a function body would not run at source
@@ -48,11 +49,12 @@
 # and a file with a reason to differ has to change this guard rather than work
 # around it. The setup scan is deliberately fail-closed: it recognizes the
 # common Bash declaration spellings wherever they are indented, but accepts one
-# column-zero `setup() {` only, and credits only an executable `strict_setup`
-# line inside that body. This rejects ambiguous nesting and keeps comments or an
-# unrelated helper from satisfying the guard. In the other direction the load
-# line is credited wherever it appears at column zero, including inside a heredoc
-# that writes a fixture .bats, which would let a file take credit for text it only
+# column-zero `setup() {` only, and requires its first nonblank, noncomment line
+# to be a standalone `strict_setup` command. This rejects ambiguous nesting and
+# conditional placement without pretending to parse shell, while allowing
+# harmless blank and comment formatting before the call. In the other direction
+# the load line is credited wherever it appears at column zero, including inside
+# a heredoc that writes a fixture .bats, which would let a file take credit for text it only
 # generates; no file does that today, and the fixtures below assemble the line
 # from printf arguments so this guard does not do it to itself. The nested Bats
 # canary below separately executes the real helper and verifies its `set -u`
@@ -121,10 +123,18 @@ bss_audit() {
       echo "$_b: uses a noncanonical or repeated setup declaration; use exactly one column-zero \`setup() {\` block"
       continue
     fi
-    if [ "$_canonical_count" -eq 1 ] \
-      && ! sed -n '/^setup() {$/,/^}$/p' "$_f" \
+    if [ "$_canonical_count" -eq 1 ]; then
+      _first_effective=$(awk '
+        /^setup\(\) \{$/ { in_setup=1; next }
+        in_setup && /^}$/ { exit }
+        in_setup && /^[[:space:]]*$/ { next }
+        in_setup && /^[[:space:]]*#/ { next }
+        in_setup { print; exit }
+      ' "$_f")
+      if ! printf '%s\n' "$_first_effective" \
         | grep -qE '^[[:space:]]*strict_setup[[:space:]]*$'; then
-      echo "$_b: defines its own setup() and never calls strict_setup as a command, which drops the \`set -u\` the helper exists to restore"
+        echo "$_b: setup() must call strict_setup directly as its first effective command; blank and comment lines may precede it"
+      fi
     fi
   done
   return 0
@@ -159,7 +169,17 @@ bss_add_own_setup() {
 }
 
 bss_add_strict_own_setup() {
-  printf '%s\n' 'setup() {' '  strict_setup' '  export FIXTURE=1' '}' >> "$1/subject.bats"
+  printf '%s\n' 'setup() {' '' '  # Restore the unit-suite contract first.' '  strict_setup' '  export FIXTURE=1' '}' >> "$1/subject.bats"
+  return 0
+}
+
+bss_add_subshell_strict_own_setup() {
+  printf '%s\n' 'setup() {' '  (' '    strict_setup' '  )' '}' >> "$1/subject.bats"
+  return 0
+}
+
+bss_add_conditional_strict_own_setup() {
+  printf '%s\n' 'setup() {' '  if false; then' '    strict_setup' '  fi' '}' >> "$1/subject.bats"
   return 0
 }
 
@@ -198,12 +218,12 @@ bss_rename() {
   return 0
 }
 
-bss_write_nounset_canary() {
+bss_add_nounset_canary() {
   printf '%s\n' \
-    "load '$BSS_DIR/test_helper.bash'" \
     '@test "nounset canary" {' \
     '  printf "%s\n" "$BSS_NOUNSET_CANARY_UNSET"' \
-    '}' > "$1/nounset-canary.bats"
+    '}' >> "$1/subject.bats"
+  ln -s "$BSS_DIR/test_helper.bash" "$1/test_helper.bash"
   return 0
 }
 
@@ -253,22 +273,37 @@ bss_write_nounset_canary() {
   rm -rf "$tmp"
 }
 
-@test "the shared helper enables nounset in a real nested Bats test" {
+@test "default and direct canonical setup enable nounset in real nested Bats tests" {
   tmp=$(mktemp -d)
-  bss_write_nounset_canary "$tmp"
   unset BSS_NOUNSET_CANARY_UNSET
 
-  child_status=0
-  output=$(bats --formatter tap "$tmp/nounset-canary.bats" 2>&1) || child_status=$?
-  rm -rf "$tmp"
+  for form in default direct; do
+    mkdir "$tmp/$form"
+    bss_new_fixture "$tmp/$form"
+    bss_add_load "$tmp/$form"
+    if [ "$form" = direct ]; then
+      bss_add_strict_own_setup "$tmp/$form"
+    fi
+    bss_add_nounset_canary "$tmp/$form"
+    report=$(bss_audit "$tmp/$form")
+    if [ -n "$report" ]; then
+      echo "FAIL: the supported $form setup was rejected: $report"
+      rm -rf "$tmp"
+      false
+    fi
 
-  if [ "$child_status" -eq 0 ]; then
-    echo "FAIL: nested Bats accepted an unset test-body read; strict_setup did not enable nounset"
-    echo "$output"
-    false
-  fi
-  printf '%s\n' "$output" | grep -Fq 'not ok 1 nounset canary'
-  printf '%s\n' "$output" | grep -Fq 'BSS_NOUNSET_CANARY_UNSET: unbound variable'
+    child_status=0
+    output=$(bats --formatter tap "$tmp/$form/subject.bats" 2>&1) || child_status=$?
+    if [ "$child_status" -eq 0 ]; then
+      echo "FAIL: nested Bats accepted an unset test-body read with $form setup"
+      echo "$output"
+      rm -rf "$tmp"
+      false
+    fi
+    printf '%s\n' "$output" | grep -Fq 'not ok 1 nounset canary'
+    printf '%s\n' "$output" | grep -Fq 'BSS_NOUNSET_CANARY_UNSET: unbound variable'
+  done
+  rm -rf "$tmp"
 }
 
 @test "every hack/*.bats unit file restores set -u through the shared helper" {
@@ -339,7 +374,7 @@ bss_write_nounset_canary() {
   bss_add_load "$tmp"
   bss_add_own_setup "$tmp"
   report=$(bss_audit "$tmp")
-  if ! echo "$report" | grep -q 'never calls strict_setup'; then
+  if ! echo "$report" | grep -q 'first effective command'; then
     echo "FAIL: a setup() override was not reported; got: $report"
     rm -rf "$tmp"
     false
@@ -358,6 +393,41 @@ bss_write_nounset_canary() {
     rm -rf "$tmp"
     false
   fi
+  rm -rf "$tmp"
+}
+
+@test "subshell and conditional strict_setup placements are rejected and leave nounset off" {
+  tmp=$(mktemp -d)
+  unset BSS_NOUNSET_CANARY_UNSET
+
+  for form in subshell conditional; do
+    mkdir "$tmp/$form"
+    bss_new_fixture "$tmp/$form"
+    bss_add_load "$tmp/$form"
+    if [ "$form" = subshell ]; then
+      bss_add_subshell_strict_own_setup "$tmp/$form"
+    else
+      bss_add_conditional_strict_own_setup "$tmp/$form"
+    fi
+    bss_add_nounset_canary "$tmp/$form"
+
+    report=$(bss_audit "$tmp/$form")
+    if ! printf '%s\n' "$report" | grep -q 'first effective command'; then
+      echo "FAIL: the unsafe $form setup was accepted: $report"
+      rm -rf "$tmp"
+      false
+    fi
+
+    child_status=0
+    output=$(bats --formatter tap "$tmp/$form/subject.bats" 2>&1) || child_status=$?
+    if [ "$child_status" -ne 0 ]; then
+      echo "FAIL: the $form fixture unexpectedly enabled nounset:"
+      echo "$output"
+      rm -rf "$tmp"
+      false
+    fi
+    printf '%s\n' "$output" | grep -Fq 'ok 1 nounset canary'
+  done
   rm -rf "$tmp"
 }
 
@@ -418,7 +488,7 @@ bss_write_nounset_canary() {
   bss_add_load "$tmp"
   bss_add_commented_strict_own_setup "$tmp"
   report=$(bss_audit "$tmp")
-  if ! echo "$report" | grep -q 'never calls strict_setup as a command'; then
+  if ! echo "$report" | grep -q 'first effective command'; then
     echo "FAIL: a comment-only strict_setup mention was credited; got: $report"
     rm -rf "$tmp"
     false
@@ -433,7 +503,7 @@ bss_write_nounset_canary() {
   bss_add_unrelated_strict_call "$tmp"
   bss_add_own_setup "$tmp"
   report=$(bss_audit "$tmp")
-  if ! echo "$report" | grep -q 'never calls strict_setup as a command'; then
+  if ! echo "$report" | grep -q 'first effective command'; then
     echo "FAIL: a strict_setup call outside setup was credited; got: $report"
     rm -rf "$tmp"
     false
