@@ -55,10 +55,7 @@ func captureTenantUpdateOptions(opts ...client.UpdateOption) *metav1.UpdateOptio
 }
 
 func captureTenantDeleteOptions(opts ...client.DeleteOption) *metav1.DeleteOptions {
-	converted := &client.DeleteOptions{}
-	for _, option := range opts {
-		option.ApplyToDelete(converted)
-	}
+	converted := (&client.DeleteOptions{}).ApplyOptions(opts)
 	return converted.AsDeleteOptions().DeepCopy()
 }
 
