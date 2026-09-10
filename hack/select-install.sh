@@ -57,9 +57,9 @@
 #   target resolves to a real PackageSource, there are no dependency cycles, and
 #   every Chainsaw suite under <suites-dir> resolves via suite_to_source() to
 #   one or more real PackageSources. Exit non-zero on any failure. The graph
-#   lives next to the packages and cannot drift from the suite directories; the
-#   hand-maintained suite mapping is the only part that can, so it is guarded
-#   here.
+#   is read from the current PackageSource inventory. The hand-maintained suite
+#   mapping can drift independently, so validation checks it against both that
+#   inventory and the current suite directories.
 #
 # Unlike select-e2e.sh's reverse walk, the forward walk KEEPS the
 # cozystack.cozystack-engine edge: every *-application declares
