@@ -59,7 +59,8 @@ export function useK8sList<T extends K8sResource>(
     ...queryOptions,
   })
 
-  const hasResourceVersion = !!query.data?.metadata?.resourceVersion
+  // Placeholder data belongs to a previous key and cannot seed this key's watch.
+  const hasResourceVersion = !query.isPlaceholderData && !!query.data?.metadata?.resourceVersion
 
   const [restart, setRestart] = useState({ key: queryKey, generation: 0 })
   const restartWatch = useCallback(() => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { act, cleanup, renderHook } from "@testing-library/react"
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { QueryClient, QueryClientProvider, useQueryClient, type DefaultOptions } from "@tanstack/react-query"
 import { K8sClient, K8sProvider, useK8sList } from "@cozystack/k8s-client"
 import type { K8sResource } from "@cozystack/k8s-client"
 import type { ReactNode } from "react"
@@ -9,16 +9,24 @@ const ref = { apiGroup: "cdi.kubevirt.io", apiVersion: "v1beta1", plural: "datav
 const selector = "metadata.name=vm-disk-demo"
 const dv: K8sResource = { apiVersion: "cdi.kubevirt.io/v1beta1", kind: "DataVolume", metadata: { name: "vm-disk-demo", namespace: "tenant-demo" } }
 
-function setup() {
+function productionQueryDefaults() {
+  const { result, unmount } = renderHook(() => useQueryClient().getDefaultOptions(), { wrapper: K8sProvider })
+  const defaults = result.current
+  unmount()
+  return defaults
+}
+
+function setup(defaultOptions: DefaultOptions = { queries: { retry: false, gcTime: Infinity } }) {
   const client = new K8sClient()
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
+  const queryClient = new QueryClient({ defaultOptions })
   const streams: ReadableStreamDefaultController<Uint8Array>[] = []
   const requests: { url: URL; signal?: AbortSignal | null }[] = []
-  const replies: { listError?: number; watchError?: number; watchPending?: Promise<Response> } = {}
+  const replies: { listPending?: Promise<Response>; listError?: number; watchError?: number; watchPending?: Promise<Response> } = {}
   const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = new URL(String(input), "https://console.example.org")
     requests.push({ url, signal: init?.signal })
     if (!url.searchParams.has("watch")) {
+      if (replies.listPending) return replies.listPending
       if (replies.listError) return Response.json({ message: "list denied" }, { status: replies.listError })
       return Response.json({ apiVersion: dv.apiVersion, kind: "DataVolumeList", metadata: { resourceVersion: "10" }, items: [dv] })
     }
@@ -58,6 +66,58 @@ describe("useK8sList watch lifecycle", () => {
     expect(h.requests.every(r => r.url.searchParams.get("fieldSelector") === selector)).toBe(true)
     expect(h.requests[1].url.searchParams.get("resourceVersion")).toBe("10")
     expect(result.current.watchReady).toBe(true)
+  })
+
+  it.each([
+    { change: "namespace", resourceVersion: "10" },
+    { change: "namespace", resourceVersion: "20" },
+    { change: "selector", resourceVersion: "10" },
+    { change: "selector", resourceVersion: "20" },
+  ])("starts the $change watch after production placeholder data is replaced at RV $resourceVersion", async ({ change, resourceVersion }) => {
+    const h = setup(productionQueryDefaults())
+    const watchSpy = vi.spyOn(h.client, "watch")
+    const initialProps = { namespace: ref.namespace, fieldSelector: selector }
+    const { result, rerender } = renderHook(
+      ({ namespace, fieldSelector }) => useK8sList({ ...ref, namespace }, { fieldSelector }),
+      { wrapper: h.wrapper, initialProps },
+    )
+    await advance()
+    expect(h.counts()).toEqual({ list: 1, watch: 1 })
+    const previousCallback = watchSpy.mock.calls[0][5]
+    let finish!: (response: Response) => void
+    h.replies.listPending = new Promise(resolve => { finish = resolve })
+    const next = change === "namespace"
+      ? { namespace: "tenant-second", fieldSelector: selector }
+      : { namespace: ref.namespace, fieldSelector: "metadata.name=vm-disk-second" }
+    const nextDisk = {
+      ...dv,
+      metadata: { name: change === "namespace" ? dv.metadata.name : "vm-disk-second", namespace: next.namespace },
+    }
+    rerender(next)
+    await advance()
+    expect(result.current.isPlaceholderData).toBe(true)
+    expect(result.current.data?.items).toEqual([dv])
+    expect(result.current.watchReady).toBe(false)
+    expect(h.requests[1].signal?.aborted).toBe(true)
+    expect(h.counts()).toEqual({ list: 2, watch: 1 })
+
+    finish(Response.json({ metadata: { resourceVersion }, items: [nextDisk] }))
+    await advance()
+    expect(result.current.isPlaceholderData).toBe(false)
+    expect(result.current.data?.items).toEqual([nextDisk])
+    expect(h.counts()).toEqual({ list: 2, watch: 2 })
+    expect(h.requests.at(-1)?.url.pathname).toContain(`/namespaces/${next.namespace}/`)
+    expect(h.requests.at(-1)?.url.searchParams.get("fieldSelector")).toBe(next.fieldSelector)
+    expect(h.requests.at(-1)?.url.searchParams.get("resourceVersion")).toBe(resourceVersion)
+    expect(result.current.watchReady).toBe(true)
+
+    h.streams[1].enqueue(new TextEncoder().encode(JSON.stringify({ type: "MODIFIED", object: { ...nextDisk, status: { phase: "Succeeded" } } }) + "\n"))
+    await advance()
+    expect(result.current.data?.items[0].status).toEqual({ phase: "Succeeded" })
+    act(() => { previousCallback({ type: "MODIFIED", object: { ...nextDisk, status: { phase: "Failed" } } }) })
+    await advance()
+    expect(result.current.data?.items[0].status).toEqual({ phase: "Succeeded" })
+    expect(h.counts()).toEqual({ list: 2, watch: 2 })
   })
 
   it("waits for accepted response headers before reporting readiness", async () => {
