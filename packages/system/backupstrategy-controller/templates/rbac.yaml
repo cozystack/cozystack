@@ -157,10 +157,11 @@ rules:
 # MongoDB strategy: read the operator-side PerconaServerMongoDB CR to gate on
 # "backups enabled + storage declared" preconditions, create one-shot
 # PerconaServerMongoDBBackup CRs on the BackupJob path, and create
-# PerconaServerMongoDBRestore CRs on the RestoreJob path. As with MariaDB the
-# driver only ever Creates/Lists/Gets these objects — it never patches or
-# deletes them; their lifecycle is owned by the psmdb operator and (for
-# cleanup) by tenants / explicit teardown flows, never by this controller.
+# PerconaServerMongoDBRestore CRs on the RestoreJob path. The Backup/Restore CRs
+# are only ever Created/Listed/Gotten — their lifecycle is owned by the psmdb
+# operator and (for cleanup) by tenants / explicit teardown flows. The cluster
+# CR is patched only on the useSystemBucket flow (storage injection, below); it
+# is never deleted.
 - apiGroups: ["psmdb.percona.com"]
   resources: ["perconaservermongodbs"]
   # patch/update: the useSystemBucket flow SSA-injects spec.backup.storages
