@@ -26,7 +26,7 @@ tests:
         'evil";id;echo "x': {}
     asserts:
       - failedTemplate:
-          errorMessage: 'invalid username "evil\";id;echo \"x": a username may contain only letters, digits and the characters -._ , must not be "." or "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+          errorMessage: 'invalid username "evil\";id;echo \"x": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
 
   - it: fails the render for a username with a space
     set:
@@ -45,7 +45,7 @@ tests:
         '.': {}
     asserts:
       - failedTemplate:
-          errorMessage: 'invalid username ".": a username may contain only letters, digits and the characters -._ , must not be "." or "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+          errorMessage: 'invalid username ".": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
 
   - it: fails the render for the reserved name ".."
     set:
@@ -53,7 +53,17 @@ tests:
         '..': {}
     asserts:
       - failedTemplate:
-          errorMessage: 'invalid username "..": a username may contain only letters, digits and the characters -._ , must not be "." or "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+          errorMessage: 'invalid username "..": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+
+  # IsConfigMapKey rejects ANY name starting with ".." (hasChDirPrefix), not just
+  # the literal "..", so "..foo" is charset-legal yet cannot install.
+  - it: fails the render for a name starting with ".."
+    set:
+      users:
+        '..foo': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "..foo": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
 
   - it: fails the render for a username longer than 253 characters
     set:
