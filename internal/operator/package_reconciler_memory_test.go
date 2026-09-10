@@ -19,6 +19,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -451,5 +452,79 @@ func TestMemoryDisableStillWorksWithCorruptSafetyState(t *testing.T) {
 	}
 	if limitRangeExists(t, cl, ns.Name) {
 		t.Fatal("reenable bypassed invalid state")
+	}
+}
+
+func TestMemoryDeletingPackageDoesNotReinstatePolicy(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		for _, held := range []bool{false, true} {
+			t.Run(fmt.Sprintf("shared=%t/held=%t", shared, held), func(t *testing.T) {
+				scheme := limitRangeScheme(t)
+				if err := cozyv1alpha1.AddToScheme(scheme); err != nil {
+					t.Fatal(err)
+				}
+				if err := helmv2.AddToScheme(scheme); err != nil {
+					t.Fatal(err)
+				}
+				now := metav1.Now()
+				pkg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{
+					Name: "retiring", UID: "retiring-uid", Finalizers: []string{"foregroundDeletion"}, DeletionTimestamp: &now,
+				}}
+				source := &cozyv1alpha1.PackageSource{ObjectMeta: metav1.ObjectMeta{Name: pkg.Name}, Spec: cozyv1alpha1.PackageSourceSpec{
+					Variants: []cozyv1alpha1.Variant{{Name: "default", Components: []cozyv1alpha1.Component{{Name: "component", Install: &cozyv1alpha1.ComponentInstall{Namespace: "cozy-monitoring"}}}}},
+				}}
+				builder := memoryTestClientBuilder(scheme).WithStatusSubresource(pkg).WithObjects(pkg, source)
+				if shared {
+					active := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Name: "active", UID: "active-uid"}}
+					activeSource := source.DeepCopy()
+					activeSource.Name = active.Name
+					builder.WithObjects(active, activeSource)
+				}
+				cl := builder.Build()
+				memoryReconcile(t, cl, "32Gi")
+				limit := "32Gi"
+				if held {
+					limit = "4Gi"
+					state := memoryReconcile(t, cl, limit)
+					acknowledgeMemory(t, cl, state.acknowledgement())
+				}
+				nsKey := types.NamespacedName{Name: "cozy-monitoring"}
+				before := &corev1.Namespace{}
+				if err := cl.Get(t.Context(), nsKey, before); err != nil {
+					t.Fatal(err)
+				}
+				r := memoryReconciler(cl, limit)
+				r.Scheme = scheme
+				for range 2 {
+					if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Name: pkg.Name}}); err != nil {
+						t.Fatal(err)
+					}
+					if got, want := limitRangeExists(t, cl, nsKey.Name), shared && !held; got != want {
+						t.Fatalf("policy exists after deleting Package reconcile = %t; want %t", got, want)
+					}
+					after := &corev1.Namespace{}
+					if err := cl.Get(t.Context(), nsKey, after); err != nil {
+						t.Fatal(err)
+					}
+					for _, key := range []string{MemoryStateAnnotation, MemoryAcknowledgementAnnotation} {
+						if !reflect.DeepEqual(before.Annotations[key], after.Annotations[key]) {
+							t.Fatalf("deleting Package changed %s", key)
+						}
+					}
+				}
+				if shared {
+					if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "active"}}); err != nil {
+						t.Fatal(err)
+					}
+					if !limitRangeExists(t, cl, nsKey.Name) {
+						t.Fatal("remaining active Package cannot apply its policy")
+					}
+				} else {
+					// A later reinstall must retain the larger default's history.
+					state := memoryReconcile(t, cl, "2Gi")
+					requireMemoryHeld(t, cl, state)
+				}
+			})
+		}
 	}
 }

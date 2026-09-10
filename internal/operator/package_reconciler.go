@@ -888,7 +888,9 @@ func (r *PackageReconciler) reconcileNamespaces(ctx context.Context, pkg *cozyv1
 		}
 		logger.Info("reconciled namespace", "name", nsName, "privileged", privileged[nsName])
 
-		if isSystem && !limitRangeDisabled {
+		// Cleanup excludes deleting Packages; their remaining reconciliation must
+		// not reinstate a retired policy or consume an acknowledgement.
+		if isSystem && !limitRangeDisabled && pkg.DeletionTimestamp.IsZero() {
 			// Logged and stepped over rather than returned. The LimitRange is
 			// opportunistic hardening against the Talos OOM handler's victim
 			// selection; a namespace that does not get one is back to the
@@ -1035,11 +1037,8 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 
 	desired := r.systemDefaultsLimitRange(nsName, r.SystemNamespaceMemoryLimit)
 
-	// Steady state, and the only path that writes nothing. The spec comparison is semantic
-	// rather than structural so that a LimitRange written in a different but equivalent
-	// notation does not re-apply forever. The managed-by label is compared beside it because
-	// deleteSystemDefaultsLimitRange reads that label to decide whether the object is this
-	// reconciler's to remove.
+	// Equivalent quantities avoid a LimitRange write even when notation differs.
+	// Namespace safety state may already have been persisted above.
 	if apiequality.Semantic.DeepEqual(existing.Spec, desired.Spec) &&
 		existing.Labels[managedByLabel] == desired.Labels[managedByLabel] {
 		return nil
@@ -1101,9 +1100,8 @@ func systemDefaultsLimitRangeApplyConfiguration(lr *corev1.LimitRange) *corev1ac
 // else in this namespace already has an opinion about container memory, the namespace is not
 // ours to default. That is the same rule the tenant-namespace exclusion rests on.
 //
-// The List is cached: a LimitRange informer already backs the Get above, and there is one
-// small object per namespace behind it, so this costs no apiserver call. It is the pod scan
-// that has to bypass the cache, and only the pod scan.
+// Foreign-policy Lists use the LimitRange cache. Ownership and Namespace state
+// Gets use APIReader, as do the workload scans; no workload informer is needed.
 func (r *PackageReconciler) foreignContainerMemoryPolicy(ctx context.Context, nsName string) (string, error) {
 	present := &corev1.LimitRangeList{}
 	if err := r.List(ctx, present, client.InNamespace(nsName)); err != nil {
