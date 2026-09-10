@@ -149,39 +149,13 @@ func main() {
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
 	flag.StringVar(&systemNamespaceMemoryLimit, "system-namespace-memory-limit", DefaultSystemNamespaceMemoryLimit,
-		"Default container memory limit applied through a LimitRange in every system namespace. "+
-			"Keeps system components out of the Talos userspace OOM handler's victim set, which only "+
-			"considers cgroups with no memory.max. The default is deliberately far above any real "+
-			"working set: the handler discards a cgroup for having a memory.max at all, whatever its "+
-			"value, so what this buys is immunity rather than a fitted ceiling, and a ceiling nothing "+
-			"reaches cannot turn a rare pressure-driven kill into a deterministic one. Lower it to make "+
-			"it bind, per component or fleet-wide, once real usage is known. "+
-			"It must stay above the largest memory request in any system namespace: a defaulted limit "+
-			"below a container's own request is rejected at admission, so a namespace holding such a "+
-			"container is left with no default at all rather than one that would stop its pods. Grep "+
-			"the operator log for \"withholding the default container memory limit\" to find those, and "+
-			"fix them by giving the container a limit of its own or by raising this value above its "+
-			"request. "+
-			"Scope is every namespace a Package targets that is not a tenant namespace, which "+
-			"includes kube-system - cozystack-scheduler is installed there - so namespaces owned "+
-			"by the underlying distribution are covered too. A namespace where another LimitRange "+
-			"already says anything about memory is left alone, in any field and at either the "+
-			"Container or the Pod scope, because two defaults leave the effective ceiling to the "+
-			"order LimitRanger iterates them and a max, min or maxLimitRequestRatio can reject the "+
-			"pods this default would produce. Empty or 0 disables the LimitRange. On the next "+
-			"Package reconcile, the operator removes every LimitRange carrying its "+
-			"app.kubernetes.io/managed-by=cozystack-package-controller ownership label, including "+
-			"objects in namespaces no active Package targets.")
-
+		"Default container memory limit in eligible system namespaces, including kube-system. "+
+			"Lowering or an oversized request creates a durable hold requiring an administrator's "+
+			"exact-value acknowledgement. Empty or 0 disables and removes managed LimitRanges; "+
+			"safety state is retained. See docs/operations/system-memory-limits.md.")
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
-		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+
-			"explicitly: Kubernetes defaults an unset request to the limit, which would reserve the full "+
-			"limit for every system container at schedule time. 0 is supported and means the opposite "+
-			"trade rather than a broken value: the API server accepts a LimitRange with defaultRequest 0, "+
-			"and a container with no memory request of its own is then admitted with an explicit request "+
-			"of 0 and the default limit, so it still gets the memory.max this feature exists to give it, "+
-			"while the scheduler reserves nothing for it - the same scheduling signal system components "+
-			"had before this feature, no worse and no better.")
+		"Default memory request paired with the system namespace limit. Keep small; 0 is supported. "+
+			"An empty installer value selects the operator default. See docs/operations/system-memory-limits.md.")
 
 	opts := zap.Options{
 		Development: true,
