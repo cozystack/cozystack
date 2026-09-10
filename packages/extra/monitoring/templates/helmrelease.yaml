@@ -39,25 +39,20 @@ spec:
   # failed log store is not ingesting, so the release must not report Ready;
   # cozystack never sets spec.paused on these VLClusters, so `paused` is not
   # reachable in normal operation. Before the operator writes any updateStatus
-  # (fresh apply) all three predicates are false, so the poller holds the
+  # in an existing status object all three predicates are false, so the poller holds the
   # release not-ready until it becomes operational or hits `timeout:` — the
-  # real backstop. Matching by kind covers every logsStorages entry. (CEL
-  # evaluation is exercised live, not in helm-unittest, which cannot run it.)
+  # real backstop. A missing status object is Unknown until the operator writes
+  # it. Matching by kind covers every logsStorages entry. Executable CEL
+  # fixtures cover these outcomes in test/healthchecks.
   #
   # The gate keys on a VLCluster existing, so an empty logsStorages would leave
   # nothing to match. That configuration is rejected at render time by the
   # system/monitoring chart (templates/vlogs/vlogs.yaml fails on an empty
   # logsStorages), so the "Ready with no log store" hole cannot be reached.
   #
-  # Extend the same gating to the rest of the monitoring stack this release
-  # applies (#2642): the metrics VMCluster + VMAgent/VMAlert/VMAlertmanager use
-  # the same status.updateStatus string contract as VLCluster; Grafana keys on
-  # status.stage/stageStatus (the grafana-operator has no status.conditions);
-  # and the CNPG Cluster backing the stack uses the standard Ready condition
-  # with the ClusterIsNotReady bootstrap reason. Each expr matches by kind, so
-  # a config that does not render a given kind is a no-op. Enum string values
-  # (updateStatus, grafana stage/stageStatus) are operator convention, not
-  # enumerated in the CRDs — exercised live, not in helm-unittest.
+  # VM* shares VLCluster's updateStatus contract. Grafana exposes stage/stageStatus
+  # instead of conditions. CNPG uses the same Ready=False reason for bootstrap
+  # and persistent errors; both deliberately wait until the Helm timeout.
   healthCheckExprs:
     - apiVersion: operator.victoriametrics.com/v1
       kind: VLCluster
@@ -91,9 +86,7 @@ spec:
       current:    has(status.stage) && has(status.stageStatus) && status.stage == 'complete' && status.stageStatus == 'success'
     - apiVersion: postgresql.cnpg.io/v1
       kind: Cluster
-      inProgress: has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'False' && e.reason == 'ClusterIsNotReady')
-      failed:     has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'False' && e.reason != 'ClusterIsNotReady')
-      current:    has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
+      current: has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
   valuesFrom:
   - kind: Secret
     name: cozystack-values

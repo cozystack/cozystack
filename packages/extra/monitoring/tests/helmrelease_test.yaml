@@ -43,9 +43,6 @@ tests:
           path: spec.healthCheckExprs[0].failed
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
 
-  # The gate was extended (#2642) to the rest of the stack the release applies:
-  # the metrics VMCluster/VMAgent/VMAlert/VMAlertmanager (same updateStatus
-  # contract), Grafana (stage/stageStatus), and the backing CNPG Cluster.
   - it: also gates on the metrics VM* CRs, Grafana and the CNPG Cluster
     asserts:
       - lengthEqual:
@@ -69,3 +66,13 @@ tests:
       - equal:
           path: spec.healthCheckExprs[6].kind
           value: Cluster
+      - notExists:
+          path: spec.healthCheckExprs[6].inProgress
+      - notExists:
+          path: spec.healthCheckExprs[6].failed
+
+  - it: keeps the timeout aligned with the outer release and OIDC job
+    asserts:
+      - equal:
+          path: spec.timeout
+          value: 15m

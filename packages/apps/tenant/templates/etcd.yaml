@@ -64,21 +64,29 @@ spec:
       retryInterval: 30s
     remediation:
       retries: -1
-  # helm-controller v1.5.0 kstatus: gate Ready on the EtcdCluster actually
-  # having all members ready (#2642). The operator's cluster-level conditions
-  # carry no stable Ready type, so key on readyMembers vs spec.replicas;
-  # brokenMembers signals failure. A freshly-applied cluster has no
-  # readyMembers yet, so the poller holds the release not-ready until the
-  # members come up or the HR timeout fires. poller is required for
-  # healthCheckExprs to be evaluated.
+  # The operator can recover quorum loss, but stops at BootstrapFailed and
+  # DeadlineExceeded until intervention. Do not mask these terminal states
+  # with an inProgress predicate: Flux evaluates it before failed.
+  # Fresh conditions and full membership are required; a paused (replicas=0)
+  # cluster cannot serve tenant control planes and waits until the timeout.
   waitStrategy:
     name: poller
   healthCheckExprs:
     - apiVersion: etcd-operator.cozystack.io/v1alpha2
       kind: EtcdCluster
-      inProgress: has(status.readyMembers) && status.readyMembers < spec.replicas
-      failed:     has(status.brokenMembers) && status.brokenMembers > 0
-      current:    has(status.readyMembers) && status.readyMembers == spec.replicas
+      failed: >-
+        has(status.conditions) && status.conditions.exists(e,
+          e.type == 'Available' && e.status == 'False' &&
+          has(e.observedGeneration) && e.observedGeneration == metadata.generation &&
+          e.reason in ['BootstrapFailed', 'DeadlineExceeded'])
+      current: >-
+        spec.replicas > 0 && has(status.readyMembers) && status.readyMembers == spec.replicas &&
+        has(status.conditions) && status.conditions.exists(e,
+          e.type == 'Available' && e.status == 'True' &&
+          has(e.observedGeneration) && e.observedGeneration == metadata.generation) &&
+        status.conditions.exists(e,
+          e.type == 'Progressing' && e.status == 'False' && e.reason == 'Reconciled' &&
+          has(e.observedGeneration) && e.observedGeneration == metadata.generation)
   valuesFrom:
   - kind: Secret
     name: cozystack-values
