@@ -118,7 +118,7 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
-@test "a CDI change selects the suite that exercises a VMDisk" {
+@test "a CDI change selects a closure that keeps VMDisk and CDI" {
     # kubevirt-cdi reaches vm-disk-application and nothing else runnable, so
     # until vm-disk-application mapped to a suite every CDI change ran all of
     # them. The vminstance suite creates a VMDisk and asserts the DataVolume
@@ -128,6 +128,9 @@ assert_full_suite() {
     echo "packages/system/kubevirt-cdi/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "vminstance" ]
+    closure=$(hack/select-install.sh "$output" "$tmp/sources")
+    printf '%s\n' "$closure" | tr ' ' '\n' | grep -Fxq cozystack.vm-disk-application
+    printf '%s\n' "$closure" | tr ' ' '\n' | grep -Fxq cozystack.kubevirt-cdi
     rm -rf "$tmp"
 }
 

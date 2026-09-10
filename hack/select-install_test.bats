@@ -17,34 +17,38 @@
 # Run with: hack/cozytest.sh hack/select-install_test.bats
 # -----------------------------------------------------------------------------
 
+assert_contains_package() {
+    printf '%s\n' "$1" | tr ' ' '\n' | grep -Fxq "$2"
+}
+
 @test "single app selects its forward dependency closure" {
     output=$(hack/select-install.sh "postgres")
-    echo "$output" | grep -wq cozystack.postgres-application
-    echo "$output" | grep -wq cozystack.postgres-operator
-    echo "$output" | grep -wq cozystack.networking
+    assert_contains_package "$output" cozystack.postgres-application
+    assert_contains_package "$output" cozystack.postgres-operator
+    assert_contains_package "$output" cozystack.networking
     # engine edge is KEPT on the install walk (unlike select-e2e.sh)
-    echo "$output" | grep -wq cozystack.cozystack-engine
+    assert_contains_package "$output" cozystack.cozystack-engine
 }
 
 @test "closure is transitive (deps of deps are pulled in)" {
     output=$(hack/select-install.sh "postgres")
     # cert-manager is a 2-hop dep (via postgres-operator and via the engine)
-    echo "$output" | grep -wq cozystack.cert-manager
+    assert_contains_package "$output" cozystack.cert-manager
     # gateway-api-crds is a 3-hop dep (postgres-application -> networking -> gateway-api-crds)
-    echo "$output" | grep -wq cozystack.gateway-api-crds
+    assert_contains_package "$output" cozystack.gateway-api-crds
 }
 
 @test "app pulls its direct operator dependencies" {
     output=$(hack/select-install.sh "harbor")
-    echo "$output" | grep -wq cozystack.harbor-application
-    echo "$output" | grep -wq cozystack.postgres-operator
-    echo "$output" | grep -wq cozystack.redis-operator
-    echo "$output" | grep -wq cozystack.objectstorage-controller
+    assert_contains_package "$output" cozystack.harbor-application
+    assert_contains_package "$output" cozystack.postgres-operator
+    assert_contains_package "$output" cozystack.redis-operator
+    assert_contains_package "$output" cozystack.objectstorage-controller
 }
 
 @test "kubernetes suites map back to the kubernetes application source" {
     output=$(hack/select-install.sh "kubernetes-latest")
-    echo "$output" | grep -wq cozystack.kubernetes-application
+    assert_contains_package "$output" cozystack.kubernetes-application
 }
 
 @test "vminstance keeps both application owners" {
@@ -56,15 +60,15 @@
 
 @test "multiple suites union their closures" {
     output=$(hack/select-install.sh "postgres kafka")
-    echo "$output" | grep -wq cozystack.postgres-application
-    echo "$output" | grep -wq cozystack.kafka-application
+    assert_contains_package "$output" cozystack.postgres-application
+    assert_contains_package "$output" cozystack.kafka-application
 }
 
 @test "suite list can be read from stdin with -" {
     output=$(printf '%s\n' "postgres kafka" | hack/select-install.sh -)
-    echo "$output" | grep -wq cozystack.postgres-application
-    echo "$output" | grep -wq cozystack.kafka-application
-    echo "$output" | grep -wq cozystack.cozystack-engine
+    assert_contains_package "$output" cozystack.postgres-application
+    assert_contains_package "$output" cozystack.kafka-application
+    assert_contains_package "$output" cozystack.cozystack-engine
 }
 
 @test "empty suites select nothing" {
@@ -91,7 +95,7 @@
 @test "suite whose source omits the -application suffix resolves via fallback" {
     # kuberture's PackageSource is cozystack.kuberture (no -application suffix)
     output=$(hack/select-install.sh "kuberture")
-    echo "$output" | grep -wq cozystack.kuberture
+    assert_contains_package "$output" cozystack.kuberture
 }
 
 @test "securitygroup closure includes the engine that serves sdn.cozystack.io" {
@@ -102,11 +106,11 @@
     # engine AND the engine's stable prerequisites — asserting only the
     # controller (a single member) is what let the bug through.
     output=$(hack/select-install.sh "securitygroup")
-    echo "$output" | grep -wq cozystack.securitygroup-controller
-    echo "$output" | grep -wq cozystack.cozystack-engine
-    echo "$output" | grep -wq cozystack.cert-manager
-    echo "$output" | grep -wq cozystack.networking
-    echo "$output" | grep -wq cozystack.gateway-api-crds
+    assert_contains_package "$output" cozystack.securitygroup-controller
+    assert_contains_package "$output" cozystack.cozystack-engine
+    assert_contains_package "$output" cozystack.cert-manager
+    assert_contains_package "$output" cozystack.networking
+    assert_contains_package "$output" cozystack.gateway-api-crds
 }
 
 @test "etcd closure includes the operator that serves its CRD" {
@@ -118,11 +122,11 @@
     # operator AND the deps it drags in -- asserting only the app source is what
     # left the gap invisible.
     output=$(hack/select-install.sh "etcd")
-    echo "$output" | grep -wq cozystack.etcd-application
-    echo "$output" | grep -wq cozystack.etcd-operator
-    echo "$output" | grep -wq cozystack.cert-manager
-    echo "$output" | grep -wq cozystack.vertical-pod-autoscaler
-    echo "$output" | grep -wq cozystack.cozystack-engine
+    assert_contains_package "$output" cozystack.etcd-application
+    assert_contains_package "$output" cozystack.etcd-operator
+    assert_contains_package "$output" cozystack.cert-manager
+    assert_contains_package "$output" cozystack.vertical-pod-autoscaler
+    assert_contains_package "$output" cozystack.cozystack-engine
 }
 
 @test "validate passes on the real source graph and suite mapping" {
