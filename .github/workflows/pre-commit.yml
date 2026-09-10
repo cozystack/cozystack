@@ -59,7 +59,7 @@ jobs:
       - name: Run pre-commit hooks
         # The complete Bats pass is a manual local hook and is therefore outside
         # this changed-file lint run. pull-requests.yaml's checks job runs the
-        # full Bats and POSIX-compatibility lanes for every non-release PR.
+        # full unit path for code and the Bats contracts for docs-only changes.
         run: |
           git fetch origin main || git fetch origin master
           base_commit=$(git rev-parse --verify origin/main || git rev-parse --verify origin/master || echo "")

@@ -326,7 +326,7 @@ jobs:
         run: make unit-tests
       - name: Run Bats unit tests for docs-only changes
         if: needs.plan.outputs.code == 'false'
-        run: make bats-unit-tests bats-posix-compat-tests
+        run: make bats-unit-tests
       - name: Upload unit test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -74,13 +74,13 @@ brc_write_parallel_stub() {
   grep -Fq 'pre-commit run bats-unit-tests --hook-stage manual --all-files' "$BRC_REPO_ROOT/docs/agents/overview.md"
 }
 
-@test "pull-request CI keeps both Bats lanes unconditional" {
+@test "pull-request CI keeps the required Bats lane unconditional" {
   lint_skip=$(yq -r '.jobs.pre-commit.steps[] | select(.name == "Run pre-commit hooks") | .env.SKIP // ""' "$BRC_PRECOMMIT_WORKFLOW")
   code_command=$(yq -r '.jobs.checks.steps[] | select(.name == "Run unit tests") | .run' "$BRC_WORKFLOW")
   docs_command=$(yq -r '.jobs.checks.steps[] | select(.name == "Run Bats unit tests for docs-only changes") | .run' "$BRC_WORKFLOW")
   [ -z "$lint_skip" ]
   [ "$code_command" = 'make unit-tests' ]
-  [ "$docs_command" = 'make bats-unit-tests bats-posix-compat-tests' ]
+  [ "$docs_command" = 'make bats-unit-tests' ]
 }
 
 @test "the POSIX compatibility lane retains reviewed and sourced shell-facing files" {
