@@ -64,7 +64,11 @@ spec:
 {{- define "cozystack.platform.package.optional.default" -}}
 {{- $name := index . 0 -}}
 {{- $root := index . 1 -}}
-{{- include "cozystack.platform.package.optional" (list $name "default" $root) }}
+{{- $components := dict -}}
+{{- if gt (len .) 2 -}}
+{{- $components = index . 2 -}}
+{{- end -}}
+{{- include "cozystack.platform.package.optional" (list $name "default" $root $components) }}
 {{ end }}
 
 {{/*
