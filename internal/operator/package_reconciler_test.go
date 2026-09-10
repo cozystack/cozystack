@@ -640,9 +640,6 @@ func TestReconcileSystemDefaultsLimitRangeAppliesWhenLargeRequestCarriesItsOwnLi
 // still look green on every other.
 func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.T) {
 	scheme := limitRangeScheme(t)
-
-	// Every one of the six lists is read on every reconcile now that the pod half is no
-	// longer skippable, so every case is seeded the same way and asserts the same thing.
 	unreadable := []struct {
 		name string
 		list client.ObjectList
@@ -654,65 +651,71 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.
 		{name: "cronjobs", list: &batchv1.CronJobList{}},
 		{name: "jobs", list: &batchv1.JobList{}},
 	}
-
-	// A sentinel the operator's own apply would overwrite. Asserting the LimitRange still
-	// exists is not enough on its own: a scan that swallowed the read error would find no
-	// offender, apply the LimitRange, and leave an object that exists just the same. The
-	// sentinel is what separates "left alone" from "applied blind".
-	sentinel := resource.MustParse("1Mi")
-
 	for _, tt := range unreadable {
-		t.Run(tt.name, func(t *testing.T) {
-			seed := []client.Object{
-				&corev1.LimitRange{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      SystemDefaultsLimitRangeName,
-						Namespace: "cozy-monitoring",
-					},
-					Spec: corev1.LimitRangeSpec{
-						Limits: []corev1.LimitRangeItem{{
-							Type:    corev1.LimitTypeContainer,
-							Default: corev1.ResourceList{corev1.ResourceMemory: sentinel},
-						}},
-					},
-				},
-			}
-			cl := memoryTestClientBuilder(scheme).WithObjects(seed...).
-				WithInterceptorFuncs(interceptor.Funcs{
-					List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, _ ...client.ListOption) error {
-						if reflect.TypeOf(list) == reflect.TypeOf(tt.list) {
+		for _, policy := range []string{"owned", "absent", "held-with-ack"} {
+			t.Run(tt.name+"/"+policy, func(t *testing.T) {
+				inject := false
+				injectedFailures := 0
+				cl := memoryTestClientBuilder(scheme).WithInterceptorFuncs(interceptor.Funcs{
+					List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+						if inject && reflect.TypeOf(list) == reflect.TypeOf(tt.list) {
+							injectedFailures++
 							return apierrors.NewServiceUnavailable("etcd leader changed")
 						}
-						return nil
+						return c.List(ctx, list, opts...)
 					},
 				}).Build()
+				if policy == "owned" {
+					// Mere existence cannot distinguish an untouched policy from a blind apply.
+					sentinel := memoryReconciler(cl, "1Mi").systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("1Mi"))
+					if err := cl.Create(t.Context(), sentinel); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if policy == "held-with-ack" {
+					memoryReconcile(t, cl, "32Gi")
+					state := memoryReconcile(t, cl, "4Gi")
+					acknowledgeMemory(t, cl, state.acknowledgement())
+				}
+				beforeNamespace := &corev1.Namespace{}
+				key := types.NamespacedName{Name: "cozy-monitoring"}
+				if err := cl.Get(t.Context(), key, beforeNamespace); err != nil {
+					t.Fatal(err)
+				}
+				beforePolicy := &corev1.LimitRange{}
+				policyKey := types.NamespacedName{Namespace: key.Name, Name: SystemDefaultsLimitRangeName}
+				if err := cl.Get(t.Context(), policyKey, beforePolicy); err != nil && !apierrors.IsNotFound(err) {
+					t.Fatal(err)
+				}
 
-			r := &PackageReconciler{
-				Client:                       cl,
-				APIReader:                    cl,
-				Scheme:                       scheme,
-				SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
-				SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-			}
-
-			if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
-				t.Fatalf("an unreadable %s list must not fail the reconcile: %v", tt.name, err)
-			}
-
-			got := &corev1.LimitRange{}
-			err := cl.Get(t.Context(), types.NamespacedName{
-				Name:      SystemDefaultsLimitRangeName,
-				Namespace: "cozy-monitoring",
-			}, got)
-
-			if err != nil {
-				t.Fatalf("existing LimitRange retracted on the strength of a failed %s read: %v", tt.name, err)
-			}
-			if len(got.Spec.Limits) != 1 || got.Spec.Limits[0].Default.Memory().Cmp(sentinel) != 0 {
-				t.Errorf("LimitRange applied on the strength of a failed %s read: spec = %+v, want the untouched sentinel %s",
-					tt.name, got.Spec.Limits, sentinel.String())
-			}
-		})
+				inject = true
+				if err := memoryReconciler(cl, "4Gi").reconcileSystemDefaultsLimitRange(t.Context(), key.Name); err != nil {
+					t.Fatalf("an unreadable %s list must not fail reconciliation: %v", tt.name, err)
+				}
+				if injectedFailures != 1 {
+					t.Fatalf("injected scan failures = %d; want 1", injectedFailures)
+				}
+				afterPolicy := &corev1.LimitRange{}
+				err := cl.Get(t.Context(), policyKey, afterPolicy)
+				if policy == "owned" {
+					if err != nil {
+						t.Fatalf("existing policy withdrawn after failed scan: %v", err)
+					}
+					if !reflect.DeepEqual(beforePolicy, afterPolicy) {
+						t.Error("existing policy changed after failed scan")
+					}
+				} else if !apierrors.IsNotFound(err) {
+					t.Errorf("absent policy created after failed scan: %v", err)
+				}
+				afterNamespace := &corev1.Namespace{}
+				if err := cl.Get(t.Context(), key, afterNamespace); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(beforeNamespace, afterNamespace) {
+					t.Error("failed scan changed Namespace safety state or consumed acknowledgement")
+				}
+			})
+		}
 	}
 }
 
@@ -801,9 +804,8 @@ func TestReconcileSystemDefaultsLimitRangeDoesNotReapplyEquivalentQuantities(t *
 	}
 }
 
-// ForceOwnership is safe only after the read proved that the object at this key carries our
-// ownership label. The absent case stays non-force so a concurrent foreign create turns into
-// an SSA conflict instead of having its atomic LimitRangeSpec.Limits list overwritten.
+// ForceOwnership requires an owned object. Conditional Create on the absent path
+// returns AlreadyExists for a concurrent foreign object instead of adopting it.
 func TestReconcileSystemDefaultsLimitRangeForcesOnlyAnOwnedObject(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
