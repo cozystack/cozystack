@@ -7,7 +7,7 @@ release:
   namespace: cozy-kubevirt-cdi
 
 tests:
-  - it: renders an unlimited TLS-passthrough Ingress in ingress mode
+  - it: renders a TLS-passthrough Ingress in ingress mode
     set:
       _cluster:
         root-host: example.org
@@ -21,14 +21,14 @@ tests:
           path: kind
           value: Ingress
       - equal:
-          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
-          value: "0"
-      - equal:
           path: metadata.annotations["nginx.ingress.kubernetes.io/ssl-passthrough"]
           value: "true"
-      - equal:
-          path: spec.tls[0].hosts[0]
-          value: cdi-uploadproxy.example.org
+      - notExists:
+          path: spec.tls
+      - notExists:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/ssl-redirect"]
+      - notExists:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
 
   - it: renders no Ingress in Gateway mode
     set:
