@@ -11,12 +11,15 @@
 #                   a *.disabled Chainsaw suite and for an
 #                   examples/backups/<app>/ with no suite, and
 #                   inert_config_pattern for repo meta and agent config
-#   - <suite names> selected per the PackageSource dependency graph
+#   - <suite names> selected per the PackageSource dependency graph, or the broad
+#                   tier: every suite except kubernetes-previous, for the build
+#                   inputs in broad_suite_pattern
 #   - full list     any path that affects all tests, OR an unrecognised
-#                   packages/* path, OR a changed package that reaches no
-#                   runnable suite through the graph, OR a path matching NEITHER
-#                   the full-suite nor the inert list, OR a yq that failed to
-#                   build the dependency graph (conservative fallbacks)
+#                   Chainsaw suite, OR an unrecognised packages/* path, OR a
+#                   changed package that reaches no runnable suite through the
+#                   graph, OR a path matching NEITHER the full-suite nor the
+#                   inert list, OR a yq that failed to build the dependency
+#                   graph (conservative fallbacks)
 #   - nothing, and  the suite list itself is unavailable: find failed, or
 #     a non-zero    hack/e2e-chainsaw holds no chainsaw-test.yaml. Unlike the
 #     exit          yq case there is no fallback left to take — an empty list
@@ -25,10 +28,11 @@
 #                   it — so the script refuses to answer at all, and since both
 #                   lanes run it under `bash -e` the step fails
 #
-# Every changed path must land in exactly one of the three selection classes by
-# an explicit rule; the fourth outcome is not a classification but a refusal to
-# produce one. An unclassified path escalates to the full suite rather than
-# selecting nothing: both e2e lanes read an empty selection as "skip Chainsaw"
+# Every changed path must land in exactly one of the four selection classes by
+# an explicit rule; the further outcome below is not a classification but a
+# refusal to produce one. An unclassified path escalates to the full suite
+# rather than selecting nothing: both e2e lanes read an empty selection as
+# "skip Chainsaw"
 # and then post the required "E2E Tests" status green, so a silent default is a
 # green gate with no suite run (#3392). When that escalation fires for a path
 # that genuinely cannot affect e2e, add it to inert_config_pattern — do not
@@ -42,7 +46,7 @@
 # decision some rule reached, never a path nothing looked at.
 #
 # Every branch that escalates names its cause on stderr, and that is a contract
-# rather than a courtesy: the answer "run everything" is the same 21 suite names
+# rather than a courtesy: the answer "run everything" is the same suite list
 # whichever rule produced it, so without a reason line the only way to learn why
 # a pull request ran the whole suite is to re-derive the selection by hand. Four
 # of them were silent before this rule, full_suite_pattern — the commonest cause
@@ -60,8 +64,8 @@
 # NAME in full_suite_pattern, which is checked first. So a workflow added under
 # .github/workflows/ that runs the suite is silently inert until someone adds it
 # to that list — the fall-through never sees it. The enumeration is the guard,
-# which is why it carries the `rg -l test-chainsaw` reminder; treat that comment
-# as load-bearing rather than decorative.
+# which is why it carries the `grep -rl 'test-chainsaw'` reminder; treat that
+# comment as load-bearing rather than decorative.
 set -eu
 
 CHANGED="${1:?missing changed-files arg}"
@@ -74,24 +78,23 @@ SOURCES_DIR="${2:-packages/core/platform/sources}"
 #
 # Three groups, all "cannot be scoped to one app":
 #   - shipped code and its build inputs: packages/library, packages/core, the Go
-#     trees (api, cmd, internal, pkg), the codegen under tools/, go.mod/go.sum,
-#     the root Makefile, hack/*.mk (the tag/push/output flags of every image),
+#     trees (api, cmd, internal, pkg), the codegen under tools/,
 #     hack/buildkitd.toml (the builder every image is built with), and hack/lib/
 #     (sourced by the hack/*.sh scripts that already escalate);
 #   - the e2e harness itself: hack/*.sh, hack/e2e-*.bats and hack/e2e-*.yaml.
 #     The bats half is prefix-matched rather than taking every hack/*.bats,
 #     because the root Makefile splits those two sets by exactly that prefix —
 #     `BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))`
-#     — so the 60 files it keeps are the unit lane and the e2e sandbox runs none
-#     of them. The three it filters out are the ones packages/core/testing's
+#     — so the files it keeps are the unit lane and the e2e sandbox runs none of
+#     them. The files it filters out are the ones packages/core/testing's
 #     recipes execute inside the sandbox, and they stay here. Narrowing this
 #     cannot leave a bats-only pull request untested: `make unit-tests` is gated
 #     on the `code` output, which pull-requests.yaml computes as "any path
-#     outside docs/" and never from this script, so those 60 files run on their
+#     outside docs/" and never from this script, so those files run on their
 #     own lane whatever the selection here is;
 #   - the workflows that RUN the suite — enumerated rather than matched by
 #     prefix, so an unrelated workflow does not burn a full run. Keep this list
-#     in step with `rg -l test-chainsaw .github/workflows/`.
+#     in step with `grep -rl 'test-chainsaw' .github/workflows/`.
 #
 #     What that costs, stated rather than left to be rediscovered: only
 #     pull-requests.yaml is executed from the PR's own head. e2e-fork runs on
@@ -106,7 +109,42 @@ SOURCES_DIR="${2:-packages/core/platform/sources}"
 #     alternative leaves them inert, which reads as an oversight rather than a
 #     decision. Reopen the trade if the full suite's flake rate makes the
 #     generic coverage cost more than it returns.
-full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|tools/|hack/lib/|hack/[^/]+\.sh$|hack/e2e-[^/]+\.bats$|hack/[^/]+\.mk$|hack/buildkitd\.toml$|hack/e2e-[^/]+\.ya?ml$|go\.(mod|sum)$|Makefile$|\.github/workflows/(pull-requests|e2e-fork|e2e-tag|nightly)\.yaml$)'
+full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|tools/|hack/lib/|hack/[^/]+\.sh$|hack/e2e-[^/]+\.bats$|hack/buildkitd\.toml$|hack/e2e-[^/]+\.ya?ml$|\.github/workflows/(pull-requests|e2e-fork|e2e-tag|nightly)\.yaml$)'
+
+# Build inputs that cannot be scoped to one suite either. Checked before
+# full_suite_pattern, and carved out of it: every path here used to escalate to
+# the whole suite.
+#
+# This tier retains `kubernetes-latest` as the tenant-chart integration witness
+# and withholds only `kubernetes-previous`, which repeats the bring-up against
+# the previous supported Kubernetes version. One captured green run measured
+# the two tenant suites together at 68 of 131 Chainsaw minutes; that aggregate
+# does not isolate the saving from withholding `kubernetes-previous`, so no
+# per-tier runtime is claimed here.
+#
+#   - go.mod / go.sum   the ROOT module, which the `^` anchor already restricts
+#                       this to. It feeds cozystack-api and cozystack-controller;
+#                       a break there can affect every suite. The
+#                       image modules that DO sit in the tenant path
+#                       (kubevirt-csi-driver, token-proxy, kubeovn-webhook) carry
+#                       their own go.mod under packages/ and are classified by
+#                       the graph instead, so they are unaffected by this entry.
+#   - Makefile          the root build targets.
+#   - hack/*.mk         the tag, push and output flags every image is built with.
+#
+# What this trades: broad changes no longer exercise tenant bring-up against the
+# previous supported Kubernetes version before merge. They still exercise one
+# tenant cluster through `kubernetes-latest`; the `e2e/full` label remains the
+# explicit route to both versions.
+#
+# Widening this list is a real decision, not bookkeeping: each entry asserts
+# that one retained tenant version is enough pre-merge coverage for those paths.
+broad_suite_pattern='^(go\.(mod|sum)$|Makefile$|hack/[^/]+\.mk$)'
+
+# The suite the broad tier withholds. Named rather than derived: runtime is not a
+# property the tree carries, and a derived rule would silently change what the
+# tier means when a suite's runtime moves.
+withheld_suite='kubernetes-previous'
 
 # Paths with no bearing on what e2e exercises. Checked AFTER full_suite_pattern,
 # so a specific escalation wins over a broad directory here (.github/ is inert,
@@ -124,7 +162,7 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #   - hack/*.bats     the unit lane, minus the hack/e2e-*.bats escalated above.
 #                     The root Makefile draws the line at that prefix
 #                     (BATS_UNIT_FILES filters hack/e2e-%.bats out of
-#                     hack/*.bats), so these 60 files are never executed inside
+#                     hack/*.bats), so these files are never executed inside
 #                     the e2e sandbox and no Chainsaw suite can regress from one.
 #                     They are not untested by being inert here: `make
 #                     unit-tests` runs them, gated on pull-requests.yaml's `code`
@@ -203,6 +241,43 @@ fi
 # has one consumer to reason about rather than three copies.
 escalate_to_full_suite() {
   echo "$all_apps" | paste -sd ' ' -
+  exit 0
+}
+
+# The fourth outcome: broad coverage. Every suite except the previous-version
+# tenant Kubernetes suite; kubernetes-latest remains in the selection.
+#
+# Fail-closed is unchanged by this. Every path is still classified and every
+# escalation is still mandatory; only the destination of one class of escalation
+# moves. An unclassified path still reaches escalate_to_full_suite.
+#
+# Refuses to answer if withholding leaves nothing, for the reason the empty-list
+# check above exists: both lanes read an empty selection as "skip Chainsaw" and
+# then post the required status green, so a tier that emptied itself would be a
+# green gate with nothing run (#3392).
+# $1: suites the graph selected explicitly on their own account, SPACE
+# separated (intersect_suites ends in `paste -sd ' '`), possibly empty. They are never withheld: a diff that touches
+# packages/apps/kubernetes selects the tenant suites through the graph, and a
+# broad path elsewhere in the same diff must not take them away again. Without
+# this the tier would SUBTRACT coverage the scoped walk had already decided on,
+# which is the one thing it is not allowed to do.
+escalate_to_broad_tier() {
+  # No `local`: this is #!/bin/sh and resolve_suites below documents the same
+  # constraint. These two names are function-scoped by convention only, and are
+  # not read after this function, which always exits.
+  explicit="${1:-}"
+  kept=$(printf '%s\n' "$all_apps" | grep -vxF "$withheld_suite" || true)
+  if [ -n "$explicit" ]; then
+    # `explicit` arrives space-separated from intersect_suites; without the
+    # newline split it is one element to sort -u and the union keeps duplicates.
+    kept=$(printf '%s\n%s\n' "$kept" "$(printf '%s' "$explicit" | tr ' ' '\n')" \
+      | grep -v '^$' | sort -u)
+  fi
+  if [ -z "$kept" ]; then
+    echo "select-e2e: the broad tier withheld every suite — withheld_suite no longer names one suite among the suites on disk, refusing to report an empty selection" >&2
+    exit 1
+  fi
+  echo "$kept" | paste -sd ' ' -
   exit 0
 }
 
@@ -308,6 +383,7 @@ OWNERS=$(printf '%s\n' "$OWNERS" | sort -u)
 REVERSE=$(printf '%s\n' "$REVERSE" | sort -u)
 
 trigger_full=0
+trigger_broad=0
 trigger_any=0
 selected_groups=""
 selected_apps=""
@@ -342,17 +418,19 @@ while IFS= read -r file || [ -n "$file" ]; do
       # A suite parked as chainsaw-test.yaml.disabled is registered nowhere and
       # executed by nothing, so an edit to it cannot regress a test. Matched
       # before the per-suite rule below, which reads the suite name off the
-      # directory and ignores the suffix: the name it derives matches no
-      # existing suite, the intersection at the bottom empties, and the
-      # safety net for a genuinely unclassified selection escalates to the
-      # full run — the most expensive outcome, bought by the one file class
-      # that provably cannot affect anything. Inert is the classification;
-      # the safety net keeps its job for paths no rule has looked at.
+      # directory and would otherwise escalate an unknown name. Inert is the
+      # classification for the one file class that provably cannot affect a
+      # runnable suite.
       continue ;;
     hack/e2e-chainsaw/*/*)
       app=$(echo "$file" | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/.*,\1,p')
-      selected_apps="$selected_apps $app"
-      trigger_any=1
+      if echo "$all_apps" | grep -Fxq "$app"; then
+        selected_apps="$selected_apps $app"
+        trigger_any=1
+      else
+        echo "select-e2e: '$file' names no runnable suite ('$app') — escalating to the full suite" >&2
+        trigger_full=1
+      fi
       continue ;;
     hack/e2e-apps/*)
       # The pre-Chainsaw per-app BATS suites. One file per app, named after it,
@@ -412,6 +490,16 @@ while IFS= read -r file || [ -n "$file" ]; do
       continue ;;
   esac
 
+  # 3a. Broad-tier trigger. The two patterns are disjoint by construction, so
+  #     the order between this and the full-suite check below decides nothing
+  #     today. Should they ever overlap, the resolution that matters is at the
+  #     bottom of the file, where trigger_full is checked first and wins.
+  if echo "$file" | grep -qE "$broad_suite_pattern"; then
+    echo "select-e2e: '$file' cannot be scoped to one suite (broad_suite_pattern) — escalating to every suite except kubernetes-previous" >&2
+    trigger_broad=1
+    continue
+  fi
+
   # 3. Full-suite trigger
   if echo "$file" | grep -qE "$full_suite_pattern"; then
     echo "select-e2e: '$file' cannot be scoped to one suite (full_suite_pattern) — escalating to the full suite" >&2
@@ -456,7 +544,11 @@ if [ "$trigger_full" = 1 ]; then
   escalate_to_full_suite
 fi
 
-if [ "$trigger_any" = 0 ]; then
+# A broad-tier path selects no suite of its own, so trigger_any stays 0 for a
+# diff that is nothing but (say) a root go.mod bump. Exiting here would report
+# an empty selection, which both lanes read as "skip Chainsaw" before posting
+# the required status green -- the #3392 shape exactly.
+if [ "$trigger_any" = 0 ] && [ "$trigger_broad" = 0 ]; then
   exit 0  # nothing to run
 fi
 
@@ -534,12 +626,10 @@ done
 final_apps=$(intersect_suites "$group_suites $selected_apps")
 
 # Backstop. Every graph path above either escalates or contributes a suite that
-# exists, and both rules that select a suite by name — the per-app BATS one and
-# the examples/backups/<app>/ one — membership-test it first, so what still
-# reaches this is a per-suite Chainsaw edit naming a directory that holds no
-# chainsaw-test.yaml: shared material beside _lib/, or a suite nested deeper than
-# the depth-2 scan looks. Selecting nothing for those would skip E2E outright, so
-# failing towards the full suite is the only safe way to be wrong here.
+# exists, and every rule that selects a suite by name membership-tests it first.
+# Keep this as a final invariant for future selection rules: selecting an
+# unknown name must escalate rather than letting the intersection silently drop
+# it and skip E2E.
 #
 # group_suites is empty whenever this fires — every group either escalated above
 # or contributed a suite that exists — so the names worth naming are the
@@ -555,7 +645,11 @@ final_apps=$(intersect_suites "$group_suites $selected_apps")
 # change set exists to remove. Unquoted expansion is the split, `case` is the
 # membership test, and neither can half-succeed; it is also the idiom
 # resolve_suites already uses.
-if [ -z "$final_apps" ]; then
+# `trigger_any` guards this. A broad-tier path selects no suite of its own, so a
+# diff of nothing but a root go.mod bump reaches here with final_apps empty and
+# nothing unresolved -- which is not the condition this backstop is about, and
+# without the guard it would report an escalation for an empty `unmatched`.
+if [ -z "$final_apps" ] && [ "$trigger_any" = 1 ]; then
   unmatched=''
   for a in $selected_apps; do
     case " $unmatched " in
@@ -565,6 +659,22 @@ if [ -z "$final_apps" ]; then
   done
   echo "select-e2e: no runnable suite is named by '$unmatched' — escalating to the full suite" >&2
   escalate_to_full_suite
+fi
+
+# The broad tier resolves here, last. It needs what the graph walk selected on
+# its own account, which is not known until final_apps exists, and it must not
+# pre-empt either escalation above it:
+#
+#   - the full-suite check, because a diff carrying a genuinely unscopeable path
+#     takes the broader answer regardless of anything here;
+#   - the unresolved-suite backstop, because a path naming a suite that does not
+#     exist is a per-path escalation. Resolving broad ahead of it let an
+#     unrelated go.mod bump in the same diff swallow both the escalation and its
+#     stderr line, which is the merge-before-escalate shape #3330 removed from
+#     the graph walk and the header calls a contract. Found in review, pinned by
+#     "an unresolved suite still escalates when a broad path is in the diff".
+if [ "$trigger_broad" = 1 ]; then
+  escalate_to_broad_tier "$final_apps"
 fi
 
 echo "$final_apps"

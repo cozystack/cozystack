@@ -293,14 +293,14 @@ jobs:
             // Test-Impact Analysis inputs, from the SAME trusted sources as the
             // docs-only decision above: the base-repo PR file list drives suite
             // selection (base64 so newlines survive the job output), and the
-            // base-repo PR labels drive the full-e2e override. Deriving these
+            // base-repo PR labels drive the e2e/full override. Deriving these
             // from `git diff` on the fork-controlled merge ref would hand a
             // fork a second way to make TIA select nothing, on top of the one
             // it already has — the selector runs from the fork tree, so this
             // hardens the input and not the decision. select-e2e.sh now
-            // classifies every path it is given: shared build inputs and the
-            // e2e harness escalate to the full suite, paths that cannot affect
-            // what e2e exercises are named inert and select nothing, and a path
+            // classifies every path it is given: root shared inputs reach the
+            // broad tier, the e2e harness reaches the full suite, paths that
+            // cannot affect what e2e exercises select nothing, and a path
             // matching neither escalates rather than returning empty. So an
             // empty selection reaching this lane means some rule decided the
             // change cannot affect a suite, not that the selector never
@@ -661,10 +661,10 @@ jobs:
       # (base64 through the job output), NOT a git diff on the fork-controlled
       # merge ref. The script below is the fork's own, so this hardens what the
       # selector reads and not what it decides — see the job header.
-      # select-e2e.sh classifies every changed path explicitly: shared build
-      # inputs and the e2e harness escalate to the full suite, several rules
-      # select nothing (docs and dashboards, a disabled Chainsaw suite, a
-      # backups example with no suite, the inert repo-meta pattern), and
+      # select-e2e.sh classifies every changed path explicitly: root shared
+      # inputs reach the broad tier, the e2e harness reaches the full suite,
+      # several rules select nothing (docs and dashboards, a disabled Chainsaw
+      # suite, a backups example with no suite, the inert repo-meta pattern), and
       # anything matching none of them escalates rather than returning empty.
       # So an empty selection here means some rule decided the change cannot
       # affect a suite, not "TIA had no idea" (#3392). The exception to that,
@@ -672,7 +672,7 @@ jobs:
       # .github/workflows/ reads as inert until it is added to the escalation
       # list by name, because .github/ is inert as a directory and the e2e
       # workflows are exempted from it individually.
-      # Skipped (→ full suite below) on the full-e2e label.
+      # Skipped (→ full suite below) on the e2e/full label.
       - name: Select E2E tests
         id: select
         if: ${{ needs.resolve.outputs.full_e2e != 'true' }}
@@ -691,7 +691,7 @@ jobs:
           fi
       # Single `chainsaw test` invocation, no per-app retry loop (e2e-testing.md
       # §1) — Chainsaw polls each assertion to its own timeout. Full suite only
-      # when the full-e2e label skipped selection: if `select` ran and came back
+      # when the e2e/full label skipped selection: if `select` ran and came back
       # empty it set skip=true and this step never starts.
       - name: Run E2E tests
         id: e2e_tests
