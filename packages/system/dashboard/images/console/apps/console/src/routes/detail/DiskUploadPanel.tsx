@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Check, Copy, RefreshCw } from "lucide-react"
 import { Button, Section, StatusBadge } from "@cozystack/ui"
 import {
@@ -81,7 +81,7 @@ function requestRetry(failureCount: number, error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     "status" in error &&
-    (error as { status?: number }).status === 401
+    [401, 403].includes((error as { status?: number }).status ?? 0)
   ) {
     return false
   }
@@ -192,6 +192,11 @@ function UploadPrerequisites({
         and run the command below. CDI keeps this state while a transfer is active,
         so do not start a second command if virtctl is already uploading.
       </p>
+      <p className="text-xs text-slate-500">
+        Your machine must reach this HTTPS endpoint and trust a certificate matching
+        its hostname. The console checks the advertised URL, not endpoint reachability
+        or certificate trust. Ask your platform administrator about TLS errors.
+      </p>
       <CopyableCommand command={command} />
     </div>
   )
@@ -263,7 +268,7 @@ function UploadDiskPanel({
   const name = releasePrefix(ad) + instance.metadata.name
   const desiredUploadSource = isUploadSource(instance)
   const ready = readyCondition(instance)
-  const canReadDataVolume = ready?.status === "True"
+  const canReadDataVolume = !!namespace && !!instance.metadata.name
   const dvQuery = useK8sList<DataVolume>(
     {
       apiGroup: CDI_GROUP,
@@ -272,7 +277,7 @@ function UploadDiskPanel({
       namespace,
     },
     {
-      enabled: canReadDataVolume && !!namespace && !!instance.metadata.name,
+      enabled: canReadDataVolume,
       fieldSelector: "metadata.name=" + name,
       placeholderData: undefined,
       refetchOnMount: "always",
@@ -280,20 +285,30 @@ function UploadDiskPanel({
       retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
     },
   )
-  const dv =
-    canReadDataVolume && !dvQuery.isError ? dvQuery.data?.items[0] : undefined
+  const { isError: readError, watchError, refetch, restartWatch } = dvQuery
+  const identity = namespace + "/" + name
+  const previousReady = useRef({ identity, status: ready?.status })
+  useEffect(() => {
+    const previous = previousReady.current
+    previousReady.current = { identity, status: ready?.status }
+    if (previous.identity === identity && previous.status !== "True" && ready?.status === "True") {
+      // The per-disk read Role may not exist until the first reconciliation completes.
+      if (watchError) void restartWatch()
+      else if (readError) void refetch()
+    }
+  }, [identity, ready?.status, readError, watchError, refetch, restartWatch])
+  const targetUnavailable = readError || !!watchError
+  const dv = canReadDataVolume ? dvQuery.data?.items[0] : undefined
   const actualUploadSource = isUploadSource(dv)
   const sourceMismatch = !!dv && !actualUploadSource
   const desiredSourceDrift = !!dv && actualUploadSource && !desiredUploadSource
-  const state: UploadState = dvQuery.isError || sourceMismatch
+  const state: UploadState = targetUnavailable || sourceMismatch
     ? { stage: "unknown", phase: dv?.status?.phase ?? "" }
     : currentState(dv)
   const capacity = dataVolumeCapacity(dv)
 
-  // Helm preserves an existing DataVolume spec because its source is
-  // immutable. Query the exact child even when the edited VMDisk values no
-  // longer say upload, then render only if either side still represents one.
-  if (!desiredUploadSource && !actualUploadSource) return null
+  // A rejected immutable-source edit leaves the existing upload target intact.
+  if (!desiredUploadSource && !actualUploadSource && !targetUnavailable) return null
 
   return (
     <div className="px-6 pt-6">
@@ -304,7 +319,10 @@ function UploadDiskPanel({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void dvQuery.refetch()}
+            onClick={() => {
+              if (watchError) restartWatch()
+              else void refetch()
+            }}
             disabled={!canReadDataVolume || dvQuery.isFetching}
           >
             <RefreshCw className="size-3.5" /> Refresh
@@ -327,8 +345,7 @@ function UploadDiskPanel({
 
         {!canReadDataVolume && (
           <p className="mt-3 text-sm text-slate-600">
-            Waiting for disk reconciliation. The upload target will be watched after
-            the VMDisk becomes Ready.
+            Waiting for a disk name and namespace before reading its upload target.
           </p>
         )}
 
@@ -336,6 +353,17 @@ function UploadDiskPanel({
           <p className="mt-3 text-sm text-red-700">
             The console could not read the upload target. Refresh to try again.
           </p>
+        )}
+
+        {watchError && (
+          <p className="mt-3 text-sm text-red-700">
+            Upload target updates are unavailable. The command is withheld until
+            current status can be read. Refresh to retry.
+          </p>
+        )}
+
+        {dv && !targetUnavailable && !dvQuery.watchReady && (
+          <p className="mt-3 text-sm text-slate-600">Connecting to upload target updates…</p>
         )}
 
         {canReadDataVolume && dvQuery.isLoading && (
@@ -350,18 +378,22 @@ function UploadDiskPanel({
 
         {sourceMismatch && (
           <p className="mt-3 text-sm text-red-700">
-            The underlying DataVolume is not configured for upload. Refresh after
-            the VMDisk finishes reconciling, or recreate the disk with an upload
-            source.
+            The underlying DataVolume is not configured for upload, and its source
+            cannot be changed. Restore the original source recorded in its
+            vm-disk.cozystack.io/source annotation, or create another disk for upload.
           </p>
         )}
 
         {desiredSourceDrift && (
           <p className="mt-3 text-sm text-amber-800">
             This VMDisk no longer selects an upload source, but its preserved
-            DataVolume is still an upload target. Finish the upload, or recreate the
-            disk to change its source.
+            DataVolume is still an upload target. Restore its recorded upload source
+            to reconcile this disk, or create another disk for a different source.
           </p>
+        )}
+
+        {(sourceMismatch || desiredSourceDrift) && ready?.status === "False" && ready.message && (
+          <p className="mt-3 text-sm text-red-700">{ready.message}</p>
         )}
 
         {!sourceMismatch && dv && state.stage === "preparing" && (
@@ -392,7 +424,7 @@ function UploadDiskPanel({
           </p>
         )}
 
-        {!sourceMismatch && dv && state.stage === "unknown" && (
+        {!targetUnavailable && !sourceMismatch && dv && state.stage === "unknown" && (
           <p className="mt-3 text-sm text-slate-600">
             CDI reported an upload phase the console does not recognise. The command
             is withheld until the disk returns to a known state.
@@ -409,7 +441,7 @@ function UploadDiskPanel({
           </p>
         )}
 
-        {!sourceMismatch && dv && state.stage === "awaiting-upload" && (
+        {!targetUnavailable && dvQuery.watchReady && !sourceMismatch && dv && state.stage === "awaiting-upload" && (
           <UploadReadyHandoff
             key={`${dv.metadata.uid ?? name}:${dv.metadata.resourceVersion ?? state.progress ?? ""}`}
             name={name}

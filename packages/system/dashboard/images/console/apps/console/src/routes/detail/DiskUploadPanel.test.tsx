@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router"
-import { K8sClient, K8sProvider } from "@cozystack/k8s-client"
+import { K8sApiError, K8sClient, K8sProvider } from "@cozystack/k8s-client"
 import type { K8sList, WatchEvent } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { DiskUploadPanel } from "@/routes/detail/DiskUploadPanel.tsx"
@@ -114,6 +114,7 @@ function dvList(items: DataVolume[], resourceVersion = "10"): K8sList<DataVolume
 }
 
 interface ClusterFixture {
+  watchPending?: boolean
   items?: DataVolume[]
   uploadProxyURL?: string
   uploadProxyURLOverride?: string
@@ -128,6 +129,7 @@ function makeHarness(fixture: ClusterFixture = {}) {
   const client = new K8sClient()
   const handlers: Array<(event: WatchEvent<DataVolume>) => void> = []
   const watchErrorHandlers: Array<(error: Error) => void> = []
+  const openHandlers: Array<() => void> = []
   const stopWatch = vi.fn()
   const listSpy = vi
     .spyOn(client, "list")
@@ -185,7 +187,10 @@ function makeHarness(fixture: ClusterFixture = {}) {
       _resourceVersion,
       onEvent,
       onError,
+      options,
     ) => {
+      if (options?.onOpen) openHandlers.push(options.onOpen)
+      if (!fixture.watchPending) options?.onOpen?.()
       handlers.push(onEvent as (event: WatchEvent<DataVolume>) => void)
       if (onError) watchErrorHandlers.push(onError)
       return stopWatch
@@ -203,9 +208,10 @@ function makeHarness(fixture: ClusterFixture = {}) {
       await waitFor(() => expect(handlers.length).toBeGreaterThan(0))
       act(() => handlers.at(-1)?.(event))
     },
-    async failWatch() {
+    acceptWatch() { act(() => openHandlers.at(-1)?.()) },
+    async failWatch(error = new Error("watch ended")) {
       await waitFor(() => expect(watchErrorHandlers.length).toBeGreaterThan(0))
-      act(() => watchErrorHandlers.at(-1)?.(new Error("watch ended")))
+      act(() => watchErrorHandlers.at(-1)?.(error))
     },
   }
 }
@@ -293,7 +299,7 @@ describe("DiskUploadPanel query lifecycle", () => {
     renderWithK8sProvider(
       <DiskUploadPanel
         ad={ad}
-        instance={makeInstance({ source: { http: { url: "https://example.org/i" } } })}
+        instance={makeInstance({ ready: "False", source: { http: { url: "https://example.org/i" } } })}
       />,
       { client: h.client },
     )
@@ -304,16 +310,80 @@ describe("DiskUploadPanel query lifecycle", () => {
     expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
   })
 
-  it("shows the intended panel but defers the child query until the VMDisk is Ready", async () => {
+  it("reads the retained child even while the VMDisk is NotReady", async () => {
     const h = makeHarness()
     renderWithK8sProvider(
       <DiskUploadPanel ad={ad} instance={makeInstance({ ready: "False" })} />,
       { client: h.client },
     )
-    expect(await screen.findByText(/Waiting for disk reconciliation/)).toBeInTheDocument()
-    expect(h.listSpy).not.toHaveBeenCalled()
+    await waitFor(() => expect(h.listSpy).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText("Upload handoff")).toBeInTheDocument()
     expect(h.getSpy).not.toHaveBeenCalled()
     expect(h.createSpy).not.toHaveBeenCalled()
+  })
+
+  it("keeps the retained upload visible when a mounted parent becomes NotReady", async () => {
+    const h = makeHarness()
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = (instance: ApplicationInstance) => <K8sProvider client={h.client} queryClient={queryClient}><DiskUploadPanel ad={ad} instance={instance} /></K8sProvider>
+    const { rerender } = render(view(makeInstance()))
+    await confirmNoUploadRunning()
+    expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
+    const changed = makeInstance({ ready: "False", source: { http: { url: "https://example.org/image" } } })
+    changed.status!.conditions![0].message = "VMDisk source is immutable after creation"
+    rerender(view(changed))
+    expect(await screen.findByText(/preserved DataVolume is still an upload target/)).toBeInTheDocument()
+    expect(screen.getByText("VMDisk source is immutable after creation")).toBeInTheDocument()
+    expect(h.listSpy).toHaveBeenCalledTimes(1)
+    expect(h.stopWatch).not.toHaveBeenCalled()
+  })
+
+  it("points a rejected HTTP-to-upload edit back to the recorded source", async () => {
+    const h = makeHarness({ items: [makeDV({ source: { http: { url: "https://example.org/image" } } })] })
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance({ ready: "False" })} />, { client: h.client })
+    expect(await screen.findByText(/Restore the original source recorded/)).toHaveTextContent("vm-disk.cozystack.io/source")
+    expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
+    expect(h.getSpy).not.toHaveBeenCalled()
+    expect(h.createSpy).not.toHaveBeenCalled()
+  })
+
+  it("recovers an early Role-creation denial when the parent becomes Ready", async () => {
+    const h = makeHarness()
+    h.listSpy.mockRejectedValueOnce(new K8sApiError(403, "Role not created"))
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = (ready: "True" | "False") => <K8sProvider client={h.client} queryClient={queryClient}><DiskUploadPanel ad={ad} instance={makeInstance({ ready })} /></K8sProvider>
+    const { rerender } = render(view("False"))
+    expect(await screen.findByText(/could not read the upload target/)).toBeInTheDocument()
+    expect(h.listSpy).toHaveBeenCalledTimes(1)
+    rerender(view("True"))
+    await confirmNoUploadRunning()
+    expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
+    expect(h.listSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it("withholds prerequisites until the watch is accepted", async () => {
+    const h = makeHarness({ watchPending: true })
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, { client: h.client })
+    expect(await screen.findByText(/Connecting to upload target updates/)).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Confirm no upload is running" })).not.toBeInTheDocument()
+    expect(h.getSpy).not.toHaveBeenCalled()
+    h.acceptWatch()
+    await confirmNoUploadRunning()
+    expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
+  })
+
+  it("removes a revealed command on watch denial and allows a fresh explicit retry", async () => {
+    const h = makeHarness()
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, { client: h.client })
+    await confirmNoUploadRunning()
+    expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
+    await h.failWatch(new K8sApiError(403, "Permission revoked"))
+    expect(await screen.findByText(/Upload target updates are unavailable/)).toBeInTheDocument()
+    expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }))
+    await confirmNoUploadRunning()
+    expect(await screen.findByText(/virtctl image-upload/)).toBeInTheDocument()
+    expect(h.listSpy).toHaveBeenCalledTimes(2)
   })
 
   it("recovers from an empty list and follows ADDED then MODIFIED to completion", async () => {
@@ -370,7 +440,7 @@ describe("DiskUploadPanel query lifecycle", () => {
     expect(await screen.findByText("Upload handoff")).toBeInTheDocument()
   })
 
-  it("does not call a pending read an absent upload target", async () => {
+  it("does not report a pending read as an absent upload target", async () => {
     const h = makeHarness()
     h.listSpy.mockImplementation(() => new Promise(() => {}))
     renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {

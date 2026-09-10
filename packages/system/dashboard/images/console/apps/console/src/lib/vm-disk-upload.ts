@@ -159,7 +159,7 @@ export function dataVolumeCapacity(dv: DataVolume | undefined): string | undefin
   return dv?.spec?.storage?.resources?.requests?.storage?.trim() || undefined
 }
 
-/** Validates an administrator-provided CDI upload proxy as a trusted HTTPS URL. */
+/** Checks HTTPS URL syntax; reachability and certificate trust belong to the upload client. */
 export function usableProxyURL(uploadProxyURL: string | undefined): string | undefined {
   const value = uploadProxyURL?.trim()
   if (!value) return undefined

@@ -4,9 +4,9 @@ import {
   useQueryClient,
   type UseQueryOptions,
 } from "@tanstack/react-query"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useK8sClient } from "./provider.tsx"
-import type { K8sList, K8sResource } from "./client.ts"
+import { K8sApiError, type K8sList, type K8sResource } from "./client.ts"
 
 export interface ResourceRef {
   apiGroup: string
@@ -49,10 +49,6 @@ export function useK8sList<T extends K8sResource>(
   )
   const enabled = queryOptions.enabled !== false
   const watchEnabled = watchOpt !== false
-  const cleanupRef = useRef<(() => void) | null>(null)
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [watchGeneration, setWatchGeneration] = useState(0)
-
   const query = useQuery<K8sList<T>>({
     queryKey,
     queryFn: () =>
@@ -63,102 +59,139 @@ export function useK8sList<T extends K8sResource>(
     ...queryOptions,
   })
 
-  const resourceVersion = query.data?.metadata?.resourceVersion
+  const hasResourceVersion = !!query.data?.metadata?.resourceVersion
+
+  const [restart, setRestart] = useState({ key: queryKey, generation: 0 })
+  const restartWatch = useCallback(() => {
+    setRestart((old) => ({ key: queryKey, generation: old.generation + 1 }))
+  }, [queryKey])
+  const watchKey = useMemo(
+    () => ({ queryKey, enabled, watchEnabled, hasResourceVersion, generation: restart.generation }),
+    [queryKey, enabled, watchEnabled, hasResourceVersion, restart.generation],
+  )
+  const [watchState, setWatchState] = useState<{
+    key: typeof watchKey
+    ready: boolean
+    error?: Error
+  }>({ key: watchKey, ready: false })
 
   useEffect(() => {
+    if (!enabled || !watchEnabled || !hasResourceVersion) return
     let active = true
-    cleanupRef.current?.()
-    cleanupRef.current = null
-    if (reconnectTimerRef.current !== null) {
-      clearTimeout(reconnectTimerRef.current)
-      reconnectTimerRef.current = null
+    let generation = 0
+    let attempts = 0
+    let abort: (() => void) | undefined
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    let healthyTimer: ReturnType<typeof setTimeout> | undefined
+
+    const stop = () => {
+      generation++
+      clearTimeout(retryTimer)
+      clearTimeout(healthyTimer)
+      retryTimer = undefined
+      healthyTimer = undefined
+      abort?.()
+      abort = undefined
     }
-
-    if (!enabled || !watchEnabled || !resourceVersion) return
-
-    const reconnect = () => {
-      if (!active || reconnectTimerRef.current !== null) return
-      cleanupRef.current?.()
-      cleanupRef.current = null
-      reconnectTimerRef.current = setTimeout(() => {
-        reconnectTimerRef.current = null
-        void queryClient.invalidateQueries({ queryKey }).finally(() => {
-          // A successful relist may return the same resourceVersion. The
-          // generation guarantees that the closed watch still reopens.
-          if (active) setWatchGeneration((generation) => generation + 1)
-        })
-      }, 1000)
+    const fail = (error: Error) => {
+      if (!active) return
+      stop()
+      setWatchState({ key: watchKey, ready: false, error })
+      const status = error instanceof K8sApiError ? error.status : 0
+      if (status >= 400 && status < 500 && status !== 410 && status !== 429) return
+      const delay = Math.min(1000 * 2 ** attempts, 30000)
+      attempts = Math.min(attempts + 1, 5)
+      retryTimer = setTimeout(() => { void relist() }, delay)
     }
-
-    cleanupRef.current = client.watch<T>(
-      ref.apiGroup,
-      ref.apiVersion,
-      ref.plural,
-      ref.namespace,
-      resourceVersion,
-      (event) => {
-        if (event.type === "BOOKMARK") return
-        if (event.type === "ERROR") {
-          reconnect()
-          return
-        }
-        queryClient.setQueryData<K8sList<T>>(queryKey, (old) => {
-          if (!old) return old
-          const items = [...old.items]
-          const idx = items.findIndex(
-            (i) =>
-              i.metadata.name === event.object.metadata.name &&
-              i.metadata.namespace === event.object.metadata.namespace,
-          )
-          switch (event.type) {
-            case "ADDED":
-              if (idx === -1) items.push(event.object)
-              else items[idx] = event.object
-              break
-            case "MODIFIED":
-              if (idx >= 0) items[idx] = event.object
-              else items.push(event.object)
-              break
-            case "DELETED":
-              if (idx >= 0) items.splice(idx, 1)
-              break
+    const open = (resourceVersion: string) => {
+      const current = generation
+      const isCurrent = () => active && current === generation
+      const cleanup = client.watch<T>(
+        ref.apiGroup, ref.apiVersion, ref.plural, ref.namespace, resourceVersion,
+        (event) => {
+          if (!isCurrent() || event.type === "BOOKMARK") return
+          if (event.type === "ERROR") {
+            fail(new K8sApiError(event.object.code ?? 0, event.object))
+            return
           }
-          return { ...old, items }
+          queryClient.setQueryData<K8sList<T>>(queryKey, (old) => {
+            if (!old) return old
+            const items = [...old.items]
+            const idx = items.findIndex(
+              (i) => i.metadata.name === event.object.metadata.name &&
+                i.metadata.namespace === event.object.metadata.namespace,
+            )
+            switch (event.type) {
+              case "ADDED":
+              case "MODIFIED":
+                if (idx === -1) items.push(event.object)
+                else items[idx] = event.object
+                break
+              case "DELETED":
+                if (idx >= 0) items.splice(idx, 1)
+                break
+            }
+            return { ...old, items }
+          })
+        },
+        (error) => { if (isCurrent()) fail(error) },
+        {
+          labelSelector,
+          fieldSelector,
+          onOpen: () => {
+            if (!isCurrent()) return
+            setWatchState({ key: watchKey, ready: true })
+            healthyTimer = setTimeout(() => { attempts = 0 }, 30000)
+          },
+        },
+      )
+      if (isCurrent()) abort = cleanup
+      else cleanup()
+    }
+    const relist = async () => {
+      stop()
+      const current = generation
+      try {
+        const data = await queryClient.fetchQuery({
+          queryKey,
+          queryFn: () => client.list<T>(ref.apiGroup, ref.apiVersion, ref.plural, ref.namespace, {
+            labelSelector, fieldSelector,
+          }),
+          retry: false,
+          staleTime: 0,
         })
-      },
-      reconnect,
-      {
-        labelSelector,
-        fieldSelector,
-      },
-    )
+        if (!active || current !== generation) return
+        if (!data.metadata.resourceVersion) throw new Error("List response has no resourceVersion")
+        // Reopen directly: a successful relist can have the same resourceVersion.
+        open(data.metadata.resourceVersion)
+      } catch (error) {
+        if (active && current === generation) {
+          fail(error instanceof Error ? error : new Error(String(error)))
+        }
+      }
+    }
+    if (restart.key === queryKey && restart.generation > 0) {
+      void relist()
+    } else {
+      const resourceVersion = queryClient.getQueryData<K8sList<T>>(queryKey)?.metadata.resourceVersion
+      if (resourceVersion) open(resourceVersion)
+    }
 
     return () => {
       active = false
-      if (reconnectTimerRef.current !== null) {
-        clearTimeout(reconnectTimerRef.current)
-        reconnectTimerRef.current = null
-      }
-      cleanupRef.current?.()
-      cleanupRef.current = null
+      stop()
     }
   }, [
-    resourceVersion,
-    enabled,
-    watchEnabled,
-    ref.apiGroup,
-    ref.apiVersion,
-    ref.plural,
-    ref.namespace,
-    labelSelector,
-    fieldSelector,
-    watchGeneration,
-    client,
-    queryClient,
-    queryKey,
+    hasResourceVersion, enabled, watchEnabled, queryKey, watchKey, restart, client, queryClient,
+    ref.apiGroup, ref.apiVersion, ref.plural, ref.namespace, labelSelector, fieldSelector,
   ])
 
-  return query
+  // Keep React Query's tracked result proxy intact; spreading subscribes to every property.
+  return Object.assign(query, {
+    watchReady: enabled && watchEnabled && watchState.key === watchKey && watchState.ready,
+    watchError: watchState.key === watchKey ? watchState.error : undefined,
+    restartWatch,
+  })
 }
 
 export function useK8sGet<T extends K8sResource>(
