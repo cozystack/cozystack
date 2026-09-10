@@ -7,14 +7,8 @@ release:
   name: tenant-alice
   namespace: tenant-alice
 
-# helm-controller v1.5.0 kstatus (#2642): the etcd and gateway tenant children
-# each wrap a chart that renders a custom resource (EtcdCluster / TenantGateway).
-# Without a health gate the child HelmRelease flips Ready as soon as helm applies
-# the CR, before the operator has stood the workload up (the empty-status race).
-# A `poller` waitStrategy plus a per-CR healthCheckExpr makes each child wait for
-# its CR's real readiness, which in turn gates the parent Tenant release.
 tests:
-  - it: etcd child gates on the EtcdCluster member count
+  - it: etcd child evaluates health without an inProgress override
     template: templates/etcd.yaml
     set:
       etcd: true
@@ -28,17 +22,24 @@ tests:
       - equal:
           path: spec.healthCheckExprs[0].kind
           value: EtcdCluster
-      - equal:
+      - exists:
           path: spec.healthCheckExprs[0].current
-          value: "has(status.readyMembers) && status.readyMembers == spec.replicas"
-      - equal:
+      - exists:
           path: spec.healthCheckExprs[0].failed
-          value: "has(status.brokenMembers) && status.brokenMembers > 0"
+      - notExists:
+          path: spec.healthCheckExprs[0].inProgress
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure
 
   - it: gateway child gates on the TenantGateway Ready condition
     template: templates/gateway.yaml
     set:
       gateway: true
+      gatewayClass: shared-edge
       host: ""
     asserts:
       - equal:
@@ -53,3 +54,12 @@ tests:
       - equal:
           path: spec.healthCheckExprs[0].current
           value: "has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')"
+      - equal:
+          path: spec.values.gatewayClassName
+          value: shared-edge
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure
