@@ -222,6 +222,12 @@ func assertWireStatus(t *testing.T, err error, wantCode int32, wantReason metav1
 	if !strings.Contains(status.Message, wantContext) {
 		t.Fatalf("wire message %q lost the %q context", status.Message, wantContext)
 	}
+	if status.Details == nil || status.Details.Group != appsv1alpha1.GroupName || status.Details.Kind != "postgresqls" || status.Details.Name != "example" {
+		t.Fatalf("wire details = %#v, want apps.cozystack.io/postgresqls example", status.Details)
+	}
+	if !strings.HasPrefix(status.Message, `postgresqls.apps.cozystack.io "example": `) {
+		t.Fatalf("wire message %q does not identify the requested Application", status.Message)
+	}
 }
 
 func TestCreatePreservesBackendStatus(t *testing.T) {
@@ -259,6 +265,34 @@ func TestUpdatePreservesBackendStatus(t *testing.T) {
 		t.Fatalf("Update returned %v, want a preserved Forbidden", err)
 	}
 	assertWireStatus(t, err, http.StatusForbidden, metav1.StatusReasonForbidden, "failed to update HelmRelease")
+}
+
+func TestUpdatePreservesStatusWhenCurrentHelmReleaseDisappears(t *testing.T) {
+	getCalls := 0
+	r := newOptionsTestREST(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*helmv2.HelmRelease); ok {
+				getCalls++
+				if getCalls == 2 {
+					return apierrors.NewNotFound(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), key.Name)
+				}
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+		Update: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.UpdateOption) error {
+			t.Fatal("Update wrote a HelmRelease after its current state could not be read")
+			return nil
+		},
+	}, optionsTestHelmRelease())
+	ctx := request.WithNamespace(context.Background(), optionsTestNamespace)
+	_, _, err := r.Update(ctx, "example", rest.DefaultUpdatedObjectInfo(optionsTestApplication()), nil, nil, false, &metav1.UpdateOptions{})
+	if getCalls != 2 {
+		t.Fatalf("HelmRelease reads = %d, want the initial read and the current-state read", getCalls)
+	}
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("Update returned %v, want a preserved NotFound", err)
+	}
+	assertWireStatus(t, err, http.StatusNotFound, metav1.StatusReasonNotFound, "failed to fetch current HelmRelease")
 }
 
 func TestDeletePreservesConflictError(t *testing.T) {

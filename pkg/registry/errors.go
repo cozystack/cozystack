@@ -21,22 +21,27 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// WrapPreservingStatus prefixes a backing API error with context while keeping
-// its machine-readable Status intact. The endpoint handlers resolve the wire
-// answer through ErrorToAPIStatus, which type-switches on the APIStatus
-// interface and never unwraps, so a fmt.Errorf-wrapped backend rejection
-// reaches the client as a generic 500 with an empty reason even though
-// errors.Is/As still see the cause. Rebuilding the StatusError keeps the
-// original code and reason (409 Conflict, 403 Forbidden, ...) on the wire.
-// Non-status errors fall back to plain wrapping.
-func WrapPreservingStatus(msg string, err error) error {
+// WrapPreservingStatus maps a backing API error to the requested resource.
+// ErrorToAPIStatus does not unwrap errors, so the result must implement
+// APIStatus directly to retain the backend's HTTP code and reason.
+func WrapPreservingStatus(msg string, err error, resource schema.GroupResource, name string) error {
+	msg = fmt.Sprintf("%s %q: %s", resource.String(), name, msg)
 	var status apierrors.APIStatus
 	if errors.As(err, &status) {
-		st := status.Status()
+		backendStatus := status.Status()
+		st := backendStatus.DeepCopy()
+		if st.Details == nil {
+			st.Details = &metav1.StatusDetails{}
+		}
+		st.Details.Group = resource.Group
+		st.Details.Kind = resource.Resource
+		st.Details.Name = name
 		st.Message = fmt.Sprintf("%s: %s", msg, st.Message)
-		return &apierrors.StatusError{ErrStatus: st}
+		return &apierrors.StatusError{ErrStatus: *st}
 	}
 	return fmt.Errorf("%s: %w", msg, err)
 }
