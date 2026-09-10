@@ -15,10 +15,11 @@
 #                   tier: every suite except kubernetes-previous, for the build
 #                   inputs in broad_suite_pattern
 #   - full list     any path that affects all tests, OR an unrecognised
-#                   packages/* path, OR a changed package that reaches no
-#                   runnable suite through the graph, OR a path matching NEITHER
-#                   the full-suite nor the inert list, OR a yq that failed to
-#                   build the dependency graph (conservative fallbacks)
+#                   Chainsaw suite, OR an unrecognised packages/* path, OR a
+#                   changed package that reaches no runnable suite through the
+#                   graph, OR a path matching NEITHER the full-suite nor the
+#                   inert list, OR a yq that failed to build the dependency
+#                   graph (conservative fallbacks)
 #   - nothing, and  the suite list itself is unavailable: find failed, or
 #     a non-zero    hack/e2e-chainsaw holds no suite file. Unlike the
 #     exit          yq case there is no fallback left to take — an empty list

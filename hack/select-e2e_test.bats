@@ -441,17 +441,16 @@ assert_broad_tier() {
     rm -rf "$tmp"
 }
 
-# Regression, found in independent review of this change: the broad tier used to
-# resolve BEFORE the unresolved-suite backstop, so an unrelated go.mod bump in
-# the same diff swallowed that per-path escalation and its stderr line. That is
-# the merge-before-escalate shape #3330 removed from the graph walk.
+# A broad path must not weaken an unknown path's per-path escalation. This small
+# case keeps the original regression trigger visible beside the full mixed-path
+# matrix below.
 @test "an unresolved suite still escalates when a broad path is in the diff" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     printf 'go.mod\nhack/e2e-chainsaw/nosuch/a.yaml\n' > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
     assert_full_suite "$output"
-    grep -q 'no runnable suite is named' "$tmp/err" \
+    grep -Fq "'hack/e2e-chainsaw/nosuch/a.yaml' names no runnable suite ('nosuch')" "$tmp/err" \
       || { echo "expected the unresolved-suite reason on stderr, got: $(cat "$tmp/err")" >&2; exit 1; }
     rm -rf "$tmp"
 }
@@ -1295,6 +1294,72 @@ assert_broad_tier() {
             exit 1
         fi
     done
+    rm -rf "$tmp"
+}
+
+@test "an unknown Chainsaw suite path escalates independently of valid neighbours" {
+    # A deleted suite path and the old side of a suite rename both name a
+    # directory absent from the runnable inventory. Each must force a full run
+    # on its own account: merging names before checking membership lets a valid
+    # direct or graph-selected neighbour hide the unknown one. A broad path is
+    # another neighbour, and its 20-suite answer must not pre-empt the full run.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    [ ! -d hack/e2e-chainsaw/deleted-suite ]
+    [ ! -d hack/e2e-chainsaw/renamed-postgres ]
+
+    for neighbour in \
+        hack/e2e-chainsaw/postgres/chainsaw-test.yaml \
+        packages/apps/postgres/Chart.yaml; do
+        for broad in '' go.mod; do
+            for order in unknown-first unknown-last; do
+                unknown=hack/e2e-chainsaw/deleted-suite/chainsaw-test.yaml
+                if [ "$order" = unknown-first ]; then
+                    printf '%s\n' "$unknown" "$neighbour" "$broad" > "$tmp/diff"
+                else
+                    printf '%s\n' "$broad" "$neighbour" "$unknown" > "$tmp/diff"
+                fi
+                output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+                assert_full_suite "$output"
+                if ! grep -Fq "'$unknown' names no runnable suite ('deleted-suite')" "$tmp/err"; then
+                    echo "unknown path must explain the full run ($neighbour, ${broad:-no broad}, $order); stderr was:" >&2
+                    cat "$tmp/err" >&2
+                    exit 1
+                fi
+            done
+        done
+    done
+
+    # A rename diff contains both the old unknown directory and the new valid
+    # one. The old side still escalates even though the new side selects a suite.
+    old=hack/e2e-chainsaw/renamed-postgres/chainsaw-test.yaml
+    printf '%s\n' "$old" hack/e2e-chainsaw/postgres/chainsaw-test.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_full_suite "$output"
+    grep -Fq "'$old' names no runnable suite ('renamed-postgres')" "$tmp/err"
+    rm -rf "$tmp"
+}
+
+@test "known and disabled Chainsaw paths keep their scoped behavior" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+
+    echo hack/e2e-chainsaw/postgres/chainsaw-test.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_selection "a known direct path must stay scoped" "$output" postgres
+    [ ! -s "$tmp/err" ]
+
+    # Disabled files are inert even when their directory names no runnable
+    # suite, alone and beside a valid direct path.
+    disabled=hack/e2e-chainsaw/no-such-suite/chainsaw-test.yaml.disabled
+    echo "$disabled" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    [ -z "$output" ]
+    [ ! -s "$tmp/err" ]
+    printf '%s\n' "$disabled" hack/e2e-chainsaw/postgres/chainsaw-test.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_selection "a disabled neighbour must stay inert" "$output" postgres
+    [ ! -s "$tmp/err" ]
     rm -rf "$tmp"
 }
 
