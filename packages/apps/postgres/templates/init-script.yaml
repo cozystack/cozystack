@@ -13,12 +13,15 @@
   and the role SQL. The apiserver already rejects such a name as an invalid
   Secret data key, but only once Flux applies the render, as an opaque "Secret is
   invalid" error; failing here names the offending username and keeps a shell
-  metacharacter from ever reaching the script. The set matches k8s IsConfigMapKey,
-  so it rejects nothing that could otherwise install.
+  metacharacter from ever reaching the script. The check mirrors k8s IsConfigMapKey
+  in full — the charset plus its rejection of "." / ".." and of names over 253
+  chars — so it rejects nothing that could otherwise install, and no legal-charset
+  name (".", "..", an over-long one) slips through to fail later with the opaque
+  apiserver error this guard exists to replace.
 */}}
 {{- range $user, $u := .Values.users }}
-  {{- if not (regexMatch "^[-._a-zA-Z0-9]+$" $user) }}
-    {{- fail (printf "invalid username %q: a username may contain only letters, digits and the characters -._ (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)" $user) }}
+  {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $user)) (eq $user ".") (eq $user "..") (gt (len $user) 253) }}
+    {{- fail (printf "invalid username %q: a username may contain only letters, digits and the characters -._ , must not be \".\" or \"..\", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)" $user) }}
   {{- end }}
 {{- end }}
 

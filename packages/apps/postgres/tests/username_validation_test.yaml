@@ -26,12 +26,39 @@ tests:
         'evil";id;echo "x': {}
     asserts:
       - failedTemplate:
-          errorMessage: 'invalid username "evil\";id;echo \"x": a username may contain only letters, digits and the characters -._ (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+          errorMessage: 'invalid username "evil\";id;echo \"x": a username may contain only letters, digits and the characters -._ , must not be "." or "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
 
   - it: fails the render for a username with a space
     set:
       users:
         'a b': {}
+    asserts:
+      - failedTemplate: {}
+
+  # ".", ".." and names longer than 253 chars match the charset but are rejected
+  # by k8s IsConfigMapKey, so they cannot install: the charset regex alone let
+  # them through the named guard and they failed later with an opaque apiserver
+  # error instead. These pin the guard to the full IsConfigMapKey contract.
+  - it: fails the render for the reserved name "."
+    set:
+      users:
+        '.': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username ".": a username may contain only letters, digits and the characters -._ , must not be "." or "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+
+  - it: fails the render for the reserved name ".."
+    set:
+      users:
+        '..': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "..": a username may contain only letters, digits and the characters -._ , must not be "." or "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+
+  - it: fails the render for a username longer than 253 characters
+    set:
+      users:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {}
     asserts:
       - failedTemplate: {}
 
