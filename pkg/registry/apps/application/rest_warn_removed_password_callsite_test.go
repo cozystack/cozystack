@@ -171,6 +171,11 @@ func TestWarnRemovedUserPasswords(t *testing.T) {
 		{"other kind quiet on passwordRotation", "Redis", `{"passwordRotation":3}`, false},
 		{"warns on a good user despite a non-object user", postgresKind, `{"users":{"good":{"password":"x"},"bad":"str"}}`, true},
 		{"warns on passwordRotation despite a non-object user", postgresKind, `{"passwordRotation":1,"users":{"bad":"str"}}`, true},
+		// A malformed users SHAPE (an array, not a map) must not suppress the
+		// sibling passwordRotation warning: a single typed unmarshal returns the
+		// first type error and discards every field it already decoded.
+		{"passwordRotation survives a malformed users shape", postgresKind, `{"passwordRotation":1,"users":["oops"]}`, true},
+		{"mariadb passwordRotation survives a malformed users shape", mariadbKind, `{"passwordRotation":1,"users":["oops"]}`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

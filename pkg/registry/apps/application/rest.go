@@ -2000,19 +2000,23 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 	if !removedUserPasswordKinds[r.kindName] || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
 		return
 	}
-	// Decode users as raw per-entry values, not map[string]map[...], so a single
-	// non-object user value does not fail the whole unmarshal and suppress every
-	// warning (the write path accepts such a value; the schema only guards the
-	// read/defaulting path). passwordRotation is decoded independently for the
-	// same reason.
-	var values struct {
-		Users            map[string]json.RawMessage `json:"users"`
-		PasswordRotation *json.RawMessage           `json:"passwordRotation"`
-	}
-	if err := json.Unmarshal(app.Spec.Raw, &values); err != nil {
+	// Decode the top level as raw keys, then each field on its own, so a
+	// malformed SHAPE for one field cannot suppress the warning for another: a
+	// single json.Unmarshal into a typed struct returns the first type error and
+	// discards every field it already decoded, so a `users` sent as an array
+	// would mute the passwordRotation warning below (the write path accepts such
+	// a value; the schema only guards the read/defaulting path).
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(app.Spec.Raw, &top); err != nil {
 		return
 	}
-	for user, raw := range values.Users {
+	var users map[string]json.RawMessage
+	if raw, ok := top["users"]; ok {
+		// A malformed users shape (not a map) is not one this warning is about;
+		// ignore it rather than let it mute the passwordRotation warning below.
+		_ = json.Unmarshal(raw, &users)
+	}
+	for user, raw := range users {
 		var u map[string]json.RawMessage
 		// A non-object user value is not one this warning is about; skip it
 		// rather than letting one malformed entry mute the rest.
@@ -2029,7 +2033,7 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 	// Helm release history). The key is still accepted and dropped by the schema,
 	// so without this an operator rotating after a leak gets a silent 200 and no
 	// effect. Rotation is being reworked as a controller — cozystack/community#72.
-	if values.PasswordRotation != nil {
+	if _, present := top["passwordRotation"]; present {
 		warning.AddWarning(ctx, "",
 			"spec.passwordRotation is ignored: chart-based password rotation is not supported (a chart-rendered Secret cannot revoke a leaked credential). Setting this field has no effect; rotation is being reworked as a controller (cozystack/community#72).")
 	}
