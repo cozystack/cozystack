@@ -16,6 +16,8 @@ EXPECTED=(
 )
 
 fail=0
+jq_err=$(mktemp)
+trap 'rm -f "$jq_err"' EXIT
 for f in packages/system/*-rd/cozyrds/*.yaml; do
   schema=$(yq -r '.spec.application.openAPISchema // ""' "$f")
   if [ -z "$schema" ]; then
@@ -24,19 +26,40 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
   # Pull every resourcesPreset enum out of the schema. Key on the JSON
   # path ending in "resourcesPreset" rather than a description heuristic,
   # so an unrelated field with "preset" in its description does not match.
-  enums=$(printf '%s' "$schema" | jq -r '
+  #
+  # jq's status is read rather than discarded. `2>/dev/null || true` left a
+  # read that failed indistinguishable from one that found nothing, and it goes
+  # two ways: with no output the emptiness guard below turned it into a clean
+  # skip, so a schema nobody could parse silently passed the check whose whole
+  # job is to parse it, and with output already written before jq died $enums
+  # held a truncated list that every preset past the cut was then judged
+  # against. An errored read is now named as one and carries jq's own reason.
+  # Fed by here-string for the same reason as the membership test below.
+  if ! enums=$(jq -r '
     [paths(type == "object" and has("enum")) as $p
      | select($p[-1] == "resourcesPreset")
      | getpath($p).enum[]]
     | .[]
-  ' 2>/dev/null || true)
+  ' <<<"$schema" 2>"$jq_err"); then
+    echo "FAIL: $f openAPISchema could not be read, so its presets were not checked: $(tr '\n' ' ' <"$jq_err")" >&2
+    fail=1
+    continue
+  fi
+  # Empty stays a skip, not a failure: most RDs define no resourcesPreset at all,
+  # and only a read that ERRORED is evidence of anything.
   if [ -z "$enums" ]; then
     continue
   fi
   missing=()
   for want in "${EXPECTED[@]}"; do
     # -F: literal match so the `.` in t1.nano does not match any character.
-    if ! printf '%s\n' "$enums" | grep -Fqx -- "$want"; then
+    # A here-string, not a pipe: `grep -q` exits on its first match, so a pipe
+    # leaves the writer with unwritten output and kills it with SIGPIPE. Under
+    # `set -o pipefail` that becomes exit 141 for the whole pipeline, which
+    # reads exactly like "not found" — so a preset that IS present is reported
+    # missing, on a different file and a different preset each run. Measured at
+    # roughly one spurious failure per run of this script.
+    if ! grep -Fqx -- "$want" <<<"$enums"; then
       missing+=("$want")
     fi
   done
@@ -47,8 +70,10 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
 done
 
 if [ "$fail" -ne 0 ]; then
-  echo "Some RD schemas are out of sync with the canonical preset set." >&2
-  echo "Run 'make generate' inside the affected chart directory." >&2
+  echo "One or more RD schemas did not pass the preset check above." >&2
+  echo "A missing preset is drift: run 'make generate' inside the affected chart" >&2
+  echo "directory. A schema that could not be read is not drift and carries its" >&2
+  echo "own reason on the line that names it." >&2
   exit 1
 fi
 echo "All RD schemas carry the full 47-preset enum."
