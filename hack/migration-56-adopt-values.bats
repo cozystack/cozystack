@@ -24,12 +24,15 @@
 # talos/version/images (plus the group fields and storageClass fallback). It
 # fails against the buggy `pick(o; ...)` and passes against `pick($o; ...)`.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run`/`$status`/`setup`/`teardown`. Assertions are
-# direct shell tests that exit non-zero on failure.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, setup(), and teardown() for that compatibility path.
 #
-# Run with: hack/cozytest.sh hack/migration-56-adopt-values.bats
+# Run with: bats hack/migration-56-adopt-values.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/migration-56"
 MIG="$PWD/packages/core/platform/images/migrations/migrations/56"

@@ -3,8 +3,9 @@
 # packages a PR did NOT rebuild at the current-main images from the
 # cozystack-packages:main artifact.
 #
-# Run from the repo root:  bats hack/overlay-main-images_test.bats
-# (CI runs it via hack/cozytest.sh through `make unit-tests`.)
+# Run from the repo root with `make bats-unit-tests`, or directly with
+# `bats hack/overlay-main-images_test.bats`. The legacy `hack/cozytest.sh`
+# runner remains a supported compatibility path.
 #
 # Each fixture test builds a throwaway tree: a `packages/` tree on release
 # (ghcr/v1.5.0) refs, and a `main/` dir standing in for the extracted
@@ -23,6 +24,8 @@
 # the shell with no working directory, which is harmless only for as long as
 # every test gets a process of its own. See hack/bats-no-exit-trap.bats and
 # docs/agents/e2e-testing.md.
+
+load test_helper
 
 @test "overlays an unbuilt unit (.tag) to current-main and reports it" {
   root=$(pwd)

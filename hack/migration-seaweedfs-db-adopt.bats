@@ -55,12 +55,15 @@
 # the script does any work, while on a developer box /bin/sh is often bash, which
 # runs green and proves nothing about ash.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run`/`$status`/`setup`. Assertions are direct
-# shell tests that exit non-zero on failure.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, and setup() for that compatibility path.
 #
-# Run with: hack/cozytest.sh hack/migration-seaweedfs-db-adopt.bats
+# Run with: bats hack/migration-seaweedfs-db-adopt.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/migration-seaweedfs-db"
 MIG_DIR="$PWD/packages/core/platform/images/migrations/migrations"

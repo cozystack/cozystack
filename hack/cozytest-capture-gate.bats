@@ -37,8 +37,10 @@
 #   - Only [A-Za-z0-9] from the title survives into the function name, so keep
 #     titles distinctive in their alphanumeric run.
 #
-# Run with: hack/cozytest.sh hack/cozytest-capture-gate.bats
+# Run with: bats hack/cozytest-capture-gate.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 RUNNER="$HACK_DIR/cozytest.sh"

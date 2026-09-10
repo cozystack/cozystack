@@ -2,6 +2,8 @@
 # Unit test: kafka-rd cozyrds must reference the Strimzi-generated
 # clients-ca-cert secret (not the bare clients-ca name, which does not exist).
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/kafka-rd/cozyrds/kafka.yaml"
 

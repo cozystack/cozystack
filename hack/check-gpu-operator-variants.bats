@@ -42,6 +42,8 @@
 # cozytest.sh runs each @test in a fresh subshell with `set -u` and does
 # not honor bats setup()/teardown(), so we provision TMP inline per test.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHART="$REPO_ROOT/packages/system/gpu-operator/charts/gpu-operator"
 VALUES_DIR="$REPO_ROOT/packages/system/gpu-operator"

@@ -13,6 +13,8 @@
 # the next reader the same ambiguity while looking like it had resolved it.
 # These tests pin the separation, not the reading.
 
+load test_helper
+
 kubectl_calls=/dev/null
 kubectl_node_names=
 kubectl_list_rc=0

@@ -41,10 +41,12 @@
 #   - An @test block ends at the first closing brace in column zero, so helpers
 #     and stub heredocs stay at top level.
 #
-# Run with: hack/cozytest.sh hack/runner-identity.bats
-#           (or `bats hack/runner-identity.bats` if the bats binary is
-#           installed; cozytest.sh is the CI path.)
+# Run from the repo root with `make bats-unit-tests`, or directly with
+# `bats hack/runner-identity.bats`. The legacy `hack/cozytest.sh` runner remains
+# a supported compatibility path.
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 SCRIPT="$HACK_DIR/e2e-runner-identity.sh"

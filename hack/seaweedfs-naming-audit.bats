@@ -20,11 +20,15 @@
 # Moving the classifier into a file with tests is the point. These drive it
 # against a fake kubectl, mocking only the cluster boundary.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its own
-# line; there is no bats `run`/`$status`/`setup`.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, and setup() for that compatibility path.
 #
-# Run with: hack/cozytest.sh hack/seaweedfs-naming-audit.bats
+# Run with: bats hack/seaweedfs-naming-audit.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 SEAWEEDFS_AUDIT_LIB=1
 export SEAWEEDFS_AUDIT_LIB

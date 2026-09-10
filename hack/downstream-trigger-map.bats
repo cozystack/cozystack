@@ -10,10 +10,9 @@
 # sources, and the tests below hold them to each other.
 #
 # The three tests pin, in order: every in-repo path the map cites to a file that
-# exists; the workflow carve-out that keeps this suite running on a docs-only PR
-# to the map's own location; and the map and the PR-template checklist to the same
-# repository list, so a repository cannot be listed in one and forgotten in the
-# other.
+# exists; the workflow guarantee that Bats contracts run on every docs-only PR;
+# and the map and the PR-template checklist to the same repository list, so a
+# repository cannot be listed in one and forgotten in the other.
 #
 # WHAT THIS DOES NOT CHECK, so nobody mistakes a green tick for a correct map:
 #
@@ -35,9 +34,11 @@
 # expensive half — is the coupling real, and is it still real over there — stays
 # a human's job, and reviewers should not assume CI did it for them.
 #
-# A docs-only PR normally skips the unit tests, which would have exempted the map
-# from its own guard; the plan step in .github/workflows/pull-requests.yaml carves
-# out docs/agents/contributing.md so that editing the map alone still runs these.
+# A docs-only PR skips builds and E2E, but the `checks` job still runs the Bats
+# lane. Otherwise editing this map, or another document audited by a unit
+# contract, would exempt the changed input from its own guard.
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 MAP_FILE="$REPO_ROOT/docs/agents/contributing.md"
@@ -104,65 +105,21 @@ map_section() {
   echo "All $count in-repo path(s) cited by the trigger map exist"
 }
 
-@test "the workflow opts the trigger map back into the unit tests" {
+@test "the workflow runs Bats contracts for docs-only changes" {
   WORKFLOW="$REPO_ROOT/.github/workflows/pull-requests.yaml"
   [ -f "$WORKFLOW" ] || { echo "missing $WORKFLOW" >&2; exit 1; }
 
-  # Every check below reads the workflow with comments stripped. A commented-out
-  # line still contains its own text, so grepping the raw file would accept a
-  # carve-out that had been disabled and left behind as a TODO — the most likely
-  # way this actually rots.
-  code_only="$(sed 's/#.*//' "$WORKFLOW")"
+  job_if=$(yq -r '.jobs.checks.if' "$WORKFLOW")
+  code_if=$(yq -r '.jobs.checks.steps[] | select(.name == "Run unit tests") | .if' "$WORKFLOW")
+  docs_if=$(yq -r '.jobs.checks.steps[] | select(.name == "Run Bats unit tests for docs-only changes") | .if' "$WORKFLOW")
+  docs_run=$(yq -r '.jobs.checks.steps[] | select(.name == "Run Bats unit tests for docs-only changes") | .run' "$WORKFLOW")
+  controller_if=$(yq -r '.jobs.checks.steps[] | select(.name == "Run controller Go tests") | .if' "$WORKFLOW")
 
-  # The block of the job that runs the unit tests, from its header to the next
-  # job's. The condition has to sit on THAT job: pinning it file-wide would accept
-  # the exact expression pasted into some other job while the unit-test job quietly
-  # loses it.
-  unit_job="$(printf '%s\n' "$code_only" | awk '
-    /^  [a-zA-Z0-9_-]+:[[:space:]]*$/ { inside = ($0 == "  checks:") }
-    inside')"
-  printf '%s\n' "$unit_job" | grep -q 'make unit-tests' || {
-    echo "The 'checks' job in .github/workflows/pull-requests.yaml no longer runs 'make unit-tests'." >&2
-    echo "This suite pins the trigger-map carve-out to that job. If the unit tests moved, point" >&2
-    echo "the checks below at their new job." >&2
-    exit 1
-  }
-
-  # Three links carry the carve-out: the plan step names the map, the plan job
-  # exports the flag, and the unit-test job gates on it. Cutting any one leaves the
-  # other two looking perfectly wired, and none of them fails loudly — an unset or
-  # unexported output dereferences to an empty string, so the condition is merely
-  # false and the suite is skipped in silence, on exactly the PRs it guards, with
-  # every test in this file still green. Pin all three.
-  rel="${MAP_FILE#"$REPO_ROOT"/}"
-  printf '%s\n' "$code_only" | grep -qF "'$rel'" || {
-    echo "The plan step in .github/workflows/pull-requests.yaml does not name '$rel'." >&2
-    echo "Without it, a PR that only edits the trigger map is treated as docs-only, the unit" >&2
-    echo "tests are skipped, and this file never runs — exactly when it is needed most." >&2
-    echo "Fix: point the trigger_map detection at the map's new path." >&2
-    exit 1
-  }
-
-  printf '%s\n' "$code_only" | grep -qF 'trigger_map: ${{ steps.p.outputs.trigger_map }}' || {
-    echo "The plan job in .github/workflows/pull-requests.yaml does not export trigger_map." >&2
-    echo "The step still computes it and the unit-test job still reads it, so this looks wired" >&2
-    echo "up, but an unexported output dereferences to an empty string: the job is skipped in" >&2
-    echo "silence on exactly the PRs this suite guards." >&2
-    echo "Fix: restore 'trigger_map: \${{ steps.p.outputs.trigger_map }}' to the plan job's outputs." >&2
-    exit 1
-  }
-
-  condition="(needs.plan.outputs.code == 'true' || needs.plan.outputs.trigger_map == 'true')"
-  printf '%s\n' "$unit_job" | grep -qF "$condition" || {
-    echo "The job that runs 'make unit-tests' is not gated on:" >&2
-    echo "  $condition" >&2
-    echo "Mentioning trigger_map in another job, or in a comment, does not count. Without that" >&2
-    echo "exact condition on that job, a PR which only edits the trigger map stays docs-only," >&2
-    echo "skips the unit tests, and never runs this file — while every test here still passes." >&2
-    exit 1
-  }
-
-  echo "The workflow names '$rel', exports the flag, and gates the unit tests on it"
+  [ "$job_if" = "!contains(github.event.pull_request.labels.*.name, 'release')" ]
+  [ "$code_if" = "needs.plan.outputs.code == 'true'" ]
+  [ "$docs_if" = "needs.plan.outputs.code == 'false'" ]
+  [ "$docs_run" = 'make bats-unit-tests' ]
+  [ "$controller_if" = "needs.plan.outputs.code == 'true'" ]
 }
 
 @test "the trigger map and the PR-template checklist list the same repositories" {

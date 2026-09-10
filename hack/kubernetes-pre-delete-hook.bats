@@ -6,13 +6,16 @@
 # which cannot say whether the closing message is reachable once a backstop has
 # swallowed a failure.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
-# paths resolve against that cwd. The runner has no setup/teardown, so each
-# @test builds its own fixture and removes it at the end of the body. No EXIT
+# Run from the repo root through `make bats-unit-tests`; relative paths resolve
+# against that cwd. The file also remains compatible with the legacy
+# `hack/cozytest.sh` translator, so each @test builds and removes its fixture
+# inline instead of relying on setup()/teardown(). No EXIT
 # traps: a test that dies inside one prints neither `not ok` nor a reason, and
 # the suite reads green. The removal is therefore reached only on a passing run;
 # a failing one leaves its temp directory behind, which is what you want when
 # reading the rendered script and the captured output afterwards.
+
+load test_helper
 
 CHART=packages/apps/kubernetes
 

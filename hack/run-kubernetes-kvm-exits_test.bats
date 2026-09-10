@@ -17,6 +17,8 @@
 # directory, which reads as a kernel that paid nothing while nothing was ever
 # asked.
 
+load test_helper
+
 timeout_calls=/dev/null
 timeout_rc_override=
 unshare_calls=/dev/null

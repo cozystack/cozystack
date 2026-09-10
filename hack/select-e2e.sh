@@ -82,12 +82,12 @@ SOURCES_DIR="${2:-packages/core/platform/sources}"
 #     The bats half is prefix-matched rather than taking every hack/*.bats,
 #     because the root Makefile splits those two sets by exactly that prefix —
 #     `BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))`
-#     — so the 60 files it keeps are the unit lane and the e2e sandbox runs none
+#     — so the files it keeps are the unit lane and the e2e sandbox runs none
 #     of them. The three it filters out are the ones packages/core/testing's
 #     recipes execute inside the sandbox, and they stay here. Narrowing this
 #     cannot leave a bats-only pull request untested: `make unit-tests` is gated
 #     on the `code` output, which pull-requests.yaml computes as "any path
-#     outside docs/" and never from this script, so those 60 files run on their
+#     outside docs/" and never from this script, so those files run on their
 #     own lane whatever the selection here is;
 #   - the workflows that RUN the suite — enumerated rather than matched by
 #     prefix, so an unrelated workflow does not burn a full run. Keep this list
@@ -124,12 +124,16 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #   - hack/*.bats     the unit lane, minus the hack/e2e-*.bats escalated above.
 #                     The root Makefile draws the line at that prefix
 #                     (BATS_UNIT_FILES filters hack/e2e-%.bats out of
-#                     hack/*.bats), so these 60 files are never executed inside
+#                     hack/*.bats), so these files are never executed inside
 #                     the e2e sandbox and no Chainsaw suite can regress from one.
 #                     They are not untested by being inert here: `make
 #                     unit-tests` runs them, gated on pull-requests.yaml's `code`
 #                     output, which is "any path outside docs/" and is computed
 #                     in the workflow rather than from this script
+#   - hack/test_helper.bash  shared setup for that same unit-only BATS lane. It
+#                     is loaded by BATS_UNIT_FILES and by nothing in the e2e
+#                     sandbox; enumerate it rather than making every future
+#                     top-level *.bash file inert
 #   - packages/tests/ helm-unittest fixture charts. cozy-lib-tests exercises
 #                     library/cozy-lib from the outside; changing a test OF
 #                     cozy-lib does not change cozy-lib, no PackageSource lists
@@ -158,7 +162,7 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #                     .gitattributes NOT on this list is classified by whatever
 #                     rule its path falls under — the graph, or the unclassified
 #                     fall-through — both of which fail safe
-inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|packages/tests/|hack/[^/]+\.bats$|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$|packages/system/\.gitattributes$|packages/system/(backup-controller|backupstrategy-controller)/definitions/\.gitattributes$)'
+inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|packages/tests/|hack/[^/]+\.bats$|hack/test_helper\.bash$|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$|packages/system/\.gitattributes$|packages/system/(backup-controller|backupstrategy-controller)/definitions/\.gitattributes$)'
 
 # All known Chainsaw suites: every dir under hack/e2e-chainsaw/ holding a
 # chainsaw-test.yaml (this excludes _lib/ and the top-level config files).

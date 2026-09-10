@@ -20,17 +20,20 @@
 # "The stamp ran" is detected by the version stamp's `kubectl apply` appearing
 # in the fake's call log — equivalently, CURRENT_VERSION was/was not advanced.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line (column 0); there is no bats `run`/`$status`/`setup`/`teardown`.
-# Assertions are direct shell tests that exit non-zero on failure, and the
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` at column 0. The tests avoid
+# `run`, `$status`, setup(), and teardown() for that compatibility path. Their
+# assertions are direct shell tests, and the
 # fake-kubectl heredocs deliberately keep every `}` off column 0 so the parser
 # does not mistake one for the end of a test. Each @test runs in its own
 # subshell, and cleanup is inline (no EXIT/RETURN trap — see
 # docs/agents/e2e-testing.md §3).
 #
-# Run with: hack/cozytest.sh hack/kubernetes-md0-migration.bats
-#           (or `bats hack/kubernetes-md0-migration.bats`)
+# Run with: bats hack/kubernetes-md0-migration.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$HACK_DIR/.." && pwd)"

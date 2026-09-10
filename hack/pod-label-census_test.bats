@@ -23,15 +23,17 @@
 # on PATH, to prove the streams stay apart end to end rather than only in the
 # half that never touches kubectl.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`, and setup()/teardown() are not
-# honored. Each test runs under `set -eu -x`; assertions are direct shell tests
-# that exit non-zero on failure. Titles are delimited by ASCII double quotes and
-# only [A-Za-z0-9] survives into the generated function name, so keep them
-# distinctive in their alphanumeric run.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, setup(), and teardown() for that compatibility path and use
+# direct shell assertions. Titles remain distinguishable after stripping all
+# but [A-Za-z0-9], as required by the legacy translator.
 #
-# Run with: hack/cozytest.sh hack/pod-label-census_test.bats
+# Run with: bats hack/pod-label-census_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 # shellcheck source=/dev/null

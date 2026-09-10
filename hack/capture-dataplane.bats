@@ -52,10 +52,12 @@
 #   - Only [A-Za-z0-9] from the title survives into the function name, so keep
 #     titles distinctive in their alphanumeric run.
 #
-# Run with: hack/cozytest.sh hack/capture-dataplane.bats
-#           (or `bats hack/capture-dataplane.bats` if the bats binary is
-#           installed; cozytest.sh is the CI path.)
+# Run from the repo root with `make bats-unit-tests`, or directly with
+# `bats hack/capture-dataplane.bats`. The legacy `hack/cozytest.sh` runner
+# remains a supported compatibility path.
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 SCRIPT="$HACK_DIR/e2e-capture-dataplane.sh"

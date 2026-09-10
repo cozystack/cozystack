@@ -4,6 +4,8 @@
 # These tests intentionally pin executable/structural workflow lines, not prose:
 # a commented-out gate, label, or body note must never satisfy the contract.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
 PULL_REQUESTS="$REPO_ROOT/.github/workflows/pull-requests.yaml"

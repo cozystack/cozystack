@@ -8,12 +8,13 @@
 # tree), and every copy targets the destination registry with the source digest
 # preserved.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats — see the same
-# note in hack/promote-retag_test.bats. No `run`, `$status`, `$output`, `skip`,
-# or setup()/teardown(); each @test is a shell function under `set -eu -x`, so a
-# non-zero exit aborts the test (that is the exit-0 assertion). A test that
-# expects a non-zero exit must capture it with `|| rc=$?`. mikefarah yq is
-# assumed present (provided by the test toolchain). Each test removes its
+# Harness compatibility note: CI runs this file under Bats through
+# `make bats-unit-tests`. It also remains compatible with the narrower legacy
+# `hack/cozytest.sh` translator, so it avoids `run`, `$status`, `$output`,
+# `skip`, and setup()/teardown(). That runner executes each @test as a shell
+# function under `set -eu -x`; a test that expects a non-zero exit therefore
+# captures it with `|| rc=$?`. mikefarah yq is assumed present (provided by the
+# test toolchain). Each test removes its
 # synthetic tree at the last reachable cleanup point of its body rather than
 # from a `trap ... EXIT`: a handler installed inside an @test body replaces the
 # one the bats binary keeps its bookkeeping in, and a test that then FAILS prints
@@ -23,7 +24,9 @@
 # for inspection on failure. See hack/bats-no-exit-trap.bats and
 # docs/agents/e2e-testing.md.
 #
-# Run with: hack/cozytest.sh hack/nightly-mirror_test.bats
+# Run with: bats hack/nightly-mirror_test.bats
+
+load test_helper
 
 # Build a synthetic baked tree exercising all four image-ref shapes plus the
 # refs that MUST be filtered (third-party host, cozystack-packages artifact).

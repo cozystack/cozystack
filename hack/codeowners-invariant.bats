@@ -25,6 +25,8 @@
 # expectation here in the same PR, with the policy discussion linked.
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "every CODEOWNERS rule that lists owners repeats the catch-all owners (governance excepted)" {
   [ -f .github/CODEOWNERS ]
 

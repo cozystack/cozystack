@@ -3,6 +3,8 @@
 # The registry workflow cannot run in a PR lane, so ordering around the first
 # write-once stable tag is pinned here. Behaviour lives in the two *_test suites.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
 FINALIZE="$REPO_ROOT/.github/workflows/pull-requests-release.yaml"

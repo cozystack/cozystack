@@ -62,8 +62,10 @@
 # Requires: helm, yq (mikefarah v4+), jq -- the same three
 # hack/admin-kubeconfig-invariant.bats needs to render and inspect a chart.
 #
-# Run with: hack/cozytest.sh hack/cozystack-controller-secret-rbac.bats
+# Run with: bats hack/cozystack-controller-secret-rbac.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 # What "*" in a rule's verbs means for a namespaced resource such as Secret.
 VERB_UNIVERSE='["create","delete","deletecollection","get","list","patch","update","watch"]'

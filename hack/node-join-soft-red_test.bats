@@ -22,8 +22,10 @@
 # so the mocks stay at top level. EXIT-trap cleanup is banned in hack/*.bats, so
 # each test removes its own temp dir on its last line.
 #
-# Run with: hack/cozytest.sh hack/node-join-soft-red_test.bats
+# Run with: bats hack/node-join-soft-red_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 GATE=hack/e2e-node-join-soft-red.sh
 
