@@ -54,11 +54,9 @@
 # line is credited wherever it appears at column zero, including inside a heredoc
 # that writes a fixture .bats, which would let a file take credit for text it only
 # generates; no file does that today, and the fixtures below assemble the line
-# from printf arguments so this guard does not do it to itself. Finally, a green
-# audit says the load is present exactly once, not that `set -u` was in force for
-# a given assertion -- for that, hack/test_helper.bash's own effect is what the
-# mutation check in #3453 covered: remove the load and a test reading an unset
-# variable stops aborting.
+# from printf arguments so this guard does not do it to itself. The nested Bats
+# canary below separately executes the real helper and verifies its `set -u`
+# effect in a test body, so the lexical audit is not trusted as behavior proof.
 # -----------------------------------------------------------------------------
 
 load test_helper
@@ -200,6 +198,15 @@ bss_rename() {
   return 0
 }
 
+bss_write_nounset_canary() {
+  printf '%s\n' \
+    "load '$BSS_DIR/test_helper.bash'" \
+    '@test "nounset canary" {' \
+    '  printf "%s\n" "$BSS_NOUNSET_CANARY_UNSET"' \
+    '}' > "$1/nounset-canary.bats"
+  return 0
+}
+
 @test "the unit enumeration is not empty" {
   count=$(bss_units "$BSS_DIR" | wc -l)
   if [ "$count" -lt 2 ]; then
@@ -244,6 +251,24 @@ bss_rename() {
     false
   fi
   rm -rf "$tmp"
+}
+
+@test "the shared helper enables nounset in a real nested Bats test" {
+  tmp=$(mktemp -d)
+  bss_write_nounset_canary "$tmp"
+  unset BSS_NOUNSET_CANARY_UNSET
+
+  child_status=0
+  output=$(bats --formatter tap "$tmp/nounset-canary.bats" 2>&1) || child_status=$?
+  rm -rf "$tmp"
+
+  if [ "$child_status" -eq 0 ]; then
+    echo "FAIL: nested Bats accepted an unset test-body read; strict_setup did not enable nounset"
+    echo "$output"
+    false
+  fi
+  printf '%s\n' "$output" | grep -Fq 'not ok 1 nounset canary'
+  printf '%s\n' "$output" | grep -Fq 'BSS_NOUNSET_CANARY_UNSET: unbound variable'
 }
 
 @test "every hack/*.bats unit file restores set -u through the shared helper" {

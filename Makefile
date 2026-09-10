@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests bats-posix-compat-tests print-bats-unit-files print-bats-jobs rd-presets-check migrations-target-check test test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests bats-posix-compat-tests print-bats-unit-files print-bats-posix-compat-files print-bats-jobs rd-presets-check migrations-target-check test test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -201,15 +201,16 @@ bats-unit-tests:
 	@mkdir -p "$(BATS_REPORT_DIR)"
 	bats -j $(BATS_JOBS) --report-formatter junit -o "$(BATS_REPORT_DIR)" $(BATS_UNIT_FILES)
 
-# Real Bats is authoritative. These files also source production code whose
-# contract is POSIX sh, so retain a narrow pass through cozytest.sh's /bin/sh
-# translator. Chainsaw script steps run in the sandbox's dash, so discover every
-# unit file that dot-sources a Chainsaw library instead of maintaining a list
-# that goes stale as main adds tests. The explicit entries cover reviewed
-# shell-facing tests whose production path is held in a variable.
-BATS_SOURCED_CHAINSAW_FILES := $(shell grep -El '^[[:space:]]*\.[[:space:]]+.*e2e-chainsaw/_lib/.*\.sh' $(BATS_UNIT_FILES))
+# Real Bats is authoritative. Unit files that source production code whose
+# contract is POSIX sh retain a compatibility pass through cozytest.sh's
+# /bin/sh translator. Discover literal .sh dependencies wherever they live,
+# including hack/lib and package migration helpers, so a new non-Chainsaw
+# helper test cannot run only under Bash. The explicit entries retain reviewed
+# shell-facing tests, including files whose production path is held in a
+# variable and therefore cannot be identified from the source line alone.
+BATS_SOURCED_SH_FILES := $(shell grep -El '^[[:space:]]*(\.|source)[[:space:]]+.*\.sh' $(BATS_UNIT_FILES))
 BATS_POSIX_COMPAT_FILES := $(sort \
-	$(BATS_SOURCED_CHAINSAW_FILES) \
+	$(BATS_SOURCED_SH_FILES) \
 	hack/capture-dataplane.bats \
 	hack/capture-previous-logs.bats \
 	hack/cilium-leak-healer_test.bats \
@@ -223,11 +224,20 @@ BATS_POSIX_COMPAT_FILES := $(sort \
 	hack/seaweedfs-naming-audit.bats \
 )
 
+# CI's /bin/sh is dash. Keep the interpreter overridable so contributors can
+# run the same compatibility lane explicitly on hosts whose /bin/sh differs.
+BATS_POSIX_SHELL ?= /bin/sh
+
+print-bats-posix-compat-files:
+	@printf '%s\n' $(BATS_POSIX_COMPAT_FILES)
+
 bats-posix-compat-tests:
-	@for f in $(BATS_POSIX_COMPAT_FILES); do \
+	@status=0; \
+	for f in $(BATS_POSIX_COMPAT_FILES); do \
 		echo "--- running POSIX compatibility: $$f ---"; \
-		hack/cozytest.sh "$$f" || exit 1; \
-	done
+		"$(BATS_POSIX_SHELL)" hack/cozytest.sh "$$f" || status=1; \
+	done; \
+	exit $$status
 
 # Operator-facing host preflight check. Warns about a standalone
 # containerd.service or docker.service running alongside the embedded
