@@ -1,4 +1,0 @@
-{{- range $path, $_ := .Files.Glob "cozyrds/*" }}
----
-{{ $.Files.Get $path }}
-{{- end }}
