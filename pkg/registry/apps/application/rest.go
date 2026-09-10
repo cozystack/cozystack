@@ -171,6 +171,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", obj)
 	}
 
+	app = app.DeepCopy()
+
 	// Validate Application name format (DNS-1035 plus any kind-specific rules)
 	if errs := r.validateNameFormat(app.Name); len(errs) > 0 {
 		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
@@ -202,12 +204,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
 
-	// An empty key in the spec (`registryMirrors:` with nothing under it)
-	// arrives here as a JSON null, and Helm's coalescing deletes it together
-	// with the chart default underneath it - which fails the render outright
-	// for a field the schema requires. Repair those before admission, storage
-	// and the emitted HelmRelease see the object; a null on a field the schema
-	// allows to be absent keeps the meaning it has today.
+	// Omission permits a chart default; explicit null suppresses it in Helm.
+	// Normalize only repairable fields before admission and persistence.
 	emptied, err := r.normalizeSpecNulls(app)
 	if err != nil {
 		return nil, apierrors.NewBadRequest(fmt.Sprintf("failed to normalize spec: %v", err))
@@ -228,7 +226,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	// this hook explicitly — unlike genericregistry.Store, which
 	// wires it automatically.
 	if createValidation != nil {
-		if err := createValidation(ctx, obj); err != nil {
+		if err := createValidation(ctx, app); err != nil {
 			return nil, err
 		}
 	}
@@ -531,20 +529,14 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, err
 	}
 
-	// Validate the update if a validation function is provided
-	if updateValidation != nil {
-		if err := updateValidation(ctx, newObj, oldObj); err != nil {
-			klog.Errorf("Update validation failed for Application %s: %v", name, err)
-			return nil, false, err
-		}
-	}
-
 	// Assert the new object is of type Application
 	app, ok := newObj.(*appsv1alpha1.Application)
 	if !ok {
 		klog.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 		return nil, false, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 	}
+
+	app = app.DeepCopy()
 
 	// Note: name validation (DNS-1035 format + length) is intentionally skipped on
 	// Update because Kubernetes names are immutable. Validating here would block
@@ -555,14 +547,21 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, apierrors.NewBadRequest(err.Error())
 	}
 
-	// Same normalization as on create: an empty key on a required field means
-	// the field was left unset, not that the chart default should be deleted.
+	// Admission must validate the same normalized values that will be stored.
 	emptied, err := r.normalizeSpecNulls(app)
 	if err != nil {
 		return nil, false, apierrors.NewBadRequest(fmt.Sprintf("failed to normalize spec: %v", err))
 	}
 	if len(emptied) > 0 {
 		warning.AddWarning(ctx, "", emptyFieldsWarning(emptied))
+	}
+
+	// Validate the update if a validation function is provided
+	if updateValidation != nil {
+		if err := updateValidation(ctx, app, oldObj); err != nil {
+			klog.Errorf("Update validation failed for Application %s: %v", name, err)
+			return nil, false, err
+		}
 	}
 
 	// Enforce hierarchical quota allocation on quota changes too: raising a

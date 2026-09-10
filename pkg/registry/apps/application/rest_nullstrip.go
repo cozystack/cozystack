@@ -17,8 +17,10 @@ limitations under the License.
 package application
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -32,47 +34,24 @@ import (
 // turn into a multi-kilobyte response header.
 const maxWarnedNullPaths = 8
 
-// normalizeSpecNulls repairs a JSON null on a field the schema marks required,
-// by removing the key so the chart's own default applies to it.
-//
-// The spec reaches flux verbatim as HelmRelease .spec.values (see
-// convertApplicationToHelmRelease), and Helm's value coalescing deletes a
-// null-valued key together with the chart default underneath it, before the
-// result is validated against values.schema.json. A required field written with
-// nothing under it is therefore rejected for being absent - "at '/talos':
-// missing property 'registryMirrors'", naming a property the spec does contain -
-// and the whole release fails to render. Nothing reaches the user that would
-// point at the empty key they actually typed.
-//
-// Only required properties are repaired, and that boundary is the point. A
-// required property's null cannot be load-bearing for anyone, because today it
-// fails the render outright; resolving it to the chart default is pure repair.
-// Where the schema permits the field to be absent, a null keeps the meaning it
-// has today - the chart default is suppressed and the key does not reach the
-// template - and that meaning is worth keeping: 167 optional fields across the
-// catalogue carry a non-trivial default, placeholders such as "<password>" and
-// example S3 buckets among them, so resolving a user's null to one of those
-// would be worse than leaving the key out.
-//
-// Filling in the schema default instead of removing the key would also pin
-// today's value into the stored HelmRelease and freeze the application on it,
-// so a later bump of that default in the chart would never reach an application
-// that had once been created with an empty key.
-//
-// Free-form subtrees are left alone, as is a null map entry whose key the user
-// chose (a node group, a registry host): there the null may be the payload, and
-// dropping the entry would drop the user's intent along with it. Array elements
-// keep their positions for the same reason.
-//
-// Returns the dotted paths that were removed, sorted, so the caller can tell
-// the user what happened to them.
+// normalizeSpecNulls removes required null properties whose schema supplies a
+// non-null default. Helm deletes explicit nulls before validating values, whereas
+// omission lets the chart default apply without persisting its current value.
+// Optional/nullable properties retain their explicit-null meaning. User-keyed
+// maps and array elements do not imply a matching Helm values-default path,
+// so defaults in their item schemas alone cannot justify a repair.
 func (r *REST) normalizeSpecNulls(app *appsv1alpha1.Application) ([]string, error) {
 	if r.specSchema == nil || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
 		return nil, nil
 	}
 	var spec map[string]any
-	if err := json.Unmarshal(app.Spec.Raw, &spec); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(app.Spec.Raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&spec); err != nil {
 		return nil, err
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return nil, fmt.Errorf("spec must contain a single JSON object")
 	}
 	if spec == nil {
 		return nil, nil
@@ -93,10 +72,9 @@ func (r *REST) normalizeSpecNulls(app *appsv1alpha1.Application) ([]string, erro
 	return stripped, nil
 }
 
-// stripDeclaredNulls walks a value alongside its structural schema, deleting
-// every null whose key the schema declares as a property *and* lists as
-// required. Dispatch is on the shape of the value rather than on schema.Type,
-// which is empty for a schema that carries only properties or only items.
+// Only declared property paths identify defaults independently of user keys.
+// In particular, a schema default inside an array item is not a
+// default for an element of a user-supplied replacement array.
 func stripDeclaredNulls(v any, s *structuralschema.Structural, path string, stripped *[]string) {
 	if s == nil || v == nil {
 		return
@@ -111,7 +89,7 @@ func stripDeclaredNulls(v any, s *structuralschema.Structural, path string, stri
 			child := value[name]
 			if prop, declared := s.Properties[name]; declared {
 				if child == nil {
-					if _, mustBeSet := required[name]; mustBeSet {
+					if _, mustBeSet := required[name]; mustBeSet && prop.Default.Object != nil && !prop.Nullable {
 						delete(value, name)
 						*stripped = append(*stripped, joinFieldPath(path, name))
 					}
@@ -120,16 +98,6 @@ func stripDeclaredNulls(v any, s *structuralschema.Structural, path string, stri
 				stripDeclaredNulls(child, &prop, joinFieldPath(path, name), stripped)
 				continue
 			}
-			if s.AdditionalProperties != nil && s.AdditionalProperties.Structural != nil {
-				stripDeclaredNulls(child, s.AdditionalProperties.Structural, joinFieldPath(path, name), stripped)
-			}
-		}
-	case []any:
-		if s.Items == nil {
-			return
-		}
-		for i := range value {
-			stripDeclaredNulls(value[i], s.Items, fmt.Sprintf("%s[%d]", path, i), stripped)
 		}
 	}
 }

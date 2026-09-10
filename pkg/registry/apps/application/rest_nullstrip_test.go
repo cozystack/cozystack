@@ -61,11 +61,6 @@ func normalize(t *testing.T, s *structuralschema.Structural, spec string) ([]str
 	return paths, got
 }
 
-// TestNormalizeSpecNulls_RequiredFields pins the fix: a required field written
-// with nothing under it is dropped, so the chart default applies to it instead
-// of being deleted along with the null by Helm's value coalescing. Before this,
-// `registryMirrors:` failed the whole HelmRelease with "at '/talos': missing
-// property 'registryMirrors'" - a property the user had in fact written.
 func TestNormalizeSpecNulls_RequiredFields(t *testing.T) {
 	s := kubernetesSpecSchema(t)
 
@@ -84,12 +79,6 @@ func TestNormalizeSpecNulls_RequiredFields(t *testing.T) {
 	}
 }
 
-// TestNormalizeSpecNulls_OptionalFieldsUntouched is the guard on the boundary:
-// where the schema permits a field to be absent, a null keeps the meaning it has
-// today - the chart default is suppressed and the key never reaches the template.
-// Repairing these too would change what a running application renders: 167
-// optional fields across the catalogue carry a non-trivial default, placeholder
-// credentials and example S3 buckets among them.
 func TestNormalizeSpecNulls_OptionalFieldsUntouched(t *testing.T) {
 	s := kubernetesSpecSchema(t)
 
@@ -124,72 +113,43 @@ func TestNormalizeSpecNulls_FreeFormSubtreeUntouched(t *testing.T) {
 	}
 }
 
-// TestNormalizeSpecNulls_UserKeyedMapEntry covers both halves of a map whose
-// keys the user chooses: the entry itself stays (dropping it would drop a node
-// group the user asked for), while a declared field inside it is normalized the
-// same way as anywhere else.
-func TestNormalizeSpecNulls_UserKeyedMapEntry(t *testing.T) {
-	s := kubernetesSpecSchema(t)
-
-	paths, got := normalize(t, s, `{"nodeGroups":{"md0":null,"md1":{"instanceType":null,"storageClass":null,"minReplicas":2}}}`)
-
-	if !reflect.DeepEqual(paths, []string{"nodeGroups.md1.instanceType"}) {
-		t.Errorf("stripped paths = %v, want [nodeGroups.md1.instanceType]", paths)
+func TestNormalizeSpecNulls_NoDefaultOrUserCollection(t *testing.T) {
+	// Even an item schema default is not a Helm default for a user-created entry.
+	s, err := buildSpecSchema(`{"type":"object","required":["missing","nullDefault","nullable","zero","false","empty"],"properties":{
+  "missing":{"type":"string"},"nullDefault":{"type":"string","default":null},
+  "nullable":{"type":"string","nullable":true,"default":"keep-null"},
+  "zero":{"type":"integer","default":0},"false":{"type":"boolean","default":false},"empty":{"type":"string","default":""},
+  "entries":{"type":"object","additionalProperties":{"type":"object","required":["name"],"properties":{"name":{"type":"string","default":"example"}}}},
+  "items":{"type":"array","items":{"type":"object","required":["name"],"properties":{"name":{"type":"string","default":"example"}}}}
+ }}`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	groups := got["nodeGroups"].(map[string]any)
-	if v, ok := groups["md0"]; !ok || v != nil {
-		t.Errorf("md0 = %v (present=%v), want a preserved null", v, ok)
+	paths, got := normalize(t, s, `{"missing":null,"nullDefault":null,"nullable":null,"zero":null,"false":null,"empty":null,"entries":{"mine":{"name":null},"blank":null},"items":[{"name":null},null]}`)
+	if !reflect.DeepEqual(paths, []string{"empty", "false", "zero"}) {
+		t.Fatalf("removed paths=%v", paths)
 	}
-	md1 := groups["md1"].(map[string]any)
-	if _, ok := md1["instanceType"]; ok {
-		t.Errorf("md1.instanceType is required by the schema and survived: %v", md1)
+	for _, key := range []string{"missing", "nullDefault", "nullable"} {
+		if value, ok := got[key]; !ok || value != nil {
+			t.Errorf("%s null changed", key)
+		}
 	}
-	if v, ok := md1["storageClass"]; !ok || v != nil {
-		t.Errorf("md1.storageClass = %v (present=%v), want a preserved null: the schema allows it to be absent", v, ok)
+	if !reflect.DeepEqual(got["entries"], map[string]any{"mine": map[string]any{"name": nil}, "blank": nil}) {
+		t.Error("user map entries changed")
 	}
-	if md1["minReplicas"] != float64(2) {
-		t.Errorf("md1.minReplicas = %v, want 2", md1["minReplicas"])
+	if !reflect.DeepEqual(got["items"], []any{map[string]any{"name": nil}, nil}) {
+		t.Error("user array changed")
 	}
 }
 
-// TestStripDeclaredNulls_ArrayPositionsKept pins that array elements are never
-// removed - an index is part of the address of every element after it - while a
-// declared field inside an element is still normalized.
-func TestStripDeclaredNulls_ArrayPositionsKept(t *testing.T) {
-	s := &structuralschema.Structural{
-		Generic: structuralschema.Generic{Type: "object"},
-		Properties: map[string]structuralschema.Structural{
-			"items": {
-				Generic: structuralschema.Generic{Type: "array"},
-				Items: &structuralschema.Structural{
-					Generic: structuralschema.Generic{Type: "object"},
-					Properties: map[string]structuralschema.Structural{
-						"name": {Generic: structuralschema.Generic{Type: "string"}},
-					},
-					ValueValidation: &structuralschema.ValueValidation{
-						Required: []string{"name"},
-					},
-				},
-			},
-		},
+func TestNormalizeSpecNulls_PreservesOtherValuesExactly(t *testing.T) {
+	app := &appsv1alpha1.Application{Spec: &apiextv1.JSON{Raw: []byte(`{"talos":{"registryMirrors":null},"large":9007199254740993,"negative":-9007199254740993,"text":"null","bool":false,"empty":[],"object":{}}`)}}
+	r := &REST{specSchema: kubernetesSpecSchema(t)}
+	if _, err := r.normalizeSpecNulls(app); err != nil {
+		t.Fatal(err)
 	}
-
-	spec := map[string]any{"items": []any{map[string]any{"name": nil}, nil}}
-	var stripped []string
-	stripDeclaredNulls(spec, s, "", &stripped)
-
-	if !reflect.DeepEqual(stripped, []string{"items[0].name"}) {
-		t.Errorf("stripped = %v, want [items[0].name]", stripped)
-	}
-	list := spec["items"].([]any)
-	if len(list) != 2 {
-		t.Fatalf("array length = %d, want 2 (elements must keep their positions)", len(list))
-	}
-	if len(list[0].(map[string]any)) != 0 {
-		t.Errorf("items[0] = %v, want {}", list[0])
-	}
-	if list[1] != nil {
-		t.Errorf("items[1] = %v, want the null left in place", list[1])
+	if string(app.Spec.Raw) != `{"bool":false,"empty":[],"large":9007199254740993,"negative":-9007199254740993,"object":{},"talos":{},"text":"null"}` {
+		t.Fatalf("unrelated values changed: %s", app.Spec.Raw)
 	}
 }
 
