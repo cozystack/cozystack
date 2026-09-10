@@ -27,7 +27,7 @@ tests:
           maxUserConnections: 10
     asserts:
       - failedTemplate:
-          errorMessage: 'invalid username "a b": a username may contain only letters, digits and the characters -._ , must not be "." or "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and the name of a mariadb-operator User resource)'
+          errorMessage: 'invalid username "a b": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and the name of a mariadb-operator User resource)'
 
   - it: fails the render for a username with a slash
     set:
@@ -44,7 +44,7 @@ tests:
           maxUserConnections: 10
     asserts:
       - failedTemplate:
-          errorMessage: 'invalid username ".": a username may contain only letters, digits and the characters -._ , must not be "." or "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and the name of a mariadb-operator User resource)'
+          errorMessage: 'invalid username ".": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and the name of a mariadb-operator User resource)'
 
   - it: fails the render for the reserved name ".."
     set:
@@ -54,6 +54,17 @@ tests:
     asserts:
       - failedTemplate: {}
 
+  # IsConfigMapKey rejects ANY name starting with ".." (hasChDirPrefix), not just
+  # the literal "..", so "..foo" is charset-legal yet cannot install.
+  - it: fails the render for a name starting with ".."
+    set:
+      users:
+        '..foo':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "..foo": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and the name of a mariadb-operator User resource)'
+
   - it: fails the render for a username longer than 253 characters
     set:
       users:
@@ -61,6 +72,48 @@ tests:
           maxUserConnections: 10
     asserts:
       - failedTemplate: {}
+
+  # The username also names the User CR (<release>-<name>, "_"->"-"), which k8s
+  # requires to be a DNS-1123 subdomain: lowercase, alnum start/end. These pass
+  # the Secret-key charset but the User CR name is invalid, so they cannot install
+  # and must be named at render time rather than failing opaquely at apply.
+  - it: fails the render for an uppercase username (invalid User CR name)
+    set:
+      users:
+        Bob:
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "Bob": it also names the mariadb-operator User resource "mdb-test-Bob", which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, "-" and ".", starting and ending with a letter or digit); use a lowercase name without a leading or trailing "-" or "."'
+
+  - it: fails the render for a username with a trailing "-" (invalid User CR name)
+    set:
+      users:
+        'foo-':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate: {}
+
+  - it: fails the render for a username with a trailing "." (invalid User CR name)
+    set:
+      users:
+        'foo.':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate: {}
+
+  # "a_b" and "a-b" both render the User CR name <release>-a-b ("_" -> "-"), so
+  # one silently overwrites the other on apply. The guard must reject the pair.
+  - it: fails the render when two usernames collide after the "_"->"-" mapping
+    set:
+      users:
+        a_b:
+          maxUserConnections: 10
+        a-b:
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'usernames "a-b" and "a_b" both map to the User resource name "mdb-test-a-b" ("_" renders as "-"); rename one of them'
 
   - it: renders normally for names using the full safe charset (root always added)
     set:
