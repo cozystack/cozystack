@@ -385,6 +385,18 @@ write_backup_object() {
   [ ! -f "$STATE/actions" ]
 }
 
+@test "restore fails closed on a non-numeric recorded replication factor" {
+  init_stubs
+  printf 'T\torders\t3\tabc\n' > "$STATE/s3_object"   # recorded rf is not a number
+  : > "$STATE/topics"                                 # topic absent -> restore takes the --create path
+  # Recorded partitions are valid, so the parts guard passes and the create path
+  # hands rf straight to `--replication-factor`. Without the recorded-rf guard a
+  # non-numeric rf reaches kafka-topics --create and the topic is (mis)created
+  # rather than the restore failing loudly on a wrong-content object.
+  expect_fail env MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  [ ! -f "$STATE/actions" ]
+}
+
 @test "restore fails closed on an unrecognised record kind" {
   init_stubs
   printf 'X\torders\t3\t1\n' > "$STATE/s3_object"   # neither T nor C
