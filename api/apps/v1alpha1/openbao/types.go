@@ -61,7 +61,7 @@ type Seal struct {
 	// Identifier of the previous key. Required when `previousSecretName` is set.
 	// +kubebuilder:default:=""
 	PreviousKeyId string `json:"previousKeyId,omitempty"`
-	// Secret holding the previous key during an n-1 key rotation.
+	// Secret holding the previous key during an n-1 key rotation. Keep it until the pods have been replaced and the active node has logged `upgrading stored keys`; see the README.
 	// +kubebuilder:default:=""
 	PreviousSecretName string `json:"previousSecretName,omitempty"`
 	// Existing Secret in the release namespace whose key `key` holds the base64 text of 32 random bytes (for example `openssl rand -base64 32`). Required when `type` is `static`.

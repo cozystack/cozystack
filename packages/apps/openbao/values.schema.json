@@ -158,7 +158,7 @@
           "default": ""
         },
         "previousSecretName": {
-          "description": "Secret holding the previous key during an n-1 key rotation.",
+          "description": "Secret holding the previous key during an n-1 key rotation. Keep it until the pods have been replaced and the active node has logged `upgrading stored keys`; see the README.",
           "type": "string",
           "default": ""
         },
