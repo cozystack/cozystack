@@ -14,10 +14,13 @@ _cluster:
   expose-ingress: "tenant-root"
   expose-services: "tenant-root"
   cluster-domain: "cluster.local"
-# The value is the NAMESPACE providing the service, not a boolean: tenant's
-# namespace.yaml sets `$etcd = $tenantName`. A non-empty value is the on side of
-# the nine `{{- if .Values._namespace.<svc> }}` branches, and it renders 15
-# manifests in packages/apps/kubernetes that the off side does not.
+  scheduling:
+    dedicatedNodesForWindowsVMs: "false"
+    globalAppTopologySpreadConstraints: |
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
 _namespace:
   etcd: "tenant-test"
   ingress: "tenant-test"
