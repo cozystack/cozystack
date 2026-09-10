@@ -1,0 +1,148 @@
+suite: cozy-kubevirt-cdi local templates
+release:
+  name: kubevirt-cdi
+  namespace: cozy-kubevirt-cdi
+# Both route cases run against this block; the TLSRoute case overrides the
+# gate alone. Emission is gated on expose-services and gateway-enabled, so
+# without a matching expose-services entry neither route renders and both
+# fail on "no manifest found" rather than on the assertion they are about.
+# root-host is not part of that gate and no assertion reads it: it is set
+# because the hostname is built from it, and without it the TLSRoute renders
+# "cdi-uploadproxy.%!s(<nil>)". tests/standalone_render_test.yaml covers the
+# opposite case, that the chart renders with nothing injected at all.
+set:
+  _cluster:
+    root-host: example.com
+    expose-services: cdi-uploadproxy
+    gateway-enabled: "false"
+tests:
+  # Each list and map is pinned whole rather than by membership or by leaf:
+  # `contains` answers "is ours still here" and cannot answer "has anything
+  # been added beside it", and an assert per leaf cannot answer "has a key
+  # appeared". Both directions matter for a file whose whole maintenance model
+  # is a hand reconciliation at each bump. Pinning featureGates whole also
+  # pins HonorWaitForFirstConsumer, which is upstream's rather than ours; that
+  # is a side effect of the shape, not a claim that the upstream half is
+  # covered.
+  - it: keeps the local additions to the CDI object
+    template: cdi-cr.yaml
+    documentSelector:
+      path: kind
+      value: CDI
+      matchMany: false
+    asserts:
+      - equal:
+          path: spec.config.featureGates
+          value:
+            - HonorWaitForFirstConsumer
+            - ExpandDisks
+      - equal:
+          path: spec.infra.tolerations
+          value:
+            - key: CriticalAddonsOnly
+              operator: Exists
+      - equal:
+          path: spec.config.podResourceRequirements
+          value:
+            limits:
+              cpu: 750m
+              memory: 600M
+            requests:
+              cpu: 100m
+              memory: 60M
+
+  # The default is the empty string, so the block renders nothing and an
+  # assertion on the default value would pass against a template that had
+  # stopped rendering the block. Setting it is what makes this able to fail.
+  - it: renders the upload-proxy URL override when one is set
+    template: cdi-cr.yaml
+    documentSelector:
+      path: kind
+      value: CDI
+      matchMany: false
+    set:
+      uploadProxyURL: https://cdi-uploadproxy.example.com
+    asserts:
+      - equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://cdi-uploadproxy.example.com
+
+  # What lets a tenant service account clone from the golden-image namespace.
+  # `any: true` on both: a bare containsDocument holds every document in the
+  # template to the match, and this template renders three.
+  - it: keeps the golden-image clone RBAC
+    template: cdi-cr.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          name: cdi-copy-dv
+          any: true
+      - containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          name: cdi-clone-dv
+          namespace: cozy-public
+          any: true
+
+  # containsDocument reaches this document's identity and nothing inside it,
+  # so what the role grants was pinned by nothing. Widening verbs to ["*"]
+  # hands every service account in the cluster whatever the binding reaches.
+  - it: grants create on datavolumes/source and nothing else
+    template: cdi-cr.yaml
+    documentSelector:
+      path: metadata.name
+      value: cdi-copy-dv
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups:
+                - cdi.kubevirt.io
+              resources:
+                - datavolumes/source
+              verbs:
+                - create
+
+  # roleRef and subjects decide who may clone out of cozy-public, so each is
+  # pinned whole rather than field by field. An assert on subjects[0] answers
+  # "was the Group replaced by something narrower" and cannot answer "was a
+  # second subject appended", and appending is the direction that widens
+  # access: pinning the list is what makes both reachable.
+  - it: binds exactly the service-account Group to the copy role
+    template: cdi-cr.yaml
+    documentSelector:
+      path: metadata.name
+      value: cdi-clone-dv
+    asserts:
+      - equal:
+          path: roleRef
+          value:
+            kind: ClusterRole
+            name: cdi-copy-dv
+            apiGroup: rbac.authorization.k8s.io
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              name: system:serviceaccounts
+              apiGroup: rbac.authorization.k8s.io
+
+  # Addressed as a `template:` because helm-unittest fails outright on one it
+  # cannot find, which makes a deleted file loud rather than a smaller render.
+  - it: renders the upload-proxy Ingress when the gateway is off
+    template: cdi-uploadproxy-ingress.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/ssl-passthrough"]
+          value: "true"
+
+  - it: renders the upload-proxy TLSRoute when the gateway is on
+    template: cdi-uploadproxy-tlsroute.yaml
+    set:
+      _cluster:
+        gateway-enabled: "true"
+    asserts:
+      - equal:
+          path: spec.parentRefs[0].sectionName
+          value: tls-cdi-uploadproxy
