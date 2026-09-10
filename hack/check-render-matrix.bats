@@ -132,17 +132,74 @@ expect_render_failure() {
     rm -rf "$tmp"
 }
 
+@test "render matrix reaches capability-gated OIDC templates" {
+    tmp=$(mktemp -d)
+    make_render_chart "$tmp/tenant"
+    cat > "$tmp/tenant/templates/object.yaml" <<'EOF'
+{{- if and (eq (index .Values._cluster "oidc-enabled") "true") (.Capabilities.APIVersions.Has "v1.edp.epam.com/v1") }}
+{{- fail "OIDC branch rendered" }}
+{{- end }}
+EOF
+    output=$(expect_render_failure "$tmp/tenant")
+    printf '%s\n' "$output" | grep -Fx 'FAIL tenant (configured)'
+    printf '%s\n' "$output" | grep -Fx 'FAIL tenant (wildcard)'
+    printf '%s\n' "$output" | grep -F 'OIDC branch rendered'
+    if printf '%s\n' "$output" | grep -Fq 'FAIL tenant (fresh)'; then
+        echo 'OIDC branch enabled for fresh fixture' >&2
+        exit 1
+    fi
+    rm -rf "$tmp"
+}
+
+@test "fixture states enable OIDC groups and shared-service resources" {
+    tmp=$(mktemp -d)
+    for state in fresh configured wildcard; do
+        helm template tenant-check packages/apps/tenant -n tenant-test \
+            --api-versions v1.edp.epam.com/v1 \
+            -f "hack/testdata/render-fixtures/$state.yaml" > "$tmp/tenant.yaml"
+        helm template kubernetes-check packages/apps/kubernetes -n tenant-test \
+            -f "hack/testdata/render-fixtures/$state.yaml" > "$tmp/kubernetes.yaml"
+        groups=$(awk '/^kind: KeycloakRealmGroup$/ {n++} END {print n+0}' "$tmp/tenant.yaml")
+        metrics=$(awk '/^  name: kubernetes-check-metrics-server$/ {n++} END {print n+0}' "$tmp/kubernetes.yaml")
+        case "$state" in
+            fresh) [ "$groups" -eq 0 ]; [ "$metrics" -eq 0 ] ;;
+            *) [ "$groups" -eq 4 ]; [ "$metrics" -eq 1 ] ;;
+        esac
+    done
+    rm -rf "$tmp"
+}
+
+@test "certificate fixtures exercise per-host ACME and wildcard ingress" {
+    tmp=$(mktemp -d)
+    for state in configured wildcard; do
+        helm template harbor-check packages/apps/harbor -n tenant-test \
+            -f "hack/testdata/render-fixtures/$state.yaml" \
+            --show-only templates/ingress.yaml > "$tmp/$state.yaml"
+        grep -Fx 'kind: Ingress' "$tmp/$state.yaml"
+        grep -F 'harbor-check.example.org' "$tmp/$state.yaml"
+    done
+    grep -F 'acme.cert-manager.io/http01-ingress-ingressclassname: tenant-test' "$tmp/configured.yaml"
+    grep -F 'cert-manager.io/cluster-issuer: letsencrypt-prod' "$tmp/configured.yaml"
+    grep -F 'secretName: harbor-check-ingress-tls' "$tmp/configured.yaml"
+    grep -Fx '  tls:' "$tmp/wildcard.yaml"
+    if grep -Eq '^[[:space:]]+(acme.cert-manager.io/|cert-manager.io/cluster-issuer:|secretName:)' "$tmp/wildcard.yaml"; then
+        echo 'wildcard ingress unexpectedly requests a per-host certificate' >&2
+        exit 1
+    fi
+    rm -rf "$tmp"
+}
+
 @test "every pair of fixture states produces different deterministic manifests" {
     tmp=$(mktemp -d)
     count=0
     for fixture in hack/testdata/render-fixtures/*.yaml; do
         state=$(basename "$fixture" .yaml)
         count=$((count + 1))
-        # Tenant exercises OIDC and certificate modes without random Secrets.
+        # This compares whole states; the tests above assert specific branches.
         # Render twice so randomness cannot masquerade as state coverage.
         for run in first second; do
             helm template tenant-check packages/apps/tenant -n tenant-test \
-                -f "$fixture" > "$tmp/$state-$run.yaml"
+                --api-versions v1.edp.epam.com/v1 -f "$fixture" > "$tmp/$state-$run.yaml"
         done
         cmp "$tmp/$state-first.yaml" "$tmp/$state-second.yaml"
         cp "$tmp/$state-first.yaml" "$tmp/$state.manifests"

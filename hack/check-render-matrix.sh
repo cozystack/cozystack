@@ -22,7 +22,7 @@ render_chart() {
   chart=$1 fixture=$2
   name=$(basename "$chart")
   case "$name" in
-    tenant) set -- tenant-sub ;;
+    tenant) set -- tenant-sub --api-versions v1.edp.epam.com/v1 ;;
     # Satisfy the parent-cluster and release-name contract before the lookup.
     kubernetes-nodes) set -- kubernetes-nodes-render-check --set-string cluster=render ;;
     *) set -- "$name-render-check" ;;
