@@ -27,17 +27,14 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
   # path ending in "resourcesPreset" rather than a description heuristic,
   # so an unrelated field with "preset" in its description does not match.
   #
-  # Fed by here-string rather than `printf | jq`, and its status is read rather
-  # than discarded, because the two together produced a FALSE FAILURE naming a
-  # preset that is present in the file. On a 4-CPU/16 GiB runner under `make
-  # -j4`, jq processing the largest schema here would exit early; `printf` then
-  # died of EPIPE ("write error: Broken pipe"), `2>/dev/null || true` hid the
-  # status, and $enums held the PARTIAL output -- non-empty, so the guard below
-  # passed it through, and every expected value past the truncation point was
-  # reported missing. Seen on two PRs the same day naming different files and
-  # different presets, which is the tell: a real drift names the same pair every
-  # time. A here-string cannot raise EPIPE, and a non-zero jq is now named as an
-  # unreadable schema instead of being converted into a data defect.
+  # jq's status is read rather than discarded. `2>/dev/null || true` left a
+  # read that failed indistinguishable from one that found nothing, and it goes
+  # two ways: with no output the emptiness guard below turned it into a clean
+  # skip, so a schema nobody could parse silently passed the check whose whole
+  # job is to parse it, and with output already written before jq died $enums
+  # held a truncated list that every preset past the cut was then judged
+  # against. An errored read is now named as one and carries jq's own reason.
+  # Fed by here-string for the same reason as the membership test below.
   if ! enums=$(jq -r '
     [paths(type == "object" and has("enum")) as $p
      | select($p[-1] == "resourcesPreset")
