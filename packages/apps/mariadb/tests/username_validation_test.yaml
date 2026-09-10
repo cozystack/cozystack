@@ -1,0 +1,73 @@
+suite: secret rejects a username outside the safe charset
+
+# A MariaDB username becomes a Kubernetes Secret data key, the spec.name of a
+# mariadb-operator User CR, and (with "_" mapped to "-") the User CR's own
+# metadata.name. A name outside the Secret-key charset renders a Secret and a
+# User the apiserver later rejects with an opaque error; ".", ".." and names
+# over 253 chars match the charset yet k8s IsConfigMapKey still rejects them.
+# Postgres already guards this at render time; MariaDB must too, for parity and
+# to name the offending username instead of failing opaquely at apply. There is
+# no shell interpolation here (the operator applies the SQL), so this is a
+# diagnosability guard, not an injection fix. Reverting the guard in secret.yaml
+# turns the first test green (render succeeds), the mutation signal that this
+# suite is not vacuous.
+
+templates:
+  - templates/secret.yaml
+
+release:
+  name: mdb-test
+  namespace: tenant-test
+
+tests:
+  - it: fails the render for a username with a space
+    set:
+      users:
+        'a b':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "a b": a username may contain only letters, digits and the characters -._ , must not be "." or "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and the name of a mariadb-operator User resource)'
+
+  - it: fails the render for a username with a slash
+    set:
+      users:
+        'a/b':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate: {}
+
+  - it: fails the render for the reserved name "."
+    set:
+      users:
+        '.':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username ".": a username may contain only letters, digits and the characters -._ , must not be "." or "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and the name of a mariadb-operator User resource)'
+
+  - it: fails the render for the reserved name ".."
+    set:
+      users:
+        '..':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate: {}
+
+  - it: fails the render for a username longer than 253 characters
+    set:
+      users:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate: {}
+
+  - it: renders normally for names using the full safe charset (root always added)
+    set:
+      users:
+        a-b.c_1:
+          maxUserConnections: 10
+    asserts:
+      - matchRegex:
+          path: stringData["a-b.c_1"]
+          pattern: ^[a-zA-Z0-9]{16}$
