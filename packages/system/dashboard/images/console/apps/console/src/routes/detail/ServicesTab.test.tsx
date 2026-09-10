@@ -8,12 +8,12 @@ import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/type
 const ad: ApplicationDefinition = {
   apiVersion: "cozystack.io/v1alpha1",
   kind: "ApplicationDefinition",
-  metadata: { name: "http-cache" },
+  metadata: { name: "tcp-balancer" },
   spec: {
     application: {
-      kind: "HTTPCache",
-      plural: "httpcaches",
-      singular: "http-cache",
+      kind: "TCPBalancer",
+      plural: "tcpbalancers",
+      singular: "tcpbalancer",
       openAPISchema: "{}",
     },
   },
@@ -21,7 +21,7 @@ const ad: ApplicationDefinition = {
 
 const instance: ApplicationInstance = {
   apiVersion: "apps.cozystack.io/v1alpha1",
-  kind: "HTTPCache",
+  kind: "TCPBalancer",
   metadata: { name: "demo", namespace: "tenant-root" },
 }
 
