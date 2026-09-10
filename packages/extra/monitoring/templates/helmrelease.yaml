@@ -12,8 +12,8 @@ spec:
   interval: 5m
   # Aligned with the outer cozyrds `release.cozystack.io/helm-install-timeout: "15m"`
   # (packages/system/monitoring-rd/cozyrds/monitoring.yaml) so the inner HR does
-  # not fail at 10m while the OIDC users-Job is still inside its
-  # activeDeadlineSeconds: 900 (10m Grafana wait + reconcile budget).
+  # not fail at 10m while the Grafana hook is still inside its
+  # activeDeadlineSeconds: 900 (10m rollout/health wait + users budget).
   timeout: 15m
   # Uninstall remediation deletes the CNPG Clusters and their owned PVCs.
   # Failed installs retry as upgrades, so both actions must recover in place.
@@ -58,8 +58,9 @@ spec:
   # system/monitoring chart (templates/vlogs/vlogs.yaml fails on an empty
   # logsStorages), so the "Ready with no log store" hole cannot be reached.
   #
-  # VM* shares VLCluster's updateStatus contract. Grafana exposes stage/stageStatus
-  # instead of conditions. CNPG uses the same Ready=False reason for bootstrap
+  # VM* shares VLCluster's updateStatus contract. The system chart hook waits
+  # for Grafana's desired Deployment rollout: its operator stages only prove
+  # resource writes. CNPG uses the same Ready=False reason for bootstrap
   # and persistent errors; both deliberately wait until the Helm timeout.
   healthCheckExprs:
     - apiVersion: operator.victoriametrics.com/v1
@@ -87,11 +88,6 @@ spec:
       inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
       failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
       current:    has(status.updateStatus) && status.updateStatus == 'operational'
-    - apiVersion: grafana.integreatly.org/v1beta1
-      kind: Grafana
-      inProgress: has(status.stageStatus) && status.stageStatus == 'in progress'
-      failed:     has(status.stageStatus) && status.stageStatus == 'failed'
-      current:    has(status.stage) && has(status.stageStatus) && status.stage == 'complete' && status.stageStatus == 'success'
     - apiVersion: postgresql.cnpg.io/v1
       kind: Cluster
       current: has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')

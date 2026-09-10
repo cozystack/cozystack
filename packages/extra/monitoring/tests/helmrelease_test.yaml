@@ -43,11 +43,11 @@ tests:
           path: spec.healthCheckExprs[0].failed
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
 
-  - it: also gates on the metrics VM* CRs, Grafana and the CNPG Cluster
+  - it: also gates on the metrics VM* CRs and the CNPG Clusters
     asserts:
       - lengthEqual:
           path: spec.healthCheckExprs
-          count: 7
+          count: 6
       - equal:
           path: spec.healthCheckExprs[1].kind
           value: VMCluster
@@ -55,21 +55,15 @@ tests:
           path: spec.healthCheckExprs[1].apiVersion
           value: operator.victoriametrics.com/v1beta1
       - equal:
-          path: spec.healthCheckExprs[5].kind
-          value: Grafana
-      - equal:
-          path: spec.healthCheckExprs[5].current
-          value: "has(status.stage) && has(status.stageStatus) && status.stage == 'complete' && status.stageStatus == 'success'"
-      - equal:
-          path: spec.healthCheckExprs[6].apiVersion
+          path: spec.healthCheckExprs[5].apiVersion
           value: postgresql.cnpg.io/v1
       - equal:
-          path: spec.healthCheckExprs[6].kind
+          path: spec.healthCheckExprs[5].kind
           value: Cluster
       - notExists:
-          path: spec.healthCheckExprs[6].inProgress
+          path: spec.healthCheckExprs[5].inProgress
       - notExists:
-          path: spec.healthCheckExprs[6].failed
+          path: spec.healthCheckExprs[5].failed
 
   - it: keeps the timeout aligned with the outer release and OIDC job
     asserts:

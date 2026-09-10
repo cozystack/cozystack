@@ -92,7 +92,6 @@ func TestRenderedHealthChecks(t *testing.T) {
 				"operator.victoriametrics.com/v1beta1/VMAgent":        "vm",
 				"operator.victoriametrics.com/v1beta1/VMAlert":        "vm",
 				"operator.victoriametrics.com/v1beta1/VMAlertmanager": "vm",
-				"grafana.integreatly.org/v1beta1/Grafana":             "grafana",
 				"postgresql.cnpg.io/v1/Cluster":                       "cnpg",
 			},
 		},

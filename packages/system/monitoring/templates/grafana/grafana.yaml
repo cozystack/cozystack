@@ -1,3 +1,4 @@
+{{- define "monitoring.grafana.base" -}}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $ingress := .Values._namespace.ingress }}
@@ -70,8 +71,8 @@
   When users[] is empty the chart hands the auth.generic_oauth block
   to the operator (System mode → chart-supplied issuer defaults;
   CustomConfig-inline → operator's map applied verbatim; secretRef →
-  operator's ini fragment is authoritative). The users-Job also does
-  not render in that state so nothing app-side touches org membership.
+  operator's ini fragment is authoritative). The hook only checks readiness
+  in that state and leaves org membership untouched.
 */}}
 {{- $usersMapActive := gt (len $users) 0 }}
 {{- $chartForcedOidc := dict }}
@@ -303,3 +304,13 @@ spec:
         secretName: grafana-ingress-tls
         {{- end }}
   {{- end }}
+{{- end }}
+{{- $grafana := include "monitoring.grafana.validatedBase" . | fromYaml }}
+{{- $hash := include "monitoring.grafana.specHash" $grafana.spec }}
+{{- $template := $grafana.spec.deployment.spec.template }}
+{{- $metadata := $template.metadata | default dict }}
+{{- $annotations := $metadata.annotations | default dict }}
+{{- $_ := set $annotations "monitoring.cozystack.io/grafana-spec-hash" $hash }}
+{{- $_ := set $metadata "annotations" $annotations }}
+{{- $_ := set $template "metadata" $metadata }}
+{{- toYaml $grafana | nindent 0 }}

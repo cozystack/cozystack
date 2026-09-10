@@ -101,30 +101,29 @@ tests:
           content:
             name: GF_PATHS_CUSTOM_INI
 
-  - it: mode=None does NOT render the users-Job (upgrade safety guard)
-    # Regression guard against the dev3 test finding: if the Job were
-    # rendered in mode=None, the post-upgrade prune pass would silently
-    # delete every non-admin Main-Org member on any monitoring HR
-    # reconcile — clobbering users added manually through the Grafana
-    # UI on installations that predate this PR (where `spec.oidc` did
-    # not exist and Grafana orgs were operator-curated by hand).
+  - it: mode=None checks readiness without admin credentials
     template: templates/grafana/oidc-users-job.yaml
     asserts:
       - hasDocuments:
-          count: 0
+          count: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content: {name: GF_ADMIN_PASSWORD}
 
-  - it: mode=None with non-empty users still does NOT render the users-Job
+  - it: mode=None with non-empty users still leaves membership alone
     template: templates/grafana/oidc-users-job.yaml
     set:
       oidc.users:
         - email: alice@example.com
           role: Admin
     asserts:
-      # The Job is not rendered because `mode: None` short-circuits the
-      # gate; the prologue-level shape checks (email/role) still fire
-      # so a typo in the users[] entries doesn't slip through unnoticed.
       - hasDocuments:
-          count: 0
+          count: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content: {name: GF_ADMIN_PASSWORD}
 
   ##########################################################
   # mode: System — happy path
@@ -338,14 +337,18 @@ tests:
           path: spec.config["auth.generic_oauth"].allowed_groups
           value: "tenant-foo-bar-view tenant-foo-bar-use tenant-foo-bar-admin tenant-foo-bar-super-admin"
 
-  - it: mode=System with empty users does NOT render the users-Job
+  - it: mode=System with empty users checks readiness without admin credentials
     template: templates/grafana/oidc-users-job.yaml
     set:
       oidc.mode: System
       _cluster.oidc-enabled: "true"
     asserts:
       - hasDocuments:
-          count: 0
+          count: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content: {name: GF_ADMIN_PASSWORD}
 
   - it: mode=System grafana.yaml wires GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET from the Secret
     template: templates/grafana/grafana.yaml
@@ -376,10 +379,10 @@ tests:
           value: "false"
 
   ##########################################################
-  # users-Job — post-install/post-upgrade hook, RBAC-free
+  # users-Job — post-install/post-upgrade hook
   ##########################################################
 
-  - it: users-Job is a helm hook, has a finite deadline, and needs no ServiceAccount
+  - it: users-Job keeps a finite deadline and uses its readiness ServiceAccount
     template: templates/grafana/oidc-users-job.yaml
     set:
       oidc.mode: System
@@ -403,10 +406,9 @@ tests:
       - equal:
           path: spec.activeDeadlineSeconds
           value: 900
-      # No SA name → falls back to `default` — the Job never talks to
-      # the kube API, only to Grafana over the in-cluster Service.
-      - notExists:
+      - equal:
           path: spec.template.spec.serviceAccountName
+          value: monitoring-grafana-readiness
 
   - it: users-Job mounts admin credentials from the chart-managed Secret
     template: templates/grafana/oidc-users-job.yaml
@@ -475,7 +477,7 @@ tests:
   ##########################################################
 
   - it: mode=System hard-fails the render when the platform OIDC feature is off
-    template: templates/grafana/oidc-keycloak.yaml
+    template: templates/grafana/oidc-users-job.yaml
     set:
       oidc.mode: System
       # _cluster.oidc-enabled deliberately unset
@@ -650,7 +652,7 @@ tests:
   ##########################################################
 
   - it: mode=CustomConfig with BOTH inline and secretRef fails the render
-    template: templates/grafana/grafana.yaml
+    template: templates/grafana/oidc-users-job.yaml
     set:
       oidc.mode: CustomConfig
       oidc.customConfig.config:
@@ -661,7 +663,7 @@ tests:
           errorMessage: "spec.oidc.customConfig: set exactly one of `config` (inline) or `secretRef.name` — they are mutually exclusive."
 
   - it: mode=CustomConfig with NEITHER inline nor secretRef fails the render
-    template: templates/grafana/grafana.yaml
+    template: templates/grafana/oidc-users-job.yaml
     set:
       oidc.mode: CustomConfig
     asserts:
