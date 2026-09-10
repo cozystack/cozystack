@@ -1,0 +1,15 @@
+[Unit]
+Description=Report the VyOS configuration load result to the console
+# After, not Before: the point is to read what vyos-router left behind. It runs
+# whether that succeeded or failed, because "which line did it object to" is only
+# answerable from the log and the console is the only way off this appliance.
+After=vyos-router.service
+Wants=vyos-router.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/vyos-appliance-config-report.sh
+
+[Install]
+WantedBy=vyos.target
