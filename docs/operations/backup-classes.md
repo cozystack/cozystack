@@ -37,7 +37,7 @@ Different operators expect different endpoint shapes; the strategy templates ren
 | CNPG (Postgres) | `barmanObjectStore.endpointURL` | full URL (scheme preserved) |
 | Etcd            | `destination.s3.endpoint`       | full URL (scheme preserved) |
 | MariaDB         | `storage.s3.endpoint`           | bare host:port (scheme stripped); `tls.enabled` derived from the scheme |
-| MongoDB         | n/a — storage lives on the app (`backup.endpointURL`)                     | full URL (scheme preserved), configured on the MongoDB application, not the strategy |
+| MongoDB         | `s3.endpointUrl`                | full URL (scheme preserved); on the default flow the app's `backup.endpointURL`, on `useSystemBucket` the strategy coordinate injected by the driver |
 | FoundationDB    | `blobStoreConfiguration.accountName` + `urlParameters.secure_connection` | bare host:port + derived secure flag |
 | Velero          | `BackupStorageLocation.spec.config.s3Url` | full URL (scheme preserved) |
 | ClickHouse sidecar | `S3_ENDPOINT` env | bare host:port (from projected Secret) |
@@ -71,9 +71,13 @@ When `useSystemBucket: true`:
 
 `s3Region`, `s3Bucket`, `endpoint`, `s3AccessKey`, `s3SecretKey`, and `s3CredentialsSecret` are ignored in this mode.
 
-## MongoDB: the application owns the backup storage
+## MongoDB: backup storage
 
-Unlike CNPG / MariaDB / Altinity, the MongoDB driver cannot inject its S3 target per-backup: the Percona psmdb operator only runs the percona-backup-mongodb (pbm) agents and services `PerconaServerMongoDBBackup` CRs when the `PerconaServerMongoDB` cluster has `spec.backup.enabled: true` and a storage declared, and a `PerconaServerMongoDBBackup` references that storage only by name. So the MongoDB application must **opt into backups** and point at the bucket in its own chart values:
+MongoDB supports two storage flows. By default the S3 target lives on the app CR and the tenant supplies its own credentials; alternatively the tenant opts into the platform system bucket and the driver injects the storage onto the live cluster at backup time.
+
+### Default: the application owns the backup storage
+
+The Percona psmdb operator only runs the percona-backup-mongodb (pbm) agents and services `PerconaServerMongoDBBackup` CRs when the `PerconaServerMongoDB` cluster has `spec.backup.enabled: true` and a storage declared, and a `PerconaServerMongoDBBackup` references that storage only by name. On the default flow the MongoDB application **opts into backups** and points at the bucket in its own chart values:
 
 ```yaml
 apiVersion: apps.cozystack.io/v1alpha1
@@ -95,6 +99,25 @@ The chart declares that storage as `s3-storage`, which the `cozy-default-mongodb
 For a to-copy restore the operator reads the dump from the **source** backup's bucket/endpoint, but authenticates with the **target** cluster's own S3 credentials (the source release's Secret dies with it in a DR scenario). So the target application's credentials must be able to read the source bucket — the common case where both share the one platform `cozy-backups` bucket. A target whose credentials are scoped to a different S3 account or bucket cannot read the source archive, and the restore fails loudly with `AccessDenied` (RestoreJob `Failed`) rather than silently restoring nothing.
 
 A full, scripted example (write a marker document, back up, restore to a copy, assert the round-trip while the source stays untouched) is in [`examples/backups/mongodb/`](../../examples/backups/mongodb/) — driven by `run-all.sh`.
+
+### Opt-in to the system bucket
+
+Unlike ClickHouse's sidecar, PBM takes the bucket/endpoint/prefix as static fields on the `PerconaServerMongoDB` CR, and the platform bucket name is only known at BackupJob time — so the chart cannot render them. Instead the `cozy-default-mongodb` driver injects the storage onto the live cluster. To back up to the platform bucket without supplying S3 credentials, set:
+
+```yaml
+backup:
+  enabled: true
+  useSystemBucket: true
+```
+
+When `useSystemBucket: true`:
+
+- The chart-emitted `<release>-s3-creds` Secret is no longer rendered, and the chart leaves `spec.backup.storages`, `spec.backup.tasks` and `spec.backup.pitr` unset on the `PerconaServerMongoDB`.
+- On every BackupJob the driver SSA-injects the `s3-storage` entry from the strategy coordinates (bucket/endpoint from the platform system bucket, `credentialsSecret: cozy-backups-creds`, prefix `<namespace>/<release>`) under its own field manager, so a Flux re-render never reverts it and a later change to the coordinates is picked up on the next backup rather than frozen at the first.
+
+`destinationPath`, `endpointURL`, `insecureSkipTLSVerify`, `s3AccessKey` and `s3SecretKey` are ignored in this mode.
+
+Because the chart drops `spec.backup.tasks` and `spec.backup.pitr`, the psmdb operator's own scheduled backups and oplog PITR do **not** run on this flow — `backup.schedule` and `backup.retentionPolicy` stay in the schema for the default flow but have no effect here, and the `recoveryTime` PITR restores described below are not available. Migrate scheduled backups to a `backups.cozystack.io/Plan` against `cozy-default` instead. **Flipping this flag on a running app** removes the storage, tasks and pitr the app had, so a release that was taking scheduled backups + PITR before the flip stops until a `Plan` takes over.
 
 ### Point-in-time recovery (MongoDB)
 
@@ -263,7 +286,7 @@ The defaults aim at a reasonable middle (30-day retention, gzip compression wher
 
 - **CNPG strategy**: `barmanObjectStore.retentionPolicy`, `data.compression`, `wal.compression`.
 - **MariaDB strategy**: `compression`, `maxRetention`, `databases[]`.
-- **MongoDB strategy**: `storageName` (which `spec.backup.storages` entry on the psmdb cluster to use), `type` (`logical`), `compressionType` / `compressionLevel`. The S3 target itself is tuned via `backup.*` values on the MongoDB release (see [MongoDB: the application owns the backup storage](#mongodb-the-application-owns-the-backup-storage)).
+- **MongoDB strategy**: `storageName` (which `spec.backup.storages` entry on the psmdb cluster to use), `type` (`logical`), `compressionType` / `compressionLevel`, and — for the `useSystemBucket` flow — the `s3` coordinates the driver injects. On the default flow the S3 target is tuned via `backup.*` values on the MongoDB release instead (see [MongoDB: backup storage](#mongodb-backup-storage)).
 - **Altinity strategy**: tune the `clickhouse-backup` sidecar via `backup.*` values on the ClickHouse release; the strategy Pod is a thin HTTP client. When the S3 endpoint's certificate is signed by a private CA rather than a publicly-trusted one — SeaweedFS's in-cluster `:8333` being the case in point — point `backup.endpointCA` at a Secret holding that CA bundle; the chart mounts it into the sidecar and adds it to the trust store via `SSL_CERT_DIR`, which supplements the system CA set rather than replacing it.
 - **FoundationDB strategy**: `snapshotPeriodSeconds`, `agentCount`, `urlParameters[]`.
 - **Rabbitmq strategy**: `artifactURITemplate` (the `<namespace>/<application>/<backup-name>/definitions.json` object-key layout) and the pod `template` (image, resources). The backup is a definitions export over the management API — vhosts, users, permissions, queues, exchanges, bindings, policies, parameters — so message payloads are out of scope and there is no point-in-time recovery; a full message-data backup is a Velero volume snapshot instead. **Restore is a merge, not a reset**: importing definitions (`POST /api/definitions`) creates or updates what the export contains and never deletes, so anything created after the backup survives the restore and the broker is not returned to its exact backup-time state. A to-copy restore imports the source's users (with password hashes) into the target, so those source credentials become valid logins there. Unlike the operator-backed strategies (whose engine owns archive retention), the Rabbitmq driver owns its object outright and deletes it from the bucket when its `Backup` is deleted — via a one-shot Job the Backup's removal waits on — so a retention-pruned `Plan` does not normally accumulate objects. The delete is **best-effort**: when it cannot run from here the Backup is released without deleting the object (with a `Warning` Event naming what was left behind), so the Backup — and any namespace being torn down — never wedges. The named give-up conditions are: the namespace is terminating (`CREATE` is forbidden there), the strategy CR or the projected credentials are unavailable, the rendered Job name is invalid, or the skip annotation below is set. Otherwise a genuinely failing delete (object storage unreachable) keeps the `Backup` in `Terminating` (a visible signal to act on) and retries. To release such a stuck `Backup`, annotate it `backups.cozystack.io/skip-artifact-cleanup: "true"` — cleanup then skips the delete and lets the `Backup` go, leaving the object in the bucket to be reclaimed manually or by a bucket lifecycle policy (`kubectl annotate backup <name> -n <namespace> backups.cozystack.io/skip-artifact-cleanup=true`).

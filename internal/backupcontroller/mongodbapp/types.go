@@ -54,13 +54,20 @@ type MongoDBList struct {
 	Items           []MongoDB `json:"items"`
 }
 
-// MongoDBSpec is intentionally empty: the driver does not currently read or
-// patch any apps.cozystack.io/MongoDB spec field. It reads the downstream
-// psmdb.percona.com/PerconaServerMongoDB CR (rendered by the chart's
-// HelmRelease) for existence + backup-enabled gating, and drives
-// PerconaServerMongoDBBackup / PerconaServerMongoDBRestore CRs; it never
-// mutates the app CR.
-//
-// Reserved for future fields the driver might need to read. Add fields here
-// only when the driver genuinely needs them.
-type MongoDBSpec struct{}
+// MongoDBSpec mirrors only the apps.cozystack.io/MongoDB spec fields the driver
+// reads. It drives the downstream psmdb.percona.com CRs directly, so it keeps
+// no other spec state here.
+type MongoDBSpec struct {
+	Backup MongoDBBackupSpec `json:"backup,omitempty"`
+}
+
+// MongoDBBackupSpec carries the backup fields the driver reads off the app CR.
+// UseSystemBucket is the tenant's opt-in to the platform system bucket: on that
+// flow the chart leaves spec.backup.storages unset and the driver injects the
+// storage from the strategy coordinates at BackupJob time. The driver keys its
+// injection and its snapshot fallback off this flag, not off whatever storage
+// happens to be on the live cluster, so a legacy app that ships its own static
+// storage (UseSystemBucket=false) is never touched.
+type MongoDBBackupSpec struct {
+	UseSystemBucket bool `json:"useSystemBucket,omitempty"`
+}

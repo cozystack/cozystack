@@ -48,6 +48,12 @@ const (
 	// storage; when it leaves StorageName empty the driver falls back to this.
 	psmdbDefaultStorageName = "s3-storage"
 
+	// psmdbDefaultCredentialsSecret is the Secret the useSystemBucket flow
+	// authenticates against: the BackupJob reconciler projects it into the
+	// namespace before dispatch. Both the storage injection and the snapshot
+	// fallback default to it when the strategy names none.
+	psmdbDefaultCredentialsSecret = "cozy-backups-creds"
+
 	// psmdbFieldManager is the server-side-apply field owner for the driver's
 	// storage injection on the useSystemBucket flow. A dedicated manager (with
 	// ForceOwnership) keeps the injected spec.backup.storages entry from being
@@ -199,6 +205,8 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		return ctrl.Result{}, err
 	}
 
+	useSystemBucket := app.Spec.Backup.UseSystemBucket
+
 	rendered, err := renderMongoDBTemplate(strategy.Spec.Template, app, resolved.Parameters)
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to template MongoDB strategy: %v", err))
@@ -231,10 +239,15 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 	// the storage from the strategy's coordinates before the precondition looks
 	// for it. Owned by a dedicated field manager with ForceOwnership so a Flux
 	// re-render of the app never reverts it (mirrors the CNPG driver's
-	// spec.plugins patch). Gated on the storage being ABSENT: rendered.S3==nil
-	// (a custom strategy) or a legacy app that already ships its own static
-	// s3-storage is left untouched, so this never clobbers a manual bucket.
-	if shouldInjectMongoDBSystemStorage(cluster, storageName, rendered) {
+	// spec.plugins patch). Keyed off the app's useSystemBucket flag, not off
+	// whatever storage is on the live cluster: when the flag is set the apply
+	// runs on every BackupJob so a later change to the strategy coordinates
+	// (endpoint, region, bucket re-provision) catches up rather than being
+	// frozen at the first backup; when it is unset the driver never touches the
+	// cluster, so a legacy app that ships its own static storage is left alone.
+	// The path prefix is deterministic (<ns>/<release>), so re-applying the
+	// whole entry never splits the archive the way CNPG's serverName would.
+	if shouldInjectMongoDBSystemStorage(useSystemBucket, rendered) {
 		if err := r.applyMongoDBSystemStorage(ctx, j.Namespace, psmdbName, storageName, rendered.S3); err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to inject system-bucket storage onto psmdb.percona.com/PerconaServerMongoDB %s/%s: %v", j.Namespace, psmdbName, err))
 		}
@@ -271,7 +284,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		artifact, err := r.createMongoDBBackupArtifact(ctx, j, resolved, mdbBackup, rendered, storageName)
+		artifact, err := r.createMongoDBBackupArtifact(ctx, j, resolved, mdbBackup, rendered, storageName, useSystemBucket)
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
 		}
@@ -396,18 +409,15 @@ func psmdbStorageS3CredentialsSecret(raw runtime.RawExtension) string {
 }
 
 // shouldInjectMongoDBSystemStorage reports whether the driver must SSA-inject
-// the system-bucket storage onto the live cluster: only when the strategy
-// carries S3 coordinates (the useSystemBucket flow) AND the cluster does not
-// already declare the named storage. The absence gate is the load-bearing
-// guarantee that a legacy app shipping its own static storage — or a custom
-// strategy with no S3 coordinates — is left untouched, so injection never
-// clobbers a manually configured bucket.
-func shouldInjectMongoDBSystemStorage(cluster *psmdbtypes.PerconaServerMongoDB, storageName string, rendered *strategyv1alpha1.MongoDBTemplate) bool {
-	if rendered.S3 == nil {
-		return false
-	}
-	_, hasStorage := cluster.Spec.Backup.Storages[storageName]
-	return !hasStorage
+// the system-bucket storage onto the live cluster: only when the app opted in
+// via backup.useSystemBucket AND the strategy actually carries S3 coordinates
+// to inject. Keying off the app flag (not the live cluster's storage set) is
+// the load-bearing guarantee: a legacy app leaves the flag false and is never
+// touched, so injection never clobbers a manually configured bucket; a
+// useSystemBucket app is injected on every BackupJob, so a later change to the
+// strategy coordinates catches up instead of being frozen at the first backup.
+func shouldInjectMongoDBSystemStorage(useSystemBucket bool, rendered *strategyv1alpha1.MongoDBTemplate) bool {
+	return useSystemBucket && rendered.S3 != nil
 }
 
 // buildMongoDBSystemStorageEntry constructs the psmdb spec.backup.storages
@@ -419,7 +429,7 @@ func shouldInjectMongoDBSystemStorage(cluster *psmdbtypes.PerconaServerMongoDB, 
 func buildMongoDBSystemStorageEntry(s3 *strategyv1alpha1.MongoDBStorageS3) map[string]interface{} {
 	cred := s3.CredentialsSecret
 	if cred == "" {
-		cred = "cozy-backups-creds"
+		cred = psmdbDefaultCredentialsSecret
 	}
 	s3Cfg := map[string]interface{}{
 		"bucket":                s3.Bucket,
@@ -551,6 +561,7 @@ func (r *BackupJobReconciler) createMongoDBBackupArtifact(
 	mdbBackup *psmdbtypes.PerconaServerMongoDBBackup,
 	rendered *strategyv1alpha1.MongoDBTemplate,
 	storageName string,
+	useSystemBucket bool,
 ) (*backupsv1alpha1.Backup, error) {
 	takenAt := metav1.Now()
 	if mdbBackup.Status.Completed != nil && !mdbBackup.Status.Completed.IsZero() {
@@ -565,7 +576,7 @@ func (r *BackupJobReconciler) createMongoDBBackupArtifact(
 		driverMD[psmdbDestinationKey] = mdbBackup.Status.Destination
 	}
 
-	underlyingResources, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, storageName, resolved.Parameters)
+	underlyingResources, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, storageName, resolved.Parameters, useSystemBucket)
 	if err != nil {
 		return nil, fmt.Errorf("encode source snapshot for Backup.status.underlyingResources: %w", err)
 	}
@@ -984,7 +995,7 @@ type mongodbBackupSnapshot struct {
 	Parameters  map[string]string           `json:"parameters,omitempty"`
 }
 
-func marshalMongoDBBackupSnapshot(mdbBackup *psmdbtypes.PerconaServerMongoDBBackup, rendered *strategyv1alpha1.MongoDBTemplate, storageName string, parameters map[string]string) (*runtime.RawExtension, error) {
+func marshalMongoDBBackupSnapshot(mdbBackup *psmdbtypes.PerconaServerMongoDBBackup, rendered *strategyv1alpha1.MongoDBTemplate, storageName string, parameters map[string]string, useSystemBucket bool) (*runtime.RawExtension, error) {
 	snap := mongodbBackupSnapshot{
 		Kind:        psmdbBackupSnapshotKind,
 		APIVersion:  psmdbBackupSnapshotAPIVersion,
@@ -997,11 +1008,15 @@ func marshalMongoDBBackupSnapshot(mdbBackup *psmdbtypes.PerconaServerMongoDBBack
 	// On the useSystemBucket flow the driver injected the storage, so fall back
 	// to those coordinates when the operator's status echo is empty - the
 	// restore path rebuilds backupSource from this snapshot and needs the
-	// endpoint + credentialsSecret (cozy-backups-creds) to be present.
-	if snap.S3 == nil && rendered.S3 != nil {
+	// endpoint + credentialsSecret (cozy-backups-creds) to be present. Gated on
+	// the app's flag, not on rendered.S3 alone: the coordinates now live on the
+	// shared cozy-default strategy, so rendered.S3 is non-nil for a legacy app
+	// too, and recording the platform bucket for an archive written to the
+	// tenant's own bucket would send restore to the wrong place.
+	if useSystemBucket && snap.S3 == nil && rendered.S3 != nil {
 		cred := rendered.S3.CredentialsSecret
 		if cred == "" {
-			cred = "cozy-backups-creds"
+			cred = psmdbDefaultCredentialsSecret
 		}
 		snap.S3 = &psmdbtypes.BackupStorageS3{
 			Bucket:                rendered.S3.Bucket,
