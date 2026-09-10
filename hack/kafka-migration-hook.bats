@@ -65,6 +65,7 @@ case "$args" in
     ;;
   *"range .items"*)
     # kafkas list for the "other ZooKeeper clusters remain" count.
+    [ -n "${STUB_OTHERS_LIST_FAIL:-}" ] && { echo "apiserver error" >&2; exit 1; }
     printf '%s\n' "${STUB_OTHERS_LIST:-}"
     exit 0
     ;;
@@ -142,6 +143,7 @@ run_hook() {
   STUB_STATE_FAIL="${STUB_STATE_FAIL:-}" \
   STUB_CREATE_FAIL="${STUB_CREATE_FAIL:-}" \
   STUB_OTHERS_LIST="${STUB_OTHERS_LIST:-}" \
+  STUB_OTHERS_LIST_FAIL="${STUB_OTHERS_LIST_FAIL:-}" \
   STUB_KAFKA_IDS="${STUB_KAFKA_IDS:-}" \
   STUB_REBALANCE="${STUB_REBALANCE:-}" \
   STUB_REBALANCE_REASON="${STUB_REBALANCE_REASON:-}" \
@@ -310,6 +312,24 @@ KRaft" run_hook
   if grep -qE 'KafkaRebalance|cruiseControl|delete .*kafkanodepools' "$tmp/kubectl.log"; then
     echo "FAIL: a sole cluster ran the name-freeing drain"
     cat "$tmp/kubectl.log"
+    return 1
+  fi
+
+  rm -rf "$tmp"
+}
+
+@test "a failed read of the other-clusters list fails closed, not mistaken for none" {
+  setup_case
+  force_kafka_pool "$tmp/s.sh"
+  # Already KRaft on kafka; the list read that decides whether others wait errors.
+  STUB_FOUND="kafka.kafka.strimzi.io/test-kafka" STUB_KRAFT="enabled" \
+    STUB_OTHERS_LIST_FAIL=1 run_hook
+
+  [ "$rc" != 0 ]
+  grep -qF 'could not list Kafka CRs' "$tmp/out"
+  if grep -qF 'keeping the "kafka" pool' "$tmp/out"; then
+    echo "FAIL: a failed list read was mistaken for 'no other clusters' and kept the pool"
+    cat "$tmp/out"
     return 1
   fi
 

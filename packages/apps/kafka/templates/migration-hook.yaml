@@ -351,7 +351,16 @@ spec:
                 echo "This cluster runs on \"$brokerPool\" (not the shared \"kafka\" pool); nothing to free."
                 exit 0
               fi
-              others=$(kubectl -n "$ns" get "$kafka" -o jsonpath='{range .items[*]}{.metadata.name}={.metadata.annotations.strimzi\.io/kraft}{"\n"}{end}' 2>/dev/null | awk -F= -v me="$name" '$1!="" && $1!=me && $2!="enabled"{c++} END{print c+0}')
+              # Reading fails open if the pipeline swallows the kubectl error: an
+              # empty list is indistinguishable from a failed read, and both would
+              # count 0 and keep the pool, stranding any co-namespaced ZK cluster
+              # still waiting. Capture the read status separately, like the drain
+              # read below.
+              if ! others_raw=$(kubectl -n "$ns" get "$kafka" -o jsonpath='{range .items[*]}{.metadata.name}={.metadata.annotations.strimzi\.io/kraft}{"\n"}{end}' 2>&1); then
+                echo "ERROR: could not list Kafka CRs in $ns to decide whether to free the \"kafka\" pool: $others_raw" >&2
+                exit 1
+              fi
+              others=$(printf '%s\n' "$others_raw" | awk -F= -v me="$name" '$1!="" && $1!=me && $2!="enabled"{c++} END{print c+0}')
               if [ "$others" -eq 0 ]; then
                 echo "No other ZooKeeper Kafka clusters in $ns; keeping the \"kafka\" pool. Done."
                 exit 0
