@@ -89,15 +89,23 @@ spec:
             name: {{ .Release.Name }}-cloud-init
 {{- if .Values._logSerialConsole }}
       {{- /*
-        A plain Secret volume, which KubeVirt renders as an iso9660 disk whose
-        label is the volume name, so the appliance seed finds it with
-        `blkid -L cozydiag`. Separate from the NoCloud disk on purpose: the
-        configuration seed and the diagnostics must not be able to break each
-        other (see site-router.diagFiles).
+        A plain Secret volume, which KubeVirt renders as an iso9660 disk. The
+        appliance seed finds it with `blkid -L cozydiag`, and volumeLabel is what
+        puts that label on the filesystem: KubeVirt takes it from
+        Secret.VolumeLabel and NOT from the volume name (kubevirt
+        pkg/config/secret.go getLabel). An earlier revision of this comment said
+        the volume name was the label; it is not, the label was empty, and the
+        seed silently installed no diagnostics on every run — which is how the
+        one channel that could have explained a failing guest was itself missing.
+
+        Separate from the NoCloud disk on purpose: the configuration seed and the
+        diagnostics must not be able to break each other (see
+        site-router.diagFiles).
       */}}
       - name: cozydiag
         secret:
           secretName: {{ .Release.Name }}-diag
+          volumeLabel: cozydiag
 {{- end }}
       networks:
       - name: default

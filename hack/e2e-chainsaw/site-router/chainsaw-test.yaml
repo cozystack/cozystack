@@ -643,6 +643,10 @@ spec:
               # curl http://$BACKEND_IP:8080/clientip from B, sourced 192.0.2.1,
               # and confirm the returned client IP is in B's site range.
               observed=$(probe_from_b_stdout http "$BACKEND_IP" 8080 "/clientip")
+              # record, not echo: a failing chainsaw script reports only its
+              # wrapper error, so the observed address has to be written where
+              # the report collector picks it up or the failure says nothing.
+              record inbound-source "backend=$BACKEND_IP observed='$observed'"
               case "$observed" in
                 192.0.2.*) echo "source preserved: backend saw $observed" ;;
                 *) echo "FAIL: backend saw '$observed', expected a 192.0.2.x source (NAT / not routed)"; exit 1 ;;

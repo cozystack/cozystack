@@ -52,6 +52,14 @@ umount "$MNT" 2>/dev/null || true
 # touch the configuration above. The chart attaches it only when the platform or
 # the e2e suite asked for the serial console; a tenant cannot.
 DIAG=$(blkid -L cozydiag 2>/dev/null) || DIAG=""
+if [ -z "$DIAG" ]; then
+    # Say so. This branch used to be silent, and the label was empty for every
+    # run because the chart set no volumeLabel on the Secret volume — KubeVirt
+    # takes the iso9660 label from Secret.VolumeLabel, not from the volume name.
+    # The result was a guest with no diagnostics and no hint that it had none,
+    # on exactly the runs where the diagnostics were the thing being looked for.
+    log "no disk labelled cozydiag; guest diagnostics not installed"
+fi
 if [ -n "$DIAG" ] && mount -o ro "$DIAG" "$MNT" 2>/dev/null; then
     if [ -s "$MNT/guest-diag.sh" ] && [ -s "$MNT/guest-diag.cron" ]; then
         mkdir -p /config/scripts
