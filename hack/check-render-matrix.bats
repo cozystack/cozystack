@@ -1,133 +1,161 @@
 #!/usr/bin/env bats
 
-# Contract for hack/check-render-matrix.sh. The point of these is that the check
-# FAILS on a broken chart: a smoke check that cannot go red is worse than none,
-# because it reports a number that looks like coverage.
-#
-# Written for cozytest.sh, which is not real bats: no `run`, no `$status`, no
-# setup()/teardown(). Each test calls the script directly and inspects its exit
-# with `if`, the way the other hack/*.bats here do.
+# Shared by bats and cozytest.sh: inspect exit codes directly, without bats-only
+# helpers. Scratch directories stay available if an assertion fails.
 
-@test "render matrix passes on the tree as it stands" {
-    output=$(hack/check-render-matrix.sh)
-    case "$output" in
-        *"rendered,"*" skipped"*) ;;
-        *) echo "expected a summary line, got: $output" >&2; exit 1 ;;
-    esac
+make_render_chart() {
+    mkdir -p "$1/templates"
+    printf 'apiVersion: v2\nname: render-test\nversion: 0.0.0\n' > "$1/Chart.yaml"
+    printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: render-test\n' > "$1/templates/object.yaml"
 }
 
-@test "render matrix fails on a chart whose template is broken" {
-    tmp=$(mktemp -d)
-    mkdir -p "$tmp/broken/templates"
-    printf 'apiVersion: v2\nname: broken\nversion: 0.0.0\n' > "$tmp/broken/Chart.yaml"
-    # `required` with no value is the cheapest deterministic render failure.
-    printf '{{ required "deliberately broken" .Values.nope }}\n' > "$tmp/broken/templates/boom.yaml"
-
-    if out=$(hack/check-render-matrix.sh "$tmp/broken" 2>&1); then
-        echo "expected a non-zero exit for a broken chart, got success: $out" >&2
-        rm -rf "$tmp"
-        exit 1
+expect_render_failure() {
+    if output=$(dash hack/check-render-matrix.sh "$@" 2>&1); then
+        echo "expected render failure, got: $output" >&2
+        return 1
     fi
-    case "$out" in
-        *"FAIL broken"*) ;;
-        *) echo "expected 'FAIL broken', got: $out" >&2; rm -rf "$tmp"; exit 1 ;;
-    esac
-    rm -rf "$tmp"
+    printf '%s\n' "$output"
 }
 
-# helm's own parser is what catches this, which is why the script carries no
-# separate YAML pass. Pinned so that stays true: if a future helm accepted it,
-# the check would silently start passing malformed manifests.
-@test "render matrix fails on a template that is not valid YAML" {
-    tmp=$(mktemp -d)
-    mkdir -p "$tmp/badyaml/templates"
-    printf 'apiVersion: v2\nname: badyaml\nversion: 0.0.0\n' > "$tmp/badyaml/Chart.yaml"
-    printf 'a: b\n  c: d\n' > "$tmp/badyaml/templates/boom.yaml"
-
-    if out=$(hack/check-render-matrix.sh "$tmp/badyaml" 2>&1); then
-        echo "expected a non-zero exit for invalid YAML, got success: $out" >&2
-        rm -rf "$tmp"
-        exit 1
-    fi
-    case "$out" in
-        *"FAIL badyaml"*) ;;
-        *) echo "expected 'FAIL badyaml', got: $out" >&2; rm -rf "$tmp"; exit 1 ;;
-    esac
-    rm -rf "$tmp"
-}
-
-# A skip that has stopped being necessary is worse than no skip: it silently
-# drops a chart from the sweep forever. This renders each skipped chart directly
-# and requires it to STILL fail, so a chart that becomes renderable shows up as a
-# red test rather than as permanent invisible exclusion.
-#
-# Replaces an earlier test that asserted every SKIP line contains parentheses.
-# The only line that emits one is `echo "SKIP $name ($reason)"` guarded on a
-# non-empty reason, so that assertion was unreachable by construction: it could
-# not fail for the property it named.
-@test "every skipped chart still genuinely fails to render" {
-    # mktemp, not $BATS_TMPDIR: cozytest.sh is not real bats and defines none of
-    # bats's variables, so under `set -u` that name aborts the suite.
-    skips=$(mktemp)
-    hack/check-render-matrix.sh | grep '^SKIP' | sed 's/^SKIP \([^ ]*\) .*/\1/' > "$skips" || true
-    while read -r name; do
-        [ -n "$name" ] || continue
-        if helm template "$name-render-check" "packages/apps/$name" -n tenant-test \
-             -f hack/testdata/render-fixtures/fresh.yaml >/dev/null 2>&1; then
-            echo "chart '$name' is on the skip list but renders fine now — remove the skip" >&2
-            rm -f "$skips"
-            exit 1
-        fi
-    done < "$skips"
-    rm -f "$skips"
-}
-
-# The sweep must cover the charts that exist rather than a number frozen when
-# this was written: a chart added to packages/apps must land in the check or in
-# the skip list, and the two together have to account for all of them.
 @test "rendered plus skipped accounts for every app chart" {
     total=$(find packages/apps -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-    output=$(hack/check-render-matrix.sh)
+    output=$(dash hack/check-render-matrix.sh)
     summary=$(printf '%s\n' "$output" | grep '^check-render-matrix:')
     rendered=$(printf '%s\n' "$summary" | sed 's/.*: \([0-9]*\) rendered.*/\1/')
     skipped=$(printf '%s\n' "$summary" | sed 's/.*, \([0-9]*\) skipped.*/\1/')
-    sum=$((rendered + skipped))
-    if [ "$sum" -ne "$total" ]; then
-        echo "sweep covered $sum charts ($rendered rendered, $skipped skipped) but packages/apps holds $total" >&2
-        exit 1
-    fi
+    [ "$rendered" -gt 0 ]
+    [ "$((rendered + skipped))" -eq "$total" ]
 }
 
-# A fixture that does not reproduce the platform's types tests a shape the
-# platform never produces. The booleans are the trap: charts compare them with
-# `eq $x "true"`, so a real YAML bool makes helm fail on incompatible types.
-@test "fixtures carry the platform's string-typed values" {
-    for f in hack/testdata/render-fixtures/*.yaml; do
-        python3 -c 'import sys,yaml;d=yaml.safe_load(open(sys.argv[1])) or {};bad=[];[bad.append(f"{sec}.{k}") for sec in ("_cluster","_namespace") for k,v in (d.get(sec) or {}).items() if isinstance(v,(bool,int,float)) or v is None];sys.exit(f"{sys.argv[1]}: scalars must be strings, the platform quotes them: {bad}") if bad else None;sys.exit(f"{sys.argv[1]}: no _cluster map") if not (d.get("_cluster") or {}) else None' "$f"
+@test "render matrix preserves multiple chart paths containing spaces" {
+    tmp=$(mktemp -d)
+    make_render_chart "$tmp/space in parent/first"
+    make_render_chart "$tmp/space in parent/second"
+    output=$(dash hack/check-render-matrix.sh "$tmp/space in parent/first/" "$tmp/space in parent/second")
+    printf '%s\n' "$output" | grep -Fx 'check-render-matrix: 2 rendered, 0 skipped'
+    rm -rf "$tmp"
+}
+
+@test "render matrix reports a broken chart and still checks the next chart" {
+    tmp=$(mktemp -d)
+    make_render_chart "$tmp/broken"
+    make_render_chart "$tmp/valid"
+    printf '{{ required "deliberately broken" .Values.nope }}\n' > "$tmp/broken/templates/object.yaml"
+    output=$(expect_render_failure "$tmp/broken" "$tmp/valid")
+    for fixture in hack/testdata/render-fixtures/*.yaml; do
+        state=$(basename "$fixture" .yaml)
+        printf '%s\n' "$output" | grep -Fx "FAIL broken ($state)"
+    done
+    printf '%s\n' "$output" | grep -F 'deliberately broken'
+    printf '%s\n' "$output" | grep -Fx 'check-render-matrix: 1 rendered, 0 skipped'
+    rm -rf "$tmp"
+}
+
+@test "render matrix fails on malformed YAML" {
+    tmp=$(mktemp -d)
+    make_render_chart "$tmp/badyaml"
+    printf 'a: b\n  c: d\n' > "$tmp/badyaml/templates/object.yaml"
+    output=$(expect_render_failure "$tmp/badyaml")
+    printf '%s\n' "$output" | grep -F 'FAIL badyaml'
+    printf '%s\n' "$output" | grep -F 'YAML parse error'
+    rm -rf "$tmp"
+}
+
+@test "render matrix does not count a nonexistent chart as rendered" {
+    tmp=$(mktemp -d)
+    output=$(expect_render_failure "$tmp/missing")
+    printf '%s\n' "$output" | grep -F 'FAIL missing'
+    printf '%s\n' "$output" | grep -Fx 'check-render-matrix: 0 rendered, 0 skipped'
+    rm -rf "$tmp"
+}
+
+@test "render matrix rejects skips that now render or fail for another reason" {
+    tmp=$(mktemp -d)
+    for name in vm-instance kubernetes-nodes; do
+        make_render_chart "$tmp/$name"
+        output=$(expect_render_failure "$tmp/$name")
+        printf '%s\n' "$output" | grep -F 'chart now renders; remove its skip'
+        printf '{{ fail "unrelated render failure" }}\n' > "$tmp/$name/templates/object.yaml"
+        output=$(expect_render_failure "$tmp/$name")
+        printf '%s\n' "$output" | grep -F 'unrelated render failure'
+        printf '%s\n' "$output" | grep -Fx 'check-render-matrix: 0 rendered, 0 skipped'
+    done
+    rm -rf "$tmp"
+}
+
+@test "fixtures match the injected value types" {
+    for fixture in hack/testdata/render-fixtures/*.yaml; do
+        helm template fixture-check hack/testdata/render-fixtures/validator \
+            --set-file "fixture=$fixture"
     done
 }
 
-# Each fixture is one cluster state, and what matters is that they produce
-# DIFFERENT RENDERS -- otherwise the sweep runs helm three times over the same
-# shape and reports triple the coverage it has.
-#
-# An earlier version compared the fixture FILES on three key names. That passed
-# while the sweep was in fact rendering 19 of 21 charts identically across all
-# three states, which is the exact condition it claimed to prevent. Comparing
-# output is the only form of this test that can fail for the right reason.
-@test "the fixtures produce different renders for at least one chart" {
-    count=$(find hack/testdata/render-fixtures -maxdepth 1 -name '*.yaml' | wc -l | tr -d ' ')
-    [ "$count" -ge 2 ]
+@test "fixture validation rejects wrong scalar and scheduling types" {
+    tmp=$(mktemp -d)
+    for value in true 12 null '[]' '{}'; do
+        printf '_cluster:\n  oidc-enabled: %s\n_namespace: {host: "example.org"}\n' "$value" > "$tmp/value.yaml"
+        if output=$(helm template fixture-check hack/testdata/render-fixtures/validator \
+            --set-file "fixture=$tmp/value.yaml" 2>&1); then
+            echo "accepted non-string oidc-enabled: $value" >&2
+            exit 1
+        fi
+        printf '%s\n' "$output" | grep -F '_cluster.oidc-enabled must be a string'
+    done
+    for value in true 12 null '[]' '{}'; do
+        printf '_cluster:\n  scheduling:\n    globalAppTopologySpreadConstraints: %s\n    dedicatedNodesForWindowsVMs: "false"\n_namespace: {host: "example.org"}\n' "$value" > "$tmp/value.yaml"
+        if output=$(helm template fixture-check hack/testdata/render-fixtures/validator \
+            --set-file "fixture=$tmp/value.yaml" 2>&1); then
+            echo "accepted non-string scheduling constraint: $value" >&2
+            exit 1
+        fi
+        printf '%s\n' "$output" | grep -F '_cluster.scheduling.globalAppTopologySpreadConstraints must be a string'
+    done
+    rm -rf "$tmp"
+}
 
-    # packages/apps/kubernetes is the chart that branches most on these values
-    # (the _namespace.<service> flags gate ~15 manifests). If a future fixture
-    # change stops moving even this one, the states have collapsed.
-    a=$(helm template kubernetes-render-check packages/apps/kubernetes -n tenant-test \
-          -f hack/testdata/render-fixtures/fresh.yaml 2>/dev/null | grep -c '^kind:')
-    b=$(helm template kubernetes-render-check packages/apps/kubernetes -n tenant-test \
-          -f hack/testdata/render-fixtures/configured.yaml 2>/dev/null | grep -c '^kind:')
-    if [ "$a" = "$b" ]; then
-        echo "fresh and configured render the same number of documents ($a) for packages/apps/kubernetes — the fixtures no longer represent different cluster states" >&2
+@test "configured scheduling reaches the postgres manifest" {
+    tmp=$(mktemp -d)
+    for state in fresh configured wildcard; do
+        helm template postgres-render-check packages/apps/postgres -n tenant-test \
+            -f "hack/testdata/render-fixtures/$state.yaml" > "$tmp/$state.yaml"
+    done
+    if grep -q '^  topologySpreadConstraints:' "$tmp/fresh.yaml"; then
+        echo 'fresh unexpectedly enables topology spread' >&2
         exit 1
     fi
+    for state in configured wildcard; do
+        grep -A 7 '^  topologySpreadConstraints:' "$tmp/$state.yaml" > "$tmp/constraints"
+        grep -F 'maxSkew: 1' "$tmp/constraints"
+        grep -F 'topologyKey: topology.kubernetes.io/zone' "$tmp/constraints"
+        grep -F 'cnpg.io/cluster: postgres-render-check' "$tmp/constraints"
+    done
+    rm -rf "$tmp"
+}
+
+@test "every pair of fixture states produces different deterministic manifests" {
+    tmp=$(mktemp -d)
+    count=0
+    for fixture in hack/testdata/render-fixtures/*.yaml; do
+        state=$(basename "$fixture" .yaml)
+        count=$((count + 1))
+        # Tenant exercises OIDC and certificate modes without random Secrets.
+        # Render twice so randomness cannot masquerade as state coverage.
+        for run in first second; do
+            helm template tenant-check packages/apps/tenant -n tenant-test \
+                -f "$fixture" > "$tmp/$state-$run.yaml"
+        done
+        cmp "$tmp/$state-first.yaml" "$tmp/$state-second.yaml"
+        cp "$tmp/$state-first.yaml" "$tmp/$state.manifests"
+    done
+    [ "$count" -ge 3 ]
+    for a in "$tmp"/*.manifests; do
+        for b in "$tmp"/*.manifests; do
+            [ "$a" != "$b" ] || continue
+            if cmp -s "$a" "$b"; then
+                echo "fixture states produce identical manifests: $a and $b" >&2
+                exit 1
+            fi
+        done
+    done
+    rm -rf "$tmp"
 }

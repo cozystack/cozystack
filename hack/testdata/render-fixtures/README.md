@@ -1,49 +1,27 @@
 # Render fixtures
 
-Values the platform injects into every app chart at install time, reproduced
-here so `hack/check-render-matrix.sh` can render a chart the way it is actually
-rendered in a cluster.
+`hack/check-render-matrix.sh` renders every app chart with its defaults plus these injected values. helm-unittest renders the templates selected by each suite, so a chart with passing unit tests can still have an untested template that fails to render. This sweep checks that Helm accepts the rendered YAML; it does not validate Kubernetes schemas or runtime behavior.
 
-The authority is `packages/core/platform/templates/apps.yaml`, which builds the `_cluster` map
-into the `cozystack-values` Secret, plus `templates/bundles/system.yaml` for
-`oidc-enabled`. `_namespace` comes from
-`packages/apps/tenant/templates/namespace.yaml`.
+The source of `_cluster` is `packages/core/platform/templates/apps.yaml`; `_namespace` comes from `packages/apps/tenant/templates/namespace.yaml`. These fixtures model selected install states, not a complete copy of every platform setting. Top-level scalar values in these maps are strings, including booleans. Charts such as tenant compare `oidc-enabled` with `"true"`, so a YAML boolean has the wrong type.
 
-**Every scalar there goes through `| quote`, so every scalar here is a string** —
-including the booleans. That is not cosmetic: `tenant` compares one with
-`eq $oidcEnabled "true"`, and a real bool makes helm fail with "incompatible
-types for comparison". `scheduling` and `branding` are the exceptions: the
-platform emits those as maps.
+`scheduling` and `branding` are maps copied with `toYaml`, which preserves their nested types. The scheduling keys read by app charts have a more specific contract: `globalAppTopologySpreadConstraints` is a string containing YAML (or an empty string), and `dedicatedNodesForWindowsVMs` is compared with the string `"true"`. The configured and wildcard fixtures supply a topology constraint; fresh leaves it empty. The embedded YAML retains numeric fields such as `maxSkew`.
 
-`_namespace.<service>` is not a boolean at all, which is easy to get wrong: the
-value is the NAMESPACE providing that service, or an empty string when the tenant
-has none (`$etcd = $tenantName` in namespace.yaml). Charts test it with a bare
-`{{- if .Values._namespace.etcd }}`, so `""` is the off side and any name is the
-on side. Omitting the key entirely renders the off side, which is a state the
-platform does produce — but then nothing renders the on side, and in
-`packages/apps/kubernetes` that is 15 manifests.
+`_namespace.<service>` contains the namespace providing the shared service, or an empty string when unavailable. A non-empty value enables the service-dependent templates in the Kubernetes chart.
 
-Each file is one cluster state, and a chart is rendered under all of them. The
-states exist because charts branch on these values, so a single fixture renders
-one side of each branch and passes a chart whose other side is broken.
-
-| file | state it represents |
+| File | State |
 |---|---|
-| `fresh.yaml` | a new install: nothing configured, OIDC off, no certificates |
-| `configured.yaml` | OIDC on, per-host ACME via http01, services exposed |
-| `wildcard.yaml` | dns01 with a platform-issued wildcard certificate |
+| `fresh.yaml` | OIDC off, no certificates or shared services, no topology constraint |
+| `configured.yaml` | OIDC on, per-host ACME via http01, shared services and topology constraint |
+| `wildcard.yaml` | OIDC on, dns01 with a platform-issued wildcard certificate, shared services and topology constraint |
 
-When a chart starts reading a `_cluster` key none of these set, add it to all
-three. A key absent from every fixture is a branch nothing renders, and it fails
-silently by passing. To list what the charts read:
+Each chart is attempted under every fixture. `vm-instance` and `kubernetes-nodes` require a `VirtualMachineClusterInstancetype` lookup on their defaults. The sweep accepts their skip only while every fixture fails with the recorded lookup diagnostic; a successful render or a different error fails the sweep. For kubernetes-nodes it supplies a parent cluster and matching release name first.
+
+`lookup` returns an empty result during this check. Tests for existing objects belong in chart-specific helm-unittest suites using `kubernetesProvider`; `packages/apps/clickhouse/tests/backup_api_password_persistence_test.yaml` covers both password generation and preservation that way. Presets, replica counts and other app feature toggles are outside this sweep.
+
+The BATS suite checks fixture types with the small Helm chart in `validator/`, using `--set-file` so explicit nulls are not removed by Helm's values merge. It also verifies scheduling reaches the PostgreSQL manifest and compares complete tenant renders for every pair of fixture states. Tenant exercises OIDC and certificate modes without generating random Secrets; rendering each state twice verifies that the comparison is deterministic. Identical output from other charts is expected.
+
+When adding an injected value read by an app, update the relevant states and add an assertion for the branch it exercises. Review all read forms, including `index`, `get` and `dig`, before deciding a value is unused:
 
 ```sh
-grep -rn '_cluster' packages/apps/*/templates/
+grep -rn '_cluster\|_namespace' packages/apps/*/templates/
 ```
-
-Grep for the bare word rather than a shape: the reads are written four different
-ways (`.Values._cluster.foo`, `index .Values._cluster "foo"`, `dig "foo" ...`,
-and `(.Values._cluster | default dict)`), so any pattern narrow enough to look
-tidy misses some of them. A key absent from every fixture is a branch nothing
-renders, and it fails silently by passing, so a false negative here is the
-expensive kind.
