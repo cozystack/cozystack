@@ -13,6 +13,9 @@ tests:
       path: metadata.name
       value: cozy:tenant:admin:base
     asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-admin"]
+          value: "true"
       - contains:
           path: rules
           content:
@@ -37,6 +40,43 @@ tests:
             apiGroups: [""]
             resources: ["persistentvolumeclaims"]
             verbs: ["get"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["upload.cdi.kubevirt.io"]
+            resources: ["uploadtokenrequests"]
+            verbs: ["create"]
+
+  - it: aggregates upload permissions through admin into super-admin
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-super-admin"]
+          value: "true"
+      - contains:
+          path: aggregationRule.clusterRoleSelectors
+          content:
+            matchLabels:
+              rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+
+  - it: selects admin permissions for super-admin
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:super-admin
+    asserts:
+      - contains:
+          path: aggregationRule.clusterRoleSelectors
+          content:
+            matchLabels:
+              rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
+
+  - it: does not grant CDI upload token creation to the view tier
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:view:base
+    asserts:
       - notContains:
           path: rules
           content:
