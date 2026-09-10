@@ -75,7 +75,7 @@ spec:
     - apiVersion: etcd-operator.cozystack.io/v1alpha2
       kind: EtcdCluster
       failed: >-
-        has(status.conditions) && status.conditions.exists(e,
+        spec.replicas > 0 && has(status.conditions) && status.conditions.exists(e,
           e.type == 'Available' && e.status == 'False' &&
           has(e.observedGeneration) && e.observedGeneration == metadata.generation &&
           e.reason in ['BootstrapFailed', 'DeadlineExceeded'])

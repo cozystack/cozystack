@@ -111,6 +111,13 @@ etcd:
     object: {spec: {replicas: 0}, status: {readyMembers: 0, conditions: [{type: Available, status: "True", reason: QuorumHealthy, observedGeneration: 2}, {type: Progressing, status: "False", reason: Reconciled, observedGeneration: 2}]}}
     want: InProgress
 
+  - name: zero-after-expired-bootstrap
+    object: {metadata: {generation: 3}, spec: {replicas: 0}, status: {observed: {replicas: 3}, clusterID: "", readyMembers: 0, conditions: [{type: Available, status: "False", reason: BootstrapFailed, observedGeneration: 3}]}}
+    want: InProgress
+  - name: zero-after-expired-deadline
+    object: {metadata: {generation: 3}, spec: {replicas: 0}, status: {readyMembers: 0, conditions: [{type: Available, status: "False", reason: DeadlineExceeded, observedGeneration: 3}]}}
+    want: InProgress
+
 gateway:
   - name: absent-status
     object: {}
