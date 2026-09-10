@@ -15,10 +15,11 @@
 #                   tier: every suite except kubernetes-previous, for the build
 #                   inputs in broad_suite_pattern
 #   - full list     any path that affects all tests, OR an unrecognised
-#                   packages/* path, OR a changed package that reaches no
-#                   runnable suite through the graph, OR a path matching NEITHER
-#                   the full-suite nor the inert list, OR a yq that failed to
-#                   build the dependency graph (conservative fallbacks)
+#                   Chainsaw suite, OR an unrecognised packages/* path, OR a
+#                   changed package that reaches no runnable suite through the
+#                   graph, OR a path matching NEITHER the full-suite nor the
+#                   inert list, OR a yq that failed to build the dependency
+#                   graph (conservative fallbacks)
 #   - nothing, and  the suite list itself is unavailable: find failed, or
 #     a non-zero    hack/e2e-chainsaw holds no chainsaw-test.yaml. Unlike the
 #     exit          yq case there is no fallback left to take — an empty list
@@ -417,17 +418,19 @@ while IFS= read -r file || [ -n "$file" ]; do
       # A suite parked as chainsaw-test.yaml.disabled is registered nowhere and
       # executed by nothing, so an edit to it cannot regress a test. Matched
       # before the per-suite rule below, which reads the suite name off the
-      # directory and ignores the suffix: the name it derives matches no
-      # existing suite, the intersection at the bottom empties, and the
-      # safety net for a genuinely unclassified selection escalates to the
-      # full run — the most expensive outcome, bought by the one file class
-      # that provably cannot affect anything. Inert is the classification;
-      # the safety net keeps its job for paths no rule has looked at.
+      # directory and would otherwise escalate an unknown name. Inert is the
+      # classification for the one file class that provably cannot affect a
+      # runnable suite.
       continue ;;
     hack/e2e-chainsaw/*/*)
       app=$(echo "$file" | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/.*,\1,p')
-      selected_apps="$selected_apps $app"
-      trigger_any=1
+      if echo "$all_apps" | grep -Fxq "$app"; then
+        selected_apps="$selected_apps $app"
+        trigger_any=1
+      else
+        echo "select-e2e: '$file' names no runnable suite ('$app') — escalating to the full suite" >&2
+        trigger_full=1
+      fi
       continue ;;
     hack/e2e-apps/*)
       # The pre-Chainsaw per-app BATS suites. One file per app, named after it,
@@ -623,12 +626,10 @@ done
 final_apps=$(intersect_suites "$group_suites $selected_apps")
 
 # Backstop. Every graph path above either escalates or contributes a suite that
-# exists, and both rules that select a suite by name — the per-app BATS one and
-# the examples/backups/<app>/ one — membership-test it first, so what still
-# reaches this is a per-suite Chainsaw edit naming a directory that holds no
-# chainsaw-test.yaml: shared material beside _lib/, or a suite nested deeper than
-# the depth-2 scan looks. Selecting nothing for those would skip E2E outright, so
-# failing towards the full suite is the only safe way to be wrong here.
+# exists, and every rule that selects a suite by name membership-tests it first.
+# Keep this as a final invariant for future selection rules: selecting an
+# unknown name must escalate rather than letting the intersection silently drop
+# it and skip E2E.
 #
 # group_suites is empty whenever this fires — every group either escalated above
 # or contributed a suite that exists — so the names worth naming are the

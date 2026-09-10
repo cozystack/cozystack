@@ -385,17 +385,16 @@ assert_broad_tier() {
     rm -rf "$tmp"
 }
 
-# Regression, found in independent review of this change: the broad tier used to
-# resolve BEFORE the unresolved-suite backstop, so an unrelated go.mod bump in
-# the same diff swallowed that per-path escalation and its stderr line. That is
-# the merge-before-escalate shape #3330 removed from the graph walk.
+# A broad path must not weaken an unknown path's per-path escalation. This small
+# case keeps the original regression trigger visible beside the full mixed-path
+# matrix below.
 @test "an unresolved suite still escalates when a broad path is in the diff" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     printf 'go.mod\nhack/e2e-chainsaw/nosuch/a.yaml\n' > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
     assert_full_suite "$output"
-    grep -q 'no runnable suite is named' "$tmp/err" \
+    grep -Fq "'hack/e2e-chainsaw/nosuch/a.yaml' names no runnable suite ('nosuch')" "$tmp/err" \
       || { echo "expected the unresolved-suite reason on stderr, got: $(cat "$tmp/err")" >&2; exit 1; }
     rm -rf "$tmp"
 }
@@ -1045,46 +1044,69 @@ assert_broad_tier() {
     done
 }
 
-@test "an edit to a non-suite directory under e2e-chainsaw escalates" {
-    # Only a switched-off suite is ignorable. Shared material next to _lib/, or
-    # a suite nested deeper than the depth-2 scan looks, is invisible to
-    # all_apps — selecting nothing for it would skip E2E outright, so it
-    # escalates through the backstop instead. That backstop is the one path
-    # still reaching the bottom of the script now that the graph decides per
-    # path, so pin it rather than assume it stays reachable.
+@test "an unknown Chainsaw suite path escalates independently of valid neighbours" {
+    # A deleted suite path and the old side of a suite rename both name a
+    # directory absent from the runnable inventory. Each must force a full run
+    # on its own account: merging names before checking membership lets a valid
+    # direct or graph-selected neighbour hide the unknown one. A broad path is
+    # another neighbour, and its 20-suite answer must not pre-empt the full run.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
-    # Premise: the directory must not exist, or all_apps would hold it and the
-    # test would be measuring the ordinary per-suite rule.
-    [ ! -d hack/e2e-chainsaw/_fixtures ]
-    echo "hack/e2e-chainsaw/_fixtures/tenant.yaml" > "$tmp/diff"
+    [ ! -d hack/e2e-chainsaw/deleted-suite ]
+    [ ! -d hack/e2e-chainsaw/renamed-postgres ]
+
+    for neighbour in \
+        hack/e2e-chainsaw/postgres/chainsaw-test.yaml \
+        packages/apps/postgres/Chart.yaml; do
+        for broad in '' go.mod; do
+            for order in unknown-first unknown-last; do
+                unknown=hack/e2e-chainsaw/deleted-suite/chainsaw-test.yaml
+                if [ "$order" = unknown-first ]; then
+                    printf '%s\n' "$unknown" "$neighbour" "$broad" > "$tmp/diff"
+                else
+                    printf '%s\n' "$broad" "$neighbour" "$unknown" > "$tmp/diff"
+                fi
+                output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+                assert_full_suite "$output"
+                if ! grep -Fq "'$unknown' names no runnable suite ('deleted-suite')" "$tmp/err"; then
+                    echo "unknown path must explain the full run ($neighbour, ${broad:-no broad}, $order); stderr was:" >&2
+                    cat "$tmp/err" >&2
+                    exit 1
+                fi
+            done
+        done
+    done
+
+    # A rename diff contains both the old unknown directory and the new valid
+    # one. The old side still escalates even though the new side selects a suite.
+    old=hack/e2e-chainsaw/renamed-postgres/chainsaw-test.yaml
+    printf '%s\n' "$old" hack/e2e-chainsaw/postgres/chainsaw-test.yaml > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
     assert_full_suite "$output"
-    # The backstop is the last branch that could reach the full suite without
-    # saying so. It names the directly-selected names it could not resolve, which
-    # for this diff is the directory the per-suite rule derived.
-    if ! grep -q "select-e2e:.*no runnable suite is named by.*_fixtures" "$tmp/err"; then
-        echo "the backstop must name what it could not resolve; stderr was:" >&2
-        cat "$tmp/err" >&2
-        exit 1
-    fi
-    # Several unresolved directories, with one of them repeated: every distinct
-    # name must appear, exactly once, in one line. The list used to be built by
-    # `tr | sort -u | grep -v | paste`, whose exit status is paste's, so a failure
-    # anywhere earlier in it would have gone unseen under set -e and printed a
-    # partial name or none at all -- the same last-command blindness this script
-    # fixes for the suite list and the yq indexes. The escalation is already
-    # decided by then, so the only casualty is the reason line, which is exactly
-    # what these asserts exist to defend.
-    [ ! -d hack/e2e-chainsaw/_zz ]
-    printf '%s\n' hack/e2e-chainsaw/_fixtures/a.yaml \
-        hack/e2e-chainsaw/_fixtures/b.yaml \
-        hack/e2e-chainsaw/_zz/c.yaml > "$tmp/diff"
+    grep -Fq "'$old' names no runnable suite ('renamed-postgres')" "$tmp/err"
+    rm -rf "$tmp"
+}
+
+@test "known and disabled Chainsaw paths keep their scoped behavior" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+
+    echo hack/e2e-chainsaw/postgres/chainsaw-test.yaml > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
-    assert_full_suite "$output"
-    line=$(grep 'no runnable suite is named by' "$tmp/err")
-    assert_selection "the backstop must name every unresolved directory once" \
-        "$line" "select-e2e: no runnable suite is named by '_fixtures _zz' — escalating to the full suite"
+    assert_selection "a known direct path must stay scoped" "$output" postgres
+    [ ! -s "$tmp/err" ]
+
+    # Disabled files are inert even when their directory names no runnable
+    # suite, alone and beside a valid direct path.
+    disabled=hack/e2e-chainsaw/no-such-suite/chainsaw-test.yaml.disabled
+    echo "$disabled" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    [ -z "$output" ]
+    [ ! -s "$tmp/err" ]
+    printf '%s\n' "$disabled" hack/e2e-chainsaw/postgres/chainsaw-test.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_selection "a disabled neighbour must stay inert" "$output" postgres
+    [ ! -s "$tmp/err" ]
     rm -rf "$tmp"
 }
 
