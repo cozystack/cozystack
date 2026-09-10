@@ -1,0 +1,116 @@
+suite: selective install via disabledPackages
+
+# The values fixture is generated from the selector and checked against the
+# PackageSource inventory by hack/select-install_test.bats. These tests prove
+# that the platform chart consumes that configuration; they do not prove live
+# reconciliation or uninstall packages protected by resource-policy: keep.
+
+templates:
+  - templates/bundles/paas.yaml
+  - templates/bundles/iaas.yaml
+  - templates/bundles/naas.yaml
+  - templates/bundles/system.yaml
+
+release:
+  name: cozystack
+  namespace: cozy-system
+
+tests:
+  - it: keeps the system runtime baseline
+    template: templates/bundles/system.yaml
+    values:
+      - fixtures/selective-install-postgres-values.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+    asserts:
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.cozystack-engine, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.cozystack-basics, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.tenant-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.etcd-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.ingress-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.monitoring-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.seaweedfs-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.linstor, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.metallb, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.reloader, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.snapshot-controller, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.etcd-operator, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.grafana-operator, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.postgres-operator, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.victoria-metrics-operator, any: true}
+
+  - it: keeps the CAPI and virtualization runtime baseline
+    template: templates/bundles/iaas.yaml
+    values:
+      - fixtures/selective-install-postgres-values.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        iaas: {enabled: true}
+    asserts:
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.kubevirt, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.kubevirt-cdi, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.kamaji, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.capi-operator, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.capi-provider-bootstrap-kubeadm, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.capi-provider-core, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.capi-provider-cp-kamaji, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.capi-provider-infra-kubevirt, any: true}
+
+  - it: keeps the selected application and removes unrelated applications
+    template: templates/bundles/paas.yaml
+    values:
+      - fixtures/selective-install-postgres-values.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        paas: {enabled: true}
+    asserts:
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.postgres-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.mariadb-operator, any: true}
+        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.kafka-operator, any: true}
+        not: true
+
+  - it: removes common packages outside the audited runtime baseline
+    template: templates/bundles/system.yaml
+    values:
+      - fixtures/selective-install-postgres-values.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+    asserts:
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.cozy-proxy, any: true}
+        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.cozystack-scheduler, any: true}
+        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.linstor-scheduler, any: true}
+        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.multus, any: true}
+        not: true
+
+  - it: keeps the later OIDC upgrade packages
+    template: templates/bundles/system.yaml
+    values:
+      - fixtures/selective-install-postgres-values.yaml
+    set:
+      authentication:
+        oidc:
+          enabled: true
+      bundles:
+        system: {enabled: true, variant: isp-full}
+    asserts:
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.keycloak, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.keycloak-operator, any: true}
+
+  - it: keeps iaas and naas bundle guards valid with the reduced set
+    values:
+      - fixtures/selective-install-postgres-values.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        iaas: {enabled: true}
+        naas: {enabled: true}
+    asserts:
+      - notFailedTemplate: {}

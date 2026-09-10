@@ -903,30 +903,57 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
-@test "every suite round-trips between the two mapping tables" {
+@test "every suite owner round-trips through selection and install closure" {
     # select-install.sh maps a suite to the PackageSource that installs it, and
     # select-e2e.sh must map that source back to the suite. A suite that does
-    # not round-trip is unreachable from its own package, so every change to it
-    # escalates to the full run — which is how the kuberture and securitygroup
-    # entries came to be missing in the first place. Pinning the property rather
-    # than those two names is what stops the next off-convention source
-    # repeating it silently.
+    # not round-trip is unreachable from its own package. Exercise the actual
+    # scripts as well as the two mapping functions so a full-suite fallback or
+    # a closure that happens to contain a baseline source cannot pass vacuously.
     eval "$(sed -n '/^src_to_suites()/,/^}/p' hack/select-e2e.sh)"
     eval "$(sed -n '/^suite_to_source()/,/^}/p' hack/select-install.sh)"
     # suite_to_source falls back to probing the graph for a source of that name,
     # and reads it from NODES, which its own script builds before calling it.
     NODES=$(yq -rN '.metadata.name' packages/core/platform/sources/*.yaml | sort -u)
+    tmp=$(mktemp -d)
     for suite in $(full_suite_list | tr ' ' '\n'); do
-        src=$(suite_to_source "$suite")
-        if [ -z "$src" ]; then
+        owners=$(suite_to_source "$suite")
+        if [ -z "$owners" ]; then
             echo "suite '$suite' has no source in select-install.sh's suite_to_source" >&2
             exit 1
         fi
-        if ! src_to_suites "${src#cozystack.}" | tr ' ' '\n' | grep -Fxq "$suite"; then
-            echo "suite '$suite' maps to $src, which select-e2e.sh maps back to '$(src_to_suites "${src#cozystack.}")'" >&2
-            exit 1
-        fi
+        for src in $owners; do
+            if ! src_to_suites "${src#cozystack.}" | tr ' ' '\n' | grep -Fxq "$suite"; then
+                echo "suite '$suite' maps to $src, which select-e2e.sh maps back to '$(src_to_suites "${src#cozystack.}")'" >&2
+                exit 1
+            fi
+
+            source_file="packages/core/platform/sources/${src#cozystack.}.yaml"
+            component_path=$(yq -r '.spec.variants[].components[]?.path | select(. != null)' "$source_file" | sed -n '1p')
+            component_path="packages/$component_path"
+            files=$(find "$component_path" -type f ! -name '*.md')
+            changed=$(printf '%s\n' "$files" | sort | sed -n '1p')
+            if [ -z "$changed" ]; then
+                echo "suite owner '$src' has no real component file for the selector matrix" >&2
+                exit 1
+            fi
+            printf '%s\n' "$changed" > "$tmp/diff"
+            selected=$(hack/select-e2e.sh "$tmp/diff")
+            if [ "$selected" = "$(full_suite_list)" ]; then
+                echo "owner '$src' reached '$suite' only through full-suite fallback for $changed" >&2
+                exit 1
+            fi
+            if ! printf '%s\n' "$selected" | tr ' ' '\n' | grep -Fxq "$suite"; then
+                echo "owner '$src' did not select its suite '$suite' for $changed: $selected" >&2
+                exit 1
+            fi
+            closure=$(hack/select-install.sh "$selected")
+            if ! printf '%s\n' "$closure" | tr ' ' '\n' | grep -Fxq "$src"; then
+                echo "selection '$selected' does not install owner '$src' for suite '$suite'" >&2
+                exit 1
+            fi
+        done
     done
+    rm -rf "$tmp"
 }
 
 @test "an edit to a non-suite directory under e2e-chainsaw escalates" {
