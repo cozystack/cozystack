@@ -37,11 +37,6 @@ system {
     }
     host-name "vyos"
     login {
-        operator-group default {
-            command-policy {
-                allow "*"
-            }
-        }
         user vyos {
             authentication {
                 encrypted-password "*"
