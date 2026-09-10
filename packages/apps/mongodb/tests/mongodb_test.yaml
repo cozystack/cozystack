@@ -89,6 +89,9 @@ tests:
       - notExists:
           path: spec.backup.tasks
         documentIndex: 0
+      - notExists:
+          path: spec.backup.pitr
+        documentIndex: 0
 
   ##################
   # Finalizers     #

@@ -457,7 +457,7 @@ func TestMarshalUnmarshalMongoDBBackupSnapshot_RoundTrip(t *testing.T) {
 		},
 	}
 	rendered := &strategyv1alpha1.MongoDBTemplate{Type: "logical"}
-	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", map[string]string{"k": "v"})
+	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", map[string]string{"k": "v"}, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -504,7 +504,7 @@ func TestMarshalMongoDBBackupSnapshot_SystemBucketFallback(t *testing.T) {
 			// CredentialsSecret intentionally empty -> defaults below.
 		},
 	}
-	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", nil)
+	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", nil, true)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -520,6 +520,42 @@ func TestMarshalMongoDBBackupSnapshot_SystemBucketFallback(t *testing.T) {
 	}
 	if snap.S3.EndpointURL != "https://s3.example.org" || snap.S3.Bucket != "cozybkt" {
 		t.Errorf("snapshot S3 coords mismatch: %#v", snap.S3)
+	}
+}
+
+// TestMarshalMongoDBBackupSnapshot_LegacyNoFallback pins the other half of the
+// gate: a legacy app (useSystemBucket=false) whose operator echoed no S3 must
+// leave the snapshot S3 nil even though the shared cozy-default strategy now
+// carries platform coordinates. Recording the platform bucket for an archive
+// the tenant wrote to its own bucket would send restore to the wrong place.
+func TestMarshalMongoDBBackupSnapshot_LegacyNoFallback(t *testing.T) {
+	mdbBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			Destination: "s3://tenant-own-bucket/mongodb-src/2026-08-26T00:00:00Z",
+			// S3 nil: operator echoed nothing, as on a legacy app whose storage
+			// lives on the app CR.
+		},
+	}
+	rendered := &strategyv1alpha1.MongoDBTemplate{
+		Type: "logical",
+		S3: &strategyv1alpha1.MongoDBStorageS3{
+			Bucket:      "cozy-backups-PLATFORM",
+			EndpointURL: "https://platform-s3.example",
+		},
+	}
+	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", nil, false)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	snap, err := unmarshalMongoDBBackupSnapshot(raw)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if snap.S3 != nil {
+		t.Fatalf("legacy snapshot must not adopt the platform coordinates; got %#v", snap.S3)
+	}
+	if snap.Destination != "s3://tenant-own-bucket/mongodb-src/2026-08-26T00:00:00Z" {
+		t.Errorf("legacy destination must be preserved; got %q", snap.Destination)
 	}
 }
 
@@ -574,7 +610,7 @@ func TestResolveMongoDBBackupSource_SnapshotFallback(t *testing.T) {
 			S3:          &psmdbtypes.BackupStorageS3{Bucket: "bkt", ForcePathStyle: &fps},
 		},
 	}
-	raw, err := marshalMongoDBBackupSnapshot(snapBackup, &strategyv1alpha1.MongoDBTemplate{Type: "logical"}, "s3-storage", nil)
+	raw, err := marshalMongoDBBackupSnapshot(snapBackup, &strategyv1alpha1.MongoDBTemplate{Type: "logical"}, "s3-storage", nil, false)
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -688,7 +724,7 @@ func TestCreateMongoDBBackupArtifact_ArtifactShape(t *testing.T) {
 			},
 		}
 
-		artefact, err := r.createMongoDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered, "s3-storage")
+		artefact, err := r.createMongoDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered, "s3-storage", false)
 		if err != nil {
 			t.Fatalf("createMongoDBBackupArtifact: %v", err)
 		}
@@ -736,7 +772,7 @@ func TestCreateMongoDBBackupArtifact_ArtifactShape(t *testing.T) {
 			Status:     psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateReady},
 		}
 
-		artefact, err := r.createMongoDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered, "s3-storage")
+		artefact, err := r.createMongoDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered, "s3-storage", false)
 		if err != nil {
 			t.Fatalf("createMongoDBBackupArtifact: %v", err)
 		}
@@ -753,58 +789,40 @@ func TestCreateMongoDBBackupArtifact_ArtifactShape(t *testing.T) {
 // System-bucket storage injection
 // ---------------------------------------------------------------------------
 
-// TestShouldInjectMongoDBSystemStorage pins both branches of the injection
-// gate: inject only when the strategy carries S3 coordinates AND the cluster
-// does not already declare the named storage. The skip-when-present branch is
-// the guarantee that a legacy app's manually configured storage is never
-// clobbered.
+// TestShouldInjectMongoDBSystemStorage pins the injection gate: inject only when
+// the app opted into the system bucket AND the strategy carries S3 coordinates.
+// The flag-false branch is the guarantee that a legacy app is never touched,
+// regardless of what storage happens to be on the live cluster.
 func TestShouldInjectMongoDBSystemStorage(t *testing.T) {
 	s3 := &strategyv1alpha1.MongoDBStorageS3{Bucket: "b", EndpointURL: "https://s3"}
-	withStorage := func(names ...string) *psmdbtypes.PerconaServerMongoDB {
-		c := &psmdbtypes.PerconaServerMongoDB{}
-		if len(names) > 0 {
-			c.Spec.Backup.Storages = map[string]runtime.RawExtension{}
-			for _, n := range names {
-				c.Spec.Backup.Storages[n] = runtime.RawExtension{Raw: []byte(`{"type":"s3"}`)}
-			}
-		}
-		return c
-	}
 	cases := []struct {
-		name     string
-		cluster  *psmdbtypes.PerconaServerMongoDB
-		rendered *strategyv1alpha1.MongoDBTemplate
-		want     bool
+		name            string
+		useSystemBucket bool
+		rendered        *strategyv1alpha1.MongoDBTemplate
+		want            bool
 	}{
 		{
-			name:     "useSystemBucket flow, storage absent: inject",
-			cluster:  withStorage(),
-			rendered: &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage", S3: s3},
-			want:     true,
+			name:            "useSystemBucket flow with strategy coordinates: inject",
+			useSystemBucket: true,
+			rendered:        &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage", S3: s3},
+			want:            true,
 		},
 		{
-			name:     "storage already declared: skip (never clobber a manual bucket)",
-			cluster:  withStorage("s3-storage"),
-			rendered: &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage", S3: s3},
-			want:     false,
+			name:            "legacy app (flag off): skip even when the shared strategy carries coordinates",
+			useSystemBucket: false,
+			rendered:        &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage", S3: s3},
+			want:            false,
 		},
 		{
-			name:     "custom strategy without S3 coordinates: skip",
-			cluster:  withStorage(),
-			rendered: &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage"},
-			want:     false,
-		},
-		{
-			name:     "S3 set but a different storage is declared: inject (named one is absent)",
-			cluster:  withStorage("other-storage"),
-			rendered: &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage", S3: s3},
-			want:     true,
+			name:            "useSystemBucket flag but strategy carries no coordinates: skip (nothing to inject)",
+			useSystemBucket: true,
+			rendered:        &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage"},
+			want:            false,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			storageName := psmdbStorageNameOrDefault(tc.rendered.StorageName)
-			if got := shouldInjectMongoDBSystemStorage(tc.cluster, storageName, tc.rendered); got != tc.want {
+			if got := shouldInjectMongoDBSystemStorage(tc.useSystemBucket, tc.rendered); got != tc.want {
 				t.Fatalf("shouldInjectMongoDBSystemStorage = %v, want %v", got, tc.want)
 			}
 		})
