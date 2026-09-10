@@ -3,10 +3,12 @@
 # demo. It applies the same numbered manifests a human reads, so the documented
 # flow and the automated test cannot drift. Stops on the first failure.
 #
-# Flow (platform cozy-default, no per-demo Bucket):
+# Flow (demo `kafka-metadata` BackupClass -> `kafka-strategy-default`, derived at
+# run time from the shipped `cozy-default-kafka`; no per-demo Bucket):
 #   source Kafka -> seed topic `orders` with a distinctive retention.ms sentinel,
 #   plus a colliding pair (`audit.events` / `audit-events`) with distinct
-#   partition counts -> ad-hoc BackupJob against cozy-default (wait Succeeded)
+#   partition counts -> ad-hoc BackupJob against the demo `kafka-metadata`
+#      BackupClass (wait Succeeded)
 #   -> in-place: drop the topics, restore, assert `orders` came back with the
 #      sentinel and each colliding topic with its own partition count
 #   -> to-copy: bootstrap an empty target Kafka, restore the metadata onto it,

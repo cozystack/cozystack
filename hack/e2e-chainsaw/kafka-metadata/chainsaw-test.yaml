@@ -3,8 +3,9 @@
 # so the test and the documented flow cannot drift. run-all.sh seeds topic
 # `orders` with a per-run retention.ms sentinel plus a colliding pair
 # (`audit.events` / `audit-events`, distinct partition counts), submits an ad-hoc
-# BackupJob against the cozy-default BackupClass (the Kafka strategy exports topic
-# metadata through the Admin API to the system bucket), drops the topics and
+# BackupJob against this demo's `kafka-metadata` BackupClass, derived from the
+# shipped `cozy-default-kafka` strategy (which exports topic metadata through the
+# Admin API to the system bucket), drops the topics and
 # restores them in place, then restores the metadata onto a fresh empty target —
 # asserting at each step that `orders` came back with the exact partitions and
 # retention sentinel, that each colliding topic kept its own partition count (so
