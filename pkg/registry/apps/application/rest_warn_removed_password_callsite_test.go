@@ -176,6 +176,11 @@ func TestWarnRemovedUserPasswords(t *testing.T) {
 		// first type error and discards every field it already decoded.
 		{"passwordRotation survives a malformed users shape", postgresKind, `{"passwordRotation":1,"users":["oops"]}`, true},
 		{"mariadb passwordRotation survives a malformed users shape", mariadbKind, `{"passwordRotation":1,"users":["oops"]}`, true},
+		// An explicit null counts as absent (matches the pre-split behaviour, where
+		// a *json.RawMessage decoded from null was nil), so a client that always
+		// emits the field does not draw a spurious warning.
+		{"passwordRotation null stays quiet", postgresKind, `{"passwordRotation":null}`, false},
+		{"passwordRotation zero still warns", postgresKind, `{"passwordRotation":0}`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

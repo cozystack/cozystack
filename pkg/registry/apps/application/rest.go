@@ -2033,7 +2033,10 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 	// Helm release history). The key is still accepted and dropped by the schema,
 	// so without this an operator rotating after a leak gets a silent 200 and no
 	// effect. Rotation is being reworked as a controller — cozystack/community#72.
-	if _, present := top["passwordRotation"]; present {
+	// A literal null counts as absent: a struct-based client (a Terraform provider,
+	// a codegen client) that always serialises every optional field would otherwise
+	// draw this warning on every apply of a resource that never set the field.
+	if raw, present := top["passwordRotation"]; present && strings.TrimSpace(string(raw)) != "null" {
 		warning.AddWarning(ctx, "",
 			"spec.passwordRotation is ignored: chart-based password rotation is not supported (a chart-rendered Secret cannot revoke a leaked credential). Setting this field has no effect; rotation is being reworked as a controller (cozystack/community#72).")
 	}
