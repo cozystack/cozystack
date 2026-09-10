@@ -76,3 +76,22 @@ tests:
       - equal:
           path: spec.timeout
           value: 15m
+
+  - it: retries failed installs and upgrades without uninstalling database owners
+    asserts:
+      - equal:
+          path: spec.install.strategy
+          value: {name: RetryOnFailure, retryInterval: 30s}
+      - equal:
+          path: spec.upgrade.strategy
+          value: {name: RetryOnFailure, retryInterval: 30s}
+      - equal:
+          path: spec.install.remediation.retries
+          value: -1
+      - equal:
+          path: spec.upgrade.remediation.retries
+          value: -1
+      - notExists:
+          path: spec.install.disableHooks
+      - notExists:
+          path: spec.upgrade.disableHooks

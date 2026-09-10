@@ -15,10 +15,18 @@ spec:
   # not fail at 10m while the OIDC users-Job is still inside its
   # activeDeadlineSeconds: 900 (10m Grafana wait + reconcile budget).
   timeout: 15m
+  # Uninstall remediation deletes the CNPG Clusters and their owned PVCs.
+  # Failed installs retry as upgrades, so both actions must recover in place.
   install:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   # `poller` waitStrategy is required for healthCheckExprs to be evaluated.
