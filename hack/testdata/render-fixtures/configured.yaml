@@ -24,7 +24,7 @@ _cluster:
 _namespace:
   etcd: "tenant-test"
   ingress: "tenant-test"
-  gateway: "tenant-test"
+  gateway: ""
   monitoring: "tenant-test"
   seaweedfs: "tenant-test"
   host: "example.org"
