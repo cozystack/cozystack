@@ -36,7 +36,13 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
   missing=()
   for want in "${EXPECTED[@]}"; do
     # -F: literal match so the `.` in t1.nano does not match any character.
-    if ! printf '%s\n' "$enums" | grep -Fqx -- "$want"; then
+    # Fed by here-string rather than by a pipe on purpose. `grep -q` exits on
+    # its first match, which can close a pipe while the writer is still in its
+    # write(2); the writer then fails with EPIPE, `set -o pipefail` makes the
+    # whole pipeline non-zero, and the `!` reads that as "not found" — so a
+    # value that matched FIRST gets reported missing. It is a scheduling race,
+    # so it fires under CI load and not on an idle machine.
+    if ! grep -Fqx -- "$want" <<<"$enums"; then
       missing+=("$want")
     fi
   done
