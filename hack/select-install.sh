@@ -159,6 +159,70 @@ deps_of() {
   echo "$FORWARD" | awk -v s="$1" -F'\t' '$1==s {print $2}'
 }
 
+# Validate the complete PackageSource graph, including branches unrelated to
+# the requested suites. Any emitted closure or complement describes this
+# inventory as a whole, so accepting a dangling edge or cycle elsewhere would
+# make the result depend on an invalid input snapshot.
+validate_graph() {
+  # One awk pass checks every reference and walks every node once. The former
+  # shell cycle walk restarted from each owner and the dangling check spawned a
+  # grep per edge, both too expensive once ordinary output shared validation.
+  if graph_errors=$(printf '%s\n' "$FORWARD" | awk -v known_nodes="$NODES" -F'\t' '
+    function visit(node, i, next_node) {
+      if (state[node] == 1) {
+        cycle = node
+        return 1
+      }
+      if (state[node] == 2)
+        return 0
+      state[node] = 1
+      for (i = 1; i <= degree[node]; i++) {
+        next_node = edge[node, i]
+        if (visit(next_node))
+          return 1
+      }
+      state[node] = 2
+      return 0
+    }
+    BEGIN {
+      count = split(known_nodes, known_list, "\n")
+      for (i = 1; i <= count; i++)
+        known[known_list[i]] = 1
+    }
+    NF == 2 {
+      if (references[$2] == "")
+        references[$2] = $1
+      else
+        references[$2] = references[$2] "," $1
+      edge[$1, ++degree[$1]] = $2
+      nodes[$1] = 1
+      nodes[$2] = 1
+    }
+    END {
+      rc = 0
+      for (dependency in references) {
+        if (!(dependency in known)) {
+          print "select-install: dangling dependency \047" dependency \
+            "\047 (referenced by: " references[dependency] ") has no PackageSource"
+          rc = 1
+        }
+      }
+      for (node in nodes) {
+        if (visit(node)) {
+          print "select-install: dependency cycle detected involving \047" cycle "\047"
+          rc = 1
+          break
+        }
+      }
+      exit rc
+    }
+  '); then
+    return 0
+  fi
+  printf '%s\n' "$graph_errors" >&2
+  return 1
+}
+
 # all Chainsaw suite names under a suites-dir (dirs holding chainsaw-test.yaml),
 # discovered exactly like select-e2e.sh.
 discover_suites() {
@@ -176,40 +240,9 @@ discover_suites() {
 if [ "$MODE" = "validate" ]; then
   rc=0
 
-  # 1. Reachability: every dependsOn target must be a real PackageSource.
-  echo "$FORWARD" | awk -F'\t' '{print $2}' | sort -u | while IFS= read -r dep; do
-    [ -z "$dep" ] && continue
-    if ! echo "$NODES" | grep -Fxq "$dep"; then
-      owners="$(echo "$FORWARD" | awk -v x="$dep" -F'\t' '$2==x {print $1}' | paste -sd ',' -)"
-      echo "select-install: dangling dependency '$dep' (referenced by: $owners) has no PackageSource" >&2
-      echo dangling
-    fi
-  done | grep -q dangling && rc=1
+  validate_graph || rc=1
 
-  # 2. Cycles: from every node with outgoing edges, walk forward; if the walk
-  #    returns to its start, the graph has a cycle through it.
-  owners_list="$(echo "$FORWARD" | awk -F'\t' '{print $1}' | sort -u)"
-  for start in $owners_list; do
-    visited=""
-    frontier="$(deps_of "$start")"
-    while [ -n "$frontier" ]; do
-      next=""
-      for f in $frontier; do
-        if [ "$f" = "$start" ]; then
-          echo "select-install: dependency cycle detected involving '$start'" >&2
-          rc=1
-          next=""
-          break
-        fi
-        case " $visited " in *" $f "*) continue ;; esac
-        visited="$visited $f"
-        next="$next $(deps_of "$f")"
-      done
-      frontier="$next"
-    done
-  done
-
-  # 3. Suite mapping: every Chainsaw suite dir must resolve to a real source.
+  # Suite mapping: every Chainsaw suite dir must resolve to a real source.
   #    The suite universe is auto-discovered while suite_to_source() is
   #    hand-maintained, so this is the part that actually drifts. A missing
   #    suites dir is itself a failure — otherwise a moved/misspelled path would
@@ -275,6 +308,11 @@ if [ -z "$seeds" ]; then
   fi
   exit 0
 fi
+
+# Do not emit an answer from an invalid inventory. Suite-directory validation
+# remains exclusive to --validate because ordinary selection must not depend on
+# scanning an unrelated test tree.
+validate_graph || exit 1
 
 # The standard E2E install has unconditional runtime requirements which are not
 # owned by any selected application. Seed those direct requirements here rather
@@ -351,14 +389,21 @@ cozystack.gateway-application
 cozystack.info-application
 cozystack.kamaji
 cozystack.kubevirt"
-missing=""
+missing_sources=""
+missing_reachable=""
 for required in $derived_baseline; do
-  if ! echo "$closure" | grep -Fxq "$required"; then
-    missing="${missing:+$missing }$required"
+  if ! echo "$NODES" | grep -Fxq "$required"; then
+    missing_sources="${missing_sources:+$missing_sources }$required"
+  elif ! echo "$closure" | grep -Fxq "$required"; then
+    missing_reachable="${missing_reachable:+$missing_reachable }$required"
   fi
 done
-if [ -n "$missing" ]; then
-  echo "select-install: error: runtime baseline dependency closure is missing: $missing" >&2
+if [ -n "$missing_sources" ]; then
+  echo "select-install: error: required runtime PackageSource(s) not found in $SOURCES_DIR: $missing_sources" >&2
+  exit 1
+fi
+if [ -n "$missing_reachable" ]; then
+  echo "select-install: error: runtime baseline dependency closure is missing: $missing_reachable" >&2
   exit 1
 fi
 

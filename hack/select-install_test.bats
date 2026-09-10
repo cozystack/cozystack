@@ -21,6 +21,26 @@ assert_contains_package() {
     printf '%s\n' "$1" | tr ' ' '\n' | grep -Fxq "$2"
 }
 
+assert_output_graph_error() {
+    mode=$1
+    sources=$2
+    expected=$3
+    out=$(mktemp)
+    err=$(mktemp)
+    if [ "$mode" = disabled ]; then
+        if hack/select-install.sh --disabled postgres "$sources" >"$out" 2>"$err"; then
+            echo "expected disabled mode to reject invalid graph $sources" >&2
+            exit 1
+        fi
+    elif hack/select-install.sh postgres "$sources" >"$out" 2>"$err"; then
+        echo "expected closure mode to reject invalid graph $sources" >&2
+        exit 1
+    fi
+    [ ! -s "$out" ]
+    grep -Fq "$expected" "$err"
+    rm -f "$out" "$err"
+}
+
 @test "single app selects its forward dependency closure" {
     output=$(hack/select-install.sh "postgres")
     assert_contains_package "$output" cozystack.postgres-application
@@ -135,7 +155,8 @@ assert_contains_package() {
 
 @test "validate detects a dangling dependency" {
     tmp=$(mktemp -d)
-    mkdir -p "$tmp/sources" "$tmp/suites"
+    mkdir -p "$tmp/sources" "$tmp/suites/foo"
+    : > "$tmp/suites/foo/chainsaw-test.yaml"
     cat > "$tmp/sources/foo-application.yaml" <<'YAML'
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
@@ -147,9 +168,15 @@ spec:
       dependsOn:
         - cozystack.does-not-exist
 YAML
-    # empty suites-dir isolates this to the graph check
-    if hack/select-install.sh --validate "$tmp/sources" "$tmp/suites" 2>/dev/null; then
+    out="$tmp/out"; err="$tmp/err"
+    if hack/select-install.sh --validate "$tmp/sources" "$tmp/suites" >"$out" 2>"$err"; then
         echo "expected validation to fail on a dangling dependency" >&2
+        exit 1
+    fi
+    [ ! -s "$out" ]
+    grep -Fq "dangling dependency 'cozystack.does-not-exist'" "$err"
+    if grep -Fq "found no chainsaw-test.yaml" "$err"; then
+        echo "positive-control suite discovery failed instead of graph validation" >&2
         exit 1
     fi
     rm -rf "$tmp"
@@ -157,7 +184,8 @@ YAML
 
 @test "validate detects a dependency cycle" {
     tmp=$(mktemp -d)
-    mkdir -p "$tmp/sources" "$tmp/suites"
+    mkdir -p "$tmp/sources" "$tmp/suites/a"
+    : > "$tmp/suites/a/chainsaw-test.yaml"
     cat > "$tmp/sources/a.yaml" <<'YAML'
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
@@ -180,11 +208,64 @@ spec:
       dependsOn:
         - cozystack.a
 YAML
-    # empty suites-dir isolates this to the graph check
-    if hack/select-install.sh --validate "$tmp/sources" "$tmp/suites" 2>/dev/null; then
+    out="$tmp/out"; err="$tmp/err"
+    if hack/select-install.sh --validate "$tmp/sources" "$tmp/suites" >"$out" 2>"$err"; then
         echo "expected validation to fail on a dependency cycle" >&2
         exit 1
     fi
+    [ ! -s "$out" ]
+    grep -Fq "dependency cycle detected involving 'cozystack.a'" "$err"
+    if grep -Fq "found no chainsaw-test.yaml" "$err"; then
+        echo "positive-control suite discovery failed instead of graph validation" >&2
+        exit 1
+    fi
+    rm -rf "$tmp"
+}
+
+@test "output modes reject a removed runtime source" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mv "$tmp/sources/reloader.yaml" "$tmp/reloader.yaml"
+    for mode in closure disabled; do
+        assert_output_graph_error "$mode" "$tmp/sources" \
+          "dangling dependency 'cozystack.reloader'"
+    done
+
+    yq -i '(.spec.variants[].dependsOn) -= ["cozystack.reloader"]' \
+      "$tmp/sources/linstor.yaml"
+    for mode in closure disabled; do
+        assert_output_graph_error "$mode" "$tmp/sources" \
+          "required runtime PackageSource(s) not found in $tmp/sources: cozystack.reloader"
+    done
+    rm -rf "$tmp"
+}
+
+@test "output modes reject a dangling dependency in an unselected package" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    yq -i '.spec.variants[0].dependsOn += ["cozystack.does-not-exist"]' \
+      "$tmp/sources/kafka-application.yaml"
+    for mode in closure disabled; do
+        assert_output_graph_error "$mode" "$tmp/sources" \
+          "dangling dependency 'cozystack.does-not-exist' (referenced by: cozystack.kafka-application)"
+    done
+    rm -rf "$tmp"
+}
+
+@test "output modes reject selected and unselected dependency cycles" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/selected"
+    cp -r packages/core/platform/sources "$tmp/unselected"
+    yq -i '.spec.variants[0].dependsOn += ["cozystack.postgres-application"]' \
+      "$tmp/selected/postgres-application.yaml"
+    yq -i '.spec.variants[0].dependsOn += ["cozystack.kafka-application"]' \
+      "$tmp/unselected/kafka-application.yaml"
+    for mode in closure disabled; do
+        assert_output_graph_error "$mode" "$tmp/selected" \
+          "dependency cycle detected involving 'cozystack.postgres-application'"
+        assert_output_graph_error "$mode" "$tmp/unselected" \
+          "dependency cycle detected involving 'cozystack.kafka-application'"
+    done
     rm -rf "$tmp"
 }
 
@@ -329,6 +410,19 @@ YAML
     [ "$total" -eq 101 ]
     [ "$keep" -eq 33 ]
     [ "$drop" -eq 68 ]
+}
+
+@test "disabled mode accepts a valid inventory with an empty complement" {
+    tmp=$(mktemp -d)
+    mkdir -p "$tmp/sources"
+    keep=$(hack/select-install.sh postgres)
+    for source in $keep; do
+        name=${source#cozystack.}
+        cp "packages/core/platform/sources/$name.yaml" "$tmp/sources/"
+    done
+    output=$(hack/select-install.sh --disabled postgres "$tmp/sources")
+    [ -z "$output" ]
+    rm -rf "$tmp"
 }
 
 @test "disabled mode: never lists a package the closure keeps" {
