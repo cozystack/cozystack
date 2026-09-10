@@ -106,14 +106,15 @@ brc_write_parallel_stub() {
 }
 
 @test "a new non-Chainsaw shell dependency joins the compatibility lane" {
-  fixture="$BRC_REPO_ROOT/hack/bats-posix-discovery-fixture.bats"
-  printf '%s\n' '#!/usr/bin/env bats' 'load test_helper' '. hack/lib/image-refs.sh' > "$fixture"
+  tmp=$(mktemp -d)
+  fixture="$tmp/non-chainsaw-helper.bats"
+  printf '%s\n' '#!/usr/bin/env bats' '. hack/lib/image-refs.sh' > "$fixture"
   make_status=0
-  compat_files=$(cd "$BRC_REPO_ROOT" && MAKEFLAGS= MAKELEVEL= make --no-print-directory -s print-bats-posix-compat-files) || make_status=$?
-  rm -f "$fixture"
+  compat_files=$(cd "$BRC_REPO_ROOT" && MAKEFLAGS= MAKELEVEL= make --no-print-directory -s "BATS_UNIT_FILES=$fixture" print-bats-posix-compat-files) || make_status=$?
+  rm -rf "$tmp"
 
   [ "$make_status" -eq 0 ]
-  printf '%s\n' "$compat_files" | grep -Fxq 'hack/bats-posix-discovery-fixture.bats'
+  printf '%s\n' "$compat_files" | grep -Fxq "$fixture"
 }
 
 @test "a failed compatibility file does not suppress later files" {
