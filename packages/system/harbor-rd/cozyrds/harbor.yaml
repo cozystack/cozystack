@@ -32,16 +32,16 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - "{{ .name }}-credentials"
+          - "harbor-{{ .name }}-credentials"
       - matchLabels:
           apps.cozystack.io/user-secret: "true"
   services:
     exclude: []
     include:
       - resourceNames:
-          - "{{ .name }}"
+          - "harbor-{{ .name }}"
   ingresses:
     exclude: []
     include:
       - resourceNames:
-          - "{{ .name }}-ingress"
+          - "harbor-{{ .name }}-ingress"
