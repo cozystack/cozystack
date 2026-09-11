@@ -22,6 +22,34 @@ spec:
   remoteWrite:
     url: http://vminsert-{{ .name }}.{{ $.Release.Namespace }}.svc:8480/insert/0/prometheus/api/v1/write
   resources: {}
+  {{- if eq $.Release.Namespace "tenant-root" }}
+  {{- /*
+    Root monitoring is the platform-wide view: it must keep seeing the
+    infrastructure VMRules, which live outside any tenant namespace
+    (cozy-monitoring, cozy-kubevirt-cdi, cozy-linstor, ...). Those namespaces
+    carry no namespace.cozystack.io/monitoring label, so any selector would
+    cut them off.
+  */}}
   selectAllByDefault: true
+  {{- else }}
+  {{- /*
+    A tenant VMAlert evaluates rules against its own vmselect, which only holds
+    that tenant's metrics. With selectAllByDefault and no selector it picks up
+    every VMRule in the cluster, so infrastructure alerts written as
+    absent(up{job="kubelet"} == 1) fire in the tenant precisely because the
+    series is absent there (issue #2775).
+
+    Scope rules the same way vmagent.yaml scopes scrapes: by the
+    namespace.cozystack.io/monitoring label, whose value names the tenant whose
+    monitoring stack covers that namespace (apps/tenant/templates/namespace.yaml).
+    That selects this tenant's own namespace plus any child tenant inheriting
+    this monitoring stack -- exactly the namespaces whose metrics reach this
+    vmselect. ruleSelector stays unset, so all VMRules in those namespaces match.
+  */}}
+  selectAllByDefault: false
+  ruleNamespaceSelector:
+    matchLabels:
+      namespace.cozystack.io/monitoring: {{ $.Release.Namespace }}
+  {{- end }}
 {{- break }}
 {{- end }}
