@@ -106,7 +106,17 @@ stringData:
       oidc-enabled: {{ .Values.authentication.oidc.enabled | quote }}
       oidc-insecure-skip-verify: {{ .Values.authentication.oidc.insecureSkipVerify | quote }}
       extra-keycloak-redirect-uri-for-dashboard: {{ index .Values.authentication.oidc.keycloakExtraRedirectUri | quote }}
-      keycloak-internal-url: {{ .Values.authentication.oidc.keycloakInternalUrl | quote }}
+      {{- $realmName := .Values.authentication.oidc.realmName | default "cozy" }}
+      oidc-realm-name: {{ $realmName | quote }}
+      {{- /* null keycloakInternalUrl derives the in-cluster Service URL for the
+             configured realm; "" is the external-discovery escape hatch and an
+             explicit value is passed through, so distinguish null from "" with
+             kindIs rather than `default`, which would also fire on "". */}}
+      {{- $keycloakInternalUrl := .Values.authentication.oidc.keycloakInternalUrl }}
+      {{- if kindIs "invalid" $keycloakInternalUrl }}
+      {{-   $keycloakInternalUrl = printf "http://keycloak-http.cozy-keycloak.svc:8080/realms/%s" $realmName }}
+      {{- end }}
+      keycloak-internal-url: {{ $keycloakInternalUrl | quote }}
       expose-services: {{ .Values.publishing.exposedServices | join "," | quote }}
       {{- /*
         expose-ingress carries two semantically distinct values that

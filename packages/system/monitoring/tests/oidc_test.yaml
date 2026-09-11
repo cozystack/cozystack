@@ -724,3 +724,21 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "spec.oidc.users[0].role: \"Superuser\" is not one of the allowed values Admin, Editor, Viewer."
+
+  # The grafana OIDC issuer realm is driven by _cluster.oidc-realm-name
+  # (authentication.oidc.realmName in the platform). A renamed realm must reach
+  # grafana's auth/token/userinfo URLs, or Grafana SSO breaks against a realm
+  # Keycloak no longer serves under the old name.
+  - it: mode=System grafana.yaml threads a custom realm name into the OIDC URLs
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+      _cluster.oidc-realm-name: acme
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
+    asserts:
+      - equal:
+          path: spec.config["auth.generic_oauth"].auth_url
+          value: "https://keycloak.example.org/realms/acme/protocol/openid-connect/auth"

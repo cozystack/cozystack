@@ -1,0 +1,38 @@
+suite: apps.yaml OIDC realm-name platform → tenant value wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# authentication.oidc.realmName is the single source for the Keycloak realm.
+# It rides the _cluster channel as oidc-realm-name and is read by
+# keycloak-configure (realm/clients/roles), the dashboard and linstor-gui
+# gatekeepers (issuer/login/logout URLs) and the info kubeconfig. The apiserver
+# OIDC issuer is configured out-of-band via talm oidcIssuerUrl, so a mismatch
+# there silently breaks SSO; pin the default and the propagation so a rename in
+# one place cannot drift from the value every consumer reads.
+
+tests:
+  - it: defaults the realm name to cozy
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'oidc-realm-name:\s*"cozy"'
+
+  - it: propagates a custom realm name onto the _cluster channel
+    set:
+      authentication.oidc.realmName: acme
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'oidc-realm-name:\s*"acme"'
+
+  - it: derives the default in-cluster keycloak URL from the realm name
+    set:
+      authentication.oidc.realmName: acme
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-internal-url:\s*"http://keycloak-http\.cozy-keycloak\.svc:8080/realms/acme"'
