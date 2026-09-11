@@ -130,13 +130,23 @@ Set `upgradeCRDs: CreateReplace` for operators whose upstream regularly adds new
 
 Do **not** set `CreateReplace` blindly: it overwrites every CRD in `crds/` and can cause silent data loss if upstream drops a field from a CRD that has live objects. Only enable it for operators whose schema evolution is additive-only. When in doubt, leave it unset and apply new CRDs manually.
 
-### Documentation
+### Documentation — where a new document goes
 
-Documentation is organized as follows:
-- `docs/` - General documentation
-- `docs/agents/` - Instructions for AI agents
-- `docs/changelogs/` - Release changelogs
-- Main website: https://github.com/cozystack/website
+Product documentation lives in [`cozystack/website`](https://github.com/cozystack/website), not here. This repository holds only documentation that something in the repository references by path, or that describes the repository's own machinery. Pick the destination before writing, because moving a document later means chasing every `@param`, template comment and test comment that points at it.
+
+| Destination | What belongs there |
+| --- | --- |
+| `packages/<group>/<name>/README.md` | Anything scoped to a single package. Prose goes **above** `## Parameters`; that section is `cozyvalues-gen` output and is never hand-edited. The website's `make update-apps` / `update-vms` / `update-networking` / `update-k8s` / `update-services` targets append the whole README onto a published page, so this route reaches users without a second PR. Prefer it whenever the content fits one package. |
+| `cozystack/website`, under `content/en/docs/` | Operator- and tenant-facing content that spans packages or is task-shaped: guides, how-tos, troubleshooting runbooks, reference tables. A new page goes into both `next/` and the current released version directory — `next/` alone is excluded from production builds and will not be visible. |
+| `docs/` | Documentation that a chart template, migration, script or workflow references by repo-relative path, plus this repository's own process docs (`docs/agents/`, `docs/changelogs/`, `docs/release.md`). |
+| `api/<group>/<version>/DESIGN.md`, `pkg/apis/<group>/DESIGN.md` | Design of an API group, beside the types it describes. |
+| [`cozystack/community`](https://github.com/cozystack/community) | Design proposals and RFCs. Not this repository. |
+
+When a document could go in either `docs/` or the website, the test is whether a non-documentation file has to link to it by path. `docs/operations/seaweedfs-431-rename-recovery.md` stays because `packages/*/seaweedfs/templates/_naming.tpl` and a platform migration point at it. A guide referenced only from a `values.yaml` `@param` does not qualify — put it on the website and link the URL.
+
+Documenting a feature's current limitations is useful and belongs with the feature. Documenting the *development process* around it does not: no "What is NOT in Phase N", no "out of scope for this PR", no "this PR" phrasing, no action plans or review negotiation. A merged document describes what the code does now, and states a limitation as a limitation rather than as a roadmap position. Scope, phasing and follow-ups belong in the pull request description or an issue.
+
+A document that names an unmerged pull request or an unreleased dependency needs a tracking issue, because nothing re-checks that claim later and it silently becomes false once the thing ships.
 
 ### Domain references for specific tasks
 
