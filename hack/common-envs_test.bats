@@ -17,8 +17,9 @@
 # relative `make -C packages/...` calls resolve against that cwd. This is NOT
 # real bats — no run/$status/$output/setup(); use plain $(...) capture + grep,
 # and the build-matrix_test.bats `if grep -q …; then echo FAIL; false; fi`
-# negation idiom (cozytest runs each @test under `set -e`, which suppresses a
-# bare `!`-negated pipeline, so a regression would silently pass a `! grep`).
+# negation idiom (cozytest runs each @test under `set -e`, which suppresses any
+# command whose status is inverted with `!`, so a regression would silently pass
+# a `! grep`).
 
 @test "cozystack-controller exports one OCI archive and never pushes under OCI_EXPORT_DIR" {
   out=$(make -n -C packages/system/cozystack-controller image OCI_EXPORT_DIR=/tmp/ocitest IMAGE_TAG=pr-1-abc BUILDER=b)

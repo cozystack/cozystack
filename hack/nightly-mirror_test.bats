@@ -175,17 +175,17 @@ _make_tree() {
   grep -q 'docker://iad.ocir.io/idyksih5sir9/cozystack/digesthost@sha256:.* docker://ghcr.io/cozystack/cozystack/digesthost:0.0.0-nightly.test' "$tmp/out"
   grep -q 'docker://iad.ocir.io/idyksih5sir9/cozystack/globalreg@sha256:.* docker://ghcr.io/cozystack/cozystack/globalreg:0.0.0-nightly.test' "$tmp/out"
   # The digest-less sibling under global.images is not invented into a ref.
-  ! grep -q '/other' "$tmp/out"
+  if grep -q '/other' "$tmp/out"; then echo "FAIL: a digest-less entry must not be invented into a ref"; false; fi
   # An owned ref sharing a file with a map-typed `repository` survives.
   grep -q 'docker://ghcr.io/cozystack/cozystack/survivor:0.0.0-nightly.test' "$tmp/out"
   # A floating tag is moved alongside the pinned version.
   grep -q 'docker://ghcr.io/cozystack/cozystack/foo:nightly' "$tmp/out"
 
   # Third-party images never appear in the copy plan.
-  ! grep -q 'docker.io/clastix' "$tmp/out"
-  ! grep -q 'docker.io/vendor' "$tmp/out"
+  if grep -q 'docker.io/clastix' "$tmp/out"; then echo "FAIL: a third-party image must not be mirrored"; false; fi
+  if grep -q 'docker.io/vendor' "$tmp/out"; then echo "FAIL: a third-party image must not be mirrored"; false; fi
   # The cozystack-packages artifact is excluded — it is rebuilt downstream.
-  ! grep -qE 'skopeo copy.*cozystack-packages' "$tmp/out"
+  if grep -qE 'skopeo copy.*cozystack-packages' "$tmp/out"; then echo "FAIL: the packages artifact must not be mirrored"; false; fi
 
   # The host rewrite is planned source->dest.
   grep -q "s|iad.ocir.io/idyksih5sir9/cozystack/|ghcr.io/cozystack/cozystack/|g" "$tmp/out"
@@ -280,7 +280,7 @@ _make_tree() {
   # the whole-value host is rewritten, and the repository beside it is untouched
   grep -q '^    address: ghcr.io/cozystack/cozystack$' "$tmp/tree/system/globalreg/values.yaml"
   grep -q '^      repository: globalreg$' "$tmp/tree/system/globalreg/values.yaml"
-  ! grep -q 'iad.ocir.io' "$tmp/tree/system/globalreg/values.yaml"
+  if grep -q 'iad.ocir.io' "$tmp/tree/system/globalreg/values.yaml"; then echo "FAIL: the source registry host must not survive the rewrite"; false; fi
 
   # a contiguous ref is still rewritten exactly once, not double-prefixed
   grep -q '^image: ghcr.io/cozystack/cozystack/foo:main@sha256:' "$tmp/tree/system/foo/values.yaml"

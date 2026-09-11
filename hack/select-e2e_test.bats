@@ -203,7 +203,10 @@ assert_full_suite() {
     echo "$output" | grep -q "kubernetes-latest"
     echo "$output" | grep -q "kubernetes-previous"
     # OIDC System -> CustomConfig lifecycle coverage is folded into latest.
-    ! echo "$output" | grep -q "kubernetes-oidc-"
+    if echo "$output" | grep -q "kubernetes-oidc-"; then
+        echo "FAIL: no kubernetes-oidc- suite must be selected"
+        false
+    fi
 }
 
 @test "dashboards-only diff selects nothing (path is plural)" {

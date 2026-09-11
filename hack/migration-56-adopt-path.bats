@@ -62,7 +62,7 @@ OBJS
   # The pool's own KMT (6-hex suffix) is adopted...
   grep -qE 'annotate kubevirtmachinetemplate.* kubernetes-test3-md0-abc123 ' "$FAKE_CMDLOG"
   # ...but the sibling pool md0-large's KMT is NOT (anchor stops the mis-adopt).
-  ! grep -qE 'kubernetes-test3-md0-large-def456' "$FAKE_CMDLOG"
+  if grep -qE 'kubernetes-test3-md0-large-def456' "$FAKE_CMDLOG"; then echo "FAIL: the sibling pool's KubevirtMachineTemplate must not be adopted"; false; fi
   rm -rf "$WORK"
 }
 
@@ -78,7 +78,7 @@ OBJS
   cat "$WORK/out"
   [ "$rc" -eq 0 ]
   # Already adopted -> no annotate issued at all.
-  ! grep -qE 'annotate ' "$FAKE_CMDLOG"
+  if grep -qE 'annotate ' "$FAKE_CMDLOG"; then echo "FAIL: an already-adopted pool must not be annotated again"; false; fi
   rm -rf "$WORK"
 }
 
@@ -108,7 +108,7 @@ OBJS
   # The foreign-owned MD is pinned with keep so the parent cannot prune it...
   grep -qE 'annotate machinedeployment.* kubernetes-test3-md0 .*resource-policy=keep' "$FAKE_CMDLOG"
   # ...but it is never re-annotated onto the child release (ownership untouched).
-  ! grep -qE 'annotate machinedeployment.* meta.helm.sh/release-name=kubernetes-nodes-test3-md0' "$FAKE_CMDLOG"
+  if grep -qE 'annotate machinedeployment.* meta.helm.sh/release-name=kubernetes-nodes-test3-md0' "$FAKE_CMDLOG"; then echo "FAIL: a foreign-owned MachineDeployment must not be re-annotated onto the child release"; false; fi
   # The sibling parent-owned MHC still adopts, and the run stamps.
   grep -qE 'annotate machinehealthcheck.* meta.helm.sh/release-name=kubernetes-nodes-test3-md0' "$FAKE_CMDLOG"
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
@@ -138,7 +138,7 @@ JSON
   [ "$rc" -eq 0 ]
   grep -qiE 'not a valid RFC-1123 label' "$WORK/out"
   # The invalid child HelmRelease is never applied.
-  ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
+  if grep -q 'APPLY-HR' "$FAKE_CMDLOG"; then echo "FAIL: no child HelmRelease must be applied for an invalid pool name"; false; fi
   rm -rf "$WORK"
 }
 
@@ -157,7 +157,7 @@ JSON
   cat "$WORK/out"
   [ "$rc" -eq 0 ]
   grep -qiE 'non-object value' "$WORK/out"
-  ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
+  if grep -q 'APPLY-HR' "$FAKE_CMDLOG"; then echo "FAIL: no child HelmRelease must be applied for a non-object value"; false; fi
   rm -rf "$WORK"
 }
 
@@ -175,7 +175,7 @@ JSON
   cat "$WORK/out"
   [ "$rc" -eq 0 ]
   grep -qiE 'not an object' "$WORK/out"
-  ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
+  if grep -q 'APPLY-HR' "$FAKE_CMDLOG"; then echo "FAIL: no child HelmRelease must be applied for a non-object nodeGroups"; false; fi
   rm -rf "$WORK"
 }
 
@@ -211,9 +211,9 @@ OBJS
   grep -qE 'annotate kubevirtmachinetemplate.* kubernetes-test3-md0-abc123 .*resource-policy=keep' "$FAKE_CMDLOG"
   grep -qE 'annotate machinedeployment.* kubernetes-test3-md1 .*resource-policy=keep' "$FAKE_CMDLOG"
   grep -qE 'annotate kubevirtmachinetemplate.* kubernetes-test3-md1-def456 .*resource-policy=keep' "$FAKE_CMDLOG"
-  ! grep -qE 'meta.helm.sh/release-name' "$FAKE_CMDLOG"
+  if grep -qE 'meta.helm.sh/release-name' "$FAKE_CMDLOG"; then echo "FAIL: no ownership must be transferred"; false; fi
   # Adoption skipped, run completes.
-  ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
+  if grep -q 'APPLY-HR' "$FAKE_CMDLOG"; then echo "FAIL: no child HelmRelease must be applied"; false; fi
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -249,9 +249,9 @@ OBJS
   grep -qE 'annotate machinehealthcheck.* kubernetes-test3-md0 .*resource-policy=keep' "$FAKE_CMDLOG"
   grep -qE 'annotate workloadmonitor.* kubernetes-test3-md0 .*resource-policy=keep' "$FAKE_CMDLOG"
   grep -qE 'annotate kubevirtmachinetemplate.* kubernetes-test3-md0-abc123 .*resource-policy=keep' "$FAKE_CMDLOG"
-  ! grep -qE 'meta.helm.sh/release-name' "$FAKE_CMDLOG"
+  if grep -qE 'meta.helm.sh/release-name' "$FAKE_CMDLOG"; then echo "FAIL: no ownership must be transferred"; false; fi
   # Adoption skipped, run completes and stamps.
-  ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
+  if grep -q 'APPLY-HR' "$FAKE_CMDLOG"; then echo "FAIL: no child HelmRelease must be applied"; false; fi
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -288,9 +288,9 @@ OBJS
   grep -qE 'annotate machinehealthcheck.* kubernetes-production-eu-central-analytics01-md0 .*resource-policy=keep' "$FAKE_CMDLOG"
   grep -qE 'annotate workloadmonitor.* kubernetes-production-eu-central-analytics01-md0 .*resource-policy=keep' "$FAKE_CMDLOG"
   grep -qE 'annotate kubevirtmachinetemplate.* kubernetes-production-eu-central-analytics01-md0-abc123 .*resource-policy=keep' "$FAKE_CMDLOG"
-  ! grep -qE 'meta.helm.sh/release-name' "$FAKE_CMDLOG"
+  if grep -qE 'meta.helm.sh/release-name' "$FAKE_CMDLOG"; then echo "FAIL: no ownership must be transferred"; false; fi
   # Adoption skipped (no child HR applied), run completes and stamps.
-  ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
+  if grep -q 'APPLY-HR' "$FAKE_CMDLOG"; then echo "FAIL: no child HelmRelease must be applied"; false; fi
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -324,7 +324,7 @@ OBJS
   cat "$WORK/out"
   [ "$rc" -ne 0 ]
   grep -q 'ERROR: reading machinedeployment' "$WORK/out"
-  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  if grep -qF -- "STAMP" "$FAKE_CMDLOG"; then echo "FAIL: the version must not be stamped after a read error"; false; fi
   unset FAKE_GET_FAIL
   rm -rf "$WORK"
 }
@@ -348,7 +348,7 @@ OBJS
   cat "$WORK/out"
   [ "$rc" -ne 0 ]
   grep -q 'ERROR: listing KubevirtMachineTemplates' "$WORK/out"
-  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  if grep -qF -- "STAMP" "$FAKE_CMDLOG"; then echo "FAIL: the version must not be stamped after a listing error"; false; fi
   unset FAKE_GET_FAIL
   rm -rf "$WORK"
 }
@@ -371,7 +371,7 @@ JSON
   cat "$WORK/out"
   [ "$rc" -ne 0 ]
   grep -q 'ERROR: reading machinedeployment' "$WORK/out"
-  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  if grep -qF -- "STAMP" "$FAKE_CMDLOG"; then echo "FAIL: the version must not be stamped after a read error"; false; fi
   unset FAKE_GET_FAIL
   rm -rf "$WORK"
 }
@@ -393,7 +393,7 @@ JSON
   [ "$rc" -eq 0 ]
   grep -qiE 'not a valid RFC-1123 label' "$WORK/out"
   grep -qi 'nothing to pin' "$WORK/out"
-  ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
+  if grep -q 'APPLY-HR' "$FAKE_CMDLOG"; then echo "FAIL: no child HelmRelease must be applied"; false; fi
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -418,7 +418,7 @@ OBJS
   cat "$WORK/out"
   [ "$rc" -eq 0 ]
   grep -qE 'annotate machinedeployment.* meta.helm.sh/release-name=kubernetes-nodes-test3-md0' "$FAKE_CMDLOG"
-  ! grep -qi 'refusing' "$WORK/out"
+  if grep -qi 'refusing' "$WORK/out"; then echo "FAIL: a warning on stderr must not make the owner guard refuse"; false; fi
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
   unset FAKE_WARN_STDERR
   rm -rf "$WORK"
@@ -438,7 +438,7 @@ OBJS
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"
   [ "$rc" -ne 0 ]
-  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  if grep -qF -- "STAMP" "$FAKE_CMDLOG"; then echo "FAIL: the version must not be stamped after a transient read failure"; false; fi
   unset FAKE_GET_FAIL FAKE_GET_FAIL_MSG
   rm -rf "$WORK"
 }
@@ -459,7 +459,7 @@ JSON
   [ "$rc" -eq 0 ]
   grep -qiE 'not a valid RFC-1123 label' "$WORK/out"
   # Neither 'my' nor 'pool' is ever applied as a child release.
-  ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
+  if grep -q 'APPLY-HR' "$FAKE_CMDLOG"; then echo "FAIL: no child HelmRelease must be applied"; false; fi
   rm -rf "$WORK"
 }
 
@@ -481,6 +481,6 @@ JSON
   grep -qiE 'non-scalar value' "$WORK/out"
   grep -q 'storageClass' "$WORK/out"
   # The pool is pinned+skipped, never applied as a child release.
-  ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
+  if grep -q 'APPLY-HR' "$FAKE_CMDLOG"; then echo "FAIL: the pinned-and-skipped pool must not be applied as a child release"; false; fi
   rm -rf "$WORK"
 }
