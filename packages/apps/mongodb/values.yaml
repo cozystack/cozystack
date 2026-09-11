@@ -155,7 +155,7 @@ databases: {}
 
 ## @typedef {struct} Backup - Backup configuration.
 ## @field {bool} enabled - Enable regular backups.
-## @field {bool} [useSystemBucket] - Opt-in: when true the chart skips the <release>-s3-creds Secret AND leaves spec.backup.storages unset; the cozy-default MongoDB BackupClass driver SSA-injects the S3 storage (bucket/endpoint/prefix/credentials from the platform system bucket) onto the live PerconaServerMongoDB at first BackupJob time. Tenants do not supply s3AccessKey/s3SecretKey/destinationPath/endpointURL; backups scope to <namespace>/<release> under the system bucket.
+## @field {bool} [useSystemBucket] - Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to <namespace>/<application>. See docs/operations/backup-classes.md.
 ## @field {string} [schedule] - Cron schedule for automated backups.
 ## @field {string} [retentionPolicy] - Retention policy (e.g. "30d").
 ## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/).
