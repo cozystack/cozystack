@@ -174,8 +174,19 @@
     echo "the packages artifact tag is not the PR's base branch. Reading a fixed" >&2
     echo "tag (e.g. :main) hands a release-line PR another generation's images." >&2
     exit 1; }
-  printf '%s\n' "$block" | grep -qF 'BASE_REF: ${{ github.base_ref }}' || {
-    echo "BASE_REF is not wired to github.base_ref in the pull step's env." >&2; exit 1; }
+  printf '%s\n' "$block" | grep -qF 'BASE_REF: ${{ github.event.pull_request.base.ref }}' || {
+    echo "BASE_REF is not wired to the PR payload's base ref in the pull step's env." >&2; exit 1; }
+
+  # …and specifically NOT to `github.base_ref`, which GitHub populates for
+  # `pull_request` and `pull_request_target` only. This workflow also runs on
+  # `pull_request_review`, where it is empty: the tag degrades to
+  # `cozystack-packages:` , the pull fails, and the step falls back to the
+  # committed refs — which is the #3437 generation mismatch again, reached
+  # silently and on every approving review rather than on a release-line PR.
+  if printf '%s\n' "$block" | grep -qF 'BASE_REF: ${{ github.base_ref }}'; then
+    echo "BASE_REF reads github.base_ref, which is empty on pull_request_review." >&2
+    exit 1
+  fi
 
   # A hardcoded :main anywhere in the two overlay steps defeats the point.
   overlay="$(printf '%s\n' "$code" | awk '

@@ -94,14 +94,14 @@ code_lines() {
   [ "${count:-0}" -eq 1 ]
 }
 
-@test "promote PR keeps release label and does not auto-apply full-e2e" {
+@test "promote PR keeps release label and does not auto-apply e2e/full" {
   block="$(job_block open-pr "$PROMOTE")"
   [ -n "$block" ]
 
   count="$(printf '%s\n' "$block" | code_lines | grep -cF -- '--body "$BODY" --label release' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  count="$(printf '%s\n' "$block" | code_lines | grep -cF -- '--label full-e2e' || true)"
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF -- '--label e2e/full' || true)"
   [ "${count:-0}" -eq 0 ]
 }
 
@@ -125,22 +125,41 @@ code_lines() {
   [ "${count:-0}" -eq 1 ]
 }
 
-@test "release PR E2E is a working manual full-e2e label opt-in" {
+@test "release PR E2E is a working manual e2e/full label opt-in" {
   count="$(code_lines < "$PULL_REQUESTS" | grep -cF '    types: [opened, synchronize, reopened, labeled]' || true)"
   [ "${count:-0}" -eq 1 ]
 
+  # The label terms only, not the whole `if:` line. This pinned the whole line
+  # once and it was the wrong instrument twice over: it broke on every
+  # unrelated edit to `plan`'s guard while still proving nothing beyond text
+  # identity — a reworded clause failed it and a weakened one passed. What this
+  # test is about is that a `labeled` event reaches `plan` at all, and that both
+  # opt-in names are among the ones it reaches for; the review axis and the
+  # complement against the concurrency key are pinned by meaning in
+  # hack/gate-concurrency-contract.bats.
   plan_header="$(job_header plan "$PULL_REQUESTS")"
-  count="$(printf '%s\n' "$plan_header" | code_lines | grep -cF "    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e'" || true)"
+  count="$(printf '%s\n' "$plan_header" | code_lines | grep -cF "github.event.action != 'labeled'" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_header" | code_lines | grep -cF "github.event.label.name == 'e2e/full'" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_header" | code_lines | grep -cF "github.event.label.name == 'e2e/run'" || true)"
   [ "${count:-0}" -eq 1 ]
 
   resolve_header="$(job_header resolve_assets "$PULL_REQUESTS")"
-  count="$(printf '%s\n' "$resolve_header" | code_lines | grep -cF "github.event.label.name == 'full-e2e'" || true)"
+  count="$(printf '%s\n' "$resolve_header" | code_lines | grep -cF "github.event.label.name == 'e2e/full'" || true)"
   [ "${count:-0}" -eq 1 ]
 
   e2e_header="$(job_header e2e "$PULL_REQUESTS")"
   count="$(printf '%s\n' "$e2e_header" | code_lines | grep -cF "needs.resolve_assets.result == 'success'" || true)"
   [ "${count:-0}" -eq 1 ]
-  count="$(printf '%s\n' "$e2e_header" | code_lines | grep -cF "&& contains(github.event.pull_request.labels.*.name, 'full-e2e')" || true)"
+  # Either opt-in label reaches the release arm. e2e/full is the scope opt-in
+  # this test is named for; e2e/run is admitted beside it because refusing it
+  # left it setting `heavy`, skipping the suite, and letting the reporter
+  # conclude "e2e not repeated" — a label named "run" reporting a run that did
+  # not happen.
+  count="$(printf '%s\n' "$e2e_header" | code_lines | grep -cF "contains(github.event.pull_request.labels.*.name, 'e2e/full')" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$e2e_header" | code_lines | grep -cF "contains(github.event.pull_request.labels.*.name, 'e2e/run')" || true)"
   [ "${count:-0}" -eq 1 ]
 }
 
