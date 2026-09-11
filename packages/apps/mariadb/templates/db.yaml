@@ -24,7 +24,7 @@ spec:
   privileges: ['ALL']
   database: {{ $name }}
   table: "*"
-  username: {{ $user }}
+  username: {{ $user | quote }}
   grantOption: true
 {{- end }}
 {{- range $user := $db.roles.readonly }}
@@ -40,7 +40,7 @@ spec:
   privileges: ['SELECT']
   database: {{ $name }}
   table: "*"
-  username: {{ $user }}
+  username: {{ $user | quote }}
   grantOption: true
 {{- end }}
 
