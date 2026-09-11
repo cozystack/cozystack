@@ -1,0 +1,56 @@
+# Vector binds 0.0.0.0:<listenPort> inside the pod netns and exposes it as a
+# containerPort, so the pod IP is reachable from every pod in the cluster. Any
+# workload could open <podIP>:<listenPort> and inject forged JSON lines that the
+# pipeline stamps with log_source=talos_system and the real node name, straight
+# into VictoriaLogs. This policy is load-bearing, not defence-in-depth: it is
+# the only thing restricting the receiver to the node-local push path (Talos
+# reaches it on 127.0.0.1:<listenPort>; portmap DNATs to the pod and SNATs the
+# source to the node, so legitimate traffic arrives as the host). A CNI that
+# does not enforce NetworkPolicy (e.g. the noop networking variant, or a BYO CNI
+# without policy support) leaves the socket unprotected regardless.
+{{- if .Capabilities.APIVersions.Has "cilium.io/v2/CiliumNetworkPolicy" }}
+# Cilium is present: restrict ingress on the listen port to the host entity, so
+# only the node-local push path is allowed and other pods are denied.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: talos-log-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "talos-log-collector.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: talos-log-collector
+  ingress:
+  - fromEntities:
+    - host
+    toPorts:
+    - ports:
+      - port: "{{ .Values.listenPort }}"
+        protocol: TCP
+{{- else }}
+# No Cilium CRD: fall back to a CNI-agnostic default-deny-ingress policy so the
+# socket is never offered without protection. This denies ingress from the pod
+# network (the injection path, whose source is a real pod IP). The node-local
+# push path (portmap SNATs the source to the node) keeps flowing on CNIs that
+# exempt node-local/health traffic from policy enforcement, as the mainstream
+# policy CNIs do; a CNI that instead enforces policy on node-local traffic would
+# also block this push path, so on such a CNI keep Cilium or open the port
+# explicitly. The only non-Cilium variant shipped today is noop, which does not
+# enforce NetworkPolicy at all, so this fallback is inert there.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: talos-log-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "talos-log-collector.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: talos-log-collector
+  policyTypes:
+  - Ingress
+  ingress: []
+{{- end }}

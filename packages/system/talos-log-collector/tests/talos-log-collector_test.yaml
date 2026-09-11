@@ -1,0 +1,200 @@
+suite: talos-log-collector receive/forward wiring
+
+# Pins the surface this package owns:
+#   - the DaemonSet pulls the first-party vector image from the cozystack
+#     registry (the load-bearing ref lives in images/vector.tag, re-pinned by
+#     `make image`);
+#   - Talos logs are received on the node loopback via hostPort+hostIP (the pod
+#     stays on the pod network for the sink; the loopback socket is published
+#     via portmap), NOT via hostNetwork;
+#   - the collector runs on every node (tolerate everything, node-critical);
+#   - logs are forwarded to the tenant VictoriaLogs vlinsert on port 9481, and
+#     the destination tenant (global.target) plumbs through verbatim.
+
+templates:
+  - templates/daemonset.yaml
+  - templates/configmap.yaml
+  - templates/serviceaccount.yaml
+  - templates/networkpolicy.yaml
+
+tests:
+  - it: "DaemonSet pulls the first-party vector image from the cozystack registry"
+    template: templates/daemonset.yaml
+    asserts:
+      - isKind:
+          of: DaemonSet
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^ghcr\\.io/cozystack/cozystack/vector:"
+
+  - it: "receives Talos logs on node loopback via hostPort, not hostNetwork"
+    template: templates/daemonset.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostNetwork
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].hostIP
+          value: 127.0.0.1
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].hostPort
+          value: 5170
+
+  - it: "runs on every node and is node-critical"
+    template: templates/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.priorityClassName
+          value: system-node-critical
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            effect: NoSchedule
+            operator: Exists
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            effect: NoExecute
+            operator: Exists
+
+  - it: "forwards to the tenant VictoriaLogs vlinsert on 9481"
+    template: templates/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["vector.yaml"]
+          pattern: "vlinsert-generic\\.tenant-root\\.svc:9481"
+
+  - it: "stamps tenant and cluster on records and streams them (parity with monitoring-agents)"
+    template: templates/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["vector.yaml"]
+          pattern: '\.tenant = "tenant-root"'
+      - matchRegex:
+          path: data["vector.yaml"]
+          pattern: '\.cluster = "root-cluster"'
+      - matchRegex:
+          path: data["vector.yaml"]
+          pattern: "_stream_fields=node,log_source,talos-service,facility,tenant,cluster"
+
+  - it: "destination tenant is overridable via global.target"
+    template: templates/configmap.yaml
+    set:
+      global:
+        target: tenant-ktj
+    asserts:
+      - matchRegex:
+          path: data["vector.yaml"]
+          pattern: "vlinsert-generic\\.tenant-ktj\\.svc:9481"
+
+  - it: "listenPort drives the DaemonSet host/container ports"
+    template: templates/daemonset.yaml
+    set:
+      listenPort: 6000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 6000
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].hostPort
+          value: 6000
+
+  - it: "listenPort drives the Vector socket address"
+    template: templates/configmap.yaml
+    set:
+      listenPort: 6000
+    asserts:
+      - matchRegex:
+          path: data["vector.yaml"]
+          pattern: "address: 0\\.0\\.0\\.0:6000"
+
+  - it: "container runs unprivileged and non-root"
+    template: templates/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: "ServiceAccount disables token automount"
+    template: templates/serviceaccount.yaml
+    asserts:
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+
+  - it: "NetworkPolicy restricts ingress to the host entity on the listen port"
+    template: templates/networkpolicy.yaml
+    capabilities:
+      apiVersions:
+        - cilium.io/v2/CiliumNetworkPolicy
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: CiliumNetworkPolicy
+      - equal:
+          path: spec.ingress[0].fromEntities[0]
+          value: host
+      - equal:
+          path: spec.ingress[0].toPorts[0].ports[0].port
+          value: "5170"
+
+  - it: "Cilium NetworkPolicy ingress port follows the listenPort override"
+    template: templates/networkpolicy.yaml
+    capabilities:
+      apiVersions:
+        - cilium.io/v2/CiliumNetworkPolicy
+    set:
+      listenPort: 6000
+    asserts:
+      - equal:
+          path: spec.ingress[0].toPorts[0].ports[0].port
+          value: "6000"
+
+  - it: "falls back to a CNI-agnostic default-deny NetworkPolicy when the Cilium CRD is absent"
+    template: templates/networkpolicy.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: NetworkPolicy
+      - isAPIVersion:
+          of: networking.k8s.io/v1
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/name"]
+          value: talos-log-collector
+      - contains:
+          path: spec.policyTypes
+          content: Ingress
+      - isNullOrEmpty:
+          path: spec.ingress
+
+  - it: "cpu is a request only; memory is request and limit"
+    template: templates/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 128Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 128Mi
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+
+  - it: "has a tcpSocket liveness probe on the listen port"
+    template: templates/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.tcpSocket.port
+          value: talos
