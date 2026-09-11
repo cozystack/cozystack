@@ -44,7 +44,8 @@
 
 {{- define "monitoring.oidc.systemIssuerURL" -}}
 {{- $host := index .Values._cluster "root-host" -}}
-{{- printf "https://keycloak.%s/realms/cozy" $host -}}
+{{- $realm := index .Values._cluster "oidc-realm-name" | default "cozy" -}}
+{{- printf "https://keycloak.%s/realms/%s" $host $realm -}}
 {{- end -}}
 
 {{- /*
