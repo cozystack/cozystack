@@ -73,6 +73,13 @@ func (h *LineageControllerWebhook) SetupWithManagerAsWebhook(mgr ctrl.Manager) e
 		return err
 	}
 
+	// Owner lookups dominate admission latency: each Pod admission walks the
+	// owner chain (Pod → STS → HelmRelease → app CR) with sequential dynamic
+	// GETs to the apiserver. The cache collapses repeat lookups across
+	// concurrent admissions for siblings of the same parent chain. TTL is short
+	// enough that DELETE/recreate of an owner is reflected within a minute.
+	h.ownerCache = lineage.NewObjectCache(ownerCacheTTL)
+
 	h.initConfig()
 	// Register HTTP path -> handler.
 	mgr.GetWebhookServer().Register("/mutate-lineage", &admission.Webhook{Handler: h})
@@ -99,6 +106,17 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 	obj := &unstructured.Unstructured{}
 	if err := h.decodeUnstructured(req, obj); err != nil {
 		return admission.Errored(400, fmt.Errorf("decode object: %w", err))
+	}
+
+	// Fast-path: the objectSelector on the MutatingWebhookConfiguration already
+	// skips admission for objects that carry the managed-by-cozystack label, so
+	// in steady state this branch only triggers for races (a controller
+	// re-applying labels mid-flight) and for safety if the selector is ever
+	// loosened. Pods still need applySchedulingClass each admission though, so
+	// we only short-circuit non-Pod kinds.
+	if obj.GetKind() != "Pod" && hasAllLineageLabels(obj) {
+		logger.V(1).Info("object already carries lineage labels, skipping owner walk")
+		return admission.Allowed("lineage labels already present")
 	}
 
 	owner, err := h.getOwner(ctx, obj)
@@ -133,11 +151,11 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 }
 
 func (h *LineageControllerWebhook) getOwner(ctx context.Context, o *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	owners := lineage.WalkOwnershipGraph(ctx, h.dynClient, h.mapper, h, o)
+	owners := lineage.WalkOwnershipGraphWithCache(ctx, h.dynClient, h.mapper, h, h.ownerCache, o)
 	if len(owners) == 0 {
 		return nil, NoAncestors
 	}
-	obj, err := owners[0].GetUnstructured(ctx, h.dynClient, h.mapper)
+	obj, err := owners[0].GetUnstructuredCached(ctx, h.dynClient, h.mapper, h.ownerCache)
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +217,26 @@ func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, lab
 		existing[k] = v
 	}
 	o.SetLabels(existing)
+}
+
+// hasAllLineageLabels reports whether `o` already carries every label the
+// webhook would set. We treat ManagedObjectKey alone as insufficient because
+// the "unmanaged" path writes it with value "false" without setting the rest;
+// only the full set proves a previous successful walk.
+func hasAllLineageLabels(o *unstructured.Unstructured) bool {
+	labels := o.GetLabels()
+	if labels == nil {
+		return false
+	}
+	if labels[ManagedObjectKey] != "true" {
+		return false
+	}
+	for _, k := range []string{ManagerGroupKey, ManagerKindKey, ManagerNameKey} {
+		if _, ok := labels[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // applySchedulingClass injects schedulerName and scheduling-class annotation
