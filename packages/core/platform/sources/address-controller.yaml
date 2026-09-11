@@ -1,0 +1,44 @@
+---
+# The chart is consumed straight from the upstream git repo: the PackageSource
+# references this GitRepository instead of embedding the cozystack-packages
+# OCIRepository, so nothing is vendored into this tree and a chart bump is a
+# ref change here, not a package sync.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: address-controller
+  namespace: cozy-system
+spec:
+  interval: 5m
+  url: https://github.com/lllamnyp/address-controller
+  ref:
+    branch: main
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.address-controller
+spec:
+  sourceRef:
+    kind: GitRepository
+    name: address-controller
+    namespace: cozy-system
+    path: chart
+  variants:
+  # The core, class-agnostic controller for IP addresses as a first-class
+  # resource (IPAddressClass / IPAddress / IPAddressClaim,
+  # local.sdn.cozystack.io) — the PVC/PV-binding analog. It owns claim–address
+  # binding and reclaim; actual allocation belongs to per-class drivers such
+  # as cozystack.metallb-iad.
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: address-controller
+      path: address-controller
+      install:
+        namespace: cozy-address-controller
+        releaseName: address-controller
+        # The chart ships its CRDs in crds/; they are v1alpha1 and still
+        # evolving, so upgrades must be allowed to replace them.
+        upgradeCRDs: CreateReplace
