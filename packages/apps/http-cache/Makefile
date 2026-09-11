@@ -19,6 +19,10 @@ generate:
 	cozyvalues-gen -m 'httpcache' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/httpcache/types.go
 	../../../hack/update-crd.sh
 
+.PHONY: test
+test:
+	helm unittest .
+
 update:
 	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/chrislim2888/IP2Location-C-Library | awk -F'[/^]' 'END{print $$3}') && \
 	sed -i "/^ARG IP2LOCATION_C_VERSION=/ s/=.*/=$$tag/" images/nginx/Dockerfile
