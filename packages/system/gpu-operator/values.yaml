@@ -32,10 +32,15 @@ gpu-operator:
 # true this wrapper chart renders the ConfigMap into the release
 # namespace so the params actually land. The driver entrypoint reads
 # ${base}/nvidia.conf and appends each line to the nvidia modprobe
-# options. Used by tenant Kubernetes clusters to set
-# NVreg_NvLinkDisable=1 (see packages/apps/kubernetes gpu-operator
-# HelmRelease defaults); off by default for host-level passthrough/vgpu
-# variants where the in-host driver is disabled.
+# options, so it only does anything when driver.enabled is true.
+#
+# No variant enables it any more. Tenant Kubernetes clusters used to, to set
+# NVreg_NvLinkDisable=1, but their workers run Talos since 1.6.0: the driver
+# comes from a system extension, the operator's driver container is off, and
+# that parameter now travels through the worker machine config instead
+# (nodeGroups.<name>.kernelModules in packages/apps/kubernetes). Kept for an
+# operator who re-enables the driver container through valuesOverride, which
+# then also has to set create: true here.
 kernelModuleConfig:
   create: false
   name: nvidia-kernel-module-params

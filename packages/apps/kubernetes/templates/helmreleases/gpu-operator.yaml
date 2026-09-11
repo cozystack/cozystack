@@ -1,31 +1,91 @@
 {{- define "cozystack.defaultGpuOperatorValues" -}}
 {{- /*
-  GPU passthrough default: cozystack passes individual SXM GPUs (e.g.
-  H200) into tenant worker VMs WITHOUT the NVSwitches. The nvidia driver
-  then waits forever for an NVLink fabric that can never come up (no
-  NVSwitch / fabricmanager), leaving Fabric State: In Progress — every
-  CUDA call fails with "system not yet initialized" and the
-  nvidia-operator-validator crashloops. Loading the kernel module with
-  NVreg_NvLinkDisable=1 flips Fabric State to N/A so CUDA initializes.
-  This is correct for per-GPU passthrough since there is no in-VM
-  NVLink/NVSwitch peering anyway.
+  OS-provided-driver default, for the Talos workers that tenant clusters have
+  run since 1.6.0. The driver is supplied by a Talos system extension baked
+  into the worker image, not by the operator's driver container, and that
+  changes what every other component has to be told.
 
-  The upstream chart only references an existing ConfigMap by name; the
-  wrapper chart (packages/system/gpu-operator) renders that ConfigMap
-  when kernelModuleConfig.create is true. Overridable via
-  addons.gpuOperator.valuesOverride (mergeOverwrite below keeps user
-  values winning).
+  This replaces the previous default, which assumed the Ubuntu shape: the
+  operator's driver container compiling and loading the module inside the
+  worker VM, with NVreg_NvLinkDisable=1 fed to it through the
+  nvidia-kernel-module-params ConfigMap. On Talos that container is off, so
+  the ConfigMap was mounted by nothing and the parameter never applied. It now
+  travels through the machine config instead, as
+  nodeGroups.<name>.kernelModules, which is where a Talos node takes module
+  parameters from.
+
+  driver.enabled: false — the module comes from the extension. The operator's
+  driver container would try to load its own and clash with it.
+
+  toolkit.enabled: false — the toolkit container rewrites
+  /etc/containerd/config.toml, which on Talos is machine-config-owned. Talos
+  already registers the `nvidia` containerd runtime and sets
+  enable_cdi = true with cdi_spec_dirs = ['/run/cdi'].
+
+  validator.driver.env — the driver validator looks for a driver container's
+  install and finds none, so it never writes its sentinel and the device
+  plugin stays blocked behind toolkit-validation. Pointing DRIVER_ROOT and
+  NVIDIA_DRIVER_ROOT at / makes it inspect the host root, where the extension
+  put the driver. DISABLE_DEV_CHAR_SYMLINK_CREATION stops it trying to create
+  /dev/char symlinks that the extension already owns.
+
+  devicePlugin.env — tenant pods carry no runtimeClassName and did not need
+  one on Ubuntu, where the toolkit made `nvidia` the default containerd
+  runtime. Talos does not, so CUDA libraries reach a pod only through CDI:
+  cdi-annotations makes the plugin annotate pods for CDI injection, and
+  NVIDIA_CTK_PATH points it at the host's nvidia-ctk so it can generate the
+  spec into the /run/cdi that containerd already reads. DEVICE_ID_STRATEGY
+  uuid is what CDI device names key on. CDI_ANNOTATION_PREFIX matches the
+  plugin's own default and is pinned so an upstream change cannot move it out
+  from under containerd. NOTE: CDI injection is decided at pod admission, so
+  pods created before a node is working never receive anything and have to be
+  recreated.
+
+  Every value here is the configuration validated in production on a Talos
+  GPU node group, minus the parts that only mattered while the driver
+  container was in play.
+
+  Overridable via addons.gpuOperator.valuesOverride — mergeOverwrite below
+  keeps operator values winning. Mind that mergeOverwrite replaces a list
+  wholesale rather than merging it: an override that sets devicePlugin.env to
+  add one variable drops the defaults above with it, and CDI stops working.
+  Restate the full list when overriding it.
 */}}
-kernelModuleConfig:
-  create: true
 gpu-operator:
   driver:
-    kernelModuleConfig:
-      name: nvidia-kernel-module-params
-{{- if .Values.addons.hami.enabled }}
+    enabled: false
+  toolkit:
+    enabled: false
+  validator:
+    driver:
+      env:
+        - name: DRIVER_ROOT
+          value: "/"
+        - name: NVIDIA_DRIVER_ROOT
+          value: "/"
+        - name: DISABLE_DEV_CHAR_SYMLINK_CREATION
+          value: "true"
   devicePlugin:
+{{- if .Values.addons.hami.enabled }}
+    {{- /* HAMi ships its own device plugin and serves the GPUs itself; the
+           operator's must stay off so the two do not both advertise
+           nvidia.com/gpu. The env below is inert while this is false, and is
+           emitted anyway so the values stay coherent if HAMi is turned off
+           later. HAMi's own plugin needs its own CDI wiring on Talos, which
+           this default does not attempt. */}}
     enabled: false
 {{- end }}
+    env:
+      - name: DEVICE_LIST_STRATEGY
+        value: cdi-annotations
+      - name: DEVICE_ID_STRATEGY
+        value: uuid
+      - name: NVIDIA_DRIVER_ROOT
+        value: "/"
+      - name: NVIDIA_CTK_PATH
+        value: /usr/local/bin/nvidia-ctk
+      - name: CDI_ANNOTATION_PREFIX
+        value: cdi.k8s.io/
 {{- end }}
 
 {{- if and .Values.addons.gpuOperator.enabled .Values._namespace.etcd }}
