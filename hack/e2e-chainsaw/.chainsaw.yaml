@@ -7,7 +7,7 @@ spec:
   # hack/e2e-install-cozystack.bats), matching the BATS suite. Chainsaw only
   # deletes namespaces it created itself, so tenant-test is safe.
   #
-  # The backup round-trip Tests (postgres-2-, mariadb-2-, clickhouse-2-) override
+  # The backup round-trip Tests (postgres-2-, mariadb-2-, clickhouse-2-, kafka-2-) override
   # this to tenant-root per Test: their S3 client runs inside the tenant, and the
   # e2e tenant-test tenant is created isolated, so its Cilium egress allowlist
   # blocks its Pods from reaching tenant-root's seaweedfs.
