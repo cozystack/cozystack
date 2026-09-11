@@ -201,7 +201,7 @@ bnet_audit() {
   find "$1" -name '*.bats' | sort | while IFS= read -r _f; do
     [ -e "$_f" ] || continue
     # Path relative to the audited root, not the basename: the scan recurses,
-    # and hack/foo.bats and hack/e2e-apps/foo.bats would otherwise report under
+    # and hack/foo.bats and hack/nested/foo.bats would otherwise report under
     # the same name.
     _b=${_f#"$1"/}
     _amb=$(bnet_ambiguous "$_f")
@@ -571,9 +571,9 @@ bnet_add_two_handlers_on_one_line() {
 }
 
 @test "a bats file in a subdirectory is audited too" {
-  # The ban is on every bats file under hack/, and hack/e2e-apps/ already holds
-  # two. A flat glob would leave the claim about "every file added later" false
-  # for anything a directory down.
+  # The ban is on every bats file under hack/, subdirectories included, and the
+  # tree has grouped live-cluster suites into one before. A flat glob would leave
+  # the claim about "every file added later" false for anything a directory down.
   tmp=$(mktemp -d)
   bnet_new_fixture "$tmp"
   bnet_add_nested_fixture "$tmp"
