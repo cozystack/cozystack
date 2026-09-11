@@ -160,8 +160,8 @@ COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
 # suite is precisely one `make unit-tests` refuses to run and
 # packages/core/testing/Makefile runs against a live cluster instead.
 #
-# That wildcard is not recursive, so it says nothing about subdirectories, and
-# hack/e2e-apps/ holds live-cluster suites whose own filenames carry no prefix.
+# That wildcard is not recursive, so it says nothing about subdirectories, and a
+# live-cluster suite under hack/e2e-apps/ carries no prefix on its own filename.
 # Matching the directory too keeps them armed; matching only the basename would
 # take the captures away from suites that need them, which is the opposite of
 # the fix. Neither test is a claim that every future live-cluster suite will be
