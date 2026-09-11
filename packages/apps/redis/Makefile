@@ -11,3 +11,6 @@ generate:
 update:
 	hack/update-versions.sh
 	make generate
+
+test:
+	helm unittest .
