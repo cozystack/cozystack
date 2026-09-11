@@ -1,0 +1,97 @@
+suite: databases render without roles
+
+# `databases.<name>.roles`, `roles.admin` and `roles.readonly` are all optional
+# in the schema. The init script used to dereference `$d.roles.admin` for every
+# database, so a database declared with only `extensions` (or with nothing at
+# all) failed the whole render with "nil pointer evaluating interface {}.admin".
+# A missing list must read as an empty list: no user is granted the role, and
+# every managed role is revoked from every user, exactly as `roles: {}` does.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+  users:
+    app:
+      password: secret
+
+tests:
+  - it: "a database with only extensions renders and revokes both managed roles"
+    set:
+      databases:
+        events:
+          extensions:
+            - hstore
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REVOKE "events_admin" FROM "app";'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REVOKE "events_readonly" FROM "app";'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'GRANT "events_(admin|readonly)" TO'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS hstore;'
+
+  - it: "a database with an empty body renders the same as roles: {}"
+    set:
+      databases:
+        events: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REVOKE "events_admin" FROM "app";'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REVOKE "events_readonly" FROM "app";'
+
+  - it: "roles with only admin grants admin and revokes readonly"
+    set:
+      databases:
+        events:
+          roles:
+            admin:
+              - app
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'GRANT "events_admin" TO "app";'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REVOKE "events_readonly" FROM "app";'
+
+  - it: "roles with only readonly grants readonly and revokes admin"
+    set:
+      databases:
+        events:
+          roles:
+            readonly:
+              - app
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REVOKE "events_admin" FROM "app";'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'GRANT "events_readonly" TO "app";'
