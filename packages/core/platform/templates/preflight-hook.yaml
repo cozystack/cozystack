@@ -1,0 +1,253 @@
+{{- /*
+Upgrade preflight health gate.
+
+Runs as a pre-upgrade Helm hook at weight 0 — BEFORE the migration hook
+(weight 1) — so a cluster that is not in a safe state never even reaches the
+schema migrations. It reuses the platform-migrations image (kubectl/jq/bash are
+already there) but overrides the entrypoint to /preflight/run-preflight.sh.
+
+Gating mirrors migration-hook.yaml: the Job renders only when the
+cozystack-version ConfigMap reports a version BELOW migrations.targetVersion,
+i.e. only on a version-advancing upgrade. This deliberately avoids re-running a
+live `linstor` exec on every Flux HelmRelease reconcile. Being a pre-upgrade
+(not pre-install) hook, it also never runs on a fresh install, where there is
+no prior state to protect and no LINSTOR to query.
+
+Unlike the migration hook (cluster-admin) this splits its access by least
+privilege: a ClusterRole with only read verbs (nodes/pods/deployments
+get+list), plus a namespaced Role in cozy-linstor for the single privileged
+verb pods/exec (running `linstor` in the controller). exec cannot be narrowed
+to one pod name, but scoping it to the one namespace the check targets keeps
+the blast radius contained; that Role renders only when cozy-linstor exists.
+*/ -}}
+{{- $pf := .Values.preflight | default dict }}
+{{- /*
+  The master toggle is default-ON, so it is coerced through the "negative"
+  helper: only an explicit no (false/0/no/off, in any of the shapes the Package
+  CR's untyped JSON can deliver) takes the gate down. A bare `if` here would be
+  truthy for a quoted "false" and keep blocking an operator who believes they
+  switched the gate off, which is exactly the moment their upgrade is already
+  stuck.
+*/}}
+{{- if ne (include "cozystack.platform.negative" (dig "enabled" true $pf)) "true" }}
+{{- $currentVersion := 0 }}
+{{- $targetVersion := .Values.migrations.targetVersion | int }}
+{{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace "cozystack-version" }}
+{{- $shouldRun := false }}
+{{- if $configMap }}
+  {{- $currentVersion = dig "data" "version" "0" $configMap | int }}
+  {{- if lt $currentVersion $targetVersion }}
+    {{- $shouldRun = true }}
+  {{- end }}
+{{- end }}
+
+{{- if $shouldRun }}
+{{- /*
+  One name for the status ConfigMap, shared by the Job's env and the Role's
+  resourceNames below so the grant can never drift from what the runner writes.
+*/}}
+{{- $statusConfigMap := "cozystack-preflight-status" }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cozystack-preflight-hook
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  # A failed preflight is a verdict, not a flake, so the Job itself does not
+  # retry. It is NOT the durable record of the block, though: the platform
+  # HelmRelease retries a failed upgrade on its own (Upgrade.Strategy
+  # RetryOnFailure, --helmrelease-retry-interval, 30s by default), and helm
+  # deletes a before-hook-creation hook at the top of every attempt, so this
+  # Job and its log survive roughly one retry interval. The verdict an operator
+  # actually reads therefore lives in the status ConfigMap the runner writes;
+  # see run-preflight.sh.
+  backoffLimit: 0
+  # Backstop so the gate cannot wedge the pre-upgrade hook indefinitely. Each
+  # check bounds its own kubectl calls with a `timeout` wrapper, so a healthy
+  # run finishes far under this; the deadline only fires on a pathological hang
+  # the per-call timeouts somehow did not bound.
+  #
+  # The budget covers pulling the image too, and this Job is the first thing to
+  # pull it on an upgrade. That is deliberate rather than a hazard: the
+  # migration hook pulls the same image seconds later, under the release's own
+  # 10m upgrade timeout, so a cluster that cannot fetch it inside 5 minutes was
+  # not going to finish the upgrade either.
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: cozystack-preflight-hook
+      containers:
+        - name: preflight
+          image: {{ .Values.migrations.image }}
+          command: ["/preflight/run-preflight.sh"]
+          # Read-only health probe: it never needs privilege escalation or any
+          # Linux capability, so drop them all.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            # Default-OFF hatch, so only an affirmative spelling (1/true/yes/on,
+            # the same set migrations.etcdAdoptSkipBackup accepts) takes it. An
+            # unrecognised token resolves to "false": the gate is never bypassed
+            # by a typo.
+            - name: PREFLIGHT_OVERRIDE
+              value: {{ include "cozystack.platform.affirmative" (dig "override" false $pf) | quote }}
+            - name: PREFLIGHT_SKIP
+              value: {{ join "," (dig "skipChecks" (list) $pf) | quote }}
+            # Advisory checks warn instead of blocking. linstor is advisory by
+            # default until its live -m field semantics are e2e-verified.
+            - name: PREFLIGHT_ADVISORY
+              value: {{ join "," (dig "advisoryChecks" (list "linstor") $pf) | quote }}
+            # Where the runner mirrors its verdict so it outlives this Job.
+            - name: NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: PREFLIGHT_STATUS_CONFIGMAP
+              value: {{ $statusConfigMap | quote }}
+      restartPolicy: Never
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozystack-preflight-hook
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+rules:
+  # Read-only, and deliberately cluster-wide. nodes are cluster-scoped anyway;
+  # pods/deployments get+list stay here (not in the LINSTOR Role below) so the
+  # LINSTOR check can always probe `get deploy -n cozy-linstor` and get a clean
+  # NotFound -> N/A on a cluster that has no LINSTOR, without depending on the
+  # cozy-linstor namespace existing. The only privileged verb (pods/exec) is
+  # NOT here; it is scoped to the LINSTOR namespace below.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozystack-preflight-hook
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozystack-preflight-hook
+subjects:
+  - kind: ServiceAccount
+    name: cozystack-preflight-hook
+    namespace: {{ .Release.Namespace | quote }}
+---
+# The one write grant the gate holds, and it is deliberately shaped so it can
+# only ever touch its own status object: `create` cannot be restricted by name
+# in RBAC, so it is granted unqualified, while get/update/patch are pinned to
+# the status ConfigMap. cozystack-version lives in this same namespace and
+# already exists, so the create verb cannot reach it and the name-restricted
+# verbs exclude it. The gate remains read-only towards everything it inspects.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozystack-preflight-hook
+  namespace: {{ .Release.Namespace | quote }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ $statusConfigMap | quote }}]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozystack-preflight-hook
+  namespace: {{ .Release.Namespace | quote }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozystack-preflight-hook
+subjects:
+  - kind: ServiceAccount
+    name: cozystack-preflight-hook
+    namespace: {{ .Release.Namespace | quote }}
+{{- if lookup "v1" "Namespace" "" "cozy-linstor" }}
+---
+# pods/exec (running `linstor` inside the controller) is the one privileged
+# grant, so it is a namespaced Role in cozy-linstor rather than cluster-wide:
+# exec cannot be scoped to a single pod name, but limiting it to the one
+# namespace the check ever targets keeps the blast radius contained. Rendered
+# only when the cozy-linstor namespace exists, so a cluster without LINSTOR
+# neither gets this grant nor fails applying a Role into a missing namespace
+# (there the check N/A-skips after the NotFound probe above).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozystack-preflight-hook
+  namespace: cozy-linstor
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozystack-preflight-hook
+  namespace: cozy-linstor
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozystack-preflight-hook
+subjects:
+  - kind: ServiceAccount
+    name: cozystack-preflight-hook
+    namespace: {{ .Release.Namespace | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cozystack-preflight-hook
+  namespace: {{ .Release.Namespace | quote }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+{{- end }}
+{{- end }}
