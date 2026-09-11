@@ -330,6 +330,18 @@ fluent-bit:
     - name: varlibdockercontainers
       mountPath: /var/lib/docker/containers
       readOnly: true
+  # Per-tenant log routing. Every container log still goes to the root
+  # VictoriaLogs below; each entry here additionally copies the logs of one
+  # namespace to that tenant's own VictoriaLogs (the vlinsert of the tenant's
+  # Monitoring application). A rewrite_tag filter re-emits the matching records
+  # under tenant.<namespace>.* and one HTTP output per entry ships them.
+  # `host` and `port` are optional and default to the tenant's own vlinsert.
+  #
+  # tenantLogRouting:
+  #   - namespace: tenant-example
+  #     host: vlinsert-generic.tenant-example.svc
+  #     port: 9481
+  tenantLogRouting: []
   config:
     inputs: |
       [INPUT]
@@ -401,6 +413,19 @@ fluent-bit:
           json_date_format iso8601
           header AccountID 0
           header ProjectID 0
+      {{- range .Values.tenantLogRouting }}
+      [OUTPUT]
+          Name http
+          Match tenant.{{ .namespace }}.*
+          Host {{ .host | default (printf "vlinsert-generic.%s.svc" .namespace) }}
+          port {{ .port | default 9481 }}
+          compress gzip
+          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
+          format json_lines
+          json_date_format iso8601
+          header AccountID 0
+          header ProjectID 0
+      {{- end }}
     filters: |
       [FILTER]
           Name kubernetes
@@ -466,6 +491,16 @@ fluent-bit:
           Rename keep_kubernetes_pod_name kubernetes_pod_name
           Rename keep_kubernetes_namespace_name kubernetes_namespace_name
           Rename keep_kubernetes_container_name kubernetes_container_name
+      {{- range .Values.tenantLogRouting }}
+      [FILTER]
+          Name rewrite_tag
+          Match kube.*
+          Rule $kubernetes_namespace_name ^{{ .namespace }}$ tenant.{{ .namespace }}.$TAG true
+      [FILTER]
+          Name modify
+          Match tenant.{{ .namespace }}.*
+          Set tenant {{ .namespace }}
+      {{- end }}
 scrapeRules:
   etcd:
     enabled: false
