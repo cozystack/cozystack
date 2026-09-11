@@ -1,29 +1,28 @@
 suite: Kafka WorkloadMonitor replica paths
 
-# Regression cover for the fix that split the WorkloadMonitor replica
-# source from a single phantom `.Values.replicas` (which does not exist in
-# this chart's values — kafka and zookeeper carry their own counts) into the
-# correct `.Values.kafka.replicas` and `.Values.zookeeper.replicas`. Before
-# the fix both monitors rendered `replicas:` empty, so the workload-monitor
-# controller never knew the expected replica count.
+# The two monitors read their own replica counts: the brokers from
+# `.Values.kafka.replicas`, the KRaft controllers from
+# `.Values.controller.replicas`. Every KRaft pod carries
+# app.kubernetes.io/name=kafka, so the monitors tell the two pools apart by
+# the strimzi.io/pool-name label the operator puts on node-pool pods.
 
 templates:
   - templates/workloadmonitor.yaml
 
 tests:
-  - it: kafka and zookeeper monitors read their own replica counts
+  - it: broker and controller monitors read their own replica counts
     release:
       name: test-kafka
       namespace: tenant-test
     set:
       kafka:
         replicas: 5
-      zookeeper:
-        replicas: 2
+      controller:
+        replicas: 3
     asserts:
       - hasDocuments:
           count: 2
-      # doc 0 — kafka monitor
+      # doc 0: broker monitor
       - documentIndex: 0
         equal:
           path: metadata.name
@@ -36,29 +35,45 @@ tests:
         equal:
           path: spec.replicas
           value: 5
-      # doc 1 — zookeeper monitor
+      - documentIndex: 0
+        equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/instance: test-kafka
+            strimzi.io/pool-name: test-kafka-broker
+      # doc 1: controller monitor
       - documentIndex: 1
         equal:
           path: metadata.name
-          value: test-kafka-zookeeper
+          value: test-kafka-controller
       - documentIndex: 1
         equal:
           path: spec.type
-          value: zookeeper
+          value: controller
       - documentIndex: 1
         equal:
           path: spec.replicas
-          value: 2
+          value: 3
+      - documentIndex: 1
+        equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/instance: test-kafka
+            strimzi.io/pool-name: test-kafka-controller
+      - documentIndex: 1
+        equal:
+          path: metadata.labels["workloads.cozystack.io/resource-preset"]
+          value: c1.small
 
-  - it: replica counts stay independent (kafka != zookeeper)
+  - it: replica counts stay independent (kafka != controller)
     release:
       name: test-kafka
       namespace: tenant-test
     set:
       kafka:
         replicas: 7
-      zookeeper:
-        replicas: 3
+      controller:
+        replicas: 1
     asserts:
       - documentIndex: 0
         equal:
@@ -67,4 +82,4 @@ tests:
       - documentIndex: 1
         equal:
           path: spec.replicas
-          value: 3
+          value: 1

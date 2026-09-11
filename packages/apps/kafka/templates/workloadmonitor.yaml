@@ -10,9 +10,11 @@ spec:
   minReplicas: 1
   kind: kafka
   type: kafka
+  # Every KRaft pod carries app.kubernetes.io/name=kafka; the pool label is
+  # what tells brokers and controllers apart.
   selector:
     app.kubernetes.io/instance: {{ $.Release.Name }}
-    app.kubernetes.io/name: kafka
+    strimzi.io/pool-name: {{ $.Release.Name }}-broker
   version: {{ $.Chart.Version }}
 
 ---
@@ -20,15 +22,15 @@ spec:
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
-  name: {{ $.Release.Name }}-zookeeper
+  name: {{ $.Release.Name }}-controller
   labels:
-    workloads.cozystack.io/resource-preset: {{ .Values.zookeeper.resourcesPreset | quote }}
+    workloads.cozystack.io/resource-preset: {{ .Values.controller.resourcesPreset | quote }}
 spec:
-  replicas: {{ .Values.zookeeper.replicas }}
+  replicas: {{ .Values.controller.replicas }}
   minReplicas: 1
   kind: kafka
-  type: zookeeper
+  type: controller
   selector:
     app.kubernetes.io/instance: {{ $.Release.Name }}
-    app.kubernetes.io/name: zookeeper
+    strimzi.io/pool-name: {{ $.Release.Name }}-controller
   version: {{ $.Chart.Version }}

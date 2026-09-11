@@ -1,0 +1,46 @@
+{{- /*
+  One KafkaUser per entry of .Values.users. The KafkaUser name is the SCRAM
+  username and the name of the Secret the user operator writes the password
+  into, so it is release-prefixed like every other object of the release and
+  never transformed: a key that is not a lowercase DNS label is refused rather
+  than silently renamed.
+*/ -}}
+{{- range $name, $user := .Values.users }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) }}
+{{- fail (printf "users.%s: the name must be a lowercase DNS label (a-z, 0-9 and dashes) because it becomes the SCRAM username and a Secret name" $name) }}
+{{- end }}
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: {{ $.Release.Name }}-{{ $name }}
+  labels:
+    strimzi.io/cluster: {{ $.Release.Name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+spec:
+  authentication:
+    type: scram-sha-512
+  {{- with (default dict $user).acls }}
+  authorization:
+    type: simple
+    acls:
+    {{- range $i, $acl := . }}
+    {{- if and (ne $acl.resource "cluster") (not $acl.name) }}
+    {{- fail (printf "users.%s.acls[%d]: name is required for a %s rule" $name $i $acl.resource) }}
+    {{- end }}
+    - resource:
+        type: {{ $acl.resource }}
+        {{- with $acl.name }}
+        name: {{ . | quote }}
+        {{- end }}
+        {{- with $acl.patternType }}
+        patternType: {{ . }}
+        {{- end }}
+      operations:
+        {{- range $acl.operations }}
+        - {{ . }}
+        {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}

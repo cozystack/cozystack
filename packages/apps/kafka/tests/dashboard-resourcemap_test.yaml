@@ -123,9 +123,56 @@ tests:
           path: rules[2].resourceNames
           content: test-kafka
         documentIndex: 0
+      - contains:
+          path: rules[2].resourceNames
+          content: test-kafka-controller
+        documentIndex: 0
+      - notContains:
+          path: rules[2].resourceNames
+          content: test-kafka-zookeeper
+        documentIndex: 0
       - equal:
           path: rules[2].apiGroups[0]
           value: cozystack.io
+        documentIndex: 0
+
+  # User credentials: the dashboard may read the Secret Strimzi writes for each user
+  - it: grants access to the Secret of every declared user
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      users:
+        app: {}
+        analytics:
+          acls:
+            - resource: topic
+              name: events
+              operations: [Read]
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: test-kafka-app
+        documentIndex: 0
+      - contains:
+          path: rules[1].resourceNames
+          content: test-kafka-analytics
+        documentIndex: 0
+      - contains:
+          path: rules[1].resourceNames
+          content: test-kafka-clients-ca-cert
+        documentIndex: 0
+
+  - it: grants no user Secret when no user is declared
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: rules[1].resourceNames
+          value:
+            - test-kafka-clients-ca-cert
+            - test-kafka-cluster-ca-cert
         documentIndex: 0
 
   # External bootstrap service absent when external=false, regardless of tls.enabled

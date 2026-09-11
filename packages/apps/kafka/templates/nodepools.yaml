@@ -1,0 +1,65 @@
+{{- /*
+  KRaft node pools: one pool of controllers, one pool of brokers. The pool
+  names are release-prefixed because a KafkaNodePool name is unique per
+  namespace and a tenant may run several Kafka clusters side by side; Strimzi
+  names the pods <cluster>-<pool>-<id> from them.
+
+  Node ids are pinned to disjoint ranges so the brokers are 0..N-1 whatever
+  order the operator creates the pools in: the externalIPs targets (broker-N)
+  and the per-broker Services Strimzi publishes are keyed by node id.
+*/ -}}
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: {{ .Release.Name }}-controller
+  labels:
+    strimzi.io/cluster: {{ .Release.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    strimzi.io/next-node-ids: "[1000-1999]"
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  roles:
+    - controller
+  resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controller.resourcesPreset .Values.controller.resources $) | nindent 4 }}
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        {{- with .Values.controller.size }}
+        size: {{ . }}
+        {{- end }}
+        {{- with .Values.controller.storageClass }}
+        class: {{ . }}
+        {{- end }}
+        deleteClaim: true
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: {{ .Release.Name }}-broker
+  labels:
+    strimzi.io/cluster: {{ .Release.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    strimzi.io/next-node-ids: "[0-999]"
+spec:
+  replicas: {{ .Values.kafka.replicas }}
+  roles:
+    - broker
+  resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 4 }}
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        {{- with .Values.kafka.size }}
+        size: {{ . }}
+        {{- end }}
+        {{- with .Values.kafka.storageClass }}
+        class: {{ . }}
+        {{- end }}
+        deleteClaim: true

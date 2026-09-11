@@ -72,6 +72,71 @@
         }
       }
     },
+    "users": {
+      "description": "Users of the cluster, each backed by a Strimzi KafkaUser. Declaring at least one user turns on SCRAM-SHA-512 authentication on every listener and ACL authorization for the whole cluster, so clients that connected without credentials lose access. The username is `\u003crelease\u003e-\u003ckey\u003e`; Strimzi generates the password into the Secret of the same name (keys `password` and `sasl.jaas.config`). Keys must be lowercase DNS labels.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "acls": {
+            "description": "Access rules of the user. A user without rules can authenticate but is denied everything.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "operations",
+                "resource"
+              ],
+              "properties": {
+                "name": {
+                  "description": "Name of the topic, consumer group or transactional id the rule covers, or its prefix when `patternType` is `prefix`. Not used for `cluster`.",
+                  "type": "string"
+                },
+                "operations": {
+                  "description": "Operations the rule allows on the resource.",
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "Read",
+                      "Write",
+                      "Create",
+                      "Delete",
+                      "Alter",
+                      "Describe",
+                      "ClusterAction",
+                      "AlterConfigs",
+                      "DescribeConfigs",
+                      "IdempotentWrite",
+                      "All"
+                    ]
+                  }
+                },
+                "patternType": {
+                  "description": "`literal` (the default) matches `name` exactly, `prefix` matches every resource whose name starts with it.",
+                  "type": "string",
+                  "enum": [
+                    "literal",
+                    "prefix"
+                  ]
+                },
+                "resource": {
+                  "description": "Kind of resource the rule covers.",
+                  "type": "string",
+                  "enum": [
+                    "topic",
+                    "group",
+                    "cluster",
+                    "transactionalId"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "kafka": {
       "description": "Kafka configuration.",
       "type": "object",
@@ -205,8 +270,8 @@
         }
       }
     },
-    "zookeeper": {
-      "description": "ZooKeeper configuration.",
+    "controller": {
+      "description": "KRaft controller configuration. The controllers hold the cluster metadata that ZooKeeper used to hold; the brokers are configured under `kafka`.",
       "type": "object",
       "default": {},
       "required": [
@@ -217,7 +282,7 @@
       ],
       "properties": {
         "replicas": {
-          "description": "Number of ZooKeeper replicas.",
+          "description": "Number of KRaft controllers. Use an odd number: the metadata quorum needs a majority of them.",
           "type": "integer",
           "default": 3
         },
@@ -309,7 +374,7 @@
           ]
         },
         "size": {
-          "description": "Persistent Volume size for ZooKeeper.",
+          "description": "Persistent Volume size for the metadata log of each controller.",
           "default": "5Gi",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
@@ -323,7 +388,7 @@
           "x-kubernetes-int-or-string": true
         },
         "storageClass": {
-          "description": "StorageClass used to store the ZooKeeper data.",
+          "description": "StorageClass used to store the controller metadata.",
           "type": "string",
           "default": "",
           "x-kubernetes-validations": [

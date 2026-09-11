@@ -30,12 +30,45 @@ type ConfigSpec struct {
 	// Topics configuration.
 	// +kubebuilder:default:={}
 	Topics []Topic `json:"topics,omitempty"`
+	// Users of the cluster, each backed by a Strimzi KafkaUser. Declaring at least one user turns on SCRAM-SHA-512 authentication on every listener and ACL authorization for the whole cluster, so clients that connected without credentials lose access. The username is `<release>-<key>`; Strimzi generates the password into the Secret of the same name (keys `password` and `sasl.jaas.config`). Keys must be lowercase DNS labels.
+	// +kubebuilder:default:={}
+	Users map[string]User `json:"users,omitempty"`
 	// Kafka configuration.
 	// +kubebuilder:default:={}
 	Kafka Kafka `json:"kafka"`
-	// ZooKeeper configuration.
+	// KRaft controller configuration. The controllers hold the cluster metadata that ZooKeeper used to hold; the brokers are configured under `kafka`.
 	// +kubebuilder:default:={}
-	Zookeeper ZooKeeper `json:"zookeeper"`
+	Controller Controller `json:"controller"`
+}
+
+type ACL struct {
+	// Name of the topic, consumer group or transactional id the rule covers, or its prefix when `patternType` is `prefix`. Not used for `cluster`.
+	Name string `json:"name,omitempty"`
+	// Operations the rule allows on the resource.
+	Operations []ACLOperation `json:"operations"`
+	// `literal` (the default) matches `name` exactly, `prefix` matches every resource whose name starts with it.
+	PatternType ACLPatternType `json:"patternType,omitempty"`
+	// Kind of resource the rule covers.
+	Resource ACLResource `json:"resource"`
+}
+
+type Controller struct {
+	// Number of KRaft controllers. Use an odd number: the metadata quorum needs a majority of them.
+	// +kubebuilder:default:=3
+	Replicas int `json:"replicas"`
+	// Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+	// +kubebuilder:default:={}
+	Resources Resources `json:"resources,omitempty"`
+	// Default sizing preset used when `resources` is omitted.
+	// +kubebuilder:default:="c1.small"
+	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
+	// Persistent Volume size for the metadata log of each controller.
+	// +kubebuilder:default:="5Gi"
+	Size resource.Quantity `json:"size"`
+	// StorageClass used to store the controller metadata.
+	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
+	StorageClass string `json:"storageClass"`
 }
 
 type ExternalIP struct {
@@ -87,24 +120,19 @@ type Topic struct {
 	Replicas int `json:"replicas"`
 }
 
-type ZooKeeper struct {
-	// Number of ZooKeeper replicas.
-	// +kubebuilder:default:=3
-	Replicas int `json:"replicas"`
-	// Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
-	// +kubebuilder:default:={}
-	Resources Resources `json:"resources,omitempty"`
-	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="c1.small"
-	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
-	// Persistent Volume size for ZooKeeper.
-	// +kubebuilder:default:="5Gi"
-	Size resource.Quantity `json:"size"`
-	// StorageClass used to store the ZooKeeper data.
-	// +kubebuilder:default:=""
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
-	StorageClass string `json:"storageClass"`
+type User struct {
+	// Access rules of the user. A user without rules can authenticate but is denied everything.
+	Acls []ACL `json:"acls,omitempty"`
 }
+
+// +kubebuilder:validation:Enum="Read";"Write";"Create";"Delete";"Alter";"Describe";"ClusterAction";"AlterConfigs";"DescribeConfigs";"IdempotentWrite";"All"
+type ACLOperation string
+
+// +kubebuilder:validation:Enum="literal";"prefix"
+type ACLPatternType string
+
+// +kubebuilder:validation:Enum="topic";"group";"cluster";"transactionalId"
+type ACLResource string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string

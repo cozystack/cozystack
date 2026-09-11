@@ -21,6 +21,9 @@ rules:
   resourceNames:
   - {{ .Release.Name }}-clients-ca-cert
   - {{ .Release.Name }}-cluster-ca-cert
+  {{- range $name, $_ := .Values.users }}
+  - {{ $.Release.Name }}-{{ $name }}
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io
@@ -28,7 +31,7 @@ rules:
   - workloadmonitors
   resourceNames:
   - {{ .Release.Name }}
-  - {{ $.Release.Name }}-zookeeper
+  - {{ .Release.Name }}-controller
   verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding

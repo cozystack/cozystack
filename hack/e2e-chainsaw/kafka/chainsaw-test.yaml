@@ -1,9 +1,13 @@
 # Chainsaw port of hack/e2e-apps/kafka.bats ("Create Kafka").
 #
-# The final step replaces the BATS check that Strimzi reclaims the ZooKeeper
-# PVCs on delete: instead of a manual kubectl delete, an explicit delete of the
-# Kafka CR followed by `error` ops asserts both PVCs disappear (a regression in
-# the operator's deleteClaim handling would leave them behind).
+# The cluster runs KRaft: the controller and broker pools are KafkaNodePools,
+# so the pods and their PVCs are named <cluster>-<pool>-<node id>. Broker ids
+# start at 0 and controller ids at 1000 (pinned in the chart).
+#
+# The final step replaces the BATS check that Strimzi reclaims the PVCs on
+# delete: instead of a manual kubectl delete, an explicit delete of the Kafka
+# CR followed by `error` ops asserts the PVCs disappear (a regression in the
+# operator's deleteClaim handling would leave them behind).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -47,7 +51,7 @@ spec:
             (conditions[?type == 'Ready']):
             - status: "True"
 
-  - name: verify-zookeeper
+  - name: verify-kraft-pools
     try:
     - assert:
         timeout: 2m
@@ -55,7 +59,7 @@ spec:
           apiVersion: v1
           kind: PersistentVolumeClaim
           metadata:
-            name: data-kafka-test-zookeeper-0
+            name: data-0-kafka-test-kafka-test-controller-1000
           status:
             phase: Bound
     - assert:
@@ -64,7 +68,16 @@ spec:
           apiVersion: v1
           kind: PersistentVolumeClaim
           metadata:
-            name: data-kafka-test-zookeeper-1
+            name: data-0-kafka-test-kafka-test-broker-0
+          status:
+            phase: Bound
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-0-kafka-test-kafka-test-broker-1
           status:
             phase: Bound
     - assert:
@@ -72,25 +85,38 @@ spec:
           apiVersion: v1
           kind: Service
           metadata:
-            name: kafka-test-zookeeper-client
+            name: kafka-test-kafka-bootstrap
           spec:
-            (ports[0].port): 2181
-    - assert:
+            (contains(ports[].port, `9092`)): true
+    - error:
         resource:
           apiVersion: v1
           kind: Service
           metadata:
-            name: kafka-test-zookeeper-nodes
-          spec:
-            (ports[*].port): [2181, 2888, 3888]
+            name: kafka-test-zookeeper-client
+
+  - name: verify-user
+    try:
+    # The user operator turns the KafkaUser into a Secret of the same name
+    # holding the SCRAM password; a missing Secret means users never reconcile.
     - assert:
-        timeout: 2m
+        timeout: 3m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaUser
+          metadata:
+            name: kafka-test-app
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 1m
         resource:
           apiVersion: v1
-          kind: Endpoints
+          kind: Secret
           metadata:
-            name: kafka-test-zookeeper-nodes
-          (subsets[0].addresses[0].ip != null): true
+            name: kafka-test-app
+          (data.password != null): true
 
   - name: verify-pvc-reclaim-on-delete
     try:
@@ -105,11 +131,18 @@ spec:
           apiVersion: v1
           kind: PersistentVolumeClaim
           metadata:
-            name: data-kafka-test-zookeeper-0
+            name: data-0-kafka-test-kafka-test-controller-1000
     - error:
         timeout: 2m
         resource:
           apiVersion: v1
           kind: PersistentVolumeClaim
           metadata:
-            name: data-kafka-test-zookeeper-1
+            name: data-0-kafka-test-kafka-test-broker-0
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-0-kafka-test-kafka-test-broker-1

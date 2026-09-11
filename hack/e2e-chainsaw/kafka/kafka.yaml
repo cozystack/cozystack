@@ -10,12 +10,22 @@ spec:
     storageClass: ""
     resources: {}
     resourcesPreset: "c1.small"
-  zookeeper:
+  controller:
     size: 5Gi
-    replicas: 2
+    replicas: 1
     storageClass: ""
     resources: {}
     resourcesPreset: "c1.small"
+  users:
+    app:
+      acls:
+        - resource: topic
+          name: testResults
+          operations: [Read, Write, Describe]
+        - resource: group
+          name: app-
+          patternType: prefix
+          operations: [Read]
   topics:
     - name: testResults
       partitions: 1

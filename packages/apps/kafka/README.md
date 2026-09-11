@@ -1,6 +1,6 @@
 # Managed Kafka Service
 
-> Both `kafka.storageClass` and `zookeeper.storageClass` are annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+> Both `kafka.storageClass` and `controller.storageClass` are annotated as immutable in the chart schema. See [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
 
 ## Parameters
 
@@ -18,13 +18,19 @@
 
 ### Application-specific parameters
 
-| Name                   | Description           | Type       | Value |
-| ---------------------- | --------------------- | ---------- | ----- |
-| `topics`               | Topics configuration. | `[]object` | `[]`  |
-| `topics[i].name`       | Topic name.           | `string`   | `""`  |
-| `topics[i].partitions` | Number of partitions. | `int`      | `0`   |
-| `topics[i].replicas`   | Number of replicas.   | `int`      | `0`   |
-| `topics[i].config`     | Topic configuration.  | `object`   | `{}`  |
+| Name                              | Description                                                                                                                                                                                                                                                                                                                                                                                                                           | Type                | Value |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----- |
+| `topics`                          | Topics configuration.                                                                                                                                                                                                                                                                                                                                                                                                                 | `[]object`          | `[]`  |
+| `topics[i].name`                  | Topic name.                                                                                                                                                                                                                                                                                                                                                                                                                           | `string`            | `""`  |
+| `topics[i].partitions`            | Number of partitions.                                                                                                                                                                                                                                                                                                                                                                                                                 | `int`               | `0`   |
+| `topics[i].replicas`              | Number of replicas.                                                                                                                                                                                                                                                                                                                                                                                                                   | `int`               | `0`   |
+| `topics[i].config`                | Topic configuration.                                                                                                                                                                                                                                                                                                                                                                                                                  | `object`            | `{}`  |
+| `users`                           | Users of the cluster, each backed by a Strimzi KafkaUser. Declaring at least one user turns on SCRAM-SHA-512 authentication on every listener and ACL authorization for the whole cluster, so clients that connected without credentials lose access. The username is `<release>-<key>`; Strimzi generates the password into the Secret of the same name (keys `password` and `sasl.jaas.config`). Keys must be lowercase DNS labels. | `map[string]object` | `{}`  |
+| `users[name].acls`                | Access rules of the user. A user without rules can authenticate but is denied everything.                                                                                                                                                                                                                                                                                                                                             | `[]object`          | `[]`  |
+| `users[name].acls[i].resource`    | Kind of resource the rule covers.                                                                                                                                                                                                                                                                                                                                                                                                     | `string`            | `""`  |
+| `users[name].acls[i].name`        | Name of the topic, consumer group or transactional id the rule covers, or its prefix when `patternType` is `prefix`. Not used for `cluster`.                                                                                                                                                                                                                                                                                          | `string`            | `""`  |
+| `users[name].acls[i].patternType` | `literal` (the default) matches `name` exactly, `prefix` matches every resource whose name starts with it.                                                                                                                                                                                                                                                                                                                            | `string`            | `""`  |
+| `users[name].acls[i].operations`  | Operations the rule allows on the resource.                                                                                                                                                                                                                                                                                                                                                                                           | `[]string`          | `[]`  |
 
 
 ### Kafka configuration
@@ -41,18 +47,18 @@
 | `kafka.storageClass`     | StorageClass used to store the Kafka data.                                                               | `string`   | `""`       |
 
 
-### ZooKeeper configuration
+### Controller configuration
 
-| Name                         | Description                                                                                              | Type       | Value      |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
-| `zookeeper`                  | ZooKeeper configuration.                                                                                 | `object`   | `{}`       |
-| `zookeeper.replicas`         | Number of ZooKeeper replicas.                                                                            | `int`      | `3`        |
-| `zookeeper.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
-| `zookeeper.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`       |
-| `zookeeper.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`       |
-| `zookeeper.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `c1.small` |
-| `zookeeper.size`             | Persistent Volume size for ZooKeeper.                                                                    | `quantity` | `5Gi`      |
-| `zookeeper.storageClass`     | StorageClass used to store the ZooKeeper data.                                                           | `string`   | `""`       |
+| Name                          | Description                                                                                                                                      | Type       | Value      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ---------- |
+| `controller`                  | KRaft controller configuration. The controllers hold the cluster metadata that ZooKeeper used to hold; the brokers are configured under `kafka`. | `object`   | `{}`       |
+| `controller.replicas`         | Number of KRaft controllers. Use an odd number: the metadata quorum needs a majority of them.                                                    | `int`      | `3`        |
+| `controller.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.                                         | `object`   | `{}`       |
+| `controller.resources.cpu`    | CPU available to each replica.                                                                                                                   | `quantity` | `""`       |
+| `controller.resources.memory` | Memory (RAM) available to each replica.                                                                                                          | `quantity` | `""`       |
+| `controller.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                                          | `string`   | `c1.small` |
+| `controller.size`             | Persistent Volume size for the metadata log of each controller.                                                                                  | `quantity` | `5Gi`      |
+| `controller.storageClass`     | StorageClass used to store the controller metadata.                                                                                              | `string`   | `""`       |
 
 
 ## Parameter examples and reference
@@ -75,9 +81,24 @@ Presets follow a cloud-style `<series>.<size>` naming convention. Five series co
 
 See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
 
-### Authentication
+### Authentication and access rules
 
-This chart does not configure listener authentication. When TLS is enabled on the external listener, clients can connect without credentials. To require authentication, use Strimzi's `KafkaUser` resource with an appropriate `authentication` type (`tls`, `scram-sha-512`, or `oauth`) outside this chart. See the [Strimzi documentation on KafkaUser](https://strimzi.io/docs/operators/latest/overview.html#security-options_str) for details.
+Listeners are open until the first user is declared. Declaring users switches the whole cluster to authenticated mode: every listener asks for SCRAM-SHA-512 credentials and the simple authorizer enforces the ACLs below, so clients that connected without credentials lose access at that point. The username is `<release>-<key>` and Strimzi writes the generated password into a Secret of the same name, under the keys `password` and `sasl.jaas.config`.
+
+```yaml
+users:
+  app:
+    acls:
+    - resource: topic
+      name: orders
+      operations: [Read, Write, Describe]
+    - resource: group
+      name: app-
+      patternType: prefix
+      operations: [Read]
+```
+
+Rules only ever allow: a user without rules can authenticate but is denied everything, and the entity operator that reconciles topics and users stays a super user. A rule covers a `topic`, a consumer `group`, a `transactionalId` or the `cluster` itself; `patternType: prefix` matches every name starting with `name`. Mutual TLS and OAuth users are not managed by this chart.
 
 ### topics
 

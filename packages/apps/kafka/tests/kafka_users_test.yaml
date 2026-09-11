@@ -1,0 +1,173 @@
+suite: Kafka users and ACLs
+
+# `users` is the switch between an open cluster and an authenticated one.
+# With no users the listeners stay exactly as they were and no authorizer is
+# configured, so nothing changes for an existing release. With users, every
+# listener asks for SCRAM-SHA-512 credentials, the simple authorizer is on
+# with the cluster operator as super user, and each user becomes a KafkaUser
+# whose ACLs are the user's `acls` entries in Strimzi's shape.
+
+templates:
+  - templates/kafka.yaml
+  - templates/users.yaml
+
+release:
+  name: test-kafka
+  namespace: tenant-test
+
+tests:
+  - it: no users leaves the listeners open and renders no authorizer or KafkaUser
+    asserts:
+      - notExists:
+          path: spec.kafka.authorization
+        template: templates/kafka.yaml
+      - notExists:
+          path: spec.kafka.listeners[0].authentication
+        template: templates/kafka.yaml
+      - notExists:
+          path: spec.kafka.listeners[1].authentication
+        template: templates/kafka.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/users.yaml
+
+  - it: a user turns on SCRAM-SHA-512 on every listener and the simple authorizer
+    set:
+      external: true
+      users:
+        app: {}
+    asserts:
+      - equal:
+          path: spec.kafka.authorization
+          value:
+            type: simple
+            superUsers:
+              - CN=cluster-operator,O=io.strimzi
+        template: templates/kafka.yaml
+      - equal:
+          path: spec.kafka.listeners[0].authentication.type
+          value: scram-sha-512
+        template: templates/kafka.yaml
+      - equal:
+          path: spec.kafka.listeners[1].authentication.type
+          value: scram-sha-512
+        template: templates/kafka.yaml
+      - equal:
+          path: spec.kafka.listeners[2].authentication.type
+          value: scram-sha-512
+        template: templates/kafka.yaml
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 3
+        template: templates/kafka.yaml
+
+  - it: a user without rules is a KafkaUser that can authenticate but has no ACLs
+    set:
+      users:
+        app: {}
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: templates/users.yaml
+      - isKind:
+          of: KafkaUser
+        template: templates/users.yaml
+      - equal:
+          path: metadata.name
+          value: test-kafka-app
+        template: templates/users.yaml
+      - equal:
+          path: metadata.labels["strimzi.io/cluster"]
+          value: test-kafka
+        template: templates/users.yaml
+      - equal:
+          path: spec.authentication.type
+          value: scram-sha-512
+        template: templates/users.yaml
+      - notExists:
+          path: spec.authorization
+        template: templates/users.yaml
+
+  - it: acls are rendered in Strimzi's shape, one rule per entry
+    set:
+      users:
+        app:
+          acls:
+            - resource: topic
+              name: orders
+              operations: [Read, Write, Describe]
+            - resource: group
+              name: app-
+              patternType: prefix
+              operations: [Read]
+            - resource: cluster
+              operations: [IdempotentWrite]
+    asserts:
+      - equal:
+          path: spec.authorization
+          value:
+            type: simple
+            acls:
+              - resource:
+                  type: topic
+                  name: orders
+                operations:
+                  - Read
+                  - Write
+                  - Describe
+              - resource:
+                  type: group
+                  name: app-
+                  patternType: prefix
+                operations:
+                  - Read
+              - resource:
+                  type: cluster
+                operations:
+                  - IdempotentWrite
+        template: templates/users.yaml
+
+  - it: renders one KafkaUser per user
+    set:
+      users:
+        app: {}
+        analytics:
+          acls:
+            - resource: topic
+              name: events
+              operations: [Read]
+    asserts:
+      - hasDocuments:
+          count: 2
+        template: templates/users.yaml
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: test-kafka-analytics
+        template: templates/users.yaml
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: test-kafka-app
+        template: templates/users.yaml
+
+  - it: a topic rule without a name is refused with the offending entry named
+    set:
+      users:
+        app:
+          acls:
+            - resource: topic
+              operations: [Read]
+    asserts:
+      - failedTemplate:
+          errorMessage: "users.app.acls[0]: name is required for a topic rule"
+        template: templates/users.yaml
+
+  - it: a user name that is not a DNS label is refused rather than renamed
+    set:
+      users:
+        myApp: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: "users.myApp: the name must be a lowercase DNS label (a-z, 0-9 and dashes) because it becomes the SCRAM username and a Secret name"
+        template: templates/users.yaml

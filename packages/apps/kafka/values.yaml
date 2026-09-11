@@ -51,6 +51,52 @@ topics: []
 ##     partitions: 1
 ##     replicas: 3
 
+## @enum {string} ACLResource - Kind of Kafka resource an access rule covers.
+## @value topic
+## @value group
+## @value cluster
+## @value transactionalId
+
+## @enum {string} ACLPatternType - How the `name` of an access rule is matched.
+## @value literal
+## @value prefix
+
+## @enum {string} ACLOperation - Operation an access rule allows.
+## @value Read
+## @value Write
+## @value Create
+## @value Delete
+## @value Alter
+## @value Describe
+## @value ClusterAction
+## @value AlterConfigs
+## @value DescribeConfigs
+## @value IdempotentWrite
+## @value All
+
+## @typedef {struct} ACL - One access rule of a user. Rules only ever allow; whatever no rule allows is denied.
+## @field {ACLResource} resource - Kind of resource the rule covers.
+## @field {string} [name] - Name of the topic, consumer group or transactional id the rule covers, or its prefix when `patternType` is `prefix`. Not used for `cluster`.
+## @field {ACLPatternType} [patternType] - `literal` (the default) matches `name` exactly, `prefix` matches every resource whose name starts with it.
+## @field {[]ACLOperation} operations - Operations the rule allows on the resource.
+
+## @typedef {struct} User - A SCRAM-SHA-512 user of the cluster.
+## @field {[]ACL} [acls] - Access rules of the user. A user without rules can authenticate but is denied everything.
+
+## @param {map[string]User} users - Users of the cluster, each backed by a Strimzi KafkaUser. Declaring at least one user turns on SCRAM-SHA-512 authentication on every listener and ACL authorization for the whole cluster, so clients that connected without credentials lose access. The username is `<release>-<key>`; Strimzi generates the password into the Secret of the same name (keys `password` and `sasl.jaas.config`). Keys must be lowercase DNS labels.
+users: {}
+## Example:
+## users:
+##   app:
+##     acls:
+##     - resource: topic
+##       name: orders
+##       operations: [Read, Write, Describe]
+##     - resource: group
+##       name: app-
+##       patternType: prefix
+##       operations: [Read]
+
 ##
 ## @section Kafka configuration
 ##
@@ -126,20 +172,20 @@ kafka:
   storageClass: ""
 
 ##
-## @section ZooKeeper configuration
+## @section Controller configuration
 ##
 
-## @typedef {struct} ZooKeeper - ZooKeeper configuration.
-## @field {int} replicas - Number of ZooKeeper replicas.
+## @typedef {struct} Controller - KRaft controller configuration.
+## @field {int} replicas - Number of KRaft controllers. Use an odd number: the metadata quorum needs a majority of them.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
-## @field {quantity} size - Persistent Volume size for ZooKeeper.
-## @field {string} storageClass - StorageClass used to store the ZooKeeper data.
+## @field {quantity} size - Persistent Volume size for the metadata log of each controller.
+## @field {string} storageClass - StorageClass used to store the controller metadata.
 ## @immutable
 ## @x-cozystack-options {source: storageclass}
 
-## @param {ZooKeeper} zookeeper - ZooKeeper configuration.
-zookeeper:
+## @param {Controller} controller - KRaft controller configuration. The controllers hold the cluster metadata that ZooKeeper used to hold; the brokers are configured under `kafka`.
+controller:
   replicas: 3
   resources: {}
   resourcesPreset: "c1.small"

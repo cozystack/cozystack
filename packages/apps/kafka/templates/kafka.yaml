@@ -25,6 +25,12 @@
 {{- $brokerTargets = append $brokerTargets (printf "broker-%d" $i) -}}
 {{- end -}}
 {{- $externalIPs := include "cozy-lib.externalIP.claims" (list .Values.externalIPs .Values.external "bootstrap" (concat (list "bootstrap") $brokerTargets) $) | fromYaml -}}
+{{- /* Declaring a user switches the cluster to authenticated mode: every
+     listener asks for SCRAM-SHA-512 credentials and the simple (ACL)
+     authorizer decides what each principal may do. Without users the
+     listeners stay open, as they always were, because an authorizer with no
+     ACLs would deny the anonymous clients of every existing release. */ -}}
+{{- $authEnabled := not (empty .Values.users) -}}
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:
@@ -32,24 +38,45 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    # KRaft with node pools: the brokers and controllers are the KafkaNodePools
+    # in nodepools.yaml, so this CR carries neither replicas nor storage.
+    strimzi.io/kraft: enabled
+    strimzi.io/node-pools: enabled
 spec:
   kafka:
-    replicas: {{ .Values.kafka.replicas }}
-    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 6 }}
+    # Both pins must stay within what the Strimzi shipped by
+    # packages/system/kafka-operator supports (0.45.x: Kafka 3.8.0 to 3.9.1).
+    # metadataVersion is the KRaft metadata format; bump it after a Kafka
+    # version bump, never before.
+    version: {{ .Chart.AppVersion }}
+    metadataVersion: 3.9-IV0
     listeners:
       - name: plain
         port: 9092
         type: internal
         tls: false
+        {{- if $authEnabled }}
+        authentication:
+          type: scram-sha-512
+        {{- end }}
       - name: tls
         port: 9093
         type: internal
         tls: true
+        {{- if $authEnabled }}
+        authentication:
+          type: scram-sha-512
+        {{- end }}
       {{- if $showExternal }}
       - name: external
         port: 9094
         type: loadbalancer
         tls: {{ $tlsEnabled }}
+        {{- if $authEnabled }}
+        authentication:
+          type: scram-sha-512
+        {{- end }}
         {{- if $externalIPs }}
         configuration:
           {{- with (include "cozy-lib.externalIP.annotations" (list $externalIPs "bootstrap" $)) }}
@@ -73,6 +100,14 @@ spec:
           {{- end }}
         {{- end }}
       {{- end }}
+    {{- if $authEnabled }}
+    authorization:
+      type: simple
+      # Strimzi adds its own operators here by itself; the cluster operator is
+      # named explicitly so the guarantee is visible in the rendered CR.
+      superUsers:
+        - CN=cluster-operator,O=io.strimzi
+    {{- end }}
     config:
       {{- if eq (int .Values.kafka.replicas) 1 }}
       offsets.topic.replication.factor: 1
@@ -93,36 +128,6 @@ spec:
       default.replication.factor: 3
       min.insync.replicas: 2
       {{- end }}
-    storage:
-      type: jbod
-      volumes:
-      - id: 0
-        type: persistent-claim
-        {{- with .Values.kafka.size }}
-        size: {{ . }}
-        {{- end }}
-        {{- with .Values.kafka.storageClass }}
-        class: {{ . }}
-        {{- end }}
-        deleteClaim: true
-    metricsConfig:
-      type: jmxPrometheusExporter
-      valueFrom:
-        configMapKeyRef:
-          name: {{ .Release.Name }}-metrics
-          key: kafka-metrics-config.yml
-  zookeeper:
-    replicas: {{ .Values.zookeeper.replicas }}
-    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.zookeeper.resourcesPreset .Values.zookeeper.resources $) | nindent 6 }}
-    storage:
-      type: persistent-claim
-      {{- with .Values.zookeeper.size }}
-      size: {{ . }}
-      {{- end }}
-      {{- with .Values.kafka.storageClass }}
-      class: {{ . }}
-      {{- end }}
-      deleteClaim: true
     metricsConfig:
       type: jmxPrometheusExporter
       valueFrom:

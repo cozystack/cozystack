@@ -1,0 +1,185 @@
+suite: Kafka on KRaft with node pools
+
+# The chart renders a KRaft cluster: the Kafka CR carries the two Strimzi
+# annotations and neither replicas, storage nor a zookeeper section, while a
+# controller pool and a broker pool carry the counts, sizing and storage from
+# `controller` and `kafka` respectively. Node ids are pinned to disjoint
+# ranges so the brokers are always 0..N-1 (the externalIPs `broker-N` targets
+# and Strimzi's per-broker Services are keyed by node id).
+
+templates:
+  - templates/kafka.yaml
+  - templates/nodepools.yaml
+
+release:
+  name: test-kafka
+  namespace: tenant-test
+
+tests:
+  - it: Kafka CR is KRaft with node pools and has no zookeeper section
+    template: templates/kafka.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["strimzi.io/kraft"]
+          value: enabled
+      - equal:
+          path: metadata.annotations["strimzi.io/node-pools"]
+          value: enabled
+      - notExists:
+          path: spec.zookeeper
+      - notExists:
+          path: spec.kafka.replicas
+      - notExists:
+          path: spec.kafka.storage
+      - notExists:
+          path: spec.kafka.resources
+
+  - it: Kafka CR pins a version and metadata version the shipped Strimzi supports
+    template: templates/kafka.yaml
+    asserts:
+      - equal:
+          path: spec.kafka.version
+          value: 3.9.1
+      - equal:
+          path: spec.kafka.metadataVersion
+          value: 3.9-IV0
+
+  - it: renders a controller pool and a broker pool bound to the cluster
+    template: templates/nodepools.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        isKind:
+          of: KafkaNodePool
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: test-kafka-controller
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["strimzi.io/cluster"]
+          value: test-kafka
+      - documentIndex: 0
+        equal:
+          path: spec.roles
+          value: [controller]
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: test-kafka-broker
+      - documentIndex: 1
+        equal:
+          path: metadata.labels["strimzi.io/cluster"]
+          value: test-kafka
+      - documentIndex: 1
+        equal:
+          path: spec.roles
+          value: [broker]
+
+  - it: pools take replicas, size and storageClass from their own values
+    template: templates/nodepools.yaml
+    set:
+      controller:
+        replicas: 1
+        size: 2Gi
+        storageClass: fast
+      kafka:
+        replicas: 5
+        size: 50Gi
+        storageClass: bulk
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.replicas
+          value: 1
+      - documentIndex: 0
+        equal:
+          path: spec.storage
+          value:
+            type: jbod
+            volumes:
+              - id: 0
+                type: persistent-claim
+                size: 2Gi
+                class: fast
+                deleteClaim: true
+      - documentIndex: 1
+        equal:
+          path: spec.replicas
+          value: 5
+      - documentIndex: 1
+        equal:
+          path: spec.storage
+          value:
+            type: jbod
+            volumes:
+              - id: 0
+                type: persistent-claim
+                size: 50Gi
+                class: bulk
+                deleteClaim: true
+
+  - it: an empty storageClass leaves the class to the cluster default
+    template: templates/nodepools.yaml
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.storage.volumes[0].class
+      - documentIndex: 1
+        notExists:
+          path: spec.storage.volumes[0].class
+
+  - it: pools take resources from their own preset
+    template: templates/nodepools.yaml
+    set:
+      controller:
+        resourcesPreset: c1.micro
+      kafka:
+        resourcesPreset: c1.large
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.resources.limits.memory
+          value: 512Mi
+      - documentIndex: 0
+        equal:
+          path: spec.resources.limits.cpu
+          value: 500m
+      - documentIndex: 1
+        equal:
+          path: spec.resources.limits.memory
+          value: 4Gi
+      - documentIndex: 1
+        equal:
+          path: spec.resources.limits.cpu
+          value: "4"
+
+  - it: explicit resources win over the preset
+    template: templates/nodepools.yaml
+    set:
+      controller:
+        resources:
+          cpu: 500m
+          memory: 3Gi
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.resources.limits.memory
+          value: 3Gi
+      - documentIndex: 0
+        equal:
+          path: spec.resources.limits.cpu
+          value: 500m
+
+  - it: broker ids start at 0 and controller ids sit in a disjoint range
+    template: templates/nodepools.yaml
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.annotations["strimzi.io/next-node-ids"]
+          value: "[1000-1999]"
+      - documentIndex: 1
+        equal:
+          path: metadata.annotations["strimzi.io/next-node-ids"]
+          value: "[0-999]"
