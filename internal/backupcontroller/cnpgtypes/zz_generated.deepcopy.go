@@ -247,6 +247,7 @@ func (in *ObjectStoreSpec) DeepCopyInto(out *ObjectStoreSpec) {
 
 func (in *InstanceSidecarConfiguration) DeepCopyInto(out *InstanceSidecarConfiguration) {
 	*out = *in
+	in.Resources.DeepCopyInto(&out.Resources)
 	if in.Env != nil {
 		out.Env = make([]EnvVar, len(in.Env))
 		copy(out.Env, in.Env)

@@ -1,0 +1,75 @@
+suite: Barman resources under tenant container limits
+templates:
+  - templates/db.yaml
+release:
+  name: postgres-source
+  namespace: tenant-test
+set:
+  _cluster:
+    scheduling: {}
+  backup:
+    destinationPath: s3://backups/test/
+    endpointURL: https://s3.example.org
+    s3CredentialsSecret:
+      name: postgres-backup
+tests:
+  - it: sets resources for native backup without inheriting the tenant 128Mi limit
+    set:
+      backup.enabled: true
+    asserts:
+      - equal:
+          path: spec.instanceSidecarConfiguration.resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+        documentSelector:
+          path: kind
+          value: ObjectStore
+      - notExists:
+          path: spec.instanceSidecarConfiguration.resources.limits.cpu
+        documentSelector:
+          path: kind
+          value: ObjectStore
+      - equal:
+          path: spec.configuration.s3Credentials.accessKeyId.name
+          value: postgres-backup
+        documentSelector:
+          path: kind
+          value: ObjectStore
+  - it: gives recovery its own resources while backup remains disabled
+    set:
+      backup.enabled: false
+      bootstrap:
+        enabled: true
+        oldName: postgres-original
+    asserts:
+      - equal:
+          path: spec.instanceSidecarConfiguration.resources.limits.memory
+          value: 1Gi
+        documentSelector:
+          path: kind
+          value: ObjectStore
+      - equal:
+          path: metadata.name
+          value: postgres-source-recovery
+        documentSelector:
+          path: kind
+          value: ObjectStore
+      - equal:
+          path: spec.externalClusters[0].plugin.parameters.serverName
+          value: postgres-original
+        documentSelector:
+          path: kind
+          value: Cluster
+  - it: does not enable backup for an application that has not requested it
+    asserts:
+      - hasDocuments:
+          count: 2
+      - notExists:
+          path: spec.plugins
+        documentSelector:
+          path: kind
+          value: Cluster

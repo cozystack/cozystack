@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1664,17 +1665,39 @@ func buildBarmanPlugin(objectStoreName, serverName string) cnpgtypes.PluginConfi
 	}
 }
 
-// barmanSidecarConfiguration pins the barman-cloud sidecar's boto3 request
-// checksum policy to "when_required". Since botocore ~1.36 the default
-// (when_supported) attaches a flexible checksum to every PutObject, which
-// non-AWS S3-compatible backends (Ceph RGW, and the platform's own default
-// SeaweedFS system bucket) reject with "x-amz-content-sha256 must be
-// UNSIGNED-PAYLOAD, ...". Compute a checksum only when required; AWS S3
-// accepts that too, so it is a safe default everywhere. This mirrors the same
-// env set on the chart-rendered ObjectStores (packages/{apps/postgres,
-// system/keycloak}/templates/db.yaml) and the etcd-operator fix (#342).
+// barmanSidecarConfiguration carries the two settings the barman-cloud sidecar
+// cannot get right on its own.
+//
+// Resources: tenant namespaces ship a LimitRange defaulting containers to 128Mi
+// (packages/apps/tenant/templates/quota.yaml). The plugin injects the sidecar
+// without resources, so it inherits that default and is OOMKilled mid-backup,
+// leaving the ObjectStore healthy and the backup failed. Measured cgroup
+// high-water mark on a 38 MB database is 254 MiB, so 128Mi cannot hold it. No
+// CPU limit is set, matching the entityOperator precedent in
+// packages/apps/kafka: a throttled sidecar stalls WAL archiving instead of
+// failing it.
+//
+// Checksum: since botocore ~1.36 the default (when_supported) attaches a
+// flexible checksum to every PutObject, which non-AWS S3-compatible backends
+// (Ceph RGW, and the platform's own default SeaweedFS system bucket) reject
+// with "x-amz-content-sha256 must be UNSIGNED-PAYLOAD, ...". Compute a checksum
+// only when required; AWS S3 accepts that too, so it is a safe default
+// everywhere.
+//
+// This mirrors the chart-rendered ObjectStores, which take both fields from
+// cozy-lib.barman.sidecarConfiguration (packages/{apps/postgres,
+// system/keycloak}/templates/db.yaml), and the etcd-operator fix (#342).
 func barmanSidecarConfiguration() *cnpgtypes.InstanceSidecarConfiguration {
 	return &cnpgtypes.InstanceSidecarConfiguration{
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("256Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+			},
+		},
 		Env: []cnpgtypes.EnvVar{{
 			Name:  "AWS_REQUEST_CHECKSUM_CALCULATION",
 			Value: "when_required",
