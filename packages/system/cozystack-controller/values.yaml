@@ -7,3 +7,5 @@ cozystackController:
   # stack that scrapes it run in a separate cluster. Empty keeps discovery
   # via the namespace.cozystack.io/monitoring label.
   seaweedfsMetricsEndpoint: ""
+  replicas: 1
+  resources: {}
