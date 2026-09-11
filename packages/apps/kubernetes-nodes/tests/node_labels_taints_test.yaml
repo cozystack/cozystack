@@ -1,0 +1,119 @@
+suite: pool labels and taints reach the Talos worker machineconfig
+
+# `labels` and `taints` are rendered into the worker TalosConfigTemplate the
+# pool's reconcile Job applies, as machine.nodeLabels and machine.nodeTaints
+# (the kubelet's registerWithTaints), next to the gpu=on label GPU pools get.
+# They are tenant input landing in the Job's unquoted heredoc, so the render
+# refuses anything that is not plain label-key, label-value or effect syntax
+# (cozystack/cozystack#3513), and the labels the chart manages itself.
+
+templates:
+  - templates/talos-reconcile-job.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 10
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: []
+  resources:
+    cpu: "8"
+    memory: 16Gi
+
+tests:
+  - it: renders neither nodeLabels nor nodeTaints by default
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeTaints:'
+
+  - it: labels land in machine.nodeLabels, sorted, values quoted
+    set:
+      labels:
+        workload: batch
+        example.com/tier: gold
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:\s*\n\s+example\.com/tier: "gold"\s*\n\s+workload: "batch"\s*\n'
+
+  - it: a GPU pool keeps gpu=on beside its own labels
+    set:
+      gpus:
+        - name: nvidia.com/GH200
+      labels:
+        workload: ml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:\s*\n\s+gpu: "on"\s*\n\s+workload: "ml"\s*\n'
+
+  - it: taints land in machine.nodeTaints as value:effect, or effect alone without a value
+    set:
+      taints:
+        - key: dedicated
+          value: batch
+          effect: NoSchedule
+        - key: example.com/spot
+          effect: PreferNoSchedule
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeTaints:\s*\n\s+dedicated: "batch:NoSchedule"\s*\n\s+example\.com/spot: "PreferNoSchedule"\s*\n'
+
+  - it: a label key that is not label syntax is refused
+    set:
+      labels:
+        "bad key": x
+    asserts:
+      - failedTemplate:
+          errorPattern: 'labels: "bad key" is not a valid label key'
+
+  - it: a label value carrying shell metacharacters is refused
+    set:
+      labels:
+        workload: "$(id)"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'labels.workload: "\$\(id\)" is not a valid label value'
+
+  - it: the gpu and node-role labels are refused because the chart owns them
+    set:
+      labels:
+        gpu: "off"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'labels: "gpu" is managed by the chart'
+
+  - it: a taint key with a backtick is refused
+    set:
+      taints:
+        - key: "a`b"
+          effect: NoSchedule
+    asserts:
+      - failedTemplate:
+          errorPattern: 'taints\[0\].key: "a`b" is not a valid taint key'

@@ -41,6 +41,12 @@ type ConfigSpec struct {
 	// List of node roles. Each role `r` labels nodes with `node-role.kubernetes.io/<r>`. Use `[ingress-nginx]` for a pool that hosts the tenant ingress-nginx controller.
 	// +kubebuilder:default:={}
 	Roles []string `json:"roles,omitempty"`
+	// Extra labels every node of the pool registers with, for nodeSelector and affinity rules; rendered into the Talos worker config as `machine.nodeLabels`. Keys and values must be valid Kubernetes label syntax. Role labels come from `roles` and GPU pools get `gpu=on` on their own, so neither belongs here. Reaches the nodes that register after the change; a running node keeps the labels it registered with until it is replaced.
+	// +kubebuilder:default:={}
+	Labels map[string]string `json:"labels,omitempty"`
+	// Taints every node of the pool registers with, so only Pods that tolerate them land on the pool; rendered into the Talos worker config as `machine.nodeTaints`, which is the kubelet's registerWithTaints. Reaches the nodes that register after the change; a running node keeps the taints it registered with until it is replaced.
+	// +kubebuilder:default:={}
+	Taints []Taint `json:"taints,omitempty"`
 	// Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
@@ -118,6 +124,15 @@ type Resources struct {
 	Memory resource.Quantity `json:"memory,omitempty"`
 }
 
+type Taint struct {
+	// What happens to Pods that do not tolerate the taint.
+	Effect TaintEffect `json:"effect"`
+	// Taint key, in label-key syntax (`dedicated`, `example.com/gpu`).
+	Key string `json:"key"`
+	// Taint value, in label-value syntax. Empty is allowed.
+	Value string `json:"value,omitempty"`
+}
+
 type Talos struct {
 	// Base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.
 	// +kubebuilder:default:="https://factory.talos.dev"
@@ -135,6 +150,9 @@ type Talos struct {
 	// +kubebuilder:default:="v1.13.6"
 	Version string `json:"version"`
 }
+
+// +kubebuilder:validation:Enum="NoSchedule";"PreferNoSchedule";"NoExecute"
+type TaintEffect string
 
 // +kubebuilder:validation:Enum="v1.35";"v1.34";"v1.33";"v1.32";"v1.31"
 type Version string

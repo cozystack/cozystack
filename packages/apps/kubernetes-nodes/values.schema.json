@@ -67,6 +67,45 @@
         "type": "string"
       }
     },
+    "labels": {
+      "description": "Extra labels every node of the pool registers with, for nodeSelector and affinity rules; rendered into the Talos worker config as `machine.nodeLabels`. Keys and values must be valid Kubernetes label syntax. Role labels come from `roles` and GPU pools get `gpu=on` on their own, so neither belongs here. Reaches the nodes that register after the change; a running node keeps the labels it registered with until it is replaced.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "taints": {
+      "description": "Taints every node of the pool registers with, so only Pods that tolerate them land on the pool; rendered into the Talos worker config as `machine.nodeTaints`, which is the kubelet's registerWithTaints. Reaches the nodes that register after the change; a running node keeps the taints it registered with until it is replaced.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "effect",
+          "key"
+        ],
+        "properties": {
+          "effect": {
+            "description": "What happens to Pods that do not tolerate the taint.",
+            "type": "string",
+            "enum": [
+              "NoSchedule",
+              "PreferNoSchedule",
+              "NoExecute"
+            ]
+          },
+          "key": {
+            "description": "Taint key, in label-key syntax (`dedicated`, `example.com/gpu`).",
+            "type": "string"
+          },
+          "value": {
+            "description": "Taint value, in label-value syntax. Empty is allowed.",
+            "type": "string"
+          }
+        }
+      }
+    },
     "resources": {
       "description": "Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.",
       "type": "object",
