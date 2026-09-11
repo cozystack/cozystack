@@ -1,0 +1,56 @@
+suite: cozy-external-dns startup-probe cozystack patch
+release:
+  name: external-dns
+  namespace: cozy-external-dns
+tests:
+  # cozystack carries `patches/deployment-startup-probe.diff` on the vendored
+  # external-dns v1.20.0 subchart because the upstream deployment.yaml templates
+  # only liveness/readiness and renders no startupProbe, so a slow first start
+  # (informer source-cache sync under E2E-sandbox load) is SIGKILLed by liveness
+  # into a restart loop that cascades into the wrapping HelmRelease timing out
+  # (see cozystack/cozystack#3459). If a future `make update` bump re-pulls
+  # upstream and the local patch drops off, or an upstream refactor renames or
+  # replaces this Deployment, these asserts catch it before the flake returns.
+  - it: external-dns Deployment carries a startupProbe covering the slow-start window
+    template: charts/external-dns/templates/deployment.yaml
+    asserts:
+      - exists:
+          path: spec.template.spec.containers[0].startupProbe
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: http
+      # Budget = periodSeconds * failureThreshold. Pinning both exact values
+      # locks the total (5 * 45 = 225s) as a regression sentinel: a chart bump
+      # that silently zeroed one of them would still fall out here. Bumping the
+      # budget deliberately requires a matching test update; the comment on the
+      # package values.yaml covers why it must stay inside the operator's 10m
+      # HelmRelease install timeout.
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 45
+
+  # Liveness / readiness must survive the patch unchanged on the same /healthz
+  # endpoint. startupProbe covers the slow-start window; once it passes the
+  # kubelet gates on the normal probes at their default cadence. If an upstream
+  # refactor renamed the port or path, this catches the drift.
+  - it: external-dns Deployment leaves upstream liveness and readiness intact on /healthz
+    template: charts/external-dns/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: http
