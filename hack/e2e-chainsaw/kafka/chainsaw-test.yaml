@@ -11,6 +11,12 @@ kind: Test
 metadata:
   name: kafka
 spec:
+  # A KRaft teardown (broker + controller pools, entity operator, their PVCs)
+  # has more to drain than the shared 5m cleanup default allows once a CI run
+  # is contended, so give this suite a wider cleanup budget — teardown latency,
+  # not the assertions, was deciding the verdict.
+  timeouts:
+    cleanup: 8m
   catch:
   - events: {}
   - describe:
