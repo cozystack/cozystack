@@ -1,0 +1,129 @@
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $sharded := .Values.sharding | default false }}
+{{- /* One mongodb_exporter per release. It logs in as the operator's own
+     clusterMonitor system user, whose credentials the PSMDB operator keeps in
+     the internal-<release>-users Secret beside the databaseAdmin ones the
+     chart already reads for the dashboard; kubelet resolves the keys at pod
+     start, so the exporter simply waits (CreateContainerConfigError) until the
+     operator has written that Secret. The credentials travel as separate
+     user/password inputs rather than inside the URI so a generated password
+     never needs URL-escaping.
+
+     The URI targets the replset Service, or mongos on a sharded cluster where
+     replSetGetStatus is not served and the replicaset collector is left out. */}}
+{{- $host := ternary (printf "%s-mongos" .Release.Name) (printf "%s-rs0" .Release.Name) $sharded }}
+{{- $uri := printf "mongodb://%s.%s.svc.%s:27017/admin" $host .Release.Namespace $clusterDomain }}
+{{- if not $sharded }}
+{{- $uri = printf "%s?replicaSet=rs0" $uri }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-metrics
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: metrics-exporter
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: metrics-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: metrics-exporter
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: exporter
+          image: percona/mongodb_exporter:0.40
+          args:
+            - --mongodb.uri={{ $uri }}
+            - --collector.diagnosticdata
+            {{- if not $sharded }}
+            - --collector.replicasetstatus
+            {{- end }}
+            - --collector.dbstats
+            - --compatible-mode
+            - --web.listen-address=:9216
+          env:
+            - name: MONGODB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: internal-{{ .Release.Name }}-users
+                  key: MONGODB_CLUSTER_MONITOR_USER
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: internal-{{ .Release.Name }}-users
+                  key: MONGODB_CLUSTER_MONITOR_PASSWORD
+          ports:
+            - name: metrics
+              containerPort: 9216
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: metrics
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-metrics
+  labels:
+    app: {{ .Release.Name }}-metrics
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: metrics-exporter
+  ports:
+    - name: metrics
+      port: 9216
+      targetPort: metrics
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  jobLabel: jobLabel
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-metrics
+  endpoints:
+    - port: metrics
+      relabelConfigs:
+        - replacement: mongodb
+          targetLabel: job
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+        - targetLabel: service
+          replacement: {{ .Release.Name }}

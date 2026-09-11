@@ -1,0 +1,113 @@
+suite: mongodb metrics exporter
+
+# The PerconaServerMongoDB is rendered with pmm disabled, so nothing collected
+# its metrics. A mongodb_exporter Deployment now logs in as the operator's
+# clusterMonitor system user (internal-<release>-users Secret) against the
+# replset Service, and a VMServiceScrape stamps service=<release> on every
+# series, the redis convention.
+
+templates:
+  - templates/exporter.yaml
+
+release:
+  name: test-mongodb
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: renders the exporter Deployment, its Service and the scrape
+    asserts:
+      - hasDocuments:
+          count: 3
+      - isKind:
+          of: Deployment
+        documentIndex: 0
+      - isKind:
+          of: Service
+        documentIndex: 1
+      - isKind:
+          of: VMServiceScrape
+        documentIndex: 2
+
+  - it: the exporter targets the replset Service with the operator's monitor user
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: percona/mongodb_exporter:0.40
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mongodb.uri=mongodb://test-mongodb-rs0.tenant-test.svc.cozy.local:27017/admin?replicaSet=rs0
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --collector.replicasetstatus
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MONGODB_USER
+            valueFrom:
+              secretKeyRef:
+                name: internal-test-mongodb-users
+                key: MONGODB_CLUSTER_MONITOR_USER
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MONGODB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: internal-test-mongodb-users
+                key: MONGODB_CLUSTER_MONITOR_PASSWORD
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 9216
+
+  - it: a sharded cluster is scraped through mongos without the replicaset collector
+    set:
+      sharding: true
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mongodb.uri=mongodb://test-mongodb-mongos.tenant-test.svc.cozy.local:27017/admin
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --collector.replicasetstatus
+
+  - it: the Service exposes the metrics port of the exporter pod
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-mongodb-metrics
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/instance: test-mongodb
+            app.kubernetes.io/component: metrics-exporter
+      - equal:
+          path: spec.ports[0].port
+          value: 9216
+
+  - it: the scrape selects that Service and stamps service=<release>
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app: test-mongodb-metrics
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+      - contains:
+          path: spec.endpoints[0].relabelConfigs
+          content:
+            targetLabel: service
+            replacement: test-mongodb
+      - contains:
+          path: spec.endpoints[0].relabelConfigs
+          content:
+            replacement: mongodb
+            targetLabel: job
