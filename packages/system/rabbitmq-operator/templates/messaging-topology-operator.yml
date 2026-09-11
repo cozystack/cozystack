@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: bindings.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -71,9 +71,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -145,7 +143,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: exchanges.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -213,9 +211,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -286,7 +282,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: federations.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -332,6 +328,15 @@ spec:
                     - on-publish
                     - no-ack
                   type: string
+                deletionPolicy:
+                  default: delete
+                  description: |-
+                    DeletionPolicy defines the behavior of federation in the RabbitMQ cluster when the corresponding custom resource is deleted.
+                    Can be set to 'delete' or 'retain'. Default is 'delete'.
+                  enum:
+                    - delete
+                    - retain
+                  type: string
                 exchange:
                   type: string
                 expires:
@@ -346,6 +351,18 @@ spec:
                 prefetch-count:
                   type: integer
                 queue:
+                  type: string
+                queueType:
+                  description: |-
+                    The queue type of the internal upstream queue used by exchange federation.
+                    Defaults to classic (a single replica queue type). Set to quorum to use a replicated queue type.
+                    Changing the queue type will delete and recreate the upstream queue by default.
+                    This may lead to messages getting lost or not routed anywhere during the re-declaration.
+                    To avoid that, set resource-cleanup-mode key to never.
+                    This requires manually deleting the old upstream queue so that it can be recreated with the new type.
+                  enum:
+                    - classic
+                    - quorum
                   type: string
                 rabbitmqClusterReference:
                   description: |-
@@ -365,9 +382,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -384,6 +399,15 @@ spec:
                   type: object
                 reconnectDelay:
                   type: integer
+                resourceCleanupMode:
+                  description: |-
+                    Whether to delete the internal upstream queue when federation links stop.
+                    By default, the internal upstream queue is deleted immediately when a federation link stops.
+                    Set to never to keep the upstream queue around and collect messages even when changing federation configuration.
+                  enum:
+                    - default
+                    - never
+                  type: string
                 trustUserId:
                   type: boolean
                 uriSecret:
@@ -400,9 +424,7 @@ spec:
                         This field is effectively required, but due to backwards compatibility is
                         allowed to be empty. Instances of this type with an empty value here are
                         almost certainly wrong.
-                        TODO: Add other useful fields. apiVersion, kind, uid?
                         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                        TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                       type: string
                   type: object
                   x-kubernetes-map-type: atomic
@@ -459,7 +481,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: operatorpolicies.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -546,9 +568,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -617,7 +637,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: permissions.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -685,9 +705,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -715,9 +733,7 @@ spec:
                         This field is effectively required, but due to backwards compatibility is
                         allowed to be empty. Instances of this type with an empty value here are
                         almost certainly wrong.
-                        TODO: Add other useful fields. apiVersion, kind, uid?
                         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                        TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                       type: string
                   type: object
                   x-kubernetes-map-type: atomic
@@ -773,7 +789,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: policies.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -862,9 +878,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -933,7 +947,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: queues.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -986,6 +1000,15 @@ spec:
                 deleteIfUnused:
                   description: when set to true, queues are delete only if they have no consumer.
                   type: boolean
+                deletionPolicy:
+                  default: delete
+                  description: |-
+                    DeletionPolicy defines the behavior of queue in the RabbitMQ cluster when the corresponding custom resource is deleted.
+                    Can be set to 'delete' or 'retain'. Default is 'delete'.
+                  enum:
+                    - delete
+                    - retain
+                  type: string
                 durable:
                   description: When set to false queues does not survive server restart.
                   type: boolean
@@ -1010,9 +1033,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -1081,7 +1102,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: schemareplications.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -1143,9 +1164,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -1187,9 +1206,7 @@ spec:
                         This field is effectively required, but due to backwards compatibility is
                         allowed to be empty. Instances of this type with an empty value here are
                         almost certainly wrong.
-                        TODO: Add other useful fields. apiVersion, kind, uid?
                         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                        TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                       type: string
                   type: object
                   x-kubernetes-map-type: atomic
@@ -1240,7 +1257,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: shovels.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -1290,6 +1307,15 @@ spec:
                   type: boolean
                 deleteAfter:
                   type: string
+                deletionPolicy:
+                  default: delete
+                  description: |-
+                    DeletionPolicy defines the behavior of shovel in the RabbitMQ cluster when the corresponding custom resource is deleted.
+                    Can be set to 'delete' or 'retain'. Default is 'delete'.
+                  enum:
+                    - delete
+                    - retain
+                  type: string
                 destAddForwardHeaders:
                   type: boolean
                 destAddTimestampHeader:
@@ -1327,6 +1353,9 @@ spec:
                 destQueue:
                   description: amqp091 configuration
                   type: string
+                destQueueArgs:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
                 name:
                   description: Required property; cannot be updated
                   type: string
@@ -1350,9 +1379,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -1394,6 +1421,9 @@ spec:
                 srcQueue:
                   description: amqp091 configuration
                   type: string
+                srcQueueArgs:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
                 uriSecret:
                   description: |-
                     Secret contains the AMQP URI(s) to configure Shovel destination and source.
@@ -1408,9 +1438,7 @@ spec:
                         This field is effectively required, but due to backwards compatibility is
                         allowed to be empty. Instances of this type with an empty value here are
                         almost certainly wrong.
-                        TODO: Add other useful fields. apiVersion, kind, uid?
                         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                        TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                       type: string
                   type: object
                   x-kubernetes-map-type: atomic
@@ -1467,7 +1495,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: superstreams.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -1532,9 +1560,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -1613,7 +1639,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: topicpermissions.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -1659,6 +1685,8 @@ spec:
                       type: string
                     write:
                       type: string
+                  required:
+                    - exchange
                   type: object
                 rabbitmqClusterReference:
                   description: |-
@@ -1678,9 +1706,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -1708,9 +1734,7 @@ spec:
                         This field is effectively required, but due to backwards compatibility is
                         allowed to be empty. Instances of this type with an empty value here are
                         almost certainly wrong.
-                        TODO: Add other useful fields. apiVersion, kind, uid?
                         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                        TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                       type: string
                   type: object
                   x-kubernetes-map-type: atomic
@@ -1766,7 +1790,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: users.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -1806,12 +1830,16 @@ spec:
               properties:
                 importCredentialsSecret:
                   description: |-
-                    Defines a Secret used to pre-define the username and password set for this User. User objects created
-                    with this field set will not have randomly-generated credentials, and will instead import
-                    the username/password values from this Secret.
-                    The Secret must contain the keys `username` and `password` in its Data field, or the import will fail.
-                    Note that this import only occurs at creation time, and is ignored once a password has been set
-                    on a User.
+                    Defines a Secret containing the credentials for the User. If this field is omitted, random a username and
+                    password will be generated. The Secret must have the following keys in its Data field:
+
+                     * `username` – Must be present or the import will fail.
+                     * `passwordHash` – The SHA-512 hash of the password. If the hash is an empty string, a passwordless user
+                       will be created. For more information, see https://www.rabbitmq.com/docs/passwords.
+                     * `password` – Plain-text password. Will be used only if the `passwordHash` key is missing.
+
+                    The Operator watches this Secret and re-syncs the User's credentials to RabbitMQ whenever it changes,
+                    so updating the Secret's `password`/`passwordHash` rotates the User's password.
                   properties:
                     name:
                       default: ""
@@ -1820,12 +1848,26 @@ spec:
                         This field is effectively required, but due to backwards compatibility is
                         allowed to be empty. Instances of this type with an empty value here are
                         almost certainly wrong.
-                        TODO: Add other useful fields. apiVersion, kind, uid?
                         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                        TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                       type: string
                   type: object
                   x-kubernetes-map-type: atomic
+                limits:
+                  description: |-
+                    Limits to apply to a user to restrict the number of connections and channels
+                    the user can create. These limits can be used as guard rails in environments
+                    where applications cannot be trusted and monitored in detail, for example,
+                    when RabbitMQ clusters are offered as a service. See https://www.rabbitmq.com/docs/user-limits.
+                  properties:
+                    channels:
+                      description: Limits how many AMQP 0.9.1 channels the user can open.
+                      format: int32
+                      type: integer
+                    connections:
+                      description: Limits how many connections the user can open.
+                      format: int32
+                      type: integer
+                  type: object
                 rabbitmqClusterReference:
                   description: |-
                     Reference to the RabbitmqCluster that the user will be created for. This cluster must
@@ -1844,9 +1886,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -1919,9 +1959,7 @@ spec:
                         This field is effectively required, but due to backwards compatibility is
                         allowed to be empty. Instances of this type with an empty value here are
                         almost certainly wrong.
-                        TODO: Add other useful fields. apiVersion, kind, uid?
                         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                        TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                       type: string
                   type: object
                   x-kubernetes-map-type: atomic
@@ -1947,7 +1985,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: vhosts.rabbitmq.com
 spec:
   group: rabbitmq.com
@@ -1994,6 +2032,28 @@ spec:
                     - classic
                     - stream
                   type: string
+                deletionPolicy:
+                  default: delete
+                  description: |-
+                    DeletionPolicy defines the behavior of vhost in the RabbitMQ cluster when the corresponding custom resource is deleted.
+                    Can be set to 'delete' or 'retain'. Default is 'delete'.
+                  enum:
+                    - delete
+                    - retain
+                  type: string
+                limits:
+                  description: |-
+                    Limits defines limits to be applied to the vhost.
+                    Supported limits include max-connections and max-queues.
+                    See https://www.rabbitmq.com/docs/vhosts#limits
+                  properties:
+                    connections:
+                      format: int32
+                      type: integer
+                    queues:
+                      format: int32
+                      type: integer
+                  type: object
                 name:
                   description: Name of the vhost; see https://www.rabbitmq.com/vhosts.html.
                   type: string
@@ -2015,9 +2075,7 @@ spec:
                             This field is effectively required, but due to backwards compatibility is
                             allowed to be empty. Instances of this type with an empty value here are
                             almost certainly wrong.
-                            TODO: Add other useful fields. apiVersion, kind, uid?
                             More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
@@ -2085,6 +2143,9 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: messaging-topology-operator
   name: messaging-topology-operator
   namespace: cozy-rabbitmq-operator
 ---
@@ -2092,12 +2153,23 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   labels:
-    app.kubernetes.io/component: rabbitmq-operator
-    app.kubernetes.io/name: rabbitmq-cluster-operator
-    app.kubernetes.io/part-of: rabbitmq
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: messaging-topology-operator
   name: messaging-topology-leader-election-role
   namespace: cozy-rabbitmq-operator
 rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
   - apiGroups:
       - coordination.k8s.io
     resources:
@@ -2116,18 +2188,7 @@ rules:
       - events
     verbs:
       - create
-  - apiGroups:
-      - ""
-    resources:
-      - configmaps
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
       - patch
-      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -2137,19 +2198,12 @@ rules:
   - apiGroups:
       - ""
     resources:
-      - events
-    verbs:
-      - create
-      - get
-      - patch
-  - apiGroups:
-      - ""
-    resources:
       - secrets
     verbs:
       - create
       - get
       - list
+      - update
       - watch
   - apiGroups:
       - ""
@@ -2160,9 +2214,28 @@ rules:
       - list
       - watch
   - apiGroups:
+      - events.k8s.io
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  - apiGroups:
       - rabbitmq.com
     resources:
       - bindings
+      - exchanges
+      - federations
+      - operatorpolicies
+      - permissions
+      - policies
+      - queues
+      - schemareplications
+      - shovels
+      - superstreams
+      - topicpermissions
+      - users
+      - vhosts
     verbs:
       - create
       - delete
@@ -2175,168 +2248,36 @@ rules:
       - rabbitmq.com
     resources:
       - bindings/finalizers
+      - exchanges/finalizers
+      - federations/finalizers
+      - operatorpolicies/finalizers
+      - permissions/finalizers
+      - policies/finalizers
+      - queues/finalizers
+      - schemareplications/finalizers
+      - shovels/finalizers
+      - superstreams/finalizers
+      - topicpermissions/finalizers
+      - users/finalizers
+      - vhosts/finalizers
     verbs:
       - update
   - apiGroups:
       - rabbitmq.com
     resources:
       - bindings/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - exchanges
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - exchanges/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
       - exchanges/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - federations
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - federations/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
       - federations/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - operatorpolicies
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - operatorpolicies/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
       - operatorpolicies/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - permissions
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - permissions/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
       - permissions/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - policies
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - policies/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
       - policies/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - queues
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - queues/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
       - queues/status
+      - schemareplications/status
+      - shovels/status
+      - superstreams/status
+      - topicpermissions/status
+      - users/status
+      - vhosts/status
     verbs:
       - get
       - patch
@@ -2355,166 +2296,41 @@ rules:
       - rabbitmqclusters/status
     verbs:
       - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: messaging-topology-metrics-auth-role
+rules:
   - apiGroups:
-      - rabbitmq.com
+      - authentication.k8s.io
     resources:
-      - schemareplications
+      - tokenreviews
     verbs:
       - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
   - apiGroups:
-      - rabbitmq.com
+      - authorization.k8s.io
     resources:
-      - schemareplications/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - schemareplications/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - shovels
+      - subjectaccessreviews
     verbs:
       - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - shovels/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - shovels/status
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: messaging-topology-metrics-reader
+rules:
+  - nonResourceURLs:
+      - /metrics
     verbs:
       - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - superstreams
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - superstreams/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - superstreams/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - topicpermissions
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - topicpermissions/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - topicpermissions/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - users
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - users/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - users/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - vhosts
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - vhosts/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - rabbitmq.com
-    resources:
-      - vhosts/status
-    verbs:
-      - get
-      - patch
-      - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: messaging-topology-operator
   name: messaging-topology-leader-election-rolebinding
   namespace: cozy-rabbitmq-operator
 roleRef:
@@ -2529,6 +2345,9 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: messaging-topology-operator
   name: messaging-topology-manager-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -2539,25 +2358,64 @@ subjects:
     name: messaging-topology-operator
     namespace: cozy-rabbitmq-operator
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: messaging-topology-metrics-auth-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: messaging-topology-metrics-auth-role
+subjects:
+  - kind: ServiceAccount
+    name: messaging-topology-operator
+    namespace: cozy-rabbitmq-operator
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: webhook-service
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: messaging-topology-operator
+    control-plane: controller-manager
+  name: messaging-topology-controller-metrics-service
+  namespace: cozy-rabbitmq-operator
+spec:
+  ports:
+    - name: https
+      port: 8443
+      protocol: TCP
+      targetPort: 8443
+  selector:
+    app.kubernetes.io/name: messaging-topology-operator
+    control-plane: controller-manager
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: messaging-topology-operator
+  name: messaging-topology-webhook-service
   namespace: cozy-rabbitmq-operator
 spec:
   ports:
     - port: 443
+      protocol: TCP
       targetPort: 9443
   selector:
     app.kubernetes.io/name: messaging-topology-operator
+    control-plane: controller-manager
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
     app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: messaging-topology-operator
     app.kubernetes.io/part-of: rabbitmq
+    control-plane: controller-manager
   name: messaging-topology-operator
   namespace: cozy-rabbitmq-operator
 spec:
@@ -2567,37 +2425,68 @@ spec:
       app.kubernetes.io/name: messaging-topology-operator
   template:
     metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
       labels:
         app.kubernetes.io/component: rabbitmq-operator
         app.kubernetes.io/name: messaging-topology-operator
         app.kubernetes.io/part-of: rabbitmq
+        control-plane: controller-manager
     spec:
       containers:
-        - command:
+        - args:
+            - --metrics-bind-address=:8443
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            - --metrics-secure
+            - --metrics-cert-path=/tmp/k8s-metrics-server/metrics-certs
+          command:
             - /manager
-          env:
-            - name: OPERATOR_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-          image: rabbitmqoperator/messaging-topology-operator:1.14.2
-          imagePullPolicy: Always
+          image: ghcr.io/rabbitmq/messaging-topology-operator:1.20.2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
           name: manager
           ports:
             - containerPort: 9443
               name: webhook-server
               protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             limits:
-              cpu: 300m
-              memory: 500Mi
+              cpu: 500m
+              memory: 512Mi
             requests:
-              cpu: 100m
-              memory: 100Mi
+              cpu: 300m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
           volumeMounts:
             - mountPath: /tmp/k8s-webhook-server/serving-certs
               name: cert
               readOnly: true
+            - mountPath: /tmp/k8s-metrics-server/metrics-certs
+              name: metrics-certs
+              readOnly: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       serviceAccountName: messaging-topology-operator
       terminationGracePeriodSeconds: 10
       volumes:
@@ -2605,45 +2494,106 @@ spec:
           secret:
             defaultMode: 420
             secretName: webhook-server-cert
+        - name: metrics-certs
+          secret:
+            items:
+              - key: ca.crt
+                path: ca.crt
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+            optional: false
+            secretName: metrics-server-cert
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: serving-cert
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: messaging-topology-operator
+  name: messaging-topology-metrics-certs
   namespace: cozy-rabbitmq-operator
 spec:
   dnsNames:
-    - webhook-service.cozy-rabbitmq-operator.svc
-    - webhook-service.cozy-rabbitmq-operator.svc.cluster.local
+    - messaging-topology-controller-metrics-service.cozy-rabbitmq-operator.svc
+    - messaging-topology-controller-metrics-service.cozy-rabbitmq-operator.svc.cluster.local
   issuerRef:
     kind: Issuer
-    name: selfsigned-issuer
+    name: messaging-topology-selfsigned-issuer
+  secretName: metrics-server-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: messaging-topology-operator
+  name: messaging-topology-serving-cert
+  namespace: cozy-rabbitmq-operator
+spec:
+  dnsNames:
+    - messaging-topology-webhook-service.cozy-rabbitmq-operator.svc
+    - messaging-topology-webhook-service.cozy-rabbitmq-operator.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: messaging-topology-selfsigned-issuer
   secretName: webhook-server-cert
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
-  name: selfsigned-issuer
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: messaging-topology-operator
+  name: messaging-topology-selfsigned-issuer
   namespace: cozy-rabbitmq-operator
 spec:
   selfSigned: {}
 ---
 apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingWebhookConfiguration
+kind: MutatingWebhookConfiguration
 metadata:
   annotations:
-    cert-manager.io/inject-ca-from: cozy-rabbitmq-operator/serving-cert
-  name: topology.rabbitmq.com
+    cert-manager.io/inject-ca-from: cozy-rabbitmq-operator/messaging-topology-serving-cert
+  name: messaging-topology-mutating-webhook-configuration
 webhooks:
   - admissionReviewVersions:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
+        namespace: cozy-rabbitmq-operator
+        path: /mutate-rabbitmq-com-v1beta1-queue
+    failurePolicy: Fail
+    name: mqueue.kb.io
+    rules:
+      - apiGroups:
+          - rabbitmq.com
+        apiVersions:
+          - v1beta1
+        operations:
+          - CREATE
+        resources:
+          - queues
+    sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: cozy-rabbitmq-operator/messaging-topology-serving-cert
+  name: messaging-topology-validating-webhook-configuration
+webhooks:
+  - admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-binding
     failurePolicy: Fail
-    name: vbinding.kb.io
+    name: vbinding-v1beta1.kb.io
     rules:
       - apiGroups:
           - rabbitmq.com
@@ -2659,7 +2609,7 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-exchange
     failurePolicy: Fail
@@ -2679,7 +2629,7 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-federation
     failurePolicy: Fail
@@ -2699,11 +2649,11 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-operatorpolicy
     failurePolicy: Fail
-    name: voperatorpolicy.kb.io
+    name: voperatorpolicy-v1beta1.kb.io
     rules:
       - apiGroups:
           - rabbitmq.com
@@ -2719,11 +2669,11 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-permission
     failurePolicy: Fail
-    name: vpermission.kb.io
+    name: vpermission-v1beta1.kb.io
     rules:
       - apiGroups:
           - rabbitmq.com
@@ -2739,7 +2689,7 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-policy
     failurePolicy: Fail
@@ -2759,7 +2709,7 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-queue
     failurePolicy: Fail
@@ -2779,11 +2729,11 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-schemareplication
     failurePolicy: Fail
-    name: vschemareplication.kb.io
+    name: vschemareplication-v1beta1.kb.io
     rules:
       - apiGroups:
           - rabbitmq.com
@@ -2799,11 +2749,11 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-shovel
     failurePolicy: Fail
-    name: vshovel.kb.io
+    name: vshovel-v1beta1.kb.io
     rules:
       - apiGroups:
           - rabbitmq.com
@@ -2817,14 +2767,33 @@ webhooks:
     sideEffects: None
   - admissionReviewVersions:
       - v1
-      - v1beta1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
+        namespace: cozy-rabbitmq-operator
+        path: /validate-rabbitmq-com-v1alpha1-superstream
+    failurePolicy: Fail
+    name: vsuperstream-v1alpha1.kb.io
+    rules:
+      - apiGroups:
+          - rabbitmq.com
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - superstreams
+    sideEffects: None
+  - admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-topicpermission
     failurePolicy: Fail
-    name: vtopicpermission.kb.io
+    name: vtopicpermission-v1beta1.kb.io
     rules:
       - apiGroups:
           - rabbitmq.com
@@ -2840,7 +2809,7 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-user
     failurePolicy: Fail
@@ -2860,7 +2829,7 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
+        name: messaging-topology-webhook-service
         namespace: cozy-rabbitmq-operator
         path: /validate-rabbitmq-com-v1beta1-vhost
     failurePolicy: Fail
@@ -2875,24 +2844,4 @@ webhooks:
           - UPDATE
         resources:
           - vhosts
-    sideEffects: None
-  - admissionReviewVersions:
-      - v1
-    clientConfig:
-      service:
-        name: webhook-service
-        namespace: cozy-rabbitmq-operator
-        path: /validate-rabbitmq-com-v1alpha1-superstream
-    failurePolicy: Fail
-    name: vsuperstream.kb.io
-    rules:
-      - apiGroups:
-          - rabbitmq.com
-        apiVersions:
-          - v1alpha1
-        operations:
-          - CREATE
-          - UPDATE
-        resources:
-          - superstreams
     sideEffects: None

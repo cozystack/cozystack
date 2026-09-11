@@ -157,6 +157,9 @@ metadata:
   name: {{ $.Release.Name }}-{{ kebabcase $user }}-credentials
   labels:
     apps.cozystack.io/user-secret: "true"
+    # Topology Operator >= 1.20 caches only Secrets carrying this label, and its User
+    # admission webhook rejects an importCredentialsSecret that lacks it.
+    rabbitmq.com/topology-operator: "true"
 type: Opaque
 stringData:
   username: {{ $user }}
