@@ -130,6 +130,15 @@ func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRo
 	}
 }
 
+// listenerAllowedRoutes returns an AllowedRoutes owned by the one
+// listener it is handed to: base's namespace selector restricted to
+// kinds, deep-copied whole. Listeners built from the same base and the
+// same kinds share nothing, so narrowing one of them later — a kind
+// dropped, a selector tightened — cannot reach its neighbours.
+func listenerAllowedRoutes(base *gatewayv1.AllowedRoutes, kinds []gatewayv1.RouteGroupKind) *gatewayv1.AllowedRoutes {
+	return (&gatewayv1.AllowedRoutes{Namespaces: base.Namespaces, Kinds: kinds}).DeepCopy()
+}
+
 // buildHTTPListenerAllowedRoutes returns a strictly narrower
 // allowedRoutes for the port-80 listener: only the tenant namespace,
 // where both the controller-owned http→https redirect HTTPRoute and

@@ -4105,7 +4105,8 @@ func TestReconcile_ExistingSecretModeKeepsHTTPRedirectAndPassthrough(t *testing.
 //     appear in any port-443 listener's kinds set. cilium#45559 governs
 //     only that the sets match each other, so this is least privilege:
 //     nothing the platform ships needs gRPC, TCP or UDP routing on port
-//     443. TCPRoute and UDPRoute also carry no hostname and no admission
+//
+//  443. TCPRoute and UDPRoute also carry no hostname and no admission
 //     rule gates them, so admitting them would let a tenant serve
 //     arbitrary traffic under the apex cert without admission control.
 //     GRPCRoute hostnames are gated by the cozystack-route-hostname-policy
@@ -5107,5 +5108,77 @@ func TestReconcile_SwitchingBackFromEdgeRestoresTheACMEShape(t *testing.T) {
 	}
 	if err := c.Get(context.TODO(), types.NamespacedName{Name: gatewayIssuerName(tgw), Namespace: "tenant-foo"}, &cmv1.Issuer{}); err != nil {
 		t.Errorf("the ACME Issuer must be minted again on the way back: %v", err)
+	}
+}
+
+// TestRenderGateway_EveryListenerOwnsItsAllowedRoutes pins the
+// ownership rule the listener builders follow: no two listeners share
+// an AllowedRoutes, a RouteNamespaces or a Kinds backing array. A
+// shared value renders identically to an owned one, so the aliasing is
+// invisible until someone narrows a single listener's kinds or
+// selector and the edit silently lands on its neighbours too.
+func TestRenderGateway_EveryListenerOwnsItsAllowedRoutes(t *testing.T) {
+	r := &Reconciler{Scheme: newScheme(t)}
+
+	tgwFor := func(mode gatewayv1alpha1.CertMode) *gatewayv1alpha1.TenantGateway {
+		tgw := &gatewayv1alpha1.TenantGateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+			Spec: gatewayv1alpha1.TenantGatewaySpec{
+				Apex:                   "foo.example.com",
+				CertMode:               mode,
+				GatewayClassName:       "cilium",
+				AttachedNamespaces:     []string{"cozy-harbor", "cozy-dashboard"},
+				TLSPassthroughServices: []string{"api", "vm-exportproxy"},
+			},
+		}
+		if mode == gatewayv1alpha1.CertModeExistingSecret {
+			tgw.Spec.WildcardSecretRef = &corev1.LocalObjectReference{Name: "wildcard-tls"}
+		}
+		return tgw
+	}
+
+	for _, mode := range []gatewayv1alpha1.CertMode{
+		gatewayv1alpha1.CertModeHTTP01,
+		gatewayv1alpha1.CertModeDNS01,
+		gatewayv1alpha1.CertModeExistingSecret,
+		gatewayv1alpha1.CertModeEdge,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			gw, err := r.renderGateway(
+				tgwFor(mode),
+				[]string{"harbor.foo.example.com", "keycloak.foo.example.com"},
+				[]string{"alice.example.com", "bob.example.com"},
+			)
+			if err != nil {
+				t.Fatalf("renderGateway: %v", err)
+			}
+			if len(gw.Spec.Listeners) < 3 {
+				t.Fatalf("expected several listeners to compare, got %+v", gw.Spec.Listeners)
+			}
+
+			owner := map[any]string{}
+			claim := func(p any, what, listener string) {
+				if prev, ok := owner[p]; ok {
+					t.Errorf("listener %q shares its %s with listener %q", listener, what, prev)
+					return
+				}
+				owner[p] = listener
+			}
+			for i := range gw.Spec.Listeners {
+				l := &gw.Spec.Listeners[i]
+				name := string(l.Name)
+				if l.AllowedRoutes == nil {
+					t.Errorf("listener %q has no allowedRoutes", name)
+					continue
+				}
+				claim(l.AllowedRoutes, "allowedRoutes", name)
+				if l.AllowedRoutes.Namespaces != nil {
+					claim(l.AllowedRoutes.Namespaces, "allowedRoutes.namespaces", name)
+				}
+				if len(l.AllowedRoutes.Kinds) > 0 {
+					claim(&l.AllowedRoutes.Kinds[0], "allowedRoutes.kinds backing array", name)
+				}
+			}
+		})
 	}
 }
