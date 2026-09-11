@@ -2,6 +2,28 @@ apiVersion: cozystack.io/v1alpha1
 kind: ApplicationDefinition
 metadata:
   name: postgres
+  annotations:
+    # Force client-side (two-way) Helm apply for every Postgres HelmRelease.
+    # helm-controller v1.5.0 defaults to server-side apply, which force-owns every
+    # rendered field and would revert spec.instances from KEDA's live /scale value on
+    # every reconcile, collapsing an autoscaled cluster. Client-side apply diffs the
+    # previous vs new rendered manifest and does not consult live state, so the chart's
+    # constant instances seed is a no-op and KEDA's value survives.
+    # Kind-wide is deliberate (every Postgres release, not only autoscaled ones): a
+    # per-instance flip would force an SSA->client-side handoff on the live
+    # spec.instances the moment autoscaling is enabled (helm-controller resolves an
+    # unset serverSideApply from the last release's method), the live field handoff
+    # this design avoids. Trade-off: a never-autoscaled release is client-side too, so
+    # a chart field that drifts on the live CR is no longer re-asserted (client-side
+    # never reads live state; driftDetection is unset) - accepted, the platform relies
+    # on GitOps re-render, and per-instance apply strategy is a follow-up.
+    # Rollout is gradual, not fleet-wide at the platform upgrade that ships this: an
+    # existing Postgres HelmRelease keeps server-side apply until its Application is next
+    # written through the aggregated API (the ApplicationDefinition reconciler syncs only
+    # chartRef/valuesFrom/labels onto a live HelmRelease, not the apply strategy), so an
+    # upgraded fleet flips one app at a time as each is next reconciled.
+    # See HelmServerSideApplyAnnotation in pkg/config/config.go.
+    release.cozystack.io/helm-server-side-apply: "false"
 spec:
   application:
     kind: Postgres
@@ -17,6 +39,25 @@ spec:
       kind: ExternalArtifact
       name: cozystack-postgres-application-default-postgres
       namespace: cozy-system
+    # A ScaledObject whose Prometheus trigger cannot resolve (a `monitoring: true`
+    # tenant who enabled autoscaling.enabled but did not point serverAddress at a
+    # vmselect carrying kube_pod_labels) stays Ready=False with reason=TriggerError
+    # forever. helm-controller's default wait blocks the WHOLE HelmRelease on every
+    # rendered resource's kstatus, so that one unready ScaledObject drives the
+    # release to UpgradeFailed and it retries forever - wedging an otherwise healthy
+    # database and blocking every later chart change to it, with the tenant unable to
+    # read the ScaledObject to see why. Autoscaling health is a degraded-but-alive
+    # state surfaced by the DatabaseAutoscaler* alerts, NOT a release-readiness gate.
+    # Treat the ScaledObject as always-ready for release readiness (current: "true");
+    # the CNPG Cluster and every other resource keep their built-in kstatus wait, so
+    # the database's own health still gates the release. Setting any healthCheckExprs
+    # couples WaitStrategy to poller (see config.ResolveWaitStrategy); that the poller
+    # wait stays equivalent to the default for the kstatus-checked Cluster is verified
+    # on cozystack-pr-test, not here (render-blind).
+    healthCheckExprs:
+      - apiVersion: keda.sh/v1alpha1
+        kind: ScaledObject
+        current: "true"
   dashboard:
     category: PaaS
     singular: PostgreSQL
