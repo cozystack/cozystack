@@ -1,0 +1,158 @@
+{{- /*
+  Post-delete cleanup of objects that outlive `helm uninstall`.
+
+  Two classes of orphan, with two different causes:
+
+  1. <release>-talos-ca and <release>-talos-tls-cert Secrets.
+     cert-manager runs with --enable-certificate-owner-ref left at the upstream
+     default of false, so the Secrets it issues carry no ownerReference back to
+     the Certificate that produced them. Helm owns the two Certificates in
+     templates/talos/talos-pki.yaml but not their output, so an uninstall leaves
+     the Secrets behind, holding the Talos CA private key of a cluster that no
+     longer exists. Recreating a cluster with the same name in the same
+     namespace then makes cert-manager adopt the stale Secret instead of issuing
+     a fresh CA, so the new cluster silently inherits the old trust root.
+
+  2. <release>-oidc-bootstrap Job.
+     It is a post-install/post-upgrade hook (templates/oidc-rbac-job.yaml) whose
+     hook-delete-policy is before-hook-creation only. Hook resources are not part
+     of the release manifest, so uninstall never deletes them, and
+     before-hook-creation only fires when a later install recreates the hook —
+     which never happens after an uninstall. Its ServiceAccount, Role and
+     RoleBinding are release-owned and do go away, leaving a Job referencing a
+     ServiceAccount that no longer exists.
+
+  This runs as post-delete, not as another step in the pre-delete Job in
+  delete.yaml, and for the Secrets that distinction matters: pre-delete hooks run
+  while the release's objects are still present, and deleting a cert-manager
+  Secret whose Certificate still exists is the documented way to force a
+  re-issue. The Secret would come back within a second or two and be orphaned
+  again with a fresh key. By post-delete the Certificates are gone, so nothing
+  can recreate them.
+*/}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+  name: {{ .Release.Name }}-post-cleanup
+spec:
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-post-cleanup
+      restartPolicy: Never
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: "NoSchedule"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kubectl
+          image: docker.io/clastix/kubectl:v1.32
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Deleting the Talos PKI Secrets orphaned by cert-manager"
+              kubectl -n {{ .Release.Namespace }} delete secret \
+                {{ .Release.Name }}-talos-ca {{ .Release.Name }}-talos-tls-cert \
+                --ignore-not-found=true
+
+              echo "Deleting the OIDC bootstrap hook Job orphaned by Helm"
+              kubectl -n {{ .Release.Namespace }} delete job \
+                {{ .Release.Name }}-oidc-bootstrap \
+                --ignore-not-found=true
+
+              echo "Cleanup completed successfully"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-post-cleanup
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation,hook-failed
+    helm.sh/hook-weight: "0"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation,hook-failed
+    "helm.sh/hook-weight": "5"
+  name: {{ .Release.Name }}-post-cleanup
+rules:
+  # resourceNames pins both rules to exactly the objects this chart orphaned, so
+  # the Job can never reach any other Secret or Job in the tenant namespace.
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ .Release.Name }}-talos-ca
+      - {{ .Release.Name }}-talos-tls-cert
+    verbs:
+      - get
+      - delete
+  - apiGroups:
+      - "batch"
+    resources:
+      - jobs
+    resourceNames:
+      - {{ .Release.Name }}-oidc-bootstrap
+    verbs:
+      - get
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation,hook-failed
+    "helm.sh/hook-weight": "5"
+  name: {{ .Release.Name }}-post-cleanup
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-post-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-post-cleanup
+    namespace: {{ .Release.Namespace }}
