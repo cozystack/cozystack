@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
@@ -454,7 +455,7 @@ func TestPrepareForRestore_KeepOriginalPVCFalse_SkipsRename(t *testing.T) {
 
 	// keepOriginalPVC = false → PVCs should NOT be renamed
 	opts := RestoreOptions{
-		KeepOriginalPVC: boolPtr(false),
+		KeepOriginalPVC: ptr.To(false),
 	}
 
 	reconciler := newTestRestoreJobReconciler(t, pvc, restoreJob, backup)
@@ -1042,7 +1043,7 @@ func TestCreateResourceModifiersConfigMap_Copy_NoOVN(t *testing.T) {
 
 	// Copy restore: keepOriginalIpAndMac=false, no OVN annotations on copy
 	opts := RestoreOptions{
-		KeepOriginalIpAndMac: boolPtr(false),
+		KeepOriginalIpAndMac: ptr.To(false),
 	}
 	ur := makeVMInstanceUR("10.0.0.5", "aa:bb:cc:dd:ee:ff", nil)
 	target := restoreTarget{Namespace: targetNS, AppName: "test-vm", AppKind: "VMInstance", IsCopy: true}
@@ -1172,7 +1173,7 @@ func TestCreateResourceModifiersConfigMap_Copy_UsesMergePatchForPVC(t *testing.T
 	restoreJob := makeTestRestoreJob(sourceNS, "rj-copy-merge")
 	backup := makeTestBackup(sourceNS, "test-vm", "VMInstance")
 
-	opts := RestoreOptions{KeepOriginalIpAndMac: boolPtr(false)}
+	opts := RestoreOptions{KeepOriginalIpAndMac: ptr.To(false)}
 	ur := makeVMInstanceUR("", "", nil)
 	target := restoreTarget{Namespace: targetNS, AppName: "test-vm", AppKind: "VMInstance", IsCopy: true}
 
