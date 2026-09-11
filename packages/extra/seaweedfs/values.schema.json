@@ -145,6 +145,11 @@
       "type": "object",
       "default": {},
       "properties": {
+        "garbageThreshold": {
+          "description": "Vacuum trigger threshold as a fraction of dead bytes per volume (e.g. \"0.10\"). Empty string keeps the SeaweedFS binary default (0.3). Lower values reclaim space sooner at the cost of more frequent brief per-volume read-only windows during compaction.",
+          "type": "string",
+          "default": ""
+        },
         "replicas": {
           "description": "Number of master replicas.",
           "type": "integer",
@@ -361,6 +366,12 @@
       "type": "object",
       "default": {},
       "properties": {
+        "compactionMBps": {
+          "description": "Per-volume-server compaction throughput cap in MB/s. 0 keeps the chart default. Size against real churn: an undersized cap lets deleted bytes outrun reclaim under heavy write load.",
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
         "diskType": {
           "description": "SeaweedFS disk type tag for the default volume servers (e.g., \"hdd\", \"ssd\").",
           "type": "string",
