@@ -156,6 +156,15 @@ seaweedfs:
     enabled: true
     replicas: 2
     port: 8333
+    # Upstream 4.45 turns the Lance Namespace catalog on by default
+    # (charts/seaweedfs/values.yaml: lancePort: 9101) and the s3 Service
+    # publishes it. weed serves that catalog over plain HTTP and accepts no
+    # certificate for it, which is the posture patches/s3-tls-main-port.patch
+    # exists to avoid, and its namespace and table routes are writable. Nothing
+    # in Cozystack consumes the catalog, so keep the pre-4.45 surface: 0 makes
+    # weed skip startLanceServer and drops the container port and Service port
+    # with it.
+    lancePort: 0
     # Keep S3 traffic on same-zone endpoints. Native chart support landed in 4.12
     # (replaces the former s3-traffic-distribution.patch); the chart gates the
     # field on Kubernetes >=1.31 and auto-converts to PreferSameZone on >=1.35.
