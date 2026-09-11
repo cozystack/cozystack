@@ -164,11 +164,15 @@ stringData:
 {{- end }}
 
 {{- range $host, $h := .Values.vhosts }}
+{{- $sanitized := regexReplaceAll "[^a-z0-9-]" (kebabcase $host) "" | trimAll "-" }}
+{{- $safeHost := $sanitized | default "default" }}
+{{- $hostHash := sha256sum $host | trunc 8 }}
+{{- $uniqueHost := printf "%s-%s" $safeHost $hostHash }}
 ---
 apiVersion: rabbitmq.com/v1beta1
 kind: Vhost
 metadata:
-  name: {{ $.Release.Name }}-{{ kebabcase $host }}
+  name: {{ $.Release.Name }}-{{ $uniqueHost }}
 spec:
   name: {{ $host }}
   rabbitmqClusterReference:
@@ -178,7 +182,7 @@ spec:
 apiVersion: rabbitmq.com/v1beta1
 kind: Permission
 metadata:
-  name: {{ $.Release.Name }}-{{ kebabcase $host }}-{{ kebabcase $user }}
+  name: {{ $.Release.Name }}-{{ $uniqueHost }}-{{ kebabcase $user }}
 spec:
   vhost: "{{ $host }}"
   user: "{{ $user }}"
@@ -194,7 +198,7 @@ spec:
 apiVersion: rabbitmq.com/v1beta1
 kind: Permission
 metadata:
-  name: {{ $.Release.Name }}-{{ kebabcase $host }}-{{ kebabcase $user }}
+  name: {{ $.Release.Name }}-{{ $uniqueHost }}-{{ kebabcase $user }}
 spec:
   vhost: "{{ $host }}"
   user: "{{ $user }}"
