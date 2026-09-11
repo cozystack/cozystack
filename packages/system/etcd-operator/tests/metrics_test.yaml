@@ -1,0 +1,40 @@
+suite: metrics — Service is unconditional, VMServiceScrape is gated on the vmoperator CRD
+
+templates:
+  - templates/metrics.yaml
+
+release:
+  name: etcd-operator
+  namespace: cozy-etcd-operator
+
+capabilities:
+  apiVersions: []
+
+tests:
+  - it: the metrics Service renders even when the VictoriaMetrics operator CRDs are absent
+    asserts:
+      - hasDocuments:
+          count: 1
+      - containsDocument:
+          apiVersion: v1
+          kind: Service
+          name: etcd-operator-metrics
+          any: true
+
+  - it: the VMServiceScrape renders alongside the Service when the VictoriaMetrics operator CRD is present
+    capabilities:
+      apiVersions:
+        - operator.victoriametrics.com/v1beta1
+    asserts:
+      - hasDocuments:
+          count: 2
+      - containsDocument:
+          apiVersion: v1
+          kind: Service
+          name: etcd-operator-metrics
+          any: true
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1beta1
+          kind: VMServiceScrape
+          name: etcd-operator
+          any: true
