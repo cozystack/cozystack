@@ -257,6 +257,7 @@ rules:
   - foos
   - foundationdbs
   - harbors
+  - httpcaches
   - kafkas
   - kuberneteses
   - mariadbs
