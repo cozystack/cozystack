@@ -28,8 +28,8 @@ tests:
           apiVersion: cozystack.io/v1alpha1
           kind: Package
           name: cozystack.ouroboros
+          any: true
         not: true
-        documentIndex: -1
 
   - it: renders cleanly with proxyProtocol true on a fresh cluster (lookup-nil happy path also irrelevant — render does not invoke lookup when proxyProtocol=true)
     set:
