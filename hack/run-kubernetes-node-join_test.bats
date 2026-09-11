@@ -939,8 +939,11 @@ read_cost_inputs() {
   # The grace is in this list because `timeout -k abc 20` exits 125 BEFORE running the
   # command, so a non-numeric grace makes every read in the block report exit 125 and
   # collects nothing -- the same total loss as the other three, by a different route.
+  # The report budget is in this list because the classification runs inside this
+  # block: rejected, it falls back to its default like the four above, and the
+  # collector keeps its walk.
   for knob in COZY_DIAG_PHASE_BUDGET COZY_DIAG_READ_TIMEOUT COZY_DIAG_MAX_IMPORTERS \
-    COZY_DIAG_READ_GRACE; do
+    COZY_DIAG_READ_GRACE COZY_GUARD_REPORT_BUDGET; do
    # Only values a `:-` default cannot absorb. An empty value set here is
    # indistinguishable from unset, so it takes the default silently and correctly;
    # the empty-string hazard lives on the post-source path and is checked there.
@@ -1417,9 +1420,18 @@ read_cost_inputs() {
     echo "found no gated collector at all, so this guard checked nothing" >&2
     return 1
   fi
+  # Same block filter as the spend-order test below, and for the same reason:
+  # the exit handler calls one of these collectors from outside any phase, and
+  # a call that spends no phase budget cannot spend it ahead of the console.
+  block=$(grep -n '^cozy_report_node_join_failure()' "$lib" | cut -d: -f1)
+  if [ -z "$block" ]; then
+    echo "expected to find the node-join diagnostics block in $lib" >&2
+    return 1
+  fi
   for entry in $gated; do
     line=${entry%%:*}
     fn=${entry#*:}
+    [ "$line" -gt "$block" ] || continue
     [ "$line" -lt "$console" ] || continue
     case "$fn" in
       # Not behind the phase gate at all: it runs ahead of the headline so the
@@ -1636,6 +1648,7 @@ ${carrier}
       # step. A function that is neither still fails below, which is what makes
       # this a list of exemptions rather than a list of everything.
       cozy_diag_read | _talos_image_cache_bounded_read) continue ;;
+      _cozy_guard_kubectl) continue ;;
       _cozy_cadvisor_node_stream | _cozy_virt_launcher_listing) continue ;;
       # The canary carries its guard in the body that runs one arm, the way the
       # cAdvisor captures carry theirs in the stream they share, so the sentence
@@ -1690,9 +1703,22 @@ ${carrier}
     echo "found no gated collector at all, so this test checked nothing" >&2
     exit 1
   fi
+  # Only the calls inside the diagnostics block. The same collector may also be
+  # called from elsewhere in the file -- the exit handler classifies the tenant
+  # HelmReleases on every other failing path -- and such a call belongs to no
+  # phase and has no place in this order. Matched on position rather than
+  # exempted by name, so a second call added INSIDE the block still has to
+  # appear in the list.
+  block=$(grep -n '^cozy_report_node_join_failure()' "$lib" | cut -d: -f1)
+  if [ -z "$block" ]; then
+    echo "expected to find the node-join diagnostics block in $lib" >&2
+    exit 1
+  fi
   expected=
   for entry in $gated; do
+    line=${entry%%:*}
     fn=${entry#*:}
+    [ "$line" -gt "$block" ] || continue
     case "$fn" in
       cozy_capture_tenant_worker_cpu_throttle) phrase='worker CPU usage and throttling counters' ;;
       cozy_capture_sandbox_node_cpu_time) phrase='sandbox node CPU time' ;;
@@ -1701,6 +1727,7 @@ ${carrier}
       cozy_capture_tenant_worker_block_io) phrase='worker block IO counters' ;;
       cozy_capture_tenant_serial_console) phrase='serial-console family' ;;
       cozy_capture_tenant_talos) phrase='guest Talos capture' ;;
+      cozy_report_helmrelease_remediation) phrase='HelmRelease remediation footprint' ;;
       talos_image_cache_diagnose) phrase='talos-image-cache diagnosis' ;;
       # Called with the same suffix but not behind the phase gate: it runs ahead
       # of the headline so the console experiment's own failure is named before
@@ -2138,7 +2165,10 @@ EOF
   assert_file_contains '::warning title=node-join::' "$tmp/out"
   # And it carries the deadline it is about. A warning that says only "the join
   # failed" leaves a reader unable to tell it from the wait having been raised.
-  assert_file_contains 'Ready within 29m' "$tmp/out"
+  # The subject is asserted along with the figure, because a bare "Ready within
+  # 29m" is a sentence about nothing in particular and the sweep below reads
+  # this line as one of the tree's copies of the deadline.
+  assert_file_contains 'nodes Ready within 29m' "$tmp/out"
   # It names the suite, because the report holds one directory per suite and a
   # run carries more than one tenant cluster.
   assert_file_contains 'test-latest-version' "$tmp/out"
@@ -2277,8 +2307,23 @@ EOF
   # Both spellings of the unit are in, `29m` and `29 minutes`, because prose
   # written for a reader tends to the second and a sweep that saw only the first
   # would leave the documentation quoting a deadline that moved.
-  pattern='(node-join|node-Ready|nodes Ready|become Ready|became Ready|Ready within)[^0-9]{0,60}[0-9]+ ?m|[0-9]+ ?m[^0-9]{0,30}(node-join|node-Ready|nodes Ready)'
-  quoted=$(grep -rnE "$pattern" hack/ docs/ || true)
+  #
+  # Every referent names a node. "become Ready" and "Ready within" on their own
+  # do not: they are what a HelmRelease, a LoadBalancer or a PVC is also said to
+  # do, each on a deadline of its own, and read as node-join referents they make
+  # this guard fail over a 5m HelmRelease wait having a different figure than the
+  # node-join wait -- which is correct of both waits and a defect in neither. The
+  # set of other things that become Ready on a clock is open and grows with the
+  # suite, so the referents are enumerated rather than the exceptions.
+  pattern='(node-join|node-Ready|nodes Ready|nodes become Ready|nodes became Ready)[^0-9]{0,60}[0-9]+ ?m|[0-9]+ ?m[^0-9]{0,30}(node-join|node-Ready|nodes Ready)'
+  # Tracked files only. grep -r would also read whatever else is sitting in
+  # those directories, and a leftover backup -- what `sed -i.bak` and most
+  # editors write beside the original -- carries a second copy of every
+  # quotation in the file it shadows. Those copies are correct, so they do not
+  # fail the staleness check below; they inflate the count the floor tests. A
+  # stray file would then lift the count past the floor while real coverage sat
+  # under it, hiding the one thing the floor is there to catch.
+  quoted=$(git grep -nE "$pattern" -- hack/ docs/ || true)
   count=$(printf '%s\n' "$quoted" | grep -c . || true)
   # A floor, not a count: the sweep is worth nothing if the sentence stopped
   # being written anywhere, and every branch below would then agree vacuously.
