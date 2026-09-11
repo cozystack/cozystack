@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest"
 import { screen, waitFor, cleanup } from "@testing-library/react"
 import { K8sClient } from "@cozystack/k8s-client"
 import { renderWithK8sProvider } from "../../test-utils/render.tsx"
+import { AppConfigContext } from "../../lib/config.ts"
 import { ServicesTab } from "./ServicesTab.tsx"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 
@@ -90,5 +91,55 @@ describe("ServicesTab external IP", () => {
     expect(screen.queryByText("Pending")).not.toBeInTheDocument()
     // The External IP cell renders an em dash for non-LoadBalancer services.
     expect(screen.getAllByText("—").length).toBeGreaterThan(0)
+  })
+})
+
+describe("ServicesTab connection hostname", () => {
+  const lbService = {
+    metadata: { name: "demo", namespace: "tenant-root" },
+    spec: { type: "LoadBalancer", clusterIP: "10.96.1.2", ports: [{ port: 5432 }] },
+    status: { loadBalancer: { ingress: [{ ip: "192.0.2.50" }] } },
+  }
+
+  it("renders <service>.<serviceDomain> for a LoadBalancer, even while the IP is pending", async () => {
+    const client = makeClient([lbService, { ...lbService, metadata: { name: "late" }, status: {} }])
+    renderWithK8sProvider(
+      <AppConfigContext.Provider value={{ serviceDomain: "svc.example.org" }}>
+        <ServicesTab ad={ad} instance={instance} />
+      </AppConfigContext.Provider>,
+      { client },
+    )
+
+    await waitFor(() => expect(screen.getByText("demo.svc.example.org")).toBeInTheDocument())
+    expect(screen.getByText("late.svc.example.org")).toBeInTheDocument()
+    expect(screen.getByText("Pending")).toBeInTheDocument()
+  })
+
+  it("renders no hostname when the platform configured no serviceDomain", async () => {
+    // Nothing in the platform publishes DNS for a guessed name, so the tab
+    // must not invent one: neither "demo." nor a tenant-derived suffix.
+    const client = makeClient([lbService])
+    renderWithK8sProvider(<ServicesTab ad={ad} instance={instance} />, { client })
+
+    await waitFor(() => expect(screen.getByText("192.0.2.50")).toBeInTheDocument())
+    expect(screen.queryByText(/^demo\./)).not.toBeInTheDocument()
+  })
+
+  it("renders no hostname for a ClusterIP service", async () => {
+    const client = makeClient([
+      {
+        metadata: { name: "internal", namespace: "tenant-root" },
+        spec: { type: "ClusterIP", clusterIP: "10.96.1.5", ports: [{ port: 8080 }] },
+      },
+    ])
+    renderWithK8sProvider(
+      <AppConfigContext.Provider value={{ serviceDomain: "svc.example.org" }}>
+        <ServicesTab ad={ad} instance={instance} />
+      </AppConfigContext.Provider>,
+      { client },
+    )
+
+    await waitFor(() => expect(screen.getByText("internal")).toBeInTheDocument())
+    expect(screen.queryByText(/^internal\./)).not.toBeInTheDocument()
   })
 })

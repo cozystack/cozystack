@@ -1,3 +1,5 @@
+import { createContext, useContext } from "react"
+
 export interface AppConfig {
   titleText?: string
   footerText?: string
@@ -9,6 +11,16 @@ export interface AppConfig {
   // than the rc version baked into the bundle at build. Falls back to the
   // build-time VITE_APP_VERSION when absent.
   version?: string
+  // DNS suffix shown after a LoadBalancer Service name on the Services tab.
+  // Absent when the platform leaves publishing.serviceDomain empty; the tab
+  // then shows no hostname.
+  serviceDomain?: string
+}
+
+export const AppConfigContext = createContext<AppConfig>({})
+
+export function useAppConfig(): AppConfig {
+  return useContext(AppConfigContext)
 }
 
 const CONFIG_NAMESPACE = "cozy-dashboard"

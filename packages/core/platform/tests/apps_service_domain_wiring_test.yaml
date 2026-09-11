@@ -1,0 +1,52 @@
+suite: apps.yaml publishing.serviceDomain → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# publishing.serviceDomain is the DNS suffix the dashboard appends to a
+# LoadBalancer Service name on the application Services tab. It reaches the
+# dashboard chart through _cluster.service-domain in the cozystack-values
+# Secret (the same path cluster-domain and branding travel). Pin both
+# directions: the empty default, which the console turns into "show no
+# hostname", and a configured value landing verbatim. Without these a refactor
+# of the values map could drop the key and the dashboard would silently stop
+# showing hostnames on every cluster that configured one.
+
+tests:
+  - it: writes an empty service-domain by default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*service-domain:\s*""'
+
+  - it: writes the service-domain when publishing.serviceDomain is set
+    set:
+      publishing.serviceDomain: svc.example.org
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*service-domain:\s*"svc\.example\.org"'
+
+  # The console joins "<service>.<suffix>" verbatim, so a leading or trailing
+  # dot from the operator would render "demo..svc.example.org." — strip them
+  # here, the single place every consumer reads from.
+  - it: strips leading and trailing dots from publishing.serviceDomain
+    set:
+      publishing.serviceDomain: .svc.example.org.
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*service-domain:\s*"svc\.example\.org"'
+
+  # An unquoted scalar in the operator's values arrives as a number, and
+  # trimAll on a float64 aborts the whole platform render. Coerce first.
+  - it: renders an unquoted numeric publishing.serviceDomain instead of failing
+    set:
+      publishing.serviceDomain: 123
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*service-domain:\s*"123"'
