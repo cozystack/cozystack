@@ -125,8 +125,8 @@ func TestPsmdbBackupPrecondition(t *testing.T) {
 // deleted together with the source app. The selector prefers the source's
 // storage name, then the chart default, then a sole storage.
 func TestPsmdbTargetCredentialsSecret(t *testing.T) {
-	s3Storage := func(secret string) runtime.RawExtension {
-		return runtime.RawExtension{Raw: []byte(fmt.Sprintf(`{"type":"s3","s3":{"credentialsSecret":%q}}`, secret))}
+	s3Storage := func(bucket, secret string) runtime.RawExtension {
+		return runtime.RawExtension{Raw: []byte(fmt.Sprintf(`{"type":"s3","s3":{"bucket":%q,"credentialsSecret":%q}}`, bucket, secret))}
 	}
 	clusterWith := func(storages map[string]runtime.RawExtension) *psmdbtypes.PerconaServerMongoDB {
 		return &psmdbtypes.PerconaServerMongoDB{
@@ -136,47 +136,68 @@ func TestPsmdbTargetCredentialsSecret(t *testing.T) {
 		}
 	}
 	cases := []struct {
-		name      string
-		storages  map[string]runtime.RawExtension
-		preferred string
-		want      string
+		name       string
+		storages   map[string]runtime.RawExtension
+		preferred  string
+		wantBucket string
+		want       string
 	}{
 		{
-			name:      "preferred storage wins",
-			storages:  map[string]runtime.RawExtension{"s3-storage": s3Storage("target-creds"), "other": s3Storage("other-creds")},
-			preferred: "s3-storage",
-			want:      "target-creds",
+			name:       "preferred storage on the source bucket wins",
+			storages:   map[string]runtime.RawExtension{"s3-storage": s3Storage("shared", "target-creds"), "other": s3Storage("shared", "other-creds")},
+			preferred:  "s3-storage",
+			wantBucket: "shared",
+			want:       "target-creds",
 		},
 		{
-			name:      "falls back to chart default when preferred absent",
-			storages:  map[string]runtime.RawExtension{"s3-storage": s3Storage("target-creds")},
-			preferred: "nonexistent",
-			want:      "target-creds",
+			name:       "falls back to chart default when preferred absent",
+			storages:   map[string]runtime.RawExtension{"s3-storage": s3Storage("shared", "target-creds")},
+			preferred:  "nonexistent",
+			wantBucket: "shared",
+			want:       "target-creds",
 		},
 		{
-			name:     "sole non-default storage is used",
-			storages: map[string]runtime.RawExtension{"custom": s3Storage("custom-creds")},
-			want:     "custom-creds",
+			name:       "sole non-default storage on the source bucket is used",
+			storages:   map[string]runtime.RawExtension{"custom": s3Storage("shared", "custom-creds")},
+			wantBucket: "shared",
+			want:       "custom-creds",
 		},
 		{
-			name:     "ambiguous (multiple, none default, no preferred) yields empty",
-			storages: map[string]runtime.RawExtension{"a": s3Storage("a-creds"), "b": s3Storage("b-creds")},
-			want:     "",
+			name:       "different bucket is NOT adopted (cross-flow guard)",
+			storages:   map[string]runtime.RawExtension{"s3-storage": s3Storage("platform-bucket", "cozy-backups-creds")},
+			preferred:  "s3-storage",
+			wantBucket: "tenant-bucket",
+			want:       "",
 		},
 		{
-			name:     "no storages yields empty",
-			storages: nil,
-			want:     "",
+			name:       "empty wantBucket yields empty (unknown source bucket, no swap)",
+			storages:   map[string]runtime.RawExtension{"s3-storage": s3Storage("shared", "target-creds")},
+			preferred:  "s3-storage",
+			wantBucket: "",
+			want:       "",
 		},
 		{
-			name:     "non-s3 storage yields empty",
-			storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"azure","azure":{"container":"c"}}`)}},
-			want:     "",
+			name:       "ambiguous (multiple, none default, no preferred) yields empty",
+			storages:   map[string]runtime.RawExtension{"a": s3Storage("shared", "a-creds"), "b": s3Storage("shared", "b-creds")},
+			wantBucket: "shared",
+			want:       "",
+		},
+		{
+			name:       "no storages yields empty",
+			storages:   nil,
+			wantBucket: "shared",
+			want:       "",
+		},
+		{
+			name:       "non-s3 storage yields empty",
+			storages:   map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"azure","azure":{"container":"c"}}`)}},
+			wantBucket: "shared",
+			want:       "",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := psmdbTargetCredentialsSecret(clusterWith(tc.storages), tc.preferred); got != tc.want {
+			if got := psmdbTargetCredentialsSecret(clusterWith(tc.storages), tc.preferred, tc.wantBucket); got != tc.want {
 				t.Errorf("psmdbTargetCredentialsSecret: got %q want %q", got, tc.want)
 			}
 		})
