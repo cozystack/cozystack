@@ -5,9 +5,23 @@ As the service evolves, it will provide more ways to isolate your workloads.
 
 ## Service details
 
-To function, the service requires kube-ovn and multus CNI to be present, so by default it will only work on `paas-full` bundle.
+To function, the service requires multus CNI and one of the two supported network backends, so by default it will only work on `paas-full` bundle.
 Kube-ovn provides VPC and Subnet resources and performs isolation and networking maintenance such as DHCP. Under the hood it uses ovn virtual routers and virtual switches.
 Multus enables a multi-nic capability, so a pod or a VM could have two or more network interfaces.
+
+### Network backend
+
+The chart picks the backend from the APIs the cluster serves; there is no value to set.
+
+| Cluster serves | Backend used |
+|---|---|
+| `kubeovn.io/v1` `Vpc` (with or without Cozyplane) | Kube-OVN, the historical rendering |
+| `sdn.cozystack.io/v1alpha1` `VPC` only | Cozyplane |
+| neither | Kube-OVN rendering (unchanged offline `helm template` output) |
+
+Kube-OVN keeps priority on a cluster that serves both APIs, so an installation that migrates to Cozyplane switches backends only once the Kube-OVN CRDs are gone.
+
+On Cozyplane each subnet becomes a `VPC` of its own carrying that subnet's CIDR (a Cozyplane VPC allocates from its first CIDR only), plus a `VPCBinding` authorizing attachment from the tenant namespace and the `NetworkAttachmentDefinition` under the same `subnet-<id>` name as with Kube-OVN. Subnets of one VirtualPrivateCloud are connected through `VPCPeering` halves, one per ordered pair of subnets, and `peers` produce one half per (local subnet, remote subnet) once the remote tenant's release exists; the remote release renders its own halves, as with Kube-OVN. `routes` have no Cozyplane equivalent and are refused explicitly.
 
 Currently every workload will have a connection to a default management network which will also have a default gateway, and the majority of traffic will go through it.
 VPC subnets are for now an additional dedicated networking spaces.

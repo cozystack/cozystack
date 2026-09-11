@@ -1,0 +1,315 @@
+suite: virtualprivatecloud network backend detection
+
+# The chart serves two network backends and must pick one from API discovery,
+# never from a `lookup`: a lookup against an API the cluster does not serve
+# fails the whole render. Kube-OVN keeps priority whenever kubeovn.io/v1 Vpc is
+# served; Cozyplane is used only when Kube-OVN is absent and
+# sdn.cozystack.io/v1alpha1 VPC is served; a cluster serving neither keeps the
+# historical Kube-OVN rendering, so offline `helm template` is unchanged.
+#
+# helm-unittest's fake `lookup` returns nothing for an unserved kind and never
+# errors the way a live cluster does, so the failure this chart guards against
+# cannot be reproduced here. Every Cozyplane case is instead pinned by the
+# objects it renders and, for `peers`, by remote VPC objects mocked through
+# kubernetesProvider: each of those cases is red on the Kube-OVN-only template.
+#
+# Identifiers below are the chart's own derivations for this release:
+#   vpcId            = "vpc-"    + sha256("tenant-test/virtualprivatecloud-test")[:6]
+#   subnet a / b     = "subnet-" + sha256("tenant-test/<vpcId>/<name>")[:8]
+#   remote vpcId     = "vpc-"    + sha256("tenant-other/virtualprivatecloud-other")[:6]
+#   remote subnet c  = "subnet-" + sha256("tenant-other/<remote vpcId>/c")[:8]
+#
+# Document order follows the template. Kube-OVN: Vpc, then NAD + Subnet per
+# subnet, then ConfigMap, RoleBinding, Role. Cozyplane: VPC + VPCBinding + NAD
+# per subnet, then the intra-VPC peering halves, then the cross-tenant halves,
+# then ConfigMap, RoleBinding, Role.
+
+release:
+  name: virtualprivatecloud-test
+  namespace: tenant-test
+templates:
+  - templates/vpc.yaml
+set:
+  subnets:
+    - name: a
+      cidr: 172.16.0.0/24
+    - name: b
+      cidr: 172.16.1.0/24
+
+tests:
+  - it: keeps the historical Kube-OVN rendering when neither backend API is served
+    asserts:
+      - containsDocument:
+          apiVersion: kubeovn.io/v1
+          kind: Vpc
+          name: vpc-2e37d4
+          any: true
+      - containsDocument:
+          apiVersion: kubeovn.io/v1
+          kind: Subnet
+          name: subnet-1f7afcd0
+          any: true
+      - containsDocument:
+          apiVersion: kubeovn.io/v1
+          kind: Subnet
+          name: subnet-408db55d
+          any: true
+      - matchRegex:
+          path: spec.config
+          pattern: '"type": "kube-ovn"'
+        documentIndex: 1
+      # Vpc + 2 x (NAD + Subnet) + ConfigMap + RoleBinding + Role.
+      - hasDocuments:
+          count: 8
+
+  - it: renders Kube-OVN objects when its Vpc API is served
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/Vpc
+        - kubeovn.io/v1/Subnet
+    asserts:
+      - containsDocument:
+          apiVersion: kubeovn.io/v1
+          kind: Vpc
+          name: vpc-2e37d4
+          any: true
+      - hasDocuments:
+          count: 8
+
+  - it: gives Kube-OVN priority when both backends are served
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/Vpc
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/VPC
+    asserts:
+      - containsDocument:
+          apiVersion: kubeovn.io/v1
+          kind: Vpc
+          name: vpc-2e37d4
+          any: true
+      - containsDocument:
+          apiVersion: kubeovn.io/v1
+          kind: Subnet
+          name: subnet-1f7afcd0
+          any: true
+      - hasDocuments:
+          count: 8
+
+  - it: renders Cozyplane objects when Kube-OVN is absent
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/VPC
+    asserts:
+      # One VPC per subnet, named after the subnet so the NAD keeps its name.
+      - containsDocument:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: VPC
+          name: subnet-1f7afcd0
+          namespace: tenant-test
+          any: true
+      - containsDocument:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: VPC
+          name: subnet-408db55d
+          namespace: tenant-test
+          any: true
+      - equal:
+          path: spec.cidrs
+          value:
+            - 172.16.0.0/24
+        documentIndex: 0
+      - equal:
+          path: metadata.labels["cozystack.io/subnetName"]
+          value: a
+        documentIndex: 0
+      # The binding authorizes attachment from the tenant namespace.
+      - containsDocument:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: VPCBinding
+          name: subnet-1f7afcd0
+          namespace: tenant-test
+          any: true
+      - equal:
+          path: spec.vpcRef
+          value:
+            namespace: tenant-test
+            name: subnet-1f7afcd0
+        documentIndex: 1
+      # The NAD carries the cozyplane CNI config, the same content the
+      # cozyplane controller writes for the binding.
+      - isKind:
+          of: NetworkAttachmentDefinition
+        documentIndex: 2
+      - equal:
+          path: spec.config
+          value: '{"cniVersion":"1.0.0","name":"subnet-1f7afcd0","type":"cozyplane","vpc":"tenant-test/subnet-1f7afcd0"}'
+        documentIndex: 2
+      # Both intra-VPC peering halves, so the two subnets route to each other.
+      - containsDocument:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: VPCPeering
+          name: subnet-1f7afcd0-subnet-408db55d
+          namespace: tenant-test
+          any: true
+      - containsDocument:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: VPCPeering
+          name: subnet-408db55d-subnet-1f7afcd0
+          namespace: tenant-test
+          any: true
+      - equal:
+          path: spec
+          value:
+            vpcRef:
+              name: subnet-1f7afcd0
+            peerRef:
+              namespace: tenant-test
+              name: subnet-408db55d
+        documentSelector:
+          path: metadata.name
+          value: subnet-1f7afcd0-subnet-408db55d
+      # The tenant-facing ConfigMap contract is unchanged.
+      - equal:
+          path: data["a.ID"]
+          value: subnet-1f7afcd0
+        documentSelector:
+          path: kind
+          value: ConfigMap
+      # No Kube-OVN object at all: 2 VPC + 2 VPCBinding + 2 NAD + 2 peering
+      # halves + ConfigMap + RoleBinding + Role.
+      - hasDocuments:
+          count: 11
+
+  - it: renders one cross-tenant peering half per discovered remote subnet on Cozyplane
+    set:
+      peers:
+        - vpcName: other
+          tenantNamespace: tenant-other
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/VPC
+    kubernetesProvider:
+      scheme:
+        "sdn.cozystack.io/v1alpha1/VPC":
+          gvr:
+            group: sdn.cozystack.io
+            version: v1alpha1
+            resource: vpcs
+          namespaced: true
+      objects:
+        # The remote release's subnet, found by its vpcId label.
+        - apiVersion: sdn.cozystack.io/v1alpha1
+          kind: VPC
+          metadata:
+            name: subnet-c02920b2
+            namespace: tenant-other
+            labels:
+              cozystack.io/vpcId: vpc-37739d
+              cozystack.io/subnetName: c
+          spec:
+            cidrs: ["172.16.9.0/24"]
+        # Another VPC of the remote tenant, not part of the peered release.
+        - apiVersion: sdn.cozystack.io/v1alpha1
+          kind: VPC
+          metadata:
+            name: unrelated
+            namespace: tenant-other
+          spec:
+            cidrs: ["10.0.0.0/24"]
+    asserts:
+      - containsDocument:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: VPCPeering
+          name: subnet-1f7afcd0-subnet-c02920b2
+          namespace: tenant-test
+          any: true
+      - containsDocument:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: VPCPeering
+          name: subnet-408db55d-subnet-c02920b2
+          namespace: tenant-test
+          any: true
+      - equal:
+          path: spec
+          value:
+            vpcRef:
+              name: subnet-408db55d
+            peerRef:
+              namespace: tenant-other
+              name: subnet-c02920b2
+        documentSelector:
+          path: metadata.name
+          value: subnet-408db55d-subnet-c02920b2
+      - equal:
+          path: metadata.labels["cozystack.io/peerVpcId"]
+          value: vpc-37739d
+        documentSelector:
+          path: metadata.name
+          value: subnet-408db55d-subnet-c02920b2
+      # 11 objects of the previous case + 2 cross-tenant halves; the unrelated
+      # remote VPC produced nothing.
+      - hasDocuments:
+          count: 13
+      - equal:
+          path: data["peer.tenant-other.other.vpcId"]
+          value: vpc-37739d
+        documentSelector:
+          path: kind
+          value: ConfigMap
+
+  - it: renders no cross-tenant half before the remote release exists on Cozyplane
+    set:
+      peers:
+        - vpcName: other
+          tenantNamespace: tenant-other
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/VPC
+    kubernetesProvider:
+      scheme:
+        "sdn.cozystack.io/v1alpha1/VPC":
+          gvr:
+            group: sdn.cozystack.io
+            version: v1alpha1
+            resource: vpcs
+          namespaced: true
+      objects: []
+    asserts:
+      - hasDocuments:
+          count: 11
+
+  - it: refuses static routes on Cozyplane
+    set:
+      routes:
+        - cidr: 10.9.0.0/24
+          nextHopIP: 172.16.0.1
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1
+        - sdn.cozystack.io/v1alpha1/VPC
+    asserts:
+      - failedTemplate:
+          errorPattern: static routes are not supported on the Cozyplane network backend
+
+  - it: keeps static routes on Kube-OVN
+    set:
+      routes:
+        - cidr: 10.9.0.0/24
+          nextHopIP: 172.16.0.1
+    capabilities:
+      apiVersions:
+        - kubeovn.io/v1
+        - kubeovn.io/v1/Vpc
+    asserts:
+      - equal:
+          path: spec.staticRoutes
+          value:
+            - cidr: 10.9.0.0/24
+              nextHopIP: 172.16.0.1
+        documentIndex: 0
