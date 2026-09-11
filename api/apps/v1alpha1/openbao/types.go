@@ -39,6 +39,9 @@ type ConfigSpec struct {
 	// Enable the OpenBAO web UI.
 	// +kubebuilder:default:=true
 	Ui bool `json:"ui"`
+	// Seal configuration. Defaults to Shamir key shares; set `type: static` for auto-unseal.
+	// +kubebuilder:default:={}
+	Seal Seal `json:"seal"`
 }
 
 type Resources struct {
@@ -48,5 +51,29 @@ type Resources struct {
 	Memory resource.Quantity `json:"memory,omitempty"`
 }
 
+type Seal struct {
+	// Acknowledge a seal migration. The chart refuses to change `type` on an existing instance unless this is `true`; set it only while running `bao operator unseal -migrate`, then remove it.
+	// +kubebuilder:default:=false
+	AllowMigration bool `json:"allowMigration,omitempty"`
+	// Permanent identifier of the current key. Change it whenever the key material changes; OpenBAO refuses a key whose identifier it has already seen with different material. Required when `type` is `static`.
+	// +kubebuilder:default:=""
+	KeyId string `json:"keyId"`
+	// Identifier of the previous key. Required when `previousSecretName` is set.
+	// +kubebuilder:default:=""
+	PreviousKeyId string `json:"previousKeyId,omitempty"`
+	// Secret holding the previous key during an n-1 key rotation. Keep it until the pods have been replaced and the active node has logged `upgrading stored keys`; see the README.
+	// +kubebuilder:default:=""
+	PreviousSecretName string `json:"previousSecretName,omitempty"`
+	// Existing Secret in the release namespace whose key `key` holds the base64 text of 32 random bytes (for example `openssl rand -base64 32`). Required when `type` is `static`.
+	// +kubebuilder:default:=""
+	SecretName string `json:"secretName"`
+	// Seal type. `shamir` keeps the current behaviour; `static` enables auto-unseal from `secretName`.
+	// +kubebuilder:default:="shamir"
+	Type SealType `json:"type"`
+}
+
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
+
+// +kubebuilder:validation:Enum="shamir";"static"
+type SealType string
