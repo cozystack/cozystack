@@ -234,6 +234,7 @@ spec:
         defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
         {{- end }}
         replicas: {{ .Values.master.replicas }}
+        volumeSizeLimitMB: {{ .Values.master.volumeSizeLimitMB }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.master.resourcesPreset .Values.master.resources $) | nindent 10 }}
       volume:
         {{ if eq .Values.topology "MultiZone" }}
@@ -248,7 +249,7 @@ spec:
           {{- with .Values.volume.storageClass }}
           storageClass: {{ . }}
           {{- end }}
-          maxVolumes: 0
+          maxVolumes: {{ .Values.volume.maxVolumes }}
         {{- if .Values.volume.diskType }}
         extraArgs:
         - "-disk={{ .Values.volume.diskType }}"
@@ -267,7 +268,7 @@ spec:
             {{- with ($pool.storageClass | default $.Values.volume.storageClass) }}
             storageClass: "{{ . }}"
             {{- end }}
-            maxVolumes: 0
+            maxVolumes: {{ $.Values.volume.maxVolumes }}
           extraArgs:
           - "-disk={{ $pool.diskType }}"
         {{- end }}
@@ -283,7 +284,7 @@ spec:
             {{- with ($zone.storageClass | default $.Values.volume.storageClass) }}
             storageClass: "{{ . }}"
             {{- end }}
-            maxVolumes: 0
+            maxVolumes: {{ $.Values.volume.maxVolumes }}
           nodeSelector: |
             {{- with $zone.nodeSelector }}
 {{ . | indent 12 }}
@@ -308,7 +309,7 @@ spec:
             {{- with ($pool.storageClass | default $zone.storageClass | default $.Values.volume.storageClass) }}
             storageClass: "{{ . }}"
             {{- end }}
-            maxVolumes: 0
+            maxVolumes: {{ $.Values.volume.maxVolumes }}
           nodeSelector: |
             {{- with $zone.nodeSelector }}
 {{ . | indent 12 }}
