@@ -113,7 +113,7 @@ backup:
 When `useSystemBucket: true`:
 
 - The chart-emitted `<release>-s3-creds` Secret is no longer rendered, and the chart leaves `spec.backup.storages`, `spec.backup.tasks` and `spec.backup.pitr` unset on the `PerconaServerMongoDB`.
-- On every BackupJob the driver SSA-injects the `s3-storage` entry from the strategy coordinates (bucket/endpoint from the platform system bucket, `credentialsSecret: cozy-backups-creds`, prefix `<namespace>/<release>`) under its own field manager, so a Flux re-render never reverts it and a later change to the coordinates is picked up on the next backup rather than frozen at the first.
+- On every BackupJob the driver SSA-injects the `s3-storage` entry from the strategy coordinates (bucket/endpoint from the platform system bucket, `credentialsSecret: cozy-backups-creds`, prefix `<namespace>/<application>`) under its own field manager, so a Flux re-render never reverts it and a later change to the coordinates is picked up on the next backup rather than frozen at the first.
 
 `destinationPath`, `endpointURL`, `insecureSkipTLSVerify`, `s3AccessKey` and `s3SecretKey` are ignored in this mode.
 

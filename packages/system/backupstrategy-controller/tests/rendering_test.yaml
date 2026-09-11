@@ -53,14 +53,13 @@ tests:
           count: 0
         template: templates/strategy-altinity-default.yaml
       # MongoDB is gated like every sibling, and this count is the assertion
-      # that keeps the chart installable. Its Strategy needs no bucket
-      # coordinates (the S3 target lives on the MongoDB application's
-      # spec.backup, the driver only names the storage), so the gate is there
-      # purely for ordering: this chart ships its own CRDs as templates, Helm
-      # resolves the whole manifest through the RESTMapper before applying any
-      # of it, and one ungated Strategy CR makes the first install apply zero
-      # objects with "no matches for kind" and never recover. A count of 1 here
-      # is that bug, green, which is how it shipped once already.
+      # that keeps the chart installable. Its Strategy carries the system-bucket
+      # coordinates ($bucketName), so it needs the gate for the same reason the
+      # others do: this chart ships its own CRDs as templates, Helm resolves the
+      # whole manifest through the RESTMapper before applying any of it, and one
+      # ungated Strategy CR makes the first install apply zero objects with "no
+      # matches for kind" and never recover. A count of 1 here is that bug,
+      # green, which is how it shipped once already.
       - hasDocuments:
           count: 0
         template: templates/strategy-mongodb-default.yaml
@@ -145,6 +144,29 @@ tests:
         template: templates/strategy-altinity-default.yaml
       - hasDocuments:
           count: 1
+        template: templates/strategy-mongodb-default.yaml
+      - equal:
+          path: spec.template.s3.bucket
+          value: test-bucket
+        template: templates/strategy-mongodb-default.yaml
+      - equal:
+          path: spec.template.s3.credentialsSecret
+          value: cozy-backups-creds
+        template: templates/strategy-mongodb-default.yaml
+      - equal:
+          path: spec.template.s3.region
+          value: us-east-1
+        template: templates/strategy-mongodb-default.yaml
+      - equal:
+          path: spec.template.s3.forcePathStyle
+          value: true
+        template: templates/strategy-mongodb-default.yaml
+      # prefix must reach the CR as a literal go-template string: Helm must NOT
+      # evaluate it, so the driver templates it per-application at BackupJob time.
+      # A stray brace would empty it with every doc-count assertion still green.
+      - equal:
+          path: spec.template.s3.prefix
+          value: "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}"
         template: templates/strategy-mongodb-default.yaml
       - hasDocuments:
           count: 1

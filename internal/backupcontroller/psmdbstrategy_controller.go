@@ -245,15 +245,15 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 	// (endpoint, region, bucket re-provision) catches up rather than being
 	// frozen at the first backup; when it is unset the driver never touches the
 	// cluster, so a legacy app that ships its own static storage is left alone.
-	// The path prefix is deterministic (<ns>/<release>), so re-applying the
-	// whole entry never splits the archive the way CNPG's serverName would.
+	// The path prefix is deterministic (<namespace>/<application>), so
+	// re-applying the whole entry never splits the archive the way CNPG's
+	// serverName would.
 	if shouldInjectMongoDBSystemStorage(useSystemBucket, rendered) {
-		if err := r.applyMongoDBSystemStorage(ctx, j.Namespace, psmdbName, storageName, rendered.S3); err != nil {
+		injected, err := r.applyMongoDBSystemStorage(ctx, j.Namespace, psmdbName, storageName, rendered.S3)
+		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to inject system-bucket storage onto psmdb.percona.com/PerconaServerMongoDB %s/%s: %v", j.Namespace, psmdbName, err))
 		}
-		if err := r.Get(ctx, types.NamespacedName{Namespace: j.Namespace, Name: psmdbName}, cluster); err != nil {
-			return ctrl.Result{}, err
-		}
+		cluster = injected
 	}
 	if msg := psmdbBackupPrecondition(cluster, storageName); msg != "" {
 		if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
@@ -360,52 +360,65 @@ func psmdbBackupPrecondition(cluster *psmdbtypes.PerconaServerMongoDB, storageNa
 	return ""
 }
 
-// psmdbTargetCredentialsSecret returns the s3 credentialsSecret name the target
-// cluster declares for its backup storage, so a restore authenticates with the
-// TARGET's own credentials rather than the (possibly deleted) source's. It
-// prefers the storage whose name the source backup used, then the chart's
-// default storage, then — only when the cluster declares exactly one storage —
-// that sole storage. Returns "" when nothing is resolvable, in which case the
-// caller keeps the source reference. spec.backup.storages is decoded on demand
-// from runtime.RawExtension (the partial type keeps only the key set for the
-// precondition gate), so no upstream storage shape is mirrored here.
-func psmdbTargetCredentialsSecret(cluster *psmdbtypes.PerconaServerMongoDB, preferredStorage string) string {
+// psmdbTargetCredentialsSecret returns the s3 credentialsSecret the target
+// cluster declares for a storage on the SAME bucket (wantBucket) as the source
+// archive, so a restore authenticates with the TARGET's own credentials rather
+// than the (possibly deleted) source's — but only when the target actually has
+// access to that bucket. Requiring the bucket to match keeps a legacy→legacy
+// restore on a shared bucket working while refusing to hand a cross-flow restore
+// a credential for the wrong bucket (a system-bucket target's cozy-backups-creds
+// against a legacy tenant bucket, or vice versa). It prefers the storage the
+// source backup named, then the chart default, then — only when the cluster
+// declares exactly one storage — that sole storage. Returns "" when nothing on
+// wantBucket is resolvable (including when wantBucket is empty), in which case
+// the caller keeps the source reference. spec.backup.storages is decoded on
+// demand from runtime.RawExtension, so no upstream storage shape is mirrored.
+func psmdbTargetCredentialsSecret(cluster *psmdbtypes.PerconaServerMongoDB, preferredStorage, wantBucket string) string {
 	storages := cluster.Spec.Backup.Storages
-	if len(storages) == 0 {
+	if len(storages) == 0 || wantBucket == "" {
+		return ""
+	}
+	credOnWantBucket := func(raw runtime.RawExtension) string {
+		bucket, cred := psmdbStorageS3(raw)
+		if cred != "" && bucket == wantBucket {
+			return cred
+		}
 		return ""
 	}
 	if preferredStorage != "" {
-		if cred := psmdbStorageS3CredentialsSecret(storages[preferredStorage]); cred != "" {
+		if cred := credOnWantBucket(storages[preferredStorage]); cred != "" {
 			return cred
 		}
 	}
-	if cred := psmdbStorageS3CredentialsSecret(storages[psmdbDefaultStorageName]); cred != "" {
+	if cred := credOnWantBucket(storages[psmdbDefaultStorageName]); cred != "" {
 		return cred
 	}
 	if len(storages) == 1 {
 		for _, raw := range storages {
-			return psmdbStorageS3CredentialsSecret(raw)
+			return credOnWantBucket(raw)
 		}
 	}
 	return ""
 }
 
-// psmdbStorageS3CredentialsSecret extracts .s3.credentialsSecret from one
-// psmdb spec.backup.storages entry. Returns "" for an empty/non-object entry,
-// a non-s3 storage, or an entry that names no secret.
-func psmdbStorageS3CredentialsSecret(raw runtime.RawExtension) string {
+// psmdbStorageS3 extracts .s3.bucket and .s3.credentialsSecret from one psmdb
+// spec.backup.storages entry. Returns ("","") for an empty/non-object entry or
+// a non-s3 storage. The bucket lets the restore path refuse to hand a restore a
+// credential for a storage on a different bucket than the archive.
+func psmdbStorageS3(raw runtime.RawExtension) (bucket, credentialsSecret string) {
 	if len(raw.Raw) == 0 {
-		return ""
+		return "", ""
 	}
 	var st struct {
 		S3 struct {
+			Bucket            string `json:"bucket"`
 			CredentialsSecret string `json:"credentialsSecret"`
 		} `json:"s3"`
 	}
 	if err := json.Unmarshal(raw.Raw, &st); err != nil {
-		return ""
+		return "", ""
 	}
-	return st.S3.CredentialsSecret
+	return st.S3.Bucket, st.S3.CredentialsSecret
 }
 
 // shouldInjectMongoDBSystemStorage reports whether the driver must SSA-inject
@@ -446,18 +459,22 @@ func buildMongoDBSystemStorageEntry(s3 *strategyv1alpha1.MongoDBStorageS3) map[s
 }
 
 // applyMongoDBSystemStorage SSA-injects the system-bucket S3 storage onto the
-// live PerconaServerMongoDB's spec.backup.storages[storageName]. On the
-// useSystemBucket flow the app chart omits the storage (it cannot know the
-// platform bucket/endpoint at render time), so the driver owns this subtree
-// via a dedicated field manager + ForceOwnership - the app's Helm/Flux manager
-// never sets it, so re-renders leave the injected storage intact (mirrors the
-// CNPG driver's spec.plugins patch). CredentialsSecret defaults to
-// cozy-backups-creds, which the BackupJob reconciler projects into the
-// namespace before dispatch.
-func (r *BackupJobReconciler) applyMongoDBSystemStorage(ctx context.Context, namespace, psmdbName, storageName string, s3 *strategyv1alpha1.MongoDBStorageS3) error {
+// live PerconaServerMongoDB's spec.backup.storages[storageName] and returns the
+// server's post-apply view of the cluster. On the useSystemBucket flow the app
+// chart omits the storage (it cannot know the platform bucket/endpoint at render
+// time), so the driver owns this subtree via a dedicated field manager +
+// ForceOwnership - the app's Helm/Flux manager never sets it, so re-renders
+// leave the injected storage intact (mirrors the CNPG driver's spec.plugins
+// patch). CredentialsSecret defaults to cozy-backups-creds, which the BackupJob
+// reconciler projects into the namespace before dispatch. The typed Patch
+// decodes the apiserver's response (the full merged object, storage included)
+// back into the patch object, so the caller reads the injected storage straight
+// from the return value instead of a follow-up Get, which would hit the
+// informer cache and see the pre-patch cluster.
+func (r *BackupJobReconciler) applyMongoDBSystemStorage(ctx context.Context, namespace, psmdbName, storageName string, s3 *strategyv1alpha1.MongoDBStorageS3) (*psmdbtypes.PerconaServerMongoDB, error) {
 	entry, err := json.Marshal(buildMongoDBSystemStorageEntry(s3))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	patch := &psmdbtypes.PerconaServerMongoDB{
 		TypeMeta:   metav1.TypeMeta{APIVersion: psmdbtypes.GroupVersion.String(), Kind: "PerconaServerMongoDB"},
@@ -466,7 +483,10 @@ func (r *BackupJobReconciler) applyMongoDBSystemStorage(ctx context.Context, nam
 	patch.Spec.Backup.Storages = map[string]runtime.RawExtension{
 		storageName: {Raw: entry},
 	}
-	return r.Patch(ctx, patch, client.Apply, client.FieldOwner(psmdbFieldManager), client.ForceOwnership)
+	if err := r.Patch(ctx, patch, client.Apply, client.FieldOwner(psmdbFieldManager), client.ForceOwnership); err != nil {
+		return nil, err
+	}
+	return patch, nil
 }
 
 // psmdbBackupDeadlineExceeded reports whether enough wall-clock time elapsed
@@ -752,21 +772,27 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 			fmt.Sprintf("waiting for target psmdb.percona.com/PerconaServerMongoDB %s/%s to enable backups", target.Namespace, targetPSMDBName))
 	}
 
-	// Re-point the restore at the TARGET cluster's own S3 credentials. The
-	// backupSource carries the SOURCE cluster's credentialsSecret (read back from
-	// the source backup status / snapshot), which names the source release's
-	// -s3-creds Secret. That Secret is deleted together with the source app —
-	// exactly the disaster-recovery case backups exist for — so a restore into a
-	// fresh, differently-named target must not depend on it. The restore replays
-	// into the target, whose own -s3-creds Secret is guaranteed present
-	// (backup.enabled was gated just above) and grants access to the backup's
-	// bucket. The backupSource's bucket/prefix/endpoint still come from the
-	// source (that is where the archive lives); only the credential reference is
-	// swapped. Falls back to the source reference when the target declares no
-	// discoverable s3 credentials (in-place restore into the still-present source
-	// resolves to the same Secret, so this is a no-op there).
-	if source.S3 != nil {
-		if cred := psmdbTargetCredentialsSecret(targetCluster, source.StorageName); cred != "" && cred != source.S3.CredentialsSecret {
+	// Re-point the restore at the TARGET cluster's own S3 credentials. On the
+	// legacy flow the backupSource carries the SOURCE release's -s3-creds Secret,
+	// which is deleted together with the source app — exactly the disaster-
+	// recovery case backups exist for — so a restore into a fresh, differently-
+	// named target must not depend on it. Two guards keep the swap correct across
+	// flows:
+	//   - Skip it when the source already names the platform-projected
+	//     cozy-backups-creds (the useSystemBucket flow): that Secret is projected
+	//     into the restore namespace and outlives the source app, so there is
+	//     nothing to repair, and repointing it at a legacy target's own creds
+	//     would send a platform-bucket restore at the wrong credentials.
+	//   - Only adopt a target credential whose storage is on the SAME bucket as
+	//     the archive (source.S3.Bucket). The backupSource's bucket/prefix/
+	//     endpoint always stay the source's (that is where the archive lives);
+	//     swapping in a credential for a different bucket (a system-bucket
+	//     target's cozy-backups-creds against a legacy tenant bucket) would fail
+	//     the restore with AccessDenied. When no same-bucket target credential is
+	//     discoverable the source reference is kept (in-place restore into the
+	//     still-present source resolves to the same Secret, so this is a no-op).
+	if source.S3 != nil && source.S3.CredentialsSecret != psmdbDefaultCredentialsSecret {
+		if cred := psmdbTargetCredentialsSecret(targetCluster, source.StorageName, source.S3.Bucket); cred != "" && cred != source.S3.CredentialsSecret {
 			logger.Debug("re-pointing MongoDB restore credentials at target cluster storage",
 				"restorejob", restoreJob.Name, "from", source.S3.CredentialsSecret, "to", cred)
 			source.S3.CredentialsSecret = cred
