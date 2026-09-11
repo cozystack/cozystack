@@ -1,0 +1,43 @@
+suite: Kafka Exporter for consumer-group lag
+
+# kafka_consumergroup_lag exists only when the Kafka CR enables the Kafka
+# Exporter; the brokers' JMX rules never publish it. The exporter pod is a
+# Strimzi-managed pod like the brokers: it carries app.kubernetes.io/instance
+# and serves its metrics on a port named tcp-prometheus, which is exactly what
+# the release's VMPodScrape selects, so one scrape object covers both.
+
+templates:
+  - templates/kafka.yaml
+  - templates/podscrape.yaml
+
+release:
+  name: test-kafka
+  namespace: tenant-test
+
+tests:
+  - it: enables the exporter over every topic and consumer group
+    template: templates/kafka.yaml
+    asserts:
+      - equal:
+          path: spec.kafkaExporter.topicRegex
+          value: ".*"
+      - equal:
+          path: spec.kafkaExporter.groupRegex
+          value: ".*"
+      - equal:
+          path: spec.kafkaExporter.resources.limits.memory
+          value: 256Mi
+      - equal:
+          path: spec.kafkaExporter.template.pod.enableServiceLinks
+          value: false
+
+  - it: the pod scrape selects every pod of the release on tcp-prometheus, the exporter included
+    template: templates/podscrape.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/instance: test-kafka
+      - equal:
+          path: spec.podMetricsEndpoints[0].port
+          value: tcp-prometheus

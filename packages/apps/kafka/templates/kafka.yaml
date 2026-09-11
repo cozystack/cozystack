@@ -165,3 +165,21 @@ spec:
           labels:
             policy.cozystack.io/allow-to-apiserver: "true"
         enableServiceLinks: false
+  # Consumer-group lag (kafka_consumergroup_lag and friends) is only published
+  # by the Kafka Exporter, never by the brokers' JMX rules. Its pod carries the
+  # same app.kubernetes.io/instance label and tcp-prometheus port as the
+  # brokers, so the release's VMPodScrape picks it up without a second scrape.
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+    # Explicit resources for the same reason as the entity operator above: the
+    # tenant LimitRange would otherwise cap the container at 128Mi.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+    template:
+      pod:
+        enableServiceLinks: false
