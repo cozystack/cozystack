@@ -1,11 +1,10 @@
 {{- $policy := .Values.admissionWebhookPolicy | default dict -}}
-{{- $inc := index .Values "ingress-nginx" | default dict -}}
 {{- $ingress := index .Subcharts "ingress-nginx" -}}
-{{- $admissionWebhooks := dig "controller" "admissionWebhooks" dict $inc | default dict -}}
+{{- $admissionWebhooks := $ingress.Values.controller.admissionWebhooks | default dict -}}
 {{- if and (dig "enabled" true $policy) (dig "enabled" true $admissionWebhooks) (.Capabilities.APIVersions.Has "cilium.io/v2/CiliumClusterwideNetworkPolicy") }}
 {{- $controllerName := include "ingress-nginx.name" $ingress -}}
 {{- $controllerNamespace := include "ingress-nginx.namespace" $ingress -}}
-{{- $webhookPort := dig "port" 8443 $admissionWebhooks -}}
+{{- $webhookPort := required "ingress-nginx.controller.admissionWebhooks.port must be set while admissionWebhookPolicy is enabled" $admissionWebhooks.port -}}
 {{- $policyHash := printf "%s/%s" $controllerNamespace .Release.Name | sha256sum | trunc 12 -}}
 ---
 {{/*
@@ -20,9 +19,9 @@ a direction the other does not.
 
 The source-side specs (the first two) are an egressDeny evaluated on the
 caller's own endpoint, so they hold while the webhook endpoint's policy is
-being recomputed or has overflowed its own policy map. What they cannot do is
-survive a datapath where Cilium is not the service load balancer, because they
-name the webhook's backend port and rely on the DNAT happening first.
+being recomputed or has overflowed its own policy map. What they cannot cover is
+a Service translated by another component after Cilium's egress hook, because
+they name the webhook's backend port and rely on the DNAT happening first.
 
 The target-side spec (the third) is an ingressDeny on the webhook endpoint,
 evaluated after whatever DNAT already happened, so it is independent of the
@@ -37,8 +36,8 @@ namespace-churn map writes on that endpoint. It makes them non-load-bearing:
 whichever end is degraded, the other still denies, and the writes are writes
 rather than an outage (see the cost paragraph on the third spec). Removing the
 coupling outright would mean dropping the target-side rule and accepting a
-silent fail-open wherever Cilium does not own the DNAT, which is the worse
-trade.
+silent fail-open if another component performs DNAT only after Cilium's egress
+hook, which is the worse trade.
 
 Stated precisely, because #3983 was reported as a hard outage rather than a
 flap: the coupling above is real, but it was not reproduced in isolation as the
@@ -64,27 +63,28 @@ destination on that port for every selected endpoint -- a cluster-wide
 egress outage, not a tighter deny.
 
 That ordering is Cilium's own, and it is conditional: it holds while Cilium owns
-service load-balancing, which on every cozystack variant it does because
-packages/system/cilium/values.yaml sets kubeProxyReplacement: true against an
-upstream chart default of "false". Set that false and the ClusterIP DNAT moves
-downstream of Cilium's egress hook (kube-proxy in the host netns, or kube-ovn's
-OVN load balancer): the packet reaches policy_can_egress4 with dst = ClusterIP,
-matches no endpoint identity, and -- default-deny being off -- is allowed. Pods
-regain <admission>.<ns>.svc:443 while the backend deny below keeps working, and
-nothing reports the change.
+service load-balancing. Cozystack supports this chart only with
+kubeProxyReplacement: true and does not provide a supported fallback service
+load balancer for a false value. On the kube-ovn management topology this is
+explicit: packages/system/kubeovn/values.yaml also sets ENABLE_LB: false. A
+false value therefore leaves ClusterIP routing without a supported owner and
+can break Service connectivity; it does not by itself make this webhook
+reachable.
 
-Three things keep that from happening quietly.
-packages/system/cilium/tests/kube_proxy_replacement_test.yaml pins the value
-across the chart defaults and all five variant valuesFiles combinations, so
-flipping it reddens the cilium package's own suite, and
-packages/system/cilium/templates/kube-proxy-replacement-beacon.yaml renders a
-status ConfigMap whenever it is not true -- the only signal an operator
-override in the field can produce, since no test in this repo observes a live
-cluster's values. The deny-still-enforced case in
-hack/e2e-chainsaw/gateway/chainsaw-test.yaml connects to the admission
-ClusterIP from a pod and requires that connect to fail, so the effect is
-asserted against a live cluster rather than only reasoned about here. And the
-third spec below keeps enforcing whoever performs the DNAT.
+If a second unsupported configuration change supplied another service DNAT,
+the source-side rules would no longer cover packets before that translation:
+they would reach Cilium's egress hook with dst = ClusterIP and match no endpoint
+identity. The third spec below remains target-side and is evaluated after any
+translation, so pod traffic still does not fail open. The source-side rules are
+still worth pinning because they carry the deny while the webhook endpoint's
+own policy is degraded.
+
+packages/system/cilium/tests/kube_proxy_replacement_test.yaml pins the supported
+value across the chart defaults and all five variant valuesFiles combinations,
+and packages/system/cilium/templates/kube-proxy-replacement-beacon.yaml reports
+an unsupported live override that repository tests cannot observe. The
+deny-still-enforced case in hack/e2e-chainsaw/gateway/chainsaw-test.yaml verifies
+both Service and direct-backend paths on a live supported cluster.
 
 The first rule covers every workload outside kube-system. The second covers
 kube-system except the konnectivity-agent ServiceAccount: a Kamaji-hosted
@@ -102,9 +102,10 @@ denies kept for different reasons.
 
 Its pod deny is deliberate belt and braces, not a leftover from the shape this
 change replaced. Being on the destination's ingress path it is evaluated after
-whatever DNAT has already happened, so it holds even where Cilium is not the
-service load balancer -- exactly the exposure the paragraphs above describe. It
-cannot catch the API server: for a clusterwide policy Cilium rewrites every
+whatever DNAT has already happened, so it still holds if another component
+translates the Service after source-side egress policy -- exactly the exposure
+the paragraphs above describe. It cannot catch the API server: for a
+clusterwide policy Cilium rewrites every
 fromEndpoints selector to also require k8s:io.kubernetes.pod.namespace to
 Exist, plus the cluster label (Cilium v1.19.5,
 pkg/k8s/apis/cilium.io/utils/utils.go:120-154 getEndpointSelector, whose own

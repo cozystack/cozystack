@@ -1,24 +1,22 @@
 cilium:
-  # Load-bearing beyond service routing, and pinned for that reason. The
-  # admission-webhook deny policies in packages/system/ingress-nginx and
-  # packages/system/kubeovn-webhook name only their webhook's backend port, which
-  # covers a pod dialling the ClusterIP only while Cilium is the thing that
-  # performs the service DNAT -- and only this value makes it so, against an
-  # upstream chart default of "false". Setting it false does not break those
-  # policies visibly; it reopens the ClusterIP path to both webhooks while the
-  # backend deny keeps working. tests/kube_proxy_replacement_test.yaml asserts
-  # the rendered value across the defaults and every variant valuesFiles
-  # combination, and carries the whole argument. Both policies also carry a
-  # target-side rule that does not depend on this value, so losing it degrades
-  # the source-side half rather than removing enforcement outright.
+  # Required for the supported service-routing topology. Cozystack does not
+  # provide a supported alternative owner for ClusterIP translation when this
+  # is false; on kube-ovn, kube-proxy is absent and the OVN service load balancer
+  # is explicitly disabled. A false value can therefore break Service
+  # connectivity. tests/kube_proxy_replacement_test.yaml asserts the rendered
+  # value across the defaults and every variant valuesFiles combination.
+  #
+  # The source-side admission-webhook denies in packages/system/ingress-nginx
+  # and packages/system/kubeovn-webhook also rely on Cilium translating the
+  # Service before egress policy. Both policies retain a target-side ingressDeny,
+  # so even a second unsupported change that introduced another translator would
+  # not make the webhooks fail open.
   #
   # No test here can observe a live cluster's values, so an operator override in
   # the field is caught only by templates/kube-proxy-replacement-beacon.yaml,
-  # which renders a status ConfigMap whenever this is not true. It is a beacon
-  # and not a fail() on purpose: whether Cilium without kube-proxy replacement
-  # is a supported cozystack configuration is a platform decision, and refusing
-  # to render the CNI over a weakened defence-in-depth control is not this
-  # chart's call.
+  # which renders a status ConfigMap whenever this is not true. The beacon keeps
+  # a live unsupported override visible; it is not an alternative supported
+  # mode, and the required remediation is to restore true.
   kubeProxyReplacement: true
   # Upstream cilium with hostFirewall enabled and the IPv6 datapath disabled
   # (ipv6.enabled=false, the default here) drops ALL node IPv6 before any

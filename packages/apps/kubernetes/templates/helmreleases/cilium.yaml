@@ -88,21 +88,19 @@ spec:
 
 {{- /*
 addons.cilium.valuesOverride is x-kubernetes-preserve-unknown-fields, so a
-tenant can set cilium.kubeProxyReplacement: false for its own cluster. That is
-the one path by which the value reaches a live cluster without a cozystack
-commit, and it is the path the guest cluster's own ingress-nginx admission deny
-depends on: that policy names the webhook backend port only, which covers a pod
-dialling the ClusterIP solely because Cilium performs the service DNAT ahead of
-its own egress hook. Override it and pods inside the guest cluster regain the
-ClusterIP path to the admission webhook while the backend deny keeps working --
-no failure, no log line, and the rendered policy unchanged.
+tenant can set cilium.kubeProxyReplacement: false for its own cluster. Cozystack
+does not support that value or supply an alternative service load balancer for
+it; guest ClusterIP connectivity can fail. The guest ingress-nginx policy's
+source-side deny also loses the pre-DNAT match, but its target-side ingressDeny
+continues to deny pods after any translation, so the override does not imply
+that the admission webhook becomes reachable.
 
 The mismatch is detectable here rather than in the guest cluster, because this
 HelmRelease's values are assembled on the management cluster, so the beacon is
 emitted next to the release that carries the override. Same mechanism and same
 reasoning as the -awaiting-etcd beacon in ../cluster.yaml: a ConfigMap an
-operator and an alert can both see, not a fail() that would take the tenant's
-only CNI down over a weakened defence-in-depth control.
+operator and an alert can both see. It is a diagnostic for an unsupported
+override, not an alternative compatibility mode.
 
 Absence is not a warning: the value is unset in both the override and
 cozystack.defaultCiliumValues on every supported path, and the cilium chart's
@@ -129,14 +127,15 @@ data:
     addons.cilium.valuesOverride sets cilium.kubeProxyReplacement to
     {{ toString $kpr | quote }} for cluster {{ .Release.Name }}.
 
-    Cilium in that guest cluster will not perform the ClusterIP DNAT ahead of
-    its own egress hook, so the admission-webhook deny the guest cluster's
-    ingress-nginx ships no longer covers traffic addressed to the webhook
-    Service ClusterIP. Pods in the guest cluster can reach
-    <webhook>.<namespace>.svc:443; the webhook's backend port stays denied.
+    Cozystack supports guest cluster networking only when
+    cilium.kubeProxyReplacement is "true". No supported alternative service load
+    balancer is supplied for this override, so ClusterIP connectivity may fail.
 
-    This is a deliberate override, so it is reported rather than refused. Clear
-    it to restore the control, or set the guest ingress-nginx addon's
-    admissionWebhookPolicy.enabled explicitly so the posture is recorded.
+    The guest ingress-nginx policy's source-side deny also loses its pre-DNAT
+    match, but its target-side ingressDeny remains. This override does not imply
+    that the admission webhook is reachable through its Service.
+
+    Clear the override or set cilium.kubeProxyReplacement back to true. Disabling
+    the webhook policy does not make this networking configuration supported.
 {{- end }}
 {{- end }}
