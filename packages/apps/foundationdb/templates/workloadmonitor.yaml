@@ -1,4 +1,3 @@
-{{- if .Values.monitoring.enabled }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
@@ -18,4 +17,3 @@ spec:
     foundationdb.org/fdb-cluster-name: {{ .Release.Name }}
     foundationdb.org/fdb-process-class: storage
   version: {{ .Chart.Version }}
-{{- end }}
