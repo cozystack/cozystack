@@ -1,0 +1,41 @@
+{{- $tlsEnabled := (include "rabbitmq.tls.enabled" .) | eq "true" }}
+{{- /* The management image ships rabbitmq_prometheus, and the operator publishes
+     its port on the client Service as either `prometheus` (15692) or
+     `prometheus-tls` (15691), never both, keyed off TLS alone. The scrape
+     follows that switch: with TLS on it moves to the HTTPS port and trusts the
+     release CA under the Service's own name, which is in the certificate's
+     SAN list. See README "TLS scope". */}}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  jobLabel: jobLabel
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}
+      app.kubernetes.io/component: rabbitmq
+  endpoints:
+  - port: {{ ternary "prometheus-tls" "prometheus" $tlsEnabled }}
+    {{- if $tlsEnabled }}
+    scheme: https
+    tlsConfig:
+      serverName: {{ .Release.Name }}.{{ .Release.Namespace }}.svc
+      ca:
+        secret:
+          name: {{ .Release.Name }}-ca
+          key: ca.crt
+    {{- end }}
+    relabelConfigs:
+    - replacement: rabbitmq
+      targetLabel: job
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    - targetLabel: service
+      replacement: {{ .Release.Name }}

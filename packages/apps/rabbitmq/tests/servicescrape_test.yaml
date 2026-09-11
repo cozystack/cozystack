@@ -1,0 +1,86 @@
+suite: RabbitMQ metrics scrape
+
+# The management image already serves rabbitmq_prometheus; this scrape is what
+# gets the series into the tenant's VictoriaMetrics. The operator publishes the
+# metrics port as `prometheus` (15692) or, once TLS is on, `prometheus-tls`
+# (15691) and withdraws the other, so the endpoint follows tls.enabled and
+# carries the release CA when it has to speak HTTPS. Every series is stamped
+# service=<release>, the convention the redis chart uses.
+
+templates:
+  - templates/servicescrape.yaml
+
+release:
+  name: myrabbitmq
+  namespace: tenant-test
+
+tests:
+  - it: scrapes the plaintext prometheus port of the cluster Service by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: VMServiceScrape
+      - equal:
+          path: metadata.name
+          value: myrabbitmq
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: myrabbitmq
+            app.kubernetes.io/component: rabbitmq
+      - equal:
+          path: spec.namespaceSelector.matchNames
+          value: [tenant-test]
+      - equal:
+          path: spec.endpoints[0].port
+          value: prometheus
+      - notExists:
+          path: spec.endpoints[0].scheme
+      - notExists:
+          path: spec.endpoints[0].tlsConfig
+
+  - it: stamps service=<release> on every series
+    asserts:
+      - contains:
+          path: spec.endpoints[0].relabelConfigs
+          content:
+            targetLabel: service
+            replacement: myrabbitmq
+      - contains:
+          path: spec.endpoints[0].relabelConfigs
+          content:
+            replacement: rabbitmq
+            targetLabel: job
+
+  - it: moves to prometheus-tls over HTTPS under the release CA when TLS is on
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.endpoints[0].port
+          value: prometheus-tls
+      - equal:
+          path: spec.endpoints[0].scheme
+          value: https
+      - equal:
+          path: spec.endpoints[0].tlsConfig
+          value:
+            serverName: myrabbitmq.tenant-test.svc
+            ca:
+              secret:
+                name: myrabbitmq-ca
+                key: ca.crt
+
+  - it: an explicit tls.enabled false keeps the plaintext port
+    set:
+      tls:
+        enabled: false
+      external: true
+    asserts:
+      - equal:
+          path: spec.endpoints[0].port
+          value: prometheus
+      - notExists:
+          path: spec.endpoints[0].tlsConfig
