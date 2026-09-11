@@ -18,6 +18,22 @@ spec:
   hostnames:
   - {{ $ingressHost | quote }}
   rules:
+  {{- with .Values.ingress.rootRedirect }}
+  # rootRedirect set: the bare "/" on the login hostname 302-redirects here
+  # (e.g. the product dashboard) instead of reaching Keycloak, whose root
+  # redirects to the admin console. Only the exact "/" is redirected — every
+  # OIDC path below still reaches Keycloak. Most useful with adminHost, which
+  # already narrows the login route off "/".
+  - matches:
+    - path:
+        type: Exact
+        value: /
+    filters:
+    - type: RequestRedirect
+      requestRedirect:
+        hostname: {{ . | quote }}
+        statusCode: 302
+  {{- end }}
   {{- if $adminHost }}
   # adminHost is set: the public (login) hostname exposes only the
   # OIDC/login paths. The admin console and Administration REST API are

@@ -1,0 +1,69 @@
+suite: login root redirect (ingress.rootRedirect)
+
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+
+# ingress.rootRedirect is an opt-in option. When set, the bare "/" of the
+# login hostname 302-redirects to the given hostname (e.g. the product
+# dashboard) instead of reaching Keycloak, whose root redirects to the admin
+# console. Only the exact "/" is redirected; the OIDC paths still reach
+# Keycloak. It applies to the Gateway API HTTPRoute.
+tests:
+  - it: no root redirect rule when rootRedirect is empty (default)
+    template: templates/httproute.yaml
+    documentSelector:
+      path: metadata.name
+      value: keycloak
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+        expose-ingress: cozy-gateway
+      ingress:
+        adminHost: kc-admin.example.com
+    asserts:
+      - isKind:
+          of: HTTPRoute
+      # First rule is the (scoped) backend, not a redirect.
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: keycloak-http
+      - notExists:
+          path: spec.rules[0].filters
+
+  - it: adds exact / -> RequestRedirect when rootRedirect is set
+    template: templates/httproute.yaml
+    documentSelector:
+      path: metadata.name
+      value: keycloak
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+        expose-ingress: cozy-gateway
+      ingress:
+        adminHost: kc-admin.example.com
+        rootRedirect: dashboard.example.com
+    asserts:
+      - isKind:
+          of: HTTPRoute
+      - equal:
+          path: spec.rules[0].matches[0].path.type
+          value: Exact
+      - equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /
+      - equal:
+          path: spec.rules[0].filters[0].type
+          value: RequestRedirect
+      - equal:
+          path: spec.rules[0].filters[0].requestRedirect.hostname
+          value: dashboard.example.com
+      - equal:
+          path: spec.rules[0].filters[0].requestRedirect.statusCode
+          value: 302
+      # OIDC paths still reach Keycloak on the following rule.
+      - equal:
+          path: spec.rules[1].backendRefs[0].name
+          value: keycloak-http
