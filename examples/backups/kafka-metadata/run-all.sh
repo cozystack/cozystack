@@ -19,7 +19,8 @@
 # default config) fails the assertion; the colliding pair proves the strategy
 # treats --topic as a literal, not a regex. Message payloads are out of scope.
 #
-# Override NAMESPACE via the environment; see 00-helpers.sh.
+# Runs in tenant-root: the numbered manifests pin that namespace and the system
+# bucket credentials live there; see 00-helpers.sh.
 # hack/e2e-chainsaw/kafka-metadata/ drives this file as kafka-3-metadata-roundtrip.
 set -euo pipefail
 
