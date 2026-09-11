@@ -1,0 +1,61 @@
+suite: Grant CR quotes the username so a YAML-special name stays a string
+
+# The Grant CR's spec.username must match the User CR's spec.name and the Secret
+# key, which user.yaml/secret.yaml already quote. Emitted bare, a username that
+# is a YAML-special scalar decodes to the wrong type: Kubernetes reads manifests
+# through sigs.k8s.io/yaml (YAML 1.1), where a numeric name like 123 becomes an
+# integer and a name like "on" becomes a boolean, so the Grant names a value the
+# User CR (string) does not, and the privilege is silently never applied.
+#
+# A numeric name is used deliberately: helm-unittest's own loader keeps a bare
+# "on" as the string "on" (it does not apply YAML 1.1 booleans), so only a
+# numeric exercises the coercion here — bare 123 loads as the integer 123, the
+# quoted form as the string "123". Asserting the string form pins the quoting;
+# dropping "| quote" in db.yaml loads it as an integer and turns this red.
+#
+# Document order from db.yaml for one database granting one user admin+readonly:
+#   0 Database, 1 Grant(ALL/admin), 2 Grant(SELECT/readonly).
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: mdb-test
+  namespace: tenant-test
+
+set:
+  users:
+    "123":
+      maxUserConnections: 10
+  databases:
+    db1:
+      roles:
+        admin: ["123"]
+        readonly: ["123"]
+
+tests:
+  - it: keeps the admin Grant username the string "123"
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: kind
+          value: Grant
+      - equal:
+          path: spec.privileges[0]
+          value: ALL
+      - equal:
+          path: spec.username
+          value: "123"
+
+  - it: keeps the readonly Grant username the string "123"
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: Grant
+      - equal:
+          path: spec.privileges[0]
+          value: SELECT
+      - equal:
+          path: spec.username
+          value: "123"
