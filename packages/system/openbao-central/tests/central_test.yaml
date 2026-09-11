@@ -1,0 +1,138 @@
+suite: central OpenBAO wiring invariants
+
+# internal/operator/openbao_transit_reconciler.go reaches this instance through
+# hardcoded constants: https://openbao-system.cozy-openbao.svc:8200 and the
+# openbao-system-keys / openbao-system-ca Secrets in cozy-openbao. Nothing in
+# Go fails to compile if a values edit here renames the release or turns TLS
+# off, so the naming and the scheme are pinned as assertions instead. The
+# tenant chart carries the same address as a literal in its seal stanza.
+
+templates:
+  - templates/openbao.yaml
+
+release:
+  name: openbao-central
+  namespace: cozy-openbao
+
+tests:
+  - it: "wraps the shared workload chart rather than vendoring a second copy"
+    asserts:
+      - equal:
+          path: spec.chartRef.kind
+          value: ExternalArtifact
+      - equal:
+          path: spec.chartRef.name
+          value: cozystack-openbao-application-default-openbao-system
+      - equal:
+          path: spec.chartRef.namespace
+          value: cozy-system
+
+  - it: "names the server openbao-system, which the reconciler's address assumes"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: openbao-system
+      - equal:
+          path: spec.values.openbao.fullnameOverride
+          value: openbao-system
+
+  - it: "never serves the central instance in plaintext"
+    asserts:
+      - equal:
+          path: spec.values.openbao.global.tlsDisable
+          value: false
+
+  - it: "labels the server pods for apiserver egress"
+    # service_registration "kubernetes" in the raft config needs this egress;
+    # without the label the pods hang at startup. See issue #2793.
+    asserts:
+      - equal:
+          path: spec.values.openbao.server.extraLabels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+      - matchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: 'service_registration "kubernetes"'
+
+  - it: "runs HA raft, not the standalone file backend"
+    asserts:
+      - equal:
+          path: spec.values.openbao.server.ha.enabled
+          value: true
+      - equal:
+          path: spec.values.openbao.server.ha.replicas
+          value: 3
+      - equal:
+          path: spec.values.openbao.server.standalone.enabled
+          value: false
+      - matchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: 'storage "raft"'
+      # One retry_join per replica, all over https so peers verify each other.
+      - matchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: 'openbao-system-2\.openbao-system-internal:8200'
+      - notMatchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: 'leader_api_addr\s+= "http://'
+
+  - it: "keeps raft as the backend at one replica, so scaling up adds voters"
+    # Not a cosmetic choice: the backend a barrier was created under cannot be
+    # changed later, so a single-node install must not land on storage "file".
+    set:
+      replicas: 1
+    asserts:
+      - equal:
+          path: spec.values.openbao.server.ha.replicas
+          value: 1
+      - equal:
+          path: spec.values.openbao.server.ha.enabled
+          value: true
+      - matchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: 'storage "raft"'
+      - notMatchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: 'storage "file"'
+      # A lone node has no cluster to join, and a self-join it can never
+      # complete would just retry until the init Job promotes it.
+      - notMatchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: retry_join
+
+  - it: "drops the hostname anti-affinity at one replica so a single node schedules"
+    # The upstream chart's server.affinity is a REQUIRED podAntiAffinity on
+    # kubernetes.io/hostname; left in place it is satisfiable only across nodes.
+    set:
+      replicas: 1
+    asserts:
+      - equal:
+          path: spec.values.openbao.server.affinity
+          value: ""
+
+  - it: "keeps the anti-affinity wherever it can be satisfied"
+    set:
+      replicas: 3
+    asserts:
+      - notExists:
+          path: spec.values.openbao.server.affinity
+
+  - it: "generates one retry_join per replica"
+    set:
+      replicas: 5
+    asserts:
+      - equal:
+          path: spec.values.openbao.server.ha.replicas
+          value: 5
+      - matchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: 'openbao-system-4\.openbao-system-internal:8200'
+      - notMatchRegex:
+          path: spec.values.openbao.server.ha.raft.config
+          pattern: 'openbao-system-5\.'
+
+  - it: "refuses a replica count below one"
+    set:
+      replicas: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'replicas must be at least 1'

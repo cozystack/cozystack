@@ -1,0 +1,112 @@
+## Central platform OpenBAO.
+##
+## This is the cluster-wide OpenBAO instance that backs auto-unseal for every
+## tenant-provisioned OpenBAO through its transit secrets engine. It runs in HA
+## mode with Raft integrated storage and end-to-end TLS.
+##
+## Its own seal is Shamir, because no cloud KMS is assumed on bare metal: a
+## one-time init Job stores the unseal keys and root token in the
+## `openbao-system-keys` Secret, and a long-running unsealer Deployment
+## re-unseals every pod after a restart. See
+## templates/{init-job,unsealer-deployment,transit-setup-job}.yaml.
+##
+## The server itself is not rendered here. This chart renders a HelmRelease
+## pointing at the same published `openbao-system` chart artifact that a tenant
+## OpenBAO instance uses, so there is one vendored copy of the upstream chart
+## rather than two, and `openbao` below is the value set handed to it.
+##
+## The release name and namespace are load-bearing, not cosmetic:
+## internal/operator/openbao_transit_reconciler.go reaches this instance at
+## https://openbao-system.cozy-openbao.svc:8200 and reads the
+## `openbao-system-keys` and `openbao-system-ca` Secrets from cozy-openbao.
+## Renaming either without changing those constants breaks tenant provisioning.
+
+## Number of server replicas. Three is the production default; one is supported
+## and is what a single-node install needs.
+##
+## Raft is the storage backend at every count, including one, deliberately: the
+## backend a barrier was created under is not something an instance can change
+## later, so scaling 1 -> 3 has to stay an in-place addition of voters rather
+## than a file-to-raft migration nobody can perform.
+##
+## Two replica-dependent things are therefore computed in templates/openbao.yaml
+## rather than written here: the retry_join set, and the anti-affinity. The
+## upstream chart's server.affinity defaults to a REQUIRED podAntiAffinity on
+## kubernetes.io/hostname, so more than one replica on a single node would sit
+## Pending forever; at replicas 1 that rule is dropped.
+replicas: 3
+
+openbao:
+  fullnameOverride: openbao-system
+
+  global:
+    # End-to-end TLS. Never expose this instance in plaintext.
+    tlsDisable: false
+
+  # The injector and CSI provider are out of scope for the platform instance;
+  # tenants consume transit auto-unseal, not sidecar injection.
+  injector:
+    enabled: false
+  csi:
+    enabled: false
+
+  server:
+    # Every pod comes up at once; init targets pod-0 and any others
+    # retry_join into the Raft cluster behind it.
+    podManagementPolicy: Parallel
+
+    # service_registration "kubernetes" below needs egress to kube-apiserver,
+    # which cozystack's allow-to-apiserver CiliumNetworkPolicy only admits for
+    # pods carrying this label. Without it the pods hang at startup with the
+    # listener open and nothing answering. See issue #2793.
+    extraLabels:
+      policy.cozystack.io/allow-to-apiserver: "true"
+
+    # The chart already sets BAO_ADDR=https://127.0.0.1:8200; it does not set a
+    # CA path, which the local bao CLI needs to verify the TLS listener.
+    extraEnvironmentVars:
+      BAO_CACERT: /openbao/tls/ca.crt
+
+    # cert-manager-issued server certificate (see templates/certmanager.yaml).
+    volumes:
+      - name: tls
+        secret:
+          secretName: openbao-system-tls
+    volumeMounts:
+      - name: tls
+        mountPath: /openbao/tls
+        readOnly: true
+
+    dataStorage:
+      enabled: true
+      size: 10Gi
+
+    # Kubernetes auth (used by tenants to authenticate to the transit engine)
+    # needs the token-reviewer binding.
+    authDelegator:
+      enabled: true
+
+    standalone:
+      enabled: false
+
+    ha:
+      enabled: true
+      raft:
+        enabled: true
+        setNodeId: true
+        # replicas, raft.config and affinity are injected by
+        # templates/openbao.yaml, which is the only place that knows the
+        # replica count.
+
+## Bootstrap workloads (init / unseal / transit setup).
+## `openbaoImage` MUST track the vendored charts/openbao appVersion of the
+## packages/system/openbao chart (the server image is
+## quay.io/openbao/openbao:<appVersion without leading v>).
+bootstrap:
+  openbaoImage: quay.io/openbao/openbao:2.5.0
+  kubectlImage: docker.io/clastix/kubectl:v1.32
+  # How often (seconds) the unsealer reconciles seal status across pods.
+  unsealInterval: 10
+  # Shamir key shares / threshold used at init time.
+  keyShares: 5
+  keyThreshold: 3

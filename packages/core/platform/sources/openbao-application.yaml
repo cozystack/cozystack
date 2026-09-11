@@ -19,8 +19,24 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       components:
+        # Published only, never installed on its own: this is the shared
+        # workload chart that both a tenant OpenBAO instance and the central
+        # platform instance below reference as an ExternalArtifact. A component
+        # without an `install` section gets no HelmRelease
+        # (internal/operator/package_reconciler.go), which is what keeps it from
+        # standing up a server nobody asked for.
         - name: openbao-system
           path: system/openbao
+        # The central platform instance that backs transit auto-unseal for
+        # tenants. Its namespace and the release naming inside it are read back
+        # by internal/operator/openbao_transit_reconciler.go, which expects
+        # https://openbao-system.cozy-openbao.svc:8200 and the
+        # openbao-system-keys / openbao-system-ca Secrets in cozy-openbao.
+        - name: openbao-central
+          path: system/openbao-central
+          install:
+            namespace: cozy-openbao
+            releaseName: openbao-central
         - name: openbao
           path: apps/openbao
           libraries: ["cozy-lib"]
