@@ -156,7 +156,7 @@ gitGraph
 
    Cherry-picking can be done as soon as each patch is merged into `main`, or directly before the release.
 
-   The `backport` label automates this: [`backport.yaml`](../.github/workflows/backport.yaml) targets the newest existing `release-X.Y` branch, which during a freeze window is the line being stabilised rather than the last published one.
+   The `kind/backport` label automates this: [`backport.yaml`](../.github/workflows/backport.yaml) targets the newest existing `release-X.Y` branch, which during a freeze window is the line being stabilised rather than the last published one.
 
    ```mermaid
    gitGraph
@@ -348,13 +348,25 @@ The matching Talos node image is `ghcr.io/cozystack/cozystack/cozystack-nocloud:
 | `kind/backport` | the newest existing `release-X.Y` branch |
 | `kind/backport-previous` | the second-newest existing `release-X.Y` branch |
 
-Resolution is dynamic at run time, and it reads the branches themselves: the job lists the repository's branches, keeps the ones matching `release-<major>.<minor>`, and sorts them numerically descending — so `release-1.10` ranks above `release-1.9`, which a lexicographic sort gets backwards. `backport` takes the first, `backport-previous` the second, so both name a branch that exists by construction; asking for `backport-previous` when only one line exists fails the job rather than inventing a target. Nothing is derived arithmetically — an earlier version computed the previous line as `Y-1`, which named a non-existent branch whenever a minor was skipped.
+Those two spellings and no others. The un-namespaced `backport` and `backport-previous` were read as well while the labels were being renamed; both arms are gone, and neither label exists in the repository any more. [`labels.yml`](../.github/labels.yml) still lists them as aliases, so a legacy label applied by hand is renamed into `kind/*` by the next label sync, carrying its PRs with it — which keeps the audit queries below able to find the PR, since they search on `label:kind/backport`.
 
-**During a freeze window the newest line is the one being stabilised, not the last published one.** `release-X.Y` is created when the first `vX.Y.0-rc.1` is cut, before `vX.Y.0` is published, so from the freeze until the release `backport` targets the release being stabilised and `backport-previous` targets the last published stable. That is the intent: the frozen branch is the only way into the upcoming release, which is when backports matter most. The trade-off is that for the length of the window the line one step further back has no label pointing at it, so a fix that has to reach it before the new release publishes must be cherry-picked by hand.
+**The rename does not deliver the backport.** [`labels.yaml`](../.github/workflows/labels.yaml) passes no `token:` to the sync action, so it writes as the default `GITHUB_TOKEN`, and GitHub does not let an event created by that token start a workflow run — the same rule [`backport.yaml`](../.github/workflows/backport.yaml) relies on at its concurrency block. So a hand-applied legacy label is ignored when it is applied, and still ignored after the sync has tidied its name. Nothing recovers it automatically: apply `kind/backport` yourself, which is the only spelling the picker offers anyway.
+
+Resolution is dynamic at run time, and it reads the branches themselves: the job lists the repository's branches, keeps the ones matching `release-<major>.<minor>`, and sorts them numerically descending — so `release-1.10` ranks above `release-1.9`, which a lexicographic sort gets backwards. `kind/backport` takes the first, `kind/backport-previous` the second, so both name a branch that exists by construction; asking for `kind/backport-previous` when only one line exists fails the job rather than inventing a target. Nothing is derived arithmetically — an earlier version computed the previous line as `Y-1`, which named a non-existent branch whenever a minor was skipped.
+
+**During a freeze window the newest line is the one being stabilised, not the last published one.** `release-X.Y` is created when the first `vX.Y.0-rc.1` is cut, before `vX.Y.0` is published, so from the freeze until the release `kind/backport` targets the release being stabilised and `kind/backport-previous` targets the last published stable. That is the intent: the frozen branch is the only way into the upcoming release, which is when backports matter most. The trade-off is that for the length of the window the line one step further back has no label pointing at it, so a fix that has to reach it before the new release publishes must be cherry-picked by hand.
 
 The bot creates a backport PR with title `[Backport release-X.Y] <original title>`. When this PR merges, the title prefix used to re-trigger the bot through `pr-labeler.yaml`, which auto-applied `backport` to any `[Backport release-X.Y]`-titled PR. Combined with the org-level `dosubot` re-applying the label, this caused recursive backports.
 
 The fix (PR #2584): both job `if:` blocks gate on `github.event.pull_request.base.ref == 'main'`. Backport PRs target `release-X.Y`, so they cannot satisfy this — architectural protection, regardless of which bot relabels them.
+
+### Empty commits
+
+The action cherry-picks a merged PR's commits one at a time and reads any non-zero exit as a conflict: on exit 1 it commits the working tree as `BACKPORT-CONFLICT` and opens a draft PR for manual fixup. An empty cherry-pick also exits 1 but leaves nothing to commit, so the action's own `git commit` exits 1 in turn, it aborts the whole cherry-pick and throws — discarding the commits it had already applied, pushing no branch and opening no PR. A single `git commit --allow-empty`, the usual way to re-trigger CI, was therefore enough to lose an entire backport, reported on the original PR as a cherry-pick failure rather than as what it was. A commit whose change the target branch already carries did the same thing.
+
+The job installs [`hack/backport-git-shim.sh`](../hack/backport-git-shim.sh) as `git` ahead of the real one on `PATH` for its own duration. It adds `--allow-empty --empty=drop` to `git cherry-pick` and passes everything else through, including the sequencer verbs, which `--empty` refuses to be combined with. An originally empty commit is carried over, one that became empty is dropped, and a real conflict still exits 1 with unmerged paths — so the draft-PR path below is unchanged, and only the two cases that used to be misreported as conflicts behave differently. It goes through `PATH` because the action accepts no cherry-pick flags, neither does its upstream v4, and git has no config knob for either case. The step proves the wrapper against the runner's own git before the action depends on it, so a `--empty`-less git or a wrapper that cannot resolve the real one is a red step rather than a lost backport.
+
+One case it deliberately does not fix: a PR whose changes the target branch **entirely** already carries — delivered by another PR, or cherry-picked by hand. Every pick then drops, the branch ends up identical to the target, and the action fails opening a PR with no commits in it. That was a failed backport before this change too, just one that failed a step earlier, so nothing regressed; what it is not is a clean "nothing to do". Detecting it up front means re-deriving which commits the action would pick, merge-strategy detection included, and getting that wrong skips a backport that should have happened — a worse failure than a misleading comment on a change that is already on the branch. The merged-backport guard covers the common way this arises, which is a second label event after the first backport merged.
 
 ### When the bot fails
 
@@ -367,11 +379,13 @@ Conflicting cherry-picks produce a draft PR via `conflict_resolution: draft_comm
 
 ```bash
 git checkout release-X.Y
-git cherry-pick -x -s <commit-sha>
+git cherry-pick -x -s --keep-redundant-commits <commit-sha>
 # resolve conflicts
 git commit -s
 git push origin release-X.Y  # or push to a new branch and open a PR
 ```
+
+`--keep-redundant-commits` is there for the same reason [the bot's wrapper injects its own flags](#empty-commits): without it a commit that is empty, or whose change `release-X.Y` already carries, stops the cherry-pick with "The previous cherry-pick is now empty" and no indication that carrying on is the right move. It keeps such a commit as an empty one rather than dropping it, which for a pick you are watching is the more useful of the two — you can see what was redundant and drop it yourself. Harmless when neither case applies, and it needs no particular git: the flag has been there since well before `--empty`, which the bot uses instead and which arrived in git 2.45. When a pick does turn out empty mid-sequence, `git cherry-pick --skip` is what git itself suggests, and has been since 2.23.
 
 To find the bot's failed comments across a batch of PRs:
 
