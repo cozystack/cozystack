@@ -11,9 +11,9 @@ spec:
   kafka:
     replicas: 1
     size: 2Gi
-    resourcesPreset: "small"
+    resourcesPreset: "c1.small"
   zookeeper:
     replicas: 1
     size: 1Gi
-    resourcesPreset: "small"
+    resourcesPreset: "c1.small"
   topics: []
