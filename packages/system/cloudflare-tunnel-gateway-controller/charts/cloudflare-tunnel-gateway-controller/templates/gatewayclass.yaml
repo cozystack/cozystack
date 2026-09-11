@@ -1,0 +1,16 @@
+{{- if .Values.gatewayClass.create }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Values.controller.gatewayClassName }}
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.labels" . | nindent 4 }}
+spec:
+  controllerName: {{ .Values.controller.controllerName }}
+  {{- if .Values.gatewayClassConfig.create }}
+  parametersRef:
+    group: cf.k8s.lex.la
+    kind: GatewayClassConfig
+    name: {{ .Values.gatewayClassConfig.name | default (include "cf-tunnel-gw-ctrl.fullname" .) }}
+  {{- end }}
+{{- end }}

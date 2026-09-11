@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cf-tunnel-gw-ctrl.proxyFullname" . }}
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.proxyLabels" . | nindent 4 }}
+  {{- with .Values.proxy.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: config-api
+      port: {{ .Values.proxy.configAPIPort }}
+      targetPort: config-api
+      protocol: TCP
+    - name: proxy
+      port: {{ .Values.proxy.proxyPort }}
+      targetPort: proxy
+      protocol: TCP
+  selector:
+    {{- include "cf-tunnel-gw-ctrl.proxySelectorLabels" . | nindent 4 }}

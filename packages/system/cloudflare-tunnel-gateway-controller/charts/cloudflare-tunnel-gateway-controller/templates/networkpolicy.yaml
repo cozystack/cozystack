@@ -1,0 +1,52 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cf-tunnel-gw-ctrl.fullname" . }}
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "cf-tunnel-gw-ctrl.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow metrics and health checks
+    - {{- if .Values.networkPolicy.ingress.from }}
+      from:
+        {{- toYaml .Values.networkPolicy.ingress.from | nindent 8 }}
+      {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.metricsPort }}
+        - protocol: TCP
+          port: {{ .Values.service.healthPort }}
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Kubernetes API
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # Cloudflare API - configurable IP ranges for security
+    - to:
+        {{- range .Values.networkPolicy.cloudflareIpRanges.ipv4 }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        {{- range .Values.networkPolicy.cloudflareIpRanges.ipv6 }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}
