@@ -214,3 +214,26 @@
 {{-   fail "spec.oidc: `users` is not honoured under `customConfig.secretRef` — the operator's mounted auth.ini is authoritative and the chart cannot inject `skip_org_role_sync=true` / `oauth_allow_insecure_email_lookup=true`, so the users-Job's role assignments would be overwritten on the operator's next login. Either switch to `customConfig.config` (inline map, merged with the chart-forced settings) or unset `users` and manage authorization inside the ini fragment yourself." -}}
 {{- end -}}
 {{- end -}}
+
+{{- /* fromYaml returns an Error map on malformed YAML. Never hash that map. */}}
+{{- define "monitoring.grafana.validatedBase" -}}
+{{- $base := include "monitoring.grafana.base" . | fromYaml -}}
+{{- if not (kindIs "map" $base) -}}
+{{- fail "Grafana base must be a resource map with a spec map" -}}
+{{- end -}}
+{{- if or (hasKey $base "Error") (not (hasKey $base "spec")) -}}
+{{- fail "Grafana base must be a resource map with a spec map" -}}
+{{- end -}}
+{{- if not (kindIs "map" $base.spec) -}}
+{{- fail "Grafana base must be a resource map with a spec map" -}}
+{{- end -}}
+{{- toYaml $base -}}
+{{- end -}}
+
+{{- /* The input is the complete rendered spec before adding this annotation. */}}
+{{- define "monitoring.grafana.specHash" -}}
+{{- if hasKey (dig "deployment" "spec" "template" "metadata" "annotations" dict .) "monitoring.cozystack.io/grafana-spec-hash" -}}
+{{- fail "Grafana base must not contain its own spec hash" -}}
+{{- end -}}
+{{- toJson . | sha256sum -}}
+{{- end -}}

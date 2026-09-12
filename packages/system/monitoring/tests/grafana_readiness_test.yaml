@@ -1,0 +1,86 @@
+suite: Grafana rollout observer identity and lifecycle
+templates:
+  - templates/grafana/grafana.yaml
+  - templates/grafana/readiness-rbac.yaml
+  - templates/grafana/oidc-users-job.yaml
+release:
+  name: monitoring
+  namespace: tenant-root
+tests:
+  - it: installs a dedicated identity before hooks
+    template: templates/grafana/readiness-rbac.yaml
+    documentIndex: 0
+    asserts:
+      - hasDocuments:
+          count: 3
+      - equal:
+          path: metadata.name
+          value: monitoring-grafana-readiness
+      - equal:
+          path: metadata.namespace
+          value: tenant-root
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+      - containsDocument:
+          apiVersion: v1
+          kind: ServiceAccount
+          name: monitoring-grafana-readiness
+          namespace: tenant-root
+
+  - it: grants only named reads of Grafana and its Deployment
+    template: templates/grafana/readiness-rbac.yaml
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [grafana.integreatly.org]
+              resources: [grafanas]
+              resourceNames: [grafana]
+              verbs: [get]
+            - apiGroups: [apps]
+              resources: [deployments]
+              resourceNames: [grafana-deployment]
+              verbs: [get]
+
+  - it: binds only the hook ServiceAccount in this namespace
+    template: templates/grafana/readiness-rbac.yaml
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: roleRef
+          value: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: monitoring-grafana-readiness}
+      - equal:
+          path: subjects
+          value: [{kind: ServiceAccount, name: monitoring-grafana-readiness, namespace: tenant-root}]
+
+  - it: always runs the bounded post-action hook with named API access
+    template: templates/grafana/oidc-users-job.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            helm.sh/hook: post-install,post-upgrade
+            helm.sh/hook-weight: "10"
+            helm.sh/hook-delete-policy: before-hook-creation
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 900
+      - equal:
+          path: spec.backoffLimit
+          value: 6
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 3600
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: monitoring-grafana-readiness
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: POD_NAMESPACE, valueFrom: {fieldRef: {fieldPath: metadata.namespace}}}

@@ -1,0 +1,183 @@
+# metadata.generation defaults to 2. apiVersion/kind come from each rendered gate.
+cnpg:
+  - name: absent-status
+    object: {}
+    error: "no such attribute"
+  - name: empty-status
+    object: {status: {}}
+    want: InProgress
+  - name: empty-conditions
+    object: {status: {conditions: []}}
+    want: InProgress
+  - name: unrelated-condition
+    object: {status: {conditions: [{type: ContinuousArchiving, status: "True"}]}}
+    want: InProgress
+  - name: ready-unknown
+    object: {status: {conditions: [{type: Ready, status: Unknown}]}}
+    want: InProgress
+  - name: bootstrap
+    object: {status: {phase: Setting up primary, conditions: [{type: Ready, status: "False", reason: ClusterIsNotReady}]}}
+    want: InProgress
+  - name: out-of-disk-waits-for-helm-timeout
+    object: {status: {phase: Not enough disk space, conditions: [{type: Ready, status: "False", reason: ClusterIsNotReady}]}}
+    want: InProgress
+  - name: unrecoverable-phase-still-waits-for-helm-timeout
+    object: {status: {phase: Unrecoverable, conditions: [{type: Ready, status: "False", reason: ClusterIsNotReady}]}}
+    want: InProgress
+  - name: reason-is-not-a-failure-classification
+    object: {status: {conditions: [{type: Ready, status: "False", reason: FutureReason}]}}
+    want: InProgress
+  - name: missing-reason
+    object: {status: {conditions: [{type: Ready, status: "False"}]}}
+    want: InProgress
+  - name: healthy
+    object: {status: {phase: Cluster in healthy state, conditions: [{type: Ready, status: "True", reason: ClusterIsReady}]}}
+    want: Current
+  - name: generation-change-without-operator-freshness-signal
+    object: {metadata: {generation: 3}, status: {conditions: [{type: Ready, status: "True", reason: ClusterIsReady}]}}
+    want: Current
+
+etcd:
+  - name: absent-status
+    object: {spec: {replicas: 3}}
+    error: "no such attribute"
+  - name: empty-status
+    object: {spec: {replicas: 3}, status: {}}
+    want: InProgress
+  - name: empty-conditions
+    object: {spec: {replicas: 3}, status: {readyMembers: 0, conditions: []}}
+    want: InProgress
+  - name: initial-snapshot
+    object: {spec: {replicas: 3}, status: {conditions: [{type: Progressing, status: "True", reason: InitialSnapshot, observedGeneration: 2}]}}
+    want: InProgress
+  - name: no-available-condition
+    object: {spec: {replicas: 3}, status: {readyMembers: 3, conditions: [{type: Progressing, status: "False", reason: Reconciled, observedGeneration: 2}]}}
+    want: InProgress
+  - name: available-unknown
+    object: {spec: {replicas: 3}, status: {readyMembers: 3, conditions: [{type: Available, status: Unknown, reason: Unknown, observedGeneration: 2}, {type: Progressing, status: "False", reason: Reconciled, observedGeneration: 2}]}}
+    want: InProgress
+  - name: counters-alone-are-not-readiness
+    object: {spec: {replicas: 3}, status: {readyMembers: 3, brokenMembers: 0}}
+    want: InProgress
+  - name: quorum-available-but-one-member-unhealthy
+    object: {spec: {replicas: 3}, status: {readyMembers: 2, brokenMembers: 0, conditions: [{type: Available, status: "True", reason: QuorumAvailable, observedGeneration: 2}, {type: Degraded, status: "True", reason: MembersUnhealthy, observedGeneration: 2}]}}
+    want: InProgress
+  - name: quorum-lost-can-recover
+    object: {spec: {replicas: 3}, status: {readyMembers: 1, brokenMembers: 0, conditions: [{type: Available, status: "False", reason: QuorumLost, observedGeneration: 2}, {type: Degraded, status: "True", reason: QuorumLost, observedGeneration: 2}]}}
+    want: InProgress
+  - name: bootstrap-failed-with-zero-ready-and-zero-broken
+    object: {spec: {replicas: 3}, status: {readyMembers: 0, brokenMembers: 0, conditions: [{type: Available, status: "False", reason: BootstrapFailed, observedGeneration: 2}, {type: Progressing, status: "False", reason: BootstrapFailed, observedGeneration: 2}]}}
+    want: Failed
+  - name: deadline-exceeded-with-partial-membership
+    object: {spec: {replicas: 3}, status: {readyMembers: 1, brokenMembers: 0, conditions: [{type: Available, status: "False", reason: DeadlineExceeded, observedGeneration: 2}, {type: Progressing, status: "False", reason: DeadlineExceeded, observedGeneration: 2}]}}
+    want: Failed
+  - name: terminal-failure-beats-old-ready-counter
+    object: {spec: {replicas: 3}, status: {readyMembers: 3, brokenMembers: 0, conditions: [{type: Available, status: "False", reason: DeadlineExceeded, observedGeneration: 2}, {type: Progressing, status: "False", reason: DeadlineExceeded, observedGeneration: 2}]}}
+    want: Failed
+  - name: previous-generation-failure-does-not-abort-retry
+    object: {metadata: {generation: 3}, spec: {replicas: 3}, status: {readyMembers: 0, conditions: [{type: Available, status: "False", reason: DeadlineExceeded, observedGeneration: 2}, {type: Progressing, status: "True", reason: RetryAfterDeadline, observedGeneration: 3}]}}
+    want: InProgress
+  - name: failure-without-generation-is-not-terminal
+    object: {spec: {replicas: 3}, status: {readyMembers: 0, conditions: [{type: Available, status: "False", reason: BootstrapFailed}]}}
+    want: InProgress
+  - name: healthy
+    object: {spec: {replicas: 3}, status: {readyMembers: 3, brokenMembers: 0, conditions: [{type: Available, status: "True", reason: QuorumHealthy, observedGeneration: 2}, {type: Progressing, status: "False", reason: Reconciled, observedGeneration: 2}]}}
+    want: Current
+  - name: single-member-healthy
+    object: {spec: {replicas: 1}, status: {readyMembers: 1, conditions: [{type: Available, status: "True", reason: QuorumHealthy, observedGeneration: 2}, {type: Progressing, status: "False", reason: Reconciled, observedGeneration: 2}]}}
+    want: Current
+  - name: stale-available-condition
+    object: {spec: {replicas: 3}, status: {readyMembers: 3, conditions: [{type: Available, status: "True", reason: QuorumHealthy, observedGeneration: 1}, {type: Progressing, status: "False", reason: Reconciled, observedGeneration: 2}]}}
+    want: InProgress
+  - name: stale-progressing-condition
+    object: {spec: {replicas: 3}, status: {readyMembers: 3, conditions: [{type: Available, status: "True", reason: QuorumHealthy, observedGeneration: 2}, {type: Progressing, status: "False", reason: Reconciled, observedGeneration: 1}]}}
+    want: InProgress
+  - name: healthy-without-generation-is-not-current
+    object: {spec: {replicas: 3}, status: {readyMembers: 3, conditions: [{type: Available, status: "True", reason: QuorumHealthy}, {type: Progressing, status: "False", reason: Reconciled}]}}
+    want: InProgress
+  - name: new-spec-not-yet-reconciled
+    object: {spec: {replicas: 3}, status: {readyMembers: 3, conditions: [{type: Available, status: "True", reason: QuorumHealthy, observedGeneration: 2}, {type: Progressing, status: "True", reason: SpecChanged, observedGeneration: 2}]}}
+    want: InProgress
+  - name: scaling-down-still-has-extra-members
+    object: {spec: {replicas: 1}, status: {readyMembers: 3, conditions: [{type: Available, status: "True", reason: QuorumHealthy, observedGeneration: 2}, {type: Progressing, status: "False", reason: Reconciled, observedGeneration: 2}]}}
+    want: InProgress
+  - name: paused-pvc-cluster
+    object: {spec: {replicas: 0}, status: {readyMembers: 0, conditions: [{type: Available, status: "False", reason: Paused, observedGeneration: 2}, {type: Degraded, status: "False", reason: Paused, observedGeneration: 2}, {type: Progressing, status: "False", reason: Paused, observedGeneration: 2}]}}
+    want: InProgress
+  - name: fresh-zero-is-not-current
+    object: {spec: {replicas: 0}, status: {readyMembers: 0}}
+    want: InProgress
+  - name: zero-with-old-healthy-conditions-is-not-current
+    object: {spec: {replicas: 0}, status: {readyMembers: 0, conditions: [{type: Available, status: "True", reason: QuorumHealthy, observedGeneration: 2}, {type: Progressing, status: "False", reason: Reconciled, observedGeneration: 2}]}}
+    want: InProgress
+
+  - name: zero-after-expired-bootstrap
+    object: {metadata: {generation: 3}, spec: {replicas: 0}, status: {observed: {replicas: 3}, clusterID: "", readyMembers: 0, conditions: [{type: Available, status: "False", reason: BootstrapFailed, observedGeneration: 3}]}}
+    want: InProgress
+  - name: zero-after-expired-deadline
+    object: {metadata: {generation: 3}, spec: {replicas: 0}, status: {readyMembers: 0, conditions: [{type: Available, status: "False", reason: DeadlineExceeded, observedGeneration: 3}]}}
+    want: InProgress
+
+gateway:
+  - name: absent-status
+    object: {}
+    error: "no such attribute"
+  - name: empty-status
+    object: {status: {}}
+    want: InProgress
+  - name: empty-conditions
+    object: {status: {observedGeneration: 2, conditions: []}}
+    want: InProgress
+  - name: unknown
+    object: {status: {observedGeneration: 2, conditions: [{type: Ready, status: Unknown}]}}
+    want: InProgress
+  - name: not-accepted
+    object: {status: {observedGeneration: 2, conditions: [{type: Ready, status: "False", reason: GatewayNotAccepted}]}}
+    want: InProgress
+  - name: not-programmed
+    object: {status: {observedGeneration: 2, conditions: [{type: Ready, status: "False", reason: GatewayNotProgrammed}]}}
+    want: InProgress
+  - name: listener-failure-waits-for-timeout
+    object: {status: {observedGeneration: 2, conditions: [{type: Ready, status: "False", reason: ListenersNotReady}]}}
+    want: InProgress
+  - name: healthy
+    object: {status: {observedGeneration: 2, conditions: [{type: Ready, status: "True", reason: Reconciled}]}}
+    want: Current
+  - name: stale-ready
+    object: {status: {observedGeneration: 1, conditions: [{type: Ready, status: "True", reason: Reconciled}]}}
+    want: InProgress
+
+vm:
+  - name: absent-status
+    object: {}
+    error: "no such attribute"
+  - name: empty-status
+    object: {status: {}}
+    want: InProgress
+  - name: expanding
+    object: {status: {observedGeneration: 2, updateStatus: expanding}}
+    want: InProgress
+  - name: operational
+    object: {status: {observedGeneration: 2, updateStatus: operational}}
+    want: Current
+  - name: failed
+    object: {status: {observedGeneration: 2, updateStatus: failed}}
+    want: Failed
+  - name: paused
+    object: {spec: {paused: true}, status: {observedGeneration: 2, updateStatus: paused}}
+    want: Failed
+  - name: unknown-status-fails-closed
+    object: {status: {observedGeneration: 2, updateStatus: unexpected}}
+    want: Failed
+  - name: explicit-empty-status-fails-closed
+    object: {status: {observedGeneration: 2, updateStatus: ""}}
+    want: Failed
+  - name: stale-operational
+    object: {status: {observedGeneration: 1, updateStatus: operational}}
+    want: InProgress
+  - name: stale-failure
+    object: {status: {observedGeneration: 1, updateStatus: failed}}
+    want: InProgress
+  - name: stale-paused
+    object: {status: {observedGeneration: 1, updateStatus: paused}}
+    want: InProgress

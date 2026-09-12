@@ -12,13 +12,21 @@ spec:
   interval: 5m
   # Aligned with the outer cozyrds `release.cozystack.io/helm-install-timeout: "15m"`
   # (packages/system/monitoring-rd/cozyrds/monitoring.yaml) so the inner HR does
-  # not fail at 10m while the OIDC users-Job is still inside its
-  # activeDeadlineSeconds: 900 (10m Grafana wait + reconcile budget).
+  # not fail at 10m while the Grafana hook is still inside its
+  # activeDeadlineSeconds: 900 (10m rollout/health wait + users budget).
   timeout: 15m
+  # Uninstall remediation deletes the CNPG Clusters and their owned PVCs.
+  # Failed installs retry as upgrades, so both actions must recover in place.
   install:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   # `poller` waitStrategy is required for healthCheckExprs to be evaluated.
@@ -39,21 +47,50 @@ spec:
   # failed log store is not ingesting, so the release must not report Ready;
   # cozystack never sets spec.paused on these VLClusters, so `paused` is not
   # reachable in normal operation. Before the operator writes any updateStatus
-  # (fresh apply) all three predicates are false, so the poller holds the
+  # in an existing status object all three predicates are false, so the poller holds the
   # release not-ready until it becomes operational or hits `timeout:` — the
-  # real backstop. Matching by kind covers every logsStorages entry. (CEL
-  # evaluation is exercised live, not in helm-unittest, which cannot run it.)
+  # real backstop. A missing status object is Unknown until the operator writes
+  # it. Matching by kind covers every logsStorages entry. Executable CEL
+  # fixtures cover these outcomes in test/healthchecks.
   #
   # The gate keys on a VLCluster existing, so an empty logsStorages would leave
   # nothing to match. That configuration is rejected at render time by the
   # system/monitoring chart (templates/vlogs/vlogs.yaml fails on an empty
   # logsStorages), so the "Ready with no log store" hole cannot be reached.
+  #
+  # VM* shares VLCluster's updateStatus contract. The system chart hook waits
+  # for Grafana's desired Deployment rollout: its operator stages only prove
+  # resource writes. CNPG uses the same Ready=False reason for bootstrap
+  # and persistent errors; both deliberately wait until the Helm timeout.
   healthCheckExprs:
     - apiVersion: operator.victoriametrics.com/v1
       kind: VLCluster
       inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
       failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
       current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1beta1
+      kind: VMCluster
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1beta1
+      kind: VMAgent
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1beta1
+      kind: VMAlert
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1beta1
+      kind: VMAlertmanager
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      current: has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
   valuesFrom:
   - kind: Secret
     name: cozystack-values
