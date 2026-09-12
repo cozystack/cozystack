@@ -59,7 +59,7 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'exit "\$\{cleanup_failed\}"'
 
-  - it: "cleanup Role grants get/list/delete on persistentvolumeclaims"
+  - it: "cleanup Role grants get/list/watch/delete on persistentvolumeclaims"
     documentSelector:
       path: kind
       value: Role
@@ -69,7 +69,7 @@ tests:
           content:
             apiGroups: [""]
             resources: ["persistentvolumeclaims"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
 
   - it: "cleanup Role scopes secret access to the named secrets only (least privilege)"
     documentSelector:
@@ -86,7 +86,7 @@ tests:
               - mariadb-test-repl-password
               - mariadb-test.ca-tls
               - mariadb-test.tls
-            verbs: ["get", "delete"]
+            verbs: ["get", "watch", "delete"]
       # Lock the exact rule set (PVC rule + the single scoped secrets rule).
       # Without this, a broader unscoped `secrets` rule could be added and the
       # `contains` checks above would still pass.

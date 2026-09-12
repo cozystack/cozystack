@@ -201,21 +201,21 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
   # Only Challenges are touched directly (the host-scoped sweep lists and
   # deletes them); Orders are cascade-deleted by cert-manager itself when the
   # Certificate is removed, so the hook needs no RBAC for them.
   - apiGroups: ["acme.cert-manager.io"]
     resources: ["challenges"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
   # We list ACME http01 solver Ingresses (filtered by this release's host)
   # and delete the orphaned ones by name.
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
