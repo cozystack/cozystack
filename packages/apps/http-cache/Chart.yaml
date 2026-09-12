@@ -1,7 +1,0 @@
-apiVersion: v2
-name: http-cache
-description: Layer7 load balancer and caching service
-icon: /logos/nginx.svg
-type: application
-version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
-appVersion: "1.25.3"

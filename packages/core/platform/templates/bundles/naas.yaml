@@ -8,7 +8,6 @@
 {{- fail "bundles.naas.enabled requires bundles.system.enabled: the naas catalog depends on packages emitted by the system bundle (cozystack.cozystack-engine, which ships the ApplicationDefinition CRD, plus cozystack.networking). To run a hosted platform where the host provides CNI, storage and virtualisation, keep bundles.system.enabled: true and set bundles.system.variant: isp-hosted (which selects a noop networking Package) with bundles.iaas.enabled: false — do not disable the system bundle." }}
 {{- end }}
 {{- if and .Values.bundles.naas.enabled (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic") (eq .Values.bundles.system.variant "isp-hosted")) }}
-{{include "cozystack.platform.package.default" (list "cozystack.http-cache-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.tcp-balancer-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.vpn-application" $) }}
 {{- end }}

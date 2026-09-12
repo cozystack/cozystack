@@ -1497,7 +1497,7 @@ func TestOwnedSolelyBy(t *testing.T) {
 // coverage. See projectionSuffix.
 func TestProjectionNameCannotCollideWithADotFreeEngineSuffix(t *testing.T) {
 	engineSuffixes := []string{"-ca", "-ca-cert", "-cluster-ca-cert", "-clients-ca-cert", "-ssl", "-tls"}
-	prefixes := []string{"", "postgres-", "kafka-", "clickhouse-", "http-cache-"}
+	prefixes := []string{"", "http-cache-", "postgres-", "kafka-", "clickhouse-"}
 	appNames := []string{
 		"foo", "foo-tenant", "foo-tenant-ca", "tenant-ca", "a", "a0-b9",
 		"mydb-tenant", "x-tenant-ca-cert", "abcdefghijklmnopqrstuvwxyz0123456789",
