@@ -68,7 +68,7 @@ type TLS struct {
 
 type Topic struct {
 	// Topic configuration.
-	Config k8sRuntime.RawExtension `json:"config"`
+	Config *k8sRuntime.RawExtension `json:"config,omitempty"`
 	// Topic name.
 	Name string `json:"name"`
 	// Number of partitions.
