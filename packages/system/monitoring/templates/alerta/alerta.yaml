@@ -20,6 +20,9 @@
 {{- if and $email.secretName (not $email.authUsername) }}
 {{- fail "alerta.alerts.email.authUsername is required when secretName is set" }}
 {{- end }}
+{{- if and $email.secretName (or (not (kindIs "string" $email.secretName)) (gt (len (toString $email.secretName)) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" (toString $email.secretName)))) }}
+{{- fail "alerta.alerts.email.secretName must be a Kubernetes Secret name (a DNS subdomain of at most 253 characters)" }}
+{{- end }}
 {{- if and $email.repeatInterval (not (regexMatch "^([0-9]+(ms|[smhdwy]))+$" (toString $email.repeatInterval))) }}
 {{- fail (printf "alerta.alerts.email.repeatInterval must be a duration such as 30s, 5m or 12h, got %q" (toString $email.repeatInterval)) }}
 {{- end }}
@@ -338,7 +341,7 @@ stringData:
         smarthost: {{ $email.smarthost | quote }}
         {{- if $email.authUsername }}
         auth_username: {{ $email.authUsername | quote }}
-        auth_password_file: /etc/vm/secrets/{{ $email.secretName }}/password
+        auth_password_file: {{ printf "/etc/vm/secrets/%s/password" $email.secretName | quote }}
         {{- end }}
         {{- if $email.subject }}
         headers:
@@ -364,7 +367,7 @@ spec:
   configSecret: alertmanager
   {{- if and $emailEnabled $email.secretName }}
   secrets:
-  - {{ $email.secretName }}
+  - {{ $email.secretName | quote }}
   {{- end }}
   podMetadata:
     labels:
