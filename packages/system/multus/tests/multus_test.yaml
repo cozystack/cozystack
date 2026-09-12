@@ -27,6 +27,29 @@ tests:
   # container's contract lives; the two below complete the set for a default
   # render. Keep all three: dropping any one silently returns the whole pod to
   # the victim set while the other assertions still pass.
+  #
+  # Where the numbers come from — this is what the one-line pointer in
+  # templates/multus-daemonset-thick.yml refers to, kept here rather than in the
+  # template because a template comment is copied verbatim into the rendered
+  # object in every cluster and goes stale the moment a value changes, while this
+  # file cannot: changing a value means changing an assertion.
+  #
+  # Upstream sets 50Mi for both the request and the limit. The cozystack patch
+  # already raised the request to 100Mi and DELETED the memory limit outright,
+  # leaving only the CPU one — which is what left the pod cgroup with no
+  # memory.max and made multus an eviction candidate on every node. So the limit
+  # is restored rather than introduced.
+  #
+  # 1Gi is a backstop, not a fitted ceiling. The 14d peak is 230Mi on a 3-node
+  # dev cluster and it grows with pods per node, which is the measurement least
+  # worth trusting here: multus-daemon holds per-pod state and a 3-node cluster
+  # understates pods per node more than it understates anything else measured for
+  # this change. A tighter multiple of that peak would trade a rare
+  # pressure-driven kill for a deterministic one. The scar this avoids is the
+  # vertical-pod-autoscaler updater, which OOM-looped at a 110Mi limit for the
+  # same reason — it scaled with pods in the cluster — and was given a limit 2.5x
+  # its measured request to stop it. A limit costs nothing until it is hit; only
+  # the request reserves, which is why the request stays at 100Mi below the peak.
   - it: kube-multus and its binary installer declare memory limits
     template: templates/multus-daemonset-thick.yml
     documentSelector:
