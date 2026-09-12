@@ -174,6 +174,8 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileRabbitmq(ctx, j, resolved)
 	case strategyv1alpha1.RedisStrategyKind:
 		return r.reconcileRedis(ctx, j, resolved)
+	case strategyv1alpha1.KafkaStrategyKind:
+		return r.reconcileKafka(ctx, j, resolved)
 	default:
 		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
@@ -199,6 +201,7 @@ func supportedBackupStrategyKinds() []string {
 		strategyv1alpha1.EtcdStrategyKind,
 		strategyv1alpha1.RabbitmqStrategyKind,
 		strategyv1alpha1.RedisStrategyKind,
+		strategyv1alpha1.KafkaStrategyKind,
 	}
 }
 

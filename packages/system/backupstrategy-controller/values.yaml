@@ -75,6 +75,13 @@ backupStrategyController:
       cpu: "1"
       memory: 1Gi
       ephemeral-storage: 4Gi
+  # The Kafka metadata strategy carries no client image here: unlike the Altinity
+  # and RabbitMQ drivers (curl-only, so a shared platform-migrations image works),
+  # its driver runs the Kafka Admin-API CLI (kafka-topics / kafka-configs), which
+  # only the Strimzi broker image ships. So the controller resolves the image from
+  # the target Kafka broker at reconcile time (strategy-kafka-default.yaml renders
+  # the container image as the "{{ .ClientImage }}" placeholder), and records it on
+  # the Backup so cleanup can reuse it once the broker is gone. No pin to drift.
   replicas: 2
   debug: false
   metrics:
