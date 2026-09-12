@@ -202,6 +202,14 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
 
+	// SiteRouter deny-set admission: reject a tunnel whose remoteCIDRs overlap a
+	// cluster-owned network (synchronous Forbidden naming the offending CIDR and
+	// colliding network). A no-op for every other kind — generic app-instance
+	// admission is unchanged (D9/D10).
+	if err := r.validateSiteRouterDeclaredNetworks(ctx, app); err != nil {
+		return nil, err
+	}
+
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
 
@@ -550,6 +558,12 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		}
 	}
 
+	// SiteRouter deny-set admission on edit too: adding a cluster-overlapping
+	// remoteCIDR is rejected synchronously the same way a create is (D9/D10).
+	if err := r.validateSiteRouterDeclaredNetworks(ctx, app); err != nil {
+		return nil, false, err
+	}
+
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
 
@@ -593,6 +607,30 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
 	}
 
+	// This Update is a full PUT of an object rebuilt from the Application, so
+	// anything a CONTROLLER wrote on the live HelmRelease is dropped unless it is
+	// carried over here. Two classes have to be, and neither is theoretical:
+	// Flux puts finalizers.fluxcd.io on every HelmRelease it manages, and the
+	// site-router controller adds both a finalizer and a route-ownership
+	// annotation it needs on the next reconcile.
+	//
+	// Losing them is not merely untidy. A tenant edit followed closely by a
+	// delete removes the object with no finalizer left to run cleanup on, so the
+	// gateway's entries stay in the namespace's ovn.kubernetes.io/routes pointing
+	// at a dead pod IP — every pod created afterwards inherits a blackhole route,
+	// and a replacement instance declaring the same network can never take
+	// ownership back. The controller re-adds what it owns on its next reconcile,
+	// so the exposure is the gap until then; that gap is milliseconds normally
+	// and a rollout of a single-replica leader-elected controller otherwise.
+	//
+	// Finalizers carry over wholesale: no spec edit through this API is a
+	// statement about them. Annotations carry over selectively — the conversion
+	// owns exactly the AnnotationPrefix ones (they mirror the Application's own),
+	// so an unprefixed annotation on the live object was written by something
+	// else and is not this caller's to remove. A tenant cannot set one through
+	// this API in the first place, so preserving them takes nothing away.
+	carryOverRuntimeMetadata(helmRelease, cur)
+
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
 	// Update the HelmRelease in Kubernetes.
@@ -601,18 +639,30 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// HelmRelease's status, which shares the object's resourceVersion. When a
 	// caller updates an app CR while a prior reconcile is still in flight, the
 	// resourceVersion read above goes stale and the Update is rejected with a
-	// 409 Conflict. The HelmRelease spec is fully derived from the Application
+	// 409 Conflict. The HelmRelease SPEC is fully derived from the Application
 	// the caller just applied, so a stale-resourceVersion conflict is never a
-	// real spec conflict here: refresh the resourceVersion from the live object
-	// and retry.
+	// real spec conflict here.
+	//
+	// The METADATA is a different matter, and this is the window where it moves.
+	// A conflict means somebody wrote the object between the read above and this
+	// Update, and the writers are the controllers whose finalizers and
+	// annotations the carry-over exists to preserve: Flux adding its finalizer,
+	// site-router adding its own or recording a route owner. Refreshing only the
+	// resourceVersion and re-sending the object built from the stale read would
+	// drop whatever they had just added — the exact loss the carry-over was added
+	// to stop, reappearing on the one path where it is most likely.
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		updateErr := r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
 		if apierrors.IsConflict(updateErr) {
-			cur := &helmv2.HelmRelease{}
-			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
+			latest := &helmv2.HelmRelease{}
+			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, latest, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
 				return getErr
 			}
-			helmRelease.SetResourceVersion(cur.GetResourceVersion())
+			helmRelease.SetResourceVersion(latest.GetResourceVersion())
+			carryOverRuntimeMetadata(helmRelease, latest)
+			if shard, ok := latest.Labels[fluxshard.ShardKeyLabel]; ok {
+				helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
+			}
 		}
 		return updateErr
 	})
@@ -1240,6 +1290,34 @@ func (r *REST) ConvertHelmReleaseToApplicationWithMonitor(ctx context.Context, h
 // ConvertApplicationToHelmRelease converts an Application to a HelmRelease
 func (r *REST) ConvertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
 	return r.convertApplicationToHelmRelease(app)
+}
+
+// carryOverRuntimeMetadata copies onto the rebuilt HelmRelease the metadata that
+// belongs to controllers rather than to the Application: finalizers wholesale,
+// and every annotation the conversion does not own.
+//
+// The conversion owns exactly the AnnotationPrefix ones, because they mirror the
+// Application's own — so a prefixed annotation the Application no longer carries
+// must still disappear, or a tenant could never remove one. Everything else was
+// written by something other than this caller and is not theirs to remove; a
+// tenant cannot set an unprefixed annotation through this API at all.
+//
+// Called once against the pre-Update read and again on every conflict retry,
+// because a conflict means a controller wrote the object in between and the
+// retry would otherwise re-send metadata from the stale read.
+func carryOverRuntimeMetadata(dst, live *helmv2.HelmRelease) {
+	dst.Finalizers = live.Finalizers
+	for k, v := range live.Annotations {
+		if strings.HasPrefix(k, AnnotationPrefix) {
+			continue
+		}
+		if dst.Annotations == nil {
+			dst.Annotations = make(map[string]string)
+		}
+		if _, set := dst.Annotations[k]; !set {
+			dst.Annotations[k] = v
+		}
+	}
 }
 
 // filterInternalKeys removes keys starting with "_" from the JSON values

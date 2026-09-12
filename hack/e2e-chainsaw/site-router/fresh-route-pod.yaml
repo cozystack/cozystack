@@ -1,0 +1,15 @@
+# A tenant workload pod created AFTER the site-router programs the namespace
+# routes. The kube-ovn webhook inherits ovn.kubernetes.io/routes onto it at
+# CREATE, so it carries the return route to the remote site without any manual
+# step. The suite asserts this pod is born with the routes annotation — the
+# other half of the pending -> reachable-after-roll contract.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: site-router-fresh-probe
+  labels:
+    app: site-router-fresh-probe
+spec:
+  containers:
+    - name: pause
+      image: registry.k8s.io/pause:3.9

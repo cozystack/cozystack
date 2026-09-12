@@ -1,0 +1,45 @@
+# VyOS "site-router" appliance flavor.
+#
+# Consumed by vyos-build's build-vyos-image via `--architecture amd64 vyos-router`;
+# hack/build-qcow2.sh copies this file into the pinned vyos-build checkout's
+# data/build-flavors/ so the positional flavor argument resolves.
+#
+# ── Why this file is now three keys ──────────────────────────────────────────
+#
+# The appliance is derived from a published VyOS Stream ISO, not built from an
+# apt repository, and hack/build-qcow2.sh therefore passes `--reuse-iso`. In
+# build-vyos-image that flag short-circuits the entire live-build branch: the
+# whole `else` arm that reads `packages`, `includes_chroot` and `default_config`
+# is skipped, and only `create_raw_image` runs afterwards, receiving the parsed
+# build config. So exactly three settings below still reach the image —
+# image_format, disk_size and boot_settings — and every other key would be
+# silently inert. They were removed rather than left to mislead.
+#
+# What used to live here now lives in ../overlay, installed by
+# ../hack/inject-appliance.sh into the disk's overlay upper directory: the baked
+# default configuration, the seed unit that replaces cloud-init, the nginx log
+# directory, and the guest agent. Read that script for the appliance's real
+# contents; this file only shapes the disk it lands on.
+#
+# NOTE (TOML): bare top-level keys must precede the [boot_settings] table — once
+# a table header is opened, later keys belong to that table.
+
+# Produce a qcow2 (build-vyos-image runs `qemu-img convert -f raw -O qcow2`).
+image_format = ["qcow2"]
+
+# Virtual disk size (GiB). Matches the 12Gi CDI import headroom the site-router
+# boot DataVolume requests (packages/apps/site-router/templates/dv.yaml) — a
+# qcow2 is sparse, so the on-registry artifact stays well under a GiB regardless.
+disk_size = 10
+
+# Build the installed image's GRUB and kernel console on ttyS0 rather than the
+# tty0/VGA default, so the KubeVirt serial console (`virtctl console`) carries
+# boot output and a login prompt. raw_image.py passes console_type through to
+# grub.set_console_type and writes console_num/console_speed into the GRUB vars,
+# which is why this survives `--reuse-iso` while the chroot-side keys do not.
+# The baked default configuration puts a getty on ttyS0 once VyOS config loads,
+# so the serial console works end to end.
+[boot_settings]
+console_type = "ttyS"
+console_num = "0"
+console_speed = "115200"

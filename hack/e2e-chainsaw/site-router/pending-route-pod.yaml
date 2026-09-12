@@ -1,0 +1,16 @@
+# A tenant workload pod created BEFORE the site-router programs the namespace
+# routes. kube-ovn stamps ovn.kubernetes.io/routes onto a pod only at CREATE, so
+# this pod predates the route and stays "pending": it will reach the remote site
+# only after it restarts. The controller surfaces exactly this set of lagging
+# pods via a PendingRoutes Event on the HelmRelease (read-only — it never rolls a
+# pod). The suite asserts that Event fires and names this pod.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: site-router-pending-probe
+  labels:
+    app: site-router-pending-probe
+spec:
+  containers:
+    - name: pause
+      image: registry.k8s.io/pause:3.9

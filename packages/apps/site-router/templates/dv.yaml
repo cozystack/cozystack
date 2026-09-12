@@ -1,0 +1,117 @@
+{{- /*
+  CDI DataVolume for the router boot disk.
+
+  Default: import the digest-pinned VyOS appliance containerDisk built in-repo by
+  packages/system/vyos-router-image, whose `image` target stamps the reference
+  into this chart's images/vyos-router-disk.tag. The artifact ships as a registry
+  image rather than an HTTP qcow2 precisely so the boot disk is pinned by digest —
+  CDI's http importer cannot verify a sha256.
+
+  Each instance imports its own boot disk rather than cloning a shared golden in
+  cozy-public. A shared golden is the cheaper import, but it needs a name both
+  this chart and the golden's chart agree on, and CDI populates a DataVolume only
+  at creation — so advancing the appliance could not replace an existing golden's
+  contents, and every later gateway would silently boot the previous appliance
+  while its cloud-init contract had moved on (the two advance atomically, see
+  docs/image-lifecycle.md). Importing per instance keeps the disk and the digest
+  that produced it in lockstep: change the digest and the next gateway gets the
+  new appliance, with nothing shared to go stale and nothing to keep in sync.
+
+  storageClass defaults to `replicated` (DRBD/LINSTOR) because that is the only
+  class the boot disk is live-migratable on, so a production gateway kept there
+  can be evacuated off a node without dropping the tunnel. It is a parameter
+  rather than a pin only so a substrate with no DRBD can run this chart at all —
+  the e2e container lane, whose management nodes are Talos containers. See the
+  @param in values.yaml.
+*/ -}}
+{{- /*
+  DataVolume.spec is immutable in CDI (#2985, docs/storage-immutability.md), so
+  an existing disk's spec is re-emitted verbatim rather than re-rendered. Without
+  this every appliance rebuild breaks `helm upgrade` for every installed
+  instance: the DataVolume keeps the name `<release>-boot` while the rendered
+  source moves to the new digest, and that is an update to an immutable spec.
+  The digest moves on every release, because the appliance package stays in the
+  root Makefile `build:` list (it stamps a reference, see image-refs.md), so this
+  is the normal path and not an edge case.
+
+  Preserving is the whole fix for the digest, and deliberately silent: the digest
+  is a platform stamp, not something an operator asked for, so failing the render
+  on it would replace a broken upgrade with a blocked one. What that leaves is
+  the lifecycle this chart already documents — a running gateway keeps the
+  appliance it was created with, and a NEW instance gets the new one. Replacing
+  the appliance under an existing instance means recreating the instance. See
+  docs/image-lifecycle.md, which also carries why the cloud-init contract and
+  the image advance together.
+
+  storageClass is the opposite case and is handled the opposite way. It IS
+  operator input, so a change to it is a request that silently would not happen,
+  which is exactly what vm-disk fails on. It fails here too, with the same
+  wording, rather than diverging the CR from the cluster.
+*/}}
+{{- $dvName := printf "%s-boot" .Release.Name }}
+{{- $existingDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" .Release.Namespace $dvName }}
+{{- $scAnnotation := "site-router.cozystack.io/storage-class" }}
+{{- $requestedSC := (.Values.storageClass | default "") | toString }}
+{{- if $existingDV }}
+  {{- $existingAnnotations := $existingDV.metadata.annotations | default dict }}
+  {{- if hasKey $existingAnnotations $scAnnotation }}
+    {{- $recordedSC := (index $existingAnnotations $scAnnotation) | toString }}
+    {{- if ne $recordedSC $requestedSC }}
+      {{- fail (printf "site-router storageClass is immutable after creation (current: %q, requested: %q). Delete and recreate the instance to change it." $recordedSC $requestedSC) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: {{ $dvName }}
+  annotations:
+    {{- /* Recorded at creation and carried forward untouched, so the immutability
+           check above compares against what the disk was actually created with
+           rather than against a spec CDI may have defaulted. A disk created
+           before this annotation existed has none, and is left alone. */}}
+    {{- if $existingDV }}
+    {{- if hasKey ($existingDV.metadata.annotations | default dict) $scAnnotation }}
+    {{ $scAnnotation }}: {{ index ($existingDV.metadata.annotations | default dict) $scAnnotation | quote }}
+    {{- end }}
+    {{- else }}
+    {{ $scAnnotation }}: {{ $requestedSC | quote }}
+    {{- end }}
+  labels:
+    {{- include "site-router.labels" . | nindent 4 }}
+spec:
+{{- if $existingDV }}
+  {{- toYaml $existingDV.spec | nindent 2 }}
+{{- else }}
+  contentType: kubevirt
+  source:
+    {{- /*
+      The URL is built by site-router.applianceDiskUrl, NOT by interpolating the
+      .tag directly: CDI's docker:// transport cannot parse a reference carrying
+      both a tag and a digest, and the committed stamp carries both. The helper
+      drops the tag, keeps the digest, and fails the render on a reference that
+      is empty or not digest-pinned — read its comment before changing either
+      end. An unstamped .tag is rejected there rather than importing a reference
+      that cannot resolve and leaving the gateway on a Pending PVC forever.
+    */}}
+    registry:
+      url: {{ include "site-router.applianceDiskUrl" (.Files.Get "images/vyos-router-disk.tag") | quote }}
+  storage:
+    resources:
+      requests:
+        # 12Gi, not the 10Gi virtual size of the VyOS qcow2: CDI's
+        # filesystem-import scratch needs the decompressed image plus ~5.5%
+        # filesystem overhead, so a request equal to the virtual size fails the
+        # import with "virtual image size larger than reported available
+        # storage" (validated live on VyOS 1.5-rolling). The headroom absorbs it.
+        storage: 12Gi
+    {{- /*
+      Omitted entirely when empty, never emitted as "": an explicit empty
+      storageClassName means "bind only a pre-provisioned PV" to Kubernetes,
+      which disables dynamic provisioning instead of selecting the cluster
+      default. Absent is what selects the default.
+    */}}
+    {{- with .Values.storageClass }}
+    storageClassName: {{ . }}
+    {{- end }}
+{{- end }}
