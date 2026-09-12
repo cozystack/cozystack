@@ -1,0 +1,87 @@
+{{- /* The Proxmox cloud-controller-manager, and the reason it has no enable
+      switch: on this substrate the worker kubelet is started with
+      --cloud-provider=external (see kubernetes-nodes/templates/talos-reconcile-job.yaml),
+      which taints every node node.cloudprovider.kubernetes.io/uninitialized
+      until a cloud provider clears it. Without this release the taint is
+      permanent, nothing but tolerating DaemonSets ever schedules, and the CSI
+      node plugin — which reads topology.kubernetes.io/region and zone off its
+      own Node and exits fatally when they are absent — never starts. The
+      KubeVirt path has its own CCM as a plain Deployment in THIS cluster
+      (templates/kccm/); here the controller belongs in the tenant, because
+      what it talks to is the hypervisor API, not this cluster's objects. */}}
+{{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
+{{- if .Values._namespace.etcd }}
+{{- if not .Values.proxmox.ccm.credentialsSecretName }}
+{{-   fail "proxmox.ccm.credentialsSecretName is required on the proxmox substrate: without a cloud-controller-manager every worker keeps the uninitialized taint and the cluster schedules nothing" }}
+{{- end }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-ccm
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  interval: 5m
+  timeout: 10m
+  releaseName: ccm
+  chartRef:
+    kind: ExternalArtifact
+    {{- /* Published under the kubevirt variant of kubernetes-application for
+          the same reason as the CSI artifact: the variant names where the
+          addon is built, not which substrate it serves. */}}
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-proxmox-ccm
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  {{- /* kube-system, where a cloud-controller-manager conventionally lives and
+        where the chart's own extension-apiserver-authentication RoleBinding
+        already points regardless of the release namespace. */}}
+  targetNamespace: kube-system
+  storageNamespace: kube-system
+  install:
+    createNamespace: false
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+    remediation:
+      retries: -1
+  upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+    remediation:
+      retries: -1
+  {{- /* By reference, not by value: Flux reads the Secret in this namespace and
+        injects each field into the tenant release, so the hypervisor token is
+        never written into a rendered HelmRelease. */}}
+  valuesFrom:
+    - kind: Secret
+      name: {{ .Values.proxmox.ccm.credentialsSecretName | quote }}
+      valuesKey: url
+      targetPath: proxmox-cloud-controller-manager.config.clusters[0].url
+    - kind: Secret
+      name: {{ .Values.proxmox.ccm.credentialsSecretName | quote }}
+      valuesKey: token_id
+      targetPath: proxmox-cloud-controller-manager.config.clusters[0].token_id
+    - kind: Secret
+      name: {{ .Values.proxmox.ccm.credentialsSecretName | quote }}
+      valuesKey: token_secret
+      targetPath: proxmox-cloud-controller-manager.config.clusters[0].token_secret
+    - kind: Secret
+      name: {{ .Values.proxmox.ccm.credentialsSecretName | quote }}
+      valuesKey: region
+      targetPath: proxmox-cloud-controller-manager.config.clusters[0].region
+  values:
+    proxmox-cloud-controller-manager:
+      config:
+        clusters:
+          - insecure: {{ .Values.proxmox.insecure }}
+  dependsOn:
+  - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

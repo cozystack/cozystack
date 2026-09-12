@@ -1,0 +1,114 @@
+{{- /* The Proxmox counterpart of helmreleases/csi.yaml. Kept as its own file
+      rather than a branch inside that one: the two drivers share nothing but
+      the role. kubevirt-csi reaches DataVolumes in this cluster over the
+      management API; proxmox-csi reaches the hypervisor over its own API with
+      its own credentials, lands in its own namespace, and takes an entirely
+      different values shape. Splitting them keeps the KubeVirt path rendering
+      byte-for-byte what it rendered before Proxmox existed. */}}
+{{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
+{{- if and .Values._namespace.etcd .Values.proxmox.csi.enabled }}
+{{- if not .Values.proxmox.csi.credentialsSecretName }}
+{{-   fail "proxmox.csi.credentialsSecretName is required when proxmox.csi.enabled: the driver authenticates to the hypervisor and the chart will not invent credentials" }}
+{{- end }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-csi
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  interval: 5m
+  timeout: 10m
+  releaseName: csi
+  chartRef:
+    kind: ExternalArtifact
+    {{- /* The artifact keeps the kubevirt- prefix because that is the variant
+          of kubernetes-application it is published under, not a statement
+          about the substrate. Naming it otherwise would mean a second variant
+          and a rename of all eighteen tenant addon artifacts. */}}
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-proxmox-csi
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: csi-proxmox
+  storageNamespace: csi-proxmox
+  {{- /* Same reasoning as the kubevirt release: install remediation is an
+         uninstall, which would take the tenant's StorageClasses down between
+         attempts. */}}
+  install:
+    createNamespace: true
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+    remediation:
+      retries: -1
+  upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+    remediation:
+      retries: -1
+  {{- /* The credentials arrive by reference, not by value: Flux reads the
+        Secret in this namespace and injects each field into the tenant
+        release, so no token is ever written into a rendered HelmRelease. */}}
+  valuesFrom:
+    - kind: Secret
+      name: {{ .Values.proxmox.csi.credentialsSecretName | quote }}
+      valuesKey: url
+      targetPath: proxmox-csi-plugin.config.clusters[0].url
+    - kind: Secret
+      name: {{ .Values.proxmox.csi.credentialsSecretName | quote }}
+      valuesKey: token_id
+      targetPath: proxmox-csi-plugin.config.clusters[0].token_id
+    - kind: Secret
+      name: {{ .Values.proxmox.csi.credentialsSecretName | quote }}
+      valuesKey: token_secret
+      targetPath: proxmox-csi-plugin.config.clusters[0].token_secret
+    - kind: Secret
+      name: {{ .Values.proxmox.csi.credentialsSecretName | quote }}
+      valuesKey: region
+      targetPath: proxmox-csi-plugin.config.clusters[0].region
+  values:
+    proxmox-csi-plugin:
+      config:
+        features:
+          {{- /* Documented by the upstream chart as the setting for clusters
+                provisioned by capmox: the CONTROLLER then resolves a node's
+                hypervisor placement from the Machine's providerID instead of
+                the topology labels a cloud-controller-manager applies. It does
+                not remove the need for a CCM — the node plugin reads
+                topology.kubernetes.io/region and zone off its own Node and
+                exits fatally without them ("Failed to get region or zone for
+                node"), so helmreleases/ccm-proxmox.yaml is a hard prerequisite
+                and this release waits on it below. */}}
+          provider: proxmox
+        clusters:
+          - insecure: {{ .Values.proxmox.insecure }}
+      storageClass:
+        {{- range .Values.proxmox.csi.storageClasses }}
+        - name: {{ .name | quote }}
+          storage: {{ .storage | quote }}
+          {{- with .fstype }}
+          fstype: {{ . | quote }}
+          {{- end }}
+          {{- with .reclaimPolicy }}
+          reclaimPolicy: {{ . | quote }}
+          {{- end }}
+          {{- if .ssd }}
+          ssd: true
+          {{- end }}
+        {{- end }}
+  dependsOn:
+  - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+  {{- /* Ordering, not decoration: the node plugin CrashLoops until the CCM has
+        labelled the Nodes, and a CrashLooping DaemonSet is a much harder thing
+        to read than a release that has not started yet. */}}
+  - name: {{ .Release.Name }}-ccm
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

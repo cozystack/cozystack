@@ -1,0 +1,17 @@
+apiVersion: v2
+appVersion: v0.15.0
+description: Cloud Controller Manager plugin for Proxmox
+home: https://github.com/sergelogvinov/proxmox-cloud-controller-manager
+icon: https://raw.githubusercontent.com/sergelogvinov/proxmox-cloud-controller-manager/main/charts/proxmox-cloud-controller-manager/icon.png
+keywords:
+- ccm
+- proxmox
+- kubernetes
+maintainers:
+- name: sergelogvinov
+  url: https://github.com/sergelogvinov
+name: proxmox-cloud-controller-manager
+sources:
+- https://github.com/sergelogvinov/proxmox-cloud-controller-manager
+type: application
+version: 0.2.30

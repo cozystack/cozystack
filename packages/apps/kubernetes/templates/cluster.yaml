@@ -25,6 +25,32 @@
 {{-   end }}
 {{- end }}
 {{- $etcd := .Values._namespace.etcd }}
+{{- /* Substrate selects the infrastructure half of the cluster. The control
+       plane is Kamaji either way, so this changes exactly one object — the
+       one Cluster.infrastructureRef points at — plus the two tenant addons
+       that only exist because the workers are KubeVirt VMs (the kubevirt-csi
+       driver and the KubeVirt cloud-controller-manager RBAC). */}}
+{{- $substrate := .Values.substrate | default "kubevirt" }}
+{{- if not (has $substrate (list "kubevirt" "proxmox")) }}
+{{- fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
+{{- end }}
+{{- $isProxmox := eq $substrate "proxmox" }}
+{{- if $isProxmox }}
+{{- /* capmox assigns static addresses from an InClusterIPPool it builds out of
+       these fields and has no DHCP mode, so an unset pool is not a default —
+       it is a ProxmoxCluster that never reaches Ready and worker Machines that
+       wait on it forever. Refuse at render time instead. */}}
+{{- if not .Values.proxmox.ipv4Config.addresses }}
+{{- fail "substrate proxmox requires proxmox.ipv4Config.addresses: capmox allocates static addresses and has no DHCP mode" }}
+{{- end }}
+{{- if not .Values.proxmox.ipv4Config.gateway }}
+{{- fail "substrate proxmox requires proxmox.ipv4Config.gateway" }}
+{{- end }}
+{{- if not .Values.proxmox.dnsServers }}
+{{- fail "substrate proxmox requires proxmox.dnsServers: the ProxmoxCluster schema makes it mandatory" }}
+{{- end }}
+{{- end }}
+{{- $infraKind := ternary "ProxmoxCluster" "KubevirtCluster" $isProxmox }}
 {{- /*
   When $etcd is empty, the parent Tenant application has not populated
   _namespace.etcd in cozystack-values yet - either the operator forgot to
@@ -214,7 +240,7 @@ spec:
     name: {{ .Release.Name }}
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-    kind: KubevirtCluster
+    kind: {{ $infraKind }}
     name: {{ .Release.Name }}
     namespace: {{ .Release.Namespace }}
 ---
@@ -335,7 +361,14 @@ spec:
     - InternalIP
     - ExternalIP
   network:
-    serviceType: ClusterIP
+    {{- /* A KubeVirt worker is a Pod in this cluster and dials the apiserver
+          over the pod network, where a ClusterIP is meaningful. A Proxmox
+          worker is a VM on the hypervisor network and cannot route to one at
+          all: it boots, fails to reach the endpoint, and never files a CSR —
+          a silence that looks like a broken bootstrap rather than an
+          unreachable address. Publishing the Service moves the endpoint onto
+          a network the workers share. */}}
+    serviceType: {{ ternary "LoadBalancer" "ClusterIP" $isProxmox }}
     ingress:
       extraAnnotations:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
@@ -438,10 +471,53 @@ spec:
   version: {{ $.Chart.Version }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: KubevirtCluster
+kind: {{ $infraKind }}
 metadata:
+  {{- if not $isProxmox }}
+  {{- /* KubevirtCluster carries managed-by: nothing has to reconcile it, and
+        the annotation keeps CAPI from waiting on an infrastructure controller
+        that will never answer.
+
+        ProxmoxCluster must NOT carry it. The annotation tells CAPI the object
+        is owned by something outside Cluster API, so the Cluster controller
+        never sets the ownerRef on it — and capmox's reconciler exits at
+        "Waiting for Cluster Controller to set OwnerRef on ProxmoxCluster"
+        without ever building the InClusterIPPool the workers draw addresses
+        from. The control plane being external is expressed instead by
+        spec.externalManagedControlPlane below, which is the field capmox
+        actually reads. */}}
   annotations:
     cluster.x-k8s.io/managed-by: kamaji
+  {{- end }}
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
+{{- if $isProxmox }}
+spec:
+  {{- /* KubevirtCluster needs no spec: its workers live in this cluster and
+        reach the apiserver over the pod network. A ProxmoxCluster addresses an
+        external hypervisor, so it carries what capmox cannot infer — where VMs
+        may be placed, which addresses they may take, and who resolves names for
+        them.
+
+        externalManagedControlPlane is not decoration next to the managed-by
+        annotation above: capmox reads the FIELD, not the annotation. Its
+        ProxmoxCluster webhook skips endpoint validation only when the field is
+        set, and on an absent controlPlaneEndpoint it does not return a
+        validation error — it panics
+        (internal/webhook/proxmoxcluster_webhook.go:105), so the admission
+        request fails with a nil-pointer stack trace instead of a message.
+        Kamaji owns the endpoint here, so the field is simply true. */}}
+  externalManagedControlPlane: true
+  {{- with .Values.proxmox.allowedNodes }}
+  allowedNodes:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  dnsServers:
+    {{- toYaml .Values.proxmox.dnsServers | nindent 4 }}
+  ipv4Config:
+    addresses:
+      {{- toYaml .Values.proxmox.ipv4Config.addresses | nindent 6 }}
+    gateway: {{ .Values.proxmox.ipv4Config.gateway | quote }}
+    prefix: {{ .Values.proxmox.ipv4Config.prefix }}
+{{- end }}
 {{- end }}

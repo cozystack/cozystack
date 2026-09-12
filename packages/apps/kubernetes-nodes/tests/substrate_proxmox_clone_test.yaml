@@ -1,0 +1,49 @@
+suite: proxmox worker disks default to linked clones
+# `full` decides whether capmox copies the template's disk or clones it. Nothing
+# fails when it is wrong: the pool comes up, the workers join, and each one
+# quietly costs the whole template instead of the increment — measured on a ZFS
+# store at 10.2 GiB against 8 KiB. That is the shape of default worth pinning,
+# because the cluster looks correct either way.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  resources:
+    cpu: 4
+    memory: 8Gi
+  substrate: proxmox
+  proxmox:
+    templateTags: [capmox-template, talos]
+    network:
+      bridge: vmbr0
+    dnsServers: ["8.8.8.8"]
+tests:
+  - it: clones rather than copies unless told otherwise
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.full
+          value: false
+
+  - it: still copies the disk when an operator asks for an independent one
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    set:
+      proxmox:
+        full: true
+    asserts:
+      - equal:
+          path: spec.template.spec.full
+          value: true
