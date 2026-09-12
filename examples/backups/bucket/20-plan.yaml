@@ -1,0 +1,17 @@
+# Cron-driven Plan: every 6 hours the core Plan controller materialises a
+# BackupJob referencing this BackupClass. The demo drives an ad-hoc BackupJob
+# (25-backupjob-adhoc.yaml) instead of waiting for the schedule.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: Plan
+metadata:
+  name: bktsrc-daily
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Bucket
+    name: bktsrc
+  backupClassName: bucket-test
+  schedule:
+    type: cron
+    cron: "0 */6 * * *"
