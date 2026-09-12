@@ -287,6 +287,30 @@ func TestValidateNameLength(t *testing.T) {
 			appName:   strings.Repeat("a", maxKubernetesClusterName+1), // 33 chars, still <= 42
 			wantError: true,
 		},
+		// Kafka clusters carry a stricter cap than their own Helm prefix allows,
+		// so the derived KRaft controller pod hostname "<release>-c-<hash>-<id>"
+		// fits the 63-char DNS-1123 label limit.
+		{
+			name:      "kafka short name passes",
+			kindName:  "Kafka",
+			prefix:    "kafka-",
+			appName:   "events",
+			wantError: false,
+		},
+		{
+			name:      "kafka at controller-hostname cap passes",
+			kindName:  "Kafka",
+			prefix:    "kafka-",
+			appName:   strings.Repeat("a", maxNamespaceName-kafkaControllerNodeOverhead-len("kafka-")), // 44 chars
+			wantError: false,
+		},
+		{
+			name:      "kafka exceeding controller-hostname cap fails even though it fits the helm prefix",
+			kindName:  "Kafka",
+			prefix:    "kafka-",
+			appName:   strings.Repeat("a", maxNamespaceName-kafkaControllerNodeOverhead-len("kafka-")+1), // 45 chars, still <= 47
+			wantError: true,
+		},
 		{
 			name:      "prefix consuming all helm capacity returns config error",
 			kindName:  "MySQL",

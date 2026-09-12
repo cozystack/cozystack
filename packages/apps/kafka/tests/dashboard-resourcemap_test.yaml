@@ -113,7 +113,7 @@ tests:
           content: test-kafka-cluster-ca-cert
         documentIndex: 0
 
-  # Role grants access to workloadmonitors
+  # Role grants access to broker and controller workloadmonitors
   - it: grants access to WorkloadMonitor
     release:
       name: test-kafka
@@ -123,9 +123,24 @@ tests:
           path: rules[2].resourceNames
           content: test-kafka
         documentIndex: 0
+      - contains:
+          path: rules[2].resourceNames
+          content: test-kafka-controller
+        documentIndex: 0
       - equal:
           path: rules[2].apiGroups[0]
           value: cozystack.io
+        documentIndex: 0
+
+  # KRaft: no ZooKeeper WorkloadMonitor is referenced
+  - it: does not reference zookeeper workloadmonitor
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - notContains:
+          path: rules[2].resourceNames
+          content: test-kafka-zookeeper
         documentIndex: 0
 
   # External bootstrap service absent when external=false, regardless of tls.enabled
