@@ -79,6 +79,7 @@ jobs:
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
+      talos: ${{ steps.p.outputs.talos }}
     steps:
       # Claim the required context for THIS run before anything can be merged on
       # the strength of the last one. Commit statuses are latest-wins per (sha,
@@ -182,6 +183,9 @@ jobs:
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          talos="$(hack/build-talos-needed.sh /tmp/changed_norenames.txt)"
+          echo "Talos build needed: $talos"
+          echo "talos=$talos" >> "$GITHUB_OUTPUT"
           # Package dirs the PR edited (packages/<area>/<name>). Their committed
           # refs are the PR's intent and must survive the current-main overlay —
           # otherwise an upstream image bump in a non-build-unit package would be
@@ -444,21 +448,33 @@ jobs:
           path: _out/oci/*.oci.tar
           if-no-files-found: error
 
-  # Talos is its own leg: the installer tarball is heavy and the talos image is
+  # Talos is its own leg: the installer tarball is heavy and the Talos image is
   # built from it, so both live in one job. No nocloud disk is built here any
-  # more, and e2e no longer downloads one -- the container lane boots the Talos
-  # image directly. `images/talos/profiles/nocloud.yaml` is therefore compiled
-  # by nightly.yaml and by the tag build's `make assets` rather than per PR;
-  # what a PR still compiles is installer.yaml, which shares every input with it
-  # bar the platform and the output format. Always runs on non-docs PRs, because
-  # the patch fragment and the installer chain need it regardless of the
-  # per-package matrix scope.
+  # more, and e2e no longer downloads one -- the container lane boots the
+  # upstream Talos container image. `images/talos/profiles/nocloud.yaml` is
+  # therefore compiled by nightly.yaml and by the tag build's `make assets`.
+  #
+  # For same-repo PRs, the plan job classifies the rename-blind changed-path
+  # list with build-talos-needed.sh. That list includes direct Talos sources and
+  # the shared Makefile/Buildx/workflow inputs that determine this job's output;
+  # line-based classification avoids depending on the formatting of `touched`.
+  # A successful run stamps packages/extra/bootbox/images/matchbox.tag, and
+  # finalize preserves that generated ref when it overlays base-branch images.
+  #
+  # Fork PRs keep the previous unconditional behavior as a conservative scope
+  # boundary. Their build/export and privileged publication path spans a second
+  # workflow and is not optimized here. The installer job also exports an OCI
+  # archive, so archive availability is not a reason to require Talos itself.
   build-talos:
     name: Build Talos
     needs: ["plan"]
     if: |
       needs.plan.outputs.code == 'true'
       && !contains(github.event.pull_request.labels.*.name, 'release')
+      && (
+        github.event.pull_request.head.repo.fork
+        || needs.plan.outputs.talos == 'true'
+      )
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 40
     permissions:
@@ -545,7 +561,7 @@ jobs:
       && !contains(github.event.pull_request.labels.*.name, 'release')
       && needs.checks.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped')
-      && needs.build-talos.result == 'success'
+      && (needs.build-talos.result == 'success' || needs.build-talos.result == 'skipped')
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
     permissions:
@@ -657,7 +673,14 @@ jobs:
         # including the empty directory the step above leaves when a line has no
         # artifact yet.
         run: |
-          hack/overlay-main-images.sh _out/mainpkgs "$BUILD_MATRIX" "$PR_TOUCHED" \
+          rebuilt="$BUILD_MATRIX"
+          if [ "$TALOS_RESULT" = "success" ]; then
+            case "$rebuilt" in
+              '[]') rebuilt='["packages/extra/bootbox"]' ;;
+              *) rebuilt="${rebuilt%]},\"packages/extra/bootbox\"]" ;;
+            esac
+          fi
+          hack/overlay-main-images.sh _out/mainpkgs "$rebuilt" "$PR_TOUCHED" \
             || echo "::warning::overlay-main-images failed; unbuilt packages keep committed refs"
         env:
           # The set of packages THIS PR rebuilt; their pr-<N>-<sha> refs are
@@ -665,6 +688,10 @@ jobs:
           # plan job from the Makefile (a JSON array of package dirs), not from
           # untrusted PR input — passed via env per workflow-injection hygiene.
           BUILD_MATRIX: ${{ needs.plan.outputs.matrix }}
+          # build-talos writes matchbox.tag under extra/bootbox rather than its
+          # own package. Preserve that generated ref only when the job actually
+          # succeeded; when it was skipped, the base-branch ref should overlay.
+          TALOS_RESULT: ${{ needs.build-talos.result }}
           # Packages THIS PR edited (changed-file dirs from the plan job's git
           # diff). Their committed refs are the PR's intent — an upstream image
           # bump in a non-build-unit package would otherwise be silently reverted
