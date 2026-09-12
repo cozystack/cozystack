@@ -1,0 +1,13 @@
+# Source S3 bucket being backed up. The `seed` user only exists so the demo
+# can write a sentinel object into the bucket; the backup driver provisions its
+# own read-only BucketAccess (bucket-bktsrc-cozy-backup) independently and does
+# not need any declared user.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: bktsrc
+spec:
+  users:
+    seed:
+      readonly: false

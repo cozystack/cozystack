@@ -1,0 +1,17 @@
+# Maps Kind=Bucket to the test-scoped strategy above. BackupClass is
+# cluster-scoped; this demo binds its own class rather than the platform
+# cozy-default so it never touches the shared cozy-backups bucket.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupClass
+metadata:
+  name: bucket-test
+spec:
+  strategies:
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Bucket
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Bucket
+        name: bucket-strategy-default

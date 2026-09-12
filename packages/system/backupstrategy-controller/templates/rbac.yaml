@@ -204,3 +204,14 @@ rules:
 - apiGroups: ["rabbitmq.com"]
   resources: ["rabbitmqclusters"]
   verbs: ["get", "list", "watch"]
+# Bucket strategy: read the COSI BucketClaim to gate on readiness and resolve
+# the driver-assigned S3 bucket name, and provision the BucketAccess the mirror
+# Job reads the source (backup) / writes the target (restore) through. The
+# access grant's credentials Secret is consumed by the Job via secretKeyRef
+# (kubelet-mounted), so no Secret RBAC is needed here beyond the projector's.
+- apiGroups: ["objectstorage.k8s.io"]
+  resources: ["bucketclaims"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["objectstorage.k8s.io"]
+  resources: ["bucketaccesses"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

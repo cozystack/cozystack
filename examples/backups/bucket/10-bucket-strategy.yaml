@@ -1,0 +1,36 @@
+# Test-scoped Bucket strategy: the shipped cozy-default-bucket retargeted at
+# THIS demo's destination bucket instead of the platform cozy-backups. String
+# fields are go-templated against the live Bucket application (.Application).
+#
+# run-all.sh fills the REPLACE_* placeholders:
+#   REPLACE_WITH_DEST_BUCKET  - the COSI-assigned S3 bucket name of bktdst
+#                               (kubectl get bucketclaim bucket-bktdst
+#                                -o jsonpath='{.status.bucketName}')
+#   the destination credentials Secret (bucket-backup-creds) is materialised by
+#   run-all.sh from the bktdst `backup` user's BucketInfo, mirroring how the
+#   platform projects cozy-backups-creds.
+#
+# endpoint / appEndpointOverride point at the in-cluster S3 Service, and TLS
+# verification is skipped, because the COSI BucketInfo advertises the external
+# S3 ingress host, which in-cluster Pods cannot reach or TLS-validate in CI.
+---
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: bucket-strategy-default
+spec:
+  template:
+    destination:
+      bucket: "REPLACE_WITH_DEST_BUCKET"
+      endpoint: "https://seaweedfs-s3.tenant-root:8333"
+      prefix: "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/"
+      accessKeyIdSecretKeyRef:
+        name: bucket-backup-creds
+        key: AWS_ACCESS_KEY_ID
+      secretAccessKeySecretKeyRef:
+        name: bucket-backup-creds
+        key: AWS_SECRET_ACCESS_KEY
+      tls:
+        insecureSkipVerify: true
+    appEndpointOverride: "https://seaweedfs-s3.tenant-root:8333"
+    image: "REPLACE_WITH_CONTROLLER_IMAGE"

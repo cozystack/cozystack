@@ -59,6 +59,13 @@ spec:
         name: cozy-default-mongodb
     - application:
         apiGroup: apps.cozystack.io
+        kind: Bucket
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Bucket
+        name: cozy-default-bucket
+    - application:
+        apiGroup: apps.cozystack.io
         kind: RabbitMQ
       strategyRef:
         apiGroup: strategy.backups.cozystack.io

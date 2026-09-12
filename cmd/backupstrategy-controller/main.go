@@ -42,6 +42,8 @@ import (
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/backupcontroller"
+	"github.com/cozystack/cozystack/internal/backupcontroller/bucketapp"
+	"github.com/cozystack/cozystack/internal/backupcontroller/buckettypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/cnpgtypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/etcdapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/etcdtypes"
@@ -53,6 +55,7 @@ import (
 	"github.com/cozystack/cozystack/internal/backupcontroller/postgresapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/psmdbtypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/rabbitmqtypes"
+	"github.com/cozystack/cozystack/internal/s3mirror"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	// +kubebuilder:scaffold:imports
 )
@@ -79,10 +82,20 @@ func init() {
 	utilruntime.Must(etcdtypes.AddToScheme(scheme))
 	utilruntime.Must(etcdapp.AddToScheme(scheme))
 	utilruntime.Must(rabbitmqtypes.AddToScheme(scheme))
+	utilruntime.Must(buckettypes.AddToScheme(scheme))
+	utilruntime.Must(bucketapp.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
 func main() {
+	// s3-mirror subcommand: the Bucket backup driver runs this same binary as
+	// a one-shot Job to copy objects between the application bucket and the
+	// cozy-backups repo. Dispatch before flag parsing so the manager flags do
+	// not shadow the subcommand's own flag set.
+	if len(os.Args) > 1 && os.Args[1] == "s3-mirror" {
+		os.Exit(s3mirror.Run(os.Args[2:]))
+	}
+
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string

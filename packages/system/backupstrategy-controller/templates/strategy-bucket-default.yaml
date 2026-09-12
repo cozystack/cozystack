@@ -1,0 +1,23 @@
+{{- $endpoint := include "backupstrategy-controller.endpoint" . -}}
+{{- $endpointHost := $endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: cozy-default-bucket
+spec:
+  template:
+    destination:
+      bucket: {{ $bucketName | quote }}
+      endpoint: {{ $endpointHost | quote }}
+      prefix: {{ printf "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/" | quote }}
+      region: {{ .Values.backupStorage.region | quote }}
+      accessKeyIdSecretKeyRef:
+        name: cozy-backups-creds
+        key: AWS_ACCESS_KEY_ID
+      secretAccessKeySecretKeyRef:
+        name: cozy-backups-creds
+        key: AWS_SECRET_ACCESS_KEY
+    image: {{ .Values.backupStrategyController.image | quote }}
+{{- end -}}

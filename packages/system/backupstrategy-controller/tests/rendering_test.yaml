@@ -20,6 +20,7 @@ templates:
   - templates/strategy-foundationdb-default.yaml
   - templates/strategy-velero-vminstance-default.yaml
   - templates/strategy-velero-vmdisk-default.yaml
+  - templates/strategy-bucket-default.yaml
 
 release:
   name: t
@@ -83,7 +84,7 @@ tests:
           count: 0
         template: templates/velero-bsl.yaml
 
-  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all eight routes (FoundationDB intentionally unbound)"
+  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all nine routes (FoundationDB intentionally unbound)"
     asserts:
       - hasDocuments:
           count: 1
@@ -94,7 +95,7 @@ tests:
         template: templates/backupclass-default.yaml
       - lengthEqual:
           path: spec.strategies
-          count: 8
+          count: 9
         template: templates/backupclass-default.yaml
       - contains:
           path: spec.strategies
@@ -143,6 +144,9 @@ tests:
       - hasDocuments:
           count: 1
         template: templates/strategy-velero-vmdisk-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-bucket-default.yaml
       - hasDocuments:
           count: 1
         template: templates/velero-bsl.yaml

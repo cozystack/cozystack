@@ -1,0 +1,14 @@
+# Ad-hoc BackupJob - copies every object in bktsrc to the destination bucket
+# under <namespace>/bktsrc/<backupjob-name>/. Completion produces a Backup CR
+# carrying the self-contained restore snapshot.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: bktsrc-adhoc
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Bucket
+    name: bktsrc
+  backupClassName: bucket-test

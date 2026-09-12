@@ -1,0 +1,9 @@
+# To-copy restore target: a separate, empty bucket. The restore mirrors the
+# backup snapshot into it while bktsrc keeps running untouched.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: bkttgt
+spec:
+  users: {}
