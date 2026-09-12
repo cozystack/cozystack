@@ -1,7 +1,7 @@
 {{- if .Values.bundles.system.enabled }}
 
 # Networking
-{{- if eq .Values.bundles.system.variant "isp-full" }}
+{{ if eq .Values.bundles.system.variant "isp-full" }}
 {{- $networkingComponents := dict -}}
 {{- if .Values.networking -}}
 {{- $kubeovnIpv4 := dict
