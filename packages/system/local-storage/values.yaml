@@ -1,0 +1,24 @@
+# OpenEBS LocalPV Hostpath defaults.
+
+localpv-provisioner:
+  analytics:
+    enabled: false
+  hostpathClass:
+    # StorageClass name; must not name an existing class owned by another provisioner.
+    name: cozystack-local-hostpath
+    # Explicitly make this the cluster default; the administrator must first handle any other default class.
+    isDefaultClass: false
+    # Delete removes the directory after PVC deletion; Retain requires manual reclamation.
+    reclaimPolicy: Delete
+  localpv:
+    image:
+      registry: docker.io
+      repository: openebs/provisioner-localpv
+      # Provisioner version and immutable image index; refreshed by make update-image-pins.
+      tag: "4.5.1@sha256:a1b4659ea4bba01235593ab796424d1503cf25e1b31fe278fef2a4829385fc61"
+  helperPod:
+    image:
+      registry: docker.io
+      repository: openebs/linux-utils
+      # Helper version and immutable image index; refreshed by make update-image-pins.
+      tag: "4.5.0@sha256:e90916c22a077e5f983afaa67f3f085e08575efb7f9828db3bb9dd53671c947f"
