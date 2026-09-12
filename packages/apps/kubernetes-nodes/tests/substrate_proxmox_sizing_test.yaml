@@ -1,0 +1,31 @@
+suite: proxmox substrate requires explicit sizing
+# Its own suite because the guard fires on the ABSENCE of `resources`, and
+# helm-unittest merges per-test `set` into the suite defaults rather than
+# replacing them — a suite that declares sizing cannot take it away again.
+# Blanking the fields is not the same case: values.schema.json rejects an empty
+# quantity before the template ever runs.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  substrate: proxmox
+  proxmox:
+    templateTags: [capmox-template, talos]
+    full: true
+    network:
+      bridge: vmbr0
+    dnsServers: ["8.8.8.8"]
+tests:
+  - it: refuses a pool it cannot size, instead of inventing capacity
+    asserts:
+      - failedTemplate:
+          errorMessage: "substrate proxmox requires resources.cpu and resources.memory: there is no instanceType to size the pool from"

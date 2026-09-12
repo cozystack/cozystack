@@ -33,6 +33,66 @@
       "type": "string",
       "default": ""
     },
+    "substrate": {
+      "description": "Which infrastructure provider backs this cluster's worker VMs. `kubevirt` runs them inside this cluster; `proxmox` runs them on an external Proxmox VE cluster through capmox. The control plane is Kamaji either way — this selects the infrastructure half only. Must match the `substrate` of every KubernetesNodes pool attached to this cluster: the pools reference this cluster's infrastructure object by kind, and a mismatch leaves their Machines unreconciled. Switching an existing cluster is not supported; create a new one.",
+      "type": "string",
+      "default": "kubevirt"
+    },
+    "proxmox": {
+      "description": "Proxmox substrate settings.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "ipv4Config"
+      ],
+      "properties": {
+        "allowedNodes": {
+          "description": "Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "dnsServers": {
+          "description": "Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "ipv4Config": {
+          "description": "Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "gateway",
+            "prefix"
+          ],
+          "properties": {
+            "addresses": {
+              "description": "Ranges or CIDRs, e.g. `[\"10.0.0.120-10.0.0.170\"]`. capmox turns these into an InClusterIPPool, so they must not overlap any DHCP range on the same L2 or two workers will answer to one address.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "gateway": {
+              "description": "Default gateway for the workers.",
+              "type": "string",
+              "default": ""
+            },
+            "prefix": {
+              "description": "Netmask prefix length.",
+              "type": "integer",
+              "default": 24
+            }
+          }
+        }
+      }
+    },
     "addons": {
       "description": "Cluster addons configuration.",
       "type": "object",
