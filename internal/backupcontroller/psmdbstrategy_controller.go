@@ -401,6 +401,39 @@ func psmdbTargetCredentialsSecret(cluster *psmdbtypes.PerconaServerMongoDB, pref
 	return ""
 }
 
+// mongodbRestoreCredentialsSecret picks the s3 credentialsSecret a restore into
+// targetCluster should authenticate with. It returns the source's own reference
+// unless a safe swap applies, so the caller can compare and re-point only when
+// the value actually changes. Two guards make the swap correct across the legacy
+// and useSystemBucket flows:
+//   - When the source already names the platform-projected cozy-backups-creds
+//     (useSystemBucket), keep it: that Secret is projected into the restore
+//     namespace and outlives the source app, so there is nothing to repair, and
+//     repointing it at a legacy target's own creds would send a platform-bucket
+//     restore at the wrong credentials.
+//   - Otherwise adopt a target credential only when its storage is on the SAME
+//     bucket as the archive (source.S3.Bucket): the backupSource's bucket stays
+//     the source's, so a credential for a different bucket (a system-bucket
+//     target's cozy-backups-creds against a legacy tenant bucket) would fail the
+//     restore with AccessDenied. When no same-bucket target credential is
+//     discoverable the source reference is kept (in-place restore into the
+//     still-present source resolves to the same Secret, so this is a no-op).
+//
+// Returns "" only when the source carries no s3 reference at all.
+func mongodbRestoreCredentialsSecret(source *psmdbtypes.BackupSource, targetCluster *psmdbtypes.PerconaServerMongoDB) string {
+	if source == nil || source.S3 == nil {
+		return ""
+	}
+	current := source.S3.CredentialsSecret
+	if current == psmdbDefaultCredentialsSecret {
+		return current
+	}
+	if cred := psmdbTargetCredentialsSecret(targetCluster, source.StorageName, source.S3.Bucket); cred != "" {
+		return cred
+	}
+	return current
+}
+
 // psmdbStorageS3 extracts .s3.bucket and .s3.credentialsSecret from one psmdb
 // spec.backup.storages entry. Returns ("","") for an empty/non-object entry or
 // a non-s3 storage. The bucket lets the restore path refuse to hand a restore a
@@ -772,27 +805,17 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 			fmt.Sprintf("waiting for target psmdb.percona.com/PerconaServerMongoDB %s/%s to enable backups", target.Namespace, targetPSMDBName))
 	}
 
-	// Re-point the restore at the TARGET cluster's own S3 credentials. On the
-	// legacy flow the backupSource carries the SOURCE release's -s3-creds Secret,
-	// which is deleted together with the source app — exactly the disaster-
-	// recovery case backups exist for — so a restore into a fresh, differently-
-	// named target must not depend on it. Two guards keep the swap correct across
-	// flows:
-	//   - Skip it when the source already names the platform-projected
-	//     cozy-backups-creds (the useSystemBucket flow): that Secret is projected
-	//     into the restore namespace and outlives the source app, so there is
-	//     nothing to repair, and repointing it at a legacy target's own creds
-	//     would send a platform-bucket restore at the wrong credentials.
-	//   - Only adopt a target credential whose storage is on the SAME bucket as
-	//     the archive (source.S3.Bucket). The backupSource's bucket/prefix/
-	//     endpoint always stay the source's (that is where the archive lives);
-	//     swapping in a credential for a different bucket (a system-bucket
-	//     target's cozy-backups-creds against a legacy tenant bucket) would fail
-	//     the restore with AccessDenied. When no same-bucket target credential is
-	//     discoverable the source reference is kept (in-place restore into the
-	//     still-present source resolves to the same Secret, so this is a no-op).
-	if source.S3 != nil && source.S3.CredentialsSecret != psmdbDefaultCredentialsSecret {
-		if cred := psmdbTargetCredentialsSecret(targetCluster, source.StorageName, source.S3.Bucket); cred != "" && cred != source.S3.CredentialsSecret {
+	// Re-point the restore at the TARGET cluster's own S3 credentials when a safe
+	// swap applies. On the legacy flow the backupSource carries the SOURCE
+	// release's -s3-creds Secret, which is deleted together with the source app —
+	// exactly the disaster-recovery case backups exist for — so a restore into a
+	// fresh, differently-named target must not depend on it. mongodbRestoreCreden-
+	// tialsSecret encodes the cross-flow guards (skip when the source already
+	// names the projected cozy-backups-creds; adopt a target credential only on
+	// the same bucket as the archive); it is unit-tested across the four flow
+	// combinations.
+	if source.S3 != nil {
+		if cred := mongodbRestoreCredentialsSecret(source, targetCluster); cred != "" && cred != source.S3.CredentialsSecret {
 			logger.Debug("re-pointing MongoDB restore credentials at target cluster storage",
 				"restorejob", restoreJob.Name, "from", source.S3.CredentialsSecret, "to", cred)
 			source.S3.CredentialsSecret = cred
