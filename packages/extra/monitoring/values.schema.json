@@ -334,7 +334,7 @@
           "default": {},
           "properties": {
             "email": {
-              "description": "Configuration for email alerts. Alerts carrying the label notify_email with the string value true are emailed when their severity is in the severities list (default critical and major); a bare YAML boolean does not match. Alerts listed in alertnames are emailed unconditionally.",
+              "description": "Configuration for email alerts. Alerts carrying the label notify_email with the string value true are emailed when their severity is in the severities list (default critical and major); a bare YAML boolean does not match. Alerts listed in alertnames are emailed unless matched by an earlier platform route.",
               "type": "object",
               "default": {},
               "required": [
@@ -344,7 +344,7 @@
               ],
               "properties": {
                 "alertnames": {
-                  "description": "Alert names emailed whether or not the rule carries the notify_email label, with no severity filter. This is the way to opt in alerts the platform ships, since their helm-owned rule definitions cannot be labelled per cluster. Entries must be plain Prometheus alert names such as `KubeAPIDown`; anything else fails the render. Empty adds no extra route.",
+                  "description": "Alert names emailed whether or not the rule carries the notify_email label, with no severity filter. Earlier platform routes still take precedence: alerts with severity `none`, `CDIDefaultStorageClassDegraded` and `CDINoDefaultStorageClass` are blackholed and never reach email. This is the way to opt in alerts the platform ships, since their helm-owned rule definitions cannot be labelled per cluster. Entries must be plain Prometheus alert names such as `KubeAPIDown`; anything else fails the render. Empty adds no extra route.",
                   "type": "array",
                   "default": [],
                   "items": {
@@ -372,7 +372,7 @@
                   "default": ""
                 },
                 "secretName": {
-                  "description": "Name of an existing Secret in the release namespace holding the SMTP password under the `password` key. Required when authUsername is set. The Secret is mounted into Alertmanager, so a name that does not exist blocks the whole Alertmanager rollout, not only email delivery.",
+                  "description": "Name of an existing Secret in the release namespace holding the SMTP password under the `password` key. Required when authUsername is set. Must be a DNS subdomain of at most 253 characters. The Secret is mounted into Alertmanager, so a name that does not exist blocks the whole Alertmanager rollout, not only email delivery.",
                   "type": "string",
                   "default": ""
                 },

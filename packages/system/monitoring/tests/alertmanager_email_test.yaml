@@ -66,7 +66,7 @@ tests:
           value: alertmanager
         matchRegex:
           path: stringData["alertmanager.yaml"]
-          pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:465"\n    auth_username: "mailer@example\.org"\n    auth_password_file: /etc/vm/secrets/alertmanager-smtp/password\n    send_resolved: true'
+          pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:465"\n    auth_username: "mailer@example\.org"\n    auth_password_file: "/etc/vm/secrets/alertmanager-smtp/password"\n    send_resolved: true'
       - documentSelector:
           path: metadata.labels.app
           value: alertmanager
@@ -275,6 +275,72 @@ tests:
         matchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: '    repeat_interval: "1h30m"\n'
+
+  - it: keeps a numeric Secret name as a string in the mount and password path
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
+            secretName: "123"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    auth_password_file: "/etc/vm/secrets/123/password"\n'
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        equal:
+          path: spec.secrets
+          value: ["123"]
+
+  - it: fails the render when secretName contains a newline
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
+            secretName: "smtp-creds\n    NOT_A_CONFIG_KEY"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.secretName must be a Kubernetes Secret name (a DNS subdomain of at most 253 characters)"
+
+  - it: fails the render when secretName contains an empty DNS label
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
+            secretName: "smtp..creds"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.secretName must be a Kubernetes Secret name (a DNS subdomain of at most 253 characters)"
+
+  - it: fails the render when secretName exceeds 253 characters
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
+            secretName: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.secretName must be a Kubernetes Secret name (a DNS subdomain of at most 253 characters)"
 
   - it: renders the alertname routes after the notify_email routes when alertnames is set
     set:
