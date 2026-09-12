@@ -119,6 +119,8 @@ When `useSystemBucket: true`:
 
 Because the chart drops `spec.backup.tasks` and `spec.backup.pitr`, the psmdb operator's own scheduled backups and oplog PITR do **not** run on this flow — `backup.schedule` and `backup.retentionPolicy` stay in the schema for the default flow but have no effect here, and the `recoveryTime` PITR restores described below are not available. Migrate scheduled backups to a `backups.cozystack.io/Plan` against `cozy-default` instead. **Flipping this flag on a running app** removes the storage, tasks and pitr the app had, so a release that was taking scheduled backups + PITR before the flip stops until a `Plan` takes over.
 
+**Opting back out** (`useSystemBucket` true→false) is not automatic in reverse: the driver stops injecting, but the `s3-storage` entry it already applied stays on the live `PerconaServerMongoDB` under the driver's own field manager (`cozystack-psmdb-backup-driver`) — the chart does not own it and so never prunes it. It is inert once `backup.enabled=false`; to fully return a release to the legacy flow, delete that storage entry from the `PerconaServerMongoDB` by hand before re-declaring the tenant's own `backup.*` S3 values.
+
 ### Point-in-time recovery (MongoDB)
 
 psmdb records an oplog stream between logical backups. A MongoDB `RestoreJob` recovers to a timestamp via `spec.options.recoveryTime` — the same option name and RFC3339 format the Postgres/CNPG driver uses, so the two are uniform:

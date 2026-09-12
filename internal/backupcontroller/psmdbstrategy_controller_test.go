@@ -204,6 +204,72 @@ func TestPsmdbTargetCredentialsSecret(t *testing.T) {
 	}
 }
 
+// TestMongoDBRestoreCredentialsSecret pins the restore credential-swap decision
+// across the four {legacy,system}×{legacy,system} flow combinations, so neither
+// cross-flow guard can be dropped unnoticed: the projected-secret skip (a system
+// source keeps cozy-backups-creds rather than adopting a legacy target's own
+// Secret) and the same-bucket match (a legacy source is not handed a credential
+// for a bucket its archive does not live in).
+func TestMongoDBRestoreCredentialsSecret(t *testing.T) {
+	s3Storage := func(bucket, secret string) runtime.RawExtension {
+		return runtime.RawExtension{Raw: []byte(fmt.Sprintf(`{"type":"s3","s3":{"bucket":%q,"credentialsSecret":%q}}`, bucket, secret))}
+	}
+	target := func(storages map[string]runtime.RawExtension) *psmdbtypes.PerconaServerMongoDB {
+		return &psmdbtypes.PerconaServerMongoDB{
+			Spec: psmdbtypes.PerconaServerMongoDBSpec{
+				Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{Storages: storages},
+			},
+		}
+	}
+	src := func(bucket, cred string) *psmdbtypes.BackupSource {
+		return &psmdbtypes.BackupSource{StorageName: "s3-storage", S3: &psmdbtypes.BackupStorageS3{Bucket: bucket, CredentialsSecret: cred}}
+	}
+	cases := []struct {
+		name   string
+		source *psmdbtypes.BackupSource
+		target *psmdbtypes.PerconaServerMongoDB
+		want   string
+	}{
+		{
+			name:   "legacy source -> legacy target on the same bucket: swap to target creds (DR after source delete)",
+			source: src("tenant-bucket", "src-s3-creds"),
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("tenant-bucket", "target-s3-creds")}),
+			want:   "target-s3-creds",
+		},
+		{
+			name:   "legacy source -> legacy target on a different bucket: keep source creds (no cross-bucket swap)",
+			source: src("tenant-bucket", "src-s3-creds"),
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("other-bucket", "target-s3-creds")}),
+			want:   "src-s3-creds",
+		},
+		{
+			name:   "system source -> legacy target: keep projected cozy-backups-creds (outlives source, reads the platform bucket)",
+			source: src("cozy-backups-PLATFORM", "cozy-backups-creds"),
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("tenant-bucket", "target-s3-creds")}),
+			want:   "cozy-backups-creds",
+		},
+		{
+			name:   "legacy source -> system-bucket target: keep source creds (target storage is on the platform bucket, not the archive's)",
+			source: src("tenant-bucket", "src-s3-creds"),
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("cozy-backups-PLATFORM", "cozy-backups-creds")}),
+			want:   "src-s3-creds",
+		},
+		{
+			name:   "no s3 source: empty (caller keeps the source reference)",
+			source: &psmdbtypes.BackupSource{StorageName: "s3-storage"},
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("tenant-bucket", "target-s3-creds")}),
+			want:   "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mongodbRestoreCredentialsSecret(tc.source, tc.target); got != tc.want {
+				t.Errorf("mongodbRestoreCredentialsSecret: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Backup-side ensure idempotency + CR shape
 // ---------------------------------------------------------------------------
