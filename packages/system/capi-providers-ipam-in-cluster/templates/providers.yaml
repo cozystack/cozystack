@@ -1,0 +1,32 @@
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: IPAMProvider
+metadata:
+  name: in-cluster
+spec:
+  # https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster
+  #
+  # Why an IPAM provider exists in a Proxmox install and not in a KubeVirt one:
+  # capmox does not use DHCP. It hands every VM a static address taken from an
+  # InClusterIPPool it creates out of ProxmoxCluster.spec.ipv4Config, so without
+  # this provider the pool kind does not resolve, ProxmoxCluster never reaches
+  # Ready, and every ProxmoxMachine sits in WaitingForClusterInfrastructure.
+  # KubeVirt workers get their addresses from the cluster network's DHCP, which
+  # is why nothing else in the platform needs this.
+  #
+  # v1.0.x, not v1.1.0: both serve InClusterIPPool v1alpha2, but the v1.0 series
+  # declares the v1beta1 contract that matches capi-providers-core v1.10.1.
+  version: v1.0.3-ipam-in-cluster
+  fetchConfig:
+    selector:
+      matchLabels:
+        ipamprovider-provider: in-cluster
+  deployment:
+    containers:
+    - name: manager
+      resources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 10m
+          memory: 64Mi

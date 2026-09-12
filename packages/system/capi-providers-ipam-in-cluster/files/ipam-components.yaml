@@ -1,0 +1,1016 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+    control-plane: controller-manager
+  name: capi-ipam-in-cluster-system
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: capi-ipam-in-cluster-system/capi-ipam-in-cluster-serving-cert
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+    clusterctl.cluster.x-k8s.io/move-hierarchy: ""
+  name: globalinclusterippools.ipam.cluster.x-k8s.io
+spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: capi-ipam-in-cluster-webhook-service
+          namespace: capi-ipam-in-cluster-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
+  group: ipam.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: GlobalInClusterIPPool
+    listKind: GlobalInClusterIPPoolList
+    plural: globalinclusterippools
+    singular: globalinclusterippool
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: Subnet to allocate IPs from
+      jsonPath: .spec.subnet
+      name: Subnet
+      type: string
+    - description: First address of the range to allocate from
+      jsonPath: .spec.first
+      name: First
+      type: string
+    - description: Last address of the range to allocate from
+      jsonPath: .spec.last
+      name: Last
+      type: string
+    - description: Count of IPs configured for the pool
+      jsonPath: .status.ipAddresses.total
+      name: Total
+      type: integer
+    - description: Count of unallocated IPs in the pool
+      jsonPath: .status.ipAddresses.free
+      name: Free
+      type: integer
+    - description: Count of allocated IPs in the pool
+      jsonPath: .status.ipAddresses.used
+      name: Used
+      type: integer
+    deprecated: true
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          GlobalInClusterIPPool is the Schema for the global inclusterippools API.
+          This pool type is cluster scoped. IPAddressClaims can reference
+          pools of this type from any namespace.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: InClusterIPPoolSpec defines the desired state of InClusterIPPool.
+            properties:
+              addresses:
+                description: |-
+                  Addresses is a list of IP addresses that can be assigned. This set of
+                  addresses can be non-contiguous. Can be omitted if subnet, or first and
+                  last is set.
+                items:
+                  type: string
+                type: array
+              end:
+                description: |-
+                  Last is the last address that can be assigned.
+                  Must come after first and needs to fit into a common subnet.
+                  If unset, the second last address of subnet will be used.
+                type: string
+              gateway:
+                description: Gateway
+                type: string
+              prefix:
+                description: |-
+                  Prefix is the network prefix to use.
+                  If unset the prefix from the subnet will be used.
+                maximum: 128
+                type: integer
+              start:
+                description: |-
+                  First is the first address that can be assigned.
+                  If unset, the second address of subnet will be used.
+                type: string
+              subnet:
+                description: |-
+                  Subnet is the subnet to assign IP addresses from.
+                  Can be omitted if addresses or first, last and prefix are set.
+                type: string
+            type: object
+          status:
+            description: InClusterIPPoolStatus defines the observed state of InClusterIPPool.
+            properties:
+              ipAddresses:
+                description: Addresses reports the count of total, free, and used
+                  IPs in the pool.
+                properties:
+                  free:
+                    description: |-
+                      Free is the count of unallocated IPs in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  outOfRange:
+                    description: |-
+                      Out of Range is the count of allocated IPs in the pool that is not
+                      contained within spec.Addresses.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  total:
+                    description: |-
+                      Total is the total number of IPs configured for the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  used:
+                    description: |-
+                      Used is the count of allocated IPs in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                required:
+                - free
+                - outOfRange
+                - total
+                - used
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - description: List of addresses, to allocate from
+      jsonPath: .spec.addresses
+      name: Addresses
+      type: string
+    - description: Count of IPs configured for the pool
+      jsonPath: .status.ipAddresses.total
+      name: Total
+      type: integer
+    - description: Count of unallocated IPs in the pool
+      jsonPath: .status.ipAddresses.free
+      name: Free
+      type: integer
+    - description: Count of allocated IPs in the pool
+      jsonPath: .status.ipAddresses.used
+      name: Used
+      type: integer
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          GlobalInClusterIPPool is the Schema for the global inclusterippools API.
+          This pool type is cluster scoped. IPAddressClaims can reference
+          pools of this type from any namespace.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: InClusterIPPoolSpec defines the desired state of InClusterIPPool.
+            properties:
+              addresses:
+                description: |-
+                  Addresses is a list of IP addresses that can be assigned. This set of
+                  addresses can be non-contiguous.
+                items:
+                  type: string
+                type: array
+              allocateReservedIPAddresses:
+                description: |-
+                  AllocateReservedIPAddresses causes the provider to allocate the network
+                  address (the first address in the inferred subnet) and broadcast address
+                  (the last address in the inferred subnet) when IPv4. The provider will
+                  allocate the anycast address (the first address in the inferred
+                  subnet) when IPv6.
+                type: boolean
+              excludedAddresses:
+                description: |-
+                  ExcludedAddresses is a list of IP addresses, which will be excluded from
+                  the set of assignable IP addresses.
+                items:
+                  type: string
+                type: array
+              gateway:
+                description: Gateway
+                type: string
+              prefix:
+                description: Prefix is the network prefix to use.
+                maximum: 128
+                minimum: 0
+                type: integer
+            required:
+            - addresses
+            - prefix
+            type: object
+          status:
+            description: InClusterIPPoolStatus defines the observed state of InClusterIPPool.
+            properties:
+              ipAddresses:
+                description: Addresses reports the count of total, free, and used
+                  IPs in the pool.
+                properties:
+                  free:
+                    description: |-
+                      Free is the count of unallocated IPs in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  outOfRange:
+                    description: |-
+                      Out of Range is the count of allocated IPs in the pool that is not
+                      contained within spec.Addresses.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  total:
+                    description: |-
+                      Total is the total number of IPs configured for the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  used:
+                    description: |-
+                      Used is the count of allocated IPs in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                required:
+                - free
+                - outOfRange
+                - total
+                - used
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: capi-ipam-in-cluster-system/capi-ipam-in-cluster-serving-cert
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+    clusterctl.cluster.x-k8s.io/move-hierarchy: ""
+  name: inclusterippools.ipam.cluster.x-k8s.io
+spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: capi-ipam-in-cluster-webhook-service
+          namespace: capi-ipam-in-cluster-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
+  group: ipam.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: InClusterIPPool
+    listKind: InClusterIPPoolList
+    plural: inclusterippools
+    singular: inclusterippool
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Subnet to allocate IPs from
+      jsonPath: .spec.subnet
+      name: Subnet
+      type: string
+    - description: First address of the range to allocate from
+      jsonPath: .spec.first
+      name: First
+      type: string
+    - description: Last address of the range to allocate from
+      jsonPath: .spec.last
+      name: Last
+      type: string
+    - description: List of addresses, within the subnet, to allocate from
+      jsonPath: .spec.addresses
+      name: Addresses
+      type: string
+    - description: Count of IPs configured for the pool
+      jsonPath: .status.ipAddresses.total
+      name: Total
+      type: integer
+    - description: Count of unallocated IPs in the pool
+      jsonPath: .status.ipAddresses.free
+      name: Free
+      type: integer
+    - description: Count of allocated IPs in the pool
+      jsonPath: .status.ipAddresses.used
+      name: Used
+      type: integer
+    deprecated: true
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: InClusterIPPool is the Schema for the inclusterippools API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: InClusterIPPoolSpec defines the desired state of InClusterIPPool.
+            properties:
+              addresses:
+                description: |-
+                  Addresses is a list of IP addresses that can be assigned. This set of
+                  addresses can be non-contiguous. Can be omitted if subnet, or first and
+                  last is set.
+                items:
+                  type: string
+                type: array
+              end:
+                description: |-
+                  Last is the last address that can be assigned.
+                  Must come after first and needs to fit into a common subnet.
+                  If unset, the second last address of subnet will be used.
+                type: string
+              gateway:
+                description: Gateway
+                type: string
+              prefix:
+                description: |-
+                  Prefix is the network prefix to use.
+                  If unset the prefix from the subnet will be used.
+                maximum: 128
+                type: integer
+              start:
+                description: |-
+                  First is the first address that can be assigned.
+                  If unset, the second address of subnet will be used.
+                type: string
+              subnet:
+                description: |-
+                  Subnet is the subnet to assign IP addresses from.
+                  Can be omitted if addresses or first, last and prefix are set.
+                type: string
+            type: object
+          status:
+            description: InClusterIPPoolStatus defines the observed state of InClusterIPPool.
+            properties:
+              ipAddresses:
+                description: Addresses reports the count of total, free, and used
+                  IPs in the pool.
+                properties:
+                  free:
+                    description: |-
+                      Free is the count of unallocated IPs in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  outOfRange:
+                    description: |-
+                      Out of Range is the count of allocated IPs in the pool that is not
+                      contained within spec.Addresses.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  total:
+                    description: |-
+                      Total is the total number of IPs configured for the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  used:
+                    description: |-
+                      Used is the count of allocated IPs in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                required:
+                - free
+                - outOfRange
+                - total
+                - used
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - description: List of addresses, to allocate from
+      jsonPath: .spec.addresses
+      name: Addresses
+      type: string
+    - description: Count of IPs configured for the pool
+      jsonPath: .status.ipAddresses.total
+      name: Total
+      type: integer
+    - description: Count of unallocated IPs in the pool
+      jsonPath: .status.ipAddresses.free
+      name: Free
+      type: integer
+    - description: Count of allocated IPs in the pool
+      jsonPath: .status.ipAddresses.used
+      name: Used
+      type: integer
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: InClusterIPPool is the Schema for the inclusterippools API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: InClusterIPPoolSpec defines the desired state of InClusterIPPool.
+            properties:
+              addresses:
+                description: |-
+                  Addresses is a list of IP addresses that can be assigned. This set of
+                  addresses can be non-contiguous.
+                items:
+                  type: string
+                type: array
+              allocateReservedIPAddresses:
+                description: |-
+                  AllocateReservedIPAddresses causes the provider to allocate the network
+                  address (the first address in the inferred subnet) and broadcast address
+                  (the last address in the inferred subnet) when IPv4. The provider will
+                  allocate the anycast address (the first address in the inferred
+                  subnet) when IPv6.
+                type: boolean
+              excludedAddresses:
+                description: |-
+                  ExcludedAddresses is a list of IP addresses, which will be excluded from
+                  the set of assignable IP addresses.
+                items:
+                  type: string
+                type: array
+              gateway:
+                description: Gateway
+                type: string
+              prefix:
+                description: Prefix is the network prefix to use.
+                maximum: 128
+                minimum: 0
+                type: integer
+            required:
+            - addresses
+            - prefix
+            type: object
+          status:
+            description: InClusterIPPoolStatus defines the observed state of InClusterIPPool.
+            properties:
+              ipAddresses:
+                description: Addresses reports the count of total, free, and used
+                  IPs in the pool.
+                properties:
+                  free:
+                    description: |-
+                      Free is the count of unallocated IPs in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  outOfRange:
+                    description: |-
+                      Out of Range is the count of allocated IPs in the pool that is not
+                      contained within spec.Addresses.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  total:
+                    description: |-
+                      Total is the total number of IPs configured for the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  used:
+                    description: |-
+                      Used is the count of allocated IPs in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                required:
+                - free
+                - outOfRange
+                - total
+                - used
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-controller-manager
+  namespace: capi-ipam-in-cluster-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-leader-election-role
+  namespace: capi-ipam-in-cluster-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-manager-role
+rules:
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
+  - clusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ipam.cluster.x-k8s.io
+  resources:
+  - globalinclusterippools
+  - inclusterippools
+  - ipaddresses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ipam.cluster.x-k8s.io
+  resources:
+  - globalinclusterippools/finalizers
+  - inclusterippools/finalizers
+  - ipaddressclaims/finalizers
+  - ipaddresses/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - ipam.cluster.x-k8s.io
+  resources:
+  - globalinclusterippools/status
+  - inclusterippools/status
+  - ipaddressclaims/status
+  - ipaddresses/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ipam.cluster.x-k8s.io
+  resources:
+  - ipaddressclaims
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-metrics-reader
+rules:
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-proxy-role
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-leader-election-rolebinding
+  namespace: capi-ipam-in-cluster-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: capi-ipam-in-cluster-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: capi-ipam-in-cluster-controller-manager
+  namespace: capi-ipam-in-cluster-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: capi-ipam-in-cluster-manager-role
+subjects:
+- kind: ServiceAccount
+  name: capi-ipam-in-cluster-controller-manager
+  namespace: capi-ipam-in-cluster-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-proxy-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: capi-ipam-in-cluster-proxy-role
+subjects:
+- kind: ServiceAccount
+  name: capi-ipam-in-cluster-controller-manager
+  namespace: capi-ipam-in-cluster-system
+---
+apiVersion: v1
+data:
+  controller_manager_config.yaml: |
+    apiVersion: controller-runtime.sigs.k8s.io/v1alpha1
+    kind: ControllerManagerConfig
+    health:
+      healthProbeBindAddress: :8081
+    metrics:
+      bindAddress: 127.0.0.1:8080
+    webhook:
+      port: 9443
+    leaderElection:
+      leaderElect: true
+      resourceName: 7bb7acb4.ipam.cluster.x-k8s.io
+kind: ConfigMap
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-manager-config
+  namespace: capi-ipam-in-cluster-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+    control-plane: controller-manager
+  name: capi-ipam-in-cluster-controller-manager-metrics-service
+  namespace: capi-ipam-in-cluster-system
+spec:
+  ports:
+  - name: https
+    port: 8443
+    protocol: TCP
+    targetPort: https
+  selector:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+    control-plane: controller-manager
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-webhook-service
+  namespace: capi-ipam-in-cluster-system
+spec:
+  ports:
+  - port: 443
+    targetPort: webhook-server
+  selector:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+    control-plane: controller-manager
+  name: capi-ipam-in-cluster-controller-manager
+  namespace: capi-ipam-in-cluster-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/provider: ipam-in-cluster
+      control-plane: controller-manager
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        cluster.x-k8s.io/provider: ipam-in-cluster
+        control-plane: controller-manager
+    spec:
+      containers:
+      - args:
+        - --leader-elect
+        command:
+        - /manager
+        image: registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v1.0.3
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: manager
+        ports:
+        - containerPort: 9443
+          name: webhook-server
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsGroup: 65532
+          runAsUser: 65532
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: cert
+          readOnly: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: capi-ipam-in-cluster-controller-manager
+      terminationGracePeriodSeconds: 10
+      volumes:
+      - name: cert
+        secret:
+          secretName: capi-ipam-in-cluster-webhook-service-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-serving-cert
+  namespace: capi-ipam-in-cluster-system
+spec:
+  dnsNames:
+  - capi-ipam-in-cluster-webhook-service.capi-ipam-in-cluster-system.svc
+  - capi-ipam-in-cluster-webhook-service.capi-ipam-in-cluster-system.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: capi-ipam-in-cluster-selfsigned-issuer
+  secretName: capi-ipam-in-cluster-webhook-service-cert
+  subject:
+    organizations:
+    - k8s-sig-cluster-lifecycle
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-selfsigned-issuer
+  namespace: capi-ipam-in-cluster-system
+spec:
+  selfSigned: {}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: capi-ipam-in-cluster-system/capi-ipam-in-cluster-serving-cert
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: capi-ipam-in-cluster-webhook-service
+      namespace: capi-ipam-in-cluster-system
+      path: /mutate-ipam-cluster-x-k8s-io-v1alpha2-globalinclusterippool
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: default.globalinclusterippool.ipam.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - ipam.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - globalinclusterippools
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: capi-ipam-in-cluster-webhook-service
+      namespace: capi-ipam-in-cluster-system
+      path: /mutate-ipam-cluster-x-k8s-io-v1alpha2-inclusterippool
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: default.inclusterippool.ipam.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - ipam.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - inclusterippools
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: capi-ipam-in-cluster-system/capi-ipam-in-cluster-serving-cert
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+  name: capi-ipam-in-cluster-validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: capi-ipam-in-cluster-webhook-service
+      namespace: capi-ipam-in-cluster-system
+      path: /validate-ipam-cluster-x-k8s-io-v1alpha2-globalinclusterippool
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: validation.globalinclusterippool.ipam.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - ipam.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - globalinclusterippools
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: capi-ipam-in-cluster-webhook-service
+      namespace: capi-ipam-in-cluster-system
+      path: /validate-ipam-cluster-x-k8s-io-v1alpha2-inclusterippool
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: validation.inclusterippool.ipam.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - ipam.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - inclusterippools
+  sideEffects: None
