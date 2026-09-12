@@ -1,0 +1,16 @@
+# To-copy restore. Targets the empty bkttgt bucket from 30-bucket-target.yaml;
+# the driver provisions a read-write BucketAccess on it, re-points the copy at
+# the target's own credentials, and mirrors the snapshot into it while bktsrc
+# stays running.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: bktsrc-to-bkttgt
+spec:
+  backupRef:
+    name: bktsrc-adhoc
+  targetApplicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Bucket
+    name: bkttgt

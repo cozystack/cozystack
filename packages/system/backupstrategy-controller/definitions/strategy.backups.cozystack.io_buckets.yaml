@@ -1,0 +1,318 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: buckets.strategy.backups.cozystack.io
+spec:
+  group: strategy.backups.cozystack.io
+  names:
+    kind: Bucket
+    listKind: BucketList
+    plural: buckets
+    singular: bucket
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Bucket defines a backup strategy for the apps.cozystack.io/Bucket
+          application (SeaweedFS-backed S3 object storage provisioned through COSI).
+          The engine has no operator-native Backup CRD, so the driver copies objects
+          S3-to-S3: each BackupJob runs a one-shot mirror Job that reads the source
+          bucket and writes to the platform cozy-backups bucket under a per-release
+          prefix; each RestoreJob mirrors that prefix back into a target bucket
+          (in-place, or a differently-named copy). The driver provisions the COSI
+          BucketAccess it needs to read the source and write the target - the
+          application chart is never touched.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: BucketSpec specifies the desired S3-mirror backup strategy.
+            properties:
+              template:
+                description: |-
+                  Template carries the destination (cozy-backups) coordinates and the
+                  mirror Job knobs. String fields support Helm-style Go templating with
+                  two top-level values:
+                    .Application - the application object (apps.cozystack.io/Bucket)
+                    .Parameters  - the parameters from the matched BackupClassStrategy.
+                                   These values MUST NOT carry credentials. Route S3
+                                   access keys through the *SecretKeyRef fields.
+                properties:
+                  appEndpointOverride:
+                    description: |-
+                      AppEndpointOverride overrides the S3 endpoint of the application-side
+                      bucket (the source on backup, the target on restore) that the mirror
+                      connects to, instead of the endpoint advertised in the COSI BucketInfo.
+                      It is an escape hatch for environments where the advertised endpoint is
+                      not reachable from in-cluster Pods (for example a CI cluster whose COSI
+                      endpoint is an external ingress placeholder) - point it at the in-cluster
+                      S3 Service there. Leave empty in production so the BucketInfo endpoint is
+                      used. Templating is supported.
+                    type: string
+                  destination:
+                    description: |-
+                      Destination is the S3 target the source objects are mirrored to (the
+                      platform cozy-backups bucket for the default strategy).
+                    properties:
+                      accessKeyIdSecretKeyRef:
+                        description: |-
+                          AccessKeyIDSecretKeyRef references a Secret key holding the destination
+                          access key id. Templating is supported on Name.
+                        properties:
+                          key:
+                            description: |-
+                              Key is the key within the Secret holding the value. Templating is
+                              supported.
+                            type: string
+                          name:
+                            description: Name is the Secret name. Templating is supported.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      bucket:
+                        description: Bucket is the destination S3 bucket name. Templating
+                          is supported.
+                        minLength: 1
+                        type: string
+                      endpoint:
+                        description: |-
+                          Endpoint is the destination S3 endpoint. A scheme is optional; the
+                          mirror prepends https:// when absent. Templating is supported.
+                        minLength: 1
+                        type: string
+                      prefix:
+                        description: |-
+                          Prefix is prepended to every object key written for this release, so
+                          several releases can share one destination bucket. The driver appends
+                          a per-backup segment under it. Templating is supported; the default
+                          strategy sets it to "<namespace>/<name>/".
+                        type: string
+                      region:
+                        description: Region is the S3 region name. Templating is supported.
+                        type: string
+                      secretAccessKeySecretKeyRef:
+                        description: |-
+                          SecretAccessKeySecretKeyRef references a Secret key holding the
+                          destination secret access key. Templating is supported on Name.
+                        properties:
+                          key:
+                            description: |-
+                              Key is the key within the Secret holding the value. Templating is
+                              supported.
+                            type: string
+                          name:
+                            description: Name is the Secret name. Templating is supported.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      tls:
+                        description: TLS configures how the mirror reaches the destination
+                          endpoint.
+                        properties:
+                          caSecretKeyRef:
+                            description: |-
+                              CASecretKeyRef references a Secret carrying a PEM CA bundle the mirror
+                              should trust. Templating is supported on Name and Key.
+                            properties:
+                              key:
+                                description: |-
+                                  Key is the key within the Secret holding the value. Templating is
+                                  supported.
+                                type: string
+                              name:
+                                description: Name is the Secret name. Templating is
+                                  supported.
+                                type: string
+                            required:
+                            - key
+                            - name
+                            type: object
+                          insecureSkipVerify:
+                            description: |-
+                              InsecureSkipVerify disables certificate verification. Use it only for a
+                              self-signed in-cluster endpoint that no CA bundle is plumbed for.
+                            type: boolean
+                        type: object
+                    required:
+                    - accessKeyIdSecretKeyRef
+                    - bucket
+                    - endpoint
+                    - secretAccessKeySecretKeyRef
+                    type: object
+                  image:
+                    description: |-
+                      Image is the container image running the mirror. It must carry the
+                      backupstrategy-controller binary so the Job can invoke its `s3-mirror`
+                      subcommand; the default strategy sets it to the controller image.
+                    minLength: 1
+                    type: string
+                  resources:
+                    description: |-
+                      Resources sets requests/limits on the mirror container so one tenant's
+                      backup cannot starve a node. Templating is not applied to this field.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  serverSideCopy:
+                    description: |-
+                      ServerSideCopy asks the mirror to attempt an S3 CopyObject (bytes stay
+                      inside the object store) before falling back to a streamed client-side
+                      copy. It only helps when source and destination share one endpoint and
+                      a single credential is authorized on both buckets; left unset (false)
+                      the mirror always streams, which works regardless of the S3 identity
+                      model.
+                    type: boolean
+                required:
+                - destination
+                - image
+                type: object
+            required:
+            - template
+            type: object
+          status:
+            description: BucketStatus reports observed state for the strategy CR.
+            properties:
+              conditions:
+                description: Conditions holds the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

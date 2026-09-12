@@ -1,0 +1,14 @@
+# Dedicated destination bucket for this demo. It stands in for the platform
+# cozy-backups system bucket, which the CI cluster does not provision - so the
+# round-trip is keyed off THIS bucket's own credentials, never cozy-backups /
+# the cozy-default BackupClass. The `backup` user's credentials are the ones
+# the test-scoped strategy (10-bucket-strategy.yaml) writes to.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: bktdst
+spec:
+  users:
+    backup:
+      readonly: false
