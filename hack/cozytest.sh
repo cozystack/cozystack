@@ -161,12 +161,12 @@ COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
 # packages/core/testing/Makefile runs against a live cluster instead.
 #
 # That wildcard is not recursive, so it says nothing about subdirectories, and
-# hack/e2e-apps/ holds live-cluster suites whose own filenames carry no prefix.
-# Matching the directory too keeps them armed; matching only the basename would
-# take the captures away from suites that need them, which is the opposite of
-# the fix. Neither test is a claim that every future live-cluster suite will be
-# named this way -- it is the only signal the runner has, and a suite placed
-# outside both shapes gets no captures.
+# hack/e2e-apps/ historically held live-cluster suites whose own filenames
+# carried no prefix. Keep matching the directory so captures stay armed if that
+# layout returns; matching only the basename would silently disarm them. Neither
+# test claims every future live-cluster suite will be named this way -- these are
+# the only signals the runner has, and a suite outside both shapes gets no
+# captures.
 #
 # Deliberately not a reachability probe. Gating on "can I talk to an apiserver"
 # would disarm the captures in the case they exist for: a failing e2e run is
