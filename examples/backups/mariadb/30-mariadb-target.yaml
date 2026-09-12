@@ -32,5 +32,4 @@ spec:
           - app
   users:
     app:
-      password: REPLACE_WITH_PASSWORD
       maxUserConnections: 100

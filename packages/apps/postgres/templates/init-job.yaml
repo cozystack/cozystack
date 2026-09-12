@@ -64,6 +64,16 @@ spec:
           name: secret
         - mountPath: /scripts
           name: scripts
+        {{- if .Values.users }}
+        # The init script reads each user's password from this mount at run time
+        # so the credential is never rendered into the init-script Secret. Gated
+        # on .Values.users to match the <release>-credentials Secret, which is
+        # only rendered when there are users: mounting it unconditionally would
+        # FailedMount a userless release and hang the post-upgrade hook.
+        - mountPath: /credentials
+          name: credentials
+          readOnly: true
+        {{- end }}
         {{- include "postgresjobs.resources" . | nindent 8 }}
       securityContext:
         fsGroup: 26
@@ -79,4 +89,9 @@ spec:
       - name: scripts
         secret:
           secretName: {{ .Release.Name }}-init-script
+      {{- if .Values.users }}
+      - name: credentials
+        secret:
+          secretName: {{ .Release.Name }}-credentials
+      {{- end }}
 {{- end }}

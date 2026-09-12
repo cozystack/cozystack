@@ -1,0 +1,85 @@
+suite: init-script rejects a username outside the safe charset
+
+# The username becomes a Kubernetes Secret data key AND is interpolated into the
+# init-script shell (pw=$(cat "/credentials/<user>")) and role SQL. A name with a
+# shell metacharacter is a command-injection shape; the apiserver would reject it
+# later as an invalid Secret key with an opaque error. The chart must reject it at
+# render time, naming the offending username, so the metacharacter never reaches
+# the script. Reverting the guard in init-script.yaml turns the first test green
+# (render succeeds), which is the mutation signal that this suite is not vacuous.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: fails the render for a username carrying a shell metacharacter
+    set:
+      users:
+        'evil";id;echo "x': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "evil\";id;echo \"x": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+
+  - it: fails the render for a username with a space
+    set:
+      users:
+        'a b': {}
+    asserts:
+      - failedTemplate: {}
+
+  # ".", ".." and names longer than 253 chars match the charset but are rejected
+  # by k8s IsConfigMapKey, so they cannot install: the charset regex alone let
+  # them through the named guard and they failed later with an opaque apiserver
+  # error instead. These pin the guard to the full IsConfigMapKey contract.
+  - it: fails the render for the reserved name "."
+    set:
+      users:
+        '.': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username ".": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+
+  - it: fails the render for the reserved name ".."
+    set:
+      users:
+        '..': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "..": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+
+  # IsConfigMapKey rejects ANY name starting with ".." (hasChDirPrefix), not just
+  # the literal "..", so "..foo" is charset-legal yet cannot install.
+  - it: fails the render for a name starting with ".."
+    set:
+      users:
+        '..foo': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "..foo": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)'
+
+  - it: fails the render for a username longer than 253 characters
+    set:
+      users:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {}
+    asserts:
+      - failedTemplate: {}
+
+  - it: renders normally for names using the full safe charset
+    set:
+      users:
+        a-b.c_1: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-credentials
+    asserts:
+      - matchRegex:
+          path: stringData["a-b.c_1"]
+          pattern: ^[a-zA-Z0-9]{16}$

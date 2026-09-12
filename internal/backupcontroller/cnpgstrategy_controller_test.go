@@ -23,6 +23,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -323,6 +324,36 @@ func TestEffectiveRestoreDeadline(t *testing.T) {
 			got := tc.opts.effectiveRestoreDeadline()
 			if got != tc.want {
 				t.Errorf("got %s want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEffectiveBootstrapDisableGrace pins the floor on the post-convergence
+// bootstrap-disable window: a tenant who sets a short restoreTimeoutSeconds to
+// fail fast on a stuck recovery must NOT thereby shrink the disable grace below
+// cnpgPostConvergenceGraceMin, or a brief control-plane blip would terminate a
+// genuinely-converged restore Failed and expose the healthy Cluster to a
+// resubmit's purge-guard. The window still tracks a *longer* recovery timeout
+// (a big-DB restore keeps its generous window).
+func TestEffectiveBootstrapDisableGrace(t *testing.T) {
+	cases := []struct {
+		name string
+		opts CNPGRestoreOptions
+		want time.Duration
+	}{
+		{"unset uses default, above floor", CNPGRestoreOptions{}, cnpgDefaultRestoreDeadline},
+		{"short timeout floored", CNPGRestoreOptions{RestoreTimeoutSeconds: 60}, cnpgPostConvergenceGraceMin},
+		{"long timeout kept", CNPGRestoreOptions{RestoreTimeoutSeconds: 7200}, 2 * time.Hour},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.opts.effectiveBootstrapDisableGrace()
+			if got != tc.want {
+				t.Errorf("got %s want %s", got, tc.want)
+			}
+			if got < cnpgPostConvergenceGraceMin {
+				t.Errorf("grace %s fell below the floor %s", got, cnpgPostConvergenceGraceMin)
 			}
 		})
 	}
@@ -682,21 +713,21 @@ func TestCNPGClusterFreshlyRecovered(t *testing.T) {
 // databases must be wiped and replaced with source's exact map. The
 // recovered cluster carries source's role catalog and data; if target's
 // pre-restore drift survives, the chart's init-job either tries to
-// re-create roles against the wrong data or leaks cleartext passwords
-// from a previous tenant configuration.
+// re-create roles against the wrong data or resurrects a role a previous
+// tenant configuration had dropped.
 func TestBuildPostgresAppRestorePatch_ReplacesTargetUsersAndDatabases(t *testing.T) {
 	app := newPostgresApp("pg-target", "tenant")
 	// Target had pre-existing users/databases (e.g. from a previous restore
 	// or operator drift). Replace must wipe them.
 	app.Spec.Users = map[string]postgresapp.User{
-		"stale-target-user": {Password: "leak-me"},
+		"stale-target-user": {Replication: true},
 	}
 	app.Spec.Databases = map[string]postgresapp.Database{
 		"stale-target-db": {Extensions: []string{"pgcrypto"}},
 	}
 
 	sourceUsers := map[string]postgresapp.User{
-		"app": {Password: "src"},
+		"app": {Replication: true},
 	}
 	sourceDatabases := map[string]postgresapp.Database{
 		"appdb": {Extensions: []string{"hstore"}},
@@ -709,8 +740,8 @@ func TestBuildPostgresAppRestorePatch_ReplacesTargetUsersAndDatabases(t *testing
 	}
 	if u, ok := patched.Spec.Users["app"]; !ok {
 		t.Errorf("source user was not propagated onto target")
-	} else if u.Password != "src" {
-		t.Errorf("source user password mismatch; got %q want %q", u.Password, "src")
+	} else if !u.Replication {
+		t.Errorf("source user attributes not propagated; got %#v", u)
 	}
 	if _, ok := patched.Spec.Databases["stale-target-db"]; ok {
 		t.Errorf("stale target database survived restore; replace semantics regressed")
@@ -842,7 +873,7 @@ func TestMarshalUnmarshalCNPGBackupSnapshot(t *testing.T) {
 		"app": {Extensions: []string{"pgcrypto"}},
 	}
 	src.Spec.Users = map[string]postgresapp.User{
-		"app": {Password: "p"},
+		"app": {Replication: true},
 	}
 	parameters := map[string]string{
 		"credsSecret": "tenant-shared-creds",
@@ -865,7 +896,7 @@ func TestMarshalUnmarshalCNPGBackupSnapshot(t *testing.T) {
 	if dbs["app"].Extensions[0] != "pgcrypto" {
 		t.Errorf("databases round-trip mismatch: %#v", dbs)
 	}
-	if users["app"].Password != "p" {
+	if !users["app"].Replication {
 		t.Errorf("users round-trip mismatch: %#v", users)
 	}
 	if params["credsSecret"] != "tenant-shared-creds" {
@@ -2239,6 +2270,199 @@ func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
 	c := newCNPGStrategyTestClient(t, backup, restoreJob, strategy, newPostgresApp(appName, ns), healthyCluster)
 	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
 
+	// A healthy recovery now converges in two reconciles: the first latches
+	// RecoveryConverged durably and requeues, the second disables bootstrap and
+	// marks Succeeded (see reconcileCNPGRestore's terminal block).
+	got := reconcileCNPGRestoreToTerminal(t, ctx, r, c, backup, ns, "rj")
+	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
+		t.Fatalf("expected phase Succeeded, got %q (msg=%q)", got.Status.Phase, got.Status.Message)
+	}
+	if c := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("expected Ready=True, got %+v", c)
+	}
+	if c := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondRecoveryConverged); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("expected RecoveryConverged=True, got %+v", c)
+	}
+}
+
+// TestReconcileCNPGRestore_HealthyDisablesBootstrap is the regression guard for
+// the restore-credentials fix: patchPostgresAppForRestore leaves the target app
+// with bootstrap.enabled=true, and while it stays true the chart skips the
+// init-job that reconciles the generated <release>-credentials Secret onto the
+// recovered roles. The recovered roles carry the source's password hashes, the
+// freshly generated Secret does not match them, so without this flip every
+// application-user login against the restored target fails. On convergence the
+// controller must clear bootstrap.enabled so the next HelmRelease upgrade runs
+// that init-job.
+func TestReconcileCNPGRestore_HealthyDisablesBootstrap(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+		cnpgBkName  = "cnpgbk"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+	startedAt := metav1.NewTime(time.Now().Add(-time.Hour))
+
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+			StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+			DriverMetadata: map[string]string{
+				cnpgServerNameKey:      appName,
+				cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+				cnpgBackupNameKey:      cnpgBkName,
+			},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+	}
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+			BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+		}},
+	}
+	healthyCluster := &cnpgtypes.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, CreationTimestamp: metav1.NewTime(startedAt.Add(time.Minute))},
+		Spec:       cnpgtypes.ClusterSpec{Bootstrap: &cnpgtypes.BootstrapConfiguration{Recovery: &cnpgtypes.RecoverySource{Source: appName}}},
+		Status:     cnpgtypes.ClusterStatus{Phase: cnpgClusterHealthyPhase},
+	}
+	// The target app is mid-restore: patchPostgresAppForRestore already set
+	// bootstrap.enabled=true (oldName is required alongside it by the schema).
+	app := newPostgresApp(appName, ns)
+	app.Spec.Bootstrap.Enabled = true
+	app.Spec.Bootstrap.OldName = appName
+	sa := startedAt
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+		Status: backupsv1alpha1.RestoreJobStatus{
+			StartedAt: &sa,
+			Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+			Conditions: []metav1.Condition{{
+				Type: restoreCondTargetPurged, Status: metav1.ConditionTrue, Reason: "ClusterPurged",
+				LastTransitionTime: startedAt, Message: "purged",
+			}},
+		},
+	}
+
+	c := newCNPGStrategyTestClient(t, backup, restoreJob, strategy, app, healthyCluster)
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+
+	got := reconcileCNPGRestoreToTerminal(t, ctx, r, c, backup, ns, "rj")
+	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
+		t.Fatalf("expected phase Succeeded, got %q (msg=%q)", got.Status.Phase, got.Status.Message)
+	}
+
+	gotApp := &postgresapp.Postgres{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: appName}, gotApp); err != nil {
+		t.Fatalf("get target app after reconcile: %v", err)
+	}
+	if gotApp.Spec.Bootstrap.Enabled {
+		t.Fatalf("expected bootstrap.enabled cleared after recovery converged, still true")
+	}
+	// oldName must survive: the app schema requires it whenever the bootstrap
+	// block is present, and clearing it would fail admission on the next apply.
+	if gotApp.Spec.Bootstrap.OldName != appName {
+		t.Fatalf("expected bootstrap.oldName preserved, got %q", gotApp.Spec.Bootstrap.OldName)
+	}
+}
+
+// TestReconcileCNPGRestore_BootstrapDisableFailsPastDeadline is the regression
+// guard for the still-open risk on the disable-bootstrap terminal step: recovery
+// has converged (RecoveryConverged=True latched) but clearing bootstrap.enabled
+// keeps failing - the app was deleted/renamed mid-restore, or a GitOps source
+// re-asserts it. Without a deadline bound the terminal block requeues forever and
+// the RestoreJob sits Running with no Failed/Ready=False. Past the restore
+// deadline it must terminate as Failed with a BootstrapDisableFailed reason.
+func TestReconcileCNPGRestore_BootstrapDisableFailsPastDeadline(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+		cnpgBkName  = "cnpgbk"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+	// Well past the 30m default deadline.
+	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
+
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+			StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+			DriverMetadata: map[string]string{
+				cnpgServerNameKey:      appName,
+				cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+				cnpgBackupNameKey:      cnpgBkName,
+			},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+	}
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+			BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+		}},
+	}
+	healthyCluster := &cnpgtypes.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, CreationTimestamp: metav1.NewTime(startedAt.Add(time.Minute))},
+		Spec:       cnpgtypes.ClusterSpec{Bootstrap: &cnpgtypes.BootstrapConfiguration{Recovery: &cnpgtypes.RecoverySource{Source: appName}}},
+		Status:     cnpgtypes.ClusterStatus{Phase: cnpgClusterHealthyPhase},
+	}
+	app := newPostgresApp(appName, ns)
+	app.Spec.Bootstrap.Enabled = true
+	app.Spec.Bootstrap.OldName = appName
+	sa := startedAt
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+		Status: backupsv1alpha1.RestoreJobStatus{
+			StartedAt: &sa,
+			Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+			Conditions: []metav1.Condition{
+				{Type: restoreCondTargetPurged, Status: metav1.ConditionTrue, Reason: "ClusterPurged", LastTransitionTime: startedAt, Message: "purged"},
+				{Type: restoreCondRecoveryConverged, Status: metav1.ConditionTrue, Reason: "RecoveryConverged", LastTransitionTime: startedAt, Message: "converged"},
+			},
+		},
+	}
+
+	// A fake client that fails Patch on the Postgres app, so
+	// disablePostgresAppBootstrap can never clear bootstrap.enabled.
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = strategyv1alpha1.AddToScheme(s)
+	_ = cnpgtypes.AddToScheme(s)
+	_ = postgresapp.AddToScheme(s)
+	c := clientfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(backup, restoreJob, strategy, app, healthyCluster).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, ok := obj.(*postgresapp.Postgres); ok {
+					return fmt.Errorf("injected bootstrap-disable failure")
+				}
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+
 	rj := &backupsv1alpha1.RestoreJob{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
 		t.Fatalf("get seeded RestoreJob: %v", err)
@@ -2251,14 +2475,238 @@ func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, got); err != nil {
 		t.Fatalf("get RestoreJob after reconcile: %v", err)
 	}
-	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
-		t.Fatalf("expected phase Succeeded, got %q (msg=%q)", got.Status.Phase, got.Status.Message)
+	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("expected phase Failed when bootstrap-disable keeps failing past the deadline, got %q", got.Status.Phase)
 	}
-	if c := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); c == nil || c.Status != metav1.ConditionTrue {
-		t.Fatalf("expected Ready=True, got %+v", c)
+	if cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); cond == nil || cond.Reason != "BootstrapDisableFailed" {
+		t.Fatalf("expected Ready=False reason BootstrapDisableFailed, got %+v", cond)
 	}
-	if c := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondRecoveryConverged); c == nil || c.Status != metav1.ConditionTrue {
-		t.Fatalf("expected RecoveryConverged=True, got %+v", c)
+}
+
+// TestReconcileCNPGRestore_BootstrapDisableTransientErrorRequeues guards the
+// grace window on the disable step: the health check wins BEFORE the restore
+// deadline on purpose, so recovery may legitimately have spent the whole
+// deadline by the time bootstrap is cleared. The disable step must therefore be
+// bounded from RecoveryConverged's LastTransitionTime, not from StartedAt - or a
+// single transient error on the first disable attempt (StartedAt already past
+// the deadline) would terminate the restore Failed, which on a resubmit lets the
+// purge-guard delete the healthy restored Cluster. A transient failure right
+// after convergence must requeue, not fail.
+func TestReconcileCNPGRestore_BootstrapDisableTransientErrorRequeues(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+		cnpgBkName  = "cnpgbk"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+	// StartedAt is well past the 30m restore deadline: a StartedAt-based bound
+	// would fail immediately; convergence just happened, so the disable window is
+	// still open and a transient error must requeue.
+	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
+	convergedAt := metav1.Now()
+
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+			StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+			DriverMetadata: map[string]string{
+				cnpgServerNameKey:      appName,
+				cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+				cnpgBackupNameKey:      cnpgBkName,
+			},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+	}
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+			BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+		}},
+	}
+	healthyCluster := &cnpgtypes.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, CreationTimestamp: metav1.NewTime(startedAt.Add(time.Minute))},
+		Spec:       cnpgtypes.ClusterSpec{Bootstrap: &cnpgtypes.BootstrapConfiguration{Recovery: &cnpgtypes.RecoverySource{Source: appName}}},
+		Status:     cnpgtypes.ClusterStatus{Phase: cnpgClusterHealthyPhase},
+	}
+	app := newPostgresApp(appName, ns)
+	app.Spec.Bootstrap.Enabled = true
+	app.Spec.Bootstrap.OldName = appName
+	sa := startedAt
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+		Status: backupsv1alpha1.RestoreJobStatus{
+			StartedAt: &sa,
+			Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+			Conditions: []metav1.Condition{
+				{Type: restoreCondTargetPurged, Status: metav1.ConditionTrue, Reason: "ClusterPurged", LastTransitionTime: startedAt, Message: "purged"},
+				{Type: restoreCondRecoveryConverged, Status: metav1.ConditionTrue, Reason: "RecoveryConverged", LastTransitionTime: convergedAt, Message: "converged"},
+			},
+		},
+	}
+
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = strategyv1alpha1.AddToScheme(s)
+	_ = cnpgtypes.AddToScheme(s)
+	_ = postgresapp.AddToScheme(s)
+	c := clientfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(backup, restoreJob, strategy, app, healthyCluster).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, ok := obj.(*postgresapp.Postgres); ok {
+					return fmt.Errorf("injected transient bootstrap-disable failure")
+				}
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+
+	rj := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+		t.Fatalf("get seeded RestoreJob: %v", err)
+	}
+	res, err := r.reconcileCNPGRestore(ctx, rj, backup)
+	if err != nil {
+		t.Fatalf("reconcileCNPGRestore: %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Fatalf("expected a requeue after a transient disable failure, got %+v", res)
+	}
+
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, got); err != nil {
+		t.Fatalf("get RestoreJob after reconcile: %v", err)
+	}
+	if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("a transient disable failure within the post-convergence window must requeue, not Fail; got phase %q", got.Status.Phase)
+	}
+}
+
+// TestReconcileCNPGRestore_BootstrapDisableShortTimeoutHonorsGraceFloor is the
+// regression guard for the grace-window floor. A tenant sets
+// restoreTimeoutSeconds:60 to fail fast on a stuck recovery; recovery actually
+// converged 90s ago and the disable step is now hitting a transient error.
+// Without the floor the disable grace collapses to 60s (the recovery timeout),
+// so 90s-since-convergence terminates the restore Failed on a blip - and a
+// resubmit's purge-guard would then delete the healthy restored Cluster. With
+// the floor (cnpgPostConvergenceGraceMin) the window stays open and the
+// transient error requeues. Reverting effectiveBootstrapDisableGrace back to
+// effectiveRestoreDeadline turns this red.
+func TestReconcileCNPGRestore_BootstrapDisableShortTimeoutHonorsGraceFloor(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+		cnpgBkName  = "cnpgbk"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
+	// Converged 90s ago: past the tenant's 60s restoreTimeoutSeconds but well
+	// within the 5m post-convergence floor.
+	convergedAt := metav1.NewTime(time.Now().Add(-90 * time.Second))
+
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+			StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+			DriverMetadata: map[string]string{
+				cnpgServerNameKey:      appName,
+				cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+				cnpgBackupNameKey:      cnpgBkName,
+			},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+	}
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+			BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+		}},
+	}
+	healthyCluster := &cnpgtypes.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, CreationTimestamp: metav1.NewTime(startedAt.Add(time.Minute))},
+		Spec:       cnpgtypes.ClusterSpec{Bootstrap: &cnpgtypes.BootstrapConfiguration{Recovery: &cnpgtypes.RecoverySource{Source: appName}}},
+		Status:     cnpgtypes.ClusterStatus{Phase: cnpgClusterHealthyPhase},
+	}
+	app := newPostgresApp(appName, ns)
+	app.Spec.Bootstrap.Enabled = true
+	app.Spec.Bootstrap.OldName = appName
+	sa := startedAt
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "bk"},
+			Options:   &runtime.RawExtension{Raw: []byte(`{"restoreTimeoutSeconds":60}`)},
+		},
+		Status: backupsv1alpha1.RestoreJobStatus{
+			StartedAt: &sa,
+			Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+			Conditions: []metav1.Condition{
+				{Type: restoreCondTargetPurged, Status: metav1.ConditionTrue, Reason: "ClusterPurged", LastTransitionTime: startedAt, Message: "purged"},
+				{Type: restoreCondRecoveryConverged, Status: metav1.ConditionTrue, Reason: "RecoveryConverged", LastTransitionTime: convergedAt, Message: "converged"},
+			},
+		},
+	}
+
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = strategyv1alpha1.AddToScheme(s)
+	_ = cnpgtypes.AddToScheme(s)
+	_ = postgresapp.AddToScheme(s)
+	c := clientfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(backup, restoreJob, strategy, app, healthyCluster).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, ok := obj.(*postgresapp.Postgres); ok {
+					return fmt.Errorf("injected transient bootstrap-disable failure")
+				}
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+
+	rj := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+		t.Fatalf("get seeded RestoreJob: %v", err)
+	}
+	res, err := r.reconcileCNPGRestore(ctx, rj, backup)
+	if err != nil {
+		t.Fatalf("reconcileCNPGRestore: %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Fatalf("expected a requeue within the floored grace window, got %+v", res)
+	}
+
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, got); err != nil {
+		t.Fatalf("get RestoreJob after reconcile: %v", err)
+	}
+	if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("a short restoreTimeoutSeconds must not shrink the disable grace below the floor; a blip 90s after convergence must requeue, got phase %q", got.Status.Phase)
 	}
 }
 
@@ -2342,18 +2790,10 @@ func TestReconcileCNPGRestore_HealthyPastDeadlineSucceeds(t *testing.T) {
 		},
 	}
 
-	rj := &backupsv1alpha1.RestoreJob{}
-	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
-		t.Fatalf("get seeded RestoreJob: %v", err)
-	}
-	if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
-		t.Fatalf("reconcileCNPGRestore: %v", err)
-	}
-
-	got := &backupsv1alpha1.RestoreJob{}
-	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, got); err != nil {
-		t.Fatalf("get RestoreJob after reconcile: %v", err)
-	}
+	// Two reconciles to terminal (latch, then disable-bootstrap + Succeeded);
+	// the injected readPodLog still fails the test if the deadline/classification
+	// branch runs on either pass, proving health short-circuits regardless.
+	got := reconcileCNPGRestoreToTerminal(t, ctx, r, c, backup, ns, "rj")
 	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
 		t.Fatalf("expected phase Succeeded (healthy cluster past deadline), got %q (msg=%q)", got.Status.Phase, got.Status.Message)
 	}
@@ -2565,4 +3005,33 @@ func newCNPGStrategyTestClient(t *testing.T, objs ...client.Object) client.Clien
 		WithObjects(objs...).
 		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
 		Build()
+}
+
+// reconcileCNPGRestoreToTerminal drives reconcileCNPGRestore until the
+// RestoreJob reaches a terminal phase (Succeeded/Failed) or a small iteration
+// bound is hit. The success path is multi-step - it latches RecoveryConverged
+// on one reconcile and disables bootstrap + marks Succeeded on the next - so a
+// single reconcile no longer reaches the verdict. Re-fetching between passes
+// mirrors how the controller-runtime requeue would re-enter Reconcile.
+func reconcileCNPGRestoreToTerminal(t *testing.T, ctx context.Context, r *RestoreJobReconciler, c client.Client, backup *backupsv1alpha1.Backup, ns, name string) *backupsv1alpha1.RestoreJob {
+	t.Helper()
+	got := &backupsv1alpha1.RestoreJob{}
+	for i := 0; i < 8; i++ {
+		rj := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, rj); err != nil {
+			t.Fatalf("get RestoreJob: %v", err)
+		}
+		if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+			t.Fatalf("reconcileCNPGRestore: %v", err)
+		}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, got); err != nil {
+			t.Fatalf("get RestoreJob after reconcile: %v", err)
+		}
+		if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded ||
+			got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+			return got
+		}
+	}
+	t.Fatalf("RestoreJob did not reach a terminal phase; last phase %q", got.Status.Phase)
+	return got
 }

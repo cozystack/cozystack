@@ -52,7 +52,7 @@ type ConfigSpec struct {
 	// Read-replica autoscaling configuration.
 	// +kubebuilder:default:={}
 	Autoscaling Autoscaling `json:"autoscaling"`
-	// Users configuration map.
+	// Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the chart; the live password lives only in the Secret.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
 	// Databases configuration map.
@@ -210,8 +210,6 @@ type TLS struct {
 }
 
 type User struct {
-	// Password for the user.
-	Password string `json:"password,omitempty"`
 	// Whether the user has replication privileges.
 	Replication bool `json:"replication,omitempty"`
 }

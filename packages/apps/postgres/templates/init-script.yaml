@@ -7,10 +7,31 @@
   {{- end }}
 {{- end }}
 
+{{/*
+  Reject a username outside the Secret-key charset before it is interpolated
+  into the credentials Secret key, the init-script shell (pw=$(cat "/credentials/<user>"))
+  and the role SQL. The apiserver already rejects such a name as an invalid
+  Secret data key, but only once Flux applies the render, as an opaque "Secret is
+  invalid" error; failing here names the offending username and keeps a shell
+  metacharacter from ever reaching the script. The check mirrors k8s IsConfigMapKey
+  in full — the charset plus its rejection of ".", of any name starting with ".."
+  (so "..", "..foo" and "..." all go), and of names over 253 chars — so it rejects
+  nothing that could otherwise install, and no legal-charset name slips through to
+  fail later with the opaque apiserver error this guard exists to replace.
+*/}}
 {{- range $user, $u := .Values.users }}
-  {{- if $u.password }}
-    {{- $_ := set $passwords $user $u.password }}
-  {{- else if not (index $passwords $user) }}
+  {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $user)) (eq $user ".") (hasPrefix ".." $user) (gt (len $user) 253) }}
+    {{- fail (printf "invalid username %q: a username may contain only letters, digits and the characters -._ , must not be \".\" or start with \"..\", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)" $user) }}
+  {{- end }}
+{{- end }}
+
+{{/*
+  Passwords are always chart-generated and preserved across reconciles via the
+  lookup above: a user keeps whatever password is already stored in the Secret,
+  and only a user without one yet gets a freshly generated value.
+*/}}
+{{- range $user, $u := .Values.users }}
+  {{- if not (index $passwords $user) }}
     {{- $_ := set $passwords $user (randAlphaNum 16) }}
   {{- end }}
 {{- end }}
@@ -20,6 +41,16 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Release.Name }}-credentials
+  {{- if .Values.bootstrap.enabled }}
+  annotations:
+    # During a restore the roles recovered from the backup keep their original
+    # password hashes, but this Secret holds freshly generated passwords and the
+    # init-job that would apply them (ALTER ROLE) is skipped while bootstrap is
+    # on. So the values below do NOT authenticate yet; they converge once the app
+    # leaves bootstrap and the init-job runs. Flag it so a reader (dashboard,
+    # tenant) does not treat the advertised password as usable mid-restore.
+    postgres.cozystack.io/credentials-pending: "true"
+  {{- end }}
 stringData:
   {{- range $user, $u := .Values.users }}
   {{ quote $user }}: {{ quote (index $passwords $user) }}
@@ -46,14 +77,21 @@ stringData:
 
     echo "== create users"
     {{- if and .Values.users (not (hasKey .Values.users "postgres")) }}
-    psql -v ON_ERROR_STOP=1 <<\EOT
     {{- range $user, $u := .Values.users }}
+    # Read the password from the mounted {{ $.Release.Name }}-credentials Secret at
+    # run time rather than rendering it into this script: the init-script Secret is
+    # stored verbatim in the Helm release manifest and kept for MaxHistory
+    # revisions, so a literal password here would linger in cleartext history a
+    # tenant cannot scrub. psql's :'pw' quotes and escapes the value, so it is
+    # applied safely whatever characters it contains.
+    pw=$(cat "/credentials/{{ $user }}")
+    psql -v ON_ERROR_STOP=1 -v pw="$pw" <<\EOT
     SELECT 'CREATE ROLE "{{ $user }}" LOGIN INHERIT;'
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $user }}')\gexec
-    ALTER ROLE "{{ $user }}" WITH PASSWORD '{{ index $passwords $user }}' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }};
+    ALTER ROLE "{{ $user }}" WITH PASSWORD :'pw' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }};
     COMMENT ON ROLE "{{ $user }}" IS 'user managed by helm';
-    {{- end }}
     EOT
+    {{- end }}
     {{- else if and .Values.users (hasKey .Values.users "postgres") }}
     {{- fail "`users.postgres` is forbidden by policy. Use a different username." }}
     {{- end }}

@@ -1,0 +1,29 @@
+suite: MariaDB User CR quotes a YAML-special username
+
+# The credentials Secret quotes each key (secret.yaml), so a Secret key is always
+# a string. The User CR must reference the same string. A username that is a bare
+# YAML scalar — a number like `123`, or `true`/`false`/`no` — renders unquoted to a
+# non-string, so spec.name and passwordSecretKeyRef.key diverge from the quoted
+# Secret key and the operator cannot find the password. Both must be quoted.
+
+release:
+  name: mariadb-test
+  namespace: tenant-test
+
+templates:
+  - templates/user.yaml
+
+tests:
+  - it: renders a numeric username as a string in name and passwordSecretKeyRef.key
+    template: templates/user.yaml
+    set:
+      users:
+        "123":
+          maxUserConnections: 10
+    asserts:
+      - equal:
+          path: spec.name
+          value: "123"
+      - equal:
+          path: spec.passwordSecretKeyRef.key
+          value: "123"
