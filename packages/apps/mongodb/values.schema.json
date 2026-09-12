@@ -311,6 +311,11 @@
           "description": "Cron schedule for automated backups.",
           "type": "string",
           "default": "0 2 * * *"
+        },
+        "useSystemBucket": {
+          "description": "Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to \u003cnamespace\u003e/\u003capplication\u003e. See docs/operations/backup-classes.md.",
+          "type": "boolean",
+          "default": false
         }
       }
     },

@@ -125,8 +125,8 @@ func TestPsmdbBackupPrecondition(t *testing.T) {
 // deleted together with the source app. The selector prefers the source's
 // storage name, then the chart default, then a sole storage.
 func TestPsmdbTargetCredentialsSecret(t *testing.T) {
-	s3Storage := func(secret string) runtime.RawExtension {
-		return runtime.RawExtension{Raw: []byte(fmt.Sprintf(`{"type":"s3","s3":{"credentialsSecret":%q}}`, secret))}
+	s3Storage := func(bucket, secret string) runtime.RawExtension {
+		return runtime.RawExtension{Raw: []byte(fmt.Sprintf(`{"type":"s3","s3":{"bucket":%q,"credentialsSecret":%q}}`, bucket, secret))}
 	}
 	clusterWith := func(storages map[string]runtime.RawExtension) *psmdbtypes.PerconaServerMongoDB {
 		return &psmdbtypes.PerconaServerMongoDB{
@@ -136,48 +136,135 @@ func TestPsmdbTargetCredentialsSecret(t *testing.T) {
 		}
 	}
 	cases := []struct {
-		name      string
-		storages  map[string]runtime.RawExtension
-		preferred string
-		want      string
+		name       string
+		storages   map[string]runtime.RawExtension
+		preferred  string
+		wantBucket string
+		want       string
 	}{
 		{
-			name:      "preferred storage wins",
-			storages:  map[string]runtime.RawExtension{"s3-storage": s3Storage("target-creds"), "other": s3Storage("other-creds")},
-			preferred: "s3-storage",
-			want:      "target-creds",
+			name:       "preferred storage on the source bucket wins",
+			storages:   map[string]runtime.RawExtension{"s3-storage": s3Storage("shared", "target-creds"), "other": s3Storage("shared", "other-creds")},
+			preferred:  "s3-storage",
+			wantBucket: "shared",
+			want:       "target-creds",
 		},
 		{
-			name:      "falls back to chart default when preferred absent",
-			storages:  map[string]runtime.RawExtension{"s3-storage": s3Storage("target-creds")},
-			preferred: "nonexistent",
-			want:      "target-creds",
+			name:       "falls back to chart default when preferred absent",
+			storages:   map[string]runtime.RawExtension{"s3-storage": s3Storage("shared", "target-creds")},
+			preferred:  "nonexistent",
+			wantBucket: "shared",
+			want:       "target-creds",
 		},
 		{
-			name:     "sole non-default storage is used",
-			storages: map[string]runtime.RawExtension{"custom": s3Storage("custom-creds")},
-			want:     "custom-creds",
+			name:       "sole non-default storage on the source bucket is used",
+			storages:   map[string]runtime.RawExtension{"custom": s3Storage("shared", "custom-creds")},
+			wantBucket: "shared",
+			want:       "custom-creds",
 		},
 		{
-			name:     "ambiguous (multiple, none default, no preferred) yields empty",
-			storages: map[string]runtime.RawExtension{"a": s3Storage("a-creds"), "b": s3Storage("b-creds")},
-			want:     "",
+			name:       "different bucket is NOT adopted (cross-flow guard)",
+			storages:   map[string]runtime.RawExtension{"s3-storage": s3Storage("platform-bucket", "cozy-backups-creds")},
+			preferred:  "s3-storage",
+			wantBucket: "tenant-bucket",
+			want:       "",
 		},
 		{
-			name:     "no storages yields empty",
-			storages: nil,
-			want:     "",
+			name:       "empty wantBucket yields empty (unknown source bucket, no swap)",
+			storages:   map[string]runtime.RawExtension{"s3-storage": s3Storage("shared", "target-creds")},
+			preferred:  "s3-storage",
+			wantBucket: "",
+			want:       "",
 		},
 		{
-			name:     "non-s3 storage yields empty",
-			storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"azure","azure":{"container":"c"}}`)}},
-			want:     "",
+			name:       "ambiguous (multiple, none default, no preferred) yields empty",
+			storages:   map[string]runtime.RawExtension{"a": s3Storage("shared", "a-creds"), "b": s3Storage("shared", "b-creds")},
+			wantBucket: "shared",
+			want:       "",
+		},
+		{
+			name:       "no storages yields empty",
+			storages:   nil,
+			wantBucket: "shared",
+			want:       "",
+		},
+		{
+			name:       "non-s3 storage yields empty",
+			storages:   map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"azure","azure":{"container":"c"}}`)}},
+			wantBucket: "shared",
+			want:       "",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := psmdbTargetCredentialsSecret(clusterWith(tc.storages), tc.preferred); got != tc.want {
+			if got := psmdbTargetCredentialsSecret(clusterWith(tc.storages), tc.preferred, tc.wantBucket); got != tc.want {
 				t.Errorf("psmdbTargetCredentialsSecret: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMongoDBRestoreCredentialsSecret pins the restore credential-swap decision
+// across the four {legacy,system}×{legacy,system} flow combinations, so neither
+// cross-flow guard can be dropped unnoticed: the projected-secret skip (a system
+// source keeps cozy-backups-creds rather than adopting a legacy target's own
+// Secret) and the same-bucket match (a legacy source is not handed a credential
+// for a bucket its archive does not live in).
+func TestMongoDBRestoreCredentialsSecret(t *testing.T) {
+	s3Storage := func(bucket, secret string) runtime.RawExtension {
+		return runtime.RawExtension{Raw: []byte(fmt.Sprintf(`{"type":"s3","s3":{"bucket":%q,"credentialsSecret":%q}}`, bucket, secret))}
+	}
+	target := func(storages map[string]runtime.RawExtension) *psmdbtypes.PerconaServerMongoDB {
+		return &psmdbtypes.PerconaServerMongoDB{
+			Spec: psmdbtypes.PerconaServerMongoDBSpec{
+				Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{Storages: storages},
+			},
+		}
+	}
+	src := func(bucket, cred string) *psmdbtypes.BackupSource {
+		return &psmdbtypes.BackupSource{StorageName: "s3-storage", S3: &psmdbtypes.BackupStorageS3{Bucket: bucket, CredentialsSecret: cred}}
+	}
+	cases := []struct {
+		name   string
+		source *psmdbtypes.BackupSource
+		target *psmdbtypes.PerconaServerMongoDB
+		want   string
+	}{
+		{
+			name:   "legacy source -> legacy target on the same bucket: swap to target creds (DR after source delete)",
+			source: src("tenant-bucket", "src-s3-creds"),
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("tenant-bucket", "target-s3-creds")}),
+			want:   "target-s3-creds",
+		},
+		{
+			name:   "legacy source -> legacy target on a different bucket: keep source creds (no cross-bucket swap)",
+			source: src("tenant-bucket", "src-s3-creds"),
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("other-bucket", "target-s3-creds")}),
+			want:   "src-s3-creds",
+		},
+		{
+			name:   "system source -> legacy target: keep projected cozy-backups-creds (outlives source, reads the platform bucket)",
+			source: src("cozy-backups-PLATFORM", "cozy-backups-creds"),
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("tenant-bucket", "target-s3-creds")}),
+			want:   "cozy-backups-creds",
+		},
+		{
+			name:   "legacy source -> system-bucket target: keep source creds (target storage is on the platform bucket, not the archive's)",
+			source: src("tenant-bucket", "src-s3-creds"),
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("cozy-backups-PLATFORM", "cozy-backups-creds")}),
+			want:   "src-s3-creds",
+		},
+		{
+			name:   "no s3 source: empty (caller keeps the source reference)",
+			source: &psmdbtypes.BackupSource{StorageName: "s3-storage"},
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("tenant-bucket", "target-s3-creds")}),
+			want:   "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mongodbRestoreCredentialsSecret(tc.source, tc.target); got != tc.want {
+				t.Errorf("mongodbRestoreCredentialsSecret: got %q want %q", got, tc.want)
 			}
 		})
 	}
@@ -457,7 +544,7 @@ func TestMarshalUnmarshalMongoDBBackupSnapshot_RoundTrip(t *testing.T) {
 		},
 	}
 	rendered := &strategyv1alpha1.MongoDBTemplate{Type: "logical"}
-	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", map[string]string{"k": "v"})
+	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", map[string]string{"k": "v"}, false)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -479,6 +566,83 @@ func TestMarshalUnmarshalMongoDBBackupSnapshot_RoundTrip(t *testing.T) {
 	// so this is structurally guaranteed; assert the reference is preserved.
 	if snap.S3.Bucket != "bkt" {
 		t.Errorf("snapshot bucket mismatch: %q", snap.S3.Bucket)
+	}
+}
+
+// TestMarshalMongoDBBackupSnapshot_SystemBucketFallback guards the
+// useSystemBucket restore path: when the operator Backup status carries no S3
+// echo, the snapshot must fall back to the strategy's injected coordinates
+// (rendered.S3) so restore can rebuild backupSource - with credentialsSecret
+// defaulting to cozy-backups-creds.
+func TestMarshalMongoDBBackupSnapshot_SystemBucketFallback(t *testing.T) {
+	mdbBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			Destination: "s3://cozybkt/tenant-root/mongodb-src/2026-08-26T00:00:00Z",
+			// S3 intentionally nil: operator did not echo storage config.
+		},
+	}
+	rendered := &strategyv1alpha1.MongoDBTemplate{
+		Type: "logical",
+		S3: &strategyv1alpha1.MongoDBStorageS3{
+			Bucket:      "cozybkt",
+			EndpointURL: "https://s3.example.org",
+			Prefix:      "tenant-root/mongodb-src",
+			Region:      "us-east-1",
+			// CredentialsSecret intentionally empty -> defaults below.
+		},
+	}
+	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", nil, true)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	snap, err := unmarshalMongoDBBackupSnapshot(raw)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if snap.S3 == nil {
+		t.Fatal("snapshot S3 must be populated from rendered.S3 when the operator echo is empty")
+	}
+	if snap.S3.CredentialsSecret != "cozy-backups-creds" {
+		t.Errorf("credentialsSecret must default to cozy-backups-creds; got %q", snap.S3.CredentialsSecret)
+	}
+	if snap.S3.EndpointURL != "https://s3.example.org" || snap.S3.Bucket != "cozybkt" {
+		t.Errorf("snapshot S3 coords mismatch: %#v", snap.S3)
+	}
+}
+
+// TestMarshalMongoDBBackupSnapshot_LegacyNoFallback pins the other half of the
+// gate: a legacy app (useSystemBucket=false) whose operator echoed no S3 must
+// leave the snapshot S3 nil even though the shared cozy-default strategy now
+// carries platform coordinates. Recording the platform bucket for an archive
+// the tenant wrote to its own bucket would send restore to the wrong place.
+func TestMarshalMongoDBBackupSnapshot_LegacyNoFallback(t *testing.T) {
+	mdbBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			Destination: "s3://tenant-own-bucket/mongodb-src/2026-08-26T00:00:00Z",
+			// S3 nil: operator echoed nothing, as on a legacy app whose storage
+			// lives on the app CR.
+		},
+	}
+	rendered := &strategyv1alpha1.MongoDBTemplate{
+		Type: "logical",
+		S3: &strategyv1alpha1.MongoDBStorageS3{
+			Bucket:      "cozy-backups-PLATFORM",
+			EndpointURL: "https://platform-s3.example",
+		},
+	}
+	raw, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, "s3-storage", nil, false)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	snap, err := unmarshalMongoDBBackupSnapshot(raw)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if snap.S3 != nil {
+		t.Fatalf("legacy snapshot must not adopt the platform coordinates; got %#v", snap.S3)
+	}
+	if snap.Destination != "s3://tenant-own-bucket/mongodb-src/2026-08-26T00:00:00Z" {
+		t.Errorf("legacy destination must be preserved; got %q", snap.Destination)
 	}
 }
 
@@ -533,7 +697,7 @@ func TestResolveMongoDBBackupSource_SnapshotFallback(t *testing.T) {
 			S3:          &psmdbtypes.BackupStorageS3{Bucket: "bkt", ForcePathStyle: &fps},
 		},
 	}
-	raw, err := marshalMongoDBBackupSnapshot(snapBackup, &strategyv1alpha1.MongoDBTemplate{Type: "logical"}, "s3-storage", nil)
+	raw, err := marshalMongoDBBackupSnapshot(snapBackup, &strategyv1alpha1.MongoDBTemplate{Type: "logical"}, "s3-storage", nil, false)
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -647,7 +811,7 @@ func TestCreateMongoDBBackupArtifact_ArtifactShape(t *testing.T) {
 			},
 		}
 
-		artefact, err := r.createMongoDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered, "s3-storage")
+		artefact, err := r.createMongoDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered, "s3-storage", false)
 		if err != nil {
 			t.Fatalf("createMongoDBBackupArtifact: %v", err)
 		}
@@ -695,7 +859,7 @@ func TestCreateMongoDBBackupArtifact_ArtifactShape(t *testing.T) {
 			Status:     psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateReady},
 		}
 
-		artefact, err := r.createMongoDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered, "s3-storage")
+		artefact, err := r.createMongoDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered, "s3-storage", false)
 		if err != nil {
 			t.Fatalf("createMongoDBBackupArtifact: %v", err)
 		}
@@ -704,6 +868,109 @@ func TestCreateMongoDBBackupArtifact_ArtifactShape(t *testing.T) {
 		}
 		if _, ok := artefact.Spec.DriverMetadata[psmdbDestinationKey]; ok {
 			t.Errorf("no destination must omit %s from driverMetadata", psmdbDestinationKey)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// System-bucket storage injection
+// ---------------------------------------------------------------------------
+
+// TestShouldInjectMongoDBSystemStorage pins the injection gate: inject only when
+// the app opted into the system bucket AND the strategy carries S3 coordinates.
+// The flag-false branch is the guarantee that a legacy app is never touched,
+// regardless of what storage happens to be on the live cluster.
+func TestShouldInjectMongoDBSystemStorage(t *testing.T) {
+	s3 := &strategyv1alpha1.MongoDBStorageS3{Bucket: "b", EndpointURL: "https://s3"}
+	cases := []struct {
+		name            string
+		useSystemBucket bool
+		rendered        *strategyv1alpha1.MongoDBTemplate
+		want            bool
+	}{
+		{
+			name:            "useSystemBucket flow with strategy coordinates: inject",
+			useSystemBucket: true,
+			rendered:        &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage", S3: s3},
+			want:            true,
+		},
+		{
+			name:            "legacy app (flag off): skip even when the shared strategy carries coordinates",
+			useSystemBucket: false,
+			rendered:        &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage", S3: s3},
+			want:            false,
+		},
+		{
+			name:            "useSystemBucket flag but strategy carries no coordinates: skip (nothing to inject)",
+			useSystemBucket: true,
+			rendered:        &strategyv1alpha1.MongoDBTemplate{StorageName: "s3-storage"},
+			want:            false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldInjectMongoDBSystemStorage(tc.useSystemBucket, tc.rendered); got != tc.want {
+				t.Fatalf("shouldInjectMongoDBSystemStorage = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildMongoDBSystemStorageEntry pins the injected storage-entry shape: the
+// {"type":"s3","s3":{…}} envelope, the empty-credentialsSecret default, and the
+// forcePathStyle omit-when-nil (a nil pointer must not surface as
+// forcePathStyle:false the app never chose).
+func TestBuildMongoDBSystemStorageEntry(t *testing.T) {
+	t.Run("defaults credentialsSecret and omits forcePathStyle when nil", func(t *testing.T) {
+		entry := buildMongoDBSystemStorageEntry(&strategyv1alpha1.MongoDBStorageS3{
+			Bucket:      "sys-bucket",
+			EndpointURL: "https://s3.example",
+			Region:      "us-east-1",
+			Prefix:      "mongodb-src",
+		})
+		if entry["type"] != "s3" {
+			t.Fatalf("type = %v, want s3", entry["type"])
+		}
+		s3, ok := entry["s3"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("s3 block is not a map: %#v", entry["s3"])
+		}
+		if s3["credentialsSecret"] != "cozy-backups-creds" {
+			t.Errorf("credentialsSecret = %v, want cozy-backups-creds", s3["credentialsSecret"])
+		}
+		if _, present := s3["forcePathStyle"]; present {
+			t.Errorf("forcePathStyle must be omitted when the pointer is nil; got %v", s3["forcePathStyle"])
+		}
+		for k, want := range map[string]interface{}{
+			"bucket":                "sys-bucket",
+			"endpointUrl":           "https://s3.example",
+			"region":                "us-east-1",
+			"prefix":                "mongodb-src",
+			"insecureSkipTLSVerify": false,
+		} {
+			if s3[k] != want {
+				t.Errorf("s3[%q] = %v, want %v", k, s3[k], want)
+			}
+		}
+	})
+
+	t.Run("honours explicit credentialsSecret and forcePathStyle", func(t *testing.T) {
+		fps := true
+		entry := buildMongoDBSystemStorageEntry(&strategyv1alpha1.MongoDBStorageS3{
+			Bucket:                "b",
+			CredentialsSecret:     "custom-creds",
+			ForcePathStyle:        &fps,
+			InsecureSkipTLSVerify: true,
+		})
+		s3 := entry["s3"].(map[string]interface{})
+		if s3["credentialsSecret"] != "custom-creds" {
+			t.Errorf("credentialsSecret = %v, want custom-creds", s3["credentialsSecret"])
+		}
+		if s3["forcePathStyle"] != true {
+			t.Errorf("forcePathStyle = %v, want true", s3["forcePathStyle"])
+		}
+		if s3["insecureSkipTLSVerify"] != true {
+			t.Errorf("insecureSkipTLSVerify = %v, want true", s3["insecureSkipTLSVerify"])
 		}
 	})
 }

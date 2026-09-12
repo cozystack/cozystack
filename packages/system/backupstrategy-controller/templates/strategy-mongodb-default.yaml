@@ -1,22 +1,27 @@
 {{/*
-  cozy-default MongoDB strategy. Unlike the MariaDB / CNPG / Altinity
-  defaults, this Strategy carries NO bucket coordinates or credentials: the
-  Percona psmdb operator resolves the on-demand backup's storageName against
-  the source PerconaServerMongoDB CR's spec.backup.storages, so the S3 target
-  lives on the MongoDB application (declared by the chart as "s3-storage" when
-  backup.enabled=true), not here.
+  cozy-default MongoDB strategy. The Percona psmdb operator resolves the
+  on-demand backup's storageName against the source PerconaServerMongoDB CR's
+  spec.backup.storages. On the legacy flow that storage lives on the MongoDB
+  application (declared by the chart as "s3-storage" when backup.enabled=true,
+  with the tenant's own bucket/creds). On the useSystemBucket flow the app
+  chart cannot know the platform bucket/endpoint at render time, so this
+  Strategy carries the coordinates (the s3 block below) and the driver
+  SSA-injects them into the app's spec.backup.storages["s3-storage"] on every
+  BackupJob. Injection is keyed off the app's backup.useSystemBucket flag, not
+  off the live cluster's storage set: a legacy app leaves the flag false and is
+  never touched, so its own static "s3-storage" stays intact.
 
-  It is gated all the same, and NOT because it needs a bucket value. This chart
-  ships its own strategy.backups.cozystack.io CRDs as ordinary templates
-  (templates/crds.yaml globs definitions/*.yaml), and Helm resolves every
-  document in a release manifest through the cluster's RESTMapper in Build()
-  BEFORE it applies any of them. An ungated Strategy CR therefore has no
-  mapping while its CRD is still absent, Build() fails with "no matches for
-  kind", and the release applies ZERO objects — including the CRDs that would
-  have made the mapping resolve. Nothing recovers from that: every retry
-  renders the same manifest, so the failure is permanent rather than a race,
-  and Helm's kind sorter cannot help because it orders the apply, not the
-  Build.
+  It is gated on $bucketName — which the s3 block below now renders — and on
+  $crdEstablished for install ordering. This chart ships its own
+  strategy.backups.cozystack.io CRDs as ordinary templates (templates/crds.yaml
+  globs definitions/*.yaml), and Helm resolves every document in a release
+  manifest through the cluster's RESTMapper in Build() BEFORE it applies any of
+  them. An ungated Strategy CR therefore has no mapping while its CRD is still
+  absent, Build() fails with "no matches for kind", and the release applies
+  ZERO objects — including the CRDs that would have made the mapping resolve.
+  Nothing recovers from that: every retry renders the same manifest, so the
+  failure is permanent rather than a race, and Helm's kind sorter cannot help
+  because it orders the apply, not the Build.
 
   So this Strategy must be absent from any render whose cluster cannot yet map
   it, and there are TWO such renders, not one.
@@ -24,8 +29,7 @@
   A fresh install is the first. $bucketName is empty until the COSI BucketClaim
   status is reconciled (see templates/_helpers.tpl), which is exactly the window
   where the CRDs are being applied; by the time DefaultObjectsGate forces a
-  second revision the CRDs exist and the mapping resolves. The seven sibling
-  strategies get that for free by needing the bucket name.
+  second revision the CRDs exist and the mapping resolves.
 
   Adding this kind to an ALREADY-INSTALLED chart is the second, and the bucket
   gate is no help there: the bucket name resolved releases ago, so the first
@@ -38,9 +42,10 @@
   afterwards.
 
   Precondition (surfaced by the driver as a clear Ready=False, not a silent
-  hang): the MongoDB application must be deployed with backup.enabled=true so
-  the percona-backup-mongodb agents run and the "s3-storage" entry exists. See
-  docs/operations/backup-classes.md.
+  hang): the MongoDB application must have backup.enabled=true so the
+  percona-backup-mongodb agents run. On the legacy flow the "s3-storage" entry
+  must also already exist on the app; on the useSystemBucket flow the driver
+  injects it at BackupJob time. See docs/operations/backup-classes.md.
 */}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
 {{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "mongodbs.strategy.backups.cozystack.io") -}}
@@ -54,4 +59,18 @@ spec:
     storageName: s3-storage
     type: logical
     compressionType: gzip
+    # System-bucket coordinates the driver SSA-injects onto the source
+    # PerconaServerMongoDB's spec.backup.storages[s3-storage] when the app ran
+    # with backup.useSystemBucket=true (the chart then omits the static
+    # storage). A legacy app leaves the flag false and is never injected, so it
+    # keeps its own static s3-storage. endpointUrl carries the scheme from the
+    # endpoint helper so PBM's aws-sdk client gets a valid URL; credentials come
+    # from the projected cozy-backups-creds.
+    s3:
+      bucket: {{ $bucketName | quote }}
+      endpointUrl: {{ include "backupstrategy-controller.endpoint" . | quote }}
+      prefix: {{ printf "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}" | quote }}
+      region: {{ .Values.backupStorage.region | quote }}
+      credentialsSecret: cozy-backups-creds
+      forcePathStyle: {{ .Values.backupStorage.forcePathStyle }}
 {{- end -}}
