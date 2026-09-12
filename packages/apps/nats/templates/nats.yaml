@@ -17,6 +17,18 @@
   {{- end }}
 {{- end }}
 
+{{- $merge := dict }}
+{{- with .Values.config.merge }}
+  {{- $merge = deepCopy . }}
+{{- end }}
+{{- if $passwords }}
+  {{- $users := list }}
+  {{- range $username, $password := $passwords }}
+    {{- $users = append $users (dict "user" $username "password" $password) }}
+  {{- end }}
+  {{- $merge = mergeOverwrite $merge (dict "accounts" (dict "A" (dict "users" $users))) }}
+{{- end }}
+
 {{- if .Values.users }}
 apiVersion: v1
 kind: Secret
@@ -64,20 +76,9 @@ spec:
         secretName: {{ .Release.Name }}-ca
       {{- end }}
       config:
-        {{- if or $passwords .Values.config.merge }}
+        {{- with $merge }}
         merge:
-          {{- if $passwords }}
-          accounts:
-            A:
-              users:
-                {{- range $username, $password := $passwords }}
-                - user: "{{ $username }}"
-                  password: "{{ $password }}"
-                {{- end }}
-          {{- end }}
-          {{- with .Values.config.merge }}
           {{- toYaml . | nindent 10 }}
-          {{- end }}
         {{- end }}
         {{- with .Values.config.resolver }}
         resolver:
