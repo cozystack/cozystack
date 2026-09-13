@@ -1,0 +1,94 @@
+suite: PostgreSQL alerts for the tenant vmalert
+
+# One VMRule per release, in the release namespace where the tenant vmalert
+# selects it. The instances of a CloudNativePG cluster are the pods named
+# <release>-N (its PodMonitor adds no cluster label), so every expression
+# pins namespace and that pod pattern; every alert carries namespace,
+# service=<release> and a severity.
+
+templates:
+  - templates/vmrule.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: renders one VMRule for the release with the alert labels the portal expects
+    documentSelector:
+      path: kind
+      value: VMRule
+    asserts:
+      - equal:
+          path: metadata.name
+          value: pg-test
+      - equal:
+          path: spec.groups[0].name
+          value: postgres.pg-test
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 5
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: PostgresClusterUnavailable
+      - equal:
+          path: spec.groups[0].rules[0].labels
+          value:
+            namespace: tenant-test
+            service: pg-test
+            severity: critical
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: 'cnpg_collector_up\{\ namespace="tenant\-test",\ pod=\~"\^pg\-test\-\[0\-9\]\+\$"\}\ ==\ 1\)\ or\ vector\(0\)\)\ ==\ 0'
+      - equal:
+          path: spec.groups[0].rules[1].alert
+          value: PostgresInstanceDown
+      - equal:
+          path: spec.groups[0].rules[1].labels
+          value:
+            namespace: tenant-test
+            service: pg-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: 'cnpg_collector_up\{\ namespace="tenant\-test",\ pod=\~"\^pg\-test\-\[0\-9\]\+\$"\}\ ==\ 0'
+      - equal:
+          path: spec.groups[0].rules[2].alert
+          value: PostgresReplicationLagHigh
+      - equal:
+          path: spec.groups[0].rules[2].labels
+          value:
+            namespace: tenant-test
+            service: pg-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: 'cnpg_pg_replication_lag\{\ namespace="tenant\-test",\ pod=\~"\^pg\-test\-\[0\-9\]\+\$"\}\ >\ 300'
+      - equal:
+          path: spec.groups[0].rules[3].alert
+          value: PostgresWALArchiveFailing
+      - equal:
+          path: spec.groups[0].rules[3].labels
+          value:
+            namespace: tenant-test
+            service: pg-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[3].expr
+          pattern: 'cnpg_pg_stat_archiver_last_failed_time\{\ namespace="tenant\-test",\ pod=\~"\^pg\-test\-\[0\-9\]\+\$"\}\ >\ cnpg_pg_stat_archiver_last_archived_time'
+      - equal:
+          path: spec.groups[0].rules[4].alert
+          value: PostgresConnectionsNearMax
+      - equal:
+          path: spec.groups[0].rules[4].labels
+          value:
+            namespace: tenant-test
+            service: pg-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[4].expr
+          pattern: 'cnpg_pg_settings_setting\{\ namespace="tenant\-test",\ pod=\~"\^pg\-test\-\[0\-9\]\+\$",\ name="max_connections"\}\ >\ 0\.9'

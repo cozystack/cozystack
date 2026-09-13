@@ -1,0 +1,71 @@
+{{- /*
+  Alerts for this cluster, evaluated by the tenant vmalert (it selects every
+  VMRule in its own namespace). CloudNativePG publishes its metrics through
+  the PodMonitor the Cluster asks for (monitoring.enablePodMonitor), which the
+  VictoriaMetrics operator converts into a scrape; those series carry no
+  cluster label, so the instances of this release are the pods named
+  <release>-N, the same selector the CNPG dashboards use. Thresholds follow
+  the upstream CloudNativePG rules and stay conservative.
+*/ -}}
+{{- $sel := printf `namespace="%s", pod=~"^%s-[0-9]+$"` .Release.Namespace .Release.Name }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  groups:
+  - name: postgres.{{ .Release.Name }}
+    rules:
+    - alert: PostgresClusterUnavailable
+      expr: (count(cnpg_collector_up{ {{ $sel }}} == 1) or vector(0)) == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: PostgreSQL {{ .Release.Name }} has no instance reporting
+        description: No instance of PostgreSQL cluster {{ .Release.Name }} in {{ .Release.Namespace }} has reported metrics for 5 minutes; the cluster is down or every pod is unreachable.
+    - alert: PostgresInstanceDown
+      expr: cnpg_collector_up{ {{ $sel }}} == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: PostgreSQL instance {{ "{{ $labels.pod }}" }} is down
+        description: Instance {{ "{{ $labels.pod }}" }} of PostgreSQL cluster {{ .Release.Name }} has not answered its metrics collector for 5 minutes.
+    - alert: PostgresReplicationLagHigh
+      expr: cnpg_pg_replication_lag{ {{ $sel }}} > 300
+      for: 10m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: PostgreSQL replica {{ "{{ $labels.pod }}" }} lags by {{ "{{ $value | humanizeDuration }}" }}
+        description: Replica {{ "{{ $labels.pod }}" }} of PostgreSQL cluster {{ .Release.Name }} is more than 5 minutes behind the primary.
+    - alert: PostgresWALArchiveFailing
+      expr: cnpg_pg_stat_archiver_last_failed_time{ {{ $sel }}} > cnpg_pg_stat_archiver_last_archived_time{ {{ $sel }}}
+      for: 15m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: PostgreSQL {{ .Release.Name }} fails to archive WAL
+        description: The last WAL archive attempt of instance {{ "{{ $labels.pod }}" }} of PostgreSQL cluster {{ .Release.Name }} failed after the last success; backups and point-in-time recovery fall behind while this lasts.
+    - alert: PostgresConnectionsNearMax
+      expr: sum by (namespace, pod) (cnpg_backends_total{ {{ $sel }}}) / on (namespace, pod) cnpg_pg_settings_setting{ {{ $sel }}, name="max_connections"} > 0.9
+      for: 10m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: PostgreSQL instance {{ "{{ $labels.pod }}" }} uses {{ "{{ $value | humanizePercentage }}" }} of max_connections
+        description: Instance {{ "{{ $labels.pod }}" }} of PostgreSQL cluster {{ .Release.Name }} holds more than 90% of its max_connections; new clients will soon be refused.
