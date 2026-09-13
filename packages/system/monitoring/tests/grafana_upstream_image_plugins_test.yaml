@@ -46,7 +46,7 @@ tests:
           path: spec.deployment.spec.template.spec.containers[0].image
           value: mirror.example.com/docker.io/grafana/grafana:11.6.15@sha256:f739273dfed04760428fcfbfccd1752b3b7fc87ef0a3d5637e2e87cce151e1a2
 
-  - it: installs pinned plugins from the in-cluster grafana-dashboards server
+  - it: preinstalls pinned plugins from the in-cluster grafana-dashboards server, asynchronously
     set:
       _cluster:
         issuer-name: letsencrypt-prod
@@ -56,10 +56,65 @@ tests:
         host: example.org
         ingress: tenant-root
     asserts:
+      # Grafana's own preinstall (id@version@url), not the entrypoint's
+      # GF_INSTALL_PLUGINS: a download the server cannot serve is logged and
+      # Grafana starts without the plugin instead of exiting.
       - contains:
           path: spec.deployment.spec.template.spec.containers[0].env
           content:
+            name: GF_PLUGINS_PREINSTALL
+            value: "grafana-worldmap-panel@1.0.6@http://grafana-dashboards.cozy-grafana-operator.svc/plugins/grafana-worldmap-panel-1.0.6.zip,marcusolsson-dynamictext-panel@6.2.0@http://grafana-dashboards.cozy-grafana-operator.svc/plugins/marcusolsson-dynamictext-panel-6.2.0.zip,natel-discrete-panel@0.1.1@http://grafana-dashboards.cozy-grafana-operator.svc/plugins/natel-discrete-panel-0.1.1.zip,victoriametrics-logs-datasource@0.29.0@http://grafana-dashboards.cozy-grafana-operator.svc/plugins/victoriametrics-logs-datasource-0.29.0.zip"
+      - contains:
+          path: spec.deployment.spec.template.spec.containers[0].env
+          content:
+            name: GF_PLUGINS_PREINSTALL_ASYNC
+            value: "true"
+      - notContains:
+          path: spec.deployment.spec.template.spec.containers[0].env
+          content:
             name: GF_INSTALL_PLUGINS
-            value: "http://grafana-dashboards.cozy-grafana-operator.svc/plugins/grafana-worldmap-panel-1.0.6.zip;grafana-worldmap-panel,http://grafana-dashboards.cozy-grafana-operator.svc/plugins/marcusolsson-dynamictext-panel-6.2.0.zip;marcusolsson-dynamictext-panel,http://grafana-dashboards.cozy-grafana-operator.svc/plugins/natel-discrete-panel-0.1.1.zip;natel-discrete-panel,http://grafana-dashboards.cozy-grafana-operator.svc/plugins/victoriametrics-logs-datasource-0.29.0.zip;victoriametrics-logs-datasource"
+          any: true
       - notExists:
           path: spec.config.plugins
+
+  - it: grafana.plugins pins the list a platform's plugin server carries
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        gateway-enabled: "false"
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      grafana:
+        plugins:
+          victoriametrics-logs-datasource: "0.28.0"
+    asserts:
+      - contains:
+          path: spec.deployment.spec.template.spec.containers[0].env
+          content:
+            name: GF_PLUGINS_PREINSTALL
+            value: "victoriametrics-logs-datasource@0.28.0@http://grafana-dashboards.cozy-grafana-operator.svc/plugins/victoriametrics-logs-datasource-0.28.0.zip"
+
+  - it: an empty grafana.plugins disables the preinstall, the image's own default list included
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        gateway-enabled: "false"
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      grafana:
+        plugins: {}
+    asserts:
+      - contains:
+          path: spec.deployment.spec.template.spec.containers[0].env
+          content:
+            name: GF_PLUGINS_PREINSTALL_DISABLED
+            value: "true"
+      - notContains:
+          path: spec.deployment.spec.template.spec.containers[0].env
+          content:
+            name: GF_PLUGINS_PREINSTALL
+          any: true

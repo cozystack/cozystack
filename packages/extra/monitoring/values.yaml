@@ -153,6 +153,7 @@ alerta:
 
 ## @typedef {struct} Grafana - Grafana service configuration.
 ## @field {int} [replicas] - Grafana replicas. Unset, one for a tenant instance and two for the root instance.
+## @field {map[string]string} [plugins] - Grafana plugins to install at startup, plugin id to version, from the in-cluster grafana-dashboards server. Empty disables the install. Unset, the chart installs the VictoriaLogs datasource and the three panels the dashboards use; a platform whose grafana-dashboards server ships other versions pins them here.
 ## @field {GrafanaDB} [db] - Database configuration.
 ## @field {Resources} [resources] - Explicit requests and limits of Grafana. Unset, a tenant instance gets 128Mi requested and 512Mi limited, the root instance 256Mi and 1Gi.
 

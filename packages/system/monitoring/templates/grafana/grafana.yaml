@@ -201,7 +201,8 @@ spec:
                 packages/system/grafana-operator/images/grafana-dashboards/Dockerfile.
                 Tenant egress to that server is opened by the
                 allow-to-grafana-dashboards CiliumNetworkPolicy in
-                packages/apps/tenant.
+                packages/apps/tenant and by this chart's own
+                allow-grafana-to-plugin-server policy.
                   * victoriametrics-logs-datasource — the VictoriaLogs
                     datasource (signed, the reason the image was rebuilt);
                   * the three panels reproduce the set previously vendored in
@@ -210,20 +211,42 @@ spec:
                 Plugins land in the default GF_PATHS_PLUGINS
                 (/var/lib/grafana/plugins), which is writable in the upstream
                 image, so no custom plugins path is needed.
+
+                The install goes through Grafana's own plugins.preinstall
+                (id@version@url) rather than the image entrypoint's
+                GF_INSTALL_PLUGINS: the entrypoint exits on a failed download,
+                so a plugin server that does not carry a version (a platform
+                whose grafana-operator package is older than this chart) kept
+                the pod crash-looping and the rollout stuck on the previous
+                ReplicaSet. Preinstall runs asynchronously, logs a failed
+                download and lets Grafana serve without that plugin. The list
+                is grafana.plugins, so such a platform can pin what its server
+                has; an empty list disables the preinstall altogether (the
+                image's own default list included).
               */}}
               {{- $pluginsURL := "http://grafana-dashboards.cozy-grafana-operator.svc/plugins" }}
-              {{- $plugins := dict
+              {{- $plugins := dig "plugins" nil (.Values.grafana | default dict) }}
+              {{- if kindIs "invalid" $plugins }}
+              {{- $plugins = dict
                     "victoriametrics-logs-datasource" "0.29.0"
                     "natel-discrete-panel" "0.1.1"
                     "grafana-worldmap-panel" "1.0.6"
                     "marcusolsson-dynamictext-panel" "6.2.0"
               }}
+              {{- end }}
               {{- $specs := list }}
               {{- range $id, $ver := $plugins }}
-              {{- $specs = append $specs (printf "%s/%s-%s.zip;%s" $pluginsURL $id $ver $id) }}
+              {{- $specs = append $specs (printf "%s@%s@%s/%s-%s.zip" $id $ver $pluginsURL $id $ver) }}
               {{- end }}
-              - name: GF_INSTALL_PLUGINS
+              {{- if $specs }}
+              - name: GF_PLUGINS_PREINSTALL
                 value: "{{ join "," $specs }}"
+              - name: GF_PLUGINS_PREINSTALL_ASYNC
+                value: "true"
+              {{- else }}
+              - name: GF_PLUGINS_PREINSTALL_DISABLED
+                value: "true"
+              {{- end }}
               - name: ONCALL_API_URL
                 value: http://grafana-oncall-engine:8080
               - name: GF_DATABASE_HOST

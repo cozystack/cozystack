@@ -99,6 +99,9 @@ grafana:
   ## Empty: 256Mi requested and 1Gi limited for the root instance, 128Mi and
   ## 512Mi for a tenant.
   resources: {}
+  ## `plugins` (plugin id to version) picks what Grafana preinstalls from the
+  ## in-cluster grafana-dashboards server; unset installs the chart's list,
+  ## empty disables the preinstall.
 ## vmagent: `resources` (a tenant otherwise gets the small default) and
 ## `remoteWrite.urls`, empty meaning one vminsert per metrics storage this
 ## instance renders.
