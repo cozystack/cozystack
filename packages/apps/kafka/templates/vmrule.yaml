@@ -1,0 +1,59 @@
+{{- /*
+  Alerts for this cluster, evaluated by the tenant vmalert (it selects every
+  VMRule in its own namespace). The release's VMPodScrape maps the Strimzi pod
+  labels onto every series, so strimzi_io_cluster names the cluster on the
+  broker, controller and Kafka Exporter metrics alike. Thresholds follow the
+  Strimzi example rules and stay conservative.
+*/ -}}
+{{- $sel := printf `namespace="%s", strimzi_io_cluster="%s"` .Release.Namespace .Release.Name }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  groups:
+  - name: kafka.{{ .Release.Name }}
+    rules:
+    - alert: KafkaOfflinePartitions
+      expr: sum(kafka_controller_kafkacontroller_offlinepartitionscount{ {{ $sel }}}) > 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: Kafka {{ .Release.Name }} has {{ "{{ $value }}" }} offline partitions
+        description: Kafka cluster {{ .Release.Name }} in {{ .Release.Namespace }} has partitions without an active leader; producers and consumers of those partitions are blocked.
+    - alert: KafkaUnderReplicatedPartitions
+      expr: sum(kafka_server_replicamanager_underreplicatedpartitions{ {{ $sel }}}) > 0
+      for: 10m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: Kafka {{ .Release.Name }} has {{ "{{ $value }}" }} under-replicated partitions
+        description: Kafka cluster {{ .Release.Name }} has had under-replicated partitions for 10 minutes; a broker is down or falling behind and the cluster is one failure away from data loss.
+    - alert: KafkaActiveControllerCount
+      expr: (sum(kafka_controller_kafkacontroller_activecontrollercount{ {{ $sel }}}) or vector(0)) != 1
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: Kafka {{ .Release.Name }} has {{ "{{ $value }}" }} active controllers
+        description: Kafka cluster {{ .Release.Name }} does not have exactly one active controller; the metadata quorum is lost or split.
+    - alert: KafkaConsumerGroupLagHigh
+      expr: sum by (consumergroup, topic) (kafka_consumergroup_lag{ {{ $sel }}}) > 10000
+      for: 15m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: Consumer group {{ "{{ $labels.consumergroup }}" }} lags {{ "{{ $value }}" }} messages on {{ "{{ $labels.topic }}" }}
+        description: Consumer group {{ "{{ $labels.consumergroup }}" }} on Kafka cluster {{ .Release.Name }} has been more than 10000 messages behind on topic {{ "{{ $labels.topic }}" }} for 15 minutes.

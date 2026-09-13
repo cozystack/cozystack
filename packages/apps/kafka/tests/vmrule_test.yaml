@@ -1,0 +1,80 @@
+suite: Kafka alerts for the tenant vmalert
+
+# One VMRule per release, in the release namespace where the tenant vmalert
+# selects it. The release's VMPodScrape maps the Strimzi pod labels onto
+# every series, so strimzi_io_cluster=<release> is the selector for brokers,
+# controllers and the Kafka Exporter alike.
+
+templates:
+  - templates/vmrule.yaml
+
+release:
+  name: kafka-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+
+tests:
+  - it: renders one VMRule for the release with the alert labels the portal expects
+    documentSelector:
+      path: kind
+      value: VMRule
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kafka-test
+      - equal:
+          path: spec.groups[0].name
+          value: kafka.kafka-test
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 4
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: KafkaOfflinePartitions
+      - equal:
+          path: spec.groups[0].rules[0].labels
+          value:
+            namespace: tenant-test
+            service: kafka-test
+            severity: critical
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: 'kafka_controller_kafkacontroller_offlinepartitionscount\{\ namespace="tenant\-test",\ strimzi_io_cluster="kafka\-test"\}\)\ >\ 0'
+      - equal:
+          path: spec.groups[0].rules[1].alert
+          value: KafkaUnderReplicatedPartitions
+      - equal:
+          path: spec.groups[0].rules[1].labels
+          value:
+            namespace: tenant-test
+            service: kafka-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: 'kafka_server_replicamanager_underreplicatedpartitions\{\ namespace="tenant\-test",\ strimzi_io_cluster="kafka\-test"\}\)\ >\ 0'
+      - equal:
+          path: spec.groups[0].rules[2].alert
+          value: KafkaActiveControllerCount
+      - equal:
+          path: spec.groups[0].rules[2].labels
+          value:
+            namespace: tenant-test
+            service: kafka-test
+            severity: critical
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: 'kafka_controller_kafkacontroller_activecontrollercount\{\ namespace="tenant\-test",\ strimzi_io_cluster="kafka\-test"\}\)\ or\ vector\(0\)\)\ !=\ 1'
+      - equal:
+          path: spec.groups[0].rules[3].alert
+          value: KafkaConsumerGroupLagHigh
+      - equal:
+          path: spec.groups[0].rules[3].labels
+          value:
+            namespace: tenant-test
+            service: kafka-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[3].expr
+          pattern: 'kafka_consumergroup_lag\{\ namespace="tenant\-test",\ strimzi_io_cluster="kafka\-test"\}\)\ >\ 10000'
