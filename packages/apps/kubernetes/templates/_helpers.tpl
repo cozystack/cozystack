@@ -210,3 +210,33 @@ string this admits parses to a positive duration.
 {{- end -}}
 {{- $value -}}
 {{- end -}}
+
+{{- /*
+  kubernetes.ipv4CIDR validates one value of .Values.network and echoes
+  it. Only IPv4 with a prefix is accepted: the Talos worker config, the
+  CAPI Cluster and the CoreDNS ClusterIP below all assume dotted quads.
+*/}}
+{{- define "kubernetes.ipv4CIDR" -}}
+{{- $v := .value | toString -}}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$" $v) -}}
+{{- fail (printf "kubernetes: %s must be an IPv4 CIDR such as 10.243.0.0/16, got %q" .field $v) -}}
+{{- end -}}
+{{- $v -}}
+{{- end -}}
+
+{{- /*
+  kubernetes.clusterDNSIP is the ClusterIP the tenant CoreDNS Service is
+  pinned to: the tenth address of network.serviceCIDR, which is also what
+  Talos hands every kubelet as clusterDNS for the same service range, so
+  the two never disagree. A prefix longer than /24 cannot hold that
+  address in its first /24, so it is refused.
+*/}}
+{{- define "kubernetes.clusterDNSIP" -}}
+{{- $cidr := include "kubernetes.ipv4CIDR" (dict "field" "network.serviceCIDR" "value" .Values.network.serviceCIDR) -}}
+{{- $prefix := regexReplaceAll "^.*/" $cidr "" | int -}}
+{{- if gt $prefix 24 -}}
+{{- fail (printf "kubernetes: network.serviceCIDR %q must be /24 or wider so the cluster DNS Service can take the tenth address of the range" $cidr) -}}
+{{- end -}}
+{{- $octets := regexSplit "\\." (regexReplaceAll "/.*$" $cidr "") -1 -}}
+{{- printf "%s.%s.%s.10" (index $octets 0) (index $octets 1) (index $octets 2) -}}
+{{- end -}}

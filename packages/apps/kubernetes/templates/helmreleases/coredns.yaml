@@ -1,7 +1,7 @@
 {{- define "cozystack.defaultCoreDNSValues" -}}
 coredns:
   service:
-    clusterIP: "10.95.0.10"
+    clusterIP: {{ include "kubernetes.clusterDNSIP" . | quote }}
 {{- end }}
 
 {{- if .Values._namespace.etcd }}

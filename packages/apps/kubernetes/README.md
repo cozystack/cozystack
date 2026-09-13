@@ -110,10 +110,13 @@ See the reference for components utilized in this service:
 
 ### Application-specific Parameters
 
-| Name      | Description                                                                                    | Type     | Value   |
-| --------- | ---------------------------------------------------------------------------------------------- | -------- | ------- |
-| `version` | Kubernetes major.minor version to deploy                                                       | `string` | `v1.35` |
-| `host`    | External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty. | `string` | `""`    |
+| Name                  | Description                                                                                                                                                                                             | Type     | Value           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------- |
+| `version`             | Kubernetes major.minor version to deploy                                                                                                                                                                | `string` | `v1.35`         |
+| `host`                | External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.                                                                                                          | `string` | `""`            |
+| `network`             | Pod and Service address ranges of the tenant cluster. Change the defaults when they overlap a network the cluster has to reach, such as a VPN peer or another cluster this one talks to by Pod address. | `object` | `{}`            |
+| `network.podCIDR`     | IPv4 range Pods take their addresses from.                                                                                                                                                              | `string` | `10.243.0.0/16` |
+| `network.serviceCIDR` | IPv4 range ClusterIP Services take their addresses from. The cluster DNS Service takes the tenth address of the range, so the prefix must be /24 or wider.                                              | `string` | `10.95.0.0/16`  |
 
 
 ### Cluster Addons

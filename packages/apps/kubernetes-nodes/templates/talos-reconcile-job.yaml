@@ -68,6 +68,10 @@ rules:
     resources: ["kamajicontrolplanes"]
     resourceNames: ["{{ $clusterName }}"]
     verbs: ["get", "patch"]
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["clusters"]
+    resourceNames: ["{{ $clusterName }}"]
+    verbs: ["get"]
   - apiGroups: ["bootstrap.cluster.x-k8s.io"]
     resources: ["talosconfigtemplates"]
     verbs: ["get", "create", "patch", "update"]
@@ -199,19 +203,24 @@ spec:
             - sh
             - -ec
             - |
-              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for Service ClusterIP, Talos CA, K8s CA, management CoreDNS"
+              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for Service ClusterIP, Talos CA, K8s CA, cluster network, management CoreDNS"
               for i in $(seq 1 120); do
                 SVC_IP=$(kubectl -n "$NS" get svc "$RELEASE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
                 TALOS_CA_B64=$(kubectl -n "$NS" get secret "${RELEASE}-talos-ca" -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)
                 K8S_CA_B64=$(kubectl -n "$NS" get secret "${RELEASE}-ca" -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
+                # The parent kubernetes chart owns the address ranges: they are read
+                # back from its CAPI Cluster so the worker machineconfig can never
+                # drift from what the control plane was rendered with.
+                POD_CIDR=$(kubectl -n "$NS" get clusters.cluster.x-k8s.io "$RELEASE" -o jsonpath='{.spec.clusterNetwork.pods.cidrBlocks[0]}' 2>/dev/null || true)
+                SERVICE_CIDR=$(kubectl -n "$NS" get clusters.cluster.x-k8s.io "$RELEASE" -o jsonpath='{.spec.clusterNetwork.services.cidrBlocks[0]}' 2>/dev/null || true)
                 COREDNS_IP=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
-                if [ -n "$SVC_IP" ] && [ -n "$TALOS_CA_B64" ] && [ -n "$K8S_CA_B64" ] && [ -n "$COREDNS_IP" ]; then
+                if [ -n "$SVC_IP" ] && [ -n "$TALOS_CA_B64" ] && [ -n "$K8S_CA_B64" ] && [ -n "$POD_CIDR" ] && [ -n "$SERVICE_CIDR" ] && [ -n "$COREDNS_IP" ]; then
                   break
                 fi
                 sleep 5
               done
-              if [ -z "$SVC_IP" ] || [ -z "$TALOS_CA_B64" ] || [ -z "$K8S_CA_B64" ] || [ -z "$COREDNS_IP" ]; then
-                echo "[$(date -u +%H:%M:%S)] timed out waiting for lookup inputs (svc='$SVC_IP' talos-ca=$([ -n "$TALOS_CA_B64" ] && echo ok) k8s-ca=$([ -n "$K8S_CA_B64" ] && echo ok) coredns='$COREDNS_IP')"
+              if [ -z "$SVC_IP" ] || [ -z "$TALOS_CA_B64" ] || [ -z "$K8S_CA_B64" ] || [ -z "$POD_CIDR" ] || [ -z "$SERVICE_CIDR" ] || [ -z "$COREDNS_IP" ]; then
+                echo "[$(date -u +%H:%M:%S)] timed out waiting for lookup inputs (svc='$SVC_IP' talos-ca=$([ -n "$TALOS_CA_B64" ] && echo ok) k8s-ca=$([ -n "$K8S_CA_B64" ] && echo ok) pod-cidr='$POD_CIDR' service-cidr='$SERVICE_CIDR' coredns='$COREDNS_IP')"
                 exit 1
               fi
               echo "[$(date -u +%H:%M:%S)] inputs ready (svc=${SVC_IP} coredns=${COREDNS_IP})"
@@ -358,9 +367,9 @@ spec:
                         network:
                           dnsDomain: {{ .dnsDomain }}
                           podSubnets:
-                            - {{ .podCIDR }}
+                            - ${POD_CIDR}
                           serviceSubnets:
-                            - {{ .serviceCIDR }}
+                            - ${SERVICE_CIDR}
                         token: ${BOOTSTRAP_TOKEN}
                         ca:
                           crt: ${K8S_CA_B64}
@@ -393,8 +402,6 @@ spec:
 {{- end }}
 {{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
 {{- $talosVersion := $.Values.talos.version }}
-{{- $podCIDR := "10.243.0.0/16" }}
-{{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $dnsDomain := include "kubernetes.tenantClusterDomain" $ }}
 {{- $mgmtClusterDomain := (index (.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
 {{- /* Pool labels and taints land in the worker machineconfig heredoc below, so
@@ -482,8 +489,6 @@ spec:
 {{- $_ := set $jobContext "clusterName" $clusterName }}
 {{- $_ := set $jobContext "kubeletVersion" $kubeletVersion }}
 {{- $_ := set $jobContext "talosVersion" $talosVersion }}
-{{- $_ := set $jobContext "podCIDR" $podCIDR }}
-{{- $_ := set $jobContext "serviceCIDR" $serviceCIDR }}
 {{- $_ := set $jobContext "dnsDomain" $dnsDomain }}
 {{- $_ := set $jobContext "mgmtClusterDomain" $mgmtClusterDomain }}
 {{- $_ := set $jobContext "systemReservedCpu" $systemReservedCpu }}

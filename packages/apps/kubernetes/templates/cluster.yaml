@@ -50,11 +50,14 @@
   spec.clusterNetwork below and the Talos worker machineconfig's
   cluster.network — Talos surfaces overlaps against the host pod CIDR
   as a diagnostic at boot, and divergence between CAPI and Talos would
-  manifest as silently broken kube-proxy / Cilium routing. Keep them
-  in one place here.
+  manifest as silently broken kube-proxy / Cilium routing. The CAPI
+  Cluster rendered here is the single source: the kubernetes-nodes
+  reconcile Job reads spec.clusterNetwork back from it when it writes
+  the worker machineconfig, and the CoreDNS ClusterIP is derived from
+  the service range (kubernetes.clusterDNSIP).
 */}}
-{{- $podCIDR := "10.243.0.0/16" }}
-{{- $serviceCIDR := "10.95.0.0/16" }}
+{{- $podCIDR := include "kubernetes.ipv4CIDR" (dict "field" "network.podCIDR" "value" .Values.network.podCIDR) }}
+{{- $serviceCIDR := include "kubernetes.ipv4CIDR" (dict "field" "network.serviceCIDR" "value" .Values.network.serviceCIDR) }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
 {{- if not $etcd }}

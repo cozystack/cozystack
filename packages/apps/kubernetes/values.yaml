@@ -79,6 +79,16 @@ version: "v1.35"
 ## @param {string} host - External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.
 host: ""
 
+## @typedef {struct} Network - Address ranges of the tenant cluster. Fixed at creation: the CAPI Cluster refuses a change of its clusterNetwork and the Talos worker configs embed the same ranges, so the values are immutable.
+## @field {string} podCIDR - IPv4 range Pods take their addresses from.
+## @field {string} serviceCIDR - IPv4 range ClusterIP Services take their addresses from. The cluster DNS Service takes the tenth address of the range, so the prefix must be /24 or wider.
+
+## @param {Network} network - Pod and Service address ranges of the tenant cluster. Change the defaults when they overlap a network the cluster has to reach, such as a VPN peer or another cluster this one talks to by Pod address.
+## @immutable
+network:
+  podCIDR: "10.243.0.0/16"
+  serviceCIDR: "10.95.0.0/16"
+
 ##
 ## @section Cluster Addons
 ##
