@@ -32,13 +32,12 @@
       "default": 3
     },
     "resources": {
-      "description": "Resource configuration for etcd.",
+      "description": "Resource configuration for etcd: `cpu` and `memory` are the limits, the requests follow the platform's allocation ratios. Empty, the chart picks a size by tier: the platform's shared datastore in tenant-root keeps 1000m and 512Mi, while a tenant's own etcd, which serves that tenant's clusters alone, starts from 100m and 128Mi requested with 1000m and 512Mi limited.",
       "type": "object",
       "default": {},
       "properties": {
         "cpu": {
           "description": "Number of CPU cores allocated.",
-          "default": "1000m",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -52,7 +51,6 @@
         },
         "memory": {
           "description": "Amount of memory allocated.",
-          "default": "512Mi",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {

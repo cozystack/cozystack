@@ -26,8 +26,25 @@ spec:
     autoCompactionMode: periodic
     autoCompactionRetention: "5m"
     snapshotCount: 10000
-  {{- with .Values.resources }}
-  resources: {{- include "cozy-lib.resources.sanitize" (list . $) | nindent 4 }}
+  {{- /* An explicit `resources` goes through the platform's allocation
+       ratios like every other application. Empty, the size follows the
+       tier: tenant-root hosts the shared datastore of every tenant cluster
+       without an etcd of its own and keeps the 1000m/512Mi it always had; a
+       tenant's own etcd serves that tenant's clusters alone and starts from
+       small requests with the same limits, so three members cost 384Mi of
+       requests rather than 1.5Gi. */}}
+  {{- if .Values.resources }}
+  resources: {{- include "cozy-lib.resources.sanitize" (list .Values.resources $) | nindent 4 }}
+  {{- else if eq .Release.Namespace "tenant-root" }}
+  resources: {{- include "cozy-lib.resources.sanitize" (list (dict "cpu" "1000m" "memory" "512Mi") $) | nindent 4 }}
+  {{- else }}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
   {{- end }}
   additionalMetadata:
     labels:

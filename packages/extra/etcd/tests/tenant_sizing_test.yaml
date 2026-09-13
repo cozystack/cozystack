@@ -1,0 +1,71 @@
+suite: a tenant's own etcd is sized for one tenant
+
+# Every tenant Kubernetes cluster keeps its state in an etcd: the platform's
+# shared datastore in tenant-root when the tenant has none, or the tenant's own
+# when it asked for one. The shared datastore keeps the size it always had and
+# its VPA; a tenant's own etcd serves that tenant's clusters alone and starts
+# from 128Mi of requests per member, with no VPA to lift them back to the
+# recommender's 250Mi floor. An explicit `resources` still goes through the
+# platform's allocation ratios.
+
+release:
+  name: etcd
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cpu-allocation-ratio: "10"
+    memory-allocation-ratio: "1"
+
+tests:
+  - it: a tenant etcd requests 128Mi per member with 512Mi limited and carries no VPA
+    asserts:
+      - template: templates/etcd-cluster.yaml
+        documentSelector:
+          path: kind
+          value: EtcdCluster
+        equal:
+          path: spec.resources
+          value:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 1000m, memory: 512Mi}
+      - template: templates/vpa.yaml
+        hasDocuments:
+          count: 0
+
+  - it: an explicit resources value goes through the allocation ratios
+    set:
+      resources:
+        cpu: 2000m
+        memory: 1Gi
+    asserts:
+      - template: templates/etcd-cluster.yaml
+        documentSelector:
+          path: kind
+          value: EtcdCluster
+        equal:
+          path: spec.resources.limits
+          value: {cpu: "2000m", memory: "1Gi"}
+      - template: templates/etcd-cluster.yaml
+        documentSelector:
+          path: kind
+          value: EtcdCluster
+        equal:
+          path: spec.resources.requests.memory
+          value: "1073741824"
+
+  - it: the shared datastore in tenant-root keeps its size and its VPA
+    release:
+      name: etcd
+      namespace: tenant-root
+    asserts:
+      - template: templates/etcd-cluster.yaml
+        documentSelector:
+          path: kind
+          value: EtcdCluster
+        equal:
+          path: spec.resources.limits
+          value: {cpu: "1000m", memory: "512Mi"}
+      - template: templates/vpa.yaml
+        hasDocuments:
+          count: 1
