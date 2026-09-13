@@ -1,0 +1,52 @@
+{{- /*
+  Alerts for this cluster, evaluated by the tenant vmalert (it selects every
+  VMRule in its own namespace). The release's mongodb_exporter runs with the
+  replicasetstatus collector in compatible mode and its VMServiceScrape stamps
+  service=<release> on every series: member health comes from
+  replSetGetStatus as mongodb_rs_members_health, the lag as the compatible
+  mongodb_mongod_replset_member_replication_lag. A sharded cluster is scraped
+  through mongos, which serves no replica-set status, so only the
+  reachability rule can fire there.
+*/ -}}
+{{- $sel := printf `namespace="%s", service="%s"` .Release.Namespace .Release.Name }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  groups:
+  - name: mongodb.{{ .Release.Name }}
+    rules:
+    - alert: MongoDBDown
+      expr: mongodb_up{ {{ $sel }}} == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: MongoDB {{ .Release.Name }} is unreachable
+        description: The exporter of MongoDB cluster {{ .Release.Name }} in {{ .Release.Namespace }} has not been able to connect for 5 minutes.
+    - alert: MongoDBReplsetMemberDown
+      expr: mongodb_rs_members_health{ {{ $sel }}} == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: MongoDB member {{ "{{ $labels.member_idx }}" }} is unhealthy
+        description: Replica set member {{ "{{ $labels.member_idx }}" }} of MongoDB cluster {{ .Release.Name }} has reported unhealthy for 5 minutes.
+    - alert: MongoDBReplicationLagHigh
+      expr: mongodb_mongod_replset_member_replication_lag{ {{ $sel }}} > 60
+      for: 10m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: MongoDB member {{ "{{ $labels.name }}" }} lags by {{ "{{ $value | humanizeDuration }}" }}
+        description: Replica set member {{ "{{ $labels.name }}" }} of MongoDB cluster {{ .Release.Name }} has been more than 60 seconds behind the primary for 10 minutes.

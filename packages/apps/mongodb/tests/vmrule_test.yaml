@@ -1,0 +1,70 @@
+suite: MongoDB alerts for the tenant vmalert
+
+# One VMRule per release, in the release namespace where the tenant vmalert
+# selects it. The release's exporter scrape stamps service=<release> on
+# every series; member health is mongodb_rs_members_health from
+# replSetGetStatus, the lag the compatible-mode
+# mongodb_mongod_replset_member_replication_lag.
+
+templates:
+  - templates/vmrule.yaml
+
+release:
+  name: mongodb-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: renders one VMRule for the release with the alert labels the portal expects
+    documentSelector:
+      path: kind
+      value: VMRule
+    asserts:
+      - equal:
+          path: metadata.name
+          value: mongodb-test
+      - equal:
+          path: spec.groups[0].name
+          value: mongodb.mongodb-test
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 3
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: MongoDBDown
+      - equal:
+          path: spec.groups[0].rules[0].labels
+          value:
+            namespace: tenant-test
+            service: mongodb-test
+            severity: critical
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: 'mongodb_up\{\ namespace="tenant\-test",\ service="mongodb\-test"\}\ ==\ 0'
+      - equal:
+          path: spec.groups[0].rules[1].alert
+          value: MongoDBReplsetMemberDown
+      - equal:
+          path: spec.groups[0].rules[1].labels
+          value:
+            namespace: tenant-test
+            service: mongodb-test
+            severity: critical
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: 'mongodb_rs_members_health\{\ namespace="tenant\-test",\ service="mongodb\-test"\}\ ==\ 0'
+      - equal:
+          path: spec.groups[0].rules[2].alert
+          value: MongoDBReplicationLagHigh
+      - equal:
+          path: spec.groups[0].rules[2].labels
+          value:
+            namespace: tenant-test
+            service: mongodb-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: 'mongodb_mongod_replset_member_replication_lag\{\ namespace="tenant\-test",\ service="mongodb\-test"\}\ >\ 60'
