@@ -34,10 +34,11 @@ spec:
     #
     # Bounded by the enumeration, not absolute — matching is by exact name with
     # no globs, so a Secret a future operator version introduces stays in scope
-    # of the label-only include. The per-user Secrets carry the username in
-    # their name and cannot be enumerated at all; they and the backup
-    # credentials hold tenant-supplied values, so surfacing one back to its own
-    # tenant crosses no privilege boundary.
+    # of the label-only includes. The per-user Secrets carry the username in
+    # their name and cannot be enumerated at all, so the chart labels them and
+    # they are included by that label below; they and the backup credentials
+    # hold tenant-supplied values, so surfacing one back to its own tenant
+    # crosses no privilege boundary.
     exclude:
       - resourceNames:
           - mongodb-{{ .name }}-ca-cert
@@ -66,6 +67,11 @@ spec:
       # it carries no per-release name templating.
       - matchLabels:
           internal.cozystack.io/tenant-ca: "true"
+      # The per-user credential Secrets the chart renders from `users`, labelled
+      # by the chart because their names carry the username. Same selector the
+      # RabbitMQ definition uses.
+      - matchLabels:
+          apps.cozystack.io/user-secret: "true"
   services:
     exclude: []
     include:
