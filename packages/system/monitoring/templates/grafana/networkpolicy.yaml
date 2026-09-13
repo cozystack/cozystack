@@ -1,0 +1,30 @@
+{{- /*
+  Grafana installs its plugins at startup from the grafana-dashboards static
+  file server in cozy-grafana-operator (see grafana.yaml, GF_INSTALL_PLUGINS)
+  and exits when a download fails, so a pod that cannot reach that server
+  never becomes Ready. The tenant chart opens that egress for the whole
+  namespace (allow-to-grafana-dashboards), but a Monitoring is upgraded
+  independently of the tenant that hosts it: on a platform whose tenant chart
+  predates that rule, the upgrade to the upstream Grafana image left the new
+  pod crash-looping on the plugin download while the old ReplicaSet kept
+  serving. This policy is the Monitoring's own copy of the rule, scoped to its
+  Grafana pods, so the chart converges on its own. Cilium policies are
+  additive, so it is harmless where the tenant rule exists too.
+*/ -}}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grafana-to-plugin-server
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grafana
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        "k8s:io.kubernetes.pod.namespace": cozy-grafana-operator
+        "k8s:app.kubernetes.io/name": grafana-dashboards
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
