@@ -1,0 +1,49 @@
+{{- /*
+  Alerts for this instance, evaluated by the tenant vmalert (it selects every
+  VMRule in its own namespace). The release's VMServiceScrape stamps
+  service=<release> on every redis_exporter series; redis_instance_info
+  carries the role of each node, so a failover that leaves no master shows
+  up as zero master series.
+*/ -}}
+{{- $sel := printf `namespace="%s", service="%s"` .Release.Namespace .Release.Name }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  groups:
+  - name: redis.{{ .Release.Name }}
+    rules:
+    - alert: RedisDown
+      expr: redis_up{ {{ $sel }}} == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: Redis node {{ "{{ $labels.pod }}" }} is down
+        description: Node {{ "{{ $labels.pod }}" }} of Redis {{ .Release.Name }} in {{ .Release.Namespace }} has not answered its exporter for 5 minutes.
+    - alert: RedisMasterMissing
+      expr: (count(redis_instance_info{ {{ $sel }}, role="master"}) or vector(0)) == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: Redis {{ .Release.Name }} has no master
+        description: No node of Redis {{ .Release.Name }} reports the master role; the failover did not elect a new master and writes are refused.
+    - alert: RedisReplicaLinkDown
+      expr: redis_master_link_up{ {{ $sel }}} == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: Redis replica {{ "{{ $labels.pod }}" }} lost its master link
+        description: Replica {{ "{{ $labels.pod }}" }} of Redis {{ .Release.Name }} has been disconnected from its master for 5 minutes and serves stale data.

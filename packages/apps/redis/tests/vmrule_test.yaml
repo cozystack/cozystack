@@ -1,0 +1,68 @@
+suite: Redis alerts for the tenant vmalert
+
+# One VMRule per release, in the release namespace where the tenant vmalert
+# selects it. The release's VMServiceScrape stamps service=<release> on
+# every redis_exporter series; a failover that leaves no master shows up as
+# zero redis_instance_info{role="master"} series.
+
+templates:
+  - templates/vmrule.yaml
+
+release:
+  name: redis-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+
+tests:
+  - it: renders one VMRule for the release with the alert labels the portal expects
+    documentSelector:
+      path: kind
+      value: VMRule
+    asserts:
+      - equal:
+          path: metadata.name
+          value: redis-test
+      - equal:
+          path: spec.groups[0].name
+          value: redis.redis-test
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 3
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: RedisDown
+      - equal:
+          path: spec.groups[0].rules[0].labels
+          value:
+            namespace: tenant-test
+            service: redis-test
+            severity: critical
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: 'redis_up\{\ namespace="tenant\-test",\ service="redis\-test"\}\ ==\ 0'
+      - equal:
+          path: spec.groups[0].rules[1].alert
+          value: RedisMasterMissing
+      - equal:
+          path: spec.groups[0].rules[1].labels
+          value:
+            namespace: tenant-test
+            service: redis-test
+            severity: critical
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: 'redis_instance_info\{\ namespace="tenant\-test",\ service="redis\-test",\ role="master"\}\)\ or\ vector\(0\)\)\ ==\ 0'
+      - equal:
+          path: spec.groups[0].rules[2].alert
+          value: RedisReplicaLinkDown
+      - equal:
+          path: spec.groups[0].rules[2].labels
+          value:
+            namespace: tenant-test
+            service: redis-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: 'redis_master_link_up\{\ namespace="tenant\-test",\ service="redis\-test"\}\ ==\ 0'
