@@ -22,6 +22,8 @@ spec:
   - url: {{ . | quote }}
   {{- end }}
 
+  {{- $r := include "monitoring.componentResources" (list $ "vmagent" (dig "resources" nil (.Values.vmagent | default dict))) }}
+  resources: {{ if eq $r "{}" }}{}{{ else }}{{ $r | nindent 4 }}{{ end }}
   scrapeInterval: 30s
   selectAllByDefault: false
   {{- with .Values.vmagent.inlineScrapeConfig }}

@@ -1,4 +1,8 @@
 {{- range .Values.metricsStorages }}
+{{- /* One replica of every component for a tenant, two for the root instance,
+     unless `replicas` says otherwise; the replication factor follows, since a
+     single vmstorage cannot hold two copies. */}}
+{{- $replicas := include "monitoring.replicas" (list $ .replicas 2 1) | int }}
 ---
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMCluster
@@ -10,18 +14,20 @@ spec:
       apps.cozystack.io/application.group: apps.cozystack.io
       apps.cozystack.io/application.kind: Monitoring
       apps.cozystack.io/application.name: {{ $.Release.Name }}
-  replicationFactor: 2
+  replicationFactor: {{ ternary 2 1 (ge $replicas 2) }}
   retentionPeriod: {{ .retentionPeriod | quote }}
   vminsert:
     extraArgs:
       # kubevirt and other systems produce a lot of labels
       # it's usually more than default 30
       maxLabelsPerTimeseries: "60"
-    replicaCount: 2
-    resources: {}
+    replicaCount: {{ $replicas }}
+    {{- $r := include "monitoring.componentResources" (list $ "vminsert" (dig "resources" nil (.vminsert | default dict))) }}
+    resources: {{ if eq $r "{}" }}{}{{ else }}{{ $r | nindent 6 }}{{ end }}
   vmselect:
-    replicaCount: 2
-    resources: {}
+    replicaCount: {{ $replicas }}
+    {{- $r := include "monitoring.componentResources" (list $ "vmselect" (dig "resources" nil (.vmselect | default dict))) }}
+    resources: {{ if eq $r "{}" }}{}{{ else }}{{ $r | nindent 6 }}{{ end }}
     extraArgs:
       search.maxUniqueTimeseries: "600000"
       vmalert.proxyURL: http://vmalert-{{ .name }}.{{ $.Release.Namespace }}.svc:8080
@@ -45,8 +51,9 @@ spec:
             requests:
               storage: 2Gi
   vmstorage:
-    replicaCount: 2
-    resources: {}
+    replicaCount: {{ $replicas }}
+    {{- $r := include "monitoring.componentResources" (list $ "vmstorage" (dig "resources" nil (.vmstorage | default dict))) }}
+    resources: {{ if eq $r "{}" }}{}{{ else }}{{ $r | nindent 6 }}{{ end }}
     storage:
       volumeClaimTemplate:
         metadata:

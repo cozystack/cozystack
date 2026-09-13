@@ -56,12 +56,16 @@
             "description": "StorageClass used for the data.",
             "type": "string"
           },
+          "replicas": {
+            "description": "Replicas of vminsert, vmselect and vmstorage. Unset, one for a tenant instance and two for the root instance. Two or more also enable a replication factor of two across the vmstorage nodes.",
+            "type": "integer"
+          },
           "vminsert": {
             "description": "Configuration for vminsert.",
             "type": "object",
             "properties": {
               "maxAllowed": {
-                "description": "Maximum allowed resources.",
+                "description": "Upper bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its memory limits and the root instance by the chart's wide defaults.",
                 "type": "object",
                 "properties": {
                   "cpu": {
@@ -95,7 +99,7 @@
                 }
               },
               "minAllowed": {
-                "description": "Minimum guaranteed resources.",
+                "description": "Lower bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its explicit requests and the root instance by the chart's wide defaults.",
                 "type": "object",
                 "properties": {
                   "cpu": {
@@ -125,6 +129,76 @@
                       }
                     ],
                     "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "resources": {
+                "description": "Explicit requests and limits of the component. Unset, a tenant instance starts from small defaults (vminsert, vmselect, vlinsert and vlselect 128Mi, vmstorage and vlstorage 256Mi, memory limits four times the request) and the root instance leaves sizing to the VPA.",
+                "type": "object",
+                "properties": {
+                  "requests": {
+                    "description": "Resource requests.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
+                  },
+                  "limits": {
+                    "description": "Resource limits.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
                   }
                 }
               }
@@ -135,7 +209,7 @@
             "type": "object",
             "properties": {
               "maxAllowed": {
-                "description": "Maximum allowed resources.",
+                "description": "Upper bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its memory limits and the root instance by the chart's wide defaults.",
                 "type": "object",
                 "properties": {
                   "cpu": {
@@ -169,7 +243,7 @@
                 }
               },
               "minAllowed": {
-                "description": "Minimum guaranteed resources.",
+                "description": "Lower bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its explicit requests and the root instance by the chart's wide defaults.",
                 "type": "object",
                 "properties": {
                   "cpu": {
@@ -199,6 +273,76 @@
                       }
                     ],
                     "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "resources": {
+                "description": "Explicit requests and limits of the component. Unset, a tenant instance starts from small defaults (vminsert, vmselect, vlinsert and vlselect 128Mi, vmstorage and vlstorage 256Mi, memory limits four times the request) and the root instance leaves sizing to the VPA.",
+                "type": "object",
+                "properties": {
+                  "requests": {
+                    "description": "Resource requests.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
+                  },
+                  "limits": {
+                    "description": "Resource limits.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
                   }
                 }
               }
@@ -209,7 +353,7 @@
             "type": "object",
             "properties": {
               "maxAllowed": {
-                "description": "Maximum allowed resources.",
+                "description": "Upper bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its memory limits and the root instance by the chart's wide defaults.",
                 "type": "object",
                 "properties": {
                   "cpu": {
@@ -243,7 +387,7 @@
                 }
               },
               "minAllowed": {
-                "description": "Minimum guaranteed resources.",
+                "description": "Lower bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its explicit requests and the root instance by the chart's wide defaults.",
                 "type": "object",
                 "properties": {
                   "cpu": {
@@ -273,6 +417,76 @@
                       }
                     ],
                     "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "resources": {
+                "description": "Explicit requests and limits of the component. Unset, a tenant instance starts from small defaults (vminsert, vmselect, vlinsert and vlselect 128Mi, vmstorage and vlstorage 256Mi, memory limits four times the request) and the root instance leaves sizing to the VPA.",
+                "type": "object",
+                "properties": {
+                  "requests": {
+                    "description": "Resource requests.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
+                  },
+                  "limits": {
+                    "description": "Resource limits.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
                   }
                 }
               }
@@ -319,6 +533,442 @@
             "description": "StorageClass used to store the data.",
             "type": "string",
             "default": "replicated"
+          },
+          "replicas": {
+            "description": "Replicas of vlinsert, vlselect and vlstorage. Unset, one for a tenant instance and two for the root instance.",
+            "type": "integer"
+          },
+          "vlinsert": {
+            "description": "Configuration for vlinsert.",
+            "type": "object",
+            "properties": {
+              "maxAllowed": {
+                "description": "Upper bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its memory limits and the root instance by the chart's wide defaults.",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU limit.",
+                    "default": 1,
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory limit.",
+                    "default": "1Gi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "minAllowed": {
+                "description": "Lower bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its explicit requests and the root instance by the chart's wide defaults.",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU request.",
+                    "default": "100m",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory request.",
+                    "default": "256Mi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "resources": {
+                "description": "Explicit requests and limits of the component. Unset, a tenant instance starts from small defaults (vminsert, vmselect, vlinsert and vlselect 128Mi, vmstorage and vlstorage 256Mi, memory limits four times the request) and the root instance leaves sizing to the VPA.",
+                "type": "object",
+                "properties": {
+                  "requests": {
+                    "description": "Resource requests.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
+                  },
+                  "limits": {
+                    "description": "Resource limits.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "vlselect": {
+            "description": "Configuration for vlselect.",
+            "type": "object",
+            "properties": {
+              "maxAllowed": {
+                "description": "Upper bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its memory limits and the root instance by the chart's wide defaults.",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU limit.",
+                    "default": 1,
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory limit.",
+                    "default": "1Gi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "minAllowed": {
+                "description": "Lower bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its explicit requests and the root instance by the chart's wide defaults.",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU request.",
+                    "default": "100m",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory request.",
+                    "default": "256Mi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "resources": {
+                "description": "Explicit requests and limits of the component. Unset, a tenant instance starts from small defaults (vminsert, vmselect, vlinsert and vlselect 128Mi, vmstorage and vlstorage 256Mi, memory limits four times the request) and the root instance leaves sizing to the VPA.",
+                "type": "object",
+                "properties": {
+                  "requests": {
+                    "description": "Resource requests.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
+                  },
+                  "limits": {
+                    "description": "Resource limits.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "vlstorage": {
+            "description": "Configuration for vlstorage.",
+            "type": "object",
+            "properties": {
+              "maxAllowed": {
+                "description": "Upper bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its memory limits and the root instance by the chart's wide defaults.",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU limit.",
+                    "default": 1,
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory limit.",
+                    "default": "1Gi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "minAllowed": {
+                "description": "Lower bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its explicit requests and the root instance by the chart's wide defaults.",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU request.",
+                    "default": "100m",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory request.",
+                    "default": "256Mi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "resources": {
+                "description": "Explicit requests and limits of the component. Unset, a tenant instance starts from small defaults (vminsert, vmselect, vlinsert and vlselect 128Mi, vmstorage and vlstorage 256Mi, memory limits four times the request) and the root instance leaves sizing to the VPA.",
+                "type": "object",
+                "properties": {
+                  "requests": {
+                    "description": "Resource requests.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory request.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
+                  },
+                  "limits": {
+                    "description": "Resource limits.",
+                    "type": "object",
+                    "properties": {
+                      "cpu": {
+                        "description": "CPU limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      },
+                      "memory": {
+                        "description": "Memory limit.",
+                        "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ],
+                        "x-kubernetes-int-or-string": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -328,6 +978,10 @@
       "type": "object",
       "default": {},
       "properties": {
+        "enabled": {
+          "description": "Render Alerta, its database and its ingress. Unset, on for the root instance and off for a tenant instance; a tenant without Alerta keeps the alertmanager, which vmalert needs and the portal reads, with every route pointed at the blackhole.",
+          "type": "boolean"
+        },
         "alerts": {
           "description": "Alert routing configuration.",
           "type": "object",
@@ -481,6 +1135,10 @@
       "type": "object",
       "default": {},
       "properties": {
+        "replicas": {
+          "description": "Grafana replicas. Unset, one for a tenant instance and two for the root instance.",
+          "type": "integer"
+        },
         "db": {
           "description": "Database configuration.",
           "type": "object",
@@ -490,6 +1148,80 @@
               "description": "Persistent volume size for the database.",
               "type": "string",
               "default": "10Gi"
+            },
+            "instances": {
+              "description": "PostgreSQL instances of the database. Unset, one for a tenant instance and two for the root instance.",
+              "type": "integer"
+            },
+            "resources": {
+              "description": "Explicit requests and limits of each PostgreSQL instance. Unset, a tenant instance gets 128Mi requested and 512Mi limited, the root instance 512Mi and 2048Mi.",
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "description": "Resource requests.",
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "description": "CPU request.",
+                      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ],
+                      "x-kubernetes-int-or-string": true
+                    },
+                    "memory": {
+                      "description": "Memory request.",
+                      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ],
+                      "x-kubernetes-int-or-string": true
+                    }
+                  }
+                },
+                "limits": {
+                  "description": "Resource limits.",
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "description": "CPU limit.",
+                      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ],
+                      "x-kubernetes-int-or-string": true
+                    },
+                    "memory": {
+                      "description": "Memory limit.",
+                      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ],
+                      "x-kubernetes-int-or-string": true
+                    }
+                  }
+                }
+              }
             }
           }
         },
@@ -572,6 +1304,164 @@
         }
       }
     },
+    "alertmanager": {
+      "description": "Configuration for the alertmanager every vmalert notifies.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "replicas": {
+          "description": "Alertmanager replicas. Unset, one for a tenant instance and three for the root instance.",
+          "type": "integer"
+        },
+        "resources": {
+          "description": "Explicit requests and limits. Unset, a tenant instance gets 64Mi requested and 256Mi limited and the root instance the operator defaults.",
+          "type": "object",
+          "properties": {
+            "requests": {
+              "description": "Resource requests.",
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "description": "CPU request.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory request.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "limits": {
+              "description": "Resource limits.",
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "description": "CPU limit.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory limit.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "vmalert": {
+      "description": "Configuration for vmalert.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "resources": {
+          "description": "Explicit requests and limits. Unset, a tenant instance gets 64Mi requested and 256Mi limited and the root instance the operator defaults.",
+          "type": "object",
+          "properties": {
+            "requests": {
+              "description": "Resource requests.",
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "description": "CPU request.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory request.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "limits": {
+              "description": "Resource limits.",
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "description": "CPU limit.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory limit.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "vmagent": {
       "description": "Configuration for VictoriaMetrics Agent.",
       "type": "object",
@@ -592,6 +1482,76 @@
               "http://vminsert-shortterm:8480/insert/0/prometheus",
               "http://vminsert-longterm:8480/insert/0/prometheus"
             ]
+          }
+        },
+        "resources": {
+          "description": "Explicit requests and limits. Unset, a tenant instance gets 128Mi requested and 512Mi limited.",
+          "type": "object",
+          "properties": {
+            "requests": {
+              "description": "Resource requests.",
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "description": "CPU request.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory request.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "limits": {
+              "description": "Resource limits.",
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "description": "CPU limit.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory limit.",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
           }
         }
       }

@@ -1,10 +1,11 @@
+{{- if include "monitoring.alertaEnabled" . }}
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: alerta-db
 spec:
-  instances: 2
+  instances: {{ ternary 2 1 (eq (include "monitoring.isRoot" $) "true") }}
   {{- $existingCluster := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace "alerta-db" }}
   {{- $image := dig "spec" "imageName" "ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie" $existingCluster }}
   imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
@@ -36,3 +37,4 @@ spec:
   inheritedMetadata:
     labels:
       policy.cozystack.io/allow-to-apiserver: "true"
+{{- end }}

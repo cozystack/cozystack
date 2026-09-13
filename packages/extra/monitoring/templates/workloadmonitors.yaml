@@ -5,7 +5,7 @@ kind: WorkloadMonitor
 metadata:
   name: {{ .name }}-vmstorage
 spec:
-  replicas: 2
+  replicas: {{ include "monitoring.replicas" (list $ .replicas 2 1) }}
   minReplicas: 1
   kind: monitoring
   type: vmstorage
@@ -20,7 +20,7 @@ kind: WorkloadMonitor
 metadata:
   name: {{ .name }}-vmselect
 spec:
-  replicas: 2
+  replicas: {{ include "monitoring.replicas" (list $ .replicas 2 1) }}
   minReplicas: 1
   kind: monitoring
   type: vmselect
@@ -35,7 +35,7 @@ kind: WorkloadMonitor
 metadata:
   name: {{ .name }}-vminsert
 spec:
-  replicas: 2
+  replicas: {{ include "monitoring.replicas" (list $ .replicas 2 1) }}
   minReplicas: 1
   kind: monitoring
   type: vminsert
@@ -69,7 +69,7 @@ kind: WorkloadMonitor
 metadata:
   name: {{ .name }}-vlstorage
 spec:
-  replicas: 2
+  replicas: {{ include "monitoring.replicas" (list $ .replicas 2 1) }}
   minReplicas: 1
   kind: monitoring
   type: vlstorage
@@ -84,7 +84,7 @@ kind: WorkloadMonitor
 metadata:
   name: {{ .name }}-vlselect
 spec:
-  replicas: 2
+  replicas: {{ include "monitoring.replicas" (list $ .replicas 2 1) }}
   minReplicas: 1
   kind: monitoring
   type: vlselect
@@ -99,7 +99,7 @@ kind: WorkloadMonitor
 metadata:
   name: {{ .name }}-vlinsert
 spec:
-  replicas: 2
+  replicas: {{ include "monitoring.replicas" (list $ .replicas 2 1) }}
   minReplicas: 1
   kind: monitoring
   type: vlinsert
@@ -115,7 +115,7 @@ kind: WorkloadMonitor
 metadata:
   name: grafana
 spec:
-  replicas: 2
+  replicas: {{ include "monitoring.replicas" (list $ (dig "replicas" nil (.Values.grafana | default dict)) 2 1) }}
   minReplicas: 1
   kind: monitoring
   type: grafana
@@ -128,7 +128,7 @@ kind: WorkloadMonitor
 metadata:
   name: grafana-db
 spec:
-  replicas: 2
+  replicas: {{ include "monitoring.replicas" (list $ (dig "db" "instances" nil (.Values.grafana | default dict)) 2 1) }}
   minReplicas: 1
   kind: monitoring
   type: postgres
@@ -136,13 +136,14 @@ spec:
     cnpg.io/cluster: grafana-db
     cnpg.io/podRole: instance
   version: {{ $.Chart.Version }}
+{{- if include "monitoring.alertaEnabled" . }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: alerta-db
 spec:
-  replicas: 2
+  replicas: {{ ternary 2 1 (eq (include "monitoring.isRoot" $) "true") }}
   minReplicas: 1
   kind: monitoring
   type: postgres
@@ -164,14 +165,16 @@ spec:
     app: alerta
     release: alerta
   version: {{ $.Chart.Version }}
+{{- end }}
+{{- $alertmanagerReplicas := include "monitoring.replicas" (list $ (dig "replicas" nil (.Values.alertmanager | default dict)) 3 1) | int }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: alertmanager
 spec:
-  replicas: 3
-  minReplicas: 2
+  replicas: {{ $alertmanagerReplicas }}
+  minReplicas: {{ ternary 2 1 (ge $alertmanagerReplicas 2) }}
   kind: monitoring
   type: alertmanager
   selector:

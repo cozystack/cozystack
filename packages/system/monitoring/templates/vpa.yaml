@@ -24,20 +24,8 @@ spec:
   resourcePolicy:
     containerPolicies:
       - containerName: vminsert
-        minAllowed:
-          {{- if and .vminsert .vminsert.minAllowed }}
-          {{- toYaml .vminsert.minAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 25m
-          memory: 64Mi
-          {{- end }}
-        maxAllowed:
-          {{- if and .vminsert .vminsert.maxAllowed }}
-          {{- toYaml .vminsert.maxAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 2000m
-          memory: 4Gi
-          {{- end }}
+        minAllowed: {{- include "monitoring.vpaBound" (list $ "vminsert" "minAllowed" (dig "minAllowed" nil (.vminsert | default dict)) (dict "cpu" "25m" "memory" "64Mi")) | nindent 10 }}
+        maxAllowed: {{- include "monitoring.vpaBound" (list $ "vminsert" "maxAllowed" (dig "maxAllowed" nil (.vminsert | default dict)) (dict "cpu" "2000m" "memory" "4Gi")) | nindent 10 }}
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -53,20 +41,8 @@ spec:
   resourcePolicy:
     containerPolicies:
       - containerName: vmselect
-        minAllowed:
-          {{- if and .vmselect .vmselect.minAllowed }}
-          {{- toYaml .vmselect.minAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 200m
-          memory: 512Mi
-          {{- end }}
-        maxAllowed:
-          {{- if and .vmselect .vmselect.maxAllowed }}
-          {{- toYaml .vmselect.maxAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 4000m
-          memory: 8Gi
-          {{- end }}
+        minAllowed: {{- include "monitoring.vpaBound" (list $ "vmselect" "minAllowed" (dig "minAllowed" nil (.vmselect | default dict)) (dict "cpu" "200m" "memory" "512Mi")) | nindent 10 }}
+        maxAllowed: {{- include "monitoring.vpaBound" (list $ "vmselect" "maxAllowed" (dig "maxAllowed" nil (.vmselect | default dict)) (dict "cpu" "4000m" "memory" "8Gi")) | nindent 10 }}
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -82,20 +58,8 @@ spec:
   resourcePolicy:
     containerPolicies:
       - containerName: vmstorage
-        minAllowed:
-          {{- if and .vmstorage .vmstorage.minAllowed }}
-          {{- toYaml .vmstorage.minAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 200m
-          memory: 512Mi
-          {{- end }}
-        maxAllowed:
-          {{- if and .vmstorage .vmstorage.maxAllowed }}
-          {{- toYaml .vmstorage.maxAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 4000m
-          memory: 8Gi
-          {{- end }}
+        minAllowed: {{- include "monitoring.vpaBound" (list $ "vmstorage" "minAllowed" (dig "minAllowed" nil (.vmstorage | default dict)) (dict "cpu" "200m" "memory" "512Mi")) | nindent 10 }}
+        maxAllowed: {{- include "monitoring.vpaBound" (list $ "vmstorage" "maxAllowed" (dig "maxAllowed" nil (.vmstorage | default dict)) (dict "cpu" "4000m" "memory" "8Gi")) | nindent 10 }}
 {{- end }}
 {{- range .Values.logsStorages }}
 ---
@@ -113,20 +77,8 @@ spec:
   resourcePolicy:
     containerPolicies:
       - containerName: vlinsert
-        minAllowed:
-          {{- if and .vlinsert .vlinsert.minAllowed }}
-          {{- toYaml .vlinsert.minAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 25m
-          memory: 64Mi
-          {{- end }}
-        maxAllowed:
-          {{- if and .vlinsert .vlinsert.maxAllowed }}
-          {{- toYaml .vlinsert.maxAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 2000m
-          memory: 4Gi
-          {{- end }}
+        minAllowed: {{- include "monitoring.vpaBound" (list $ "vlinsert" "minAllowed" (dig "minAllowed" nil (.vlinsert | default dict)) (dict "cpu" "25m" "memory" "64Mi")) | nindent 10 }}
+        maxAllowed: {{- include "monitoring.vpaBound" (list $ "vlinsert" "maxAllowed" (dig "maxAllowed" nil (.vlinsert | default dict)) (dict "cpu" "2000m" "memory" "4Gi")) | nindent 10 }}
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -142,20 +94,8 @@ spec:
   resourcePolicy:
     containerPolicies:
       - containerName: vlselect
-        minAllowed:
-          {{- if and .vlselect .vlselect.minAllowed }}
-          {{- toYaml .vlselect.minAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 25m
-          memory: 64Mi
-          {{- end }}
-        maxAllowed:
-          {{- if and .vlselect .vlselect.maxAllowed }}
-          {{- toYaml .vlselect.maxAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 4000m
-          memory: 8Gi
-          {{- end }}
+        minAllowed: {{- include "monitoring.vpaBound" (list $ "vlselect" "minAllowed" (dig "minAllowed" nil (.vlselect | default dict)) (dict "cpu" "25m" "memory" "64Mi")) | nindent 10 }}
+        maxAllowed: {{- include "monitoring.vpaBound" (list $ "vlselect" "maxAllowed" (dig "maxAllowed" nil (.vlselect | default dict)) (dict "cpu" "4000m" "memory" "8Gi")) | nindent 10 }}
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -171,18 +111,6 @@ spec:
   resourcePolicy:
     containerPolicies:
       - containerName: vlstorage
-        minAllowed:
-          {{- if and .vlstorage .vlstorage.minAllowed }}
-          {{- toYaml .vlstorage.minAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 25m
-          memory: 64Mi
-          {{- end }}
-        maxAllowed:
-          {{- if and .vlstorage .vlstorage.maxAllowed }}
-          {{- toYaml .vlstorage.maxAllowed | nindent 10 }}
-          {{- else }}
-          cpu: 4000m
-          memory: 8Gi
-          {{- end }}
+        minAllowed: {{- include "monitoring.vpaBound" (list $ "vlstorage" "minAllowed" (dig "minAllowed" nil (.vlstorage | default dict)) (dict "cpu" "25m" "memory" "64Mi")) | nindent 10 }}
+        maxAllowed: {{- include "monitoring.vpaBound" (list $ "vlstorage" "maxAllowed" (dig "maxAllowed" nil (.vlstorage | default dict)) (dict "cpu" "4000m" "memory" "8Gi")) | nindent 10 }}
 {{- end }}

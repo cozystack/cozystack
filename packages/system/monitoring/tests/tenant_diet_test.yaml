@@ -1,0 +1,283 @@
+suite: tenant instances run one replica of everything with small explicit requests
+
+# A Monitoring is one instance per tenant, so the HA shape the platform's own
+# instance needs (two of every store, three alertmanagers, VPA sizing, Alerta)
+# cannot be the default per tenant. Outside tenant-root and cozy-monitoring the
+# chart renders one replica of every component with explicit requests close to a
+# small tenant's usage, bounds the VPA between those requests and the memory
+# limits, and leaves Alerta out while keeping the alertmanager vmalert needs.
+# Every default has a values knob; the root namespaces keep the HA shape.
+
+release:
+  name: monitoring-system
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+  _namespace:
+    etcd: tenant-root
+    ingress: tenant-root
+    host: test.example.com
+    monitoring: tenant-test
+
+tests:
+  - it: metrics stores run one replica per component, replication factor 1, explicit requests
+    template: templates/vm/vmcluster.yaml
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.replicationFactor
+          value: 1
+      - equal:
+          path: spec.vminsert.replicaCount
+          value: 1
+      - equal:
+          path: spec.vmselect.replicaCount
+          value: 1
+      - equal:
+          path: spec.vmstorage.replicaCount
+          value: 1
+      - equal:
+          path: spec.vminsert.resources
+          value:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+      - equal:
+          path: spec.vmselect.resources.requests.memory
+          value: 128Mi
+      - equal:
+          path: spec.vmstorage.resources
+          value:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+
+  - it: logs stores run one replica per component with explicit requests
+    template: templates/vlogs/vlogs.yaml
+    asserts:
+      - equal:
+          path: spec.vlinsert.replicaCount
+          value: 1
+      - equal:
+          path: spec.vlselect.replicaCount
+          value: 1
+      - equal:
+          path: spec.vlstorage.replicaCount
+          value: 1
+      - equal:
+          path: spec.vlinsert.resources.requests.memory
+          value: 128Mi
+      - equal:
+          path: spec.vlstorage.resources
+          value:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+
+  - it: the VPA is bounded between the explicit requests and the memory limits
+    template: templates/vpa.yaml
+    documentSelector:
+      path: metadata.name
+      value: vpa-vmstorage-shortterm
+    asserts:
+      - equal:
+          path: spec.resourcePolicy.containerPolicies[0].minAllowed
+          value: {cpu: 100m, memory: 256Mi}
+      - equal:
+          path: spec.resourcePolicy.containerPolicies[0].maxAllowed
+          value: {cpu: 4000m, memory: 1Gi}
+
+  - it: one alertmanager with small requests, no Alerta, routes to the blackhole
+    template: templates/alerta/alerta.yaml
+    asserts:
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        equal:
+          path: spec.replicaCount
+          value: 1
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        equal:
+          path: spec.resources
+          value:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {memory: 256Mi}
+      # without Alerta the file renders two objects: the alertmanager config
+      # Secret and the VMAlertmanager
+      - documentIndex: 0
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "receiver: blackhole\n"
+      - documentIndex: 0
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "alerta"
+      - hasDocuments:
+          count: 2
+
+  - it: renders no Alerta database
+    template: templates/alerta/alerta-db.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: one Grafana on a single PostgreSQL instance with small requests
+    asserts:
+      - template: templates/grafana/grafana.yaml
+        equal:
+          path: spec.deployment.spec.replicas
+          value: 1
+      - template: templates/grafana/db.yaml
+        equal:
+          path: spec.instances
+          value: 1
+      - template: templates/grafana/db.yaml
+        equal:
+          path: spec.resources
+          value:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+
+  - it: vmalert and vmagent carry small explicit requests
+    asserts:
+      - template: templates/vm/vmalert.yaml
+        equal:
+          path: spec.resources.requests.memory
+          value: 64Mi
+      - template: templates/vm/vmagent.yaml
+        equal:
+          path: spec.resources.requests.memory
+          value: 128Mi
+
+  - it: values raise the replicas and override the resources
+    set:
+      metricsStorages:
+        - name: shortterm
+          retentionPeriod: "3d"
+          deduplicationInterval: "15s"
+          storage: 10Gi
+          replicas: 3
+          vmstorage:
+            resources:
+              requests: {cpu: 1, memory: 2Gi}
+              limits: {memory: 4Gi}
+      alertmanager:
+        replicas: 2
+      grafana:
+        replicas: 2
+        db:
+          instances: 2
+    asserts:
+      - template: templates/vm/vmcluster.yaml
+        equal:
+          path: spec.replicationFactor
+          value: 2
+      - template: templates/vm/vmcluster.yaml
+        equal:
+          path: spec.vmstorage.replicaCount
+          value: 3
+      - template: templates/vm/vmcluster.yaml
+        equal:
+          path: spec.vmstorage.resources.requests.memory
+          value: 2Gi
+      - template: templates/alerta/alerta.yaml
+        documentSelector:
+          path: kind
+          value: VMAlertmanager
+        equal:
+          path: spec.replicaCount
+          value: 2
+      - template: templates/grafana/grafana.yaml
+        equal:
+          path: spec.deployment.spec.replicas
+          value: 2
+      - template: templates/grafana/db.yaml
+        equal:
+          path: spec.instances
+          value: 2
+
+  - it: alerta.enabled brings Alerta back for a tenant
+    set:
+      alerta:
+        enabled: true
+    asserts:
+      - template: templates/alerta/alerta-db.yaml
+        equal:
+          path: spec.instances
+          value: 1
+      - template: templates/alerta/alerta.yaml
+        documentSelector:
+          path: kind
+          value: Deployment
+        equal:
+          path: metadata.name
+          value: alerta
+      # with Alerta the config Secret is the sixth object, after the Alerta
+      # Secret, ConfigMap, Service, Deployment and Ingress
+      - template: templates/alerta/alerta.yaml
+        documentIndex: 5
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "receiver: 'alerta'"
+
+  - it: the root instance keeps the HA shape
+    release:
+      name: monitoring-system
+      namespace: tenant-root
+    asserts:
+      - template: templates/vm/vmcluster.yaml
+        documentSelector:
+          path: metadata.name
+          value: shortterm
+        equal:
+          path: spec.replicationFactor
+          value: 2
+      - template: templates/vm/vmcluster.yaml
+        documentSelector:
+          path: metadata.name
+          value: shortterm
+        equal:
+          path: spec.vmstorage.replicaCount
+          value: 2
+      - template: templates/vm/vmcluster.yaml
+        documentSelector:
+          path: metadata.name
+          value: shortterm
+        equal:
+          path: spec.vmstorage.resources
+          value: {}
+      - template: templates/vpa.yaml
+        documentSelector:
+          path: metadata.name
+          value: vpa-vmstorage-shortterm
+        equal:
+          path: spec.resourcePolicy.containerPolicies[0].minAllowed
+          value: {cpu: 200m, memory: 512Mi}
+      - template: templates/alerta/alerta.yaml
+        documentSelector:
+          path: kind
+          value: VMAlertmanager
+        equal:
+          path: spec.replicaCount
+          value: 3
+      - template: templates/alerta/alerta.yaml
+        documentSelector:
+          path: kind
+          value: VMAlertmanager
+        notExists:
+          path: spec.resources
+      - template: templates/alerta/alerta-db.yaml
+        equal:
+          path: spec.instances
+          value: 2
+      - template: templates/grafana/grafana.yaml
+        equal:
+          path: spec.deployment.spec.replicas
+          value: 2
+      - template: templates/grafana/db.yaml
+        equal:
+          path: spec.resources.requests.memory
+          value: 512Mi

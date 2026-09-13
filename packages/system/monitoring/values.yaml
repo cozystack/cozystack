@@ -45,11 +45,24 @@ metricsStorages:
   storage: 10Gi
   storageClassName: ""
 
+## Each metrics or logs storage may also carry `replicas` (one for a tenant,
+## two for the root instance when unset) and, per component (vminsert, vmselect,
+## vmstorage, vlinsert, vlselect, vlstorage), `resources` with explicit requests
+## and limits; a tenant otherwise starts from the small defaults in
+## templates/_helpers.tpl (monitoring.tenantResources) and the root instance
+## leaves sizing to the VPA.
 logsStorages:
 - name: generic
   retentionPeriod: "1"
   storage: 10Gi
   storageClassName: ""
+## Alertmanager: `replicas` (three for the root instance, one for a tenant when
+## unset) and `resources` (a tenant otherwise gets the small default).
+alertmanager: {}
+## vmalert: `resources` (a tenant otherwise gets the small default).
+vmalert: {}
+## Alerta is rendered for the root instance and for a tenant that sets
+## `alerta.enabled: true`; without it a tenant keeps only the alertmanager.
 alerta:
   storage: 10Gi
   storageClassName: ""
@@ -70,6 +83,8 @@ alerta:
       disabledSeverity: []
       dashboardUrl: ""
       summaryFmt: ""
+## Grafana: `replicas` (two for the root instance, one for a tenant when
+## unset); `db.instances` and `db.resources` size its PostgreSQL the same way.
 grafana:
   # Upstream Grafana image, pinned by digest and routed through
   # cozy-lib.image (so mirrored-registry installs work). Plugins (VictoriaLogs
@@ -86,6 +101,7 @@ grafana:
     requests:
       cpu: 100m
       memory: 256Mi
+## vmagent: `resources` (a tenant otherwise gets the small default).
 vmagent:
   externalLabels:
     cluster: cozystack

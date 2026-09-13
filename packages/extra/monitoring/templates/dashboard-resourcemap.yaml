@@ -1,3 +1,4 @@
+{{- $alertaEnabled := include "monitoring.alertaEnabled" . }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -9,7 +10,9 @@ rules:
   - ingresses
   resourceNames:
   - grafana-ingress
+  {{- if $alertaEnabled }}
   - alerta
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - ""
@@ -24,18 +27,22 @@ rules:
   - services
   resourceNames:
   - grafana-service
+  {{- if $alertaEnabled }}
   - alerta
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io
   resources:
   - workloadmonitors
   resourceNames:
+  {{- if $alertaEnabled }}
   - alerta
+  - alerta-db
+  {{- end }}
   - grafana
   - grafana-db
-  - alerta-db
-  - alermanager
+  - alertmanager
   {{- range .Values.metricsStorages }}
   - {{ .name }}-vmstorage
   - {{ .name }}-vmselect

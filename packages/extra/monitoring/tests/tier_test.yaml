@@ -1,0 +1,132 @@
+suite: workload monitors and dashboard grants follow the tenant or root tier
+
+# The system chart this application renders runs one replica of everything for
+# a tenant and the HA shape for the root instance; the WorkloadMonitors and the
+# dashboard Role rendered here must describe the same objects, or the portal
+# would wait for replicas that never come and grant Alerta objects that do not
+# exist.
+
+release:
+  name: monitoring
+  namespace: tenant-test
+
+tests:
+  - it: a tenant gets single-replica monitors and no Alerta monitors
+    template: templates/workloadmonitors.yaml
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: shortterm-vmstorage
+        equal:
+          path: spec.replicas
+          value: 1
+      - documentSelector:
+          path: metadata.name
+          value: generic-vlstorage
+        equal:
+          path: spec.replicas
+          value: 1
+      - documentSelector:
+          path: metadata.name
+          value: grafana-db
+        equal:
+          path: spec.replicas
+          value: 1
+      - documentSelector:
+          path: metadata.name
+          value: alertmanager
+        equal:
+          path: spec.replicas
+          value: 1
+      - documentSelector:
+          path: metadata.name
+          value: alertmanager
+        equal:
+          path: spec.minReplicas
+          value: 1
+      - hasDocuments:
+          count: 13
+
+  - it: a tenant's dashboard Role grants no Alerta object and names the alertmanager monitor
+    template: templates/dashboard-resourcemap.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules[0].resourceNames
+          content: alerta
+      - notContains:
+          path: rules[3].resourceNames
+          content: alerta-db
+      - contains:
+          path: rules[3].resourceNames
+          content: alertmanager
+
+  - it: values raise the replicas of the monitors
+    template: templates/workloadmonitors.yaml
+    set:
+      metricsStorages:
+        - name: shortterm
+          retentionPeriod: "3d"
+          deduplicationInterval: "15s"
+          storage: 10Gi
+          replicas: 3
+      alertmanager:
+        replicas: 2
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: shortterm-vmstorage
+        equal:
+          path: spec.replicas
+          value: 3
+      - documentSelector:
+          path: metadata.name
+          value: alertmanager
+        equal:
+          path: spec.replicas
+          value: 2
+      - documentSelector:
+          path: metadata.name
+          value: alertmanager
+        equal:
+          path: spec.minReplicas
+          value: 2
+
+  - it: the root instance keeps the HA monitors and the Alerta grants
+    release:
+      name: monitoring
+      namespace: tenant-root
+    asserts:
+      - template: templates/workloadmonitors.yaml
+        documentSelector:
+          path: metadata.name
+          value: shortterm-vmstorage
+        equal:
+          path: spec.replicas
+          value: 2
+      - template: templates/workloadmonitors.yaml
+        documentSelector:
+          path: metadata.name
+          value: alertmanager
+        equal:
+          path: spec.replicas
+          value: 3
+      - template: templates/workloadmonitors.yaml
+        documentSelector:
+          path: metadata.name
+          value: alerta-db
+        equal:
+          path: spec.replicas
+          value: 2
+      - template: templates/workloadmonitors.yaml
+        hasDocuments:
+          count: 15
+      - template: templates/dashboard-resourcemap.yaml
+        documentSelector:
+          path: kind
+          value: Role
+        contains:
+          path: rules[3].resourceNames
+          content: alerta-db

@@ -11,6 +11,12 @@
 {{- if $existingSecret }}
 {{- $apiKey = index $existingSecret.data "alerta-api-key" | b64dec }}
 {{- end }}
+{{- /* Alerta (the web console, its database and the ingress) is rendered for
+     the root instance and for a tenant that asks for it with alerta.enabled;
+     a tenant that does not still gets the alertmanager, which vmalert needs
+     and the portal reads, with every route pointed at the blackhole. */}}
+{{- $alertaEnabled := include "monitoring.alertaEnabled" . }}
+{{- if $alertaEnabled }}
 ---
 apiVersion: v1
 kind: Secret
@@ -234,6 +240,7 @@ spec:
     - name: alerta
       port: 80
 {{- end }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Secret
@@ -249,12 +256,14 @@ stringData:
       group_wait: 15s
       group_interval: 15s
       repeat_interval: 1h
-      receiver: 'alerta'
+      receiver: {{ ternary "'alerta'" "blackhole" (eq $alertaEnabled "true") }}
       routes:
+      {{- if $alertaEnabled }}
       - receiver: alerta_no_resolve
         repeat_interval: 1m
         matchers:
         - 'event="Heartbeat"'
+      {{- end }}
       - receiver: blackhole
         matchers:
         - 'severity="none"'
@@ -263,6 +272,7 @@ stringData:
         - 'alertname=~"CDIDefaultStorageClassDegraded|CDINoDefaultStorageClass"'
     receivers:
     - name: blackhole
+    {{- if $alertaEnabled }}
     - name: "alerta"
       webhook_configs:
       - url: 'http://alerta/api/webhooks/prometheus?api-key={{ $apiKey }}'
@@ -271,6 +281,7 @@ stringData:
       webhook_configs:
       - url: 'http://alerta/api/webhooks/prometheus?api-key={{ $apiKey }}'
         send_resolved: false
+    {{- end }}
 ---
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMAlertmanager
@@ -282,7 +293,11 @@ spec:
       apps.cozystack.io/application.group: apps.cozystack.io
       apps.cozystack.io/application.kind: Monitoring
       apps.cozystack.io/application.name: {{ $.Release.Name }}
-  replicaCount: 3
+  replicaCount: {{ include "monitoring.replicas" (list $ (dig "replicas" nil (.Values.alertmanager | default dict)) 3 1) }}
+  {{- $amResources := include "monitoring.componentResources" (list $ "alertmanager" (dig "resources" nil (.Values.alertmanager | default dict))) }}
+  {{- if ne $amResources "{}" }}
+  resources: {{- $amResources | nindent 4 }}
+  {{- end }}
   configSecret: alertmanager
   podMetadata:
     labels:

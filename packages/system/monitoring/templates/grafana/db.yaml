@@ -3,7 +3,7 @@ kind: Cluster
 metadata:
   name: grafana-db
 spec:
-  instances: 2
+  instances: {{ include "monitoring.replicas" (list $ (dig "db" "instances" nil (.Values.grafana | default dict)) 2 1) }}
   {{- $existingCluster := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace "grafana-db" }}
   {{- $image := dig "spec" "imageName" "ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie" $existingCluster }}
   imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
@@ -20,6 +20,10 @@ spec:
   {{- end }}
   monitoring:
     enablePodMonitor: true
+  {{- $dbResources := dig "db" "resources" nil (.Values.grafana | default dict) }}
+  {{- if $dbResources }}
+  resources: {{- toYaml $dbResources | nindent 4 }}
+  {{- else if include "monitoring.isRoot" $ }}
   resources:
     limits:
       cpu: "1"
@@ -27,6 +31,9 @@ spec:
     requests:
       cpu: 100m
       memory: 512Mi
+  {{- else }}
+  resources: {{- include "monitoring.componentResources" (list $ "grafanaDB" nil) | nindent 4 }}
+  {{- end }}
   inheritedMetadata:
     labels:
       policy.cozystack.io/allow-to-apiserver: "true"

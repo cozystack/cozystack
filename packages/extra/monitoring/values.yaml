@@ -17,8 +17,9 @@ host: ""
 ## @field {quantity} [memory] - Memory limit.
 
 ## @typedef {struct} VMComponent - VictoriaMetrics component configuration.
-## @field {Request} [minAllowed] - Minimum guaranteed resources.
-## @field {Limit} [maxAllowed] - Maximum allowed resources.
+## @field {Request} [minAllowed] - Lower bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its explicit requests and the root instance by the chart's wide defaults.
+## @field {Limit} [maxAllowed] - Upper bound the VPA may size the component's requests to. Unset, a tenant instance is bounded by its memory limits and the root instance by the chart's wide defaults.
+## @field {Resources} [resources] - Explicit requests and limits of the component. Unset, a tenant instance starts from small defaults (vminsert, vmselect, vlinsert and vlselect 128Mi, vmstorage and vlstorage 256Mi, memory limits four times the request) and the root instance leaves sizing to the VPA.
 
 ## @typedef {struct} Resources - Combined resource configuration.
 ## @field {Request} [requests] - Resource requests.
@@ -30,6 +31,7 @@ host: ""
 ## @field {string} deduplicationInterval - Deduplication interval for metrics.
 ## @field {string} storage="10Gi" - Persistent volume size.
 ## @field {string} [storageClassName] - StorageClass used for the data.
+## @field {int} [replicas] - Replicas of vminsert, vmselect and vmstorage. Unset, one for a tenant instance and two for the root instance. Two or more also enable a replication factor of two across the vmstorage nodes.
 ## @field {VMComponent} [vminsert] - Configuration for vminsert.
 ## @field {VMComponent} [vmselect] - Configuration for vmselect.
 ## @field {VMComponent} [vmstorage] - Configuration for vmstorage.
@@ -84,6 +86,10 @@ metricsStorages:
 ## @field {string} retentionPeriod="1" - Retention period for logs.
 ## @field {string} storage="10Gi" - Persistent volume size.
 ## @field {string} storageClassName="replicated" - StorageClass used to store the data.
+## @field {int} [replicas] - Replicas of vlinsert, vlselect and vlstorage. Unset, one for a tenant instance and two for the root instance.
+## @field {VMComponent} [vlinsert] - Configuration for vlinsert.
+## @field {VMComponent} [vlselect] - Configuration for vlselect.
+## @field {VMComponent} [vlstorage] - Configuration for vlstorage.
 
 ## @param {[]LogsStorage} logsStorages - Configuration of logs storage instances.
 logsStorages:
@@ -110,6 +116,7 @@ logsStorages:
 ## @field {SlackAlerts} [slack] - Configuration for Slack alerts.
 
 ## @typedef {struct} Alerta - Configuration for the Alerta service.
+## @field {bool} [enabled] - Render Alerta, its database and its ingress. Unset, on for the root instance and off for a tenant instance; a tenant without Alerta keeps the alertmanager, which vmalert needs and the portal reads, with every route pointed at the blackhole.
 ## @field {string} [storage] - Persistent volume size for the database.
 ## @field {string} [storageClassName] - StorageClass used for the database.
 ## @field {Resources} [resources] - Resource configuration.
@@ -140,8 +147,11 @@ alerta:
 
 ## @typedef {struct} GrafanaDB - Grafana database configuration.
 ## @field {string} [size] - Persistent volume size for the database.
+## @field {int} [instances] - PostgreSQL instances of the database. Unset, one for a tenant instance and two for the root instance.
+## @field {Resources} [resources] - Explicit requests and limits of each PostgreSQL instance. Unset, a tenant instance gets 128Mi requested and 512Mi limited, the root instance 512Mi and 2048Mi.
 
 ## @typedef {struct} Grafana - Grafana service configuration.
+## @field {int} [replicas] - Grafana replicas. Unset, one for a tenant instance and two for the root instance.
 ## @field {GrafanaDB} [db] - Database configuration.
 ## @field {Resources} [resources] - Resource configuration.
 
@@ -157,6 +167,27 @@ grafana:
       cpu: 100m
       memory: 256Mi
 ##
+## @section Alertmanager configuration
+##
+
+## @typedef {struct} Alertmanager - Alertmanager configuration.
+## @field {int} [replicas] - Alertmanager replicas. Unset, one for a tenant instance and three for the root instance.
+## @field {Resources} [resources] - Explicit requests and limits. Unset, a tenant instance gets 64Mi requested and 256Mi limited and the root instance the operator defaults.
+
+## @param {Alertmanager} alertmanager - Configuration for the alertmanager every vmalert notifies.
+alertmanager: {}
+
+##
+## @section Vmalert configuration
+##
+
+## @typedef {struct} Vmalert - VictoriaMetrics alerting configuration.
+## @field {Resources} [resources] - Explicit requests and limits. Unset, a tenant instance gets 64Mi requested and 256Mi limited and the root instance the operator defaults.
+
+## @param {Vmalert} vmalert - Configuration for vmalert.
+vmalert: {}
+
+##
 ## @section Vmagent configuration
 ##
 
@@ -169,6 +200,7 @@ grafana:
 ## @typedef {struct} Vmagent - VictoriaMetrics Agent configuration.
 ## @field {VmagentExternalLabels} [externalLabels] - External labels applied to all metrics.
 ## @field {VmagentRemoteWrite} [remoteWrite] - Remote write configuration.
+## @field {Resources} [resources] - Explicit requests and limits. Unset, a tenant instance gets 128Mi requested and 512Mi limited.
 
 ## @param {Vmagent} vmagent - Configuration for VictoriaMetrics Agent.
 vmagent:

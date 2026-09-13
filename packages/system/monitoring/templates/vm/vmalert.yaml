@@ -21,7 +21,8 @@ spec:
     url: http://vmselect-{{ .name }}.{{ $.Release.Namespace }}.svc:8481/select/0/prometheus
   remoteWrite:
     url: http://vminsert-{{ .name }}.{{ $.Release.Namespace }}.svc:8480/insert/0/prometheus/api/v1/write
-  resources: {}
+  {{- $r := include "monitoring.componentResources" (list $ "vmalert" (dig "resources" nil ($.Values.vmalert | default dict))) }}
+  resources: {{ if eq $r "{}" }}{}{{ else }}{{ $r | nindent 4 }}{{ end }}
   selectAllByDefault: true
 {{- break }}
 {{- end }}

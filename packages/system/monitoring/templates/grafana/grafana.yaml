@@ -173,7 +173,7 @@ spec:
     {{- end }}
   deployment:
     spec:
-      replicas: 2
+      replicas: {{ include "monitoring.replicas" (list $ (dig "replicas" nil (.Values.grafana | default dict)) 2 1) }}
       template:
         spec:
           containers:

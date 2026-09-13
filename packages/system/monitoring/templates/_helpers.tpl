@@ -214,3 +214,127 @@
 {{-   fail "spec.oidc: `users` is not honoured under `customConfig.secretRef` — the operator's mounted auth.ini is authoritative and the chart cannot inject `skip_org_role_sync=true` / `oauth_allow_insecure_email_lookup=true`, so the users-Job's role assignments would be overwritten on the operator's next login. Either switch to `customConfig.config` (inline map, merged with the chart-forced settings) or unset `users` and manage authorization inside the ini fragment yourself." -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+monitoring.isRoot: "true" for the platform's own Monitoring (tenant-root, or
+cozy-monitoring on older layouts), "" for a tenant's. The root instance keeps
+the HA shape (two replicas of every store, three alertmanagers, VPA-driven
+sizing, Alerta); a tenant instance defaults to one replica of everything with
+small explicit requests, because a tenant runs its own copy of the whole stack
+and the platform cannot afford the HA shape per tenant. Every default below can
+be overridden through values; the helper only picks the tier.
+*/}}
+{{- define "monitoring.isRoot" -}}
+{{- if or (eq .Release.Namespace "tenant-root") (eq .Release.Namespace "cozy-monitoring") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+monitoring.replicas: (list $ value rootDefault tenantDefault). An explicit
+value wins; otherwise the tier default.
+*/}}
+{{- define "monitoring.replicas" -}}
+{{- $root := index . 0 -}}
+{{- $value := index . 1 -}}
+{{- if and (not (kindIs "invalid" $value)) (ne (toString $value) "") -}}
+{{- int $value -}}
+{{- else if include "monitoring.isRoot" $root -}}
+{{- index . 2 -}}
+{{- else -}}
+{{- index . 3 -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+monitoring.tenantResources: the small explicit requests a tenant instance
+starts from, close to what a lightly used tenant needs; memory limits are four
+times the request. The VPA (Initial mode) may raise the requests of the metrics
+and logs stores between these requests and limits as usage grows.
+*/}}
+{{- define "monitoring.tenantResources" -}}
+vminsert:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 512Mi}
+vmselect:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 512Mi}
+vmstorage:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 1Gi}
+vlinsert:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 512Mi}
+vlselect:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 512Mi}
+vlstorage:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 1Gi}
+alertmanager:
+  requests: {cpu: 25m, memory: 64Mi}
+  limits: {memory: 256Mi}
+vmalert:
+  requests: {cpu: 25m, memory: 64Mi}
+  limits: {memory: 256Mi}
+vmagent:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 512Mi}
+grafanaDB:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 512Mi}
+{{- end -}}
+
+{{/*
+monitoring.componentResources: (list $ component override) renders the
+resources block of one component as YAML. An explicit override wins; the root
+tier renders an empty block (the VPA sizes it); a tenant gets the small
+defaults above.
+*/}}
+{{- define "monitoring.componentResources" -}}
+{{- $root := index . 0 -}}
+{{- $component := index . 1 -}}
+{{- $override := index . 2 -}}
+{{- if $override -}}
+{{- toYaml $override -}}
+{{- else if include "monitoring.isRoot" $root -}}
+{}
+{{- else -}}
+{{- toYaml (index (include "monitoring.tenantResources" $root | fromYaml) $component) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+monitoring.vpaBound: (list $ component "minAllowed"|"maxAllowed" override rootDefault)
+renders one VPA bound as YAML. An explicit override wins; the root tier keeps
+its wide bounds; a tenant is bounded by its explicit requests (minAllowed) and
+memory limits (maxAllowed), so the VPA sizes between the two.
+*/}}
+{{- define "monitoring.vpaBound" -}}
+{{- $root := index . 0 -}}
+{{- $component := index . 1 -}}
+{{- $bound := index . 2 -}}
+{{- $override := index . 3 -}}
+{{- $rootDefault := index . 4 -}}
+{{- if $override -}}
+{{- toYaml $override -}}
+{{- else if include "monitoring.isRoot" $root -}}
+{{- toYaml $rootDefault -}}
+{{- else -}}
+{{- $r := index (include "monitoring.tenantResources" $root | fromYaml) $component -}}
+{{- if eq $bound "minAllowed" -}}
+{{- toYaml $r.requests -}}
+{{- else -}}
+{{- toYaml (dict "cpu" (index $rootDefault "cpu") "memory" $r.limits.memory) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+monitoring.alertaEnabled: "true" when Alerta is rendered. Explicit
+alerta.enabled wins; otherwise on for the root instance, off for a tenant.
+*/}}
+{{- define "monitoring.alertaEnabled" -}}
+{{- $v := dig "enabled" nil (.Values.alerta | default dict) -}}
+{{- if kindIs "invalid" $v -}}
+{{- include "monitoring.isRoot" . -}}
+{{- else if $v -}}true{{- end -}}
+{{- end -}}
