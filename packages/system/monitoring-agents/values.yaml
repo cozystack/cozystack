@@ -331,11 +331,25 @@ fluent-bit:
       mountPath: /var/lib/docker/containers
       readOnly: true
   # Per-tenant log routing. Every container log still goes to the root
-  # VictoriaLogs below; each entry here additionally copies the logs of one
-  # namespace to that tenant's own VictoriaLogs (the vlinsert of the tenant's
-  # Monitoring application). A rewrite_tag filter re-emits the matching records
-  # under tenant.<namespace>.* and one HTTP output per entry ships them.
-  # `host` and `port` are optional and default to the tenant's own vlinsert.
+  # VictoriaLogs below; the logs of a namespace that belongs to a tenant with
+  # its own Monitoring are additionally copied to that tenant's VictoriaLogs
+  # (the vlinsert of its Monitoring application). A rewrite_tag filter
+  # re-emits the matching records under tenant.<namespace>.* and one HTTP
+  # output per namespace ships the copy.
+  #
+  # Which namespaces are routed is discovered at render time from the
+  # namespace.cozystack.io/monitoring label the tenant chart stamps on every
+  # tenant namespace: its value names the nearest tenant (itself included)
+  # that runs a Monitoring application, the same rule that decides which
+  # vmagent collects the namespace's metrics, so a sub-tenant without a
+  # Monitoring of its own is routed to its parent's store. A namespace whose
+  # label names the root target (global.target) is not routed: the root output
+  # already receives it. See templates/_helpers.tpl,
+  # monitoring-agents.tenantLogRoutes.
+  #
+  # The list below is an override: an entry for a discovered namespace
+  # replaces its host or port, an entry for any other namespace adds a route.
+  # `host` and `port` are optional and default to the namespace's own vlinsert.
   #
   # tenantLogRouting:
   #   - namespace: tenant-example
@@ -413,12 +427,16 @@ fluent-bit:
           json_date_format iso8601
           header AccountID 0
           header ProjectID 0
-      {{- range .Values.tenantLogRouting }}
+      {{- range (include "monitoring-agents.tenantLogRoutes" $ | fromYamlArray) }}
       [OUTPUT]
           Name http
           Match tenant.{{ .namespace }}.*
-          Host {{ .host | default (printf "vlinsert-generic.%s.svc" .namespace) }}
-          port {{ .port | default 9481 }}
+          Host {{ .host }}
+          port {{ .port }}
+          # A tenant store that is down must not hold the pipeline hostage:
+          # give up on a chunk after a few retries instead of buffering until
+          # the input pauses and the root output stalls with it.
+          Retry_Limit 5
           compress gzip
           uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
           format json_lines
@@ -491,7 +509,7 @@ fluent-bit:
           Rename keep_kubernetes_pod_name kubernetes_pod_name
           Rename keep_kubernetes_namespace_name kubernetes_namespace_name
           Rename keep_kubernetes_container_name kubernetes_container_name
-      {{- range .Values.tenantLogRouting }}
+      {{- range (include "monitoring-agents.tenantLogRoutes" $ | fromYamlArray) }}
       [FILTER]
           Name rewrite_tag
           Match kube.*

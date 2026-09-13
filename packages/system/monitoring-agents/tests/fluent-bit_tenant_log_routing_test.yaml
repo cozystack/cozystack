@@ -2,71 +2,111 @@ suite: fluent-bit routes tenant logs to the tenant VictoriaLogs
 
 # fluent-bit ships every container log to the root VictoriaLogs. A tenant
 # that runs its own Monitoring application gets a VictoriaLogs of its own that
-# receives nothing. `fluent-bit.tenantLogRouting` fixes that per namespace: a
-# rewrite_tag filter re-emits the records of the namespace under
-# tenant.<namespace>.* (keeping the original, so the root still sees them) and
-# one HTTP output per entry ships the copy to the tenant's vlinsert.
+# would otherwise receive nothing. The routes are discovered from the
+# namespace.cozystack.io/monitoring label the tenant chart stamps on every
+# tenant namespace (its value names the tenant whose Monitoring collects the
+# namespace): each routed namespace gets a rewrite_tag filter that re-emits its
+# records under tenant.<namespace>.* (keeping the original, so the root still
+# sees them) and one HTTP output shipping the copy to that tenant's vlinsert.
+# `fluent-bit.tenantLogRouting` overrides or adds routes explicitly.
+
 release:
   name: monitoring-agents
   namespace: cozy-monitoring
+
+set:
+  global:
+    target: tenant-root
+
 templates:
   - charts/fluent-bit/templates/configmap.yaml
+
+kubernetesProvider:
+  scheme:
+    "v1/Namespace":
+      gvr:
+        group: ""
+        version: v1
+        resource: namespaces
+      namespaced: false
+  objects:
+    # a tenant with its own Monitoring
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: tenant-a
+        labels:
+          namespace.cozystack.io/monitoring: tenant-a
+    # its sub-tenant without one: collected by the parent
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: tenant-a-child
+        labels:
+          namespace.cozystack.io/monitoring: tenant-a
+    # a tenant collected by the root Monitoring: nothing to add
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: tenant-b
+        labels:
+          namespace.cozystack.io/monitoring: tenant-root
+    # a namespace the tenant chart never labelled
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: kube-system
+
 tests:
-  - it: renders no tenant routing by default
+  - it: routes every namespace labelled with a tenant Monitoring to that tenant's vlinsert
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '\[FILTER\]\n\s+Name rewrite_tag\n\s+Match kube\.\*\n\s+Rule \$kubernetes_namespace_name \^tenant-a\$ tenant\.tenant-a\.\$TAG true'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '\[OUTPUT\]\n\s+Name http\n\s+Match tenant\.tenant-a\.\*\n\s+Host vlinsert-generic\.tenant-a\.svc\n\s+port 9481\n'
+      # the sub-tenant is shipped to its parent's store under its own tag
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Rule \$kubernetes_namespace_name \^tenant-a-child\$ tenant\.tenant-a-child\.\$TAG true'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match tenant\.tenant-a-child\.\*\n\s+Host vlinsert-generic\.tenant-a\.svc\n'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match tenant\.tenant-a\.\*\n(.*\n){2,6}\s+Retry_Limit 5\n'
+
+  - it: leaves namespaces collected by the root, and unlabelled ones, to the root output alone
     asserts:
       - notMatchRegex:
           path: data["fluent-bit.conf"]
-          pattern: rewrite_tag
+          pattern: 'tenant-b'
       - notMatchRegex:
           path: data["fluent-bit.conf"]
-          pattern: 'Match tenant\.'
+          pattern: 'kube-system'
       - matchRegex:
           path: data["fluent-bit.conf"]
-          pattern: 'Match kube\.\*\n\s+Host vlinsert-generic\.cozy-monitoring\.svc'
+          pattern: 'Match kube\.\*\n\s+Host vlinsert-generic\.tenant-root\.svc'
 
-  - it: one entry adds a rewrite_tag filter and an output to the tenant vlinsert, root keeps everything
-    set:
-      fluent-bit:
-        tenantLogRouting:
-          - namespace: tenant-example
-    asserts:
-      # the copy: re-tagged from the namespace field, original record kept
-      - matchRegex:
-          path: data["fluent-bit.conf"]
-          pattern: '\[FILTER\]\n\s+Name rewrite_tag\n\s+Match kube\.\*\n\s+Rule \$kubernetes_namespace_name \^tenant-example\$ tenant\.tenant-example\.\$TAG true'
-      - matchRegex:
-          path: data["fluent-bit.conf"]
-          pattern: '\[FILTER\]\n\s+Name modify\n\s+Match tenant\.tenant-example\.\*\n\s+Set tenant tenant-example'
-      # the tenant output, defaulting to the tenant's own vlinsert
-      - matchRegex:
-          path: data["fluent-bit.conf"]
-          pattern: '\[OUTPUT\]\n\s+Name http\n\s+Match tenant\.tenant-example\.\*\n\s+Host vlinsert-generic\.tenant-example\.svc\n\s+port 9481\n'
-      - matchRegex:
-          path: data["fluent-bit.conf"]
-          pattern: 'Match tenant\.tenant-example\.\*\n(.*\n){2}.*\n\s+uri /insert/jsonline\?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date'
-      # the root output is untouched and still matches every container log
-      - matchRegex:
-          path: data["fluent-bit.conf"]
-          pattern: 'Match kube\.\*\n\s+Host vlinsert-generic\.cozy-monitoring\.svc'
-
-  - it: host and port can be overridden per entry, and entries are independent
+  - it: the explicit list overrides a discovered route and adds any other
     set:
       fluent-bit:
         tenantLogRouting:
           - namespace: tenant-a
             host: vlinsert-custom.tenant-a.svc
             port: 9999
-          - namespace: tenant-b
+          - namespace: tenant-c
     asserts:
       - matchRegex:
           path: data["fluent-bit.conf"]
           pattern: 'Match tenant\.tenant-a\.\*\n\s+Host vlinsert-custom\.tenant-a\.svc\n\s+port 9999\n'
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match tenant\.tenant-a\.\*\n\s+Host vlinsert-generic\.tenant-a\.svc'
       - matchRegex:
           path: data["fluent-bit.conf"]
-          pattern: 'Match tenant\.tenant-b\.\*\n\s+Host vlinsert-generic\.tenant-b\.svc\n\s+port 9481\n'
+          pattern: 'Match tenant\.tenant-c\.\*\n\s+Host vlinsert-generic\.tenant-c\.svc\n\s+port 9481\n'
       - matchRegex:
           path: data["fluent-bit.conf"]
-          pattern: 'Rule \$kubernetes_namespace_name \^tenant-a\$ tenant\.tenant-a\.\$TAG true'
-      - matchRegex:
-          path: data["fluent-bit.conf"]
-          pattern: 'Rule \$kubernetes_namespace_name \^tenant-b\$ tenant\.tenant-b\.\$TAG true'
+          pattern: 'Rule \$kubernetes_namespace_name \^tenant-a-child\$ tenant\.tenant-a-child\.\$TAG true'

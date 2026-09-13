@@ -1,0 +1,41 @@
+suite: fluent-bit tenant log routing renders offline from the explicit list alone
+
+# Outside a cluster `lookup` finds no namespaces, so the discovered routes are
+# empty and only the explicit fluent-bit.tenantLogRouting list renders; with
+# nothing listed the config carries no tenant route at all.
+
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+
+templates:
+  - charts/fluent-bit/templates/configmap.yaml
+
+tests:
+  - it: renders no tenant routing by default
+    asserts:
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: rewrite_tag
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match tenant\.'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match kube\.\*\n\s+Host vlinsert-generic\.cozy-monitoring\.svc'
+
+  - it: an explicit entry renders its filter and output
+    set:
+      fluent-bit:
+        tenantLogRouting:
+          - namespace: tenant-example
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '\[FILTER\]\n\s+Name rewrite_tag\n\s+Match kube\.\*\n\s+Rule \$kubernetes_namespace_name \^tenant-example\$ tenant\.tenant-example\.\$TAG true'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '\[FILTER\]\n\s+Name modify\n\s+Match tenant\.tenant-example\.\*\n\s+Set tenant tenant-example'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '\[OUTPUT\]\n\s+Name http\n\s+Match tenant\.tenant-example\.\*\n\s+Host vlinsert-generic\.tenant-example\.svc\n\s+port 9481\n'
