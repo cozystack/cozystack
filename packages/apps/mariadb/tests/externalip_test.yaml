@@ -93,3 +93,24 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'externalIPs[1] targets "primary" a second time: one endpoint wears one address, so use one entry per target'
+
+  - it: "an entry with a hostname also asks external-dns to publish the address under it"
+    set:
+      external: true
+      replicas: 1
+      externalIPs:
+        - claim: reserved-address
+          hostname: app.example.com
+    asserts:
+      - equal:
+          path: spec.service.metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+        documentSelector:
+          path: kind
+          value: MariaDB
+      - equal:
+          path: spec.service.metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: app.example.com
+        documentSelector:
+          path: kind
+          value: MariaDB

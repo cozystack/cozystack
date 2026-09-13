@@ -53,6 +53,8 @@ type ConfigSpec struct {
 type ExternalIP struct {
 	// Name of an IPAddressClaim in this namespace whose address the endpoint should wear. Until the claim binds, the endpoint keeps whatever address the load balancer assigned.
 	Claim string `json:"claim"`
+	// DNS name the tenant's external-dns application publishes the pinned address under, as the `external-dns.alpha.kubernetes.io/hostname` annotation of the pinned Service. Several names may be joined by commas. Needs an external-dns application in this namespace whose domain filters cover the name; without one the annotation is inert.
+	Hostname string `json:"hostname,omitempty"`
 	// Which external endpoint to pin. `master` is the Sentinel-elected master, the endpoint `external: true` publishes, and is the default.
 	Target string `json:"target,omitempty"`
 }

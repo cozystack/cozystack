@@ -31,13 +31,26 @@ local.sdn.cozystack.io/ip-address-claim
 {{- end }}
 
 {{/*
-Normalize and validate `.Values.externalIPs` into a map of target -> claim name.
+The Service annotation external-dns reads a DNS name from. The tenant's
+external-dns application watches the Services of its namespace with the
+default annotation prefix, so a pinned endpoint that also names a hostname is
+published under it; an external-dns run with a custom annotationPrefix does not
+see this key.
+*/}}
+{{- define "cozy-lib.externalIP.hostnameAnnotation" -}}
+external-dns.alpha.kubernetes.io/hostname
+{{- end }}
+
+{{/*
+Normalize and validate `.Values.externalIPs` into a map of target -> {claim,
+hostname}, hostname being optional.
 
 Invoke as:
   {{- $claims := include "cozy-lib.externalIP.claims" (list .Values.externalIPs .Values.external "rw" (list "rw" "ro") $) | fromYaml }}
 
 Arguments, in order:
-  - externalIPs   the raw value: a list of {target, claim} entries, or empty
+  - externalIPs   the raw value: a list of {target, claim, hostname} entries,
+                  or empty
   - external      the chart's external-exposure gate, as a bool
   - defaultTarget the target an entry that omits one selects — the endpoint the
                   chart publishes when `external: true`
@@ -78,7 +91,15 @@ install-time error than as a Service that quietly came up on the wrong IP.
 {{-       if hasKey $out $target }}
 {{-         fail (printf "externalIPs[%d] targets %q a second time: one endpoint wears one address, so use one entry per target" $i $target) }}
 {{-       end }}
-{{-       $_ := set $out $target $claim }}
+{{-       $hostname := $entry.hostname | default "" | toString }}
+{{-       if $hostname }}
+{{-         range $name := splitList "," $hostname }}
+{{-           if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)+$" $name) }}
+{{-             fail (printf "externalIPs[%d] hostname %q is not a DNS name: lowercase labels joined by dots, such as db.example.com (several may be joined by commas)" $i $hostname) }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{-       $_ := set $out $target (dict "claim" $claim "hostname" $hostname) }}
 {{-     end }}
 {{-   end }}
 {{-   toYaml $out }}
@@ -86,7 +107,9 @@ install-time error than as a Service that quietly came up on the wrong IP.
 
 {{/*
 Render the consumption annotation for one target, or nothing when that target
-has no reserved address.
+has no reserved address. An entry that also names a hostname gets the
+external-dns hostname annotation beside it, so the tenant's external-dns
+publishes the pinned address under that name.
 
 Invoke as:
   metadata:
@@ -103,6 +126,9 @@ absent one.
 {{-   $claims := index . 0 }}
 {{-   $target := index . 1 }}
 {{-   with (index ($claims | default dict) $target) }}
-{{-     include "cozy-lib.externalIP.claimAnnotation" $ }}: {{ . | quote }}
+{{-     include "cozy-lib.externalIP.claimAnnotation" $ }}: {{ .claim | quote }}
+{{-     with .hostname }}
+{{ include "cozy-lib.externalIP.hostnameAnnotation" $ }}: {{ . | quote }}
+{{-     end }}
 {{-   end }}
 {{- end }}

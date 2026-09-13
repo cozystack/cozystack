@@ -108,3 +108,25 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'externalIPs[1] targets "endpoint" a second time: one endpoint wears one address, so use one entry per target'
+
+  - it: "an entry with a hostname also asks external-dns to publish the address under it"
+    set:
+      external: true
+      _cluster:
+        cluster-domain: cozy.local
+      externalIPs:
+        - claim: reserved-address
+          hostname: app.example.com
+    asserts:
+      - equal:
+          path: spec.templates.serviceTemplates[0].metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: reserved-address
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      - equal:
+          path: spec.templates.serviceTemplates[0].metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: app.example.com
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation

@@ -121,3 +121,73 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "externalIPs[0] must be a {target, claim} object, got string"
+
+  - it: "an entry with a hostname also asks external-dns to publish the address under it"
+    set:
+      external: true
+      externalIPs:
+        - claim: primary-address
+          hostname: db.example.com
+    asserts:
+      - equal:
+          path: metadata.annotations["local.sdn.cozystack.io/ip-address-claim"]
+          value: primary-address
+        documentSelector:
+          path: metadata.name
+          value: lib-rw
+      - equal:
+          path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: db.example.com
+        documentSelector:
+          path: metadata.name
+          value: lib-rw
+      - notExists:
+          path: metadata.annotations
+        documentSelector:
+          path: metadata.name
+          value: lib-ro
+
+  - it: "an entry without a hostname gets no external-dns annotation"
+    set:
+      external: true
+      externalIPs:
+        - claim: primary-address
+    asserts:
+      - notExists:
+          path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+        documentSelector:
+          path: metadata.name
+          value: lib-rw
+
+  - it: "several hostnames may be joined by commas, the way external-dns reads them"
+    set:
+      external: true
+      externalIPs:
+        - claim: primary-address
+          hostname: db.example.com,db-primary.example.com
+    asserts:
+      - equal:
+          path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: db.example.com,db-primary.example.com
+        documentSelector:
+          path: metadata.name
+          value: lib-rw
+
+  - it: "a hostname that is not a DNS name is refused"
+    set:
+      external: true
+      externalIPs:
+        - claim: primary-address
+          hostname: "DB example"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalIPs[0] hostname "DB example" is not a DNS name: lowercase labels joined by dots, such as db.example.com (several may be joined by commas)'
+
+  - it: "a hostname needs a claim: the address is what the name points at"
+    set:
+      external: true
+      externalIPs:
+        - hostname: db.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: "externalIPs[0] has no claim: every entry must name an IPAddressClaim in this namespace"
