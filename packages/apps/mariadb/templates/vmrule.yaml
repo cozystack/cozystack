@@ -1,0 +1,53 @@
+{{- /*
+  Alerts for this cluster, evaluated by the tenant vmalert (it selects every
+  VMRule in its own namespace). The mariadb-operator runs mysqld_exporter as
+  a sidecar and publishes the ServiceMonitor the MariaDB asks for
+  (metrics.serviceMonitor), which the VictoriaMetrics operator converts into a
+  scrape; the instances of this release are the pods named <release>-N. The
+  replication rules only make sense with a replica to lag behind, so they are
+  rendered for more than one replica.
+*/ -}}
+{{- $sel := printf `namespace="%s", pod=~"^%s-[0-9]+$"` .Release.Namespace .Release.Name }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  groups:
+  - name: mariadb.{{ .Release.Name }}
+    rules:
+    - alert: MariaDBDown
+      expr: mysql_up{ {{ $sel }}} == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: MariaDB instance {{ "{{ $labels.pod }}" }} is down
+        description: Instance {{ "{{ $labels.pod }}" }} of MariaDB {{ .Release.Name }} in {{ .Release.Namespace }} has not answered its exporter for 5 minutes.
+    {{- if gt (int .Values.replicas) 1 }}
+    - alert: MariaDBReplicationBroken
+      expr: mysql_slave_status_slave_sql_running{ {{ $sel }}} == 0 or mysql_slave_status_slave_io_running{ {{ $sel }}} == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: MariaDB replica {{ "{{ $labels.pod }}" }} stopped replicating
+        description: Replica {{ "{{ $labels.pod }}" }} of MariaDB {{ .Release.Name }} has a stopped SQL or IO replication thread; it no longer follows the primary.
+    - alert: MariaDBReplicationLagHigh
+      expr: mysql_slave_status_seconds_behind_master{ {{ $sel }}} > 300
+      for: 10m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: MariaDB replica {{ "{{ $labels.pod }}" }} lags by {{ "{{ $value | humanizeDuration }}" }}
+        description: Replica {{ "{{ $labels.pod }}" }} of MariaDB {{ .Release.Name }} has been more than 5 minutes behind the primary for 10 minutes.
+    {{- end }}

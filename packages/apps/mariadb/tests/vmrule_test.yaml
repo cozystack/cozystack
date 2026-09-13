@@ -1,0 +1,84 @@
+suite: MariaDB alerts for the tenant vmalert
+
+# One VMRule per release, in the release namespace where the tenant vmalert
+# selects it. mysqld_exporter runs as a sidecar of the pods named
+# <release>-N, so every expression pins namespace and that pod pattern. The
+# replication rules need a replica to lag behind and are rendered only for
+# more than one replica.
+
+templates:
+  - templates/vmrule.yaml
+
+release:
+  name: mariadb-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+  replicas: 2
+
+tests:
+  - it: renders one VMRule for the release with the alert labels the portal expects
+    documentSelector:
+      path: kind
+      value: VMRule
+    asserts:
+      - equal:
+          path: metadata.name
+          value: mariadb-test
+      - equal:
+          path: spec.groups[0].name
+          value: mariadb.mariadb-test
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 3
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: MariaDBDown
+      - equal:
+          path: spec.groups[0].rules[0].labels
+          value:
+            namespace: tenant-test
+            service: mariadb-test
+            severity: critical
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: 'mysql_up\{\ namespace="tenant\-test",\ pod=\~"\^mariadb\-test\-\[0\-9\]\+\$"\}\ ==\ 0'
+      - equal:
+          path: spec.groups[0].rules[1].alert
+          value: MariaDBReplicationBroken
+      - equal:
+          path: spec.groups[0].rules[1].labels
+          value:
+            namespace: tenant-test
+            service: mariadb-test
+            severity: critical
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: 'mysql_slave_status_slave_sql_running\{\ namespace="tenant\-test",\ pod=\~"\^mariadb\-test\-\[0\-9\]\+\$"\}\ ==\ 0\ or\ mysql_slave_status_slave_io_running'
+      - equal:
+          path: spec.groups[0].rules[2].alert
+          value: MariaDBReplicationLagHigh
+      - equal:
+          path: spec.groups[0].rules[2].labels
+          value:
+            namespace: tenant-test
+            service: mariadb-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: 'mysql_slave_status_seconds_behind_master\{\ namespace="tenant\-test",\ pod=\~"\^mariadb\-test\-\[0\-9\]\+\$"\}\ >\ 300'
+
+  - it: a single replica gets the availability rule only
+    set:
+      replicas: 1
+    documentSelector:
+      path: kind
+      value: VMRule
+    asserts:
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 1
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: MariaDBDown
