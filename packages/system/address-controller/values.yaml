@@ -1,0 +1,8 @@
+# The core controllers for IP addresses as a first-class resource
+# (IPAddressClass / IPAddress / IPAddressClaim, local.sdn.cozystack.io): the
+# PVC/PV analog for addresses. They own claim-to-address binding and reclaim;
+# allocation belongs to per-class drivers such as cozy-metallb-iad.
+#
+# The vendored chart (charts/address-controller) is used with its own
+# defaults. Anything under this key is passed to it unchanged.
+address-controller: {}

@@ -1,0 +1,20 @@
+# Container image for the core controller.
+image: ghcr.io/lllamnyp/address-controller:main
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+controller:
+  replicas: 1
+  # Leader election matters once replicas > 1, but is on by default so scaling
+  # up is safe without a config change.
+  leaderElect: true
+  # ":8443" (HTTPS) or ":8080" (HTTP) to expose controller-runtime metrics;
+  # "0" disables the endpoint.
+  metricsBindAddress: "0"
+  priorityClassName: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi

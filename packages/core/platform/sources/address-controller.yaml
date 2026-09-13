@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.address-controller
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  # The core, class-agnostic controller for IP addresses as a first-class
+  # resource (IPAddressClass / IPAddress / IPAddressClaim,
+  # local.sdn.cozystack.io), the PVC/PV-binding analog. It owns claim-to-address
+  # binding and reclaim; actual allocation belongs to per-class drivers such
+  # as cozystack.metallb-iad.
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: address-controller
+      path: system/address-controller
+      install:
+        namespace: cozy-address-controller
+        releaseName: address-controller
+        # The vendored chart ships its CRDs in crds/; they are v1alpha1 and
+        # still evolving, so upgrades must be allowed to replace them.
+        upgradeCRDs: CreateReplace

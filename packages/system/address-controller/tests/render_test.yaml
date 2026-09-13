@@ -1,0 +1,43 @@
+suite: cozy-address-controller renders the vendored chart untouched
+
+# The wrapper carries no templates of its own: everything comes from the
+# vendored lllamnyp/address-controller chart. The CRDs travel in its crds/
+# directory, so the PackageSource installs them with upgradeCRDs:
+# CreateReplace; here the controller Deployment is enough to prove the
+# wrapper wires the subchart.
+
+release:
+  name: address-controller
+  namespace: cozy-address-controller
+
+tests:
+  - it: renders the controller Deployment from the vendored chart
+    template: charts/address-controller/templates/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/lllamnyp/address-controller:'
+
+  - it: renders the controller's RBAC from the vendored chart
+    asserts:
+      - template: charts/address-controller/templates/role.yaml
+        containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          any: true
+      - template: charts/address-controller/templates/controller.yaml
+        containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          any: true
+      - template: charts/address-controller/templates/controller.yaml
+        containsDocument:
+          apiVersion: v1
+          kind: ServiceAccount
+          any: true

@@ -1,0 +1,16 @@
+apiVersion: v2
+name: address-controller
+description: Core controllers for IP addresses as a first-class resource — IPAddressClass, IPAddress, IPAddressClaim (local.sdn.cozystack.io)
+type: application
+# Placeholder; the real version is stamped at package time (make helm-package).
+version: 0.0.0
+appVersion: "0.1.0"
+# CEL validation rules on the CRDs (immutability, union exactness) need 1.29+.
+kubeVersion: ">=1.29.0-0"
+keywords:
+  - ipam
+  - networking
+  - cozystack
+home: https://github.com/lllamnyp/address-controller
+sources:
+  - https://github.com/lllamnyp/address-controller

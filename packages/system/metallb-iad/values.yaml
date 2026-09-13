@@ -1,0 +1,13 @@
+# The MetalLB IP Allocation Driver: the per-class driver implementing the
+# cozy-address-controller contract for addresses announced by MetalLB. It
+# holds reservations as placeholder Services in its own namespace
+# (cozy-metallb-iad, which tenants must have no write access to) and renders
+# the IPAddressPool / L2Advertisement objects into the MetalLB namespace.
+#
+# Anything under this key is passed to the vendored chart
+# (charts/metallb-iad) unchanged. The only value Cozystack sets is the
+# MetalLB namespace, the same overlay the upstream chart ships as
+# values-cozystack.yaml: Cozystack installs MetalLB in cozy-metallb, not the
+# upstream default metallb-system.
+metallb-iad:
+  metallbNamespace: cozy-metallb

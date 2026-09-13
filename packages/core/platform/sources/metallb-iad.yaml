@@ -1,0 +1,28 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.metallb-iad
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  # The MetalLB IP Allocation Driver, the per-class driver implementing the
+  # cozystack.address-controller contract for addresses announced by MetalLB.
+  # It holds reservations as placeholder Services in its own namespace
+  # (cozy-metallb-iad, which tenants must have no write access to) and needs
+  # both the core CRDs/controller and MetalLB itself in place. The package's
+  # values point it at cozy-metallb, Cozystack's MetalLB namespace.
+  - name: default
+    dependsOn:
+    - cozystack.address-controller
+    - cozystack.metallb
+    components:
+    - name: metallb-iad
+      path: system/metallb-iad
+      install:
+        namespace: cozy-metallb-iad
+        releaseName: metallb-iad

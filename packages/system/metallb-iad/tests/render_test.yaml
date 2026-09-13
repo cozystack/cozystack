@@ -1,0 +1,27 @@
+suite: cozy-metallb-iad renders the vendored driver against Cozystack's MetalLB
+
+# The wrapper carries no templates of its own: everything comes from the
+# vendored lllamnyp/metallb-iad chart. The one value Cozystack sets is the
+# MetalLB namespace (cozy-metallb instead of the upstream metallb-system), the
+# same overlay the upstream chart ships as values-cozystack.yaml.
+
+release:
+  name: metallb-iad
+  namespace: cozy-metallb-iad
+
+tests:
+  - it: renders the driver Deployment pointed at cozy-metallb
+    template: charts/metallb-iad/templates/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/lllamnyp/metallb-iad:'
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metallb-namespace=cozy-metallb
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --placeholder-namespace=cozy-metallb-iad
