@@ -178,7 +178,7 @@ spec:
         spec:
           containers:
             - name: grafana
-              resources: {{- toYaml .Values.grafana.resources | nindent 16 }}
+              resources: {{- include "monitoring.componentResources" (list $ "grafana" (dig "resources" nil (.Values.grafana | default dict))) | nindent 16 }}
               image: {{ include "cozy-lib.image" (list .Values.grafana.image $) }}
               securityContext:
                 allowPrivilegeEscalation: false

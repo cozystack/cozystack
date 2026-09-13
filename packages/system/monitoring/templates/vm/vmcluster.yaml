@@ -1,4 +1,4 @@
-{{- range .Values.metricsStorages }}
+{{- range (include "monitoring.metricsStorages" $ | fromYamlArray) }}
 {{- /* One replica of every component for a tenant, two for the root instance,
      unless `replicas` says otherwise; the replication factor follows, since a
      single vmstorage cannot hold two copies. */}}

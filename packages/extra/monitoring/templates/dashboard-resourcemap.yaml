@@ -43,7 +43,7 @@ rules:
   - grafana
   - grafana-db
   - alertmanager
-  {{- range .Values.metricsStorages }}
+  {{- range (include "monitoring.metricsStorages" $ | fromYamlArray) }}
   - {{ .name }}-vmstorage
   - {{ .name }}-vmselect
   - {{ .name }}-vminsert
@@ -53,7 +53,7 @@ rules:
   - {{ .name }}-vlselect
   - {{ .name }}-vlinsert
   {{- end }}
-  {{- range .Values.metricsStorages }}
+  {{- range (include "monitoring.metricsStorages" $ | fromYamlArray) }}
   - vmalert-{{ .name }}
   {{- break }}
   {{- end }}

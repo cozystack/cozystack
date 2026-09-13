@@ -50,7 +50,9 @@ metricsStorages:
 ## vmstorage, vlinsert, vlselect, vlstorage), `resources` with explicit requests
 ## and limits; a tenant otherwise starts from the small defaults in
 ## templates/_helpers.tpl (monitoring.tenantResources) and the root instance
-## leaves sizing to the VPA.
+## leaves sizing to the VPA. A metrics storage may also carry `enabled`: unset,
+## the root instance renders every storage and a tenant instance only the
+## first one, its primary store.
 logsStorages:
 - name: generic
   retentionPeriod: "1"
@@ -94,22 +96,18 @@ grafana:
   image: docker.io/grafana/grafana:11.6.15@sha256:f739273dfed04760428fcfbfccd1752b3b7fc87ef0a3d5637e2e87cce151e1a2
   db:
     size: 10Gi
-  resources:
-    limits:
-      cpu: "1"
-      memory: 1Gi
-    requests:
-      cpu: 100m
-      memory: 256Mi
-## vmagent: `resources` (a tenant otherwise gets the small default).
+  ## Empty: 256Mi requested and 1Gi limited for the root instance, 128Mi and
+  ## 512Mi for a tenant.
+  resources: {}
+## vmagent: `resources` (a tenant otherwise gets the small default) and
+## `remoteWrite.urls`, empty meaning one vminsert per metrics storage this
+## instance renders.
 vmagent:
   externalLabels:
     cluster: cozystack
     environment: ""
   remoteWrite:
-    urls:
-      - http://vminsert-shortterm:8480/insert/0/prometheus
-      - http://vminsert-longterm:8480/insert/0/prometheus
+    urls: []
   ## inlineScrapeConfig: |
   ##   - job_name: "custom"
   ##     static_configs:

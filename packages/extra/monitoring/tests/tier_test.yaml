@@ -44,8 +44,15 @@ tests:
         equal:
           path: spec.minReplicas
           value: 1
+      # shortterm x3, vmalert, generic x3, grafana, grafana-db, alertmanager
       - hasDocuments:
-          count: 13
+          count: 10
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: WorkloadMonitor
+          name: longterm-vmstorage
+          any: true
+        not: true
 
   - it: a tenant's dashboard Role grants no Alerta object and names the alertmanager monitor
     template: templates/dashboard-resourcemap.yaml
@@ -123,6 +130,13 @@ tests:
       - template: templates/workloadmonitors.yaml
         hasDocuments:
           count: 15
+      - template: templates/workloadmonitors.yaml
+        documentSelector:
+          path: metadata.name
+          value: longterm-vmstorage
+        equal:
+          path: spec.replicas
+          value: 2
       - template: templates/dashboard-resourcemap.yaml
         documentSelector:
           path: kind

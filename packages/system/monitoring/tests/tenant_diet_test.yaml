@@ -43,16 +43,56 @@ tests:
       - equal:
           path: spec.vminsert.resources
           value:
-            requests: {cpu: 50m, memory: 128Mi}
-            limits: {memory: 512Mi}
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {memory: 256Mi}
       - equal:
           path: spec.vmselect.resources.requests.memory
-          value: 128Mi
+          value: 64Mi
       - equal:
           path: spec.vmstorage.resources
           value:
-            requests: {cpu: 100m, memory: 256Mi}
-            limits: {memory: 1Gi}
+            requests: {cpu: 50m, memory: 192Mi}
+            limits: {memory: 768Mi}
+
+  - it: a tenant renders only its primary metrics store, root renders every one
+    template: templates/vm/vmcluster.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: shortterm
+
+  - it: metricsStorages[].enabled brings the long-term store back for a tenant
+    template: templates/vm/vmcluster.yaml
+    set:
+      metricsStorages:
+        - name: shortterm
+          retentionPeriod: "3d"
+          deduplicationInterval: "15s"
+          storage: 10Gi
+        - name: longterm
+          retentionPeriod: "14d"
+          deduplicationInterval: "5m"
+          storage: 10Gi
+          enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: vmagent writes to the stores the instance renders
+    template: templates/vm/vmagent.yaml
+    asserts:
+      - equal:
+          path: spec.remoteWrite
+          value:
+            - url: http://vminsert-shortterm:8480/insert/0/prometheus
+
+  - it: a tenant carries no VPA, its explicit requests must hold
+    template: templates/vpa.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
 
   - it: logs stores run one replica per component with explicit requests
     template: templates/vlogs/vlogs.yaml
@@ -68,25 +108,12 @@ tests:
           value: 1
       - equal:
           path: spec.vlinsert.resources.requests.memory
-          value: 128Mi
+          value: 64Mi
       - equal:
           path: spec.vlstorage.resources
           value:
-            requests: {cpu: 100m, memory: 256Mi}
-            limits: {memory: 1Gi}
-
-  - it: the VPA is bounded between the explicit requests and the memory limits
-    template: templates/vpa.yaml
-    documentSelector:
-      path: metadata.name
-      value: vpa-vmstorage-shortterm
-    asserts:
-      - equal:
-          path: spec.resourcePolicy.containerPolicies[0].minAllowed
-          value: {cpu: 100m, memory: 256Mi}
-      - equal:
-          path: spec.resourcePolicy.containerPolicies[0].maxAllowed
-          value: {cpu: 4000m, memory: 1Gi}
+            requests: {cpu: 50m, memory: 192Mi}
+            limits: {memory: 768Mi}
 
   - it: one alertmanager with small requests, no Alerta, routes to the blackhole
     template: templates/alerta/alerta.yaml
@@ -130,6 +157,12 @@ tests:
         equal:
           path: spec.deployment.spec.replicas
           value: 1
+      - template: templates/grafana/grafana.yaml
+        equal:
+          path: spec.deployment.spec.template.spec.containers[0].resources
+          value:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
       - template: templates/grafana/db.yaml
         equal:
           path: spec.instances
@@ -138,8 +171,8 @@ tests:
         equal:
           path: spec.resources
           value:
-            requests: {cpu: 50m, memory: 128Mi}
-            limits: {memory: 512Mi}
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
 
   - it: vmalert and vmagent carry small explicit requests
     asserts:
@@ -150,7 +183,7 @@ tests:
       - template: templates/vm/vmagent.yaml
         equal:
           path: spec.resources.requests.memory
-          value: 128Mi
+          value: 96Mi
 
   - it: values raise the replicas and override the resources
     set:
@@ -277,7 +310,19 @@ tests:
         equal:
           path: spec.deployment.spec.replicas
           value: 2
+      - template: templates/grafana/grafana.yaml
+        equal:
+          path: spec.deployment.spec.template.spec.containers[0].resources
+          value:
+            limits: {cpu: "1", memory: 1Gi}
+            requests: {cpu: 100m, memory: 256Mi}
       - template: templates/grafana/db.yaml
         equal:
           path: spec.resources.requests.memory
           value: 512Mi
+      - template: templates/vm/vmcluster.yaml
+        hasDocuments:
+          count: 2
+      - template: templates/vm/vmagent.yaml
+        hasDocuments:
+          count: 0

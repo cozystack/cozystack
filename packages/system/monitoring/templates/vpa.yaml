@@ -8,7 +8,14 @@
   creation without ever evicting, which removes the trigger. Do not switch back
   to Auto without first fixing the underlying Cilium IP-reuse race.
 */ -}}
-{{- range .Values.metricsStorages }}
+{{- /* Only the root instance is VPA-sized. The recommender never goes below
+     its pod-recommendation-min-memory (250Mi by default) and, in Initial
+     mode, replaces the requests at every pod creation, so a tenant instance,
+     whose whole point is to run on small explicit requests, must not carry a
+     VPA at all: its first rollout showed every 64Mi and 128Mi request coming
+     up as 250Mi and the stores at 512Mi. */ -}}
+{{- if include "monitoring.isRoot" . }}
+{{- range (include "monitoring.metricsStorages" $ | fromYamlArray) }}
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -113,4 +120,5 @@ spec:
       - containerName: vlstorage
         minAllowed: {{- include "monitoring.vpaBound" (list $ "vlstorage" "minAllowed" (dig "minAllowed" nil (.vlstorage | default dict)) (dict "cpu" "25m" "memory" "64Mi")) | nindent 10 }}
         maxAllowed: {{- include "monitoring.vpaBound" (list $ "vlstorage" "maxAllowed" (dig "maxAllowed" nil (.vlstorage | default dict)) (dict "cpu" "4000m" "memory" "8Gi")) | nindent 10 }}
+{{- end }}
 {{- end }}

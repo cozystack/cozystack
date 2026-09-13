@@ -252,23 +252,23 @@ and logs stores between these requests and limits as usage grows.
 */}}
 {{- define "monitoring.tenantResources" -}}
 vminsert:
-  requests: {cpu: 50m, memory: 128Mi}
-  limits: {memory: 512Mi}
+  requests: {cpu: 25m, memory: 64Mi}
+  limits: {memory: 256Mi}
 vmselect:
-  requests: {cpu: 50m, memory: 128Mi}
-  limits: {memory: 512Mi}
+  requests: {cpu: 25m, memory: 64Mi}
+  limits: {memory: 256Mi}
 vmstorage:
-  requests: {cpu: 100m, memory: 256Mi}
-  limits: {memory: 1Gi}
+  requests: {cpu: 50m, memory: 192Mi}
+  limits: {memory: 768Mi}
 vlinsert:
-  requests: {cpu: 50m, memory: 128Mi}
-  limits: {memory: 512Mi}
+  requests: {cpu: 25m, memory: 64Mi}
+  limits: {memory: 256Mi}
 vlselect:
-  requests: {cpu: 50m, memory: 128Mi}
-  limits: {memory: 512Mi}
+  requests: {cpu: 25m, memory: 64Mi}
+  limits: {memory: 256Mi}
 vlstorage:
-  requests: {cpu: 100m, memory: 256Mi}
-  limits: {memory: 1Gi}
+  requests: {cpu: 50m, memory: 192Mi}
+  limits: {memory: 768Mi}
 alertmanager:
   requests: {cpu: 25m, memory: 64Mi}
   limits: {memory: 256Mi}
@@ -276,11 +276,48 @@ vmalert:
   requests: {cpu: 25m, memory: 64Mi}
   limits: {memory: 256Mi}
 vmagent:
-  requests: {cpu: 50m, memory: 128Mi}
+  requests: {cpu: 50m, memory: 96Mi}
+  limits: {memory: 384Mi}
+grafana:
+  requests: {cpu: 100m, memory: 128Mi}
   limits: {memory: 512Mi}
 grafanaDB:
-  requests: {cpu: 50m, memory: 128Mi}
-  limits: {memory: 512Mi}
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {memory: 256Mi}
+{{- end -}}
+
+{{/*
+monitoring.rootResources: the explicit requests the root instance renders for
+the components that never had VPA sizing. Everything not listed here stays an
+empty block for the root instance, which is what leaves it to the VPA.
+*/}}
+{{- define "monitoring.rootResources" -}}
+grafana:
+  limits: {cpu: "1", memory: 1Gi}
+  requests: {cpu: 100m, memory: 256Mi}
+{{- end -}}
+
+{{/*
+monitoring.metricsStorages: the metrics storages this instance renders, as a
+YAML list. An entry's `enabled` wins; unset, the root instance renders every
+entry and a tenant instance only the first one, its primary store (the one
+vmalert evaluates against and Grafana defaults to): the long-term store
+doubles the memory of a tenant Monitoring for retention a tenant can also get
+by raising the primary store's retentionPeriod.
+*/}}
+{{- define "monitoring.metricsStorages" -}}
+{{- $out := list -}}
+{{- $root := include "monitoring.isRoot" . -}}
+{{- range $i, $s := .Values.metricsStorages -}}
+{{-   $enabled := dig "enabled" nil $s -}}
+{{-   if kindIs "invalid" $enabled -}}
+{{-     $enabled = or (eq $root "true") (eq $i 0) -}}
+{{-   end -}}
+{{-   if $enabled -}}
+{{-     $out = append $out $s -}}
+{{-   end -}}
+{{- end -}}
+{{- toYaml $out -}}
 {{- end -}}
 
 {{/*
@@ -296,7 +333,12 @@ defaults above.
 {{- if $override -}}
 {{- toYaml $override -}}
 {{- else if include "monitoring.isRoot" $root -}}
+{{- $rootDefaults := include "monitoring.rootResources" $root | fromYaml -}}
+{{- if hasKey $rootDefaults $component -}}
+{{- toYaml (index $rootDefaults $component) -}}
+{{- else -}}
 {}
+{{- end -}}
 {{- else -}}
 {{- toYaml (index (include "monitoring.tenantResources" $root | fromYaml) $component) -}}
 {{- end -}}
@@ -304,9 +346,8 @@ defaults above.
 
 {{/*
 monitoring.vpaBound: (list $ component "minAllowed"|"maxAllowed" override rootDefault)
-renders one VPA bound as YAML. An explicit override wins; the root tier keeps
-its wide bounds; a tenant is bounded by its explicit requests (minAllowed) and
-memory limits (maxAllowed), so the VPA sizes between the two.
+renders one VPA bound as YAML: an explicit override, or the root default.
+Only the root instance renders VPAs at all (see vpa.yaml).
 */}}
 {{- define "monitoring.vpaBound" -}}
 {{- $root := index . 0 -}}
@@ -316,15 +357,8 @@ memory limits (maxAllowed), so the VPA sizes between the two.
 {{- $rootDefault := index . 4 -}}
 {{- if $override -}}
 {{- toYaml $override -}}
-{{- else if include "monitoring.isRoot" $root -}}
+{{- else -}}
 {{- toYaml $rootDefault -}}
-{{- else -}}
-{{- $r := index (include "monitoring.tenantResources" $root | fromYaml) $component -}}
-{{- if eq $bound "minAllowed" -}}
-{{- toYaml $r.requests -}}
-{{- else -}}
-{{- toYaml (dict "cpu" (index $rootDefault "cpu") "memory" $r.limits.memory) -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 

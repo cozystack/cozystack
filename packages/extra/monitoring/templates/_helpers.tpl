@@ -36,3 +36,24 @@ alerta.enabled wins; otherwise on for the root instance, off for a tenant.
 {{- include "monitoring.isRoot" . -}}
 {{- else if $v -}}true{{- end -}}
 {{- end -}}
+
+{{/*
+monitoring.metricsStorages: the metrics storages the system chart renders for
+this instance, as a YAML list; mirrors the helper of the same name there. An
+entry's `enabled` wins; unset, the root instance renders every entry and a
+tenant instance only the first one.
+*/}}
+{{- define "monitoring.metricsStorages" -}}
+{{- $out := list -}}
+{{- $root := include "monitoring.isRoot" . -}}
+{{- range $i, $s := .Values.metricsStorages -}}
+{{-   $enabled := dig "enabled" nil $s -}}
+{{-   if kindIs "invalid" $enabled -}}
+{{-     $enabled = or (eq $root "true") (eq $i 0) -}}
+{{-   end -}}
+{{-   if $enabled -}}
+{{-     $out = append $out $s -}}
+{{-   end -}}
+{{- end -}}
+{{- toYaml $out -}}
+{{- end -}}

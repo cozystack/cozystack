@@ -31,6 +31,7 @@ host: ""
 ## @field {string} deduplicationInterval - Deduplication interval for metrics.
 ## @field {string} storage="10Gi" - Persistent volume size.
 ## @field {string} [storageClassName] - StorageClass used for the data.
+## @field {bool} [enabled] - Render this storage. Unset, the root instance renders every storage and a tenant instance only the first one, its primary store (the one vmalert evaluates against and Grafana defaults to); the long-term store doubles the memory of a tenant Monitoring for retention a tenant can also get by raising the primary store's retentionPeriod.
 ## @field {int} [replicas] - Replicas of vminsert, vmselect and vmstorage. Unset, one for a tenant instance and two for the root instance. Two or more also enable a replication factor of two across the vmstorage nodes.
 ## @field {VMComponent} [vminsert] - Configuration for vminsert.
 ## @field {VMComponent} [vmselect] - Configuration for vmselect.
@@ -153,19 +154,13 @@ alerta:
 ## @typedef {struct} Grafana - Grafana service configuration.
 ## @field {int} [replicas] - Grafana replicas. Unset, one for a tenant instance and two for the root instance.
 ## @field {GrafanaDB} [db] - Database configuration.
-## @field {Resources} [resources] - Resource configuration.
+## @field {Resources} [resources] - Explicit requests and limits of Grafana. Unset, a tenant instance gets 128Mi requested and 512Mi limited, the root instance 256Mi and 1Gi.
 
 ## @param {Grafana} grafana - Configuration for Grafana.
 grafana:
   db:
     size: 10Gi
-  resources:
-    limits:
-      cpu: "1"
-      memory: 1Gi
-    requests:
-      cpu: 100m
-      memory: 256Mi
+  resources: {}
 ##
 ## @section Alertmanager configuration
 ##
@@ -191,7 +186,7 @@ vmalert: {}
 ## @section Vmagent configuration
 ##
 
-## @typedef {struct} VmagentRemoteWrite - Remote write configuration.
+## @typedef {struct} VmagentRemoteWrite - Remote write configuration. Empty `urls` means one vminsert per metrics storage this instance renders.
 ## @typedef {stringSlice} VmagentRemoteWriteURLs - List of remoteWrite endpoint URLs.
 
 ## @typedef {struct} VmagentExternalLabels - External labels for metrics.
@@ -207,9 +202,7 @@ vmagent:
   externalLabels:
     cluster: cozystack
   remoteWrite:
-    urls:
-      - http://vminsert-shortterm:8480/insert/0/prometheus
-      - http://vminsert-longterm:8480/insert/0/prometheus
+    urls: []
   ## inlineScrapeConfig: |
   ##   - job_name: "custom"
   ##     static_configs:

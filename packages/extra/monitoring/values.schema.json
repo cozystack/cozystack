@@ -56,6 +56,10 @@
             "description": "StorageClass used for the data.",
             "type": "string"
           },
+          "enabled": {
+            "description": "Render this storage. Unset, the root instance renders every storage and a tenant instance only the first one, its primary store (the one vmalert evaluates against and Grafana defaults to); the long-term store doubles the memory of a tenant Monitoring for retention a tenant can also get by raising the primary store's retentionPeriod.",
+            "type": "boolean"
+          },
           "replicas": {
             "description": "Replicas of vminsert, vmselect and vmstorage. Unset, one for a tenant instance and two for the root instance. Two or more also enable a replication factor of two across the vmstorage nodes.",
             "type": "integer"
@@ -1226,7 +1230,7 @@
           }
         },
         "resources": {
-          "description": "Resource configuration.",
+          "description": "Explicit requests and limits of Grafana. Unset, a tenant instance gets 128Mi requested and 512Mi limited, the root instance 256Mi and 1Gi.",
           "type": "object",
           "default": {},
           "properties": {
@@ -1237,7 +1241,6 @@
               "properties": {
                 "cpu": {
                   "description": "CPU limit.",
-                  "default": 1,
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                   "anyOf": [
                     {
@@ -1251,7 +1254,6 @@
                 },
                 "memory": {
                   "description": "Memory limit.",
-                  "default": "1Gi",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                   "anyOf": [
                     {
@@ -1272,7 +1274,6 @@
               "properties": {
                 "cpu": {
                   "description": "CPU request.",
-                  "default": "100m",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                   "anyOf": [
                     {
@@ -1286,7 +1287,6 @@
                 },
                 "memory": {
                   "description": "Memory request.",
-                  "default": "256Mi",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                   "anyOf": [
                     {

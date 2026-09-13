@@ -18,7 +18,15 @@ spec:
     promscrape.maxScrapeSize: "32MB"
     promscrape.streamParse: "true"
   remoteWrite:
-  {{- range .Values.vmagent.remoteWrite.urls }}
+  {{- /* One target per metrics store this instance renders, unless the
+       values name the targets themselves. */}}
+  {{- $urls := dig "remoteWrite" "urls" list (.Values.vmagent | default dict) }}
+  {{- if not $urls }}
+  {{- range (include "monitoring.metricsStorages" $ | fromYamlArray) }}
+  {{- $urls = append $urls (printf "http://vminsert-%s:8480/insert/0/prometheus" .name) }}
+  {{- end }}
+  {{- end }}
+  {{- range $urls }}
   - url: {{ . | quote }}
   {{- end }}
 

@@ -1,5 +1,5 @@
 {{- $first := true }}
-{{- range .Values.metricsStorages }}
+{{- range (include "monitoring.metricsStorages" $ | fromYamlArray) }}
 ---
 apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDatasource

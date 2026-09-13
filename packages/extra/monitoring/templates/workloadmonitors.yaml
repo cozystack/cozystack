@@ -1,4 +1,4 @@
-{{- range .Values.metricsStorages }}
+{{- range (include "monitoring.metricsStorages" $ | fromYamlArray) }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
@@ -45,7 +45,7 @@ spec:
     app.kubernetes.io/name: vminsert
   version: {{ $.Chart.Version }}
 {{- end }}
-{{- range .Values.metricsStorages }}
+{{- range (include "monitoring.metricsStorages" $ | fromYamlArray) }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
