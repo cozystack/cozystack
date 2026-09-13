@@ -1,0 +1,54 @@
+suite: ClickHouse server metrics scrape
+
+# The tenant never sees the operator's metrics-exporter (it lives in the
+# operator namespace and only the root monitoring collects it), so the
+# installation enables the server's own Prometheus endpoint and scrapes the
+# CHI pods on it with job=clickhouse and service=<release>, the redis
+# convention the alert rules rely on.
+
+templates:
+  - templates/clickhouse.yaml
+
+release:
+  name: clickhouse-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: the installation enables the built-in Prometheus endpoint on 9363
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    asserts:
+      - matchRegex:
+          path: spec.configuration.files["config.d/prometheus.xml"]
+          pattern: '<prometheus>\s*<endpoint>/metrics</endpoint>\s*<port>9363</port>\s*<metrics>true</metrics>\s*<events>true</events>\s*<asynchronous_metrics>true</asynchronous_metrics>'
+
+  - it: a VMPodScrape collects the CHI pods on that port and stamps service=<release>
+    documentSelector:
+      path: kind
+      value: VMPodScrape
+    asserts:
+      - equal:
+          path: metadata.name
+          value: clickhouse-test
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            clickhouse.altinity.com/chi: clickhouse-test
+      - equal:
+          path: spec.podMetricsEndpoints[0].targetPort
+          value: 9363
+      - contains:
+          path: spec.podMetricsEndpoints[0].relabelConfigs
+          content:
+            replacement: clickhouse
+            targetLabel: job
+      - contains:
+          path: spec.podMetricsEndpoints[0].relabelConfigs
+          content:
+            targetLabel: service
+            replacement: clickhouse-test

@@ -53,6 +53,20 @@ spec:
       {{- end }}
     {{- end }}
     files:
+      # The server's own Prometheus endpoint, scraped by the VMPodScrape at the
+      # end of this file. The operator's metrics-exporter also serves these
+      # numbers, but from the operator namespace where only the root monitoring
+      # reaches it; a tenant Monitoring needs the pods themselves to answer.
+      config.d/prometheus.xml: |
+        <clickhouse>
+            <prometheus>
+                <endpoint>/metrics</endpoint>
+                <port>9363</port>
+                <metrics>true</metrics>
+                <events>true</events>
+                <asynchronous_metrics>true</asynchronous_metrics>
+            </prometheus>
+        </clickhouse>
       config.d/z_log_disable.xml: |
         <clickhouse>
             <asynchronous_metric_log remove="1"/>
@@ -413,3 +427,28 @@ spec:
               port: 8123
             - name: tcp
               port: 9000
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      clickhouse.altinity.com/chi: {{ .Release.Name }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  podMetricsEndpoints:
+    - targetPort: 9363
+      path: /metrics
+      interval: 30s
+      scheme: http
+      relabelConfigs:
+        - replacement: clickhouse
+          targetLabel: job
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+        - targetLabel: service
+          replacement: {{ .Release.Name }}

@@ -1,0 +1,70 @@
+suite: ClickHouse alerts for the tenant vmalert
+
+# One VMRule per release, in the release namespace where the tenant vmalert
+# selects it. The rules read the server's own Prometheus endpoint, which
+# clickhouse.yaml enables and scrapes with job=clickhouse and
+# service=<release> (the operator's metrics-exporter is only collected by
+# the root monitoring).
+
+templates:
+  - templates/vmrule.yaml
+
+release:
+  name: clickhouse-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: renders one VMRule for the release with the alert labels the portal expects
+    documentSelector:
+      path: kind
+      value: VMRule
+    asserts:
+      - equal:
+          path: metadata.name
+          value: clickhouse-test
+      - equal:
+          path: spec.groups[0].name
+          value: clickhouse.clickhouse-test
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 3
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: ClickHouseDown
+      - equal:
+          path: spec.groups[0].rules[0].labels
+          value:
+            namespace: tenant-test
+            service: clickhouse-test
+            severity: critical
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: 'up\{\ namespace="tenant\-test",\ service="clickhouse\-test",\ job="clickhouse"\}\ ==\ 0'
+      - equal:
+          path: spec.groups[0].rules[1].alert
+          value: ClickHouseReplicaDelayHigh
+      - equal:
+          path: spec.groups[0].rules[1].labels
+          value:
+            namespace: tenant-test
+            service: clickhouse-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: 'ClickHouseAsyncMetrics_ReplicasMaxAbsoluteDelay\{\ namespace="tenant\-test",\ service="clickhouse\-test"\}\ >\ 300'
+      - equal:
+          path: spec.groups[0].rules[2].alert
+          value: ClickHouseReadonlyReplica
+      - equal:
+          path: spec.groups[0].rules[2].labels
+          value:
+            namespace: tenant-test
+            service: clickhouse-test
+            severity: warning
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: 'ClickHouseMetrics_ReadonlyReplica\{\ namespace="tenant\-test",\ service="clickhouse\-test"\}\ >\ 0'

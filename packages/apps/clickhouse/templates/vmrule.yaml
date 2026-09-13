@@ -1,0 +1,50 @@
+{{- /*
+  Alerts for this installation, evaluated by the tenant vmalert (it selects
+  every VMRule in its own namespace). They read the server's own Prometheus
+  endpoint that clickhouse.yaml enables and scrapes with job=clickhouse and
+  service=<release>: the operator's metrics-exporter lives in the operator
+  namespace and only the root monitoring collects it, so a tenant never sees
+  the chi_clickhouse_metric_* series.
+*/ -}}
+{{- $sel := printf `namespace="%s", service="%s"` .Release.Namespace .Release.Name }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  groups:
+  - name: clickhouse.{{ .Release.Name }}
+    rules:
+    - alert: ClickHouseDown
+      expr: up{ {{ $sel }}, job="clickhouse"} == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: ClickHouse host {{ "{{ $labels.pod }}" }} is down
+        description: Host {{ "{{ $labels.pod }}" }} of ClickHouse {{ .Release.Name }} in {{ .Release.Namespace }} has not answered its metrics scrape for 5 minutes.
+    - alert: ClickHouseReplicaDelayHigh
+      expr: ClickHouseAsyncMetrics_ReplicasMaxAbsoluteDelay{ {{ $sel }}} > 300
+      for: 10m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: ClickHouse host {{ "{{ $labels.pod }}" }} replicates {{ "{{ $value | humanizeDuration }}" }} behind
+        description: A replicated table on host {{ "{{ $labels.pod }}" }} of ClickHouse {{ .Release.Name }} has been more than 5 minutes behind its peers for 10 minutes.
+    - alert: ClickHouseReadonlyReplica
+      expr: ClickHouseMetrics_ReadonlyReplica{ {{ $sel }}} > 0
+      for: 10m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: ClickHouse host {{ "{{ $labels.pod }}" }} has read-only replicated tables
+        description: Host {{ "{{ $labels.pod }}" }} of ClickHouse {{ .Release.Name }} has {{ "{{ $value }}" }} replicated tables in read-only mode for 10 minutes, usually because it lost its keeper session.
