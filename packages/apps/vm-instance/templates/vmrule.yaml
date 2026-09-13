@@ -1,0 +1,38 @@
+{{- /*
+  Alert for this virtual machine, evaluated by the tenant vmalert (it selects
+  every VMRule in its own namespace). The tenant Monitoring scrapes
+  virt-handler, whose kubevirt_vmi_* series exist only while the VMI runs on a
+  node and carry the VMI's own name and namespace; a VMI that is expected to
+  run and has no series for 5 minutes is stopped, stuck or failed. A VM whose
+  run strategy allows it to be stopped gets no rule, because a halted VM would
+  keep it firing.
+*/ -}}
+{{- $strategy := "" }}
+{{- if hasKey .Values "runStrategy" }}
+{{- $strategy = .Values.runStrategy }}
+{{- else }}
+{{- $strategy = ternary "Always" "Halted" (.Values.running | default true) }}
+{{- end }}
+{{- if has $strategy (list "Always" "RerunOnFailure") }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  groups:
+  - name: vm-instance.{{ .Release.Name }}
+    rules:
+    - alert: VMInstanceNotRunning
+      expr: absent(kubevirt_vmi_cpu_usage_seconds_total{namespace="{{ .Release.Namespace }}", name="{{ include "virtual-machine.fullname" . }}"})
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: Virtual machine {{ include "virtual-machine.fullname" . }} is not running
+        description: Virtual machine {{ include "virtual-machine.fullname" . }} in {{ .Release.Namespace }} should run ({{ $strategy }}) but has reported no metrics from any node for 5 minutes; it is stopped, stuck or failed.
+{{- end }}

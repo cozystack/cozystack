@@ -1,0 +1,64 @@
+suite: virtual machine alert for the tenant vmalert
+
+# One VMRule per release, in the release namespace where the tenant vmalert
+# selects it. The tenant Monitoring scrapes virt-handler, whose kubevirt_vmi_*
+# series exist only while the VMI runs, so a VM that should run and has no
+# series for 5 minutes is the alert. A VM whose run strategy allows it to be
+# stopped gets no rule at all.
+
+templates:
+  - templates/vmrule.yaml
+
+release:
+  name: test-vm
+  namespace: tenant-test
+
+set:
+  fullnameOverride: test-vm
+  _cluster: {}
+
+tests:
+  - it: an always-running VM gets the not-running alert with the portal labels
+    documentSelector:
+      path: kind
+      value: VMRule
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-vm
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: VMInstanceNotRunning
+      - equal:
+          path: spec.groups[0].rules[0].expr
+          value: absent(kubevirt_vmi_cpu_usage_seconds_total{namespace="tenant-test", name="test-vm"})
+      - equal:
+          path: spec.groups[0].rules[0].for
+          value: 5m
+      - equal:
+          path: spec.groups[0].rules[0].labels
+          value:
+            namespace: tenant-test
+            service: test-vm
+            severity: critical
+
+  - it: RerunOnFailure is also expected to run
+    set:
+      runStrategy: RerunOnFailure
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: a halted VM gets no rule
+    set:
+      runStrategy: Halted
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: a manually driven VM gets no rule
+    set:
+      runStrategy: Manual
+    asserts:
+      - hasDocuments:
+          count: 0
