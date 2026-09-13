@@ -1,0 +1,48 @@
+{{- /*
+  Alerts for this cluster, evaluated by the tenant vmalert (it selects every
+  VMRule in its own namespace). The release's VMServiceScrape stamps
+  job=rabbitmq and service=<release> on every series, including the scrape's
+  own `up`, which is what reports a node that stopped answering.
+*/ -}}
+{{- $sel := printf `namespace="%s", service="%s"` .Release.Namespace .Release.Name }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  groups:
+  - name: rabbitmq.{{ .Release.Name }}
+    rules:
+    - alert: RabbitMQNodeDown
+      expr: up{ {{ $sel }}, job="rabbitmq"} == 0
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: critical
+      annotations:
+        summary: RabbitMQ node {{ "{{ $labels.pod }}" }} is down
+        description: Node {{ "{{ $labels.pod }}" }} of RabbitMQ cluster {{ .Release.Name }} in {{ .Release.Namespace }} has not answered its metrics scrape for 5 minutes.
+    - alert: RabbitMQMemoryAlarm
+      expr: rabbitmq_alarms_memory_used_watermark{ {{ $sel }}} == 1
+      for: 5m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: RabbitMQ node {{ "{{ $labels.pod }}" }} raised its memory alarm
+        description: Node {{ "{{ $labels.pod }}" }} of RabbitMQ cluster {{ .Release.Name }} is above its memory high watermark and blocks publishers until memory is freed.
+    - alert: RabbitMQUnroutableMessages
+      expr: sum(increase(rabbitmq_channel_messages_unroutable_dropped_total{ {{ $sel }}}[10m]) or vector(0)) + sum(increase(rabbitmq_channel_messages_unroutable_returned_total{ {{ $sel }}}[10m]) or vector(0)) > 0
+      for: 10m
+      labels:
+        namespace: {{ .Release.Namespace }}
+        service: {{ .Release.Name }}
+        severity: warning
+      annotations:
+        summary: RabbitMQ {{ .Release.Name }} receives unroutable messages
+        description: Publishers on RabbitMQ cluster {{ .Release.Name }} sent {{ "{{ $value }}" }} messages in 10 minutes that matched no queue; they were dropped or returned.
