@@ -600,8 +600,11 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 	// Reconstruct the destination (repo) coordinates from the self-contained
 	// snapshot; take the execution knobs (image, resources) from the live
 	// strategy so a strategy upgrade takes effect. Restore reads from the
-	// repo and writes to the target, purging objects the snapshot does not
-	// contain (--delete-extraneous), so an in-place restore is a true mirror.
+	// repo and writes to the target. An in-place restore (target == the
+	// backup's source app) purges objects the snapshot does not contain so it
+	// is a true mirror; a restore-as-copy into a different app merges the
+	// snapshot in without deleting objects the copy target already holds.
+	inPlace := targetAppName == backup.Spec.ApplicationRef.Name
 	repoDest := strategyv1alpha1.BucketDestination{
 		Bucket:                      snapshot.RepoBucket,
 		Endpoint:                    snapshot.RepoEndpoint,
@@ -620,7 +623,7 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 		ServerSideCopy:      snapshot.ServerSideCopy,
 		Resources:           rendered.Resources,
 	}
-	pod := buildBucketMirrorPod(bucketModeRestore, restoreTemplate, restoreAccessName(targetAppName), snapshot.RepoPrefix, true)
+	pod := buildBucketMirrorPod(bucketModeRestore, restoreTemplate, restoreAccessName(targetAppName), snapshot.RepoPrefix, inPlace)
 
 	batchJob, err := r.ensureJobStrategyRestoreJob(ctx, restoreJob, targetNamespace, jobNameForRestoreJob(restoreJob),
 		bucketModeRestore,
