@@ -36,6 +36,7 @@ import (
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
@@ -98,6 +99,8 @@ func main() {
 	var platformSourceName string
 	var platformSourceRef string
 	var platformSourceSecret string
+	var systemNamespaceMemoryLimit string
+	var systemNamespaceMemoryRequest string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -145,6 +148,14 @@ func main() {
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
+	flag.StringVar(&systemNamespaceMemoryLimit, "system-namespace-memory-limit", DefaultSystemNamespaceMemoryLimit,
+		"Default container memory limit in eligible system namespaces, including kube-system. "+
+			"Lowering or an oversized request creates a durable hold requiring an administrator's "+
+			"exact-value acknowledgement. Empty or 0 disables and removes managed LimitRanges; "+
+			"safety state is retained. See docs/operations/system-memory-limits.md.")
+	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
+		"Default memory request paired with the system namespace limit. Keep small; 0 is supported. "+
+			"An empty installer value selects the operator default. See docs/operations/system-memory-limits.md.")
 
 	opts := zap.Options{
 		Development: true,
@@ -168,6 +179,13 @@ func main() {
 	hrUpgradeTimeoutDuration := parseFlag("--helmrelease-upgrade-timeout", helmReleaseUpgradeTimeout)
 	if helmReleaseMaxHistory < 0 {
 		setupLog.Error(fmt.Errorf("--helmrelease-max-history must be >= 0"), "invalid value", "value", helmReleaseMaxHistory)
+		os.Exit(1)
+	}
+
+	systemNSMemoryLimit, systemNSMemoryRequest, err := parseSystemNamespaceMemory(systemNamespaceMemoryLimit, systemNamespaceMemoryRequest)
+	if err != nil {
+		setupLog.Error(err, "invalid system namespace memory flags",
+			"limit", systemNamespaceMemoryLimit, "request", systemNamespaceMemoryRequest)
 		os.Exit(1)
 	}
 
@@ -307,13 +325,20 @@ func main() {
 
 	// Setup Package reconciler
 	if err := (&operator.PackageReconciler{
-		Client:                    mgr.GetClient(),
+		Client: mgr.GetClient(),
+		// Non-cached, so the per-namespace pod and workload scan guarding the
+		// system defaults LimitRange does not start cluster-wide informers in an
+		// operator whose whole purpose here is to bound memory.
+		APIReader:                 mgr.GetAPIReader(),
 		Scheme:                    mgr.GetScheme(),
 		HelmReleaseInterval:       hrIntervalDuration,
 		HelmReleaseRetryInterval:  hrRetryIntervalDuration,
 		HelmReleaseInstallTimeout: hrInstallTimeoutDuration,
 		HelmReleaseUpgradeTimeout: hrUpgradeTimeoutDuration,
 		HelmReleaseMaxHistory:     helmReleaseMaxHistory,
+
+		SystemNamespaceMemoryLimit:   systemNSMemoryLimit,
+		SystemNamespaceMemoryRequest: systemNSMemoryRequest,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Package")
 		os.Exit(1)
@@ -452,6 +477,59 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	}
 
 	return nil
+}
+
+// The shipped defaults for the two system-namespace memory knobs. Constants keep flag
+// registration and the parser test inputs on the same values; the test compares the parsed
+// result with literal contract values so changing a default cannot stay green by construction.
+const (
+	DefaultSystemNamespaceMemoryLimit   = "32Gi"
+	DefaultSystemNamespaceMemoryRequest = "32Mi"
+)
+
+// parseSystemNamespaceMemory turns the --system-namespace-memory-limit and
+// --system-namespace-memory-request flag values into the quantities the Package reconciler
+// takes, rejecting the combinations that would fail later and further away.
+//
+// Empty is how both flags are disabled and parses to the zero quantity; for the limit that
+// means "no LimitRange, and remove any this operator created", which is the documented
+// off switch. A negative quantity parses fine as a Quantity and is meaningless as memory,
+// so it is caught here rather than being written into a LimitRange the API server rejects.
+//
+// The pair check is the one that matters most. A LimitRange whose defaultRequest exceeds
+// its default is rejected by the API server, and because the reconciler applies one per
+// system namespace on every Package reconcile, a bad pair would wedge namespace
+// reconciliation for every system package with an error nothing connects back to a flag.
+// A request of 0 against a non-zero limit passes deliberately: it is the supported way to
+// take the memory.max without reserving anything at schedule time, not a broken value.
+// Both zero is the disabled case and never reaches the comparison.
+func parseSystemNamespaceMemory(rawLimit, rawRequest string) (limit, request resource.Quantity, err error) {
+	parse := func(flagName, raw string) (resource.Quantity, error) {
+		if raw == "" {
+			return resource.Quantity{}, nil
+		}
+		q, err := resource.ParseQuantity(raw)
+		if err != nil {
+			return resource.Quantity{}, fmt.Errorf("%s: %w", flagName, err)
+		}
+		if q.Sign() < 0 {
+			return resource.Quantity{}, fmt.Errorf("%s must not be negative, got %s", flagName, raw)
+		}
+		return q, nil
+	}
+
+	if limit, err = parse("--system-namespace-memory-limit", rawLimit); err != nil {
+		return resource.Quantity{}, resource.Quantity{}, err
+	}
+	if request, err = parse("--system-namespace-memory-request", rawRequest); err != nil {
+		return resource.Quantity{}, resource.Quantity{}, err
+	}
+	if !limit.IsZero() && request.Cmp(limit) > 0 {
+		return resource.Quantity{}, resource.Quantity{}, fmt.Errorf(
+			"--system-namespace-memory-request (%s) must not exceed --system-namespace-memory-limit (%s)",
+			request.String(), limit.String())
+	}
+	return limit, request, nil
 }
 
 // parsePlatformSourceURL parses the source URL and returns the source type and repository URL.
