@@ -234,13 +234,19 @@ spec:
         defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
         {{- end }}
         replicas: {{ .Values.master.replicas }}
-        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.master.resourcesPreset .Values.master.resources $) | nindent 10 }}
+{{- $masterResources := include "cozy-lib.resources.defaultingSanitize" (list .Values.master.resourcesPreset .Values.master.resources $) | fromYaml }}
+        resources: {{- toYaml $masterResources | nindent 10 }}
+        extraEnvironmentVars:
+          GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $masterResources | quote }}
       volume:
         {{ if eq .Values.topology "MultiZone" }}
         enabled: false
         {{- end }}
         replicas: {{ .Values.volume.replicas }}
-        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.volume.resourcesPreset .Values.volume.resources $) | nindent 10 }}
+{{- $volumeResources := include "cozy-lib.resources.defaultingSanitize" (list .Values.volume.resourcesPreset .Values.volume.resources $) | fromYaml }}
+        resources: {{- toYaml $volumeResources | nindent 10 }}
+        extraEnvironmentVars:
+          GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $volumeResources | quote }}
         dataDirs:
         - name: data1
           type: "persistentVolumeClaim"
@@ -331,7 +337,10 @@ spec:
         replicas: {{ .Values.filer.replicas }}
         s3:
           domainName: {{ .Values.host | default (printf "s3.%s" $host) }}
-        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.filer.resourcesPreset .Values.filer.resources $) | nindent 10 }}
+{{- $filerResources := include "cozy-lib.resources.defaultingSanitize" (list .Values.filer.resourcesPreset .Values.filer.resources $) | fromYaml }}
+        resources: {{- toYaml $filerResources | nindent 10 }}
+        extraEnvironmentVars:
+          GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $filerResources | quote }}
       s3:
         replicas: {{ .Values.s3.replicas }}
         ingress:
@@ -366,7 +375,10 @@ spec:
               {{- if not $wildcardSecret }}
               secretName: {{ .Release.Name }}-s3-ingress-tls
               {{- end }}
-        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.s3.resourcesPreset .Values.s3.resources $) | nindent 10 }}
+{{- $s3Resources := include "cozy-lib.resources.defaultingSanitize" (list .Values.s3.resourcesPreset .Values.s3.resources $) | fromYaml }}
+        resources: {{- toYaml $s3Resources | nindent 10 }}
+        extraEnvironmentVars:
+          GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $s3Resources | quote }}
       cosi:
         driverName: "{{ .Release.Namespace }}.seaweedfs.objectstorage.k8s.io"
         bucketClassName: "{{ .Release.Namespace }}"
