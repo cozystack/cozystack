@@ -78,6 +78,10 @@ suite_to_source() {
     vminstance) echo cozystack.vm-instance-application ; return ;;
     securitygroup) echo cozystack.securitygroup-controller ; return ;;
     kafka-metadata) echo cozystack.kafka-application ; return ;;
+    # The Bucket backup round-trip installs the Bucket app (it provisions its own
+    # buckets through the example scripts), so it rides the same source as the
+    # bucket app-create suite; select-e2e.sh maps that source back to both.
+    bucket-backup) echo cozystack.bucket-application ; return ;;
   esac
   for cand in "cozystack.$1-application" "cozystack.$1"; do
     if echo "$NODES" | grep -Fxq "$cand"; then echo "$cand"; return; fi

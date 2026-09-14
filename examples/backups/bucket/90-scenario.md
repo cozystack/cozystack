@@ -4,7 +4,7 @@ A tenant stores objects in an `apps.cozystack.io/Bucket` and enables backups by 
 
 ## In-place restore
 
-After an accidental deletion the tenant creates a `RestoreJob` with `backupRef` set and no `targetApplicationRef` (`35-restorejob-in-place.yaml`). The driver provisions a read-write `BucketAccess` on the source bucket and mirrors the chosen backup snapshot back over the live contents, deleting objects the snapshot does not contain, so the bucket ends up byte-for-byte as it was at backup time. This is destructive to anything written after the backup — take a fresh backup first if the current state matters.
+After an accidental deletion the tenant creates a `RestoreJob` with `backupRef` set and no `targetApplicationRef` (`35-restorejob-in-place.yaml`). The driver provisions a read-write `BucketAccess` on the source bucket and mirrors the chosen backup snapshot back over the live contents, deleting objects the snapshot does not contain, so the bucket's objects and their content type are restored to the snapshot (object versions and tags are not carried). This is destructive to anything written after the backup — take a fresh backup first if the current state matters.
 
 ## To-copy restore
 

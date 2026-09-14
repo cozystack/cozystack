@@ -94,7 +94,7 @@ func splitEndpoint(endpoint string) (host string, secure bool) {
 // caller can os.Exit on it.
 func Run(args []string) int {
 	fs := flag.NewFlagSet("s3-mirror", flag.ContinueOnError)
-	mode := fs.String("mode", "", "backup or restore")
+	mode := fs.String("mode", "", "backup, restore or delete")
 	repoEndpoint := fs.String("repo-endpoint", "", "repo (cozy-backups) S3 endpoint")
 	repoBucket := fs.String("repo-bucket", "", "repo S3 bucket name")
 	repoPrefix := fs.String("repo-prefix", "", "repo object-key prefix for this backup")
@@ -104,28 +104,68 @@ func Run(args []string) int {
 	caFile := fs.String("ca-file", "", "PEM CA bundle to trust")
 	serverSide := fs.Bool("server-side", false, "attempt server-side CopyObject before streaming")
 	deleteExtraneous := fs.Bool("delete-extraneous", false, "delete destination objects absent from the source (restore mirror)")
-	allowEmptySource := fs.Bool("allow-empty-source", false, "permit a --delete-extraneous run whose source lists zero objects (would purge the whole destination)")
+	allowEmptySource := fs.Bool("allow-empty-source", false, "permit a restore whose source lists zero objects (which would wipe or empty the destination)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	if *mode != "backup" && *mode != "restore" {
-		fmt.Fprintln(os.Stderr, "s3-mirror: --mode must be backup or restore")
+	if *mode != "backup" && *mode != "restore" && *mode != "delete" {
+		fmt.Fprintln(os.Stderr, "s3-mirror: --mode must be backup, restore or delete")
 		return 2
 	}
 	if *repoEndpoint == "" || *repoBucket == "" {
 		fmt.Fprintln(os.Stderr, "s3-mirror: --repo-endpoint and --repo-bucket are required")
 		return 2
 	}
-	// A restore reads the repo side under this prefix; an empty one would list
-	// the whole repo bucket (every snapshot and tenant) and mirror it into the
-	// application bucket. Backup mode legitimately reads the application bucket
-	// at an empty prefix, so gate this on restore only.
-	if *mode == "restore" && *repoPrefix == "" {
-		fmt.Fprintln(os.Stderr, "s3-mirror: --repo-prefix is required in restore mode")
+	// A restore reads, and a delete removes, the repo side under this prefix; an
+	// empty one would sweep the whole repo bucket (every snapshot and tenant).
+	// Backup mode legitimately reads the application bucket at an empty prefix,
+	// so gate this on restore/delete only.
+	if (*mode == "restore" || *mode == "delete") && *repoPrefix == "" {
+		fmt.Fprintln(os.Stderr, "s3-mirror: --repo-prefix is required in "+*mode+" mode")
+		return 2
+	}
+	// --delete-extraneous removes objects the source does not contain; without a
+	// prefix to scope it, an accidental backup-mode run would sweep the whole
+	// repo bucket. No caller emits this pair, but a delete stays gated on scope
+	// rather than trusting the caller.
+	if *deleteExtraneous && *repoPrefix == "" {
+		fmt.Fprintln(os.Stderr, "s3-mirror: --delete-extraneous requires --repo-prefix")
 		return 2
 	}
 
+	transport, err := buildTransport(*insecure, *caFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "s3-mirror: %v\n", err)
+		return 1
+	}
+	if *mode == "delete" {
+		repo := endpointCreds{
+			endpoint:  *repoEndpoint,
+			accessKey: os.Getenv("REPO_ACCESS_KEY"),
+			secretKey: os.Getenv("REPO_SECRET_KEY"),
+			bucket:    *repoBucket,
+			region:    *repoRegion,
+		}
+		if repo.accessKey == "" || repo.secretKey == "" {
+			fmt.Fprintln(os.Stderr, "s3-mirror: REPO_ACCESS_KEY/REPO_SECRET_KEY env is empty")
+			return 1
+		}
+		repoClient, cerr := newClient(repo, transport)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "s3-mirror: repo client: %v\n", cerr)
+			return 1
+		}
+		removed, derr := purge(context.Background(), copySide{store: &minioStore{client: repoClient}, bucket: repo.bucket, prefix: *repoPrefix})
+		if derr != nil {
+			fmt.Fprintf(os.Stderr, "s3-mirror: %v\n", derr)
+			return 1
+		}
+		fmt.Printf("s3-mirror: delete complete, %d object(s) removed under %s/%s\n", removed, repo.bucket, *repoPrefix)
+		return 0
+	}
+
+	// backup / restore need the application side too.
 	appRaw := os.Getenv("APP_BUCKETINFO")
 	if appRaw == "" {
 		fmt.Fprintln(os.Stderr, "s3-mirror: APP_BUCKETINFO env is empty")
@@ -154,12 +194,6 @@ func Run(args []string) int {
 		return 1
 	}
 
-	transport, err := buildTransport(*insecure, *caFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "s3-mirror: %v\n", err)
-		return 1
-	}
-
 	appClient, err := newClient(app, transport)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "s3-mirror: app client: %v\n", err)
@@ -184,10 +218,16 @@ func Run(args []string) int {
 	}
 
 	sameEndpoint := hostOf(app.endpoint) == hostOf(repo.endpoint)
-	copied, err := mirror(ctx, from, to, *serverSide && sameEndpoint, *deleteExtraneous, *allowEmptySource)
+	copied, err := mirror(ctx, from, to, *serverSide && sameEndpoint, *deleteExtraneous, *mode == "restore", *allowEmptySource)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "s3-mirror: %v\n", err)
 		return 1
+	}
+	// A backup that copied nothing is legitimate (an empty application bucket)
+	// but indistinguishable from a misconfiguration until someone restores it,
+	// so surface it rather than reporting a silent success.
+	if *mode == "backup" && copied == 0 {
+		fmt.Fprintf(os.Stderr, "s3-mirror: warning: backup copied 0 objects from %s (empty bucket, or wrong coordinates)\n", from.bucket)
 	}
 	fmt.Printf("s3-mirror: %s complete, %d object(s) copied %s -> %s\n", *mode, copied, from.bucket, to.bucket)
 	return 0
@@ -208,7 +248,14 @@ func buildTransport(insecure bool, caFile string) (http.RoundTripper, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read CA file %s: %w", caFile, err)
 		}
-		pool := x509.NewCertPool()
+		// Append to the system roots rather than replacing them: this one
+		// transport serves both the application and the repo endpoint, so a
+		// private CA supplied for one side must not strip the public trust the
+		// other side may rely on.
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
 		if !pool.AppendCertsFromPEM(pem) {
 			return nil, fmt.Errorf("no certificates parsed from CA file %s", caFile)
 		}
@@ -266,8 +313,9 @@ type copySide struct {
 
 // mirror copies every object under from into to (rekeying from.prefix to
 // to.prefix), optionally deleting objects under to.prefix that the source no
-// longer contains. Returns the number of objects copied.
-func mirror(ctx context.Context, from, to copySide, serverSide, deleteExtraneous, allowEmptySource bool) (int, error) {
+// longer contains. Returns the number of objects copied. restore marks the
+// direction as a restore, where a zero-object source is refused (see below).
+func mirror(ctx context.Context, from, to copySide, serverSide, deleteExtraneous, restore, allowEmptySource bool) (int, error) {
 	seen := map[string]struct{}{}
 	copied := 0
 
@@ -296,15 +344,21 @@ func mirror(ctx context.Context, from, to copySide, serverSide, deleteExtraneous
 		return copied, err
 	}
 
-	if deleteExtraneous {
-		// A source that lists zero objects is not a signal to erase the
-		// destination. Without this guard an in-place restore whose snapshot
-		// objects are gone (retention-pruned, expired, or the source was empty
-		// at backup time) deletes every object in the live bucket and still
-		// reports success. Fail closed unless explicitly overridden.
-		if copied == 0 && !allowEmptySource {
-			return copied, fmt.Errorf("refusing to purge %s: source %s/%s listed zero objects (pass --allow-empty-source to override)", to.bucket, from.bucket, from.prefix)
+	// A restore that copies nothing means the snapshot's objects are gone
+	// (retention-pruned, expired) or the source was empty at backup time. An
+	// in-place restore would then delete every live object, and a to-copy
+	// restore would silently "succeed" having restored nothing - so refuse both.
+	// Backup mode legitimately copies zero from an empty application bucket, so
+	// this is gated on restore. --allow-empty-source overrides it.
+	if restore && copied == 0 && !allowEmptySource {
+		detail := "would restore nothing"
+		if deleteExtraneous {
+			detail = "would delete every object in the destination"
 		}
+		return copied, fmt.Errorf("refusing to restore from empty snapshot %s/%s: it lists zero objects and %s", from.bucket, from.prefix, detail)
+	}
+
+	if deleteExtraneous {
 		if err := deleteUnseen(ctx, to, seen); err != nil {
 			return copied, err
 		}
@@ -322,6 +376,21 @@ func streamCopy(ctx context.Context, from, to copySide, srcKey, destKey string) 
 		return fmt.Errorf("put %s/%s: %w", to.bucket, destKey, err)
 	}
 	return nil
+}
+
+// purge removes every object under side.prefix and returns how many it deleted.
+// It is the delete-mode counterpart of deleteUnseen with an empty seen set,
+// used to reclaim a backup's repo objects when its Backup is deleted.
+func purge(ctx context.Context, side copySide) (int, error) {
+	removed := 0
+	err := side.store.list(ctx, side.bucket, side.prefix, func(key string, _ int64) error {
+		if err := side.store.remove(ctx, side.bucket, key); err != nil {
+			return fmt.Errorf("remove %s/%s: %w", side.bucket, key, err)
+		}
+		removed++
+		return nil
+	})
+	return removed, err
 }
 
 func deleteUnseen(ctx context.Context, to copySide, seen map[string]struct{}) error {

@@ -219,6 +219,14 @@ tests:
           path: spec.template.destination.endpoint
           pattern: ^https?://
         template: templates/strategy-bucket-default.yaml
+      # The namespace segment of the prefix is the only thing separating two
+      # tenants inside the shared cozy-backups bucket, so pin the shipped value:
+      # dropping it would let two tenants' same-named Bucket apps collide and a
+      # restore read the wrong tenant's objects.
+      - equal:
+          path: spec.template.destination.prefix
+          value: "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/"
+        template: templates/strategy-bucket-default.yaml
       - hasDocuments:
           count: 1
         template: templates/velero-bsl.yaml

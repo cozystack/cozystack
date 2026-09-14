@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -257,5 +258,99 @@ func TestReconcileBucketAccessReusesOwnedMatch(t *testing.T) {
 	}
 	if got.Spec != owned.Spec {
 		t.Fatalf("returned spec = %+v, want the existing %+v", got.Spec, owned.Spec)
+	}
+}
+
+func hasArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildBucketMirrorPod(t *testing.T) {
+	tmpl := strategyv1alpha1.BucketTemplate{
+		Image: "controller:latest",
+		Destination: strategyv1alpha1.BucketDestination{
+			Bucket:                      "cozy-backups",
+			Endpoint:                    "http://seaweedfs:8333",
+			Region:                      "us-east-1",
+			AccessKeyIDSecretKeyRef:     strategyv1alpha1.BucketSecretKeySelector{Name: "cozy-backups-creds", Key: "AWS_ACCESS_KEY_ID"},
+			SecretAccessKeySecretKeyRef: strategyv1alpha1.BucketSecretKeySelector{Name: "cozy-backups-creds", Key: "AWS_SECRET_ACCESS_KEY"},
+		},
+	}
+
+	backupPod := buildBucketMirrorPod(bucketModeBackup, tmpl, "bucket-web-cozy-backup", "tenant-x/web/bk1/", false)
+	c := backupPod.Spec.Containers[0]
+	for _, want := range []string{"s3-mirror", "--mode=backup", "--repo-bucket=cozy-backups", "--repo-prefix=tenant-x/web/bk1/", "--repo-region=us-east-1"} {
+		if !hasArg(c.Args, want) {
+			t.Errorf("backup args missing %q: %v", want, c.Args)
+		}
+	}
+	if hasArg(c.Args, "--delete-extraneous") {
+		t.Errorf("backup must not set --delete-extraneous: %v", c.Args)
+	}
+	if backupPod.Spec.ActiveDeadlineSeconds == nil {
+		t.Error("mirror pod has no ActiveDeadlineSeconds")
+	}
+	gotEnv := map[string]bool{}
+	for _, e := range c.Env {
+		gotEnv[e.Name] = true
+	}
+	for _, want := range []string{"APP_BUCKETINFO", "REPO_ACCESS_KEY", "REPO_SECRET_KEY"} {
+		if !gotEnv[want] {
+			t.Errorf("env missing %q", want)
+		}
+	}
+
+	// The delete flag (the one that erases objects) rides only on an in-place
+	// restore, so it must appear exactly when the caller asks for it.
+	restorePod := buildBucketMirrorPod(bucketModeRestore, tmpl, "bucket-web-cozy-restore", "tenant-x/web/bk1/", true)
+	if !hasArg(restorePod.Spec.Containers[0].Args, "--delete-extraneous") {
+		t.Errorf("in-place restore must set --delete-extraneous: %v", restorePod.Spec.Containers[0].Args)
+	}
+}
+
+func TestCleanupBucketBackupRefusesUnrelatedJob(t *testing.T) {
+	s := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		backupsv1alpha1.AddToScheme, strategyv1alpha1.AddToScheme, batchv1.AddToScheme,
+	} {
+		if err := add(s); err != nil {
+			t.Fatalf("AddToScheme: %v", err)
+		}
+	}
+
+	raw, err := marshalBucketSnapshot(bucketBackupSnapshot{
+		Kind:                        bucketSnapshotKind,
+		RepoBucket:                  "cozy-backups",
+		RepoPrefix:                  "tenant-x/app/bk1/",
+		RepoEndpoint:                "http://s3",
+		RepoCredentialsSecret:       "cozy-backups-creds",
+		RepoCredentialsAccessKeyKey: "AWS_ACCESS_KEY_ID",
+		RepoCredentialsSecretKeyKey: "AWS_SECRET_ACCESS_KEY",
+	})
+	if err != nil {
+		t.Fatalf("marshalBucketSnapshot: %v", err)
+	}
+
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bk1", UID: "backup-uid"},
+		Spec:       backupsv1alpha1.BackupSpec{StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.BucketStrategyKind, Name: "cozy-default-bucket"}},
+		Status:     backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+	}
+	strategy := &strategyv1alpha1.Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-bucket"},
+		Spec:       strategyv1alpha1.BucketSpec{Template: strategyv1alpha1.BucketTemplate{Image: "controller:latest"}},
+	}
+	// A same-named Job owned by nobody must not drive the release decision.
+	alien := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bk1-cleanup"}}
+
+	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(backup, strategy, alien).Build()
+	r := &BackupReconciler{Client: c, Scheme: s}
+	if _, err := r.cleanupBucketBackup(context.Background(), backup); err == nil {
+		t.Fatal("cleanupBucketBackup: want a conflict error for an unrelated cleanup Job, got nil")
 	}
 }
