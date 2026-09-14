@@ -14,6 +14,16 @@ export interface AppConfig {
 const CONFIG_NAMESPACE = "cozy-dashboard"
 const CONFIG_MAP_NAME = "cozy-dashboard-console-config"
 
+// Branding served as a static asset by the console, mounted from the same
+// ConfigMap. Read without the kube-api, so the access-denied screen renders
+// branded for a signed-in user who has no cluster RBAC.
+const BRANDING_STATIC_PATH = "/branding/config.json"
+
+// The static asset is a local file behind the same nginx, so it should answer
+// immediately; a short budget keeps first paint from stalling on it before the
+// kube-api fallback, which keeps the default 5s.
+const BRANDING_STATIC_TIMEOUT_MS = 1500
+
 function fetchWithTimeout(url: string, ms = 5000): Promise<Response> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), ms)
@@ -21,6 +31,25 @@ function fetchWithTimeout(url: string, ms = 5000): Promise<Response> {
 }
 
 export async function loadConfig(): Promise<AppConfig> {
+  const fromStatic = await loadStaticConfig()
+  if (fromStatic) return fromStatic
+  return loadConfigFromApi()
+}
+
+async function loadStaticConfig(): Promise<AppConfig | undefined> {
+  try {
+    const resp = await fetchWithTimeout(BRANDING_STATIC_PATH, BRANDING_STATIC_TIMEOUT_MS)
+    if (!resp.ok) return undefined
+    const cfg: unknown = await resp.json()
+    // A chart without the branding mount serves the SPA index.html here; its
+    // non-JSON body throws above, so only a real config object reaches this.
+    return cfg && typeof cfg === "object" ? (cfg as AppConfig) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function loadConfigFromApi(): Promise<AppConfig> {
   try {
     const resp = await fetchWithTimeout(
       `/api/v1/namespaces/${CONFIG_NAMESPACE}/configmaps/${CONFIG_MAP_NAME}`,
