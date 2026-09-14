@@ -14,20 +14,22 @@ release:
 # value nobody could set without breaking the install.
 
 tests:
+  # The realm is single-quoted in the shell assignment so a name carrying a
+  # space or a shell metacharacter cannot break or inject into the Job script.
   - it: defaults the hook Job realm to cozy
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'REALM=cozy(\s|$)'
+          pattern: "REALM='cozy'(\\s|$)"
 
-  - it: threads a custom realm name into the hook Job
+  - it: threads a single-quoted custom realm name into the hook Job
     set:
       _cluster:
         oidc-realm-name: acme
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'REALM=acme(\s|$)'
+          pattern: "REALM='acme'(\\s|$)"
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'REALM=cozy'
+          pattern: "REALM='cozy'"

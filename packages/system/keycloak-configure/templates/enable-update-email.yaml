@@ -75,7 +75,7 @@ spec:
               set -eu
               KCADM=/opt/keycloak/bin/kcadm.sh
               CFG=/tmp/kcadm.config
-              REALM={{ $realmName }}
+              REALM={{ $realmName | squote }}
 
               # The realm is reconciled asynchronously by the
               # keycloak-operator, so wait for it before configuring it.
