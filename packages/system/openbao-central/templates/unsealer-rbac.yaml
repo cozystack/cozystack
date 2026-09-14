@@ -1,0 +1,42 @@
+{{- /*
+ServiceAccount + namespace-scoped RBAC shared by the bootstrap workloads:
+  - init-job          (creates the openbao-system-keys Secret)
+  - unsealer-deployment (reads keys, re-unseals pods)
+  - transit-setup-job  (reads root token from the keys Secret)
+Scope is intentionally limited to this namespace (cozy-openbao).
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-system-bootstrap
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openbao-system-bootstrap
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-system-bootstrap
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openbao-system-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: openbao-system-bootstrap
+    namespace: {{ .Release.Namespace }}
