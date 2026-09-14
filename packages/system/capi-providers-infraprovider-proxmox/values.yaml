@@ -1,0 +1,8 @@
+## @section Proxmox API credentials
+##
+## capmox authenticates to Proxmox VE with an API token. The operator reads the
+## values below out of a Secret and injects them into the provider Deployment as
+## PROXMOX_URL / PROXMOX_TOKEN / PROXMOX_SECRET.
+##
+## @param {string} credentialsSecretName - Name of the Secret holding PROXMOX_URL, PROXMOX_TOKEN and PROXMOX_SECRET. It must live in this release's namespace and is NOT created by this chart: the token is a hypervisor credential and belongs to the platform's own secret management.
+credentialsSecretName: "capmox-config"
