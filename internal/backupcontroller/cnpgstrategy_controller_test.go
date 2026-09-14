@@ -1759,9 +1759,20 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 	// platform-managed useSystemBucket=true flow, so this Go path is the only
 	// place that sets it there.
 	sc := store.Spec.InstanceSidecarConfiguration
-	if sc == nil || len(sc.Env) != 1 ||
+	if sc == nil {
+		t.Fatal("ObjectStore has no instanceSidecarConfiguration")
+	}
+	if len(sc.Env) != 1 ||
 		sc.Env[0].Name != "AWS_REQUEST_CHECKSUM_CALCULATION" || sc.Env[0].Value != "when_required" {
 		t.Errorf("ObjectStore instanceSidecarConfiguration.env: got %+v, want [AWS_REQUEST_CHECKSUM_CALCULATION=when_required]", sc)
+	}
+	if sc.Resources.Requests.Memory().Value() != 256*1024*1024 ||
+		sc.Resources.Limits.Memory().Value() != 1024*1024*1024 ||
+		sc.Resources.Requests.Cpu().MilliValue() != 100 {
+		t.Errorf("ObjectStore leaves Barman subject to undersized tenant resource defaults: %+v", sc.Resources)
+	}
+	if _, ok := sc.Resources.Limits[corev1.ResourceCPU]; ok {
+		t.Errorf("ObjectStore caps sidecar CPU, which throttles WAL archiving instead of failing it: %+v", sc.Resources.Limits)
 	}
 	// The ObjectStore must be owner-referenced to the Cluster so Kubernetes GC
 	// removes it when the Cluster is deleted (no orphan in the platform flow,

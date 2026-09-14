@@ -51,9 +51,9 @@ spec:
   {{- if .Values.backup.retentionPolicy }}
   retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
   {{- end }}
-  # Pin the barman-cloud sidecar's S3 request checksum to when_required
-  # (rationale in cozy-lib.barman.checksumSidecarConfiguration).
-  {{- include "cozy-lib.barman.checksumSidecarConfiguration" . | nindent 2 }}
+  # Size the barman-cloud sidecar off the tenant LimitRange default and pin its
+  # S3 request checksum (rationale in cozy-lib.barman.sidecarConfiguration).
+  {{- include "cozy-lib.barman.sidecarConfiguration" . | nindent 2 }}
   configuration:
     destinationPath: {{ .Values.backup.destinationPath | quote }}
     {{- with .Values.backup.endpointURL }}
