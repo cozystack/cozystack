@@ -199,6 +199,20 @@ spec:
                         --topic "\${t}" --partition "\${p}" --offset "\${begin}" --max-messages "\${n}" \
                         --timeout-ms 120000 --property print.key=true --property print.timestamp=false \
                         > "\${WORK}/data-\${t}-\${p}.tsv"
+                      # kafka-console-consumer exits 0 even on a short read: a
+                      # --timeout-ms expiry is swallowed inside ConsoleConsumer,
+                      # so a truncated drain is indistinguishable from a full one
+                      # by exit status. One newline-free record is one line (the
+                      # README's key/value fidelity constraint), so a line-count
+                      # short of n means the [begin,end) cut was not fully
+                      # consumable - transactional control batches or a compacted
+                      # topic, both out of scope - and the backup must fail
+                      # rather than PUT a partial tarball reported as Succeeded.
+                      got=\$(wc -l < "\${WORK}/data-\${t}-\${p}.tsv")
+                      if [ "\${got}" -ne "\${n}" ]; then
+                        echo "partial drain on \${t}:\${p}: captured \${got} of \${n} record(s) in [\${begin},\${end}); refusing to upload an incomplete backup" >&2
+                        exit 1
+                      fi
                     fi
                     echo "  \${t}:\${p} [\${begin},\${end}) -> \${n} record(s)"
                   done
@@ -249,10 +263,10 @@ spec:
               cpu: "1"
               memory: 1Gi
           securityContext:
-            # Minimal hardening, matching the ClickHouse/NATS examples. The
-            # Strimzi image runs the CLI as its default user; tenants enforcing
-            # PSA "restricted" should add runAsNonRoot/runAsUser for the image
-            # they pin.
+            # restricted-clean. The Strimzi image's default user is a non-root
+            # numeric UID (1001), so runAsNonRoot passes without pinning
+            # runAsUser to a value specific to this image tag.
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]

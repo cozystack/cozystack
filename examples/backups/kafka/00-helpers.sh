@@ -27,11 +27,24 @@ export RESTOREJOB_INPLACE_NAME="${RESTOREJOB_INPLACE_NAME:-kafka-restore-inplace
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-kafka-restore-to-copy}"
 # The Strimzi Kafka image carries the full kafka-*.sh CLI plus bash, curl and
 # tar - everything the generic Job strategy and these host-side helpers need,
-# with no purpose-built backup image. Override KAFKA_IMAGE to match your
-# operator's Kafka image if it differs:
-#   kubectl -n cozy-kafka-operator get deploy strimzi-cluster-operator \
-#     -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' | grep KAFKA_IMAGES
-export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.8.0}"
+# with no purpose-built backup image.
+#
+# Default to the image the operator already caches on the nodes so the backup
+# Pod and these CLI Pods reuse a warm image with no version skew. The operator's
+# STRIMZI_KAFKA_IMAGES env is a newline-separated "version=image" map (one entry
+# per supported version); split on whitespace, drop the "version=" prefix and
+# take the newest (last) entry - the version the operator itself defaults to.
+# Fall back to a pinned literal only when the operator cannot be read (an
+# air-gapped clone with no cluster), so the demo still has a runnable default.
+# Setting KAFKA_IMAGE in the environment skips the lookup entirely.
+resolve_kafka_image() {
+    local resolved
+    resolved=$(kubectl -n cozy-kafka-operator get deploy strimzi-cluster-operator \
+        -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="STRIMZI_KAFKA_IMAGES")].value}' 2>/dev/null \
+        | tr '[:space:]' '\n' | grep -E '=.*/kafka:' | sed 's/.*=//' | tail -n1)
+    echo "${resolved:-quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.8.0}"
+}
+export KAFKA_IMAGE="${KAFKA_IMAGE:-$(resolve_kafka_image)}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
 
 log_info()    { echo -e "${BLUE}i${NC} $*" >&2; }
@@ -131,6 +144,39 @@ wait_hr_ready() {
     done
 }
 
+# Wait until a namespaced resource is really gone.
+#
+# `kubectl wait --for=delete` is not used: it errors when the resource is
+# already absent, the normal case on a clean namespace (cleanup.sh is
+# idempotent and runs as a pre-clean too), and swallowing that error would also
+# swallow a genuine failure. Polling `get --ignore-not-found` treats "already
+# gone" and "gone now" alike (empty output, exit 0), while a retrieval failure -
+# RBAC, API-server, transport - is a non-zero exit that must NOT be read as
+# deletion, or the teardown settles on a false success and leaves
+# half-uninstalled resources for the next run.
+wait_deleted() {
+    local resource_type="$1"
+    local resource_name="$2"
+    local timeout="${3:-300}"
+    local elapsed=0
+    local got
+
+    while true; do
+        if got=$(kubectl -n "$NAMESPACE" get "$resource_type" "$resource_name" --ignore-not-found 2>/dev/null) && [[ -z "$got" ]]; then
+            [[ $elapsed -gt 0 ]] && log_success "$resource_type/$resource_name is gone"
+            return 0
+        fi
+        if [[ $elapsed -ge $timeout ]]; then
+            log_error "Timeout waiting for $resource_type/$resource_name to be deleted; still present after ${timeout}s:"
+            kubectl -n "$NAMESPACE" get "$resource_type" "$resource_name" -o wide >&2 || true
+            return 1
+        fi
+        [[ $elapsed -eq 0 ]] && log_substep "Waiting for $resource_type/$resource_name to be deleted..."
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+}
+
 # In-cluster bootstrap address for a Kafka application instance. The Cozystack
 # chart names the Strimzi Kafka cluster "kafka-<app>", and Strimzi names the
 # plaintext bootstrap Service "<cluster>-kafka-bootstrap" - so for an app named
@@ -152,11 +198,21 @@ kafka_bootstrap() {
 kafka_run() {
     local app="$1"; shift
     local snippet="$1"
-    local boot
+    local boot pod
     boot="$(kafka_bootstrap "$app")"
-    kubectl -n "$NAMESPACE" run "kafka-cli-$RANDOM" \
+    pod="kafka-cli-$RANDOM"
+    # restricted-clean throwaway Pod. The Strimzi image runs as a non-root
+    # numeric UID (1001), so runAsNonRoot/seccomp at the Pod level plus the
+    # container's allowPrivilegeEscalation=false and drop-ALL satisfy PSA
+    # "restricted" without pinning runAsUser to a value specific to this image
+    # tag. An add-only JSON patch layers these onto the run-generated Pod's sole
+    # container (index 0), leaving image, command and args untouched.
+    local overrides
+    overrides='[{"op":"add","path":"/spec/securityContext","value":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}},{"op":"add","path":"/spec/containers/0/securityContext","value":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]'
+    kubectl -n "$NAMESPACE" run "$pod" \
         --image="$KAFKA_IMAGE" --restart=Never --rm -i --quiet \
         --pod-running-timeout=5m \
+        --override-type=json --overrides="$overrides" \
         --command -- bash -c "set -eu
 BOOT=$(printf %q "$boot")
 BIN=$(printf %q "$KAFKA_BIN")
