@@ -28,8 +28,12 @@ spec:
         kind: Job
         name: ${STRATEGY_NAME}
       parameters:
-        # Empty "topics" backs up every non-internal topic. Set a
-        # comma/space-separated list to restrict the backup.
+        # Empty "topics" backs up every non-internal topic - the wider net, not
+        # the safer one: it can pull in a compacted or transactional topic,
+        # which this logical strategy fails closed on (see the drain guard in
+        # 01-create-strategy.sh and README "Scope and limitations"). Set a
+        # comma/space-separated list to restrict the backup to topics known to
+        # be plain.
         topics: "${TOPIC}"
         replicationFactor: "1"
 EOF

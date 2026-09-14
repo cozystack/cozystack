@@ -155,6 +155,10 @@ spec:
       kind: Kafka
       name: kafka-kafka-test
   - describe:
+      apiVersion: kafka.strimzi.io/v1beta2
+      kind: Kafka
+      name: kafka-kafka-restore
+  - describe:
       apiVersion: backups.cozystack.io/v1alpha1
       kind: BackupJob
   - describe:
@@ -172,9 +176,12 @@ spec:
   # Broker Pods too, for the drain/replay's server side. The example uses its
   # default app names (kafka-test source, kafka-restore to-copy target); the
   # Cozystack chart prefixes the Strimzi cluster with "kafka-", so the source
-  # cluster is kafka-kafka-test.
+  # cluster is kafka-kafka-test and the to-copy target is kafka-kafka-restore.
   - podLogs:
       selector: app.kubernetes.io/instance=kafka-kafka-test
+      tail: 200
+  - podLogs:
+      selector: app.kubernetes.io/instance=kafka-kafka-restore
       tail: 200
   steps:
   - name: run
