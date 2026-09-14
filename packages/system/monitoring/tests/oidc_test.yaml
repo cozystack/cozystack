@@ -179,6 +179,28 @@ tests:
           content: groups
         documentIndex: 1
 
+  # The count and kind assertions above already reject extra realm objects. Keep
+  # this named invariant beside them so ownership remains explicit: the tenant
+  # chart, rather than each Monitoring release, provisions the group directory.
+  - it: mode=System provisions no KeycloakRealmGroup
+    template: templates/grafana/oidc-keycloak.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      # Positive control first: the template DOES emit here, so the negative
+      # below is a statement about KeycloakRealmGroup rather than about an empty
+      # render.
+      - containsDocument:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClient
+          any: true
+      - containsDocument:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakRealmGroup
+          any: true
+        not: true
+
   - it: mode=System audience scope pins id_token.aud to the per-instance clientId
     template: templates/grafana/oidc-keycloak.yaml
     set:

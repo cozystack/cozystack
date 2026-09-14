@@ -504,11 +504,10 @@ assert_full_suite() {
     # no rule at all and escalated as unclassified -- 5 of the last 150 merged
     # pull requests, all of them the migration deleting one of these files.
     #
-    # Mapped rather than marked inert: what is left here is wired to nothing
-    # today, and inert would bake that in and go quietly wrong the day a lane
-    # runs them again. This asserts the mapping on a name that IS a suite, so it
-    # measures the rule rather than the orphan status of the files that happen to
-    # remain.
+    # Mapped rather than marked inert: the files formerly kept here were wired to
+    # nothing after migration, and inert would go quietly wrong if this layout
+    # returns. This fixture asserts the rule independently of the historical file
+    # inventory.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-apps/postgres.bats" > "$tmp/diff"
