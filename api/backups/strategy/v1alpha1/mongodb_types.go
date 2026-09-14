@@ -37,11 +37,14 @@ const (
 // carrying the S3 destination read back from the source backup, so the same
 // artifact restores in-place or into a differently-named instance.
 //
-// Unlike the MariaDB strategy, the storage config is NOT inlined here: psmdb
-// resolves spec.storageName against the source cluster's spec.backup.storages,
-// so the S3/credentials live on the PerconaServerMongoDB CR (the mongodb chart
-// declares them when backup.enabled=true) and the strategy only names the
-// storage to use.
+// The strategy always names the storage (spec.template.storageName) psmdb
+// resolves against the source cluster's spec.backup.storages. On the legacy
+// flow the S3/credentials for that storage live on the PerconaServerMongoDB CR
+// (the mongodb chart declares them when backup.enabled=true and
+// useSystemBucket=false). On the useSystemBucket flow the chart cannot know the
+// platform bucket at render time, so the strategy also carries the storage's S3
+// coordinates (spec.template.s3) and the driver SSA-injects them onto the
+// cluster at BackupJob time.
 type MongoDB struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -75,9 +78,11 @@ type MongoDBSpec struct {
 // MongoDBTemplate describes the templated PerconaServerMongoDBBackup shape the
 // driver renders per BackupJob.
 type MongoDBTemplate struct {
-	// StorageName names a storage entry declared in the source cluster's
-	// spec.backup.storages. The mongodb chart declares "s3-storage" when
-	// backup.enabled=true; leave empty to use that default. Templating is
+	// StorageName names a storage entry in the source cluster's
+	// spec.backup.storages. On the legacy flow the mongodb chart declares
+	// "s3-storage" when backup.enabled=true and useSystemBucket=false; on the
+	// useSystemBucket flow the driver injects an entry under this same name from
+	// the S3 coordinates below. Leave empty to use "s3-storage". Templating is
 	// supported.
 	// +optional
 	StorageName string `json:"storageName,omitempty"`
