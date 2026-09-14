@@ -73,4 +73,5 @@ spec:
       region: {{ .Values.backupStorage.region | quote }}
       credentialsSecret: cozy-backups-creds
       forcePathStyle: {{ .Values.backupStorage.forcePathStyle }}
+      insecureSkipTLSVerify: {{ .Values.backupStorage.insecureSkipTLSVerify }}
 {{- end -}}

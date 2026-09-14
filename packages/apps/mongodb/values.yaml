@@ -155,7 +155,7 @@ databases: {}
 
 ## @typedef {struct} Backup - Backup configuration.
 ## @field {bool} enabled - Enable regular backups.
-## @field {bool} [useSystemBucket] - Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to <namespace>/<application>. See docs/operations/backup-classes.md.
+## @field {bool} [useSystemBucket] - Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `<namespace>/<application>`. Scheduling and retention move to the BackupClass Plan, so `schedule`, `retentionPolicy` and PITR are ignored while this is on. See docs/operations/backup-classes.md.
 ## @field {string} [schedule] - Cron schedule for automated backups.
 ## @field {string} [retentionPolicy] - Retention policy (e.g. "30d").
 ## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/).
