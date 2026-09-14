@@ -1,0 +1,48 @@
+suite: proxmox-ccm values that a regression would silently undo
+# Both assertions here exist because the bug happened, cost a day to find, and
+# leaves the tenant cluster looking healthy while it is broken. Neither is
+# caught by anything else: the values they pin are two lines in a values file
+# that reads like preference and is not.
+templates:
+  - charts/proxmox-cloud-controller-manager/templates/secrets.yaml
+  - charts/proxmox-cloud-controller-manager/templates/deployment.yaml
+release:
+  name: ccm
+  namespace: kube-system
+tests:
+  # capmox stamps proxmox://<SMBIOS UUID> on the ProxmoxMachine; this
+  # controller's default mode writes proxmox://<region>/<vmid>. CAPI pairs
+  # Machine with Node by matching providerID exactly, so the default leaves
+  # every Machine at Provisioned with an empty nodeRef while the tenant cluster
+  # runs perfectly well — which is what made it take a day to notice.
+  - it: keeps the controller in capmox providerID mode
+    template: charts/proxmox-cloud-controller-manager/templates/secrets.yaml
+    set:
+      proxmox-cloud-controller-manager.config.clusters:
+        - url: https://pve.example:8006/api2/json
+          region: test
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'provider: capmox'
+          decodeBase64: true
+
+  # A blanket `operator: Exists` reads as "run anywhere" and also matches
+  # node.kubernetes.io/unreachable:NoExecute with no tolerationSeconds, which
+  # stops admission adding the bounded 300s one. The Pod then outlives the Node
+  # it runs on — and the controller that removes a departed Node is this one, so
+  # a single-worker pool deadlocks on machine replacement until an operator
+  # deletes the Node by hand.
+  - it: refuses the blanket toleration that outlives a dead node
+    template: charts/proxmox-cloud-controller-manager/templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.tolerations
+          content:
+            operator: Exists
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: node.cloudprovider.kubernetes.io/uninitialized
+            operator: Exists
+            effect: NoSchedule

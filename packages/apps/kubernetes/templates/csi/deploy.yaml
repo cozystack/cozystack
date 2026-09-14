@@ -1,3 +1,10 @@
+{{- /* KubeVirt-only: the cloud-controller-manager and the CSI driver here
+      exist to reach the workers' VirtualMachines and their DataVolumes in
+      THIS cluster. On the proxmox substrate the VMs are on an external
+      hypervisor and the equivalents are separate packages
+      (proxmox-ccm, proxmox-csi), so rendering these would leave a
+      controller in the tenant reconciling objects that do not exist. */}}
+{{- if ne (.Values.substrate | default "kubevirt") "proxmox" }}
 {{- if .Values._namespace.etcd }}
 kind: Deployment
 apiVersion: apps/v1
@@ -242,4 +249,5 @@ spec:
             secretName: {{ .Release.Name }}-admin-kubeconfig
             optional: true
           name: kubeconfig
+{{- end }}
 {{- end }}

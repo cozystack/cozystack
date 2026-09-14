@@ -11,7 +11,7 @@
 # therefore render packages/apps/kubernetes-nodes.
 #
 # The reconcile Job applies the TalosConfigTemplate via an UNQUOTED
-# `cat <<EOF | kubectl apply -f -` heredoc, so every line of its body is subject
+# `cat <<EOF` heredoc (redirected to a file, then applied), so every line of its body is subject
 # to shell parameter expansion and command substitution at Job runtime. The
 # `talos.registryMirrors` knob and the Talos image coordinates render free-form
 # tenant-facing input into that heredoc. A helm-unittest string `matchRegex`
@@ -51,7 +51,7 @@ VALS
         > "$work/cmd.sh"
     [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
     awk '
-      /^cat <<EOF \| kubectl apply/ { print "cat <<EOF"; inblock=1; next }
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
       inblock && /^EOF$/            { print "EOF"; inblock=0; next }
       inblock                       { print }
     ' "$work/cmd.sh" > "$work/heredoc.sh"
@@ -86,7 +86,7 @@ VALS
         > "$work/cmd.sh"
     [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
     awk '
-      /^cat <<EOF \| kubectl apply/ { print "cat <<EOF"; inblock=1; next }
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
       inblock && /^EOF$/            { print "EOF"; inblock=0; next }
       inblock                       { print }
     ' "$work/cmd.sh" > "$work/heredoc.sh"

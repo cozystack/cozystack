@@ -1,0 +1,95 @@
+# End-to-end coverage for the Proxmox substrate.
+#
+# Parked as .disabled on purpose. Suites are discovered with
+#   find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml
+# so this one is registered nowhere and cannot be selected by the normal lanes.
+# That is the point: it needs a Proxmox hypervisor, and the runners those lanes
+# use will never have one. .github/workflows/e2e-proxmox.yaml drops the suffix
+# on a self-hosted runner that does.
+#
+# What this asserts is what NO other suite can, and every item is a bug this
+# integration actually hit rather than a shape someone imagined:
+#
+#   ProxmoxCluster Ready      — a missing IPAM provider, or the managed-by
+#                               annotation that stops CAPI setting an ownerRef
+#   linked-clone boot disk    — 8 KiB per worker against 10.2 GiB, and nothing
+#                               fails when it regresses
+#   Machine Running + nodeRef — capmox writes proxmox://<UUID>, the CCM's default
+#                               mode writes proxmox://<region>/<vmid>, and CAPI
+#                               pairs on an exact match
+#   node Ready + region label — the CSI node plugin exits fatally without it
+#   PVC bound AND on the host — Bound is not proof that a disk exists
+#   unattended replacement    — a blanket toleration kept the CCM Pod alive on a
+#                               dead Node, and that controller is what removes
+#                               departed Nodes
+#
+# It does NOT install Cozystack. The upstream lanes build a sandbox per run;
+# this one runs against an existing cluster and an existing hypervisor, which is
+# a weaker guarantee and is stated rather than implied.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kubernetes-proxmox
+spec:
+  # Teardown is the finally below, which must run whether the suite passed or
+  # failed: a leaked tenant leaves VMs on the hypervisor.
+  skipDelete: true
+  catch:
+  - events: {}
+  - script:
+      content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox.sh diagnostics
+  steps:
+  - name: tenant-and-cluster
+    try:
+    - apply:
+        file: tenant.yaml
+    # Declarative where the object lives in this cluster, per the conventions in
+    # docs/agents/e2e-testing.md — the assert polls to its own timeout and
+    # reports a structured diff rather than a generic non-zero exit.
+    - assert:
+        timeout: 10m
+        resource:
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: ProxmoxCluster
+          metadata:
+            name: k8s-e2e
+          status:
+            ready: true
+    - assert:
+        timeout: 20m
+        resource:
+          apiVersion: cluster.x-k8s.io/v1beta1
+          kind: Machine
+          status:
+            phase: Running
+
+  - name: vm-shape-on-the-hypervisor
+    try:
+    - script:
+        timeout: 3m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox.sh linked-clone
+
+  - name: tenant-node-usable
+    try:
+    - script:
+        timeout: 10m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox.sh tenant-node
+
+  - name: storage-round-trip
+    try:
+    - script:
+        timeout: 10m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox.sh pvc-round-trip
+
+  - name: replacement-converges-unattended
+    try:
+    - script:
+        timeout: 20m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox.sh replacement
+    finally:
+    - script:
+        content: |
+          set -eu
+          kubectl delete kubernetesnodes.apps.cozystack.io -n "${COZY_PROXMOX_NS:-tenant-e2eproxmox}" --all --ignore-not-found
+          kubectl delete kubernetes.apps.cozystack.io -n "${COZY_PROXMOX_NS:-tenant-e2eproxmox}" --all --ignore-not-found
+          kubectl delete tenant.apps.cozystack.io e2eproxmox -n tenant-root --ignore-not-found

@@ -1,0 +1,10 @@
+{{- if and .Values.createNamespace (ne .Release.Namespace "kube-system") }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Release.Namespace }}
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline
+{{- end }}
