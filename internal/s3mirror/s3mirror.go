@@ -117,6 +117,14 @@ func Run(args []string) int {
 		fmt.Fprintln(os.Stderr, "s3-mirror: --repo-endpoint and --repo-bucket are required")
 		return 2
 	}
+	// A restore reads the repo side under this prefix; an empty one would list
+	// the whole repo bucket (every snapshot and tenant) and mirror it into the
+	// application bucket. Backup mode legitimately reads the application bucket
+	// at an empty prefix, so gate this on restore only.
+	if *mode == "restore" && *repoPrefix == "" {
+		fmt.Fprintln(os.Stderr, "s3-mirror: --repo-prefix is required in restore mode")
+		return 2
+	}
 
 	appRaw := os.Getenv("APP_BUCKETINFO")
 	if appRaw == "" {

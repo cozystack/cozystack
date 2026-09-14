@@ -1,7 +1,15 @@
 {{- $endpoint := include "backupstrategy-controller.endpoint" . -}}
-{{- $endpointHost := $endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
-{{- if $bucketName -}}
+{{- /*
+  Gate on the Bucket CRD being Established, not just a resolved $bucketName:
+  this chart ships its own strategy.backups.cozystack.io CRDs as templates, and
+  Helm resolves every document in a release manifest through the RESTMapper
+  before applying any of them. On an upgrade that first ships this kind the
+  bucket name resolved releases ago, so a bucket-name-only gate would render the
+  CR alongside its still-absent CRD and wedge the whole release (see the mongodb
+  default for the same trap). */ -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "buckets.strategy.backups.cozystack.io") -}}
+{{- if and $bucketName $crdEstablished -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Bucket
 metadata:
@@ -10,7 +18,7 @@ spec:
   template:
     destination:
       bucket: {{ $bucketName | quote }}
-      endpoint: {{ $endpointHost | quote }}
+      endpoint: {{ $endpoint | quote }}
       prefix: {{ printf "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/" | quote }}
       region: {{ .Values.backupStorage.region | quote }}
       accessKeyIdSecretKeyRef:

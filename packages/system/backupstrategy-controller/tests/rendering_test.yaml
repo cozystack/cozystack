@@ -213,6 +213,12 @@ tests:
       - hasDocuments:
           count: 1
         template: templates/strategy-bucket-default.yaml
+      # The endpoint keeps its scheme: the mirror reads a scheme-less endpoint
+      # as HTTPS, so an http:// SeaweedFS must survive the render as http://.
+      - matchRegex:
+          path: spec.template.destination.endpoint
+          pattern: ^https?://
+        template: templates/strategy-bucket-default.yaml
       - hasDocuments:
           count: 1
         template: templates/velero-bsl.yaml
@@ -266,6 +272,23 @@ tests:
       # A sibling whose CRD shipped in an earlier release keeps rendering, which
       # is what makes the count above an assertion about the MongoDB gate rather
       # than about a chart-wide render failure.
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-cnpg-default.yaml
+
+  - it: "Bucket Strategy gates on its CRD too, so shipping the kind to an installed chart cannot wedge the release"
+    # Same shape as the MongoDB case: provisionBucket=false resolves $bucketName
+    # without the offline override, so only the CRD gate can hold the CR back.
+    # helm-unittest has no apiserver, so the Bucket CRD lookup answers "absent" -
+    # the answer a real cluster gives on the upgrade that first ships the CRD -
+    # where rendering the CR would fail Build() for the whole release.
+    set:
+      backupStorage.provisionBucket: false
+      backupStorage.bucketName: ext-bucket
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-bucket-default.yaml
       - hasDocuments:
           count: 1
         template: templates/strategy-cnpg-default.yaml

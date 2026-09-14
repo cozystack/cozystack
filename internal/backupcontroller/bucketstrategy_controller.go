@@ -71,14 +71,23 @@ type bucketBackupSnapshot struct {
 	RepoEndpoint string `json:"repoEndpoint"`
 	RepoPrefix   string `json:"repoPrefix"`
 	RepoRegion   string `json:"repoRegion,omitempty"`
-	// Repo credentials are referenced, never inlined. The name is the
-	// projected cozy-backups-creds Secret; the keys default to the AWS_*
-	// entries the projector writes.
-	RepoCredentialsSecret       string `json:"repoCredentialsSecret"`
-	RepoCredentialsAccessKeyKey string `json:"repoCredentialsAccessKeyKey"`
-	RepoCredentialsSecretKeyKey string `json:"repoCredentialsSecretKeyKey"`
-	InsecureSkipVerify          bool   `json:"insecureSkipVerify,omitempty"`
-	ServerSideCopy              bool   `json:"serverSideCopy,omitempty"`
+	// Repo credentials are referenced, never inlined. RepoCredentialsSecret is
+	// the access-key Secret name; RepoCredentialsSecretKeySecret is the
+	// secret-key Secret name when the two live in different Secrets, and is
+	// empty when they share one (the default) - a restore then falls back to
+	// RepoCredentialsSecret for both. The keys default to the AWS_* entries the
+	// projector writes.
+	RepoCredentialsSecret          string `json:"repoCredentialsSecret"`
+	RepoCredentialsSecretKeySecret string `json:"repoCredentialsSecretKeySecret,omitempty"`
+	RepoCredentialsAccessKeyKey    string `json:"repoCredentialsAccessKeyKey"`
+	RepoCredentialsSecretKeyKey    string `json:"repoCredentialsSecretKeyKey"`
+	// CA bundle the mirror trusts, referenced when the destination declares a
+	// private CA. Empty when none was configured; a restore then rebuilds TLS
+	// from InsecureSkipVerify alone.
+	RepoCACertSecret   string `json:"repoCaCertSecret,omitempty"`
+	RepoCACertKey      string `json:"repoCaCertKey,omitempty"`
+	InsecureSkipVerify bool   `json:"insecureSkipVerify,omitempty"`
+	ServerSideCopy     bool   `json:"serverSideCopy,omitempty"`
 }
 
 // validateBucketApplicationRef rejects refs that are not
@@ -388,21 +397,15 @@ func (r *BackupJobReconciler) requeueBucketWaiting(ctx context.Context, j *backu
 	return ctrl.Result{RequeueAfter: CredentialsProjectionRequeue}, nil
 }
 
-// ensureBucketAccess provisions a COSI BucketAccess (and its credentials
-// Secret) idempotently via server-side apply. The write is gated
-// write-only-when-absent: an existing access (created by a prior backup, or by
-// the tenant) is returned untouched, so the driver never clobbers a grant it
-// does not exclusively own. The object carries no controllerRef - it persists
-// across BackupJobs and is reused.
-func (r *BackupJobReconciler) ensureBucketAccess(ctx context.Context, namespace, name, claimName, accessClass string) (*buckettypes.BucketAccess, error) {
-	existing := &buckettypes.BucketAccess{}
-	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing)
-	if err == nil {
-		return existing, nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return nil, err
-	}
+// reconcileBucketAccess provisions the deterministic-named COSI BucketAccess the
+// mirror consumes, via server-side apply. An existing object is reused only when
+// it carries the driver's managed-by label AND its spec still matches: a
+// same-named object without the label belongs to someone else and is refused
+// (COSI would otherwise populate a Secret for a claim/class the driver never
+// asked for, while the mirror reads the deterministic Secret), and an
+// owned-but-drifted object is re-applied back to the desired spec. The object
+// carries no controllerRef - it persists across jobs and is reused.
+func reconcileBucketAccess(ctx context.Context, c client.Client, namespace, name, claimName, accessClass string) (*buckettypes.BucketAccess, error) {
 	desired := &buckettypes.BucketAccess{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: buckettypes.GroupVersion.String(),
@@ -420,10 +423,33 @@ func (r *BackupJobReconciler) ensureBucketAccess(ctx context.Context, namespace,
 			CredentialsSecretName: name,
 		},
 	}
-	if err := r.Patch(ctx, desired, client.Apply, client.FieldOwner(bucketFieldManager), client.ForceOwnership); err != nil {
+
+	existing := &buckettypes.BucketAccess{}
+	err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing)
+	switch {
+	case err == nil:
+		if existing.Labels[managedByLabel] != managedByValue {
+			return nil, fmt.Errorf("BucketAccess %s/%s exists but is not managed by the backup driver (missing %s=%s); refusing to reuse it", namespace, name, managedByLabel, managedByValue)
+		}
+		if existing.Spec == desired.Spec {
+			return existing, nil
+		}
+		// Owned but drifted: fall through and re-apply the desired spec.
+	case apierrors.IsNotFound(err):
+		// Fall through and create via apply.
+	default:
+		return nil, err
+	}
+
+	if err := c.Patch(ctx, desired, client.Apply, client.FieldOwner(bucketFieldManager), client.ForceOwnership); err != nil {
 		return nil, err
 	}
 	return desired, nil
+}
+
+// ensureBucketAccess is the BackupJob-side entry point to reconcileBucketAccess.
+func (r *BackupJobReconciler) ensureBucketAccess(ctx context.Context, namespace, name, claimName, accessClass string) (*buckettypes.BucketAccess, error) {
+	return reconcileBucketAccess(ctx, r.Client, namespace, name, claimName, accessClass)
 }
 
 // createBucketBackupArtifact materialises a Cozystack Backup with the restore
@@ -455,8 +481,17 @@ func (r *BackupJobReconciler) createBucketBackupArtifact(
 		RepoCredentialsSecretKeyKey: rendered.Destination.SecretAccessKeySecretKeyRef.Key,
 		ServerSideCopy:              rendered.ServerSideCopy,
 	}
+	// Record the secret-key Secret name only when it differs from the
+	// access-key one, so old readers that ignore the field lose nothing.
+	if sk := rendered.Destination.SecretAccessKeySecretKeyRef.Name; sk != snapshot.RepoCredentialsSecret {
+		snapshot.RepoCredentialsSecretKeySecret = sk
+	}
 	if rendered.Destination.TLS != nil {
 		snapshot.InsecureSkipVerify = rendered.Destination.TLS.InsecureSkipVerify
+		if ca := rendered.Destination.TLS.CASecretKeyRef; ca != nil {
+			snapshot.RepoCACertSecret = ca.Name
+			snapshot.RepoCACertKey = ca.Key
+		}
 	}
 	underlyingResources, err := marshalBucketSnapshot(snapshot)
 	if err != nil {
@@ -605,16 +640,28 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 	// is a true mirror; a restore-as-copy into a different app merges the
 	// snapshot in without deleting objects the copy target already holds.
 	inPlace := targetAppName == backup.Spec.ApplicationRef.Name
+	// The secret-key Secret name falls back to the access-key one for snapshots
+	// that predate the separate field (and for the common single-Secret case).
+	secretKeySecret := snapshot.RepoCredentialsSecretKeySecret
+	if secretKeySecret == "" {
+		secretKeySecret = snapshot.RepoCredentialsSecret
+	}
 	repoDest := strategyv1alpha1.BucketDestination{
 		Bucket:                      snapshot.RepoBucket,
 		Endpoint:                    snapshot.RepoEndpoint,
 		Prefix:                      snapshot.RepoPrefix,
 		Region:                      snapshot.RepoRegion,
 		AccessKeyIDSecretKeyRef:     strategyv1alpha1.BucketSecretKeySelector{Name: snapshot.RepoCredentialsSecret, Key: snapshot.RepoCredentialsAccessKeyKey},
-		SecretAccessKeySecretKeyRef: strategyv1alpha1.BucketSecretKeySelector{Name: snapshot.RepoCredentialsSecret, Key: snapshot.RepoCredentialsSecretKeyKey},
+		SecretAccessKeySecretKeyRef: strategyv1alpha1.BucketSecretKeySelector{Name: secretKeySecret, Key: snapshot.RepoCredentialsSecretKeyKey},
 	}
-	if snapshot.InsecureSkipVerify {
-		repoDest.TLS = &strategyv1alpha1.BucketTLS{InsecureSkipVerify: true}
+	if snapshot.InsecureSkipVerify || snapshot.RepoCACertSecret != "" {
+		repoDest.TLS = &strategyv1alpha1.BucketTLS{InsecureSkipVerify: snapshot.InsecureSkipVerify}
+		if snapshot.RepoCACertSecret != "" {
+			repoDest.TLS.CASecretKeyRef = &strategyv1alpha1.BucketSecretKeySelector{
+				Name: snapshot.RepoCACertSecret,
+				Key:  snapshot.RepoCACertKey,
+			}
+		}
 	}
 	restoreTemplate := strategyv1alpha1.BucketTemplate{
 		Destination:         repoDest,
@@ -682,39 +729,11 @@ func bucketRestoreParameters(b *backupsv1alpha1.Backup) map[string]string {
 	return out
 }
 
-// ensureBucketAccess is the RestoreJob-side mirror. The BucketAccess lives in
-// the target application's namespace and persists (no controllerRef) so a
-// re-restore reuses the same grant.
+// ensureBucketAccess is the RestoreJob-side entry point to
+// reconcileBucketAccess. The BucketAccess lives in the target application's
+// namespace and persists (no controllerRef) so a re-restore reuses the grant.
 func (r *RestoreJobReconciler) ensureBucketAccess(ctx context.Context, namespace, name, claimName, accessClass string) (*buckettypes.BucketAccess, error) {
-	existing := &buckettypes.BucketAccess{}
-	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing)
-	if err == nil {
-		return existing, nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return nil, err
-	}
-	desired := &buckettypes.BucketAccess{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: buckettypes.GroupVersion.String(),
-			Kind:       "BucketAccess",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      name,
-			Labels:    map[string]string{managedByLabel: managedByValue},
-		},
-		Spec: buckettypes.BucketAccessSpec{
-			BucketClaimName:       claimName,
-			BucketAccessClassName: accessClass,
-			Protocol:              bucketProtocolS3,
-			CredentialsSecretName: name,
-		},
-	}
-	if err := r.Patch(ctx, desired, client.Apply, client.FieldOwner(bucketFieldManager), client.ForceOwnership); err != nil {
-		return nil, err
-	}
-	return desired, nil
+	return reconcileBucketAccess(ctx, r.Client, namespace, name, claimName, accessClass)
 }
 
 // requeueRestoreBucketWaiting mirrors requeueBucketWaiting for the restore path.

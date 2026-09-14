@@ -2,9 +2,14 @@
 package backupcontroller
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -111,17 +116,20 @@ func TestBucketBackupPrecondition(t *testing.T) {
 
 func TestBucketSnapshotRoundTrip(t *testing.T) {
 	in := bucketBackupSnapshot{
-		Kind:                        bucketSnapshotKind,
-		SourceBucket:                "bucket-src",
-		RepoBucket:                  "cozy-backups-xyz",
-		RepoEndpoint:                "s3.example.com",
-		RepoPrefix:                  "tenant-x/app/backup-1/",
-		RepoRegion:                  "us-east-1",
-		RepoCredentialsSecret:       "cozy-backups-creds",
-		RepoCredentialsAccessKeyKey: "AWS_ACCESS_KEY_ID",
-		RepoCredentialsSecretKeyKey: "AWS_SECRET_ACCESS_KEY",
-		InsecureSkipVerify:          true,
-		ServerSideCopy:              false,
+		Kind:                           bucketSnapshotKind,
+		SourceBucket:                   "bucket-src",
+		RepoBucket:                     "cozy-backups-xyz",
+		RepoEndpoint:                   "s3.example.com",
+		RepoPrefix:                     "tenant-x/app/backup-1/",
+		RepoRegion:                     "us-east-1",
+		RepoCredentialsSecret:          "cozy-backups-creds",
+		RepoCredentialsSecretKeySecret: "cozy-backups-creds-secretkey",
+		RepoCredentialsAccessKeyKey:    "AWS_ACCESS_KEY_ID",
+		RepoCredentialsSecretKeyKey:    "AWS_SECRET_ACCESS_KEY",
+		RepoCACertSecret:               "cozy-backups-ca",
+		RepoCACertKey:                  "ca.crt",
+		InsecureSkipVerify:             true,
+		ServerSideCopy:                 false,
 	}
 	raw, err := marshalBucketSnapshot(in)
 	if err != nil {
@@ -193,5 +201,61 @@ func TestRenderBucketTemplate(t *testing.T) {
 	}
 	if rendered.Destination.Prefix != "tenant-x/mybucket/" {
 		t.Fatalf("prefix = %q, want %q", rendered.Destination.Prefix, "tenant-x/mybucket/")
+	}
+}
+
+func newBucketAccessTestClient(t *testing.T, objs ...*buckettypes.BucketAccess) client.Client {
+	t.Helper()
+	s := runtime.NewScheme()
+	if err := buckettypes.AddToScheme(s); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	b := clientfake.NewClientBuilder().WithScheme(s)
+	for _, o := range objs {
+		b = b.WithObjects(o)
+	}
+	return b.Build()
+}
+
+func bucketAccess(name string, labels map[string]string, spec buckettypes.BucketAccessSpec) *buckettypes.BucketAccess {
+	return &buckettypes.BucketAccess{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: name, Labels: labels},
+		Spec:       spec,
+	}
+}
+
+func TestReconcileBucketAccessRefusesUnownedName(t *testing.T) {
+	// A same-named object without the driver's label belongs to someone else:
+	// reusing it would point the mirror at whatever claim/class/Secret it names.
+	squatted := bucketAccess("bucket-web-cozy-backup", nil, buckettypes.BucketAccessSpec{
+		BucketClaimName:       "attacker-claim",
+		BucketAccessClassName: "attacker-class",
+		Protocol:              bucketProtocolS3,
+		CredentialsSecretName: "bucket-web-cozy-backup",
+	})
+	c := newBucketAccessTestClient(t, squatted)
+
+	if _, err := reconcileBucketAccess(context.Background(), c, "tenant-x", "bucket-web-cozy-backup", "bucket-web", "bucket-web-readonly"); err == nil {
+		t.Fatal("reconcileBucketAccess: want conflict error for an unowned same-named object, got nil")
+	}
+}
+
+func TestReconcileBucketAccessReusesOwnedMatch(t *testing.T) {
+	owned := bucketAccess("bucket-web-cozy-backup",
+		map[string]string{managedByLabel: managedByValue},
+		buckettypes.BucketAccessSpec{
+			BucketClaimName:       "bucket-web",
+			BucketAccessClassName: "bucket-web-readonly",
+			Protocol:              bucketProtocolS3,
+			CredentialsSecretName: "bucket-web-cozy-backup",
+		})
+	c := newBucketAccessTestClient(t, owned)
+
+	got, err := reconcileBucketAccess(context.Background(), c, "tenant-x", "bucket-web-cozy-backup", "bucket-web", "bucket-web-readonly")
+	if err != nil {
+		t.Fatalf("reconcileBucketAccess: %v", err)
+	}
+	if got.Spec != owned.Spec {
+		t.Fatalf("returned spec = %+v, want the existing %+v", got.Spec, owned.Spec)
 	}
 }

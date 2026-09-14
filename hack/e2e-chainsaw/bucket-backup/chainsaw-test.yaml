@@ -64,10 +64,11 @@ spec:
     # Op timeout strictly above the sum of run-all.sh's inner waits (per
     # docs/agents/e2e-testing.md): buckets ready (~300+180+120) + BackupJob 480
     # + in-place 480 + target ready (~300+180) + to-copy 480, plus the mc /
-    # port-forward interleaves. 40m leaves comfortable headroom while every
-    # inner wait still fails fast on a terminal phase=Failed / Stalled.
+    # port-forward interleaves - roughly 52 minutes. 60m clears that sum while
+    # every inner wait still fails fast on a terminal phase=Failed / Stalled;
+    # the bound is not strict because the mc / kubectl commands are unbounded.
     - script:
-        timeout: 40m
+        timeout: 60m
         content: |
           set -eu
           cd ../../..
