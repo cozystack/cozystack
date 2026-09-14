@@ -830,7 +830,7 @@
           }
         },
         "mode": {
-          "description": "Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform `cozy` realm via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.",
+          "description": "Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform Keycloak realm (`cozy` by default) via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.",
           "type": "string",
           "default": "None",
           "enum": [

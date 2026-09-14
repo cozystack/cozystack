@@ -37,12 +37,22 @@ tests:
           path: stringData["values.yaml"]
           pattern: 'keycloak-internal-url:\s*"http://keycloak-http\.cozy-keycloak\.svc:8080/realms/acme"'
 
-  # A bare-integer realm name arrives as a Go int; the derived URL builds it with
-  # printf %s, which renders a "%!s(int=...)" format error unless the value is
-  # coerced to a string first. Pin both the realm key and the derived URL.
-  - it: renders a numeric realm name as a string in both the key and the derived URL
+  # A realm name YAML resolves to a non-string (a bare integer, or a reserved
+  # word like on/off that becomes a bool) is rejected, not silently coerced —
+  # coercion would rename the realm to something never typed and inject a
+  # "%!s(...)" format error into the derived URL.
+  - it: rejects a non-string realm name with a quoting hint
     set:
       authentication.oidc.realmName: 123
+    asserts:
+      - failedTemplate:
+          errorMessage: 'authentication.oidc.realmName must be a string, got float64; quote it in values, e.g. realmName: "123"'
+
+  # A quoted numeric name is a legitimate string and passes through to both the
+  # realm key and the derived URL unchanged.
+  - it: accepts a quoted numeric realm name verbatim
+    set:
+      authentication.oidc.realmName: "123"
     asserts:
       - matchRegex:
           path: stringData["values.yaml"]
@@ -50,6 +60,3 @@ tests:
       - matchRegex:
           path: stringData["values.yaml"]
           pattern: 'keycloak-internal-url:\s*"http://keycloak-http\.cozy-keycloak\.svc:8080/realms/123"'
-      - notMatchRegex:
-          path: stringData["values.yaml"]
-          pattern: '%!s\(int'
