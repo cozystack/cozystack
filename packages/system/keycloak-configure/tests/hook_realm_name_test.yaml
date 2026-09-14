@@ -1,0 +1,33 @@
+suite: enable-update-email hook Job targets the configured realm
+templates:
+  - templates/enable-update-email.yaml
+
+release:
+  name: keycloak-configure
+  namespace: cozy-keycloak
+
+# The enable-update-email hook Job is a consumer of the realm in the same chart
+# that creates it: it waits on and configures the realm by name via kcadm. On a
+# custom realm it must target the realm keycloak-configure actually provisions,
+# not the literal "cozy" — otherwise the Job waits for a realm that never
+# appears and the cold install times out, so a non-default realmName is the one
+# value nobody could set without breaking the install.
+
+tests:
+  - it: defaults the hook Job realm to cozy
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'REALM=cozy(\s|$)'
+
+  - it: threads a custom realm name into the hook Job
+    set:
+      _cluster:
+        oidc-realm-name: acme
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'REALM=acme(\s|$)'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'REALM=cozy'
