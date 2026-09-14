@@ -1,0 +1,94 @@
+suite: seaweedfs s3 catalog listener ports
+
+# weed s3 ships two table-catalog listeners that default to on: Lance on 9101
+# and Iceberg on 8181. Both are served over plain HTTP with no certificate
+# option (weed/command/s3.go: newHttpServer with a nil TLS config) while every
+# other port on this gateway is TLS by way of patches/s3-tls-main-port.patch,
+# and both expose writable routes. Nothing in Cozystack consumes either, so
+# values.yaml pins lancePort off and s3-iceberg-port-explicit.patch renders
+# -port.iceberg unconditionally so the chart's null default reaches weed as 0
+# rather than being dropped into weed's own 8181. These cases fail if either
+# control is lost, and the last two pin that an operator who does want a
+# catalog can still turn one on.
+
+templates:
+  - charts/seaweedfs/templates/s3/s3-service.yaml
+  - charts/seaweedfs/templates/s3/s3-deployment.yaml
+
+release:
+  name: seaweedfs
+  namespace: cozy-seaweedfs
+
+tests:
+  - it: does not publish a Lance port on the s3 Service
+    template: charts/seaweedfs/templates/s3/s3-service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - notContains:
+          path: spec.ports
+          content:
+            name: swfs-lance
+          any: true
+
+  - it: keeps the s3 Service on the pre-4.45 port set
+    template: charts/seaweedfs/templates/s3/s3-service.yaml
+    asserts:
+      - contains:
+          path: spec.ports
+          content:
+            name: swfs-s3
+          any: true
+      - contains:
+          path: spec.ports
+          content:
+            name: metrics
+          any: true
+      - lengthEqual:
+          path: spec.ports
+          count: 2
+
+  - it: tells weed to skip the Lance server
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: -port\.lance=0
+
+  - it: does not expose a Lance container port
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: swfs-lance
+          any: true
+
+  - it: tells weed to skip the Iceberg catalog too
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: -port\.iceberg=0
+
+  - it: still honours an explicitly configured Iceberg port
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    set:
+      seaweedfs.s3.icebergPort: 8334
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: -port\.iceberg=8334
+
+  - it: still honours an explicitly configured Lance port
+    template: charts/seaweedfs/templates/s3/s3-service.yaml
+    set:
+      seaweedfs.s3.lancePort: 9101
+    asserts:
+      - contains:
+          path: spec.ports
+          content:
+            name: swfs-lance
+          any: true
