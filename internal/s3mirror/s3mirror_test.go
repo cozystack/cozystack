@@ -3,6 +3,16 @@ package s3mirror
 
 import "testing"
 
+func TestRunRejectsEmptyRestorePrefix(t *testing.T) {
+	// An empty --repo-prefix in restore mode would list the whole repo bucket;
+	// Run must reject it before contacting S3. Validation runs before any env
+	// lookup, so no APP_BUCKETINFO/REPO_* is needed to reach it.
+	code := Run([]string{"--mode=restore", "--repo-endpoint=s3.example.com", "--repo-bucket=cozy-backups"})
+	if code != 2 {
+		t.Fatalf("Run(restore, empty prefix) = %d, want 2", code)
+	}
+}
+
 func TestParseBucketInfo(t *testing.T) {
 	valid := `{"spec":{"bucketName":"bucket-abc","secretS3":{"accessKeyID":"AK","accessSecretKey":"SK","endpoint":"https://s3.example.com:8333"}}}`
 	bi, err := parseBucketInfo([]byte(valid))
