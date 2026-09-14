@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -103,6 +104,7 @@ func Run(args []string) int {
 	caFile := fs.String("ca-file", "", "PEM CA bundle to trust")
 	serverSide := fs.Bool("server-side", false, "attempt server-side CopyObject before streaming")
 	deleteExtraneous := fs.Bool("delete-extraneous", false, "delete destination objects absent from the source (restore mirror)")
+	allowEmptySource := fs.Bool("allow-empty-source", false, "permit a --delete-extraneous run whose source lists zero objects (would purge the whole destination)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -162,17 +164,19 @@ func Run(args []string) int {
 	}
 
 	ctx := context.Background()
+	appStore := &minioStore{client: appClient}
+	repoStore := &minioStore{client: repoClient}
 	var from, to copySide
 	if *mode == "backup" {
-		from = copySide{client: appClient, bucket: app.bucket, prefix: ""}
-		to = copySide{client: repoClient, bucket: repo.bucket, prefix: *repoPrefix}
+		from = copySide{store: appStore, bucket: app.bucket, prefix: ""}
+		to = copySide{store: repoStore, bucket: repo.bucket, prefix: *repoPrefix}
 	} else {
-		from = copySide{client: repoClient, bucket: repo.bucket, prefix: *repoPrefix}
-		to = copySide{client: appClient, bucket: app.bucket, prefix: ""}
+		from = copySide{store: repoStore, bucket: repo.bucket, prefix: *repoPrefix}
+		to = copySide{store: appStore, bucket: app.bucket, prefix: ""}
 	}
 
 	sameEndpoint := hostOf(app.endpoint) == hostOf(repo.endpoint)
-	copied, err := mirror(ctx, from, to, *serverSide && sameEndpoint, *deleteExtraneous)
+	copied, err := mirror(ctx, from, to, *serverSide && sameEndpoint, *deleteExtraneous, *allowEmptySource)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "s3-mirror: %v\n", err)
 		return 1
@@ -218,9 +222,36 @@ func newClient(c endpointCreds, transport http.RoundTripper) (*minio.Client, err
 	return minio.New(host, opts)
 }
 
-// copySide is one endpoint+bucket+prefix in a mirror.
+// object carries one S3 object's payload and the metadata the mirror preserves
+// across a copy.
+type object struct {
+	size            int64
+	contentType     string
+	contentEncoding string
+	cacheControl    string
+	userMetadata    map[string]string
+	body            io.ReadCloser
+}
+
+// objectStore is the minimal S3 surface the mirror needs. It is an interface so
+// the copy/purge decision logic - the destructive --delete-extraneous path in
+// particular - is unit-testable against an in-memory fake.
+type objectStore interface {
+	// list streams the key+size of every object under prefix to fn; an error
+	// from fn or the listing aborts and propagates.
+	list(ctx context.Context, bucket, prefix string, fn func(key string, size int64) error) error
+	// get opens one object; the caller closes the returned body.
+	get(ctx context.Context, bucket, key string) (object, error)
+	put(ctx context.Context, bucket, key string, obj object) error
+	// copyServerSide attempts an in-server copy; a returned error signals the
+	// caller to fall back to a streamed copy.
+	copyServerSide(ctx context.Context, dstBucket, dstKey, srcBucket, srcKey string) error
+	remove(ctx context.Context, bucket, key string) error
+}
+
+// copySide is one store+bucket+prefix in a mirror.
 type copySide struct {
-	client *minio.Client
+	store  objectStore
 	bucket string
 	prefix string
 }
@@ -228,38 +259,44 @@ type copySide struct {
 // mirror copies every object under from into to (rekeying from.prefix to
 // to.prefix), optionally deleting objects under to.prefix that the source no
 // longer contains. Returns the number of objects copied.
-func mirror(ctx context.Context, from, to copySide, serverSide, deleteExtraneous bool) (int, error) {
+func mirror(ctx context.Context, from, to copySide, serverSide, deleteExtraneous, allowEmptySource bool) (int, error) {
 	seen := map[string]struct{}{}
 	copied := 0
 
-	for obj := range from.client.ListObjects(ctx, from.bucket, minio.ListObjectsOptions{Prefix: from.prefix, Recursive: true}) {
-		if obj.Err != nil {
-			return copied, fmt.Errorf("list %s/%s: %w", from.bucket, from.prefix, obj.Err)
-		}
-		rel := strings.TrimPrefix(obj.Key, from.prefix)
+	err := from.store.list(ctx, from.bucket, from.prefix, func(key string, _ int64) error {
+		rel := strings.TrimPrefix(key, from.prefix)
 		destKey := to.prefix + rel
 		seen[destKey] = struct{}{}
 
 		if serverSide {
-			_, err := to.client.CopyObject(ctx,
-				minio.CopyDestOptions{Bucket: to.bucket, Object: destKey},
-				minio.CopySrcOptions{Bucket: from.bucket, Object: obj.Key})
-			if err == nil {
+			if err := to.store.copyServerSide(ctx, to.bucket, destKey, from.bucket, key); err == nil {
 				copied++
-				continue
+				return nil
 			}
 			// Fall back to a streamed copy: a single credential may not be
 			// authorized on both buckets, so a server-side copy can fail
 			// where a two-client streamed copy succeeds.
 		}
 
-		if err := streamCopy(ctx, from, to, obj.Key, destKey, obj.Size); err != nil {
-			return copied, err
+		if err := streamCopy(ctx, from, to, key, destKey); err != nil {
+			return err
 		}
 		copied++
+		return nil
+	})
+	if err != nil {
+		return copied, err
 	}
 
 	if deleteExtraneous {
+		// A source that lists zero objects is not a signal to erase the
+		// destination. Without this guard an in-place restore whose snapshot
+		// objects are gone (retention-pruned, expired, or the source was empty
+		// at backup time) deletes every object in the live bucket and still
+		// reports success. Fail closed unless explicitly overridden.
+		if copied == 0 && !allowEmptySource {
+			return copied, fmt.Errorf("refusing to purge %s: source %s/%s listed zero objects (pass --allow-empty-source to override)", to.bucket, from.bucket, from.prefix)
+		}
 		if err := deleteUnseen(ctx, to, seen); err != nil {
 			return copied, err
 		}
@@ -267,29 +304,107 @@ func mirror(ctx context.Context, from, to copySide, serverSide, deleteExtraneous
 	return copied, nil
 }
 
-func streamCopy(ctx context.Context, from, to copySide, srcKey, destKey string, size int64) error {
-	obj, err := from.client.GetObject(ctx, from.bucket, srcKey, minio.GetObjectOptions{})
+func streamCopy(ctx context.Context, from, to copySide, srcKey, destKey string) error {
+	obj, err := from.store.get(ctx, from.bucket, srcKey)
 	if err != nil {
 		return fmt.Errorf("get %s/%s: %w", from.bucket, srcKey, err)
 	}
-	defer obj.Close()
-	if _, err := to.client.PutObject(ctx, to.bucket, destKey, obj, size, minio.PutObjectOptions{}); err != nil {
+	defer obj.body.Close()
+	if err := to.store.put(ctx, to.bucket, destKey, obj); err != nil {
 		return fmt.Errorf("put %s/%s: %w", to.bucket, destKey, err)
 	}
 	return nil
 }
 
 func deleteUnseen(ctx context.Context, to copySide, seen map[string]struct{}) error {
-	for obj := range to.client.ListObjects(ctx, to.bucket, minio.ListObjectsOptions{Prefix: to.prefix, Recursive: true}) {
-		if obj.Err != nil {
-			return fmt.Errorf("list %s/%s: %w", to.bucket, to.prefix, obj.Err)
+	return to.store.list(ctx, to.bucket, to.prefix, func(key string, _ int64) error {
+		if _, ok := seen[key]; ok {
+			return nil
 		}
-		if _, ok := seen[obj.Key]; ok {
-			continue
+		if err := to.store.remove(ctx, to.bucket, key); err != nil {
+			return fmt.Errorf("remove %s/%s: %w", to.bucket, key, err)
 		}
-		if err := to.client.RemoveObject(ctx, to.bucket, obj.Key, minio.RemoveObjectOptions{}); err != nil {
-			return fmt.Errorf("remove %s/%s: %w", to.bucket, obj.Key, err)
+		return nil
+	})
+}
+
+// minioStore adapts a *minio.Client to objectStore; each method maps to the SDK
+// call the mirror previously made inline.
+type minioStore struct {
+	client *minio.Client
+}
+
+func (s *minioStore) list(ctx context.Context, bucket, prefix string, fn func(key string, size int64) error) error {
+	for info := range s.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if info.Err != nil {
+			return fmt.Errorf("list %s/%s: %w", bucket, prefix, info.Err)
+		}
+		if err := fn(info.Key, info.Size); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func (s *minioStore) get(ctx context.Context, bucket, key string) (object, error) {
+	o, err := s.client.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return object{}, err
+	}
+	// Stat resolves the object's headers (Content-Type, Content-Encoding, user
+	// metadata) that a listing does not carry; a subsequent Read still streams
+	// the body from offset 0.
+	info, err := o.Stat()
+	if err != nil {
+		o.Close()
+		return object{}, err
+	}
+	return object{
+		size:            info.Size,
+		contentType:     info.ContentType,
+		contentEncoding: info.Metadata.Get("Content-Encoding"),
+		cacheControl:    info.Metadata.Get("Cache-Control"),
+		userMetadata:    userMetadataOf(info.Metadata),
+		body:            o,
+	}, nil
+}
+
+func (s *minioStore) put(ctx context.Context, bucket, key string, obj object) error {
+	_, err := s.client.PutObject(ctx, bucket, key, obj.body, obj.size, minio.PutObjectOptions{
+		ContentType:     obj.contentType,
+		ContentEncoding: obj.contentEncoding,
+		CacheControl:    obj.cacheControl,
+		UserMetadata:    obj.userMetadata,
+	})
+	return err
+}
+
+func (s *minioStore) copyServerSide(ctx context.Context, dstBucket, dstKey, srcBucket, srcKey string) error {
+	_, err := s.client.CopyObject(ctx,
+		minio.CopyDestOptions{Bucket: dstBucket, Object: dstKey},
+		minio.CopySrcOptions{Bucket: srcBucket, Object: srcKey})
+	return err
+}
+
+func (s *minioStore) remove(ctx context.Context, bucket, key string) error {
+	return s.client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
+}
+
+// userMetadataOf lifts the x-amz-meta-* headers (prefix stripped) that minio-go
+// exposes on ObjectInfo.Metadata into the map PutObject re-emits.
+func userMetadataOf(h http.Header) map[string]string {
+	var out map[string]string
+	const prefix = "X-Amz-Meta-"
+	for k, v := range h {
+		if len(v) == 0 {
+			continue
+		}
+		if ck := http.CanonicalHeaderKey(k); strings.HasPrefix(ck, prefix) {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[strings.TrimPrefix(ck, prefix)] = v[0]
+		}
+	}
+	return out
 }
