@@ -155,20 +155,24 @@ rules:
   resources: ["backups", "restores"]
   verbs: ["get", "list", "watch", "create"]
 # MongoDB strategy: read the operator-side PerconaServerMongoDB CR to gate on
-# "backups enabled + storage declared" preconditions, create one-shot
-# PerconaServerMongoDBBackup CRs on the BackupJob path, and create
-# PerconaServerMongoDBRestore CRs on the RestoreJob path. The Backup/Restore CRs
-# are only ever Created/Listed/Gotten — their lifecycle is owned by the psmdb
-# operator and (for cleanup) by tenants / explicit teardown flows. The cluster
-# CR is patched only on the useSystemBucket flow (storage injection, below); it
-# is never deleted.
+# the backup preconditions, create one-shot PerconaServerMongoDBBackup CRs on the
+# BackupJob path, and create PerconaServerMongoDBRestore CRs on the RestoreJob
+# path. The cluster CR is patched only on the useSystemBucket flow (storage
+# injection, below); it is never deleted.
 - apiGroups: ["psmdb.percona.com"]
   resources: ["perconaservermongodbs"]
-  # patch/update: the useSystemBucket flow SSA-injects spec.backup.storages
-  # onto the live PerconaServerMongoDB at BackupJob time.
-  verbs: ["get", "list", "watch", "patch", "update"]
+  # patch: the useSystemBucket flow SSA-injects spec.backup.storages onto the
+  # live PerconaServerMongoDB at BackupJob time (server-side apply is a PATCH).
+  verbs: ["get", "list", "watch", "patch"]
 - apiGroups: ["psmdb.percona.com"]
-  resources: ["perconaservermongodbbackups", "perconaservermongodbrestores"]
+  resources: ["perconaservermongodbbackups"]
+  # delete: on the useSystemBucket flow the driver owns the shared-bucket archive
+  # and prunes it on Cozystack Backup deletion by deleting this CR, whose
+  # delete-backup finalizer frees the object (see cleanupMongoDBBackup). A legacy
+  # backup lives in the tenant's own bucket and is never deleted here.
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: ["psmdb.percona.com"]
+  resources: ["perconaservermongodbrestores"]
   verbs: ["get", "list", "watch", "create"]
 # FoundationDB strategy: read the operator-side FoundationDBCluster CR to
 # surface "not yet rendered" preconditions, create per-BackupJob

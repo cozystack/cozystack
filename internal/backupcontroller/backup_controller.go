@@ -138,17 +138,15 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// Mirrors the Altinity branch's "we do not own S3" stance.
 		return ctrl.Result{}, nil
 	case strategyv1alpha1.MongoDBStrategyKind:
-		// Cozystack Backup deletion does NOT delete the operator-side
-		// psmdb.percona.com/PerconaServerMongoDBBackup CR or the backing S3
-		// archive. Lifecycle of that CR is owned by the psmdb operator's
-		// retention and by tenants / explicit teardown flows; the
-		// controller's RBAC has no delete verb on
-		// psmdb.percona.com/perconaservermongodbbackups for that reason. Same
-		// "we do not own the archive" contract as Altinity / MariaDB / FDB —
-		// the explicit branch guards the seam against a future driver refactor
-		// that might incidentally stamp velero.io/backup-name onto MongoDB
-		// driverMetadata via a shared helper.
-		return ctrl.Result{}, nil
+		// Split by flow (see cleanupMongoDBBackup). A legacy backup writes to the
+		// tenant's own bucket and its lifecycle stays the tenant's / psmdb
+		// operator's — that branch is a no-op, the same "we do not own the
+		// archive" contract as Altinity / MariaDB / FDB. A useSystemBucket backup
+		// lands in the shared cozy-backups bucket with no psmdb task retention to
+		// prune it, so the driver OWNS it: this deletes the operator
+		// PerconaServerMongoDBBackup CR and waits for its delete-backup finalizer
+		// to free the object before the Backup is removed (like Redis / Rabbitmq).
+		return r.cleanupMongoDBBackup(ctx, backup)
 	case strategyv1alpha1.FoundationDBStrategyKind:
 		// Cozystack Backup deletion does NOT delete the operator-side
 		// foundationdb.org/FoundationDBBackup CR. That CR drives a
