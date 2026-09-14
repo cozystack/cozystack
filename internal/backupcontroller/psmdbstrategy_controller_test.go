@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -255,6 +256,18 @@ func TestMongoDBRestoreCredentialsSecret(t *testing.T) {
 			want:   "src-s3-creds",
 		},
 		{
+			// Reaches the projected-secret early return specifically: the target
+			// declares a storage on the SAME bucket as the archive under a
+			// different credentialsSecret, so without the "already cozy-backups-
+			// creds" short-circuit the same-bucket swap would re-point the restore
+			// at the operator-managed secret. Keeping the projected secret is
+			// correct — it outlives the source app and reads the platform bucket.
+			name:   "system source -> target with same-bucket storage under other creds: keep projected cozy-backups-creds",
+			source: src("cozy-backups-PLATFORM", "cozy-backups-creds"),
+			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("cozy-backups-PLATFORM", "operator-managed-creds")}),
+			want:   "cozy-backups-creds",
+		},
+		{
 			name:   "no s3 source: empty (caller keeps the source reference)",
 			source: &psmdbtypes.BackupSource{StorageName: "s3-storage"},
 			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("tenant-bucket", "target-s3-creds")}),
@@ -284,11 +297,11 @@ func TestEnsureMongoDBBackup_IdempotentByLabel(t *testing.T) {
 	rendered := newRenderedMongoDBTemplate()
 	cluster := mongodbNameForApp("mongodb-src")
 
-	first, err := r.ensureMongoDBBackup(context.Background(), job, cluster, "s3-storage", rendered)
+	first, err := r.ensureMongoDBBackup(context.Background(), job, cluster, "s3-storage", rendered, false)
 	if err != nil {
 		t.Fatalf("first ensureMongoDBBackup: %v", err)
 	}
-	second, err := r.ensureMongoDBBackup(context.Background(), job, cluster, "s3-storage", rendered)
+	second, err := r.ensureMongoDBBackup(context.Background(), job, cluster, "s3-storage", rendered, false)
 	if err != nil {
 		t.Fatalf("second ensureMongoDBBackup: %v", err)
 	}
@@ -322,6 +335,37 @@ func TestEnsureMongoDBBackup_IdempotentByLabel(t *testing.T) {
 	}
 	if got.Labels[backupsv1alpha1.OwningJobNameLabel] != "bj-1" {
 		t.Errorf("OwningJobName label missing or wrong: %v", got.Labels)
+	}
+	// Legacy flow: the archive is the tenant's, so the driver must NOT stamp the
+	// delete-backup finalizer that would prune it on CR deletion.
+	for _, f := range got.Finalizers {
+		if f == psmdbDeleteBackupFinalizer {
+			t.Errorf("legacy backup must not carry %q finalizer; got %v", psmdbDeleteBackupFinalizer, got.Finalizers)
+		}
+	}
+}
+
+func TestEnsureMongoDBBackup_SystemBucketStampsDeleteFinalizer(t *testing.T) {
+	c := newMongoDBStrategyTestClient(t)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+	job := newMongoDBBackupJob("bj-sb", "tenant")
+	if err := c.Create(context.Background(), job); err != nil {
+		t.Fatalf("seed BackupJob: %v", err)
+	}
+	got, err := r.ensureMongoDBBackup(context.Background(), job, "mongodb-app", "s3-storage", newRenderedMongoDBTemplate(), true)
+	if err != nil {
+		t.Fatalf("ensureMongoDBBackup: %v", err)
+	}
+	found := false
+	for _, f := range got.Finalizers {
+		if f == psmdbDeleteBackupFinalizer {
+			found = true
+		}
+	}
+	if !found {
+		// Without it, deleting the Backup on Plan retention would orphan the
+		// object in the shared cozy-backups bucket forever.
+		t.Errorf("system-bucket backup must carry %q finalizer so its archive is pruned on delete; got %v", psmdbDeleteBackupFinalizer, got.Finalizers)
 	}
 }
 
@@ -1021,4 +1065,254 @@ func newRenderedMongoDBTemplate() *strategyv1alpha1.MongoDBTemplate {
 		Type:            "logical",
 		CompressionType: "gzip",
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Strategy rendering
+// ---------------------------------------------------------------------------
+
+// The strategy prefix reaches the CR as a literal Go template
+// ("<ns>/<app>") and renderMongoDBTemplate is what turns it into a per-tenant
+// path at BackupJob time. That resolution is the only thing keeping two tenants'
+// dumps apart inside one shared bucket, so pin it: an unrendered prefix would
+// collide every tenant under the same path. Mirrors the CNPG/FoundationDB
+// sibling render tests.
+func TestRenderMongoDBTemplate_TemplatingApplicationName(t *testing.T) {
+	tmpl := strategyv1alpha1.MongoDBTemplate{
+		StorageName: "s3-storage",
+		Type:        "logical",
+		S3: &strategyv1alpha1.MongoDBStorageS3{
+			Bucket:            "cozy-backups",
+			EndpointURL:       "https://s3.example",
+			Prefix:            "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}",
+			CredentialsSecret: "cozy-backups-creds",
+		},
+	}
+	app := &mongodbapp.MongoDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "mongo-y"}}
+
+	got, err := renderMongoDBTemplate(tmpl, app, nil)
+	if err != nil {
+		t.Fatalf("renderMongoDBTemplate: %v", err)
+	}
+	if got.S3 == nil {
+		t.Fatalf("rendered S3 is nil")
+	}
+	if got.S3.Prefix != "tenant-x/mongo-y" {
+		t.Errorf("prefix not templated per application: got %q want tenant-x/mongo-y", got.S3.Prefix)
+	}
+	// The non-templated coordinates must pass through untouched.
+	if got.S3.Bucket != "cozy-backups" || got.S3.CredentialsSecret != "cozy-backups-creds" {
+		t.Errorf("static coordinates altered: %#v", got.S3)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// System-bucket storage injection (BackupJob path)
+// ---------------------------------------------------------------------------
+
+// The injection is what makes the useSystemBucket flow work: the app chart omits
+// the storage, so reconcileMongoDB SSA-injects it and must read the precondition
+// off the post-apply cluster (cluster = injected), not the pre-apply one it
+// Got. This pins that within a single reconcile: with a live cluster that has
+// backups enabled but no storage declared, the reconcile must inject, pass the
+// precondition, and create the operator Backup CR. Drop the reassignment and the
+// precondition reads the pre-apply cluster, fails, and no Backup is created.
+func TestReconcileMongoDB_InjectsSystemStorageBeforePrecondition(t *testing.T) {
+	apps := mongodbapp.GroupName
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	now := metav1.Now()
+
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-inj"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "app1", APIGroup: &apps},
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now},
+	}
+	strategy := &strategyv1alpha1.MongoDB{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-mongodb"},
+		Spec: strategyv1alpha1.MongoDBSpec{Template: strategyv1alpha1.MongoDBTemplate{
+			StorageName: "s3-storage",
+			Type:        "logical",
+			S3: &strategyv1alpha1.MongoDBStorageS3{
+				Bucket:            "cozy-backups",
+				EndpointURL:       "https://s3.example",
+				Prefix:            "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}",
+				CredentialsSecret: "cozy-backups-creds",
+			},
+		}},
+	}
+	app := &mongodbapp.MongoDB{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "app1"},
+		Spec:       mongodbapp.MongoDBSpec{Backup: mongodbapp.MongoDBBackupSpec{UseSystemBucket: true}},
+	}
+	// Live cluster: backups enabled (agents run) but storage NOT declared — the
+	// exact state the chart leaves on the useSystemBucket flow.
+	cluster := &psmdbtypes.PerconaServerMongoDB{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-app1"},
+		Spec:       psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{Enabled: true}},
+	}
+
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.MongoDBStrategyKind, Name: "cozy-default-mongodb"},
+		Parameters:  map[string]string{},
+	}
+
+	res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+	if err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected a poll requeue while the operator Backup runs, got %+v", res)
+	}
+
+	// The precondition passed only because it read the injected cluster: an
+	// operator Backup CR now exists.
+	list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list operator backups: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("expected the injection to let the precondition pass and create 1 operator Backup, got %d", len(list.Items))
+	}
+
+	// The storage was actually persisted onto the live cluster.
+	got := &psmdbtypes.PerconaServerMongoDB{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "mongodb-app1"}, got); err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	if _, ok := got.Spec.Backup.Storages["s3-storage"]; !ok {
+		t.Errorf("expected injected s3-storage on the cluster, got %#v", got.Spec.Backup.Storages)
+	}
+}
+
+// resolveMongoDBBackupSource must fill an S3 block the live operator status
+// omits from the snapshot: on the useSystemBucket flow the operator can report
+// status.destination with status.s3 empty (the storage was injected, not
+// declared), and without the coordinates the restore has nothing to authenticate
+// or address the archive with. Neither prior test covers a live CR whose
+// destination is set but whose S3 is nil.
+func TestResolveMongoDBBackupSource_LiveMissingS3BackfillsFromSnapshot(t *testing.T) {
+	liveBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-backup"},
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			State:       psmdbtypes.StateReady,
+			Type:        "logical",
+			Destination: "s3://cozy-backups/tenant/app1/2026",
+			// S3 intentionally nil: the operator echoed a destination only.
+		},
+	}
+	snapBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			Destination: "s3://cozy-backups/tenant/app1/2026",
+			S3:          &psmdbtypes.BackupStorageS3{Bucket: "cozy-backups", CredentialsSecret: "cozy-backups-creds", EndpointURL: "https://s3.example"},
+		},
+	}
+	raw, err := marshalMongoDBBackupSnapshot(snapBackup, &strategyv1alpha1.MongoDBTemplate{Type: "logical"}, "s3-storage", nil, false)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	cozyBackup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cozy-bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			DriverMetadata: map[string]string{psmdbBackupNameKey: "op-backup"},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+	}
+	c := newMongoDBStrategyTestClient(t, liveBackup)
+	r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	src, err := r.resolveMongoDBBackupSource(context.Background(), cozyBackup)
+	if err != nil {
+		t.Fatalf("resolveMongoDBBackupSource: %v", err)
+	}
+	if src.Destination != "s3://cozy-backups/tenant/app1/2026" {
+		t.Errorf("expected live destination, got %q", src.Destination)
+	}
+	if src.S3 == nil {
+		t.Fatalf("expected S3 backfilled from snapshot, got nil (restore would have no coordinates)")
+	}
+	if src.S3.CredentialsSecret != "cozy-backups-creds" || src.S3.Bucket != "cozy-backups" {
+		t.Errorf("expected snapshot S3 coordinates, got %#v", src.S3)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// System-bucket archive cleanup (retention)
+// ---------------------------------------------------------------------------
+
+func TestCleanupMongoDBBackup(t *testing.T) {
+	newBackup := func(md map[string]string, ann map[string]string) *backupsv1alpha1.Backup {
+		return &backupsv1alpha1.Backup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cozy-bk", Annotations: ann},
+			Spec:       backupsv1alpha1.BackupSpec{DriverMetadata: md},
+		}
+	}
+	opBackup := func() *psmdbtypes.PerconaServerMongoDBBackup {
+		return &psmdbtypes.PerconaServerMongoDBBackup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-bk", Finalizers: []string{psmdbDeleteBackupFinalizer}},
+		}
+	}
+
+	t.Run("legacy backup is a no-op (tenant owns the archive)", func(t *testing.T) {
+		c := newMongoDBStrategyTestClient(t, opBackup())
+		r := &BackupReconciler{Client: c}
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(map[string]string{psmdbBackupNameKey: "op-bk"}, nil))
+		if err != nil || res.RequeueAfter != 0 {
+			t.Fatalf("legacy cleanup must be a no-op, got res=%+v err=%v", res, err)
+		}
+		// The operator CR must be untouched (no delete issued).
+		got := &psmdbtypes.PerconaServerMongoDBBackup{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-bk"}, got); err != nil {
+			t.Fatalf("operator CR should be untouched: %v", err)
+		}
+		if !got.DeletionTimestamp.IsZero() {
+			t.Errorf("legacy cleanup must not delete the operator CR")
+		}
+	})
+
+	t.Run("system-bucket backup deletes the operator CR and waits", func(t *testing.T) {
+		c := newMongoDBStrategyTestClient(t, opBackup())
+		r := &BackupReconciler{Client: c}
+		md := map[string]string{psmdbBackupNameKey: "op-bk", psmdbUseSystemBucketKey: "true"}
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(md, nil))
+		if err != nil {
+			t.Fatalf("cleanupMongoDBBackup: %v", err)
+		}
+		if res.RequeueAfter == 0 {
+			t.Fatalf("expected a requeue while the operator prunes the archive, got %+v", res)
+		}
+		// The delete-backup finalizer holds the CR Terminating until the operator
+		// prunes the object; the driver must keep waiting, not release early.
+		got := &psmdbtypes.PerconaServerMongoDBBackup{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-bk"}, got); err != nil {
+			t.Fatalf("operator CR should still exist under its finalizer: %v", err)
+		}
+		if got.DeletionTimestamp.IsZero() {
+			t.Errorf("expected the operator CR to be marked for deletion")
+		}
+	})
+
+	t.Run("operator CR already gone releases (finalizer pruned the archive)", func(t *testing.T) {
+		c := newMongoDBStrategyTestClient(t)
+		r := &BackupReconciler{Client: c}
+		md := map[string]string{psmdbBackupNameKey: "op-bk", psmdbUseSystemBucketKey: "true"}
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(md, nil))
+		if err != nil || res.RequeueAfter != 0 {
+			t.Fatalf("a reaped operator CR must release, got res=%+v err=%v", res, err)
+		}
+	})
+
+	t.Run("skip annotation releases without waiting", func(t *testing.T) {
+		c := newMongoDBStrategyTestClient(t, opBackup())
+		r := &BackupReconciler{Client: c}
+		md := map[string]string{psmdbBackupNameKey: "op-bk", psmdbUseSystemBucketKey: "true"}
+		ann := map[string]string{psmdbSkipArtifactCleanupAnnotation: "true"}
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(md, ann))
+		if err != nil || res.RequeueAfter != 0 {
+			t.Fatalf("skip annotation must release, got res=%+v err=%v", res, err)
+		}
+	})
 }
