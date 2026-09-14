@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -36,6 +37,7 @@ const (
 	bucketLabelMode   = "bucket.strategy.backups.cozystack.io/mode"
 	bucketModeBackup  = "backup"
 	bucketModeRestore = "restore"
+	bucketModeCleanup = "cleanup"
 
 	// Driver-metadata key prefix used to round-trip BackupClassStrategy
 	// parameters through the Backup artifact, mirroring the Job driver.
@@ -43,6 +45,14 @@ const (
 
 	// bucketPollInterval matches the Job / Altinity cadence.
 	bucketPollInterval = 5 * time.Second
+
+	// bucketMirrorDeadlineSeconds bounds a single mirror Pod attempt. Without it
+	// a wedged copy (a hung S3 connection, a never-completing list) keeps the
+	// mirror Pod Running forever and the BackupJob polling it never terminates;
+	// the Pod deadline plus backoffLimit caps the whole run at a finite multiple.
+	// Generous so a large legitimate bucket still finishes; the point is a
+	// finite ceiling, not a tight SLA.
+	bucketMirrorDeadlineSeconds int64 = 2 * 60 * 60
 
 	// bucketFieldManager owns the COSI BucketAccess objects the driver
 	// applies via server-side apply.
@@ -845,11 +855,195 @@ func buildBucketMirrorPod(mode string, tmpl strategyv1alpha1.BucketTemplate, app
 		}
 	}
 
+	deadline := bucketMirrorDeadlineSeconds
 	return &corev1.PodTemplateSpec{
 		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			Containers:    []corev1.Container{container},
-			Volumes:       volumes,
+			RestartPolicy:         corev1.RestartPolicyNever,
+			ActiveDeadlineSeconds: &deadline,
+			Containers:            []corev1.Container{container},
+			Volumes:               volumes,
 		},
 	}
+}
+
+// buildBucketCleanupPod builds the one-shot Pod that reclaims a backup's repo
+// objects (`s3-mirror --mode=delete`) when its Backup is deleted. Only the repo
+// side matters to a purge, so no BucketAccess or app credentials are wired.
+func buildBucketCleanupPod(snapshot *bucketBackupSnapshot, image string) *corev1.PodTemplateSpec {
+	args := []string{
+		"s3-mirror",
+		"--mode=delete",
+		"--repo-endpoint=" + snapshot.RepoEndpoint,
+		"--repo-bucket=" + snapshot.RepoBucket,
+		"--repo-prefix=" + snapshot.RepoPrefix,
+	}
+	if snapshot.RepoRegion != "" {
+		args = append(args, "--repo-region="+snapshot.RepoRegion)
+	}
+
+	secretKeySecret := snapshot.RepoCredentialsSecretKeySecret
+	if secretKeySecret == "" {
+		secretKeySecret = snapshot.RepoCredentialsSecret
+	}
+	env := []corev1.EnvVar{
+		{
+			Name: "REPO_ACCESS_KEY",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: snapshot.RepoCredentialsSecret},
+				Key:                  snapshot.RepoCredentialsAccessKeyKey,
+			}},
+		},
+		{
+			Name: "REPO_SECRET_KEY",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: secretKeySecret},
+				Key:                  snapshot.RepoCredentialsSecretKeyKey,
+			}},
+		},
+	}
+
+	container := corev1.Container{Name: "cleanup", Image: image, Args: args, Env: env}
+
+	var volumes []corev1.Volume
+	if snapshot.RepoCACertSecret != "" {
+		container.Args = append(container.Args, "--ca-file="+bucketCAMountPath+"/"+bucketCAFileName)
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "s3-ca",
+			MountPath: bucketCAMountPath,
+			ReadOnly:  true,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: "s3-ca",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: snapshot.RepoCACertSecret,
+				Items:      []corev1.KeyToPath{{Key: snapshot.RepoCACertKey, Path: bucketCAFileName}},
+			}},
+		})
+	} else if snapshot.InsecureSkipVerify {
+		container.Args = append(container.Args, "--insecure")
+	}
+
+	deadline := bucketMirrorDeadlineSeconds
+	return &corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{
+			RestartPolicy:         corev1.RestartPolicyNever,
+			ActiveDeadlineSeconds: &deadline,
+			Containers:            []corev1.Container{container},
+			Volumes:               volumes,
+		},
+	}
+}
+
+// cleanupBucketBackup deletes a Backup's mirrored repo objects when the Backup
+// is removed. Like the Redis / Rabbitmq drivers the Bucket driver OWNS its
+// artifact (the objects under the repo prefix; no engine retention prunes them),
+// so it runs a one-shot delete Job and WAITS for it before the finalizer is
+// removed, leaving nothing orphaned in cozy-backups. It fails open - releasing
+// the Backup and leaving the objects - when the delete cannot proceed (namespace
+// terminating, strategy gone, credentials unprojectable) rather than wedging the
+// Backup Terminating forever; `backups.cozystack.io/skip-artifact-cleanup` is the
+// operator escape hatch.
+func (r *BackupReconciler) cleanupBucketBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
+	logger := getLogger(ctx)
+	jobName := backup.Name + "-cleanup"
+
+	if backup.Annotations[redisSkipArtifactCleanupAnnotation] == "true" {
+		existing := &batchv1.Job{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: jobName}, existing); err == nil &&
+			metav1.IsControlledBy(existing, backup) && existing.Labels[bucketLabelMode] == bucketModeCleanup {
+			_ = r.deleteBucketCleanupJob(ctx, existing)
+		}
+		logger.Debug("skipping Bucket artifact cleanup per annotation; objects left in the repo bucket", "backup", backup.Name)
+		return ctrl.Result{}, nil
+	}
+
+	snapshot, err := unmarshalBucketSnapshot(backup.Status.UnderlyingResources)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("decode Backup snapshot: %w", err)
+	}
+	if snapshot == nil || snapshot.RepoBucket == "" || snapshot.RepoPrefix == "" {
+		// A Backup written before the snapshot recorded repo coordinates names
+		// nothing to delete.
+		return ctrl.Result{}, nil
+	}
+
+	strategy := &strategyv1alpha1.Bucket{}
+	if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, strategy); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.releaseBucketCleanup(ctx, backup, snapshot.RepoPrefix, "strategy CR is gone"), nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	job := &batchv1.Job{}
+	err = r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: jobName}, job)
+	switch {
+	case apierrors.IsNotFound(err):
+		terminating, nsErr := r.namespaceTerminating(ctx, backup.Namespace)
+		if nsErr != nil {
+			return ctrl.Result{}, nsErr
+		}
+		if terminating {
+			return r.releaseBucketCleanup(ctx, backup, snapshot.RepoPrefix, "namespace is terminating"), nil
+		}
+		if perr := ProjectBackupCredentials(ctx, r.Client, r.CredentialsConfig, backup.Namespace); perr != nil {
+			return r.releaseBucketCleanup(ctx, backup, snapshot.RepoPrefix, fmt.Sprintf("cannot project credentials: %v", perr)), nil
+		}
+		pod := buildBucketCleanupPod(snapshot, strategy.Spec.Template.Image)
+		desired := buildJobStrategyBatchJob(backup.Namespace, jobName, map[string]string{bucketLabelMode: bucketModeCleanup}, pod)
+		if cerr := controllerutil.SetControllerReference(backup, desired, r.Scheme); cerr != nil {
+			return ctrl.Result{}, fmt.Errorf("set controller reference on cleanup Job: %w", cerr)
+		}
+		if cerr := r.Create(ctx, desired); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
+			// Forbidden (namespace went Terminating after the check) or Invalid
+			// (a long Backup name overflows the 63-char Job name) cannot be fixed
+			// by retrying; release. Other errors are transient - requeue.
+			if apierrors.IsForbidden(cerr) || apierrors.IsInvalid(cerr) {
+				return r.releaseBucketCleanup(ctx, backup, snapshot.RepoPrefix, fmt.Sprintf("cannot create cleanup Job: %v", cerr)), nil
+			}
+			return ctrl.Result{}, cerr
+		}
+		return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
+	case err != nil:
+		return ctrl.Result{}, err
+	}
+
+	// Only a Job this Backup controls and stamped as a cleanup Job may drive the
+	// release decision below: a same-named Job belonging to someone else (or a
+	// stale one from a prior identically-named Backup) must not let us drop the
+	// finalizer without ever purging the objects.
+	if !metav1.IsControlledBy(job, backup) || job.Labels[bucketLabelMode] != bucketModeCleanup {
+		return ctrl.Result{}, fmt.Errorf("Job %s/%s exists but is not this Backup's cleanup Job; refusing to act on it", backup.Namespace, jobName)
+	}
+
+	if !job.DeletionTimestamp.IsZero() {
+		// A prior failed attempt is being collected; wait for it to go, then the
+		// NotFound branch recreates a fresh one.
+		return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
+	}
+	switch jobConditionState(job) {
+	case batchv1.JobComplete:
+		_ = r.deleteBucketCleanupJob(ctx, job)
+		logger.Debug("Bucket backup objects deleted", "backup", backup.Name, "prefix", snapshot.RepoPrefix)
+		return ctrl.Result{}, nil
+	case batchv1.JobFailed:
+		_ = r.deleteBucketCleanupJob(ctx, job)
+		logger.Debug("Bucket cleanup Job failed; retrying", "backup", backup.Name)
+		return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
+	default:
+		return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
+	}
+}
+
+func (r *BackupReconciler) deleteBucketCleanupJob(ctx context.Context, job *batchv1.Job) error {
+	policy := metav1.DeletePropagationBackground
+	return client.IgnoreNotFound(r.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &policy}))
+}
+
+func (r *BackupReconciler) releaseBucketCleanup(ctx context.Context, backup *backupsv1alpha1.Backup, prefix, reason string) ctrl.Result {
+	getLogger(ctx).Info("releasing Backup without deleting its repo objects", "backup", backup.Name, "prefix", prefix, "reason", reason)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactNotDeleted", "left objects under %s in the repo bucket: %s", prefix, reason)
+	}
+	return ctrl.Result{}
 }

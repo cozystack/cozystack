@@ -106,7 +106,7 @@ func TestMirrorRestoreDeletesExtraneous(t *testing.T) {
 
 	from := copySide{store: s, bucket: "repo", prefix: "p/"}
 	to := copySide{store: s, bucket: "app", prefix: ""}
-	copied, err := mirror(context.Background(), from, to, false, true, false)
+	copied, err := mirror(context.Background(), from, to, false, true, true, false)
 	if err != nil {
 		t.Fatalf("mirror: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestMirrorZeroObjectSourceDoesNotWipe(t *testing.T) {
 	from := copySide{store: s, bucket: "repo", prefix: "p/"}
 	to := copySide{store: s, bucket: "app", prefix: ""}
 
-	copied, err := mirror(context.Background(), from, to, false, true, false)
+	copied, err := mirror(context.Background(), from, to, false, true, true, false)
 	if err == nil {
 		t.Fatal("mirror: want error on zero-object source with delete-extraneous, got nil")
 	}
@@ -142,11 +142,46 @@ func TestMirrorZeroObjectSourceDoesNotWipe(t *testing.T) {
 	}
 
 	// The override still lets an intentional empty-source restore through.
-	if _, err := mirror(context.Background(), from, to, false, true, true); err != nil {
+	if _, err := mirror(context.Background(), from, to, false, true, true, true); err != nil {
 		t.Fatalf("mirror(allow-empty-source): %v", err)
 	}
 	if got := s.keys("app"); len(got) != 0 {
 		t.Fatalf("app keys = %v, want empty after allow-empty-source purge", got)
+	}
+}
+
+func TestMirrorToCopyEmptySourceFails(t *testing.T) {
+	// A restore-as-copy (no delete-extraneous) whose source lists zero objects
+	// must fail rather than report success having restored nothing.
+	s := newFakeStore()
+	s.seed("target", "existing", fakeObject{data: []byte("keep")})
+
+	from := copySide{store: s, bucket: "repo", prefix: "p/"} // empty prefix
+	to := copySide{store: s, bucket: "target", prefix: ""}
+	copied, err := mirror(context.Background(), from, to, false, false, true, false)
+	if err == nil {
+		t.Fatal("mirror(to-copy, empty source): want error, got nil")
+	}
+	if copied != 0 {
+		t.Fatalf("copied = %d, want 0", copied)
+	}
+}
+
+func TestPurgeRemovesOnlyThePrefix(t *testing.T) {
+	s := newFakeStore()
+	s.seed("repo", "ns/app/bk1/a", fakeObject{data: []byte("A")})
+	s.seed("repo", "ns/app/bk1/b", fakeObject{data: []byte("B")})
+	s.seed("repo", "ns/app/bk2/c", fakeObject{data: []byte("C")}) // a different backup
+
+	removed, err := purge(context.Background(), copySide{store: s, bucket: "repo", prefix: "ns/app/bk1/"})
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed = %d, want 2", removed)
+	}
+	if got := strings.Join(s.keys("repo"), ","); got != "ns/app/bk2/c" {
+		t.Fatalf("repo keys = %q, want only the untouched other backup", got)
 	}
 }
 
@@ -162,7 +197,7 @@ func TestMirrorPreservesObjectMetadata(t *testing.T) {
 
 	from := copySide{store: s, bucket: "repo", prefix: "p/"}
 	to := copySide{store: s, bucket: "app", prefix: ""}
-	if _, err := mirror(context.Background(), from, to, false, false, false); err != nil {
+	if _, err := mirror(context.Background(), from, to, false, false, true, false); err != nil {
 		t.Fatalf("mirror: %v", err)
 	}
 
