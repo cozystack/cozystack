@@ -1,0 +1,282 @@
+diff --git a/opensearch-operator/opensearch-gateway/services/os_client.go b/opensearch-operator/opensearch-gateway/services/os_client.go
+index 2ec30c5..a33fa11 100644
+--- a/opensearch-operator/opensearch-gateway/services/os_client.go
++++ b/opensearch-operator/opensearch-gateway/services/os_client.go
+@@ -4,6 +4,7 @@ import (
+ 	"context"
+ 	"crypto/tls"
+ 	"encoding/json"
++	"fmt"
+ 	"github.com/Opster/opensearch-k8s-operator/opensearch-operator/pkg/helpers"
+ 	"io"
+ 	"k8s.io/utils/ptr"
+@@ -535,3 +536,115 @@ func generateAPIPathSnapshotUpdatePolicies(resource, name string, seqno, primary
+ 	path.WriteString(strconv.Itoa(primaryterm))
+ 	return path
+ }
++
++// votingConfigState is the slice of the cluster state that says who may vote.
++// The coordination metadata names voters by node id, so the node list travels
++// in the same response to resolve an id back to a name.
++type votingConfigState struct {
++	Nodes map[string]struct {
++		Name string `json:"name"`
++	} `json:"nodes"`
++	Metadata struct {
++		ClusterCoordination struct {
++			LastCommittedConfig    []string `json:"last_committed_config"`
++			VotingConfigExclusions []struct {
++				NodeName string `json:"node_name"`
++			} `json:"voting_config_exclusions"`
++		} `json:"cluster_coordination"`
++	} `json:"metadata"`
++}
++
++// ExcludeNodeFromVotingConfig commits a voting configuration that leaves
++// nodeName out, which is what makes the node safe to remove: a node still in
++// the configuration is a vote the cluster keeps counting on.
++func (client *OsClusterClient) ExcludeNodeFromVotingConfig(ctx context.Context, nodeName string) error {
++	path := generateAPIPathVotingConfigExclusions(nodeName)
++	res, err := doHTTPPost(ctx, client.client, path, nil)
++	if err != nil {
++		return err
++	}
++	defer helpers.SafeClose(res.Body)
++	if res.IsError() {
++		return fmt.Errorf("excluding %s from the voting configuration returned %s", nodeName, res.Status())
++	}
++	return nil
++}
++
++// ClearVotingConfigExclusions empties the exclusion list, which is capped and
++// would otherwise keep entries for nodes that are long gone. wait_for_removal
++// stays at its default: clearing without it can re-admit a node that is still
++// running, and the caller has already removed the one it excluded.
++func (client *OsClusterClient) ClearVotingConfigExclusions(ctx context.Context) error {
++	var path strings.Builder
++	path.WriteString("/_cluster/voting_config_exclusions")
++	res, err := doHTTPDelete(ctx, client.client, path)
++	if err != nil {
++		return err
++	}
++	defer helpers.SafeClose(res.Body)
++	if res.IsError() {
++		return fmt.Errorf("clearing the voting configuration exclusions returned %s", res.Status())
++	}
++	return nil
++}
++
++func (client *OsClusterClient) readVotingConfigState(ctx context.Context) (votingConfigState, error) {
++	var state votingConfigState
++	var path strings.Builder
++	path.WriteString("/_cluster/state/nodes,metadata")
++	path.WriteString("?filter_path=nodes.*.name,metadata.cluster_coordination.last_committed_config")
++	path.WriteString(",metadata.cluster_coordination.voting_config_exclusions")
++	res, err := doHTTPGet(ctx, client.client, path)
++	if err != nil {
++		return state, err
++	}
++	defer helpers.SafeClose(res.Body)
++	if res.IsError() {
++		return state, fmt.Errorf("reading the voting configuration returned %s", res.Status())
++	}
++	err = json.NewDecoder(res.Body).Decode(&state)
++	return state, err
++}
++
++// IsInVotingConfig reports whether nodeName is still one of the nodes whose
++// vote counts. An exclusion is committed through the cluster state rather than
++// applied by the time the request returns, so this is what tells a caller the
++// exclusion has actually taken.
++func (client *OsClusterClient) IsInVotingConfig(ctx context.Context, nodeName string) (bool, error) {
++	state, err := client.readVotingConfigState(ctx)
++	if err != nil {
++		return false, err
++	}
++
++	for _, id := range state.Metadata.ClusterCoordination.LastCommittedConfig {
++		if node, ok := state.Nodes[id]; ok && node.Name == nodeName {
++			return true, nil
++		}
++	}
++	return false, nil
++}
++
++// IsVotingConfigExcluded reports whether nodeName is still named in the
++// exclusion list. The list is capped, so an entry left behind for a node that
++// no longer exists costs capacity a later membership change may need.
++func (client *OsClusterClient) IsVotingConfigExcluded(ctx context.Context, nodeName string) (bool, error) {
++	state, err := client.readVotingConfigState(ctx)
++	if err != nil {
++		return false, err
++	}
++
++	for _, ex := range state.Metadata.ClusterCoordination.VotingConfigExclusions {
++		if ex.NodeName == nodeName {
++			return true, nil
++		}
++	}
++	return false, nil
++}
++
++func generateAPIPathVotingConfigExclusions(nodeName string) strings.Builder {
++	var path strings.Builder
++	path.Grow(len("/_cluster/voting_config_exclusions?node_names=") + len(nodeName))
++	path.WriteString("/_cluster/voting_config_exclusions?node_names=")
++	path.WriteString(nodeName)
++	return path
++}
+diff --git a/opensearch-operator/pkg/reconcilers/cluster.go b/opensearch-operator/pkg/reconcilers/cluster.go
+index 710f585..c199fa0 100644
+--- a/opensearch-operator/pkg/reconcilers/cluster.go
++++ b/opensearch-operator/pkg/reconcilers/cluster.go
+@@ -4,7 +4,9 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"strings"
++	"time"
+ 
++	"github.com/Opster/opensearch-k8s-operator/opensearch-operator/opensearch-gateway/services"
+ 	"github.com/Opster/opensearch-k8s-operator/opensearch-operator/pkg/reconcilers/k8s"
+ 	"github.com/Opster/opensearch-k8s-operator/opensearch-operator/pkg/reconcilers/util"
+ 	policyv1 "k8s.io/api/policy/v1"
+@@ -17,6 +19,8 @@ import (
+ 	"github.com/go-logr/logr"
+ 	"github.com/samber/lo"
+ 	appsv1 "k8s.io/api/apps/v1"
++	corev1 "k8s.io/api/core/v1"
++	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+ 	"k8s.io/apimachinery/pkg/api/resource"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/client-go/tools/record"
+@@ -25,6 +29,12 @@ import (
+ 	"sigs.k8s.io/controller-runtime/pkg/log"
+ )
+ 
++// How long to wait before trying again when the cluster cannot be reached or
++// has not yet committed the exclusion. Short enough that a healthy cluster
++// sheds its bootstrap pod promptly, long enough not to spin on an API that is
++// still coming up.
++const bootstrapRetireRetry = 10 * time.Second
++
+ type ClusterReconciler struct {
+ 	client            k8s.K8sClient
+ 	ctx               context.Context
+@@ -98,7 +108,7 @@ func (r *ClusterReconciler) Reconcile() (ctrl.Result, error) {
+ 	bootstrapPod := builders.NewBootstrapPod(r.instance, r.reconcilerContext.Volumes, r.reconcilerContext.VolumeMounts)
+ 	result.CombineErr(ctrl.SetControllerReference(r.instance, bootstrapPod, r.client.Scheme()))
+ 	if r.instance.Status.Initialized {
+-		result.Combine(r.client.ReconcileResource(bootstrapPod, reconciler.StateAbsent))
++		result.Combine(r.retireBootstrapPod(bootstrapPod))
+ 	} else {
+ 		result.Combine(r.client.ReconcileResource(bootstrapPod, reconciler.StatePresent))
+ 	}
+@@ -130,6 +140,108 @@ func (r *ClusterReconciler) Reconcile() (ctrl.Result, error) {
+ 	return result.Result, result.Err
+ }
+ 
++// retireBootstrapPod takes the bootstrap node out of the voting configuration
++// before deleting its pod.
++//
++// The bootstrap node is the one that formed the cluster, so it is the voter the
++// cluster keeps while the voting configuration holds a single node, which is
++// what it holds whenever exactly two nodes are cluster_manager-eligible: the
++// bootstrap pod and one node pool replica. Deleting the pod then takes away the
++// only vote there was, and the survivor can never hold an election again,
++// because changing the voting configuration itself needs a quorum. Excluding
++// the node first moves the configuration onto the surviving node, which is what
++// makes the deletion safe.
++//
++// Every failure to reach the cluster leaves the pod alone and requeues. A
++// bootstrap pod that outlives its purpose costs a pod; a cluster that cannot
++// elect a cluster-manager does not recover without a human.
++func (r *ClusterReconciler) retireBootstrapPod(bootstrapPod *corev1.Pod) (*ctrl.Result, error) {
++	podGone := false
++	if _, err := r.client.GetPod(bootstrapPod.Name, bootstrapPod.Namespace); err != nil {
++		if !k8serrors.IsNotFound(err) {
++			return &ctrl.Result{}, err
++		}
++		podGone = true
++	}
++
++	annotations := map[string]string{"cluster-name": r.instance.GetName()}
++	nodeName := builders.BootstrapPodName(r.instance)
++
++	clusterClient, err := util.CreateClientForCluster(r.client, r.ctx, r.instance, nil)
++	if err != nil {
++		r.logger.Error(err, "Failed to create os client to retire the bootstrap node", "node", nodeName)
++		r.recorder.AnnotatedEventf(r.instance, annotations, "Warning", "Bootstrap",
++			"Cannot reach the cluster to exclude %s from voting; keeping the bootstrap pod", nodeName)
++		return &ctrl.Result{RequeueAfter: bootstrapRetireRetry}, nil
++	}
++
++	// Deleting the pod is a request, not a wait, so the clearing step below can
++	// find the node still in the cluster and fail. Retrying it here is what
++	// keeps a stale entry from sitting in the capped exclusion list forever,
++	// where it would cost a later membership change the capacity it needs.
++	if podGone {
++		return r.clearBootstrapExclusion(clusterClient, nodeName)
++	}
++
++	if err := clusterClient.ExcludeNodeFromVotingConfig(r.ctx, nodeName); err != nil {
++		r.logger.Error(err, "Failed to exclude the bootstrap node from the voting configuration", "node", nodeName)
++		r.recorder.AnnotatedEventf(r.instance, annotations, "Warning", "Bootstrap",
++			"Could not exclude %s from voting; keeping the bootstrap pod", nodeName)
++		return &ctrl.Result{RequeueAfter: bootstrapRetireRetry}, nil
++	}
++
++	// The exclusion travels through the cluster state, so it is committed a
++	// moment after the request returns rather than by the time it does.
++	stillVoting, err := clusterClient.IsInVotingConfig(r.ctx, nodeName)
++	if err != nil {
++		r.logger.Error(err, "Failed to read the voting configuration", "node", nodeName)
++		return &ctrl.Result{RequeueAfter: bootstrapRetireRetry}, nil
++	}
++	if stillVoting {
++		r.logger.Info("Waiting for the bootstrap node to leave the voting configuration", "node", nodeName)
++		return &ctrl.Result{RequeueAfter: bootstrapRetireRetry}, nil
++	}
++
++	result, err := r.client.ReconcileResource(bootstrapPod, reconciler.StateAbsent)
++	if err != nil {
++		return result, err
++	}
++
++	r.recorder.AnnotatedEventf(r.instance, annotations, "Normal", "Bootstrap",
++		"Excluded %s from voting and removed the bootstrap pod", nodeName)
++
++	if cleared, err := r.clearBootstrapExclusion(clusterClient, nodeName); err != nil || cleared.RequeueAfter > 0 {
++		return cleared, err
++	}
++	return result, nil
++}
++
++// clearBootstrapExclusion drops the exclusion this reconciler added, once the
++// node it named is really gone.
++//
++// Clearing empties the whole list rather than one entry, so it is left at the
++// API's default wait_for_removal=true: that is what stops it from re-admitting
++// a node some other operation excluded and is still draining. A failure is
++// therefore expected while the bootstrap pod is terminating, and is answered
++// with a requeue rather than a log line, because nothing else will come back to
++// it.
++func (r *ClusterReconciler) clearBootstrapExclusion(clusterClient *services.OsClusterClient, nodeName string) (*ctrl.Result, error) {
++	excluded, err := clusterClient.IsVotingConfigExcluded(r.ctx, nodeName)
++	if err != nil {
++		r.logger.Error(err, "Failed to read the voting configuration exclusions", "node", nodeName)
++		return &ctrl.Result{RequeueAfter: bootstrapRetireRetry}, nil
++	}
++	if !excluded {
++		return &ctrl.Result{}, nil
++	}
++
++	if err := clusterClient.ClearVotingConfigExclusions(r.ctx); err != nil {
++		r.logger.Error(err, "Failed to clear the voting configuration exclusions", "node", nodeName)
++		return &ctrl.Result{RequeueAfter: bootstrapRetireRetry}, nil
++	}
++	return &ctrl.Result{}, nil
++}
++
+ func (r *ClusterReconciler) reconcileNodeStatefulSet(nodePool opsterv1.NodePool, username string) (*ctrl.Result, error) {
+ 	found, nodePoolConfig := r.reconcilerContext.fetchNodePoolHash(nodePool.Component)
+ 
