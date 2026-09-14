@@ -178,6 +178,13 @@ tests:
           path: spec.template.s3.forcePathStyle
           value: true
         template: templates/strategy-mongodb-default.yaml
+      # insecureSkipTLSVerify is plumbed end-to-end (strategy -> driver-injected
+      # storage entry); the template must render it from the platform knob, not
+      # leave it unset (which pins the injected entry to false regardless).
+      - equal:
+          path: spec.template.s3.insecureSkipTLSVerify
+          value: false
+        template: templates/strategy-mongodb-default.yaml
       # prefix must reach the CR as a literal go-template string: Helm must NOT
       # evaluate it, so the driver templates it per-application at BackupJob time.
       # A stray brace would empty it with every doc-count assertion still green.
