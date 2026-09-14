@@ -1,4 +1,4 @@
-NAME=etcd
+NAME=info
 
 include ../../../hack/package.mk
 

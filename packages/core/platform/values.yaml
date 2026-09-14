@@ -463,6 +463,12 @@ authentication:
     # /realms/<realmName>. The apiserver OIDC issuer is set out-of-band via talm
     # oidcIssuerUrl and must carry the same realm, or the tokens minted here are
     # rejected. Rename it in one place; keep it in step with talm.
+    #
+    # Set this at install time. Changing it on a running cluster does not rename
+    # the realm: the keycloak-operator provisions a fresh, empty realm under the
+    # new name and abandons the old one, so every account, session and client
+    # living in the previous realm is orphaned. Treat a rename on a live cluster
+    # as a from-scratch re-provision of identities, not an in-place migration.
     realmName: "cozy"
     # In-cluster URL of the KeyCloak realm, used for backend-to-backend requests. oauth2-proxy runs
     # with --skip-oidc-discovery and sends every backend call (token, jwks, userinfo, logout) to this

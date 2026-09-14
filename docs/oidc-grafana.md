@@ -78,7 +78,7 @@ CR:
    fallback, same pattern as `packages/system/dashboard`), preserved
    across upgrades.
 4. The Grafana CR's `spec.config.auth.generic_oauth` section wired to
-   the cozy realm issuer + the per-instance audience scope. Two
+   the platform realm issuer (`cozy` by default, `authentication.oidc.realmName`) + the per-instance audience scope. Two
    independent gates ride on top of the raw OAuth wiring:
 
    **Tenant-membership gate — unconditional in System mode.** The chart

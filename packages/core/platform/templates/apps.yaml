@@ -106,7 +106,10 @@ stringData:
       oidc-enabled: {{ .Values.authentication.oidc.enabled | quote }}
       oidc-insecure-skip-verify: {{ .Values.authentication.oidc.insecureSkipVerify | quote }}
       extra-keycloak-redirect-uri-for-dashboard: {{ index .Values.authentication.oidc.keycloakExtraRedirectUri | quote }}
-      {{- $realmName := .Values.authentication.oidc.realmName | default "cozy" }}
+      {{- /* toString so a bare-integer or YAML-reserved realm name does not
+             become a Go int/bool: quote would still emit it, but the printf %s
+             in the derived URL below would render a "%!s(...)" format error. */}}
+      {{- $realmName := .Values.authentication.oidc.realmName | default "cozy" | toString }}
       oidc-realm-name: {{ $realmName | quote }}
       {{- /* null keycloakInternalUrl derives the in-cluster Service URL for the
              configured realm; "" is the external-discovery escape hatch and an
