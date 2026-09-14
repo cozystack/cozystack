@@ -1,0 +1,20 @@
+[Unit]
+Description=Report the VyOS configuration load result to the console
+# After= is a hint here and nothing more: vyos-router.service is Type=simple, so
+# systemd calls it started the instant the process forks, which happens long
+# before the configuration is loaded. The script waits on /tmp/vyos-config-status
+# the way upstream's own vyos-config init does; that is what actually orders it.
+After=vyos-router.service
+Wants=vyos-router.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/vyos-appliance-config-report.sh
+# The script bounds its own wait at 240s and always exits 0. This is the backstop
+# for a hang inside journalctl, and it is longer than that wait so a timeout here
+# means something other than the wait went wrong.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=vyos.target

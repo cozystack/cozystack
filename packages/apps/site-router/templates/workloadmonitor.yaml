@@ -1,0 +1,23 @@
+{{- /*
+  Gateway WorkloadMonitor (T10). The aggregated apiserver derives the app
+  instance's WorkloadsReady condition from the matching WorkloadMonitor
+  (convertHelmReleaseToApplication, D9), so this is what surfaces gateway
+  liveness to the tenant. The selector targets the gateway virt-launcher pod via
+  the KubeVirt-managed vm.kubevirt.io/name label — the same pod the tunnel
+  Service selects on. Single-homed gateway VM ⇒ exactly one replica.
+*/ -}}
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "site-router.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: site-router
+  type: site-router
+  selector:
+    vm.kubevirt.io/name: {{ .Release.Name }}
+  version: {{ .Chart.Version }}

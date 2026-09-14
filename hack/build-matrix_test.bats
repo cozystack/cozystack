@@ -15,13 +15,26 @@
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
 }
 
-@test "talos and installer are excluded from the parallel matrix" {
+@test "talos, installer and vyos-router-image are excluded from the parallel matrix" {
   out=$(hack/build-matrix.sh)
   # `! cmd` would be vacuous: cozytest.sh runs each @test under `set -e`, which
   # is suppressed for a `!`-negated pipeline, so a regression that wrongly
   # included these paths would not fail the test. Assert via `if cmd; then ...`.
   if echo "$out" | grep -q '"packages/core/talos"'; then echo "FAIL: packages/core/talos must be excluded from the parallel matrix"; false; fi
   if echo "$out" | grep -q '"packages/core/installer"'; then echo "FAIL: packages/core/installer must be excluded from the parallel matrix"; false; fi
+  if echo "$out" | grep -q '"packages/system/vyos-router-image"'; then echo "FAIL: packages/system/vyos-router-image must be excluded from the parallel matrix (built by the dedicated build-vyos leg)"; false; fi
+}
+
+@test "vyos-router-image-only diff selects nothing (handled by the dedicated leg)" {
+  # Cleaned up at the end of the body rather than from an EXIT trap: a
+  # test-level trap displaces the handler the bats binary installs, and a test
+  # that then fails prints no TAP line at all. Both runners set -e, so a failure
+  # leaves the temp file behind for inspection. See docs/agents/e2e-testing.md.
+  tmp=$(mktemp)
+  echo "packages/system/vyos-router-image/flavors/vyos-router.toml" > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '[]' ]
+  rm -f "$tmp"
 }
 
 @test "talos-only diff selects nothing (handled by the dedicated leg)" {
@@ -140,11 +153,12 @@
     [ -f "$d/Makefile" ]
   done
   # Count matches the `make -C packages/... image` lines in Makefile, minus the
-  # two units handled outside the parallel matrix (talos, installer).
+  # three units handled outside the parallel matrix (talos, installer,
+  # vyos-router-image).
   expected=$(sed -n '/^build:/,/^[^[:space:]]/p' Makefile \
     | grep -oE 'make -C packages/[A-Za-z0-9._/-]+ image' \
     | sed -E 's/^make -C (packages[^ ]+) image$/\1/' \
-    | grep -vxcE 'packages/core/(talos|installer)')
+    | grep -vxcE 'packages/core/(talos|installer)|packages/system/vyos-router-image')
   actual=$(echo "$out" | jq 'length')
   [ "$expected" -eq "$actual" ]
 }

@@ -1,0 +1,46 @@
+suite: site-router-application depends only on packages that always resolve
+# Regression guard for an install-time hang: every dependsOn edge on the SiteRouter
+# app-registration Package must be a package that is actually emitted whenever this
+# one is. An edge to an opt-in package (off unless named in bundles.enabledPackages)
+# leaves this registration Package stuck InProgress forever on any install that does
+# not enable it, which blocks the whole cozystack-platform HelmRelease from
+# converging (a timeout on `Package/cozystack.site-router-application status:
+# 'InProgress'` during E2E install). cozystack.vm-default-images is the specific
+# opt-in package this app used to clone its boot image from, and must never come
+# back as an edge. The edges below are all non-optional under the IaaS bundle (the
+# same iaas.enabled gate that emits this package), so they always resolve.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: depends on the resolvable IaaS + control-plane edges, never on vm-default-images
+    documentSelector:
+      path: metadata.name
+      value: cozystack.site-router-application
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.kubevirt
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.kubevirt-cdi
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.cozystack-engine
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.site-router-controller
+      # The appliance image is imported from the registry by digest, so there is no
+      # cluster object to depend on and no package that can be disabled out from
+      # under this one.
+      - notContains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.vyos-router-image
+      - notContains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.vm-default-images

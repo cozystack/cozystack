@@ -1,0 +1,82 @@
+suite: site-router management CIDR resolution
+
+# `_managementCIDR` is a platform value, not a tenant one, and it has no writer
+# other than the cluster itself. Taking it off the tenant surface left nobody
+# able to set it: the cozystack-values Secrets carry only `_cluster` and
+# `_namespace`, and `_cluster` has no pod-CIDR key. On a cluster whose
+# networking.podCIDR is not the kube-ovn default, a hardcoded 10.244.0.0/16 in
+# the seeded management rule excludes the controller's real pod IP and locks it
+# out of the router permanently, with nothing but an opaque ConfigureFailed to
+# show for it.
+#
+# site-router.managementCIDR therefore reads the same cozy-system/cozystack key
+# the deny-set already uses (denyset.ConfigMapKeyPodCIDR). This suite is separate
+# from secret_cloudinit_test.yaml because that one pins `_managementCIDR` at the
+# suite level, which makes the discovery branch unreachable there.
+
+templates:
+  - templates/secret-cloudinit.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+tests:
+  - it: seeds the management rule from the cluster's own pod CIDR
+    kubernetesProvider:
+      scheme:
+        "v1/ConfigMap":
+          gvr:
+            version: "v1"
+            resource: "configmaps"
+          namespaced: true
+      objects:
+        - kind: ConfigMap
+          apiVersion: v1
+          metadata:
+            name: cozystack
+            namespace: cozy-system
+          data:
+            ipv4-pod-cidr: "192.168.0.0/16"
+    asserts:
+      - matchRegex:
+          path: stringData.userdata
+          pattern: 'address "192\.168\.0\.0/16"'
+        documentIndex: 1
+      - notMatchRegex:
+          path: stringData.userdata
+          pattern: 'address "10\.244\.0\.0/16"'
+        documentIndex: 1
+
+  - it: falls back to the kube-ovn default when the cluster does not say
+    # The offline render (helm template, this assertion) and a cluster whose
+    # ConfigMap omits the key take the same path.
+    asserts:
+      - matchRegex:
+          path: stringData.userdata
+          pattern: 'address "10\.244\.0\.0/16"'
+        documentIndex: 1
+
+  - it: an explicit platform value still wins over discovery
+    set:
+      _managementCIDR: 172.16.0.0/12
+    kubernetesProvider:
+      scheme:
+        "v1/ConfigMap":
+          gvr:
+            version: "v1"
+            resource: "configmaps"
+          namespaced: true
+      objects:
+        - kind: ConfigMap
+          apiVersion: v1
+          metadata:
+            name: cozystack
+            namespace: cozy-system
+          data:
+            ipv4-pod-cidr: "192.168.0.0/16"
+    asserts:
+      - matchRegex:
+          path: stringData.userdata
+          pattern: 'address "172\.16\.0\.0/12"'
+        documentIndex: 1
