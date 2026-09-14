@@ -318,8 +318,15 @@ jobs:
       # prerequisite, so the long tail no longer runs as one nine-minute shell
       # loop; Helm and Go targets share the same bounded pool. Output stays
       # grouped by target instead of four test logs interleaving.
+      #
+      # -k is required, not cosmetic: unit-tests and test-controllers are two
+      # independent goals on the same command line, and without -k make stops
+      # handing out new work the moment any unit-tests prerequisite fails —
+      # test-controllers then never starts and reports nothing, so a red BATS
+      # file hides the entire Go controller suite. -k lets already-schedulable
+      # goals keep running; the job still fails overall on any red target.
       - name: Run unit and controller tests
-        run: make unit-tests test-controllers -j4 --output-sync=target
+        run: make unit-tests test-controllers -j4 -k --output-sync=target
 
   # One image (package) per job, fanned out across the ephemeral pool. Each job
   # gets its own buildx (docker-container driver) so the shared-buildkit
