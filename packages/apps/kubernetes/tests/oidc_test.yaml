@@ -592,3 +592,11 @@ tests:
       - notMatchRegex:
           path: stringData["config.yaml"]
           pattern: "/realms/cozy"
+      # The claimValidationRules denial message names the realm; on a renamed
+      # realm it must not keep telling the user to look in "cozy".
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "group in the acme realm"
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: "group in the cozy realm"
