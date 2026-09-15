@@ -2,6 +2,14 @@
 ## @section Common parameters
 ##
 
+## @enum {string} Version
+## @value v7.4
+## @value v7.3
+## @value v7.1
+
+## @param {Version} version - FoundationDB major.minor version to deploy
+version: v7.3
+
 ## @typedef {struct} ClusterProcessCounts - Process counts for different roles.
 ## @field {int} stateless - Number of stateless processes (-1 for automatic).
 ## @field {int} storage - Number of storage processes (determines cluster size).
@@ -13,7 +21,6 @@
 
 ## @typedef {struct} Cluster - Cluster configuration.
 ## @field {ClusterProcessCounts} processCounts - Process counts for different roles.
-## @field {string} version - Version of FoundationDB to use.
 ## @field {string} redundancyMode - Database redundancy mode (single, double, triple, three_datacenter, three_datacenter_fallback).
 ## @field {string} storageEngine - Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory).
 ## @field {ClusterFaultDomain} faultDomain - Fault domain configuration.
@@ -25,7 +32,6 @@ cluster:
     storage: 3
     cluster_controller: 1
 
-  version: "7.3.63"
   redundancyMode: "double"
   storageEngine: "ssd-2"
 
