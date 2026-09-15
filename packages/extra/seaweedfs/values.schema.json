@@ -236,6 +236,11 @@
             "xlarge",
             "2xlarge"
           ]
+        },
+        "volumeSizeLimitMB": {
+          "description": "Size in MB at which a volume stops taking writes, and the divisor that sets how many buckets a volume server can serve. Lower it to fit more buckets on the same disk, at the cost of more volume files for the same stored data; on a large volume it is worth raising instead.",
+          "type": "integer",
+          "default": 500
         }
       }
     },

@@ -1,0 +1,164 @@
+suite: seaweedfs master volume size limit reaches the data plane
+
+# This limit is one of the two numbers the bucket ceiling divides by, so it has
+# to arrive at the master or the ceiling is whatever the data-plane chart
+# defaults to. The arithmetic behind that is in
+# packages/system/seaweedfs/values.yaml, next to the pair it governs.
+# It is not reachable any other way: the system chart is pulled by
+# ExternalArtifact, and the component that publishes it declares no install
+# section, so a Package-level values override for it is dropped before any
+# merge.
+#
+# The overridden case matters as much as the default. Asserting only the
+# default passes just as well against a template that ignores the value and
+# writes the same number as a literal, which is the state this suite exists to
+# rule out.
+
+templates:
+  - templates/seaweedfs.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+tests:
+  - it: carries the default volume size limit to the master
+    set: &platform
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.master.volumeSizeLimitMB
+          value: 500
+
+  - it: carries an operator's volume size limit to the master
+    set:
+      <<: *platform
+      master:
+        volumeSizeLimitMB: 2000
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.master.volumeSizeLimitMB
+          value: 2000
+
+  # The slot figures quoted beside the values in packages/system/seaweedfs are
+  # for a 10Gi volume, which is this chart's default. Nothing else pins that
+  # default, so raising it would leave those figures stale with no test to say
+  # so; this case couples the two, and reddens when the default moves.
+  - it: ships a 10Gi volume by default, the size those slot figures assume
+    set: *platform
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.volume.dataDirs[0].size
+          value: "10Gi"
+
+  # The divisor is only half the arithmetic: the volume server derives a slot
+  # count at all because its -max is zero, and this template writes that zero
+  # into dataDirs on every release. dataDirs is a list, so Helm replaces the
+  # data-plane chart's copy wholesale and this literal is what installs run.
+  # Losing it is a silent capacity regression rather than a render error: the
+  # server falls back to the subchart's fixed 7, and before these two cases
+  # existed both suites stayed green through it.
+  #
+  # The template writes the same literal at four sites, one per render path:
+  # the default volume, a pool, a zone, and a pool inside a zone. All four are
+  # covered, here and in the MultiZone case at the end.
+  - it: keeps the volume server slot count auto-derived on every release
+    set: *platform
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.volume.dataDirs[0].maxVolumes
+          value: 0
+
+  - it: keeps the slot count auto-derived for a storage pool too
+    set:
+      <<: *platform
+      volume:
+        pools:
+          fast:
+            diskType: ssd
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.volumes.fast.dataDirs[0].maxVolumes
+          value: 0
+
+  # Both ends of the range take an instance down while satisfying the schema,
+  # which types the field only as an integer. Zero turns the slot calculation
+  # off, so nothing is grown and every write fails. Past 30000 the master
+  # refuses to start, so the instance never comes up at all.
+  - it: refuses a volume size limit of zero
+    set:
+      <<: *platform
+      master:
+        volumeSizeLimitMB: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "master.volumeSizeLimitMB. Must be between 1 and 30000"
+
+  - it: refuses a volume size limit past what the master accepts
+    set:
+      <<: *platform
+      master:
+        volumeSizeLimitMB: 30001
+    asserts:
+      - failedTemplate:
+          errorPattern: "master.volumeSizeLimitMB. Must be between 1 and 30000"
+
+  - it: allows the largest volume size limit the master accepts
+    set:
+      <<: *platform
+      master:
+        volumeSizeLimitMB: 30000
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.master.volumeSizeLimitMB
+          value: 30000
+
+  # MultiZone renders its own dataDirs per zone, and per pool within a zone, so
+  # the zero has four sites in this template rather than two. replicationFactor
+  # has to come down to the zone count, which the preflight enforces.
+  - it: keeps the slot count auto-derived for a zone and a pool inside it
+    set:
+      <<: *platform
+      topology: MultiZone
+      replicationFactor: 1
+      volume:
+        zones:
+          east:
+            replicas: 2
+            size: 10Gi
+            pools:
+              fast:
+                diskType: ssd
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.volumes.east.dataDirs[0].maxVolumes
+          value: 0
+      - equal:
+          path: spec.values.seaweedfs.volumes.east-fast.dataDirs[0].maxVolumes
+          value: 0
