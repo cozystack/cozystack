@@ -1,0 +1,23 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.cloudflare-tunnel-gateway-controller
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.gateway-api-crds
+    components:
+    - name: cloudflare-tunnel-gateway-controller
+      path: system/cloudflare-tunnel-gateway-controller
+      install:
+        namespace: cozy-cloudflare-tunnel-gateway-controller
+        releaseName: cloudflare-tunnel-gateway-controller
+        upgradeCRDs: CreateReplace
