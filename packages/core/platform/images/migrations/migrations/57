@@ -1,0 +1,114 @@
+#!/bin/bash
+# Migration 57 --> 58
+# Carry a FoundationDB application's cluster.version over to the version
+# field that replaces it.
+#
+# The foundationdb chart used to pass cluster.version, a free-form string, to
+# the operator as the FoundationDB version. It now takes version (v7.4, v7.3,
+# v7.1) and maps it to a tag, and no longer reads cluster.version at all. A
+# cluster that set cluster.version to anything but 7.3.x would otherwise move to
+# the v7.3 default on its first reconcile after the upgrade: an incompatible
+# upgrade from 7.1 with a full cluster bounce, or a downgrade from 7.4.
+#
+# The release line is carried over, not the patch: 7.1.x becomes v7.1, which
+# the chart maps to the one tag it ships for that line.
+#
+# cluster.version is left in place on purpose. This runs as a pre-upgrade hook,
+# so helm-controller reconciles the patched release with the OLD chart first.
+# That chart ignores version but still reads cluster.version; removing it would
+# let the old chart fall back to its own 7.3.63 default in that window, which is
+# the version change this migration exists to prevent. The new chart ignores the
+# leftover key.
+#
+# The release values are patched directly rather than through the apps API:
+# a read through the API fills in the schema defaults, so a cluster that never
+# set cluster.version would look as if it had and get pinned for no reason.
+#
+# Idempotent: a release that already has version is left alone. A patch carries
+# a test on the cluster.version it read, so a concurrent edit fails the patch.
+# Fail-closed on any read or patch error (exit 1 before the stamp) so the new
+# chart does not roll out over a cluster whose version was not carried over.
+# A cluster.version outside those three lines cannot be carried over; it is
+# logged and recorded on the cozystack-version ConfigMap, and does not block the
+# upgrade.
+#
+# If another migration 57 lands first, renumber this one and bump
+# migrations.targetVersion; the collision surfaces as a loud add/add conflict on
+# rebase.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+DRY_RUN="${MIGRATION_DRY_RUN:-0}"
+
+CHART_REF_NAME="cozystack-foundationdb-application-default-foundationdb"
+INLINE_CHART_NAME="foundationdb"
+
+# One line per FoundationDB release that needs attention:
+#   <namespace> <name> carry <version> <cluster.version>
+#   <namespace> <name> unmapped - <cluster.version>
+# Releases are matched by the application label or by the chart they install,
+# since the label postdates some releases (see migration 56).
+plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output json | jq -r \
+  --arg chart "$CHART_REF_NAME" --arg inlinechart "$INLINE_CHART_NAME" '
+  .items[]
+  | select(
+      (.metadata.labels["apps.cozystack.io/application.kind"] == "FoundationDB")
+      or ((.metadata.name | startswith("foundationdb-"))
+          and ((.spec.chartRef.name == $chart) or (.spec.chart.spec.chart == $inlinechart))))
+  | (.spec.values // {}) as $v
+  | select((($v.version | type) == "string" and $v.version != "") | not)
+  | select(($v.cluster | type) == "object" and ($v.cluster.version | type) == "string" and $v.cluster.version != "")
+  | $v.cluster.version as $cv
+  | (($cv | capture("^(?<line>7\\.(1|3|4))\\.[0-9]+$") | .line) // null) as $line
+  | if $line then "\(.metadata.namespace) \(.metadata.name) carry v\($line) \($cv)"
+    else "\(.metadata.namespace) \(.metadata.name) unmapped - \($cv)" end')
+
+CARRIED=0
+UNMAPPED=""
+
+while read -r ns name action version cluster_version; do
+  [ -n "$ns" ] || continue
+  case "$action" in
+    carry)
+      if [ "$DRY_RUN" = "1" ]; then
+        echo "[dry-run] would set version=$version on FoundationDB $ns/$name (cluster.version $cluster_version)"
+        CARRIED=$((CARRIED + 1))
+        continue
+      fi
+      patch=$(jq -cn --arg cv "$cluster_version" --arg v "$version" '[
+        {op: "test", path: "/spec/values/cluster/version", value: $cv},
+        {op: "add", path: "/spec/values/version", value: $v}
+      ]')
+      kubectl patch helmreleases.helm.toolkit.fluxcd.io --namespace "$ns" "$name" \
+        --type json --patch "$patch" >/dev/null
+      echo "Set version=$version on FoundationDB $ns/$name (cluster.version $cluster_version)"
+      CARRIED=$((CARRIED + 1))
+      ;;
+    unmapped)
+      echo "WARN: FoundationDB $ns/$name has cluster.version $cluster_version, which is not on a supported line (7.1, 7.3, 7.4); it will render the v7.3 default after the upgrade" >&2
+      UNMAPPED="${UNMAPPED}${UNMAPPED:+,}${ns}/${name}=${cluster_version}"
+      ;;
+  esac
+done <<EOF
+$plan
+EOF
+
+echo "==> Summary: carried=$CARRIED unmapped=${UNMAPPED:-none}"
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "Dry-run complete; version stamp not advanced"
+  exit 0
+fi
+
+# The record is a diagnostic aid, so failing to write it must not block the
+# upgrade for every tenant.
+if [ -n "$UNMAPPED" ]; then
+  kubectl annotate configmap --namespace "${NAMESPACE:-cozy-system}" cozystack-version \
+    "cozystack.io/migration-57-unmapped-foundationdb=$UNMAPPED" --overwrite >/dev/null \
+    || echo "WARN: failed to record the unmapped FoundationDB releases on cozystack-version" >&2
+fi
+
+stamp_cozystack_version 58
