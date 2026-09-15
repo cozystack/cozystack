@@ -161,15 +161,19 @@ psql_exec() {
 # exercises a user's password; only this path proves the password the
 # <release>-credentials Secret advertises actually authenticates. The password
 # is read from that chart-managed Secret; the bracket jsonpath form tolerates a
-# '.' in the username. Args: <cluster> <release> <user> <db> <sql>
+# '.' in the username. The chart names the CNPG Cluster, the -rw Service and the
+# credentials Secret all after the release, so the cluster IS the release here -
+# derive the Secret from it rather than taking a separate name that a caller can
+# get wrong (a release/app-name mix-up read a Secret that never exists and made
+# every login time out). Args: <cluster> <user> <db> <sql>
 psql_app_exec() {
-    local cluster="$1" release="$2" user="$3" db="$4" sql="$5"
+    local cluster="$1" user="$2" db="$3" sql="$4"
     local pod pw
     pod=$(cnpg_primary_pod "$cluster")
     [[ -n "$pod" ]] || { log_error "no primary pod for cnpg cluster '$cluster'"; return 1; }
-    pw=$(kubectl -n "$NAMESPACE" get secret "${release}-credentials" \
+    pw=$(kubectl -n "$NAMESPACE" get secret "${cluster}-credentials" \
         -o "jsonpath={.data['${user}']}" | base64 -d)
-    [[ -n "$pw" ]] || { log_error "no password for user '${user}' in ${release}-credentials"; return 1; }
+    [[ -n "$pw" ]] || { log_error "no password for user '${user}' in ${cluster}-credentials"; return 1; }
     kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
         env PGPASSWORD="$pw" psql -h "${cluster}-rw" -U "$user" -d "$db" -tAc "$sql"
 }
@@ -182,18 +186,27 @@ psql_app_exec() {
 # Secret. That convergence is asynchronous - a HelmRelease upgrade plus its
 # post-upgrade init-job hook - so this is a readiness wait on an eventually
 # consistent property, not a retry over a deterministic step.
-# Args: <cluster> <release> <user> <db> <timeout>
+# Args: <cluster> <user> <db> <timeout>
 wait_for_app_login() {
-    local cluster="$1" release="$2" user="$3" db="$4" timeout="${5:-300}"
-    local elapsed=0
+    local cluster="$1" user="$2" db="$3" timeout="${4:-300}"
+    local elapsed=0 errfile
+    errfile=$(mktemp)
     log_substep "Waiting for user '${user}' to authenticate against ${cluster}..."
     while true; do
-        if [[ "$(psql_app_exec "$cluster" "$release" "$user" "$db" 'SELECT 1;' 2>/dev/null | tr -d '[:space:]')" == "1" ]]; then
+        # Success is decided on stdout alone (the '1' from SELECT 1), so a stray
+        # notice on stderr cannot read as a failure. stderr is kept in errfile,
+        # not discarded: a transient not-yet-converged attempt stays quiet, but
+        # the LAST attempt's stderr is what names the cause on timeout (a missing
+        # password, or the wrong Secret) - without it a real failure reads as a
+        # generic timeout.
+        if [[ "$(psql_app_exec "$cluster" "$user" "$db" 'SELECT 1;' 2>"$errfile" | tr -d '[:space:]')" == "1" ]]; then
+            rm -f "$errfile"
             log_success "user '${user}' authenticated against ${cluster}"
             return 0
         fi
         if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for user '${user}' to authenticate against ${cluster}: the credentials Secret advertises a password the roles never received (bootstrap not cleared, or the init-job did not reconcile)"
+            log_error "Timeout waiting for user '${user}' to authenticate against ${cluster}: the credentials Secret advertises a password the roles never received (bootstrap not cleared, or the init-job did not reconcile). Last attempt: $(cat "$errfile")"
+            rm -f "$errfile"
             return 1
         fi
         sleep 5

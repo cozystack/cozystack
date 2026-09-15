@@ -190,8 +190,8 @@ log_success "Round-trip verified: '${PG_TARGET_NAME}' restored sentinel '${GOT}'
 # actually log in against the restored copy - psql_exec above only ever used the
 # in-pod postgres superuser, so a broken credential would otherwise pass silently.
 print_header "Step 40 verify: the app user authenticates against the restored copy"
-wait_for_app_login "$PG_TARGET_CLUSTER" "$PG_TARGET_NAME" app demo 360
-APP_GOT=$(psql_app_exec "$PG_TARGET_CLUSTER" "$PG_TARGET_NAME" app demo \
+wait_for_app_login "$PG_TARGET_CLUSTER" app demo 360
+APP_GOT=$(psql_app_exec "$PG_TARGET_CLUSTER" app demo \
     "SELECT token FROM e2e_sentinel WHERE id = 1;" | tr -d '[:space:]')
 if [[ "$APP_GOT" != "$SENTINEL_TOKEN" ]]; then
     log_error "app-user read mismatch: target has '${APP_GOT}', expected '${SENTINEL_TOKEN}'"
