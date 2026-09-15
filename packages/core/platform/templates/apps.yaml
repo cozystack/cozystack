@@ -116,7 +116,14 @@ stringData:
              rather than emit a broken issuer later. The hint does not echo the
              parsed value back: YAML has already lost the operator's original
              token (on -> true), so quoting is the fix, not the reprinted bool. */}}
-      {{- $realmName := .Values.authentication.oidc.realmName | default "cozy" }}
+      {{- /* Unset (null) falls back to cozy; an explicit "" is a meaningless
+             value, not a default request, so let it reach the charset guard
+             below rather than swallowing it — mirrors the keycloakInternalUrl
+             tri-state a few lines down (kindIs "invalid" is null, not ""). */}}
+      {{- $realmName := .Values.authentication.oidc.realmName }}
+      {{- if kindIs "invalid" $realmName }}
+      {{-   $realmName = "cozy" }}
+      {{- end }}
       {{- if not (kindIs "string" $realmName) }}
       {{-   fail (printf "authentication.oidc.realmName must be a string (got %s); wrap the value in quotes in the platform values, e.g. realmName: \"my-realm\"" (kindOf $realmName)) }}
       {{- end }}
