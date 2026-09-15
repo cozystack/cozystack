@@ -57,7 +57,6 @@ export function useMarketplaceSidebarSections(): SidebarSection[] {
         title: "Marketplace",
         items: [
           { label: "Marketplace", to: "/marketplace", end: true, icon: LayoutGrid },
-          { label: "Repositories", to: "/marketplace/taps", icon: Package },
           ...ordered.map((category) => ({
             label: category,
             to: `/marketplace/c/${encodeURIComponent(category)}`,
@@ -155,7 +154,7 @@ export function useAdminAccess(): {
 
 /**
  * The Admin tab is always visible: Administration (Info, Modules, External IPs,
- * Tenants) needs no special permission. The gated Capacity/Backup-Classes areas
+ * Repositories, Tenants) needs no special permission. The gated Capacity/Backup-Classes areas
  * keep their own per-area guards inside the portal.
  */
 export function useCanSeeAdmin(): boolean {
@@ -164,8 +163,8 @@ export function useCanSeeAdmin(): boolean {
 
 /**
  * Admin sidebar: Administration first (always visible, no permission needed —
- * Tenants, Modules, External IPs; per-tenant Info is a row action in the
- * Tenants tree), then the cluster-wide operator areas (Capacity and Backup
+ * Tenants, Modules, External IPs, Repositories; per-tenant Info is a row action
+ * in the Tenants tree), then the cluster-wide operator areas (Capacity and Backup
  * Classes). Each operator area is gated by its own permission so the sidebar
  * never shows an area the user cannot open.
  */
@@ -202,6 +201,7 @@ export function useAdminSidebarSections(): SidebarSection[] {
             alsoMatch: modulePaths ? modulePaths.split(",") : undefined,
           },
           { label: "External IPs", to: "/admin/external-ips", icon: Globe },
+          { label: "Repositories", to: "/admin/taps", icon: Package },
         ],
       },
     ]
