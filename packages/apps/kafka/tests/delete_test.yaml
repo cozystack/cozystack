@@ -43,9 +43,12 @@ tests:
           path: spec.ttlSecondsAfterFinished
           value: 3600
         documentIndex: 0
+      # Both quotes are part of the pattern. Unanchored, this matches a selector
+      # widened to the sibling release kafka-test2 or to kafka-test-topics, so
+      # it would pin nothing about scoping.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "strimzi\\.io/cluster=kafka-test"
+          pattern: "-l 'strimzi\\.io/cluster=kafka-test'"
         documentIndex: 0
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
@@ -56,16 +59,12 @@ tests:
       # tests/, so a literal of either turns the next bump red for no defect.
       # What matters is that the ref stays pinned by digest at all. Same shape
       # as harbor's cleanup_hook_test.yaml and mariadb's
-      # cleanup_pvc_hook_test.yaml.
+      # cleanup_pvc_hook_test.yaml. The leading ^ also covers the empty
+      # images-registry case, where a bare leading slash would be an unpullable
+      # ref that only surfaces at uninstall time.
       - matchRegex:
           path: spec.template.spec.containers[0].image
           pattern: ^clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
-        documentIndex: 0
-      # An empty images-registry must not leave a bare leading slash, which is
-      # an unpullable ref that only shows up at uninstall time.
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].image
-          pattern: ^/
         documentIndex: 0
       - isKind:
           of: ServiceAccount

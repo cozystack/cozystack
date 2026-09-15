@@ -100,7 +100,12 @@ KEOF
     cat "$tmp/out" "$tmp/err"
     false
   fi
-  if ! grep -q "strimzi.io/cluster=kafka-test" "$tmp/calls"; then
+  # Anchored on both sides. Bare "strimzi.io/cluster=kafka-test" is a prefix of
+  # the sibling release kafka-test2 and of kafka-test-topics, so a selector
+  # widened to either stays green against it: verified by rendering the hook
+  # with {{ .Release.Name }}2 and watching this test pass. The leading "-l " and
+  # the trailing space are what make it name this release and no other.
+  if ! grep -q -- "-l strimzi.io/cluster=kafka-test " "$tmp/calls"; then
     echo "FAIL: the delete was not scoped to this release"
     cat "$tmp/calls"
     false
