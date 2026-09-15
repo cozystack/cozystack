@@ -792,28 +792,49 @@ func (r *BackupReconciler) cleanupMongoDBBackup(ctx context.Context, backup *bac
 	return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
 }
 
-// releaseMongoDBCleanup gives up pruning the archive and lets the Cozystack
-// Backup (and any enclosing namespace) finish deleting: best-effort, it strips
-// the driver's delete-backup finalizer from the operator CR so the CR no longer
-// blocks teardown and deletes that CR, then records a Warning naming the object
-// left in the bucket. Every apiserver step is best-effort — a failed read or
-// write is swallowed — because the caller reaches here precisely to let a wedged
-// Backup go, and must never be blocked by the same unreachable CR. Takes the CR
-// name rather than a fetched object so it works on the annotation path, which
-// runs before any read. Mirrors the Redis/Rabbitmq release path.
+// releaseMongoDBCleanup lets the Cozystack Backup (and any enclosing namespace)
+// finish deleting when the archive cannot be pruned in place. It only ever
+// touches an operator CR the driver OWNS — one carrying the delete-backup
+// finalizer: it strips that finalizer so the CR no longer blocks teardown and
+// deletes it. A legacy CR (no finalizer) or one that cannot be read at all is
+// left entirely intact, so the never-deleted contract for legacy backups holds
+// even though the annotation reaches this path before the ownership check, and
+// an unreadable CR still releases. The finalizer strip is best-effort — the
+// release must proceed even against an unreachable CR — but a failed strip is
+// surfaced (log + Event), because the CR then keeps the finalizer and can hold
+// its namespace in Terminating, and the operator needs to know which one. Takes
+// the CR name so it works on the annotation path, which runs before any read.
 func (r *BackupReconciler) releaseMongoDBCleanup(ctx context.Context, backup *backupsv1alpha1.Backup, sourceBackupName, reason string) (ctrl.Result, error) {
+	logger := getLogger(ctx)
 	live := &psmdbtypes.PerconaServerMongoDBBackup{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: sourceBackupName}, live); err == nil {
-		if controllerutil.ContainsFinalizer(live, psmdbDeleteBackupFinalizer) {
-			base := live.DeepCopy()
-			controllerutil.RemoveFinalizer(live, psmdbDeleteBackupFinalizer)
-			_ = r.Patch(ctx, live, client.MergeFrom(base))
-		}
-		if live.DeletionTimestamp.IsZero() {
-			_ = r.Delete(ctx, live)
-		}
+	err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: sourceBackupName}, live)
+	if err != nil || !controllerutil.ContainsFinalizer(live, psmdbDeleteBackupFinalizer) {
+		// Legacy backup (no delete-backup finalizer) or an unreadable CR: nothing
+		// of the driver's to strip or delete. Leave the operator CR untouched and
+		// release the Cozystack Backup.
+		logger.Debug("releasing MongoDB Backup; no driver-owned archive to prune",
+			"backup", backup.Name, "sourceBackup", sourceBackupName, "reason", reason)
+		return ctrl.Result{}, nil
 	}
-	getLogger(ctx).Info("releasing MongoDB Backup without pruning its object",
+
+	base := live.DeepCopy()
+	controllerutil.RemoveFinalizer(live, psmdbDeleteBackupFinalizer)
+	if perr := r.Patch(ctx, live, client.MergeFrom(base)); perr != nil {
+		// The release still proceeds (an unreachable CR must not wedge the
+		// Backup), but the CR keeps the finalizer and can pin its namespace in
+		// Terminating — surface which object so an operator can find it.
+		logger.Info("released MongoDB Backup but could not strip the delete-backup finalizer; the operator CR may hold its namespace in Terminating",
+			"backup", backup.Name, "sourceBackup", sourceBackupName, "reason", reason, "error", perr)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(backup, corev1.EventTypeWarning, "FinalizerNotStripped",
+				"released Backup but could not strip the delete-backup finalizer from PerconaServerMongoDBBackup %s (%v); it may keep the namespace in Terminating", sourceBackupName, perr)
+		}
+		return ctrl.Result{}, nil
+	}
+	if live.DeletionTimestamp.IsZero() {
+		_ = r.Delete(ctx, live)
+	}
+	logger.Info("releasing MongoDB Backup, leaving its shared-bucket object for a lifecycle policy",
 		"backup", backup.Name, "sourceBackup", sourceBackupName, "reason", reason)
 	if r.Recorder != nil {
 		r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactNotDeleted",
