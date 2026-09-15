@@ -1,0 +1,70 @@
+suite: db.yaml rejects a database name that cannot install
+
+# A database name becomes the Database CR spec.name and (via "_"->"-") the
+# Database CR metadata.name <release>-<name>, plus each Grant's database and
+# metadata.name. Kubernetes requires that resource name to be a DNS-1123
+# subdomain, and two names differing only in "_" vs "-" collide on one Database
+# CR. Names that break these render fine today and fail opaquely at apply — the
+# same class the username guard already catches. Mirror it for databases.
+# Reverting the guard in db.yaml turns the reject tests green (render succeeds).
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: mdb-test
+  namespace: tenant-test
+
+set:
+  users:
+    app:
+      maxUserConnections: 10
+
+tests:
+  - it: fails for an uppercase database name (invalid Database CR name)
+    set:
+      databases:
+        My.Db:
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "My.Db": it also names the Database resource "mdb-test-My.Db", which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, "-" and ".", starting and ending with a letter or digit); use a lowercase name without a leading or trailing "-" or "."'
+
+  - it: fails for a database name with a trailing "-"
+    set:
+      databases:
+        foo-:
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate: {}
+
+  - it: fails for two database names that collide after the "_"->"-" mapping
+    set:
+      databases:
+        a_b:
+          roles:
+            admin: [app]
+        a-b:
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database names "a-b" and "a_b" both map to the Database resource name "mdb-test-a-b" ("_" renders as "-"); rename one of them'
+
+  - it: renders normally for a valid lowercase database name
+    set:
+      databases:
+        mydb:
+          roles:
+            admin: [app]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Database
+      - documentIndex: 0
+        equal:
+          path: spec.name
+          value: mydb

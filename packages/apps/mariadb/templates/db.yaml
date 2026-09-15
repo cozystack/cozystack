@@ -1,3 +1,25 @@
+{{/*
+  A database name also names Kubernetes resources: the Database CR
+  {{ .Release.Name }}-{{ replace "_" "-" $name }} and, under it, each Grant. So
+  the same DNS-1123 rule and "_"/"-" collision that the username guard enforces
+  apply here — a name like "My.Db" or "foo-" renders but the apiserver rejects
+  the Database CR with an opaque error, and two names differing only in "_" vs
+  "-" collide on one Database CR (one silently overwrites the other). Reject both
+  at render time, mirroring the username guard in secret.yaml. Database names are
+  not Secret keys, so the DNS-1123 name is the binding rule.
+*/}}
+{{- $seenDBDNS := dict }}
+{{- range $name, $db := .Values.databases }}
+  {{- $crName := printf "%s-%s" $.Release.Name (replace "_" "-" $name) }}
+  {{- if or (gt (len $crName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $crName)) }}
+    {{- fail (printf "invalid database name %q: it also names the Database resource %q, which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, \"-\" and \".\", starting and ending with a letter or digit); use a lowercase name without a leading or trailing \"-\" or \".\"" $name $crName) }}
+  {{- end }}
+  {{- $dbDNS := replace "_" "-" $name }}
+  {{- if hasKey $seenDBDNS $dbDNS }}
+    {{- fail (printf "database names %q and %q both map to the Database resource name %q (\"_\" renders as \"-\"); rename one of them" (index $seenDBDNS $dbDNS) $name (printf "%s-%s" $.Release.Name $dbDNS)) }}
+  {{- end }}
+  {{- $_ := set $seenDBDNS $dbDNS $name }}
+{{- end }}
 {{- range $name, $db := .Values.databases }}
 {{ $dbDNSName := replace "_" "-" $name }}
 ---
