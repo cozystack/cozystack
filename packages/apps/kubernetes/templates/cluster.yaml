@@ -256,6 +256,49 @@ metadata:
 {{-   fail "controlPlane.apiServer.extraVolumes: volume name \"authentication-config\" is reserved by the chart for OIDC AuthenticationConfiguration when spec.oidc.mode is not None — rename your volume." }}
 {{- end }}
 {{- /*
+  Aggregation-layer UID plumbing. What is rendered per version, why an
+  opt-out renders nothing rather than failing, and the migration note live
+  in docs/oidc-tenant.md. That table is the one to update; there is
+  deliberately no copy of it here.
+
+  Anchors for the split, read at v1.32.13 and v1.35.6:
+  staging/src/k8s.io/apiserver/pkg/features/kube_features.go for the gate's
+  versioned spec, and .../server/options/authentication.go Validate() for
+  the two refusals the guards below mirror. The version that decides is the
+  EFFECTIVE one, which --emulated-version moves down.
+
+  The merged gate entry carries the operator's own value, in their own
+  prefix spelling, because that is correct whether duplicate flags collapse
+  by name (it is last and wins) or are preserved (featureGate.Set() merges
+  it into the earlier one).
+
+  Two things do depend on the collapse, pinned by packages/system/kamaji,
+  whose Makefile takes the newest -edge tag on `make update`. Reading only
+  the LAST entry of each flag cuts both ways: handed every copy the apiserver
+  merges them, so an earlier explicit setting the chart never saw would reach
+  the gate. Failing on a uid-headers list without X-Remote-Uid is the other:
+  handed both copies pflag appends, and the union passes caseInsensitiveHas.
+  The opt-out path is unaffected, since the chart emits nothing there.
+
+  Ownership is resolved after the arg loop because the last entry of each
+  flag, and the interaction between them, are known only once every arg has
+  been seen.
+*/}}
+{{- $uidHeaderUnsupported := false }}
+{{- $uidGateRequired := false }}
+{{- $emulatedKubeVersion := "" }}
+{{- $uidGateOptedOut := false }}
+{{- $uidHeaderArgSeen := "" }}
+{{- $uidQuotedInput := false }}
+{{- $uidHeaderConforms := false }}
+{{- $gateArgValue := "" }}
+{{- $gateUsesKubePrefix := false }}
+{{- $gateArgSeen := "" }}
+{{- $uidGateSetting := "" }}
+{{- $allBetaSetting := "" }}
+{{- $allAlphaSetting := "" }}
+{{- $uidArgs := list }}
+{{- /*
   Legacy `--oidc-*` flags in the user-supplied extraArgs are mutually
   exclusive with `--authentication-config`. The kube-apiserver refuses
   to boot when both are set (`--authentication-config cannot be used with
@@ -275,6 +318,216 @@ metadata:
 {{-     end }}
 {{-     if hasPrefix "--authentication-config" $arg }}
 {{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart already injects --authentication-config= for OIDC. Drop your explicit flag and let spec.oidc.mode: CustomConfig own the AuthenticationConfiguration (customConfig.config or customConfig.secretRef.name), or leave spec.oidc.mode: None and keep managing the flag yourself." $arg $.Values.oidc.mode) }}
+{{-     end }}
+{{-     if hasPrefix "--requestheader-uid-headers=" $arg }}
+{{- /*
+  An empty value is not an opinion: readAsCSV returns an empty slice and
+  Validate() only inspects a non-empty list, so the chart reads the last
+  entry carrying one. Where the chart renders nothing for that flag the
+  operator's empty value survives the collapse and reaches the apiserver as
+  a BARE flag, which pflag refuses to start on: not this code's to repair,
+  and why docs tell operators to delete such an entry rather than empty it.
+
+  Only --flag=value is matched, and the space-separated spelling does not
+  survive the collapse, which keys on "=". Written as two elements the flag
+  comes back bare and takes whichever argument sorts after it as its value;
+  written as one element the whole string becomes the key and reaches pflag
+  as an unknown flag. The apiserver refuses to start either way.
+
+  Match whole ELEMENTS and do NOT trim them: caseInsensitiveHas compares with
+  strings.EqualFold and pflag's CSV reader keeps surrounding spaces, so
+  "X-Remote-Uid-Extra" and "X-Remote-Uid " both fail there. Being more
+  permissive than upstream would skip the chart's flag for a list the
+  apiserver rejects.
+*/}}
+{{-       $headerValue := trimPrefix "--requestheader-uid-headers=" $arg }}
+{{- /*
+  Both flags this block reads are pflag StringSlice values, whose CSV reader
+  strips a pair of surrounding double quotes before the apiserver sees them.
+  Reproducing CSV here would be a second parser to keep correct, so a quoted
+  value means the chart cannot know what the apiserver will read and renders
+  nothing at all, which is what it did before these flags existed.
+
+  That split is the rule for the whole block: fail only where the operator's
+  own entry would stop the apiserver from starting, and withhold silently
+  where the cluster keeps running and only misses the fix.
+*/}}
+{{-       if contains "\"" $headerValue }}
+{{-         $uidQuotedInput = true }}
+{{-       end }}
+{{-       if ne $headerValue "" }}
+{{-         $uidHeaders := list }}
+{{-         range $h := splitList "," $headerValue }}
+{{-           $uidHeaders = append $uidHeaders (lower $h) }}
+{{-         end }}
+{{-         $uidHeaderArgSeen = $arg }}
+{{-         $uidHeaderConforms = has "x-remote-uid" $uidHeaders }}
+{{-       end }}
+{{-     end }}
+{{-     if hasPrefix "--feature-gates=" $arg }}
+{{- /*
+  Values resolve as strconv.ParseBool resolves them (0/f/F, 1/t/T), names
+  compare exactly, and both only after the component prefix is off: the flag
+  is a colon-separated multimap parsed above featureGate.Set(), which is the
+  layer `known[Feature(k)]` belongs to.
+
+  A blanket AllAlpha/AllBeta counts: setUnsetAlphaGates and setUnsetBetaGates
+  skip a key an explicit entry already wrote, so the explicit one wins in
+  either map-iteration order.
+*/}}
+{{-       $gateValue := trimPrefix "--feature-gates=" $arg }}
+{{-       if ne $gateValue "" }}
+{{- /*
+  Per ARGUMENT, not per element: only the surviving --feature-gates entry
+  decides the spelling, so a prefix seen in an earlier entry must not leak
+  into a merge onto a later unprefixed one.
+*/}}
+{{-         $gateUsesKubePrefix = false }}
+{{-         $gateValues := dict }}
+{{-         range $g := splitList "," $gateValue }}
+{{- /*
+  --feature-gates is a colon-separated multimap: each element is
+  component:name=value, and an element with no component belongs to kube.
+  Reading the whole "kube:Name" as the gate name misses every prefixed
+  spelling, and appending an unprefixed term next to a prefixed one is
+  rejected outright -- componentGlobalsRegistry.Set() refuses a mix of the
+  empty prefix and kube: in one flag (registry.go, read at v1.35.6).
+*/}}
+{{-           $element := $g }}
+{{-           if contains ":" $element }}
+{{-             $component := trim (index (splitList ":" $element) 0) }}
+{{- /*
+  Only a literal "kube" keys under the kube component. An empty component,
+  as in ":Foo=true", keys under "" exactly like an unprefixed element, so
+  answering it with a kube:-prefixed term would create the mix the registry
+  rejects. A foreign component keeps its prefix and so never matches one of
+  the gate names below.
+*/}}
+{{-             if eq $component "kube" }}
+{{-               $gateUsesKubePrefix = true }}
+{{-             end }}
+{{-             if or (eq $component "kube") (eq $component "") }}
+{{-               $element = trimPrefix (printf "%s:" (index (splitList ":" $element) 0)) $element }}
+{{-             end }}
+{{-           end }}
+{{-           $kv := splitList "=" $element }}
+{{-           if eq (len $kv) 2 }}
+{{-             $gname := trim (index $kv 0) }}
+{{-             $gval := lower (trim (index $kv 1)) }}
+{{-             if has $gval (list "true" "t" "1") }}
+{{-               $gateValues = set $gateValues $gname "true" }}
+{{-             else if has $gval (list "false" "f" "0") }}
+{{-               $gateValues = set $gateValues $gname "false" }}
+{{-             end }}
+{{-           end }}
+{{-         end }}
+{{-         $gateArgSeen = $arg }}
+{{-         $gateArgValue = $gateValue }}
+{{-         $uidGateSetting = dig "RemoteRequestHeaderUID" "" $gateValues }}
+{{-         $allBetaSetting = dig "AllBeta" "" $gateValues }}
+{{-         $allAlphaSetting = dig "AllAlpha" "" $gateValues }}
+{{-       end }}
+{{-     end }}
+{{-     if hasPrefix "--emulated-version=" $arg }}
+{{- /*
+  Emulation moves the version the gate resolves at, and the flags below have
+  to follow it rather than the image tag. featureSpecAtEmulationVersion walks
+  the versioned specs down to the emulated version, so RemoteRequestHeaderUID
+  is alpha-and-off at an emulated 1.32 on any binary, and PreAlpha below that,
+  where featureGate.Set() refuses to enable it at all.
+
+  The value is a CSV of component=version, and an element naming no component
+  is kube's. Anything else names another component and is none of our
+  business. An unparseable version is left alone, the way an unparseable gate
+  value is: the apiserver rejects it on its own terms.
+*/}}
+{{-       $emulatedValue := trimPrefix "--emulated-version=" $arg }}
+{{-       if contains "\"" $emulatedValue }}
+{{-         $uidQuotedInput = true }}
+{{-       end }}
+{{-       if ne $emulatedValue "" }}
+{{- /*
+  Reset per argument, for the reason given at the --feature-gates parser.
+*/}}
+{{-         $emulatedKubeVersion = "" }}
+{{-         range $e := splitList "," $emulatedValue }}
+{{-           $parts := splitList "=" (trim $e) }}
+{{-           if eq (len $parts) 1 }}
+{{-             $emulatedKubeVersion = trim (index $parts 0) }}
+{{-           else if and (eq (len $parts) 2) (eq (trim (index $parts 0)) "kube") }}
+{{-             $emulatedKubeVersion = trim (index $parts 1) }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{- /*
+  Emulation can only move the effective version down, so the lower of the two
+  decides. A tenant asking to emulate something newer than its own image is
+  rejected by the apiserver; reading the lower one keeps the chart from
+  rendering a flag that version cannot take.
+*/}}
+{{-   $chartMinorParts := splitList "." (trimPrefix "v" .Values.version) }}
+{{-   $chartMinor := atoi (index $chartMinorParts 1) }}
+{{-   $effectiveMinor := $chartMinor }}
+{{-   if ne $emulatedKubeVersion "" }}
+{{-     $emulatedParts := splitList "." (trimPrefix "v" $emulatedKubeVersion) }}
+{{-     if and (ge (len $emulatedParts) 2) (regexMatch "^[0-9]+$" (index $emulatedParts 1)) }}
+{{-       $emulatedMinor := atoi (index $emulatedParts 1) }}
+{{-       if lt $emulatedMinor $effectiveMinor }}
+{{-         $effectiveMinor = $emulatedMinor }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{- /*
+  The fail messages are migration instructions, so they name the version the
+  decision was taken at, which is not the image tag when emulation moved it.
+*/}}
+{{-   $versionForMessage := .Values.version }}
+{{-   if and (ne $emulatedKubeVersion "") (ne $effectiveMinor $chartMinor) }}
+{{-     $versionForMessage = printf "%s emulating %s" .Values.version $emulatedKubeVersion }}
+{{-   end }}
+{{-   $uidHeaderUnsupported = le $effectiveMinor 31 }}
+{{-   $uidGateRequired = eq $effectiveMinor 32 }}
+{{-   if eq $uidGateSetting "false" }}
+{{-     $uidGateOptedOut = true }}
+{{-   else if ne $uidGateSetting "true" }}
+{{-     if $uidGateRequired }}
+{{-       if eq $allAlphaSetting "false" }}
+{{-         $uidGateOptedOut = true }}
+{{-       end }}
+{{-     else if eq $allBetaSetting "false" }}
+{{-       $uidGateOptedOut = true }}
+{{-     end }}
+{{-   end }}
+{{-   if and (not $uidHeaderUnsupported) (not $uidQuotedInput) }}
+{{-     if $uidGateOptedOut }}
+{{-       if ne $uidHeaderArgSeen "" }}
+{{-         fail (printf "controlPlane.apiServer.extraArgs contains %q alongside %q, while spec.oidc.mode is %q on Kubernetes %s — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off." $uidHeaderArgSeen $gateArgSeen $.Values.oidc.mode $versionForMessage) }}
+{{-       end }}
+{{-     else }}
+{{-       if and (ne $uidHeaderArgSeen "") (not $uidHeaderConforms) }}
+{{-         fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart injects --requestheader-uid-headers=X-Remote-Uid so the authenticated user UID survives the aggregation layer, and the kube-apiserver rejects a uid-headers list that omits X-Remote-Uid. Add X-Remote-Uid to your entry, or drop the entry and let the chart render the flag." $uidHeaderArgSeen $.Values.oidc.mode) }}
+{{-       end }}
+{{- /* The fail above leaves only conforming entries, so a non-empty one is yielded to. */}}
+{{-       if eq $uidHeaderArgSeen "" }}
+{{-         $uidArgs = append $uidArgs "--requestheader-uid-headers=X-Remote-Uid" }}
+{{-       end }}
+{{-       if and $uidGateRequired (not (or (eq $uidGateSetting "true") (eq $allAlphaSetting "true"))) }}
+{{-         if ne $gateArgValue "" }}
+{{- /*
+  Match the operator's spelling: a prefixed value must get a prefixed term,
+  or the apiserver rejects the mixed flag before any gate is read.
+*/}}
+{{-           $ownTerm := "RemoteRequestHeaderUID=true" }}
+{{-           if $gateUsesKubePrefix }}
+{{-             $ownTerm = "kube:RemoteRequestHeaderUID=true" }}
+{{-           end }}
+{{-           $uidArgs = append $uidArgs (printf "--feature-gates=%s,%s" $gateArgValue $ownTerm) }}
+{{-         else }}
+{{-           $uidArgs = append $uidArgs "--feature-gates=RemoteRequestHeaderUID=true" }}
+{{-         end }}
+{{-       end }}
 {{-     end }}
 {{-   end }}
 {{- end }}
@@ -299,6 +552,9 @@ spec:
       {{- end }}
       {{- if $oidcEnabled }}
       - --authentication-config=/etc/kubernetes/authentication-config/config.yaml
+      {{- with $uidArgs }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
       {{- end }}
       {{- if not (or .Values.controlPlane.apiServer.extraArgs $oidcEnabled) }} []{{ end }}
     extraVolumeMounts:

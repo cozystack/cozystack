@@ -137,12 +137,32 @@ EOF
   return 1
 }
 
+# Returns 0 with empty output when kubectl fails: callers run under `set -eu`
+# without pipefail, so the status comes from `sort`. Compare the result against
+# a non-empty literal; grepping it, or testing it for emptiness, reads a failed
+# query as a pass.
 cozy_oidc_bindings() {
   local test_name="$1"
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get clusterrolebindings \
     --selector="app.kubernetes.io/managed-by=cozystack-oidc,app.kubernetes.io/instance=kubernetes-${test_name}" \
     -o 'jsonpath={range .items[*]}{.subjects[0].name}{"\t"}{.roleRef.name}{"\n"}{end}' |
     sort
+}
+
+cozy_assert_oidc_apiserver_flags() {
+  local release="$1"
+  local extra_args
+
+  # Captured because a pipeline is single-use: a second grep on it reads nothing.
+  extra_args=$(kubectl -n tenant-test get kamajicontrolplane "${release}" \
+    -o jsonpath='{.spec.apiServer.extraArgs}')
+  printf '%s\n' "${extra_args}" |
+    grep -qF -- '--authentication-config=/etc/kubernetes/authentication-config/config.yaml'
+  # --feature-gates=RemoteRequestHeaderUID=true is deliberately not asserted:
+  # the chart renders it only on v1.32, while this lane takes the highest
+  # version in the map, which is above that.
+  printf '%s\n' "${extra_args}" |
+    grep -qF -- '--requestheader-uid-headers=X-Remote-Uid'
 }
 
 cozy_assert_oidc_system() {
@@ -154,9 +174,7 @@ cozy_assert_oidc_system() {
   kubectl -n tenant-test wait job "${release}-oidc-bootstrap" \
     --for=condition=complete --timeout=1m
 
-  kubectl -n tenant-test get kamajicontrolplane "${release}" \
-    -o jsonpath='{.spec.apiServer.extraArgs}' |
-    grep -qF -- '--authentication-config=/etc/kubernetes/authentication-config/config.yaml'
+  cozy_assert_oidc_apiserver_flags "${release}"
 
   authn_config=$(kubectl -n tenant-test get secret "${release}-oidc-authn-config" \
     -o jsonpath='{.data.config\.yaml}' | base64 -d)
@@ -203,12 +221,14 @@ cozy_switch_and_assert_oidc_custom_config() {
 
   cozy_wait_helmrelease_upgrade tenant-test "${release}" \
     "${previous_generation}" 600
+  # One Job name serves both modes, so this wait means something only while the
+  # Job stays a post-upgrade hook with helm.sh/hook-delete-policy:
+  # before-hook-creation. Without that, a completed System-mode Job satisfies it
+  # at once and every assertion below reads the old object, green and silent.
   kubectl -n tenant-test wait job "${release}-oidc-bootstrap" \
     --for=condition=complete --timeout=1m
 
-  kubectl -n tenant-test get kamajicontrolplane "${release}" \
-    -o jsonpath='{.spec.apiServer.extraArgs}' |
-    grep -qF -- '--authentication-config=/etc/kubernetes/authentication-config/config.yaml'
+  cozy_assert_oidc_apiserver_flags "${release}"
 
   authn_config=$(kubectl -n tenant-test get secret "${release}-oidc-authn-config" \
     -o jsonpath='{.data.config\.yaml}' | base64 -d)
