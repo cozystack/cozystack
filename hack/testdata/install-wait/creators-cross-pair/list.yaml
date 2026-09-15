@@ -1,0 +1,14 @@
+# Two sequence items at the same indent inside one document. The cozystack
+# apiVersion belongs to the first item and the kind to the second, which is a
+# core-group object, so neither item creates a tenant cluster -- and the sweep
+# reports the file anyway, because its buckets are keyed by indent and both
+# items share one.
+items:
+- apiVersion: apps.cozystack.io/v1alpha1
+  kind: Tenant
+  metadata:
+    name: some-tenant
+- apiVersion: v1
+  kind: Kubernetes
+  metadata:
+    name: the-service-named-after-the-api

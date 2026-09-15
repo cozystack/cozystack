@@ -1,0 +1,19 @@
+# A Chainsaw suite creating a cozystack app the way the tree usually does it:
+# an inline `apply.resource:` block, where the CR's fields are indented. The
+# sweep that finds creators has to see this shape, or a second creator written
+# the idiomatic way leaves the "exactly one script" claim passing while false.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+spec:
+  steps:
+  - try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          # a value carrying --- mid-line: a document separator is a line that
+          # STARTS with it, and an unanchored split would cut the document here
+          # and lose the creator below.
+          description: "before --- after"
+          kind: Kubernetes
+          metadata:
+            name: fixture
