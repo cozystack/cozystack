@@ -46,7 +46,7 @@ tests:
       authentication.oidc.realmName: 123
     asserts:
       - failedTemplate:
-          errorMessage: 'authentication.oidc.realmName must be a string, got float64; quote it in values, e.g. realmName: "123"'
+          errorMessage: 'authentication.oidc.realmName must be a string (got float64); wrap the value in quotes in the platform values, e.g. realmName: "my-realm"'
 
   # A quoted numeric name is a legitimate string and passes through to both the
   # realm key and the derived URL unchanged.
@@ -60,3 +60,20 @@ tests:
       - matchRegex:
           path: stringData["values.yaml"]
           pattern: 'keycloak-internal-url:\s*"http://keycloak-http\.cozy-keycloak\.svc:8080/realms/123"'
+
+  # The realm is spliced verbatim into URL path segments and a shell token, so a
+  # name with a "/" or a space must be rejected at the source rather than split
+  # a URL or break the hook script downstream.
+  - it: rejects a realm name with a path separator
+    set:
+      authentication.oidc.realmName: "foo/bar"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'authentication.oidc.realmName "foo/bar" is invalid: use only letters, digits, ''.'', ''_'' and ''-'' (it is used verbatim as a URL path segment and a shell token)'
+
+  - it: rejects a realm name with a space
+    set:
+      authentication.oidc.realmName: "foo bar"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'authentication.oidc.realmName "foo bar" is invalid: use only letters, digits, ''.'', ''_'' and ''-'' (it is used verbatim as a URL path segment and a shell token)'

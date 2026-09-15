@@ -106,15 +106,22 @@ stringData:
       oidc-enabled: {{ .Values.authentication.oidc.enabled | quote }}
       oidc-insecure-skip-verify: {{ .Values.authentication.oidc.insecureSkipVerify | quote }}
       extra-keycloak-redirect-uri-for-dashboard: {{ index .Values.authentication.oidc.keycloakExtraRedirectUri | quote }}
-      {{- /* Reject a realm name YAML did not resolve to a string — a bare
-             integer, or a reserved word like on/off/yes/no that becomes a
-             bool. Coercing it silently would rename the realm to something the
-             operator never typed (`on` -> "true"), and the printf %s in the
-             derived URL below would emit a "%!s(...)" format error. Fail with a
-             fix instead of swallowing it. */}}
+      {{- /* The realm name becomes a Keycloak realm, a URL path segment in every
+             issuer/redirect/logout URL, and a shell token in the update-email
+             hook. Reject anything YAML or --set did not resolve to a string (a
+             bare number, or true/false) — coercing it would rename the realm to
+             something never typed and inject a "%!s(...)" into the derived URL —
+             and reject anything outside a safe slug charset, so a stray "/" or
+             space cannot split a URL path or the shell. Fail at the source
+             rather than emit a broken issuer later. The hint does not echo the
+             parsed value back: YAML has already lost the operator's original
+             token (on -> true), so quoting is the fix, not the reprinted bool. */}}
       {{- $realmName := .Values.authentication.oidc.realmName | default "cozy" }}
       {{- if not (kindIs "string" $realmName) }}
-      {{-   fail (printf "authentication.oidc.realmName must be a string, got %s; quote it in values, e.g. realmName: \"%v\"" (kindOf $realmName) $realmName) }}
+      {{-   fail (printf "authentication.oidc.realmName must be a string (got %s); wrap the value in quotes in the platform values, e.g. realmName: \"my-realm\"" (kindOf $realmName)) }}
+      {{- end }}
+      {{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9._-]*$" $realmName) }}
+      {{-   fail (printf "authentication.oidc.realmName %q is invalid: use only letters, digits, '.', '_' and '-' (it is used verbatim as a URL path segment and a shell token)" $realmName) }}
       {{- end }}
       oidc-realm-name: {{ $realmName | quote }}
       {{- /* null keycloakInternalUrl derives the in-cluster Service URL for the
