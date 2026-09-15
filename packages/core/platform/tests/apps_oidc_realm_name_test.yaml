@@ -21,6 +21,17 @@ tests:
           path: stringData["values.yaml"]
           pattern: 'oidc-realm-name:\s*"cozy"'
 
+  # Unset (null) falls back to cozy, but an explicit empty string is a
+  # meaningless value, not a request for the default — it is rejected by the
+  # charset guard rather than silently coerced, mirroring the null-vs-"" tristate
+  # of keycloakInternalUrl below.
+  - it: rejects an explicitly empty realm name
+    set:
+      authentication.oidc.realmName: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'authentication.oidc.realmName "" is invalid: use only letters, digits, ''.'', ''_'' and ''-'' (it is used verbatim as a URL path segment and a shell token)'
+
   - it: propagates a custom realm name onto the _cluster channel
     set:
       authentication.oidc.realmName: acme
