@@ -59,3 +59,56 @@ tests:
       - equal:
           path: spec.username
           value: "123"
+
+  # A database name is subject to the same YAML-1.1 coercion: bare, a numeric
+  # name loads as an integer on the Database CR and the Grant, so they name a
+  # database that is not the one asked for. Quote both.
+  - it: keeps the Database and Grant database name the string "123"
+    set:
+      users:
+        app:
+          maxUserConnections: 10
+      databases:
+        "123":
+          roles:
+            admin: [app]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Database
+      - documentIndex: 0
+        equal:
+          path: spec.name
+          value: "123"
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: Grant
+      - documentIndex: 1
+        equal:
+          path: spec.database
+          value: "123"
+
+  # A user in both admin and readonly of one database rendered two Grant CRs
+  # under one metadata.name, so one silently overwrote the other on apply and a
+  # privilege set went missing. The names must be distinct.
+  - it: gives the admin and readonly Grants of one user distinct names
+    set:
+      users:
+        app:
+          maxUserConnections: 10
+      databases:
+        db1:
+          roles:
+            admin: [app]
+            readonly: [app]
+    asserts:
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: mdb-test-db1-app-admin
+      - documentIndex: 2
+        equal:
+          path: metadata.name
+          value: mdb-test-db1-app-readonly

@@ -6,7 +6,7 @@ kind: Database
 metadata:
   name: {{ $.Release.Name }}-{{ $dbDNSName }}
 spec:
-  name: {{ $name }}
+  name: {{ $name | quote }}
   mariaDbRef:
     name: {{ $.Release.Name }}
   characterSet: utf8
@@ -17,12 +17,15 @@ spec:
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Grant
 metadata:
-  name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}
+  # Scope the name by role: a user in both admin and readonly of one database
+  # would otherwise render two Grant CRs under one metadata.name, and one would
+  # silently overwrite the other on apply.
+  name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}-admin
 spec:
   mariaDbRef:
     name: {{ $.Release.Name }}
   privileges: ['ALL']
-  database: {{ $name }}
+  database: {{ $name | quote }}
   table: "*"
   username: {{ $user | quote }}
   grantOption: true
@@ -33,12 +36,12 @@ spec:
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Grant
 metadata:
-  name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}
+  name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}-readonly
 spec:
   mariaDbRef:
     name: {{ $.Release.Name }}
   privileges: ['SELECT']
-  database: {{ $name }}
+  database: {{ $name | quote }}
   table: "*"
   username: {{ $user | quote }}
   grantOption: true
