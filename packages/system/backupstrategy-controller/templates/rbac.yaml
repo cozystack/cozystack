@@ -170,7 +170,10 @@ rules:
   # and prunes it on Cozystack Backup deletion by deleting this CR, whose
   # delete-backup finalizer frees the object (see cleanupMongoDBBackup). A legacy
   # backup lives in the tenant's own bucket and is never deleted here.
-  verbs: ["get", "list", "watch", "create", "delete"]
+  # patch: strip the driver's own delete-backup finalizer to release a wedged
+  # cleanup (namespace terminating, or the skip-artifact-cleanup annotation) so a
+  # stuck operator never pins a tenant namespace in Terminating.
+  verbs: ["get", "list", "watch", "create", "delete", "patch"]
 - apiGroups: ["psmdb.percona.com"]
   resources: ["perconaservermongodbrestores"]
   verbs: ["get", "list", "watch", "create"]
