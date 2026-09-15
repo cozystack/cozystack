@@ -35,8 +35,11 @@
 # registry (OCIR), so refs differ in registry host / tag / digest — and charts
 # split those across separate lines (`repository:`, `tag:`, `digest:`), not all
 # of which carry '@sha256:'. So a changed line counts as image-related if it
-# carries '@sha256:' OR its key is image/repository/registry/tag/digest (or it
-# is a `--…-image=` arg). If any OTHER line differs — the PR branched from a
+# carries '@sha256:', its key is image/repository/registry/tag/digest, its key
+# ends in `image`/`Image` and its value holds a repository path, or it is a
+# `--…-image=` arg (see the img_line comment for why each). A blank line is not
+# a change: `yq -i`, which every `make image` uses to stamp the ref, drops one.
+# If any OTHER line differs — the PR branched from a
 # main whose config for that file differs from the artifact's base — the file is
 # left on its committed ref (safe degradation, logged, never fatal). CI checks
 # out the pull_request merge commit (current main + PR), so for an unbuilt file
@@ -76,13 +79,36 @@ fi
 skip=" packages/core/talos packages/core/installer $(echo "$BUILT_JSON" | tr -d '[]"' | tr ',' ' ') $TOUCHED "
 
 # A changed line is image-reference-bearing if it carries a full ref (@sha256:),
-# is a split ref key (image/repository/registry/tag/digest), or a `--…-image=` arg.
-img_line='(@sha256:|^[[:space:]]*(- )?(image|repository|registry|tag|digest):|--[A-Za-z-]*image=)'
+# is a split ref key (image/repository/registry/tag/digest), a prefixed *Image
+# key holding a repository path, or a `--…-image=` arg.
+#
+# The prefixed-key branch exists because a chart that renders several images
+# names the extra ones after what they are for — chBackupClientImage,
+# rabbitmqBackupClientImage, redisBackupClientImage. Those used to pass only
+# through the `@sha256:` branch, so one pinned by tag alone read as a config
+# change and cost its WHOLE file the overlay: that is how
+# backupstrategy-controller kept serving a release image two months older than
+# the tree in every lane that did not rebuild it (#4257).
+#
+# Two things keep that branch narrow, and neither is the trailing `:`. The
+# `[A-Za-z]+` demands a letter BEFORE `image`, which a key that begins with it
+# has nothing to put there — that, not the colon, is why `imagePullPolicy:` and
+# `imagePullSecrets:` do not match, with the colon or without it. The colon
+# earns its place on the other side: it is where the value scan starts, so
+# `clientImage: "ghcr.io/…"` stops matching if it goes, which is what the test
+# named "a suffixed image key is a ref, not a config change" holds. And the value has to contain a `/`, which a repository path always
+# does and an operator-settable knob named after an image does not: `vddkImage: ""`
+# (core/platform, migration-controller) is configuration the build never
+# stamps, and taking it from the artifact in silence is the opposite of what
+# this script is for. The exact-key branch keeps no such requirement, because
+# `tag:` and `digest:` legitimately hold values with no slash in them.
+img_line='(@sha256:|^[[:space:]]*(- )?(image|repository|registry|tag|digest):|^[[:space:]]*(- )?[A-Za-z]+[Ii]mage:[[:space:]]*"?[^"[:space:]]*/|--[A-Za-z-]*image=)'
 
 overlaid=0
 same=0
 skipped=0
 drift=0
+drift_files=""
 failed=0
 # Walk the artifact's ref-bearing files, pruning vendored charts/ subtrees.
 # `for … in $(find)` (not a pipe) keeps the counters in this shell; package
@@ -104,9 +130,23 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
   [ -f "$cur" ] || continue           # not in the PR tree -> don't introduce it
   cmp -s "$cur" "$new" && { same=$((same + 1)); continue; }
 
-  if diff "$cur" "$new" | sed -n 's/^[<>] //p' | grep -qvE "$img_line"; then
+  # Blank lines are dropped before the test. `yq -i` does not preserve them:
+  # stamping a digest re-emits the document, and a blank line separating two
+  # top-level keys does not come back. The stamp therefore changes a file the
+  # PR never touched, on a line carrying no configuration at all, and the whole
+  # file loses its overlay for it. That is not a corner case -- on the run
+  # behind #4265 it was the entire remaining drift list: core/platform,
+  # cozystack-api, dashboard, kubeovn-webhook and linstor-gui each differed
+  # from the artifact by one blank line and their own ref, nothing else.
+  if diff "$cur" "$new" | sed -n 's/^[<>] //p' \
+      | grep -vE '^[[:space:]]*$' | grep -qvE "$img_line"; then
     echo "drift (non-ref change) in $cur -> keeping committed ref"
     drift=$((drift + 1))
+    # Name the PACKAGE, not the directory the file happens to sit in: an
+    # images/*.tag drift would otherwise read as "<pkg>/images", which is not
+    # something anyone can go and look at.
+    d=$(dirname "${cur#packages/}")
+    drift_files="$drift_files ${d%/images}"
     continue
   fi
 
@@ -120,3 +160,17 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
 done
 
 echo "Overlay current-main images: overlaid=$overlaid same=$same skipped(rebuilt/owned/edited)=$skipped drift=$drift failed=$failed"
+
+# Keeping the committed ref is the safe answer to a config that does not match
+# the artifact, but it is not a neutral one: that component then runs its last
+# RELEASE image in a lane whose job is to exercise the tree under review. Said
+# once per file among hundreds of overlay lines, it reads as bookkeeping. Said
+# once at the end, with the packages named, it is the first thing to check when
+# a suite fails on behaviour the diff plainly contains — which is what #4257
+# cost three unrelated PRs, one round each.
+if [ "$drift" -gt 0 ]; then
+  drift_pkgs=$(echo "$drift_files" | tr ' ' '\n' | grep -v '^$' | sort -u)
+  printf '::warning title=Image overlay drift::%s package(s) kept committed release refs, so they run release images in this lane rather than current main: %s\n' \
+    "$(printf '%s\n' "$drift_pkgs" | wc -l | tr -d ' ')" \
+    "$(printf '%s' "$drift_pkgs" | tr '\n' ' ' | sed 's/ $//')"
+fi
