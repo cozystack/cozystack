@@ -32,6 +32,49 @@
 {{- include "kubernetes-nodes.assertNoForeignPool" . }}
 {{- include "kubernetes-nodes.assertParentVersion" . }}
 {{- $kubevirtmachinetemplateNames := list }}
+{{- /* Substrate selects which infrastructure provider renders this pool's
+       machine template. Everything downstream of the template — autoscaler
+       capacity annotations, kubelet reservations, MachineDeployment,
+       MachineHealthCheck, WorkloadMonitor, the talos-reconcile Job — is
+       substrate-agnostic and rendered once, so the two paths differ only in
+       the template object and the infrastructureRef that points at it. */}}
+{{- $substrate := .Values.substrate | default "kubevirt" }}
+{{- if not (has $substrate (list "kubevirt" "proxmox")) }}
+{{-   fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
+{{- end }}
+{{- $isProxmox := eq $substrate "proxmox" }}
+{{- if $isProxmox }}
+{{- /* Proxmox has no equivalent of a VirtualMachineClusterInstancetype, so the
+         instancetype lookup that normally supplies effective CPU and memory has
+         nothing to read. Those two numbers are not cosmetic: the kubelet
+         reservations and the cluster-autoscaler capacity annotations are both
+         derived from them, and a pool that cannot state them would be scheduled
+         against invented capacity. Require them explicitly rather than let the
+         defaults silently produce a mis-sized pool. */}}
+{{-   if not (and $.Values.resources $.Values.resources.cpu $.Values.resources.memory) }}
+{{-     fail "substrate proxmox requires resources.cpu and resources.memory: there is no instanceType to size the pool from" }}
+{{-   end }}
+{{-   if not $.Values.proxmox.templateTags }}
+{{-     fail "substrate proxmox requires proxmox.templateTags: capmox clones a VM template and has no image URL to fall back on" }}
+{{-   end }}
+{{-   if not $.Values.proxmox.network.bridge }}
+{{-     fail "substrate proxmox requires proxmox.network.bridge" }}
+{{-   end }}
+{{-   if not $.Values.proxmox.dnsServers }}
+{{-     fail "substrate proxmox requires proxmox.dnsServers: an off-cluster worker cannot resolve through the management cluster's CoreDNS" }}
+{{-   end }}
+{{- /* KubeVirt-only knobs. Accepting them silently on Proxmox would let a pool
+         believe it had asked for something the substrate cannot deliver. */}}
+{{-   if $.Values.gpus }}
+{{-     fail "gpus is a kubevirt-only field; pass GPUs through on the Proxmox template instead" }}
+{{-   end }}
+{{-   if $.Values.logSerialConsole }}
+{{-     fail "logSerialConsole is a kubevirt-only field; use the Proxmox serial console on the VM" }}
+{{-   end }}
+{{-   if or (not (kindIs "invalid" $.Values.podCpuLimit)) (not (kindIs "invalid" $.Values.podCpuRequest)) }}
+{{-     fail "podCpuLimit/podCpuRequest size the virt-launcher pod and are kubevirt-only" }}
+{{-   end }}
+{{- end }}
 {{- $group := dict
       "minReplicas" .Values.minReplicas
       "maxReplicas" .Values.maxReplicas
@@ -46,6 +89,56 @@
       "podCpuLimit" .Values.podCpuLimit
       "podCpuRequest" .Values.podCpuRequest
 }}
+{{- $_ := set $group "proxmox" .Values.proxmox }}
+{{- define "proxmoxmachinetemplate" -}}
+spec:
+  {{- /* Talos ships neither qemu-guest-agent nor a cloud-init status file, and
+        capmox blocks a Machine on both probes until they answer. Left on, the
+        VM boots, joins nothing, and the provider reports
+        "error waiting for agent: the operation has timed out" forever. This is
+        the same class of problem the KubeVirt path solves with
+        virtualMachineBootstrapCheck.checkStrategy: none for its SSH probe —
+        capmox's own CRD names TalOS in the skipCloudInitStatus description. */}}
+  checks:
+    skipQemuGuestAgent: true
+    skipCloudInitStatus: true
+  {{- /* capmox clones an existing VM template; it has no image URL to fetch, so
+        the Talos image is not a chart input the way it is on KubeVirt. The
+        template must carry the nocloud platform image, NOT the openstack one
+        the KubeVirt path uses: capmox injects bootstrap data as a nocloud ISO,
+        and an openstack image ignores it exactly as silently as a nocloud image
+        ignores configdrive.
+
+        matchTags is set equality, not containment. capmox sorts both sides and
+        compares them with slices.Equal, so a template tagged
+        {a,b,c} is invisible to a selector listing {a,b}, and the error says
+        "found 0 VM templates" rather than pointing at the extra tag. */}}
+  templateSelector:
+    matchTags:
+      {{- range .group.proxmox.templateTags }}
+      - {{ . | quote }}
+      {{- end }}
+  full: {{ .group.proxmox.full }}
+  numSockets: 1
+  {{- /* divf takes its arguments in order, and a pipeline would feed the
+        millicores in as the divisor: `x | divf 1000.0` is 1000/x, which
+        silently sizes every pool at one core. */}}
+  numCores: {{ ceil (divf (include "kubernetes.cpuToMillicores" .group.resources.cpu | float64) 1000.0) | int }}
+  memoryMiB: {{ divf (include "cozy-lib.resources.toFloat" .group.resources.memory | float64) 1048576.0 | ceil | int }}
+  {{- with .group.proxmox.storage }}
+  storage: {{ . | quote }}
+  {{- end }}
+  network:
+    default:
+      bridge: {{ .group.proxmox.network.bridge | quote }}
+      model: virtio
+      {{- with .group.proxmox.network.vlan }}
+      vlan: {{ . }}
+      {{- end }}
+      {{- with .group.proxmox.network.mtu }}
+      mtu: {{ . }}
+      {{- end }}
+{{- end }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
   {{- /* Talos has no SSH; use 'none' so CAPK does not block Machine.Ready
@@ -473,12 +566,16 @@ spec:
 {{- $_ := set $context "group" $group }}
 {{- $_ := set $context "groupName" $groupName }}
 {{- $_ := set $context "clusterName" $clusterName }}
-{{- $kubevirtmachinetemplate := include "kubevirtmachinetemplate" $context }}
+{{- /* The variable keeps its kubevirt name so the rendered bytes of the
+       default path are unchanged: this template is content-hash named, and a
+       rename here would roll every live worker VM on every existing cluster. */}}
+{{- $machineTemplateKind := ternary "ProxmoxMachineTemplate" "KubevirtMachineTemplate" $isProxmox }}
+{{- $kubevirtmachinetemplate := include (ternary "proxmoxmachinetemplate" "kubevirtmachinetemplate" $isProxmox) $context }}
 {{- $kubevirtmachinetemplateHash := $kubevirtmachinetemplate | sha256sum | trunc 6 }}
 {{- $kubevirtmachinetemplateName := printf "%s-%s-%s" $clusterName $groupName $kubevirtmachinetemplateHash }}
 {{- $kubevirtmachinetemplateNames = append $kubevirtmachinetemplateNames $kubevirtmachinetemplateName }}
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: KubevirtMachineTemplate
+kind: {{ $machineTemplateKind }}
 metadata:
   name: {{ $clusterName }}-{{ $groupName }}-{{ $kubevirtmachinetemplateHash }}
   namespace: {{ $.Release.Namespace }}
@@ -564,7 +661,7 @@ spec:
       clusterName: {{ $clusterName }}
       infrastructureRef:
         apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-        kind: KubevirtMachineTemplate
+        kind: {{ $machineTemplateKind }}
         name: {{ $clusterName }}-{{ $groupName }}-{{ $kubevirtmachinetemplateHash }}
         namespace: {{ $.Release.Namespace }}
       version: {{ include "kubernetes.versionMap" $}}
@@ -629,13 +726,17 @@ the same namespace never re-emit and fight over each other's templates. A bare
 name prefix is unsafe here: pool "gpu" would match sibling "gpu-large"'s
 hash-named KMTs; the release-name annotation is exact.
 */ -}}
+{{- /* The lookup follows the substrate: on a Proxmox pool the live templates
+       are ProxmoxMachineTemplates, and looking for the KubeVirt kind would
+       find nothing and quietly drop templates a MachineSet still references,
+       deleting the infrastructure reference out from under running workers. */}}
 {{- $mss := (lookup "cluster.x-k8s.io/v1beta1" "MachineSet" $.Release.Namespace "").items }}
 {{- $oldKubevirtmachinetemplates := dict }}
-{{- range $kmt := (lookup "infrastructure.cluster.x-k8s.io/v1alpha1" "KubevirtMachineTemplate" $.Release.Namespace "").items }}
+{{- range $kmt := (lookup "infrastructure.cluster.x-k8s.io/v1alpha1" $machineTemplateKind $.Release.Namespace "").items }}
 {{- range $or := $kmt.metadata.ownerReferences }}
 {{- if and (eq $or.kind "Cluster") (eq $or.name $clusterName) (eq (dig "annotations" "meta.helm.sh/release-name" "" $kmt.metadata) $.Release.Name) }}
 {{- range $ms := $mss }}
-{{- if and (eq $ms.spec.template.spec.infrastructureRef.kind "KubevirtMachineTemplate") (eq $ms.spec.template.spec.infrastructureRef.name $kmt.metadata.name) }}
+{{- if and (eq $ms.spec.template.spec.infrastructureRef.kind $machineTemplateKind) (eq $ms.spec.template.spec.infrastructureRef.name $kmt.metadata.name) }}
 {{- if not (has $kmt.metadata.name $kubevirtmachinetemplateNames) }}
 {{- $oldKubevirtmachinetemplates = merge $oldKubevirtmachinetemplates (dict $kmt.metadata.name $kmt) }}
 {{- end }}
@@ -648,7 +749,7 @@ hash-named KMTs; the release-name annotation is exact.
 {{- range $oldKubevirtmachinetemplates }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: KubevirtMachineTemplate
+kind: {{ $machineTemplateKind }}
 metadata:
   name: {{ .metadata.name }}
   namespace: {{ .metadata.namespace }}
