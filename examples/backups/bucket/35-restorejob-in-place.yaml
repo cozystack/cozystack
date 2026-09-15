@@ -1,0 +1,13 @@
+# In-place restore. With targetApplicationRef omitted the driver restores back
+# into bktsrc, mirroring the backup snapshot over the live bucket contents
+# (objects the snapshot does not contain are deleted). Object storage keeps no
+# continuous log, so there is no point-in-time option - a restore replays one
+# discrete snapshot.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: bktsrc-in-place
+spec:
+  backupRef:
+    name: bktsrc-adhoc
