@@ -3,15 +3,10 @@ kind: Kafka
 metadata:
   name: test
 spec:
+  version: "v3.9"
   external: false
   kafka:
     size: 10Gi
-    replicas: 2
-    storageClass: ""
-    resources: {}
-    resourcesPreset: "c1.small"
-  zookeeper:
-    size: 5Gi
     replicas: 2
     storageClass: ""
     resources: {}
