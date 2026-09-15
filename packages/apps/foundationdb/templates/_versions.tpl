@@ -1,0 +1,7 @@
+{{- define "foundationdb.versionMap" }}
+{{- $versionMap := .Files.Get "files/versions.yaml" | fromYaml }}
+{{- if not (hasKey $versionMap .Values.version) }}
+    {{- printf `FoundationDB version %s is not supported, allowed versions are %s` $.Values.version (keys $versionMap | sortAlpha) | fail }}
+{{- end }}
+{{- index $versionMap .Values.version }}
+{{- end }}

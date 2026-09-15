@@ -2,6 +2,16 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "version": {
+      "description": "FoundationDB major.minor version to deploy",
+      "type": "string",
+      "default": "v7.3",
+      "enum": [
+        "v7.4",
+        "v7.3",
+        "v7.1"
+      ]
+    },
     "cluster": {
       "description": "Cluster configuration.",
       "type": "object",
@@ -10,8 +20,7 @@
         "faultDomain",
         "processCounts",
         "redundancyMode",
-        "storageEngine",
-        "version"
+        "storageEngine"
       ],
       "properties": {
         "faultDomain": {
@@ -71,11 +80,6 @@
           "description": "Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory).",
           "type": "string",
           "default": "ssd-2"
-        },
-        "version": {
-          "description": "Version of FoundationDB to use.",
-          "type": "string",
-          "default": "7.3.63"
         }
       }
     },
