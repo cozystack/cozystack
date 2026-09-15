@@ -76,11 +76,3 @@ the parent cluster `kubernetes-<cluster>` in the same namespace, plus a
 | `talos.installerRepository` | OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.                                                                                                                                                                                                                                                                                                                                                     | `string` | `factory.talos.dev/installer`                                      |
 | `talos.registryMirrors`     | Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap. Keep in sync with the parent kubernetes chart. | `object` | `{}`                                                               |
 
-
-### Images
-
-| Name             | Description                                                                                                    | Type     | Value |
-| ---------------- | -------------------------------------------------------------------------------------------------------------- | -------- | ----- |
-| `images`         | Optional image overrides for air-gapped or rate-limited registries.                                            | `object` | `{}`  |
-| `images.kubectl` | Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag. | `string` | `""`  |
-
