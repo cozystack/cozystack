@@ -90,20 +90,11 @@ type ConfigSpec struct {
 	// Proxmox substrate settings.
 	// +kubebuilder:default:={}
 	Proxmox Proxmox `json:"proxmox"`
-	// Optional image overrides for air-gapped or rate-limited registries.
-	// +kubebuilder:default:={}
-	Images Images `json:"images"`
 }
 
 type GPU struct {
 	// Name of GPU, such as "nvidia.com/AD102GL_L40S".
 	Name string `json:"name"`
-}
-
-type Images struct {
-	// Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag.
-	// +kubebuilder:default:=""
-	Kubectl string `json:"kubectl,omitempty"`
 }
 
 type KernelModule struct {

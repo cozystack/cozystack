@@ -104,11 +104,3 @@ the parent cluster `kubernetes-<cluster>` in the same namespace, plus a
 | `proxmox.pool`           | Proxmox resource pool the worker VMs are added to. Set the same pool on every node pool of a tenant cluster and grant the tenant's tokens their privileges on `/pool/<name>`: that is the one ACL path that follows every VM capmox creates, replacements included. The pool must exist on the hypervisor; capmox does not create it. Empty adds the workers to no pool.                                                                                                                                                                                                                                                                                                                                                                                                                              | `string`   | `""`       |
 | `proxmox.dnsServers`     | Nameservers written into the worker machineconfig. On kubevirt the workers use the management cluster's CoreDNS, which they reach over the pod network; an off-cluster Proxmox worker cannot, so it needs reachable resolvers of its own. Required when `substrate` is `proxmox`. Keep in sync with the parent kubernetes chart's `proxmox.dnsServers`.                                                                                                                                                                                                                                                                                                                                                                                                                                               | `[]string` | `[]`       |
 
-
-### Images
-
-| Name             | Description                                                                                                    | Type     | Value |
-| ---------------- | -------------------------------------------------------------------------------------------------------------- | -------- | ----- |
-| `images`         | Optional image overrides for air-gapped or rate-limited registries.                                            | `object` | `{}`  |
-| `images.kubectl` | Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag. | `string` | `""`  |
-
