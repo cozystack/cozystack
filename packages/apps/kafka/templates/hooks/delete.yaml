@@ -65,12 +65,24 @@ spec:
             - |
               set -eu
               echo "Deleting KafkaTopics for {{ .Release.Name }} before the topic-operator is removed"
+              # The call carries no request timeout, deliberately. Any non-zero
+              # value for that flag makes kubectl skip its in-cluster
+              # credentials: client-go consults them only while the assembled
+              # config still equals the default, and the flag lands in that
+              # config. kubectl then talks to its built-in default cluster,
+              # localhost:8080, is refused, and this script reads the refusal as
+              # a failed delete and exits 1 -- which returns from Uninstall.Run
+              # before anything is removed and wedges every uninstall of this
+              # release. It leaves no trace in the rendered manifest; only a live
+              # uninstall shows it (#4276). The call is bounded by --timeout
+              # above for the watch and by activeDeadlineSeconds for the whole
+              # Job, the shape packages/apps/tenant/templates/cleanup-job.yaml
+              # uses and documents.
               if ! out=$(kubectl -n {{ .Release.Namespace }} delete kafkatopics.kafka.strimzi.io \
                     -l 'strimzi.io/cluster={{ .Release.Name }}' \
                     --ignore-not-found=true \
                     --wait=true \
-                    --timeout=180s \
-                    --request-timeout=20s 2>&1); then
+                    --timeout=180s 2>&1); then
                 printf '%s\n' "${out}"
                 case "${out}" in
                   *"the server doesn't have a resource type"*|*"no matches for kind"*)
