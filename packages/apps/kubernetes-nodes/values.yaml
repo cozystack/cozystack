@@ -174,14 +174,3 @@ proxmox:
     bridge: ""
   storage: ""
   dnsServers: []
-
-##
-## @section Images
-##
-
-## @typedef {struct} Images - Optional image overrides for chart-internal helpers.
-## @field {string} [kubectl] - Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag.
-
-## @param {Images} images - Optional image overrides for air-gapped or rate-limited registries.
-images:
-  kubectl: ""
