@@ -51,14 +51,21 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: "--wait=true"
         documentIndex: 0
-      # Digest-agnostic on purpose: Renovate rewrites the digest under
-      # packages/.+/templates/hooks/.+\.yaml and nothing rewrites tests/, so a
-      # literal here turns the next bump red for no defect. What matters is that
-      # the ref stays pinned by digest at all. Same shape as
-      # packages/system/etcd-operator/tests/selector-fix-hook_test.yaml.
+      # Pinned by shape, not by literal: Renovate rewrites both the tag and the
+      # digest under packages/.+/templates/hooks/.+\.yaml and nothing rewrites
+      # tests/, so a literal of either turns the next bump red for no defect.
+      # What matters is that the ref stays pinned by digest at all. Same shape
+      # as harbor's cleanup_hook_test.yaml and mariadb's
+      # cleanup_pvc_hook_test.yaml.
       - matchRegex:
           path: spec.template.spec.containers[0].image
-          pattern: ^clastix/kubectl:v1\.32@sha256:[0-9a-f]{64}$
+          pattern: ^clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+        documentIndex: 0
+      # An empty images-registry must not leave a bare leading slash, which is
+      # an unpullable ref that only shows up at uninstall time.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^/
         documentIndex: 0
       - isKind:
           of: ServiceAccount
@@ -84,3 +91,18 @@ tests:
           path: subjects[0].name
           value: kafka-test-pre-delete
         documentIndex: 3
+
+  - it: prefixes the hook image with the cluster images registry when set
+    set:
+      _cluster:
+        images-registry: registry.example.com
+    asserts:
+      # A mirrored or air-gapped install resolves the image from the internal
+      # registry, and the digest pin survives the prefixing. Unasserted until
+      # now, so nothing would have caught the hook being the one image in this
+      # chart that ignored the override: at uninstall time a pull failure here
+      # means the topics keep their finalizer and the namespace does not go.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^registry\.example\.com/clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+        documentIndex: 0

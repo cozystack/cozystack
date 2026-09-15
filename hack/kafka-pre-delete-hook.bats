@@ -11,9 +11,9 @@
 # branch back to `exit 1` — which is the whole subject of this file.
 #
 # Why the exit code carries so much: a non-zero hook returns from Uninstall.Run
-# before any release resource is deleted, so Helm leaves the topic operator
-# running and helm-controller retries. That is the difference between "the
-# uninstall waits" and "the topic operator is gone while topics still hold
+# before any release resource goes, so Helm leaves the topic operator running
+# and helm-controller retries. That is the difference between "the uninstall
+# waits" and "the topic operator is gone while topics still hold
 # strimzi.io/topic-operator", which is issue #3793.
 #
 # What is pinned here:
@@ -28,9 +28,14 @@
 #   * the selector names this release only.
 #
 # Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
-# paths resolve against that cwd. Each @test builds its own fixture and removes
-# it in the body: no setup/teardown, and no EXIT trap, per
-# docs/agents/e2e-testing.md.
+# paths resolve against that cwd. That runner implements `@test` and little
+# else: it has NO `run` helper and therefore no $status or $output, so every
+# test below saves `$?` by hand the way hack/app-cleanup-hooks_test.bats does.
+# Under the bats binary `run` would work and the file would pass either way,
+# which is exactly how a suite that dies on `run: command not found` under the
+# real runner got committed once. docs/agents/e2e-testing.md:66 says it too.
+# Each @test builds its own fixture and removes it in the body: no
+# setup/teardown, and no EXIT trap.
 
 KAFKA_CHART=packages/apps/kafka
 
@@ -51,14 +56,20 @@ render_hook() {
 # $DELETE_OUT holds, exiting with $DELETE_RC. The hook reads kubectl's combined
 # output and branches on its text, so the fixture is that text verbatim: the
 # timeout string is what kubectl v1.32 prints from the wait path, and the
-# CRD-absent string is what it prints for an unknown resource type.
+# CRD-absent strings are the two RESTMapper wordings.
+# DELETE_RC deliberately has NO default: an unset value would make every
+# failure-path test exit 0 and assert nothing. Each test sets it.
 # No line below is a bare column-0 `}`, so cozytest.sh's parser leaves it alone.
 write_fake_kubectl() {
   cat > "$1/kubectl" <<'KEOF'
 #!/bin/sh
 echo "$*" >> "$KLOG"
+if [ -z "${DELETE_RC:-}" ]; then
+  echo "fake kubectl: DELETE_RC unset; the test would assert nothing" >&2
+  exit 64
+fi
 printf '%s\n' "${DELETE_OUT:-kafkatopic.kafka.strimzi.io \"t\" deleted}"
-exit "${DELETE_RC:-0}"
+exit "$DELETE_RC"
 KEOF
   chmod +x "$1/kubectl"
 }
@@ -82,14 +93,21 @@ KEOF
 
   export KLOG="$tmp/calls"
   export DELETE_RC=0
-  run env PATH="$tmp:$PATH" sh "$tmp/hook.sh"
-  [ "$status" -eq 0 ]
-
-  grep -q "strimzi.io/cluster=kafka-test" "$tmp/calls"
-  grep -q -- "--ignore-not-found=true" "$tmp/calls"
-  # A sibling release must not be in the selector.
-  if grep -q "strimzi.io/cluster=kafka-test2" "$tmp/calls"; then
-    echo "FAIL: the selector reached a sibling release"
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: hook exited $rc on a clean delete"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q "strimzi.io/cluster=kafka-test" "$tmp/calls"; then
+    echo "FAIL: the delete was not scoped to this release"
+    cat "$tmp/calls"
+    false
+  fi
+  if ! grep -q -- "--ignore-not-found=true" "$tmp/calls"; then
+    echo "FAIL: --ignore-not-found is gone, so an already-deleted topic fails the hook"
+    cat "$tmp/calls"
     false
   fi
   rm -rf "$tmp"
@@ -97,18 +115,31 @@ KEOF
 
 @test "kafka pre-delete hook exits 0 when the KafkaTopic CRD is absent" {
   # A release that never created a topic, or a cluster where Strimzi is already
-  # gone. Failing here would wedge the uninstall over nothing to clean up.
-  tmp=$(mktemp -d)
-  write_fake_kubectl "$tmp"
-  render_hook "$KAFKA_CHART" kafka-test tenant-test kafka-test-pre-delete "$tmp/hook.sh"
+  # gone. Failing here would wedge the uninstall over nothing to clean up. Both
+  # RESTMapper wordings are covered because kubectl picks between them.
+  for msg in 'error: the server doesn'"'"'t have a resource type "kafkatopics"' \
+             'error: no matches for kind "KafkaTopic" in version "kafka.strimzi.io/v1beta2"'; do
+    tmp=$(mktemp -d)
+    write_fake_kubectl "$tmp"
+    render_hook "$KAFKA_CHART" kafka-test tenant-test kafka-test-pre-delete "$tmp/hook.sh"
 
-  export KLOG="$tmp/calls"
-  export DELETE_RC=1
-  export DELETE_OUT='error: the server doesn'"'"'t have a resource type "kafkatopics"'
-  run env PATH="$tmp:$PATH" sh "$tmp/hook.sh"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q "CRD absent"
-  rm -rf "$tmp"
+    export KLOG="$tmp/calls"
+    export DELETE_RC=1
+    export DELETE_OUT="$msg"
+    rc=0
+    PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      echo "FAIL: hook exited $rc on an absent CRD, wedging the uninstall"
+      cat "$tmp/out" "$tmp/err"
+      false
+    fi
+    if ! grep -q 'CRD absent' "$tmp/out"; then
+      echo "FAIL: the absent CRD was not reported as such"
+      cat "$tmp/out"
+      false
+    fi
+    rm -rf "$tmp"
+  done
 }
 
 @test "kafka pre-delete hook exits 0 on a wait timeout and says the finalizer is still held" {
@@ -124,10 +155,23 @@ KEOF
   export KLOG="$tmp/calls"
   export DELETE_RC=1
   export DELETE_OUT='error: timed out waiting for the condition on kafkatopics/kafka-test-orders'
-  run env PATH="$tmp:$PATH" sh "$tmp/hook.sh"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q "still hold the strimzi.io/topic-operator finalizer"
-  echo "$output" | grep -q "clear the finalizer by hand"
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: hook exited $rc on a wait timeout, which wedges the uninstall"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q 'still hold the strimzi.io/topic-operator finalizer' "$tmp/err"; then
+    echo "FAIL: the degraded path said nothing about the finalizer"
+    cat "$tmp/err"
+    false
+  fi
+  if ! grep -q 'clear the finalizer by hand' "$tmp/err"; then
+    echo "FAIL: the degraded path did not say what to do about it"
+    cat "$tmp/err"
+    false
+  fi
   rm -rf "$tmp"
 }
 
@@ -143,8 +187,17 @@ KEOF
   export KLOG="$tmp/calls"
   export DELETE_RC=1
   export DELETE_OUT='Error from server (Forbidden): kafkatopics.kafka.strimzi.io is forbidden'
-  run env PATH="$tmp:$PATH" sh "$tmp/hook.sh"
-  [ "$status" -ne 0 ]
-  echo "$output" | grep -q "ERROR: deleting KafkaTopics failed"
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: hook exited 0 on a Forbidden, so Helm would remove the topic operator"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q '^ERROR: deleting KafkaTopics failed' "$tmp/err"; then
+    echo "FAIL: the failure was not reported as an error"
+    cat "$tmp/err"
+    false
+  fi
   rm -rf "$tmp"
 }
