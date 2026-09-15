@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll } from "vitest"
 import { screen } from "@testing-library/react"
+import { useLocation } from "react-router"
 import {
   K8sClient,
   type K8sList,
@@ -7,6 +8,12 @@ import {
 } from "@cozystack/k8s-client"
 import App from "./App.tsx"
 import { renderWithK8sProvider } from "./test-utils/render.tsx"
+
+// Echoes the router location so a redirect can be asserted by URL.
+function LocationProbe() {
+  const { pathname } = useLocation()
+  return <div data-testid="location">{pathname}</div>
+}
 
 function makeClient(): K8sClient {
   const client = new K8sClient()
@@ -69,5 +76,23 @@ describe("default landing", () => {
     expect(
       await screen.findByRole("heading", { name: "Marketplace", level: 1 }),
     ).toBeTruthy()
+  })
+
+  it("sends the old Marketplace Repositories URL to the Admin portal", async () => {
+    // Without the redirect the :appName catch-all would render an order page
+    // for an application called "taps".
+    const client = makeClient()
+    renderWithK8sProvider(
+      <>
+        <App />
+        <LocationProbe />
+      </>,
+      { client, initialRoute: "/marketplace/taps" },
+    )
+
+    expect(
+      await screen.findByRole("heading", { name: "Repositories", level: 1 }),
+    ).toBeTruthy()
+    expect(screen.getByTestId("location").textContent).toBe("/admin/taps")
   })
 })
