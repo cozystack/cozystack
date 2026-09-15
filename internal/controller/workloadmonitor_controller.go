@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -132,8 +132,8 @@ func updateOwnerReferences(obj metav1.Object, monitor client.Object) {
 			Name:       monitor.GetName(),
 			UID:        monitor.GetUID(),
 			// Set Controller to false to avoid conflict as multiple controllers are not allowed
-			Controller:         pointer.BoolPtr(false),
-			BlockOwnerDeletion: pointer.BoolPtr(true),
+			Controller:     ptr.To(false),
+			BlockOwnerDeletion: ptr.To(true),
 		}
 		owners = append(owners, newOwnerRef)
 	}
@@ -724,9 +724,9 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// Default to operational = true, but check MinReplicas if set.
 		// Use fresh.Spec to avoid making decisions based on a stale cached copy
 		// when the spec was updated between the initial read and this retry.
-		fresh.Status.Operational = pointer.Bool(true)
+		fresh.Status.Operational = ptr.To(true)
 		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
-			fresh.Status.Operational = pointer.Bool(false)
+			fresh.Status.Operational = ptr.To(false)
 		}
 		return r.Status().Update(ctx, fresh)
 	})
