@@ -26,6 +26,9 @@
 {{- if $disabledFeatureGates -}}
 {{- $_ := set $kubevirtValues "disabledFeatureGates" $disabledFeatureGates -}}
 {{- end -}}
+{{- with (.Values.kubevirt).migrations -}}
+{{- $_ := set $kubevirtValues "migrations" . -}}
+{{- end -}}
 {{- /*
   When cozystack.gpu-operator is enabled the platform mirrors the variant
   into the KubeVirt CR: the HostDevices feature gate, without which the

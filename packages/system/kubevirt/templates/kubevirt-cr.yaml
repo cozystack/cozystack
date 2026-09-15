@@ -119,6 +119,10 @@ spec:
     mediatedDevicesConfiguration:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+    {{- with .Values.migrations }}
+    migrations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
     evictionStrategy: LiveMigrate
     virtualMachineOptions:
       disableSerialConsoleLog: {}
