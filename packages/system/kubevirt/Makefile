@@ -72,8 +72,8 @@ update:
 	@# for, and their absence cannot surface as a value that stopped taking
 	@# effect — the CR simply goes back to deploying virt-template, to letting
 	@# KubeVirt skip NAD resource injection, and to image volumes an apiserver
-	@# below 1.35 discards. The payload lines of the blocks above are exposed the
-	@# same way; covering them is a wider change than this. `make update` cannot
+	@# below 1.35 discards. The device/CPU payload lines remain outside these
+	@# checks; migrations validates its complete block below. `make update` cannot
 	@# repair a partial block — the directive guard is what stops the insert — so
 	@# name the missing marker and let the operator restore it.
 	@grep -q '{{- if .Values.cpuAllocationRatio }}' $(CR_FILE) || { echo "ERROR: directive '{{- if .Values.cpuAllocationRatio }}' not inserted — restore the 'developerConfiguration:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
@@ -90,3 +90,10 @@ update:
 	@grep -q '{{- with .Values.permittedHostDevices }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.permittedHostDevices }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
 	@grep -q '{{- with .Values.mediatedDevicesConfiguration }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.mediatedDevicesConfiguration }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
 	@grep -q '{{- with .Values.migrations }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.migrations }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
+	@# A retained directive skips insertion even if its body or end was lost.
+	@# Check the whole block in order; only END decides the exit status.
+	@awk '\
+		$$0 == "    migrations:" { keys++ } \
+		$$0 == "    {{- with .Values.migrations }}" { blocks++; step=1; next } \
+		step { expected = step == 1 ? "    migrations:" : step == 2 ? "      {{- toYaml . | nindent 6 }}" : "    {{- end }}"; if ($$0 != expected) bad=1; step=(step+1)%4 } \
+		END { exit !(blocks == 1 && keys == 1 && step == 0 && !bad) }' $(CR_FILE) || { echo "ERROR: migrations block is partial or duplicated — restore the complete block or delete all its remaining lines from $(CR_FILE) and re-run" >&2; exit 1; }

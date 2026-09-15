@@ -273,4 +273,53 @@ if ! grep -qF "directive '$MIG' not inserted" "$anchorless_migrations_log"; then
 	fail "make update did not name the missing migrations directive: $(cat "$anchorless_migrations_log")"
 fi
 
+# A retained opening directive must not hide a missing body or terminator.
+# The opening-less case also leaves an orphan key: inserting a second complete
+# block must not make that damaged template pass validation.
+for missing in key payload end body opening; do
+	partial_migrations="$tmpdir/migrations-missing-$missing.yaml"
+	awk -v missing="$missing" -v opening="$MIG" '
+		index($0, opening) { inside=1; if (missing != "opening") print; next }
+		inside && /{{- end }}/ { inside=0; if (missing != "end") print; next }
+		inside && /^    migrations:$/ && (missing == "key" || missing == "body") { next }
+		inside && /{{- toYaml \. \| nindent 6 }}/ && (missing == "payload" || missing == "body") { next }
+		{ print }
+	' "$src" >"$partial_migrations"
+	partial_migrations_log="$tmpdir/migrations-missing-$missing.log"
+	if run_update_logged "$partial_migrations" "$partial_migrations_log"; then
+		fail "make update exited zero on a migrations block missing $missing"
+	fi
+	if ! grep -qF 'migrations block is partial or duplicated' "$partial_migrations_log"; then
+		fail "make update did not diagnose migrations missing $missing: $(cat "$partial_migrations_log")"
+	fi
+done
+
+# Presence checks can also accept reordered lines, a duplicate complete block,
+# or a complete body with EOF in place of its closing directive.
+for malformed in reordered duplicate eof; do
+	malformed_migrations="$tmpdir/migrations-$malformed.yaml"
+	awk -v malformed="$malformed" -v opening="$MIG" '
+		index($0, opening) { inside=1; block=$0 ORS; print; next }
+		inside {
+			block=block $0 ORS
+			if (/{{- end }}/) {
+				if (malformed == "eof") exit
+				inside=0; print
+				if (malformed == "duplicate") printf "%s", block
+				next
+			}
+			if (malformed == "reordered" && /^    migrations:$/) { print "      {{- toYaml . | nindent 6 }}"; next }
+			if (malformed == "reordered" && /{{- toYaml \. \| nindent 6 }}/) { print "    migrations:"; next }
+		}
+		{ print }
+	' "$src" >"$malformed_migrations"
+	malformed_migrations_log="$tmpdir/migrations-$malformed.log"
+	if run_update_logged "$malformed_migrations" "$malformed_migrations_log"; then
+		fail "make update exited zero on a $malformed migrations block"
+	fi
+	if ! grep -qF 'migrations block is partial or duplicated' "$malformed_migrations_log"; then
+		fail "make update did not diagnose $malformed migrations: $(cat "$malformed_migrations_log")"
+	fi
+done
+
 echo "PASS update_idempotency_test"
