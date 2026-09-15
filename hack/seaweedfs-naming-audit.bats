@@ -322,19 +322,29 @@ for _a in "$@"; do
     -d) echo "date: illegal option -- d" >&2; exit 1 ;;
   esac
 done
-# The audit's only other date form: -u -j -f FMT VALUE +%s. Pull VALUE (the arg
-# after the format) and recompute it with a real date, trying the GNU spelling
-# then the BSD one so this shim is itself host-agnostic.
-_val=""
+# The audit's only other date form: -u -j -f FMT VALUE +%s. Capture BOTH the
+# format and the value the audit actually passed, so this shim exercises the
+# script's real BSD spelling instead of substituting its own. If it dropped the
+# format, a regression in that exact string would ship green -- and the BSD path
+# is the whole of issue #4273, so an inert guard here would defeat the test.
+_fmt=""; _val=""
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = -f ]; then shift; shift; _val=${1:-}; break; fi
+  if [ "$1" = -f ]; then _fmt=${2:-}; _val=${3:-}; break; fi
   shift
 done
 if [ -n "$_val" ]; then
-  /usr/bin/date -u -d "$_val" +%s 2>/dev/null && exit 0
-  /bin/date -u -d "$_val" +%s 2>/dev/null && exit 0
-  /bin/date -u -j -f '%Y-%m-%dT%H:%M:%S' "$_val" +%s 2>/dev/null && exit 0
-  /usr/bin/date -u -j -f '%Y-%m-%dT%H:%M:%S' "$_val" +%s 2>/dev/null && exit 0
+  # A real BSD host has `-j -f`, so honor the format the audit passed: a wrong
+  # format fails here exactly as production would.
+  /bin/date -u -j -f "$_fmt" "$_val" +%s 2>/dev/null && exit 0
+  /usr/bin/date -u -j -f "$_fmt" "$_val" +%s 2>/dev/null && exit 0
+  # A GNU-only runner (the CI gate) has no `-j` to enforce the format, so
+  # recompute via `-d` -- but ONLY for the exact format the audit is supposed to
+  # pass. A regressed format must NOT be rescued by GNU here, or these BSD tests
+  # would go green on a broken spelling on the very runner they are meant to guard.
+  if [ "$_fmt" = '%Y-%m-%dT%H:%M:%S' ]; then
+    /usr/bin/date -u -d "$_val" +%s 2>/dev/null && exit 0
+    /bin/date -u -d "$_val" +%s 2>/dev/null && exit 0
+  fi
 fi
 echo "fake date: unsupported invocation: $*" >&2
 exit 1
