@@ -365,7 +365,7 @@ spec:
         policy.cozystack.io/allow-to-etcd: "true"
     extraContainers:
       - name: talos-csr-signer
-        image: "{{ default (.Files.Get "images/talos-csr-signer.tag" | trim) .Values.images.talosCsrSigner }}"
+        image: "{{ .Files.Get "images/talos-csr-signer.tag" | trim }}"
         imagePullPolicy: IfNotPresent
         ports:
           - name: trustd

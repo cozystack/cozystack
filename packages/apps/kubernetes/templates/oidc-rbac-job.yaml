@@ -144,7 +144,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: bootstrap
-          image: "{{ default (.Files.Get "images/kubectl.tag" | trim) .Values.images.kubectl }}"
+          image: "{{ .Files.Get "images/kubectl.tag" | trim }}"
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -379,7 +379,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cleanup
-          image: "{{ default (.Files.Get "images/kubectl.tag" | trim) .Values.images.kubectl }}"
+          image: "{{ .Files.Get "images/kubectl.tag" | trim }}"
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

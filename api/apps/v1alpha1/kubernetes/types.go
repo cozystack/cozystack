@@ -34,9 +34,6 @@ type ConfigSpec struct {
 	// Kubernetes control-plane configuration.
 	// +kubebuilder:default:={}
 	ControlPlane ControlPlane `json:"controlPlane"`
-	// Optional image overrides for air-gapped or rate-limited registries.
-	// +kubebuilder:default:={}
-	Images Images `json:"images"`
 	// Talos worker image configuration.
 	// +kubebuilder:default:={}
 	Talos Talos `json:"talos"`
@@ -169,18 +166,6 @@ type HAMiAddon struct {
 	// Custom Helm values overrides.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
-}
-
-type Images struct {
-	// Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.
-	// +kubebuilder:default:=""
-	Kubectl string `json:"kubectl,omitempty"`
-	// Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.
-	// +kubebuilder:default:=""
-	TalosCsrSigner string `json:"talosCsrSigner,omitempty"`
-	// Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
-	// +kubebuilder:default:=""
-	WaitForKubeconfig string `json:"waitForKubeconfig,omitempty"`
 }
 
 type IngressNginxAddon struct {

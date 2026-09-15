@@ -43,7 +43,7 @@
   content-hash name suffix over its whole rendered spec (mirrors
   talos-reconcile-job.yaml and the KubevirtMachineTemplate idiom in
   cluster.yaml): an identical render keeps the name and Helm no-ops it;
-  any change that flows into the spec — notably .Values.images.kubectl —
+  any change that flows into the spec — notably a new images/kubectl.tag —
   yields a new name so a fresh Job runs and Helm prunes the old one. The
   hash also folds in the looked-up bootstrap token — both halves,
   bootstrapTokenId and bootstrapTokenSecret — because the token reaches
@@ -100,7 +100,7 @@ spec:
       {{- include "kubernetes.waitForAdminKubeconfig" . | nindent 6 }}
       containers:
         - name: kubectl
-          image: "{{ default (.Files.Get "images/kubectl.tag" | trim) .Values.images.kubectl }}"
+          image: "{{ .Files.Get "images/kubectl.tag" | trim }}"
           env:
             - name: KUBECONFIG
               value: /etc/kubernetes/kubeconfig/super-admin.svc
