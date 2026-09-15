@@ -63,9 +63,13 @@
   # value is a version, as cilium and kubeovn write it), so the fixture
   # exercises every shape the enumeration claims to cover rather than only the
   # single-string one.
+  # `sed -i -E`: on BSD `-i` consumes the next argument as the backup suffix, so
+  # `-E` is eaten and never enables extended syntax — the `\1` backreferences
+  # then refer to groups plain BRE never captured. Route each edit through a temp
+  # file instead; `sed -E` (extended regex) is understood by both GNU and BSD.
   for f in $(grep -rIl 'cozystack/cozystack' "$tmp/packages"); do
-    sed -i -E "s|(cozystack/cozystack/[A-Za-z0-9._-]+):v[0-9]+\.[0-9]+\.[0-9]+@|\1:v${RC}@|g" "$f"
-    sed -i -E "s|^([[:space:]]*tag:[[:space:]]*)v[0-9]+\.[0-9]+\.[0-9]+([[:space:]]*)$|\1v${RC}\2|" "$f"
+    sed -E "s|(cozystack/cozystack/[A-Za-z0-9._-]+):v[0-9]+\.[0-9]+\.[0-9]+@|\1:v${RC}@|g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    sed -E "s|^([[:space:]]*tag:[[:space:]]*)v[0-9]+\.[0-9]+\.[0-9]+([[:space:]]*)$|\1v${RC}\2|" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   done
 
   # Sanity: the fixture must actually contain the rc string, otherwise the
