@@ -39,9 +39,9 @@
 {{- range $name, $db := .Values.databases }}
   {{- $dbDNS := replace "_" "-" $name }}
   {{- $roles := $db.roles | default dict }}
-  {{- $adminUsers := $roles.admin | default (list) }}
+  {{- $adminUsers := $roles.admin | default (list) | uniq }}
   {{- $grantUsers := $adminUsers }}
-  {{- range $user := ($roles.readonly | default (list)) }}
+  {{- range $user := ($roles.readonly | default (list) | uniq) }}
     {{- if not (has $user $adminUsers) }}{{- $grantUsers = append $grantUsers $user }}{{- end }}
   {{- end }}
   {{- range $user := $grantUsers }}
@@ -59,7 +59,7 @@
 {{- range $name, $db := .Values.databases }}
 {{ $dbDNSName := replace "_" "-" $name }}
 {{- $roles := $db.roles | default dict }}
-{{- $adminUsers := $roles.admin | default (list) }}
+{{- $adminUsers := $roles.admin | default (list) | uniq }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Database
@@ -87,7 +87,7 @@ spec:
   username: {{ $user | quote }}
   grantOption: true
 {{- end }}
-{{- range $user := ($roles.readonly | default (list)) }}
+{{- range $user := ($roles.readonly | default (list) | uniq) }}
 {{- if not (has $user $adminUsers) }}
 {{ $userDNSName := replace "_" "-" $user }}
 ---

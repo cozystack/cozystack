@@ -94,6 +94,32 @@ tests:
     asserts:
       - failedTemplate: {}
 
+  # A role list has no uniqueItems in the schema, so admin: [bob, bob] is legal
+  # and rendered harmlessly (one Grant) before this PR. The collision guard must
+  # not treat a user duplicated within one role as a collision with itself and
+  # abort the whole render — dedupe first.
+  - it: renders one Grant for a user listed twice in the same role
+    set:
+      users:
+        bob:
+          maxUserConnections: 10
+      databases:
+        testdb:
+          roles:
+            admin: [bob, bob]
+    asserts:
+      # doc 0 Database, doc 1 the single Grant; no self-collision failure
+      - hasDocuments:
+          count: 2
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: mdb-test-testdb-bob
+      - documentIndex: 1
+        equal:
+          path: spec.privileges[0]
+          value: ALL
+
   - it: renders normally for a valid lowercase database name
     set:
       databases:
