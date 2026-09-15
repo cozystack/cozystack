@@ -14,8 +14,8 @@ spec:
   namespace:
     name: tenant-test
   # Run tests sequentially, matching the current BATS behavior. The bucket
-  # test uses a fixed local port-forward port, so parallelism is unsafe
-  # until ports are made dynamic.
+  # suite uses a fixed local port-forward port in both of its cases, so
+  # parallelism is unsafe until ports are made dynamic.
   execution:
     parallel: 1
   timeouts:
