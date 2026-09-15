@@ -1,5 +1,10 @@
 #!/bin/bash
-# Clean up all resources created by the demo
+# Clean up all resources created by the demo. Non-interactive: safe to call from
+# the e2e harness's finally block, and idempotent (a no-op when a gated-out run
+# created nothing). --ignore-not-found returns success for an absent resource
+# but does NOT mask a stuck delete: the delete still blocks and, under set -e,
+# a teardown that never settles fails this script instead of leaking state into
+# the next run (docs/agents/e2e-testing.md convention 4).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,62 +14,35 @@ TARGET_NAMESPACE="${TARGET_NAMESPACE:-tenant-root-copy}"
 
 print_header "Cleanup Demo Resources"
 
-log_warning "This script will delete all resources created during the demo"
-echo -e "\n${YELLOW}The following will be deleted:${NC}"
-echo "  - RestoreJobs (restore-in-place-test, restore-to-copy-test)"
-echo "  - BackupJob (test-backup) and associated Backup"
-echo "  - VMInstance (test)"
-echo "  - VMDisk (ubuntu-source)"
-echo "  - BackupClass (velero)"
-echo "  - Velero strategies (vminstance-strategy, vmdisk-strategy)"
-echo "  - Target namespace ($TARGET_NAMESPACE)"
-echo ""
-
-read -p "Continue? (y/N): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    log_info "Cancelled"
-    exit 0
-fi
-
-separator
-
+# Namespaced request objects first. Deleting the cozystack BackupJob/RestoreJob
+# and Backup CRs cascades to the Velero Backup/Restore the controller created.
 log_step "Deleting RestoreJobs..."
-kubectl delete restorejob restore-to-copy-test -n "$NAMESPACE" 2>/dev/null || log_warning "RestoreJob restore-to-copy-test not found"
-kubectl delete restorejob restore-in-place-test -n "$NAMESPACE" 2>/dev/null || log_warning "RestoreJob restore-in-place-test not found"
-
-separator
+kubectl delete restorejob restore-to-copy-test restore-in-place-test \
+    -n "$NAMESPACE" --ignore-not-found
 
 log_step "Deleting BackupJob and Backup..."
-kubectl delete backupjob test-backup -n "$NAMESPACE" 2>/dev/null || log_warning "BackupJob test-backup not found"
-kubectl delete backup test-backup -n "$NAMESPACE" 2>/dev/null || log_warning "Backup test-backup not found"
+kubectl delete backupjob test-backup -n "$NAMESPACE" --ignore-not-found
+kubectl delete backup test-backup -n "$NAMESPACE" --ignore-not-found
 
 separator
 
-log_step "Deleting VMInstance..."
-kubectl delete vminstance test -n "$NAMESPACE" 2>/dev/null || log_warning "VMInstance test not found"
-
-log_step "Deleting VMDisk..."
-kubectl delete vmdisk ubuntu-source -n "$NAMESPACE" 2>/dev/null || log_warning "VMDisk ubuntu-source not found"
+log_step "Deleting VMInstance and VMDisk..."
+kubectl delete vminstance test -n "$NAMESPACE" --ignore-not-found
+kubectl delete vmdisk ubuntu-source -n "$NAMESPACE" --ignore-not-found
 
 separator
 
-log_step "Deleting BackupClass..."
-kubectl delete backupclass velero 2>/dev/null || log_warning "BackupClass velero not found"
-
-separator
-
-log_step "Deleting Velero strategies..."
-kubectl delete velero.strategy.backups.cozystack.io vminstance-strategy 2>/dev/null || log_warning "Strategy vminstance-strategy not found"
-kubectl delete velero.strategy.backups.cozystack.io vmdisk-strategy 2>/dev/null || log_warning "Strategy vmdisk-strategy not found"
+# Cluster-scoped BackupClass + strategies.
+log_step "Deleting BackupClass and Velero strategies..."
+kubectl delete backupclass velero --ignore-not-found
+kubectl delete velero.strategy.backups.cozystack.io \
+    vminstance-strategy vmdisk-strategy --ignore-not-found
 
 separator
 
 log_step "Deleting target namespace..."
-kubectl delete namespace "$TARGET_NAMESPACE" 2>/dev/null || log_warning "Namespace $TARGET_NAMESPACE not found"
+kubectl delete namespace "$TARGET_NAMESPACE" --ignore-not-found
 
 separator
 
 log_success "Cleanup complete"
-log_info "All demo resources have been deleted"
-echo -e "\n${GREEN}${BOLD}To re-run the demo:${NC} ./01-create-strategies.sh"

@@ -7,8 +7,13 @@ source "$SCRIPT_DIR/00-helpers.sh"
 
 print_header "Step 3: Create VMDisk"
 
+# Image + size are overridable so the same flow can run a heavy ubuntu demo or a
+# tiny cirros disk for a lightweight e2e (see hack/e2e-chainsaw/vminstance).
+VMI_IMAGE_URL="${VMI_IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}"
+VMI_DISK_STORAGE="${VMI_DISK_STORAGE:-20Gi}"
+
 log_step "Creating VMDisk 'ubuntu-source' in namespace $NAMESPACE..."
-log_info "This will download the Ubuntu Noble cloud image (~700MB)"
+log_info "Importing ${VMI_IMAGE_URL} into a ${VMI_DISK_STORAGE} disk"
 log_command "kubectl apply -f - (VMDisk: ubuntu-source)"
 
 kubectl apply -f - <<EOF
@@ -21,8 +26,8 @@ spec:
   optical: false
   source:
     http:
-      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
-  storage: 20Gi
+      url: ${VMI_IMAGE_URL}
+  storage: ${VMI_DISK_STORAGE}
   storageClass: replicated
 EOF
 
