@@ -54,6 +54,19 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: "--wait=true"
         documentIndex: 0
+      # A non-zero --request-timeout makes kubectl ignore its in-cluster
+      # credentials: client-go consults them only while the assembled config
+      # still equals the default, and the flag lands in that config. The call
+      # then goes to localhost:8080, is refused, and the hook exits 1, which
+      # wedges every uninstall of the release (#4276). Nothing in the rendered
+      # manifest looks wrong, so this assertion is the only thing standing
+      # between that flag and another cluster-only failure. The pattern needs
+      # the "=": the script's own comment names the flag, and matching the bare
+      # name would fail on the explanation rather than on a real use.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "--request-timeout="
+        documentIndex: 0
       # Pinned by shape, not by literal: Renovate rewrites both the tag and the
       # digest under packages/.+/templates/hooks/.+\.yaml and nothing rewrites
       # tests/, so a literal of either turns the next bump red for no defect.
@@ -69,8 +82,23 @@ tests:
       - isKind:
           of: ServiceAccount
         documentIndex: 1
+      # The Job carries no hook-succeeded, so it outlives the hook run. Every
+      # credential it needs has to outlive it too. A ServiceAccount reaped on
+      # hook-succeeded or hook-failed leaves the Job able to start a pod whose
+      # ServiceAccount is gone: the projected volume mounts without a token,
+      # kubectl falls back to localhost:8080, and the uninstall wedges on a hook
+      # that can no longer reach the apiserver. That is #4276, and it reached
+      # main because nothing here compared the two policies.
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+        documentIndex: 1
       - isKind:
           of: Role
+        documentIndex: 2
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
         documentIndex: 2
       - contains:
           path: rules
@@ -81,6 +109,10 @@ tests:
         documentIndex: 2
       - isKind:
           of: RoleBinding
+        documentIndex: 3
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
         documentIndex: 3
       - equal:
           path: roleRef.name
