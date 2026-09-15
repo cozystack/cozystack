@@ -1,0 +1,47 @@
+# ./tests/resources_gomemlimit_test.yaml
+suite: resources goMemLimit helper
+
+# The helper turns a memory limit into a GOMEMLIMIT the Go runtime accepts,
+# at 75% of the limit. Two properties matter and neither is visible from a
+# single value: the result carries the MiB suffix Go parses, and it stays
+# strictly under the limit it protects, whatever unit the quantity came in.
+# A value that came out at or above the limit would leave the runtime with
+# no headroom and the container would still be killed.
+
+templates:
+  - templates/tests/resources-gomemlimit.yaml
+
+tests:
+  - it: takes 75% of the limit and keeps the unit Go parses
+    values:
+      - resources_gomemlimit_values.yaml
+
+    release:
+      name: myrelease
+      namespace: default
+
+    asserts:
+      - equal:
+          path: data.binaryGi
+          value: "6144MiB"
+
+      - equal:
+          path: data.binaryMi
+          value: "384MiB"
+
+      # A decimal quantity is smaller than its binary lookalike: 1G is
+      # 1000000000 bytes, so 75% of it lands below 768MiB.
+      - equal:
+          path: data.decimalG
+          value: "715MiB"
+
+      - equal:
+          path: data.bareBytes
+          value: "768MiB"
+
+      # Integer division floors, so a limit under 4Mi yields 0MiB rather
+      # than a fraction. Go rejects a zero limit, which is the signal that
+      # a component this small has no business carrying one.
+      - equal:
+          path: data.belowOneMiB
+          value: "0MiB"

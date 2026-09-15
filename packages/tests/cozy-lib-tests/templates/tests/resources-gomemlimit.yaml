@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-gomemlimit
+data:
+{{- range $name, $resources := .Values.sanitizedResources }}
+  {{ $name }}: {{ include "cozy-lib.resources.goMemLimit" $resources | quote }}
+{{- end }}

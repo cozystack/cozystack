@@ -1,0 +1,97 @@
+suite: seaweedfs components carry a GOMEMLIMIT derived from their memory limit
+templates:
+  - templates/seaweedfs.yaml
+
+# Every SeaweedFS component is a Go binary. Without GOMEMLIMIT the runtime
+# collects on a relative target and keeps no absolute ceiling, so a burst of
+# allocation grows the heap past the cgroup limit and the kernel kills the
+# container. Each component sizes its own value from its own memory limit,
+# so the assertions below track the limit rather than a fixed string.
+
+tests:
+  - it: derives GOMEMLIMIT from the default preset on every component
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      topology: Simple
+      replicationFactor: 2
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.master.resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.values.seaweedfs.master.extraEnvironmentVars.GOMEMLIMIT
+          value: 384MiB
+      - equal:
+          path: spec.values.seaweedfs.volume.extraEnvironmentVars.GOMEMLIMIT
+          value: 384MiB
+      - equal:
+          path: spec.values.seaweedfs.filer.extraEnvironmentVars.GOMEMLIMIT
+          value: 384MiB
+      - equal:
+          path: spec.values.seaweedfs.s3.extraEnvironmentVars.GOMEMLIMIT
+          value: 384MiB
+
+  - it: follows the memory limit when a component is resized
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      topology: Simple
+      replicationFactor: 2
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      s3:
+        resources:
+          memory: 8Gi
+      volume:
+        resources:
+          memory: 2Gi
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.s3.resources.limits.memory
+          value: 8Gi
+      - equal:
+          path: spec.values.seaweedfs.s3.extraEnvironmentVars.GOMEMLIMIT
+          value: 6144MiB
+      - equal:
+          path: spec.values.seaweedfs.volume.extraEnvironmentVars.GOMEMLIMIT
+          value: 1536MiB
+      - equal:
+          path: spec.values.seaweedfs.master.extraEnvironmentVars.GOMEMLIMIT
+          value: 384MiB
+
+  - it: keeps GOMEMLIMIT below the cgroup limit it protects
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      topology: Simple
+      replicationFactor: 2
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      s3:
+        resources:
+          memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.s3.resources.limits.memory
+          value: 1Gi
+      - equal:
+          path: spec.values.seaweedfs.s3.extraEnvironmentVars.GOMEMLIMIT
+          value: 768MiB

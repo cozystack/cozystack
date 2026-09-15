@@ -1,0 +1,16 @@
+sanitizedResources:
+  binaryGi:
+    limits:
+      memory: "8Gi"
+  binaryMi:
+    limits:
+      memory: "512Mi"
+  decimalG:
+    limits:
+      memory: "1G"
+  bareBytes:
+    limits:
+      memory: "1073741824"
+  belowOneMiB:
+    limits:
+      memory: "1Mi"
