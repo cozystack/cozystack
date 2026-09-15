@@ -273,7 +273,7 @@
       ],
       "properties": {
         "destinationPath": {
-          "description": "Destination path for backups (e.g. s3://bucket/path/).",
+          "description": "Destination path for backups (e.g. s3://bucket/path/). Ignored when useSystemBucket is true (the driver injects the platform bucket).",
           "type": "string",
           "default": "s3://bucket/path/to/folder/"
         },
@@ -283,32 +283,32 @@
           "default": false
         },
         "endpointURL": {
-          "description": "S3 endpoint URL for uploads.",
+          "description": "S3 endpoint URL for uploads. Ignored when useSystemBucket is true (the strategy supplies the platform endpoint).",
           "type": "string",
           "default": "http://minio-gateway-service:9000"
         },
         "insecureSkipTLSVerify": {
-          "description": "Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs).",
+          "description": "Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs). Ignored when useSystemBucket is true (the platform backupStorage knob applies instead).",
           "type": "boolean",
           "default": false
         },
         "retentionPolicy": {
-          "description": "Retention policy (e.g. \"30d\").",
+          "description": "Retention policy (e.g. \"30d\"). Ignored when useSystemBucket is true (no engine-side retention on that flow).",
           "type": "string",
           "default": "30d"
         },
         "s3AccessKey": {
-          "description": "Access key for S3 authentication.",
+          "description": "Access key for S3 authentication. Ignored when useSystemBucket is true (credentials come from the projected cozy-backups-creds).",
           "type": "string",
           "default": ""
         },
         "s3SecretKey": {
-          "description": "Secret key for S3 authentication.",
+          "description": "Secret key for S3 authentication. Ignored when useSystemBucket is true (credentials come from the projected cozy-backups-creds).",
           "type": "string",
           "default": ""
         },
         "schedule": {
-          "description": "Cron schedule for automated backups.",
+          "description": "Cron schedule for automated backups. Ignored when useSystemBucket is true (scheduling moves to the BackupClass Plan).",
           "type": "string",
           "default": "0 2 * * *"
         },

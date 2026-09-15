@@ -162,8 +162,10 @@ tests:
           value: true
         template: templates/strategy-mongodb-default.yaml
       # insecureSkipTLSVerify is plumbed end-to-end (strategy -> driver-injected
-      # storage entry); the template must render it from the platform knob, not
-      # leave it unset (which pins the injected entry to false regardless).
+      # storage entry). This case pins the default (knob off -> false); the
+      # "renders insecureSkipTLSVerify from the platform knob" case below flips
+      # the knob on, so the pair discriminates the rendered value from a
+      # hardcoded literal (either would redden one of the two).
       - equal:
           path: spec.template.s3.insecureSkipTLSVerify
           value: false
@@ -202,6 +204,20 @@ tests:
           path: spec.config.s3ForcePathStyle
           value: "true"
         template: templates/velero-bsl.yaml
+
+  - it: "the MongoDB strategy renders insecureSkipTLSVerify from the platform knob"
+    # Pairs with the default (false) assertion above: with the knob flipped on,
+    # the injected storage entry must carry true. A template that hardcoded either
+    # literal would redden one of the two cases, so together they prove the value
+    # tracks backupStorage.insecureSkipTLSVerify rather than a constant.
+    set:
+      backupStorage.bucketNameOverride: test-bucket
+      backupStorage.insecureSkipTLSVerify: true
+    asserts:
+      - equal:
+          path: spec.template.s3.insecureSkipTLSVerify
+          value: true
+        template: templates/strategy-mongodb-default.yaml
 
   - it: "external S3 (provisionBucket=false): Strategy CRs render against the configured bucketName, no Bucket CR is created"
     set:
