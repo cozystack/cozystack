@@ -24,8 +24,10 @@
 # a read through the API fills in the schema defaults, so a cluster that never
 # set cluster.version would look as if it had and get pinned for no reason.
 #
-# Idempotent: a release that already has version is left alone. A patch carries
-# a test on the cluster.version it read, so a concurrent edit fails the patch.
+# Idempotent: a release that already has version is left alone. A patch tests
+# the values it read, so any concurrent edit to them fails the patch instead of
+# being overwritten. It does not test resourceVersion: helm-controller writes
+# the release status all the time, and that alone would abort the upgrade.
 # Fail-closed on any read or patch error (exit 1 before the stamp) so the new
 # chart does not roll out over a cluster whose version was not carried over.
 # A cluster.version outside those three lines cannot be carried over; it is
@@ -46,12 +48,10 @@ DRY_RUN="${MIGRATION_DRY_RUN:-0}"
 CHART_REF_NAME="cozystack-foundationdb-application-default-foundationdb"
 INLINE_CHART_NAME="foundationdb"
 
-# One line per FoundationDB release that needs attention:
-#   <namespace> <name> carry <version> <cluster.version>
-#   <namespace> <name> unmapped - <cluster.version>
-# Releases are matched by the application label or by the chart they install,
-# since the label postdates some releases (see migration 56).
-plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output json | jq -r \
+# One JSON line per FoundationDB release that needs attention, carrying the
+# values as read. Releases are matched by the application label or by the chart
+# they install, since the label postdates some releases (see migration 56).
+plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output json | jq -c \
   --arg chart "$CHART_REF_NAME" --arg inlinechart "$INLINE_CHART_NAME" '
   .items[]
   | select(
@@ -63,31 +63,35 @@ plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output
   | select(($v.cluster | type) == "object" and ($v.cluster.version | type) == "string" and $v.cluster.version != "")
   | $v.cluster.version as $cv
   | (($cv | capture("^(?<line>7\\.(1|3|4))\\.[0-9]+$") | .line) // null) as $line
-  | if $line then "\(.metadata.namespace) \(.metadata.name) carry v\($line) \($cv)"
-    else "\(.metadata.namespace) \(.metadata.name) unmapped - \($cv)" end')
+  | {ns: .metadata.namespace, name: .metadata.name, cv: $cv, values: $v,
+     version: (if $line then "v\($line)" else null end)}')
 
 CARRIED=0
 UNMAPPED=""
 
-while read -r ns name action version cluster_version; do
-  [ -n "$ns" ] || continue
-  case "$action" in
-    carry)
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
+  ns=$(printf '%s' "$row" | jq -r '.ns')
+  name=$(printf '%s' "$row" | jq -r '.name')
+  cluster_version=$(printf '%s' "$row" | jq -r '.cv')
+  version=$(printf '%s' "$row" | jq -r '.version // ""')
+  case "$version" in
+    v*)
       if [ "$DRY_RUN" = "1" ]; then
         echo "[dry-run] would set version=$version on FoundationDB $ns/$name (cluster.version $cluster_version)"
         CARRIED=$((CARRIED + 1))
         continue
       fi
-      patch=$(jq -cn --arg cv "$cluster_version" --arg v "$version" '[
-        {op: "test", path: "/spec/values/cluster/version", value: $cv},
-        {op: "add", path: "/spec/values/version", value: $v}
+      patch=$(printf '%s' "$row" | jq -c '[
+        {op: "test", path: "/spec/values", value: .values},
+        {op: "add", path: "/spec/values/version", value: .version}
       ]')
       kubectl patch helmreleases.helm.toolkit.fluxcd.io --namespace "$ns" "$name" \
         --type json --patch "$patch" >/dev/null
       echo "Set version=$version on FoundationDB $ns/$name (cluster.version $cluster_version)"
       CARRIED=$((CARRIED + 1))
       ;;
-    unmapped)
+    *)
       echo "WARN: FoundationDB $ns/$name has cluster.version $cluster_version, which is not on a supported line (7.1, 7.3, 7.4); it will render the v7.3 default after the upgrade" >&2
       UNMAPPED="${UNMAPPED}${UNMAPPED:+,}${ns}/${name}=${cluster_version}"
       ;;
