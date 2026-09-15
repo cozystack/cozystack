@@ -159,20 +159,23 @@ psql_exec() {
 # Service), forcing password authentication. psql_exec above connects as the
 # in-pod postgres superuser through the local socket (peer auth) and so never
 # exercises a user's password; only this path proves the password the
-# <release>-credentials Secret advertises actually authenticates. The password
-# is read from that chart-managed Secret; the bracket jsonpath form tolerates a
-# '.' in the username. The chart names the CNPG Cluster, the -rw Service and the
-# credentials Secret all after the release, so the cluster IS the release here -
-# derive the Secret from it rather than taking a separate name that a caller can
-# get wrong (a release/app-name mix-up read a Secret that never exists and made
-# every login time out). Args: <cluster> <user> <db> <sql>
+# <release>-credentials Secret advertises actually authenticates. The password is
+# read from that chart-managed Secret with jq, not a jsonpath: a username may
+# contain a '.', and jsonpath's `{.data['a.b']}` treats the dot as a path step
+# and returns nothing, so a dotted user would read an empty password and time out
+# on a credential that is fine. jq indexes the key as a literal string. The chart
+# names the CNPG Cluster, the -rw Service and the credentials Secret all after the
+# release, so the cluster IS the release here - derive the Secret from it rather
+# than taking a separate name that a caller can get wrong (a release/app-name
+# mix-up read a Secret that never exists and made every login time out).
+# Args: <cluster> <user> <db> <sql>
 psql_app_exec() {
     local cluster="$1" user="$2" db="$3" sql="$4"
     local pod pw
     pod=$(cnpg_primary_pod "$cluster")
     [[ -n "$pod" ]] || { log_error "no primary pod for cnpg cluster '$cluster'"; return 1; }
-    pw=$(kubectl -n "$NAMESPACE" get secret "${cluster}-credentials" \
-        -o "jsonpath={.data['${user}']}" | base64 -d)
+    pw=$(kubectl -n "$NAMESPACE" get secret "${cluster}-credentials" -o json \
+        | jq -r --arg u "$user" '.data[$u] // empty' | base64 -d)
     [[ -n "$pw" ]] || { log_error "no password for user '${user}' in ${cluster}-credentials"; return 1; }
     kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
         env PGPASSWORD="$pw" psql -h "${cluster}-rw" -U "$user" -d "$db" -tAc "$sql"
