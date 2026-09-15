@@ -1,0 +1,31 @@
+{{- range .Values.tracingStorages }}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: vtraces-{{ .name }}
+spec:
+  datasource:
+    access: proxy
+    # VictoriaTraces serves a Jaeger Query Service API on its select component;
+    # `jaeger` is a built-in Grafana datasource (no plugin install needed,
+    # unlike the logs datasource). Ports/paths are per upstream docs
+    # (https://docs.victoriametrics.com/victoriatraces/querying/grafana/):
+    #   cluster -> vtselect  :10471/select/jaeger
+    #   single  -> vtsingle  :10428/select/jaeger
+    # Service names follow the operator's vt-prefix convention (as vlselect-*
+    # for VLCluster). VictoriaTraces also serves a Tempo Query API
+    # (/select/tempo, Grafana `tempo` datasource, v0.9.4+) with richer TraceQL
+    # UX, but that surface is upstream-experimental, so the stable Jaeger API is
+    # the default here.
+    type: jaeger
+    name: vtraces-{{ .name }}
+    {{- if eq (.mode | default "cluster") "single" }}
+    url: http://vtsingle-{{ .name }}.{{ $.Release.Namespace }}.svc:10428/select/jaeger
+    {{- else }}
+    url: http://vtselect-{{ .name }}.{{ $.Release.Namespace }}.svc:10471/select/jaeger
+    {{- end }}
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+{{- end }}

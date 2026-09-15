@@ -1,0 +1,88 @@
+{{- /*
+  tracingStorages is empty by default, so tracing is off out of the box and no
+  VTCluster/VTSingle is provisioned. Unlike logsStorages, an absent backend
+  drops no data here: nothing produces spans until the trace collector ships (a
+  later PR), so there is no loud-failure guard yet. The collector PR re-adds a
+  fail-on-empty guard — at that point an enabled producer with no backend really
+  would drop spans, exactly as the logsStorages #3181 guard prevents for logs.
+  The readiness-gate healthCheckExprs on VTCluster/VTSingle stay unconditional:
+  Flux evaluates them only against CRs present in the release inventory, so with
+  nothing rendered they are inert.
+*/ -}}
+{{- range .Values.tracingStorages }}
+{{- $mode := .mode | default "cluster" }}
+{{- if and (ne $mode "cluster") (ne $mode "single") }}
+{{- fail (printf "monitoring: tracingStorages[%s].mode must be either \"cluster\" or \"single\"" .name) }}
+{{- end }}
+---
+{{- if eq $mode "single" }}
+apiVersion: operator.victoriametrics.com/v1
+kind: VTSingle
+metadata:
+  name: {{ .name }}
+spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  retentionPeriod: {{ .retentionPeriod | quote }}
+  {{- with .retentionDiskUsageBytes }}
+  retentionMaxDiskSpaceUsageBytes: {{ . | quote }}
+  {{- end }}
+  # Stamped on the storage PVC so the monitoring post-delete cleanup hook can
+  # select it by this label (same release-scoped cleanup as logs/metrics).
+  storageMetadata:
+    labels:
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  storage:
+    {{- with .storageClassName }}
+    storageClassName: {{ . }}
+    {{- end }}
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: {{ .storage }}
+{{- else }}
+apiVersion: operator.victoriametrics.com/v1
+kind: VTCluster
+metadata:
+  name: {{ .name }}
+spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  insert:
+    replicaCount: 2
+    resources: {}
+  select:
+    replicaCount: 2
+    resources: {}
+  storage:
+    retentionPeriod: {{ .retentionPeriod | quote }}
+    {{- with .retentionDiskUsageBytes }}
+    retentionMaxDiskSpaceUsageBytes: {{ . | quote }}
+    {{- end }}
+    replicaCount: 2
+    resources: {}
+    storage:
+      volumeClaimTemplate:
+        metadata:
+          # Stamped on the claim template so vm-operator copies it onto the
+          # storage PVCs; managedMetadata is not applied to PVCs. The monitoring
+          # post-delete cleanup hook selects PVCs by this label to stay
+          # release-scoped (mirrors vlogs/vmcluster).
+          labels:
+            apps.cozystack.io/application.name: {{ $.Release.Name }}
+        spec:
+          {{- with .storageClassName }}
+          storageClassName: {{ . }}
+          {{- end }}
+          resources:
+            requests:
+              storage: {{ .storage }}
+{{- end }}
+{{- end }}
