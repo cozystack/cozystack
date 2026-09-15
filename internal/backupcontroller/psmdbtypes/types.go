@@ -8,9 +8,13 @@
 //
 // The driver reads PerconaServerMongoDB for an existence/backup-enabled gate,
 // creates PerconaServerMongoDBBackup CRs on the BackupJob path, and creates
-// PerconaServerMongoDBRestore CRs on the RestoreJob path. It never patches the
-// operator CRs, so the partial specs below only carry the fields the driver
-// writes; unknown fields are preserved by the server on any merge patch.
+// PerconaServerMongoDBRestore CRs on the RestoreJob path. On the useSystemBucket
+// flow it also server-side-applies spec.backup.storages onto the live
+// PerconaServerMongoDB (storage injection) and strips its own delete-backup
+// finalizer from a PerconaServerMongoDBBackup on teardown. These partial specs
+// carry only the fields the driver reads or writes; unknown fields are preserved
+// by the server on any apply/merge patch, so injecting one subtree never drops
+// the storage the operator resolved from the rest of the object.
 //
 // +groupName=psmdb.percona.com
 // +versionName=v1

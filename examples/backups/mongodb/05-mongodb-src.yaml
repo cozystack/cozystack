@@ -4,8 +4,11 @@
 # when the cluster has the percona-backup-mongodb agents running and a storage
 # declared — that is what `backup.enabled: true` wires up. The cozystack
 # backup-strategy driver names that storage ("s3-storage", the one the chart
-# declares) via the cozy-default-mongodb Strategy; it does NOT inject storage
-# into the cluster, so unlike MariaDB the application must opt into backups.
+# declares) via the cozy-default-mongodb Strategy. This example uses the default
+# flow, where the application owns the storage and the driver does not inject it
+# — so, unlike MariaDB, the application must opt into backups. (Set
+# backup.useSystemBucket: true instead to have the driver inject the platform
+# system-bucket storage; see docs/operations/backup-classes.md.)
 #
 # The bucket coordinates (destinationPath / endpointURL / s3AccessKey /
 # s3SecretKey) point the storage at the Bucket provisioned in 00-bucket.yaml.
