@@ -83,6 +83,29 @@ tests:
           value: "1.3.20"
         documentIndex: 0
 
+  - it: leaves the image to the operator even when values carry an image override
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      images:
+        opensearch: registry.example.test/opensearch:6.6.6
+      dashboards:
+        enabled: true
+    asserts:
+      - notExists:
+          path: spec.general.image
+        documentIndex: 0
+      - notExists:
+          path: spec.dashboards.image
+        documentIndex: 0
+      - equal:
+          path: spec.general.version
+          value: "2.11.1"
+        documentIndex: 0
+
   #####################
   # General           #
   #####################
