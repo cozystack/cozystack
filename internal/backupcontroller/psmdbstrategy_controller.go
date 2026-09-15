@@ -729,10 +729,13 @@ func (r *BackupJobReconciler) createMongoDBBackupArtifact(
 // drivers.
 //
 // The wait is bounded by give-up conditions, so a wedged operator never pins a
-// tenant namespace in Terminating: when the namespace is going away (the psmdb
-// delete-backup exec cannot run there) or the escape-hatch annotation is set,
-// the driver strips its own finalizer and releases, leaving the object for a
-// bucket lifecycle policy to reclaim.
+// tenant namespace in Terminating: the escape-hatch annotation (honoured before
+// any apiserver read, so it still frees a Backup whose operator CR has become
+// unreadable) and a going-away namespace (the psmdb delete-backup exec cannot
+// run there) each make the driver strip its own finalizer and release, leaving
+// the object for a bucket lifecycle policy to reclaim. A down operator in a live
+// namespace is NOT auto-released: the Backup stays Terminating as a visible
+// signal until an operator recovers or the annotation is set.
 func (r *BackupReconciler) cleanupMongoDBBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
 	sourceBackupName := backup.Spec.DriverMetadata[psmdbBackupNameKey]
 	if sourceBackupName == "" {
@@ -740,11 +743,23 @@ func (r *BackupReconciler) cleanupMongoDBBackup(ctx context.Context, backup *bac
 		return ctrl.Result{}, nil
 	}
 
+	// Escape hatch first, before any apiserver read: the Backup must be releasable
+	// even when the operator CR cannot be read at all — its CRD removed, or the
+	// verb revoked — which is exactly the situation someone sets it in. Mirrors
+	// the Redis cleanup, which reads its skip annotation before it touches the
+	// apiserver.
+	if backup.Annotations[psmdbSkipArtifactCleanupAnnotation] == "true" {
+		return r.releaseMongoDBCleanup(ctx, backup, sourceBackupName, "skip-artifact-cleanup annotation set")
+	}
+
 	live := &psmdbtypes.PerconaServerMongoDBBackup{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: sourceBackupName}, live)
-	if apierrors.IsNotFound(err) {
-		// The operator CR is gone: a driver-owned archive was pruned with it (the
-		// finalizer ran), and a legacy CR that is gone was nothing of ours. Release.
+	if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+		// The operator CR is gone (a driver-owned archive was pruned with it, and
+		// a legacy CR that is gone was nothing of ours), or its CRD is no longer
+		// served (nothing to strip when the kind itself is unmapped). Release.
+		// Classifying NoMatchError alongside NotFound matches the Job/Redis
+		// cleanups.
 		return ctrl.Result{}, nil
 	}
 	if err != nil {
@@ -762,10 +777,7 @@ func (r *BackupReconciler) cleanupMongoDBBackup(ctx context.Context, backup *bac
 		return ctrl.Result{}, nsErr
 	}
 	if terminating {
-		return r.releaseMongoDBCleanup(ctx, backup, live, "namespace is terminating")
-	}
-	if backup.Annotations[psmdbSkipArtifactCleanupAnnotation] == "true" {
-		return r.releaseMongoDBCleanup(ctx, backup, live, "skip-artifact-cleanup annotation set")
+		return r.releaseMongoDBCleanup(ctx, backup, sourceBackupName, "namespace is terminating")
 	}
 
 	if live.DeletionTimestamp.IsZero() {
@@ -781,26 +793,28 @@ func (r *BackupReconciler) cleanupMongoDBBackup(ctx context.Context, backup *bac
 }
 
 // releaseMongoDBCleanup gives up pruning the archive and lets the Cozystack
-// Backup (and any enclosing namespace) finish deleting: it strips the driver's
-// delete-backup finalizer from the operator CR so the CR no longer blocks
-// teardown, best-effort deletes that CR, and records a Warning naming the object
-// left in the bucket. Mirrors the Redis/Rabbitmq release path — the prune is
-// best-effort, not guaranteed.
-func (r *BackupReconciler) releaseMongoDBCleanup(ctx context.Context, backup *backupsv1alpha1.Backup, live *psmdbtypes.PerconaServerMongoDBBackup, reason string) (ctrl.Result, error) {
-	if controllerutil.ContainsFinalizer(live, psmdbDeleteBackupFinalizer) {
-		base := live.DeepCopy()
-		controllerutil.RemoveFinalizer(live, psmdbDeleteBackupFinalizer)
-		if err := r.Patch(ctx, live, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, err
+// Backup (and any enclosing namespace) finish deleting: best-effort, it strips
+// the driver's delete-backup finalizer from the operator CR so the CR no longer
+// blocks teardown and deletes that CR, then records a Warning naming the object
+// left in the bucket. Every apiserver step is best-effort — a failed read or
+// write is swallowed — because the caller reaches here precisely to let a wedged
+// Backup go, and must never be blocked by the same unreachable CR. Takes the CR
+// name rather than a fetched object so it works on the annotation path, which
+// runs before any read. Mirrors the Redis/Rabbitmq release path.
+func (r *BackupReconciler) releaseMongoDBCleanup(ctx context.Context, backup *backupsv1alpha1.Backup, sourceBackupName, reason string) (ctrl.Result, error) {
+	live := &psmdbtypes.PerconaServerMongoDBBackup{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: sourceBackupName}, live); err == nil {
+		if controllerutil.ContainsFinalizer(live, psmdbDeleteBackupFinalizer) {
+			base := live.DeepCopy()
+			controllerutil.RemoveFinalizer(live, psmdbDeleteBackupFinalizer)
+			_ = r.Patch(ctx, live, client.MergeFrom(base))
 		}
-	}
-	if live.DeletionTimestamp.IsZero() {
-		if derr := r.Delete(ctx, live); derr != nil && !apierrors.IsNotFound(derr) {
-			return ctrl.Result{}, derr
+		if live.DeletionTimestamp.IsZero() {
+			_ = r.Delete(ctx, live)
 		}
 	}
 	getLogger(ctx).Info("releasing MongoDB Backup without pruning its object",
-		"backup", backup.Name, "sourceBackup", live.Name, "reason", reason)
+		"backup", backup.Name, "sourceBackup", sourceBackupName, "reason", reason)
 	if r.Recorder != nil {
 		r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactNotDeleted",
 			"left MongoDB archive in the bucket: %s", reason)

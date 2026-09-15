@@ -9,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -1461,6 +1462,49 @@ func TestCleanupMongoDBBackup(t *testing.T) {
 		err = c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-bk"}, got)
 		if err == nil && controllerutil.ContainsFinalizer(got, psmdbDeleteBackupFinalizer) {
 			t.Errorf("teardown must strip the finalizer so the namespace can finish; still present: %v", got.Finalizers)
+		}
+	})
+
+	// A client whose Get on the operator CR hard-fails the way a missing CRD or a
+	// revoked verb does — NoKindMatchError / an arbitrary error — models the case
+	// the escape hatch exists for. The annotation must free the Backup without
+	// depending on that read, and a bare NoMatchError must be treated as "gone".
+	failingGetClient := func(getErr error) client.Client {
+		s := runtime.NewScheme()
+		_ = scheme.AddToScheme(s)
+		_ = backupsv1alpha1.AddToScheme(s)
+		_ = psmdbtypes.AddToScheme(s)
+		return clientfake.NewClientBuilder().
+			WithScheme(s).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*psmdbtypes.PerconaServerMongoDBBackup); ok {
+						return getErr
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
+	}
+	noMatch := &apimeta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "psmdb.percona.com", Kind: "PerconaServerMongoDBBackup"}}
+
+	t.Run("skip annotation releases even when the operator CR is unreadable", func(t *testing.T) {
+		// The verb is revoked (Forbidden): the escape hatch runs before the Get, so
+		// it must still release rather than propagate the read error and wedge.
+		c := failingGetClient(apierrors.NewForbidden(schema.GroupResource{Group: "psmdb.percona.com", Resource: "perconaservermongodbbackups"}, "op-bk", errors.New("rbac revoked")))
+		r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(map[string]string{psmdbSkipArtifactCleanupAnnotation: "true"}))
+		if err != nil || res.RequeueAfter != 0 {
+			t.Fatalf("annotation must release despite an unreadable operator CR, got res=%+v err=%v", res, err)
+		}
+	})
+
+	t.Run("a missing CRD (NoMatchError) releases instead of wedging", func(t *testing.T) {
+		c := failingGetClient(noMatch)
+		r := &BackupReconciler{Client: c}
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(nil))
+		if err != nil || res.RequeueAfter != 0 {
+			t.Fatalf("NoMatchError must be treated as gone and release, got res=%+v err=%v", res, err)
 		}
 	})
 }
