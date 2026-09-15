@@ -86,10 +86,29 @@ spec:
           workdir=$(mktemp -d)
           trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
 
+          # Cap every S3 and apiserver call at its own deadline. A chainsaw
+          # `script` op runs the shell under exec.CommandContext with stdout and
+          # stderr wired to in-process buffers
+          # (pkg/engine/operations/script/operation.go): when the op `timeout`
+          # fires it SIGKILLs the shell alone — not its descendants — and
+          # cmd.Wait() does not return until every process that inherited those
+          # pipe fds has closed them. An mc left retrying a slow S3 call after
+          # the shell is gone keeps that pipe open, so the op runs past its
+          # declared ceiling instead of being cut at it (#4268: this step ran
+          # 606s under a 300s ceiling). Per-command caps stop any single call
+          # outliving its budget, so a hang fails fast and legibly and the op
+          # `timeout` stays a backstop whose inner budgets (2×30 + 10×15 + the
+          # 30s port-forward wait = 240s) sit under its 5m ceiling. mc and kubectl
+          # both exit on SIGTERM, matching the caps already carried by the redis
+          # suite (`k`) and _lib/backup-access-preflight.sh (`mc`). timeout execs
+          # its argument directly, so these wrappers do not recurse.
+          k()  { timeout 30 kubectl "$@"; }
+          mc() { timeout 15 mc "$@"; }
+
           # Extract credentials for both users
-          kubectl -n "$NAMESPACE" get secret bucket-test-admin \
+          k -n "$NAMESPACE" get secret bucket-test-admin \
             -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/admin.json"
-          kubectl -n "$NAMESPACE" get secret bucket-test-viewer \
+          k -n "$NAMESPACE" get secret bucket-test-viewer \
             -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/viewer.json"
           ADMIN_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/admin.json")
           ADMIN_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/admin.json")
