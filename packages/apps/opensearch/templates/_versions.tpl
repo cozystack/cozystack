@@ -1,13 +1,7 @@
-{{/*
-Version mapping helper
-Loads version mapping from files/versions.yaml and returns the full version for a given major version
-*/}}
-{{- define "opensearch.versionMap" -}}
-{{- $versions := .Files.Get "files/versions.yaml" | fromYaml -}}
-{{- $version := .Values.version | default "v2" -}}
-{{- if hasKey $versions $version -}}
-{{- index $versions $version -}}
-{{- else -}}
-{{- fail (printf "Invalid version '%s'. Available versions: %s" $version (keys $versions | join ", ")) -}}
-{{- end -}}
-{{- end -}}
+{{- define "opensearch.versionMap" }}
+{{- $versionMap := .Files.Get "files/versions.yaml" | fromYaml }}
+{{- if not (hasKey $versionMap .Values.version) }}
+    {{- printf `OpenSearch version %s is not supported, allowed versions are %s` $.Values.version (keys $versionMap | sortAlpha) | fail }}
+{{- end }}
+{{- index $versionMap .Values.version }}
+{{- end }}
