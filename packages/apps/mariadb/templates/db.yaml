@@ -20,6 +20,36 @@
   {{- end }}
   {{- $_ := set $seenDBDNS $dbDNS $name }}
 {{- end }}
+
+{{/*
+  The Grant CR name is the join <release>-<dbDNS>-<userDNS>-<role>, so two
+  DIFFERENT (database, user) pairs whose "-"/"_" split differently collide on one
+  Grant even when each database and each username is individually unique and
+  valid — e.g. (database "a", user "b-c") and (database "a-b", user "c") both
+  render <release>-a-b-c-admin, and one silently overwrites the other at apply,
+  dropping a privilege the tenant configured. The per-field guards above cannot
+  see this; track the whole rendered Grant name and reject a collision.
+*/}}
+{{- $seenGrant := dict }}
+{{- range $name, $db := .Values.databases }}
+  {{- $dbDNS := replace "_" "-" $name }}
+  {{- range $user := $db.roles.admin }}
+    {{- $g := printf "%s-%s-%s-admin" $.Release.Name $dbDNS (replace "_" "-" $user) }}
+    {{- $desc := printf "(database %q, user %q, admin)" $name $user }}
+    {{- if hasKey $seenGrant $g }}
+      {{- fail (printf "the Grant resource name %q is produced by both %s and %s (\"_\" renders as \"-\"); rename a database or user so their Grants do not collide" $g (index $seenGrant $g) $desc) }}
+    {{- end }}
+    {{- $_ := set $seenGrant $g $desc }}
+  {{- end }}
+  {{- range $user := $db.roles.readonly }}
+    {{- $g := printf "%s-%s-%s-readonly" $.Release.Name $dbDNS (replace "_" "-" $user) }}
+    {{- $desc := printf "(database %q, user %q, readonly)" $name $user }}
+    {{- if hasKey $seenGrant $g }}
+      {{- fail (printf "the Grant resource name %q is produced by both %s and %s (\"_\" renders as \"-\"); rename a database or user so their Grants do not collide" $g (index $seenGrant $g) $desc) }}
+    {{- end }}
+    {{- $_ := set $seenGrant $g $desc }}
+  {{- end }}
+{{- end }}
 {{- range $name, $db := .Values.databases }}
 {{ $dbDNSName := replace "_" "-" $name }}
 ---

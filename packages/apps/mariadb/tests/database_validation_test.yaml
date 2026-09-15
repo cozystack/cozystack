@@ -53,6 +53,30 @@ tests:
       - failedTemplate:
           errorMessage: 'database names "a-b" and "a_b" both map to the Database resource name "mdb-test-a-b" ("_" renders as "-"); rename one of them'
 
+  # The Grant CR name is the join <release>-<dbDNS>-<userDNS>-<role>, so two
+  # different (database, user) pairs that split the "-"/"_" differently collide
+  # on one Grant even when each database and each username is individually unique
+  # and valid. Per-field guards miss this join; the guard must track the whole
+  # rendered Grant name. Here (db "a", user "b-c") and (db "a-b", user "c") both
+  # render mdb-test-a-b-c-admin.
+  - it: fails when two (database,user) admin grants collide on one Grant name
+    set:
+      users:
+        b-c:
+          maxUserConnections: 10
+        c:
+          maxUserConnections: 10
+      databases:
+        a:
+          roles:
+            admin: [b-c]
+        a-b:
+          roles:
+            admin: [c]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'the Grant resource name "mdb-test-a-b-c-admin" is produced by both (database "a", user "b-c", admin) and (database "a-b", user "c", admin) ("_" renders as "-"); rename a database or user so their Grants do not collide'
+
   - it: renders normally for a valid lowercase database name
     set:
       databases:
