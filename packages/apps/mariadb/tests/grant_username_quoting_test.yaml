@@ -27,11 +27,13 @@ set:
   users:
     "123":
       maxUserConnections: 10
+    "456":
+      maxUserConnections: 10
   databases:
     db1:
       roles:
         admin: ["123"]
-        readonly: ["123"]
+        readonly: ["456"]
 
 tests:
   - it: keeps the admin Grant username the string "123"
@@ -47,7 +49,7 @@ tests:
           path: spec.username
           value: "123"
 
-  - it: keeps the readonly Grant username the string "123"
+  - it: keeps the readonly Grant username the string "456"
     documentIndex: 2
     asserts:
       - equal:
@@ -58,7 +60,7 @@ tests:
           value: SELECT
       - equal:
           path: spec.username
-          value: "123"
+          value: "456"
 
   # A database name is subject to the same YAML-1.1 coercion: bare, a numeric
   # name loads as an integer on the Database CR and the Grant, so they name a
@@ -90,10 +92,12 @@ tests:
           path: spec.database
           value: "123"
 
-  # A user in both admin and readonly of one database rendered two Grant CRs
-  # under one metadata.name, so one silently overwrote the other on apply and a
-  # privilege set went missing. The names must be distinct.
-  - it: gives the admin and readonly Grants of one user distinct names
+  # A user in both admin and readonly of one database must render a SINGLE Grant,
+  # named <release>-<db>-<user> with no role suffix (renaming a Grant on upgrade
+  # makes the operator revoke the live privilege). The admin grant wins (ALL is a
+  # superset of the readonly SELECT); the readonly grant is skipped, so there is
+  # no same-name collision to disambiguate.
+  - it: renders a single unsuffixed admin Grant for a user in both roles
     set:
       users:
         app:
@@ -104,11 +108,14 @@ tests:
             admin: [app]
             readonly: [app]
     asserts:
+      # doc 0 Database, doc 1 the one Grant; only two documents (no readonly Grant)
+      - hasDocuments:
+          count: 2
       - documentIndex: 1
         equal:
           path: metadata.name
-          value: mdb-test-db1-app-admin
-      - documentIndex: 2
+          value: mdb-test-db1-app
+      - documentIndex: 1
         equal:
-          path: metadata.name
-          value: mdb-test-db1-app-readonly
+          path: spec.privileges[0]
+          value: ALL

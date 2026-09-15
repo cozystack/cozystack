@@ -22,28 +22,34 @@
 {{- end }}
 
 {{/*
-  The Grant CR name is the join <release>-<dbDNS>-<userDNS>-<role>, so two
-  DIFFERENT (database, user) pairs whose "-"/"_" split differently collide on one
-  Grant even when each database and each username is individually unique and
-  valid — e.g. (database "a", user "b-c") and (database "a-b", user "c") both
-  render <release>-a-b-c-admin, and one silently overwrites the other at apply,
-  dropping a privilege the tenant configured. The per-field guards above cannot
-  see this; track the whole rendered Grant name and reject a collision.
+  The Grant CR name is <release>-<dbDNS>-<userDNS>. Two DIFFERENT (database, user)
+  pairs whose "-"/"_" split differently collide there — (database "a", user "b-c")
+  and (database "a-b", user "c") both render <release>-a-b-c — and one silently
+  overwrites the other at apply, dropping a privilege the tenant configured. A
+  user in both admin and readonly of one database would also collide with itself;
+  that user needs only the admin grant (ALL is a superset of the readonly SELECT),
+  so the readonly grant is SKIPPED for them rather than the name role-scoped —
+  role-scoping renames the Grant, and renaming a Grant on upgrade makes the
+  operator revoke the tenant's live privilege while the old CR is pruned. Track
+  the whole rendered Grant name plus its length (the apiserver caps a resource
+  name at 253) and reject a collision or an over-long name here rather than let it
+  fail opaquely at apply.
 */}}
 {{- $seenGrant := dict }}
 {{- range $name, $db := .Values.databases }}
   {{- $dbDNS := replace "_" "-" $name }}
-  {{- range $user := $db.roles.admin }}
-    {{- $g := printf "%s-%s-%s-admin" $.Release.Name $dbDNS (replace "_" "-" $user) }}
-    {{- $desc := printf "(database %q, user %q, admin)" $name $user }}
-    {{- if hasKey $seenGrant $g }}
-      {{- fail (printf "the Grant resource name %q is produced by both %s and %s (\"_\" renders as \"-\"); rename a database or user so their Grants do not collide" $g (index $seenGrant $g) $desc) }}
-    {{- end }}
-    {{- $_ := set $seenGrant $g $desc }}
+  {{- $roles := $db.roles | default dict }}
+  {{- $adminUsers := $roles.admin | default (list) }}
+  {{- $grantUsers := $adminUsers }}
+  {{- range $user := ($roles.readonly | default (list)) }}
+    {{- if not (has $user $adminUsers) }}{{- $grantUsers = append $grantUsers $user }}{{- end }}
   {{- end }}
-  {{- range $user := $db.roles.readonly }}
-    {{- $g := printf "%s-%s-%s-readonly" $.Release.Name $dbDNS (replace "_" "-" $user) }}
-    {{- $desc := printf "(database %q, user %q, readonly)" $name $user }}
+  {{- range $user := $grantUsers }}
+    {{- $g := printf "%s-%s-%s" $.Release.Name $dbDNS (replace "_" "-" $user) }}
+    {{- if gt (len $g) 253 }}
+      {{- fail (printf "the Grant resource name %q for (database %q, user %q) exceeds the 253-character limit Kubernetes puts on a resource name; shorten the database or user name" $g $name $user) }}
+    {{- end }}
+    {{- $desc := printf "(database %q, user %q)" $name $user }}
     {{- if hasKey $seenGrant $g }}
       {{- fail (printf "the Grant resource name %q is produced by both %s and %s (\"_\" renders as \"-\"); rename a database or user so their Grants do not collide" $g (index $seenGrant $g) $desc) }}
     {{- end }}
@@ -52,6 +58,8 @@
 {{- end }}
 {{- range $name, $db := .Values.databases }}
 {{ $dbDNSName := replace "_" "-" $name }}
+{{- $roles := $db.roles | default dict }}
+{{- $adminUsers := $roles.admin | default (list) }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Database
@@ -63,16 +71,13 @@ spec:
     name: {{ $.Release.Name }}
   characterSet: utf8
   collate: utf8_general_ci
-{{- range $user := $db.roles.admin }}
+{{- range $user := $adminUsers }}
 {{ $userDNSName := replace "_" "-" $user }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Grant
 metadata:
-  # Scope the name by role: a user in both admin and readonly of one database
-  # would otherwise render two Grant CRs under one metadata.name, and one would
-  # silently overwrite the other on apply.
-  name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}-admin
+  name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}
 spec:
   mariaDbRef:
     name: {{ $.Release.Name }}
@@ -82,13 +87,18 @@ spec:
   username: {{ $user | quote }}
   grantOption: true
 {{- end }}
-{{- range $user := $db.roles.readonly }}
+{{- range $user := ($roles.readonly | default (list)) }}
+{{- if not (has $user $adminUsers) }}
 {{ $userDNSName := replace "_" "-" $user }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Grant
 metadata:
-  name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}-readonly
+  # No -readonly suffix: the Grant name must not change from the merge base, or
+  # the operator revokes the live privilege as the renamed CR is pruned on
+  # upgrade. A user also in admin gets ALL and is skipped above, so there is no
+  # same-name collision to disambiguate.
+  name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}
 spec:
   mariaDbRef:
     name: {{ $.Release.Name }}
@@ -97,6 +107,7 @@ spec:
   table: "*"
   username: {{ $user | quote }}
   grantOption: true
+{{- end }}
 {{- end }}
 
 {{- end }}

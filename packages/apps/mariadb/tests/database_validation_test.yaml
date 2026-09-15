@@ -75,7 +75,24 @@ tests:
             admin: [c]
     asserts:
       - failedTemplate:
-          errorMessage: 'the Grant resource name "mdb-test-a-b-c-admin" is produced by both (database "a", user "b-c", admin) and (database "a-b", user "c", admin) ("_" renders as "-"); rename a database or user so their Grants do not collide'
+          errorMessage: 'the Grant resource name "mdb-test-a-b-c" is produced by both (database "a", user "b-c") and (database "a-b", user "c") ("_" renders as "-"); rename a database or user so their Grants do not collide'
+
+  # The Grant name <release>-<db>-<user> is longer than the Database name
+  # <release>-<db>, so a database name that passes the Database length check (<=253)
+  # can still push the Grant name over 253. Both sibling guards check length; the
+  # Grant guard must too. Here the 240-char db gives a 249-char Database (accepted)
+  # and a 255-char Grant (rejected).
+  - it: fails when the Grant name exceeds 253 characters though the Database name fits
+    set:
+      users:
+        user1:
+          maxUserConnections: 10
+      databases:
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:
+          roles:
+            admin: [user1]
+    asserts:
+      - failedTemplate: {}
 
   - it: renders normally for a valid lowercase database name
     set:
