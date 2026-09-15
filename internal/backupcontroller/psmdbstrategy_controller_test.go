@@ -11,12 +11,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -1189,6 +1191,120 @@ func TestReconcileMongoDB_InjectsSystemStorageBeforePrecondition(t *testing.T) {
 	}
 }
 
+// mongodbInjectFixture builds the four objects reconcileMongoDB needs to reach
+// the injection point on the useSystemBucket flow, parameterised on the live
+// cluster's backup.enabled.
+func mongodbInjectFixture(enabled bool) (*backupsv1alpha1.BackupJob, *strategyv1alpha1.MongoDB, *mongodbapp.MongoDB, *psmdbtypes.PerconaServerMongoDB, *ResolvedBackupConfig) {
+	apps := mongodbapp.GroupName
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	now := metav1.Now()
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-inj"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "app1", APIGroup: &apps},
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now},
+	}
+	strategy := &strategyv1alpha1.MongoDB{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-mongodb"},
+		Spec: strategyv1alpha1.MongoDBSpec{Template: strategyv1alpha1.MongoDBTemplate{
+			StorageName: "s3-storage",
+			Type:        "logical",
+			S3: &strategyv1alpha1.MongoDBStorageS3{
+				Bucket: "cozy-backups", EndpointURL: "https://s3.example",
+				Prefix: "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}", CredentialsSecret: "cozy-backups-creds",
+			},
+		}},
+	}
+	app := &mongodbapp.MongoDB{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "app1"},
+		Spec:       mongodbapp.MongoDBSpec{Backup: mongodbapp.MongoDBBackupSpec{UseSystemBucket: true}},
+	}
+	cluster := &psmdbtypes.PerconaServerMongoDB{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-app1"},
+		Spec:       psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{Enabled: enabled}},
+	}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.MongoDBStrategyKind, Name: "cozy-default-mongodb"},
+		Parameters:  map[string]string{},
+	}
+	return job, strategy, app, cluster, resolved
+}
+
+// A cluster that can never service a backup (backup.enabled=false) must not be
+// mutated: injection is gated on Enabled so the disabled cluster fails the
+// precondition on the enabled check without the driver having written storage
+// onto it.
+func TestReconcileMongoDB_DisabledClusterNotMutated(t *testing.T) {
+	job, strategy, app, cluster, resolved := mongodbInjectFixture(false)
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+
+	res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+	if err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected a waiting requeue for a disabled cluster, got %+v", res)
+	}
+	got := &psmdbtypes.PerconaServerMongoDB{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "mongodb-app1"}, got); err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	if len(got.Spec.Backup.Storages) != 0 {
+		t.Errorf("disabled cluster must not be injected, got storages %#v", got.Spec.Backup.Storages)
+	}
+	list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("no operator Backup should be created for a disabled cluster, got %d", len(list.Items))
+	}
+}
+
+// A server-side apply that fails transiently (apiserver hiccup, operator
+// conflict) must requeue with backoff, not fail the BackupJob terminally. Before
+// the fix the injection error went straight to markBackupJobFailed, so one
+// transient apply killed the backup.
+func TestReconcileMongoDB_InjectApplyErrorRequeues(t *testing.T) {
+	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = strategyv1alpha1.AddToScheme(s)
+	_ = psmdbtypes.AddToScheme(s)
+	_ = mongodbapp.AddToScheme(s)
+	c := clientfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(job, strategy, app, cluster).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, ok := obj.(*psmdbtypes.PerconaServerMongoDB); ok {
+					return apierrors.NewConflict(schema.GroupResource{Group: "psmdb.percona.com", Resource: "perconaservermongodbs"}, obj.GetName(), errors.New("racing the operator"))
+				}
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+
+	_, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+	if err == nil {
+		t.Fatal("expected a transient error so the caller requeues, got nil")
+	}
+	// The BackupJob must NOT be marked Failed by a transient apply error.
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "bj-inj"}, persisted); err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if persisted.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("a transient inject error must not fail the BackupJob terminally")
+	}
+}
+
 // resolveMongoDBBackupSource must fill an S3 block the live operator status
 // omits from the snapshot: on the useSystemBucket flow the operator can report
 // status.destination with status.s3 empty (the storage was injected, not
@@ -1244,75 +1360,107 @@ func TestResolveMongoDBBackupSource_LiveMissingS3BackfillsFromSnapshot(t *testin
 // ---------------------------------------------------------------------------
 
 func TestCleanupMongoDBBackup(t *testing.T) {
-	newBackup := func(md map[string]string, ann map[string]string) *backupsv1alpha1.Backup {
+	md := map[string]string{psmdbBackupNameKey: "op-bk"}
+	newBackup := func(ann map[string]string) *backupsv1alpha1.Backup {
 		return &backupsv1alpha1.Backup{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cozy-bk", Annotations: ann},
 			Spec:       backupsv1alpha1.BackupSpec{DriverMetadata: md},
 		}
 	}
-	opBackup := func() *psmdbtypes.PerconaServerMongoDBBackup {
-		return &psmdbtypes.PerconaServerMongoDBBackup{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-bk", Finalizers: []string{psmdbDeleteBackupFinalizer}},
+	// The delete-backup finalizer is the ownership marker: present = the driver
+	// owns the shared-bucket archive; absent = legacy (tenant bucket).
+	opBackup := func(finalized bool) *psmdbtypes.PerconaServerMongoDBBackup {
+		b := &psmdbtypes.PerconaServerMongoDBBackup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-bk"},
 		}
+		if finalized {
+			b.Finalizers = []string{psmdbDeleteBackupFinalizer}
+		}
+		return b
+	}
+	liveNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
+	getOp := func(t *testing.T, c client.Client) *psmdbtypes.PerconaServerMongoDBBackup {
+		got := &psmdbtypes.PerconaServerMongoDBBackup{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-bk"}, got); err != nil {
+			t.Fatalf("get operator CR: %v", err)
+		}
+		return got
 	}
 
-	t.Run("legacy backup is a no-op (tenant owns the archive)", func(t *testing.T) {
-		c := newMongoDBStrategyTestClient(t, opBackup())
+	t.Run("legacy backup (no finalizer) is a no-op", func(t *testing.T) {
+		c := newMongoDBStrategyTestClient(t, opBackup(false), liveNamespace)
 		r := &BackupReconciler{Client: c}
-		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(map[string]string{psmdbBackupNameKey: "op-bk"}, nil))
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(nil))
 		if err != nil || res.RequeueAfter != 0 {
 			t.Fatalf("legacy cleanup must be a no-op, got res=%+v err=%v", res, err)
 		}
-		// The operator CR must be untouched (no delete issued).
-		got := &psmdbtypes.PerconaServerMongoDBBackup{}
-		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-bk"}, got); err != nil {
-			t.Fatalf("operator CR should be untouched: %v", err)
-		}
-		if !got.DeletionTimestamp.IsZero() {
+		if !getOp(t, c).DeletionTimestamp.IsZero() {
 			t.Errorf("legacy cleanup must not delete the operator CR")
 		}
 	})
 
-	t.Run("system-bucket backup deletes the operator CR and waits", func(t *testing.T) {
-		c := newMongoDBStrategyTestClient(t, opBackup())
+	t.Run("owned archive deletes the operator CR and waits", func(t *testing.T) {
+		c := newMongoDBStrategyTestClient(t, opBackup(true), liveNamespace)
 		r := &BackupReconciler{Client: c}
-		md := map[string]string{psmdbBackupNameKey: "op-bk", psmdbUseSystemBucketKey: "true"}
-		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(md, nil))
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(nil))
 		if err != nil {
 			t.Fatalf("cleanupMongoDBBackup: %v", err)
 		}
 		if res.RequeueAfter == 0 {
 			t.Fatalf("expected a requeue while the operator prunes the archive, got %+v", res)
 		}
-		// The delete-backup finalizer holds the CR Terminating until the operator
-		// prunes the object; the driver must keep waiting, not release early.
-		got := &psmdbtypes.PerconaServerMongoDBBackup{}
-		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-bk"}, got); err != nil {
-			t.Fatalf("operator CR should still exist under its finalizer: %v", err)
-		}
+		// The finalizer holds the CR Terminating until the operator prunes; the
+		// driver keeps its finalizer and waits, it does not strip it here.
+		got := getOp(t, c)
 		if got.DeletionTimestamp.IsZero() {
 			t.Errorf("expected the operator CR to be marked for deletion")
 		}
+		if !controllerutil.ContainsFinalizer(got, psmdbDeleteBackupFinalizer) {
+			t.Errorf("driver must keep the finalizer while waiting, so the operator can prune")
+		}
 	})
 
-	t.Run("operator CR already gone releases (finalizer pruned the archive)", func(t *testing.T) {
-		c := newMongoDBStrategyTestClient(t)
+	t.Run("operator CR already gone releases", func(t *testing.T) {
+		c := newMongoDBStrategyTestClient(t, liveNamespace)
 		r := &BackupReconciler{Client: c}
-		md := map[string]string{psmdbBackupNameKey: "op-bk", psmdbUseSystemBucketKey: "true"}
-		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(md, nil))
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(nil))
 		if err != nil || res.RequeueAfter != 0 {
 			t.Fatalf("a reaped operator CR must release, got res=%+v err=%v", res, err)
 		}
 	})
 
-	t.Run("skip annotation releases without waiting", func(t *testing.T) {
-		c := newMongoDBStrategyTestClient(t, opBackup())
-		r := &BackupReconciler{Client: c}
-		md := map[string]string{psmdbBackupNameKey: "op-bk", psmdbUseSystemBucketKey: "true"}
-		ann := map[string]string{psmdbSkipArtifactCleanupAnnotation: "true"}
-		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(md, ann))
+	t.Run("skip annotation strips the finalizer and releases", func(t *testing.T) {
+		c := newMongoDBStrategyTestClient(t, opBackup(true), liveNamespace)
+		r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(map[string]string{psmdbSkipArtifactCleanupAnnotation: "true"}))
 		if err != nil || res.RequeueAfter != 0 {
 			t.Fatalf("skip annotation must release, got res=%+v err=%v", res, err)
+		}
+		// Releasing strips our finalizer so the CR can be reaped (in the fake
+		// client, with no finalizer left, the best-effort delete removes it): the
+		// escape hatch actually unwedges. Tolerate either "gone" or "present
+		// without our finalizer".
+		got := &psmdbtypes.PerconaServerMongoDBBackup{}
+		err = c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-bk"}, got)
+		if err == nil && controllerutil.ContainsFinalizer(got, psmdbDeleteBackupFinalizer) {
+			t.Errorf("release must strip the delete-backup finalizer; still present: %v", got.Finalizers)
+		}
+	})
+
+	t.Run("terminating namespace strips the finalizer and releases (no wedge)", func(t *testing.T) {
+		// No namespace object seeded → namespaceTerminating reports true, the
+		// teardown case. The driver must not requeue forever waiting on an
+		// operator that can no longer prune; it strips its finalizer and releases.
+		c := newMongoDBStrategyTestClient(t, opBackup(true))
+		r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(nil))
+		if err != nil || res.RequeueAfter != 0 {
+			t.Fatalf("teardown must release, not wedge; got res=%+v err=%v", res, err)
+		}
+		got := &psmdbtypes.PerconaServerMongoDBBackup{}
+		err = c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-bk"}, got)
+		if err == nil && controllerutil.ContainsFinalizer(got, psmdbDeleteBackupFinalizer) {
+			t.Errorf("teardown must strip the finalizer so the namespace can finish; still present: %v", got.Finalizers)
 		}
 	})
 }
