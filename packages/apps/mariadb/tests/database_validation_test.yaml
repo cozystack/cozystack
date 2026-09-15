@@ -1,0 +1,155 @@
+suite: db.yaml rejects a database name that cannot install
+
+# A database name becomes the Database CR spec.name and (via "_"->"-") the
+# Database CR metadata.name <release>-<name>, plus each Grant's database and
+# metadata.name. Kubernetes requires that resource name to be a DNS-1123
+# subdomain, and two names differing only in "_" vs "-" collide on one Database
+# CR. Names that break these render fine today and fail opaquely at apply — the
+# same class the username guard already catches. Mirror it for databases.
+# Reverting the guard in db.yaml turns the reject tests green (render succeeds).
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: mdb-test
+  namespace: tenant-test
+
+set:
+  users:
+    app:
+      maxUserConnections: 10
+
+tests:
+  - it: fails for an uppercase database name (invalid Database CR name)
+    set:
+      databases:
+        My.Db:
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "My.Db": it also names the Database resource "mdb-test-My.Db", which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, "-" and ".", starting and ending with a letter or digit); use a lowercase name without a leading or trailing "-" or "."'
+
+  - it: fails for a database name with a trailing "-"
+    set:
+      databases:
+        foo-:
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate: {}
+
+  - it: fails for two database names that collide after the "_"->"-" mapping
+    set:
+      databases:
+        a_b:
+          roles:
+            admin: [app]
+        a-b:
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database names "a-b" and "a_b" both map to the Database resource name "mdb-test-a-b" ("_" renders as "-"); rename one of them'
+
+  # The Grant CR name is the join <release>-<dbDNS>-<userDNS>-<role>, so two
+  # different (database, user) pairs that split the "-"/"_" differently collide
+  # on one Grant even when each database and each username is individually unique
+  # and valid. Per-field guards miss this join; the guard must track the whole
+  # rendered Grant name. Here (db "a", user "b-c") and (db "a-b", user "c") both
+  # render mdb-test-a-b-c-admin.
+  - it: fails when two (database,user) admin grants collide on one Grant name
+    set:
+      users:
+        b-c:
+          maxUserConnections: 10
+        c:
+          maxUserConnections: 10
+      databases:
+        a:
+          roles:
+            admin: [b-c]
+        a-b:
+          roles:
+            admin: [c]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'the Grant resource name "mdb-test-a-b-c" is produced by both (database "a", user "b-c") and (database "a-b", user "c") ("_" renders as "-"); rename a database or user so their Grants do not collide'
+
+  # The Grant name <release>-<db>-<user> is longer than the Database name
+  # <release>-<db>, so a database name that passes the Database length check (<=253)
+  # can still push the Grant name over 253. Both sibling guards check length; the
+  # Grant guard must too. Here the 240-char db gives a 249-char Database (accepted)
+  # and a 255-char Grant (rejected).
+  - it: fails when the Grant name exceeds 253 characters though the Database name fits
+    set:
+      users:
+        user1:
+          maxUserConnections: 10
+      databases:
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:
+          roles:
+            admin: [user1]
+    asserts:
+      - failedTemplate: {}
+
+  # A role list has no uniqueItems in the schema, so admin: [bob, bob] is legal
+  # and rendered harmlessly (one Grant) before this PR. The collision guard must
+  # not treat a user duplicated within one role as a collision with itself and
+  # abort the whole render — dedupe first.
+  - it: renders one Grant for a user listed twice in the same role
+    set:
+      users:
+        bob:
+          maxUserConnections: 10
+      databases:
+        testdb:
+          roles:
+            admin: [bob, bob]
+    asserts:
+      # doc 0 Database, doc 1 the single Grant; no self-collision failure
+      - hasDocuments:
+          count: 2
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: mdb-test-testdb-bob
+      - documentIndex: 1
+        equal:
+          path: spec.privileges[0]
+          value: ALL
+
+  # A name in databases.<db>.roles.admin/readonly is NOT one of .Values.users,
+  # so it never passes the username guard in secret.yaml, yet it forms the Grant
+  # CR name <release>-<db>-<user>. A member outside the DNS-1123 charset (here
+  # "Weird.User!") renders a Grant name the apiserver rejects opaquely — the
+  # class the guards exist to close. The Grant guard must check the charset too,
+  # not only the length.
+  - it: fails for a role member that is not a valid DNS-1123 name
+    set:
+      users:
+        gooduser:
+          maxUserConnections: 10
+      databases:
+        mydb:
+          roles:
+            admin: ["Weird.User!"]
+    asserts:
+      - failedTemplate: {}
+
+  - it: renders normally for a valid lowercase database name
+    set:
+      databases:
+        mydb:
+          roles:
+            admin: [app]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Database
+      - documentIndex: 0
+        equal:
+          path: spec.name
+          value: mydb

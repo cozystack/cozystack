@@ -1,17 +1,80 @@
+{{/*
+  A database name also names Kubernetes resources: the Database CR
+  {{ .Release.Name }}-{{ replace "_" "-" $name }} and, under it, each Grant. So
+  the same DNS-1123 rule and "_"/"-" collision that the username guard enforces
+  apply here — a name like "My.Db" or "foo-" renders but the apiserver rejects
+  the Database CR with an opaque error, and two names differing only in "_" vs
+  "-" collide on one Database CR (one silently overwrites the other). Reject both
+  at render time, mirroring the username guard in secret.yaml. Database names are
+  not Secret keys, so the DNS-1123 name is the binding rule.
+*/}}
+{{- $seenDBDNS := dict }}
+{{- range $name, $db := .Values.databases }}
+  {{- $crName := printf "%s-%s" $.Release.Name (replace "_" "-" $name) }}
+  {{- if or (gt (len $crName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $crName)) }}
+    {{- fail (printf "invalid database name %q: it also names the Database resource %q, which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, \"-\" and \".\", starting and ending with a letter or digit); use a lowercase name without a leading or trailing \"-\" or \".\"" $name $crName) }}
+  {{- end }}
+  {{- $dbDNS := replace "_" "-" $name }}
+  {{- if hasKey $seenDBDNS $dbDNS }}
+    {{- fail (printf "database names %q and %q both map to the Database resource name %q (\"_\" renders as \"-\"); rename one of them" (index $seenDBDNS $dbDNS) $name (printf "%s-%s" $.Release.Name $dbDNS)) }}
+  {{- end }}
+  {{- $_ := set $seenDBDNS $dbDNS $name }}
+{{- end }}
+
+{{/*
+  The Grant CR name is <release>-<dbDNS>-<userDNS>. Two DIFFERENT (database, user)
+  pairs whose "-"/"_" split differently collide there — (database "a", user "b-c")
+  and (database "a-b", user "c") both render <release>-a-b-c — and one silently
+  overwrites the other at apply, dropping a privilege the tenant configured. A
+  user in both admin and readonly of one database would also collide with itself;
+  that user needs only the admin grant (ALL is a superset of the readonly SELECT),
+  so the readonly grant is SKIPPED for them rather than the name role-scoped —
+  role-scoping renames the Grant, and renaming a Grant on upgrade makes the
+  operator revoke the tenant's live privilege while the old CR is pruned. Track
+  the whole rendered Grant name plus its length (the apiserver caps a resource
+  name at 253) and reject a collision or an over-long name here rather than let it
+  fail opaquely at apply.
+*/}}
+{{- $seenGrant := dict }}
+{{- range $name, $db := .Values.databases }}
+  {{- $dbDNS := replace "_" "-" $name }}
+  {{- $roles := $db.roles | default dict }}
+  {{- $adminUsers := $roles.admin | default (list) | uniq }}
+  {{- $grantUsers := $adminUsers }}
+  {{- range $user := ($roles.readonly | default (list) | uniq) }}
+    {{- if not (has $user $adminUsers) }}{{- $grantUsers = append $grantUsers $user }}{{- end }}
+  {{- end }}
+  {{- range $user := $grantUsers }}
+    {{- $g := printf "%s-%s-%s" $.Release.Name $dbDNS (replace "_" "-" $user) }}
+    {{- if gt (len $g) 253 }}
+      {{- fail (printf "the Grant resource name %q for (database %q, user %q) exceeds the 253-character limit Kubernetes puts on a resource name; shorten the database or user name" $g $name $user) }}
+    {{- end }}
+    {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $g) }}
+      {{- fail (printf "invalid role member %q for database %q: it names the Grant resource %q, which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, \"-\" and \".\", starting and ending with a letter or digit). A name in databases.<db>.roles.admin/readonly is not one of .Values.users, so the username guard never sees it - use a lowercase name without special characters" $user $name $g) }}
+    {{- end }}
+    {{- $desc := printf "(database %q, user %q)" $name $user }}
+    {{- if hasKey $seenGrant $g }}
+      {{- fail (printf "the Grant resource name %q is produced by both %s and %s (\"_\" renders as \"-\"); rename a database or user so their Grants do not collide" $g (index $seenGrant $g) $desc) }}
+    {{- end }}
+    {{- $_ := set $seenGrant $g $desc }}
+  {{- end }}
+{{- end }}
 {{- range $name, $db := .Values.databases }}
 {{ $dbDNSName := replace "_" "-" $name }}
+{{- $roles := $db.roles | default dict }}
+{{- $adminUsers := $roles.admin | default (list) | uniq }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Database
 metadata:
   name: {{ $.Release.Name }}-{{ $dbDNSName }}
 spec:
-  name: {{ $name }}
+  name: {{ $name | quote }}
   mariaDbRef:
     name: {{ $.Release.Name }}
   characterSet: utf8
   collate: utf8_general_ci
-{{- range $user := $db.roles.admin }}
+{{- range $user := $adminUsers }}
 {{ $userDNSName := replace "_" "-" $user }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
@@ -22,26 +85,32 @@ spec:
   mariaDbRef:
     name: {{ $.Release.Name }}
   privileges: ['ALL']
-  database: {{ $name }}
+  database: {{ $name | quote }}
   table: "*"
-  username: {{ $user }}
+  username: {{ $user | quote }}
   grantOption: true
 {{- end }}
-{{- range $user := $db.roles.readonly }}
+{{- range $user := ($roles.readonly | default (list) | uniq) }}
+{{- if not (has $user $adminUsers) }}
 {{ $userDNSName := replace "_" "-" $user }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Grant
 metadata:
+  # No -readonly suffix: the Grant name must not change from the merge base, or
+  # the operator revokes the live privilege as the renamed CR is pruned on
+  # upgrade. A user also in admin gets ALL and is skipped above, so there is no
+  # same-name collision to disambiguate.
   name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}
 spec:
   mariaDbRef:
     name: {{ $.Release.Name }}
   privileges: ['SELECT']
-  database: {{ $name }}
+  database: {{ $name | quote }}
   table: "*"
-  username: {{ $user }}
+  username: {{ $user | quote }}
   grantOption: true
+{{- end }}
 {{- end }}
 
 {{- end }}

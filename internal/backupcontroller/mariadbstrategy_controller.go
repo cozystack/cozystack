@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -302,6 +303,10 @@ func (r *BackupJobReconciler) ensureMariaDBBackup(ctx context.Context, j *backup
 			Compression:  rendered.Compression,
 			LogLevel:     rendered.LogLevel,
 			MaxRetention: rendered.MaxRetention.DeepCopy(),
+			// Keep the source's grant table out of the dump so a restore into a
+			// copy leaves the target's chart-managed users and root intact (see
+			// BackupSpec.IgnoreGlobalPriv).
+			IgnoreGlobalPriv: ptr.To(true),
 		},
 	}
 

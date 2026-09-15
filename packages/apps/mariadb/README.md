@@ -203,15 +203,14 @@ Uninstalling the instance does this for you; only the turn-it-off-and-keep-runni
 
 ### Application-specific parameters
 
-| Name                             | Description                              | Type                | Value |
-| -------------------------------- | ---------------------------------------- | ------------------- | ----- |
-| `users`                          | Users configuration map.                 | `map[string]object` | `{}`  |
-| `users[name].password`           | Password for the user.                   | `string`            | `""`  |
-| `users[name].maxUserConnections` | Maximum number of connections.           | `int`               | `0`   |
-| `databases`                      | Databases configuration map.             | `map[string]object` | `{}`  |
-| `databases[name].roles`          | Roles assigned to users.                 | `object`            | `{}`  |
-| `databases[name].roles.admin`    | List of users with admin privileges.     | `[]string`          | `[]`  |
-| `databases[name].roles.readonly` | List of users with read-only privileges. | `[]string`          | `[]`  |
+| Name                             | Description                                                                                                                                                                                                                                                                                                                                                       | Type                | Value |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----- |
+| `users`                          | Users configuration map. Passwords (including the `root` account) are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the chart; the live password lives only in the Secret. | `map[string]object` | `{}`  |
+| `users[name].maxUserConnections` | Maximum number of connections.                                                                                                                                                                                                                                                                                                                                    | `int`               | `0`   |
+| `databases`                      | Databases configuration map.                                                                                                                                                                                                                                                                                                                                      | `map[string]object` | `{}`  |
+| `databases[name].roles`          | Roles assigned to users.                                                                                                                                                                                                                                                                                                                                          | `object`            | `{}`  |
+| `databases[name].roles.admin`    | List of users with admin privileges.                                                                                                                                                                                                                                                                                                                              | `[]string`          | `[]`  |
+| `databases[name].roles.readonly` | List of users with read-only privileges.                                                                                                                                                                                                                                                                                                                          | `[]string`          | `[]`  |
 
 
 ### Backup parameters (DEPRECATED)
@@ -255,11 +254,11 @@ See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-pr
 users:
   user1:
     maxUserConnections: 1000
-    password: hackme
   user2:
     maxUserConnections: 1000
-    password: hackme
 ```
+
+Passwords cannot be set here — they (and the `root` account) are auto-generated and stored in the `<release>-credentials` Secret. Read a user's password with `kubectl get secret <release>-credentials -o jsonpath='{.data.user1}' | base64 -d`.
 
 
 ### databases

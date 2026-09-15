@@ -42,7 +42,7 @@ type ConfigSpec struct {
 	// MariaDB major.minor version to deploy
 	// +kubebuilder:default:="v11.8"
 	Version Version `json:"version"`
-	// Users configuration map.
+	// Users configuration map. Passwords (including the `root` account) are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the chart; the live password lives only in the Secret.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
 	// Databases configuration map.
@@ -110,8 +110,6 @@ type TLS struct {
 type User struct {
 	// Maximum number of connections.
 	MaxUserConnections int `json:"maxUserConnections"`
-	// Password for the user.
-	Password string `json:"password"`
 }
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"

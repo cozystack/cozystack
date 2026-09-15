@@ -31,11 +31,10 @@ export BACKUPCLASS_NAME="${BACKUPCLASS_NAME:-mariadb-default}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-mariadb-src-adhoc}"
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-mariadb-src-to-mariadb-target}"
 export PLAN_NAME="${PLAN_NAME:-mariadb-src-daily}"
-# App user password baked into 05-mariadb-src.yaml / 30-mariadb-target.yaml
-# (REPLACE_WITH_PASSWORD). The demo writes and reads the sentinel row as this
-# user, so both the source and the target chart specs declare it.
+# App user the demo writes and reads the sentinel row as. Its password is
+# chart-generated (the charts no longer accept a plaintext password) and read
+# from the release's <cr>-credentials Secret by mysql_exec at call time.
 export MARIADB_APP_USER="${MARIADB_APP_USER:-app}"
-export MARIADB_PASSWORD="${MARIADB_PASSWORD:-Xai7Wepo0aeThie8}"
 
 # S3 endpoint CA. cozystack's default seaweedfs serves its S3 endpoint with a
 # self-signed certificate whose CA lives in this Secret; the demo copies its
@@ -154,9 +153,29 @@ mariadb_primary_pod() {
 # Args: <cr-name> <sql>
 mysql_exec() {
     local cr="$1" sql="$2"
-    local pod
+    local pod pass
     pod=$(mariadb_primary_pod "$cr")
     [[ -n "$pod" ]] || { log_error "no primary pod for MariaDB CR '$cr'"; return 1; }
+    pass=$(kubectl -n "$NAMESPACE" get secret "${cr}-credentials" \
+        -o "jsonpath={.data['${MARIADB_APP_USER}']}" | base64 -d)
+    [[ -n "$pass" ]] || { log_error "no password for '$MARIADB_APP_USER' in ${cr}-credentials"; return 1; }
     kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
-        mariadb -u"$MARIADB_APP_USER" -p"$MARIADB_PASSWORD" -h "${cr}-primary" -e "$sql"
+        mariadb -u"$MARIADB_APP_USER" -p"$pass" -h "${cr}-primary" -e "$sql"
+}
+
+# Authenticate as root against a MariaDB CR's primary over TCP, using the
+# chart-generated root password in <cr>-credentials. root is the sharp edge on a
+# restore into a copy: the operator only applies rootPasswordSecretKeyRef at
+# datadir bootstrap, so if a restore overwrote the grant table with the source's
+# root hash the target's advertised root would be wrong for good. Args: <cr-name>
+mysql_root_login() {
+    local cr="$1"
+    local pod pass
+    pod=$(mariadb_primary_pod "$cr")
+    [[ -n "$pod" ]] || { log_error "no primary pod for MariaDB CR '$cr'"; return 1; }
+    pass=$(kubectl -n "$NAMESPACE" get secret "${cr}-credentials" \
+        -o "jsonpath={.data['root']}" | base64 -d)
+    [[ -n "$pass" ]] || { log_error "no root password in ${cr}-credentials"; return 1; }
+    kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
+        mariadb -uroot -p"$pass" -h "${cr}-primary" -e "SELECT 1;"
 }

@@ -230,19 +230,15 @@ autoscaling:
 ##
 
 ## @typedef {struct} User - User configuration.
-## @field {string} [password] - Password for the user.
 ## @field {bool} [replication] - Whether the user has replication privileges.
 
-## @param {map[string]User} users - Users configuration map.
+## @param {map[string]User} users - Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the chart; the live password lives only in the Secret.
 users: {}
 ## Example:
 ## users:
-##   user1:
-##     password: strongpassword
-##   user2:
-##     password: hackme
-##   airflow:
-##     password: qwerty123
+##   user1: {}
+##   user2: {}
+##   airflow: {}
 ##   debezium:
 ##     replication: true
 

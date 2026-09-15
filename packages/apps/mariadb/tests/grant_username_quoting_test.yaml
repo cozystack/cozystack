@@ -1,0 +1,121 @@
+suite: Grant CR quotes the username so a YAML-special name stays a string
+
+# The Grant CR's spec.username must match the User CR's spec.name and the Secret
+# key, which user.yaml/secret.yaml already quote. Emitted bare, a username that
+# is a YAML-special scalar decodes to the wrong type: Kubernetes reads manifests
+# through sigs.k8s.io/yaml (YAML 1.1), where a numeric name like 123 becomes an
+# integer and a name like "on" becomes a boolean, so the Grant names a value the
+# User CR (string) does not, and the privilege is silently never applied.
+#
+# A numeric name is used deliberately: helm-unittest's own loader keeps a bare
+# "on" as the string "on" (it does not apply YAML 1.1 booleans), so only a
+# numeric exercises the coercion here — bare 123 loads as the integer 123, the
+# quoted form as the string "123". Asserting the string form pins the quoting;
+# dropping "| quote" in db.yaml loads it as an integer and turns this red.
+#
+# Document order from db.yaml for one database granting one user admin+readonly:
+#   0 Database, 1 Grant(ALL/admin), 2 Grant(SELECT/readonly).
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: mdb-test
+  namespace: tenant-test
+
+set:
+  users:
+    "123":
+      maxUserConnections: 10
+    "456":
+      maxUserConnections: 10
+  databases:
+    db1:
+      roles:
+        admin: ["123"]
+        readonly: ["456"]
+
+tests:
+  - it: keeps the admin Grant username the string "123"
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: kind
+          value: Grant
+      - equal:
+          path: spec.privileges[0]
+          value: ALL
+      - equal:
+          path: spec.username
+          value: "123"
+
+  - it: keeps the readonly Grant username the string "456"
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: Grant
+      - equal:
+          path: spec.privileges[0]
+          value: SELECT
+      - equal:
+          path: spec.username
+          value: "456"
+
+  # A database name is subject to the same YAML-1.1 coercion: bare, a numeric
+  # name loads as an integer on the Database CR and the Grant, so they name a
+  # database that is not the one asked for. Quote both.
+  - it: keeps the Database and Grant database name the string "123"
+    set:
+      users:
+        app:
+          maxUserConnections: 10
+      databases:
+        "123":
+          roles:
+            admin: [app]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Database
+      - documentIndex: 0
+        equal:
+          path: spec.name
+          value: "123"
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: Grant
+      - documentIndex: 1
+        equal:
+          path: spec.database
+          value: "123"
+
+  # A user in both admin and readonly of one database must render a SINGLE Grant,
+  # named <release>-<db>-<user> with no role suffix (renaming a Grant on upgrade
+  # makes the operator revoke the live privilege). The admin grant wins (ALL is a
+  # superset of the readonly SELECT); the readonly grant is skipped, so there is
+  # no same-name collision to disambiguate.
+  - it: renders a single unsuffixed admin Grant for a user in both roles
+    set:
+      users:
+        app:
+          maxUserConnections: 10
+      databases:
+        db1:
+          roles:
+            admin: [app]
+            readonly: [app]
+    asserts:
+      # doc 0 Database, doc 1 the one Grant; only two documents (no readonly Grant)
+      - hasDocuments:
+          count: 2
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: mdb-test-db1-app
+      - documentIndex: 1
+        equal:
+          path: spec.privileges[0]
+          value: ALL

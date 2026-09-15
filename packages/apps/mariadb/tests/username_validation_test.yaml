@@ -1,0 +1,126 @@
+suite: secret rejects a username outside the safe charset
+
+# A MariaDB username becomes a Kubernetes Secret data key, the spec.name of a
+# mariadb-operator User CR, and (with "_" mapped to "-") the User CR's own
+# metadata.name. A name outside the Secret-key charset renders a Secret and a
+# User the apiserver later rejects with an opaque error; ".", ".." and names
+# over 253 chars match the charset yet k8s IsConfigMapKey still rejects them.
+# Postgres already guards this at render time; MariaDB must too, for parity and
+# to name the offending username instead of failing opaquely at apply. There is
+# no shell interpolation here (the operator applies the SQL), so this is a
+# diagnosability guard, not an injection fix. Reverting the guard in secret.yaml
+# turns the first test green (render succeeds), the mutation signal that this
+# suite is not vacuous.
+
+templates:
+  - templates/secret.yaml
+
+release:
+  name: mdb-test
+  namespace: tenant-test
+
+tests:
+  - it: fails the render for a username with a space
+    set:
+      users:
+        'a b':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "a b": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and the name of a mariadb-operator User resource)'
+
+  - it: fails the render for a username with a slash
+    set:
+      users:
+        'a/b':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate: {}
+
+  - it: fails the render for the reserved name "."
+    set:
+      users:
+        '.':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username ".": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and the name of a mariadb-operator User resource)'
+
+  - it: fails the render for the reserved name ".."
+    set:
+      users:
+        '..':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate: {}
+
+  # IsConfigMapKey rejects ANY name starting with ".." (hasChDirPrefix), not just
+  # the literal "..", so "..foo" is charset-legal yet cannot install.
+  - it: fails the render for a name starting with ".."
+    set:
+      users:
+        '..foo':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "..foo": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it becomes a Kubernetes Secret key and the name of a mariadb-operator User resource)'
+
+  - it: fails the render for a username longer than 253 characters
+    set:
+      users:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate: {}
+
+  # The username also names the User CR (<release>-<name>, "_"->"-"), which k8s
+  # requires to be a DNS-1123 subdomain: lowercase, alnum start/end. These pass
+  # the Secret-key charset but the User CR name is invalid, so they cannot install
+  # and must be named at render time rather than failing opaquely at apply.
+  - it: fails the render for an uppercase username (invalid User CR name)
+    set:
+      users:
+        Bob:
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "Bob": it also names the mariadb-operator User resource "mdb-test-Bob", which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, "-" and ".", starting and ending with a letter or digit); use a lowercase name without a leading or trailing "-" or "."'
+
+  - it: fails the render for a username with a trailing "-" (invalid User CR name)
+    set:
+      users:
+        'foo-':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate: {}
+
+  - it: fails the render for a username with a trailing "." (invalid User CR name)
+    set:
+      users:
+        'foo.':
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate: {}
+
+  # "a_b" and "a-b" both render the User CR name <release>-a-b ("_" -> "-"), so
+  # one silently overwrites the other on apply. The guard must reject the pair.
+  - it: fails the render when two usernames collide after the "_"->"-" mapping
+    set:
+      users:
+        a_b:
+          maxUserConnections: 10
+        a-b:
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'usernames "a-b" and "a_b" both map to the User resource name "mdb-test-a-b" ("_" renders as "-"); rename one of them'
+
+  - it: renders normally for names using the full safe charset (root always added)
+    set:
+      users:
+        a-b.c_1:
+          maxUserConnections: 10
+    asserts:
+      - matchRegex:
+          path: stringData["a-b.c_1"]
+          pattern: ^[a-zA-Z0-9]{16}$
