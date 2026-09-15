@@ -353,6 +353,17 @@ jobs:
             sudo "$bats_source/install.sh" /usr/local
           fi
           bats --version | grep -qx "Bats $BATS_VERSION"
+      # setup-envtest and the kube-apiserver and etcd it fetches, so a pull
+      # request downloads them only when the versions pinned in the Makefile
+      # change, and an outage at their sources cannot fail unrelated changes.
+      # The envtest target runs the controller suites a fake client cannot
+      # stand in for.
+      - name: Cache envtest binaries
+        if: needs.plan.outputs.code == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: _out/envtest
+          key: envtest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
       # -k is required, not cosmetic: unit-tests and test-controllers are two
       # independent goals on the same command line, and without -k make stops
       # handing out new work the moment any unit-tests prerequisite fails —
@@ -361,7 +372,7 @@ jobs:
       # goals keep running; the job still fails overall on any red target.
       - name: Run unit and controller tests
         if: needs.plan.outputs.code == 'true'
-        run: make unit-tests test-controllers -j4 -k --output-sync=target
+        run: make unit-tests test-controllers test-controllers-envtest -j4 -k --output-sync=target
       - name: Run Bats unit tests for docs-only changes
         if: needs.plan.outputs.code == 'false'
         run: make bats-unit-tests

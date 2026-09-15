@@ -1,0 +1,391 @@
+{{- /*
+  flux-plunger sets a finalizer, flux-plunger.cozystack.io/uninstall-fence, on a
+  HelmRelease it is recovering, and only flux-plunger removes it. When it stops it
+  gives them all up itself (DrainFences): it lifts its suspensions and, within its
+  termination grace period, waits for helm-controller to uninstall each release
+  being deleted before lifting that fence. This hook is the backstop for what the
+  drain could not finish, so that removing the chart never leaves a release that
+  tenant teardown waits on forever: it stops flux-plunger, waits out the drain,
+  then lifts any suspension and fence that remain, without waiting again.
+
+  Two bounds apply. helm-controller runs a pre-delete hook under the release's
+  uninstall timeout, 300s by default (the operator sets none), counted from when
+  helm creates the hook; the Job's activeDeadlineSeconds is counted from the Job's
+  start, so it has to end first, with room for the pod to be scheduled and pulled.
+  The pod wait covers flux-plunger's grace period, and the sweep has the rest.
+
+  A scale-down or a listing that never succeeds ends the hook before any fence is
+  touched, and a fence that cannot be removed ends it once the sweep is done.
+  Either way it exits non-zero: the failed hook fails the uninstall before helm
+  records anything, and helm-controller retries it, running this hook again from a
+  state it can still converge from; exiting 0 would let the chart go and leave the
+  fence with nothing to remove it. A pod still there after its grace period is
+  named and the sweep goes on; since that pod may still be fencing, the fences are
+  listed again after the sweep, and any found fails the hook the same way.
+*/ -}}
+{{- $img := printf "%s:%s" .Values.kubectlImage.repository .Values.kubectlImage.tag }}
+{{- with .Values.kubectlImage.digest }}{{- $img = printf "%s@%s" $img . }}{{- end }}
+{{- $deadline := 240 }}
+{{- $podWait := add .Values.shutdownGracePeriodSeconds 10 }}
+{{- $retryWindow := sub $deadline 60 }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+rules:
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flux-plunger-uninstall-fence-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: flux-plunger-uninstall-fence-cleanup
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+rules:
+  # kubectl scale reads the Deployment, then patches its scale subresource.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["flux-plunger"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    resourceNames: ["flux-plunger"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: flux-plunger-uninstall-fence-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: flux-plunger-uninstall-fence-cleanup
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "0"
+    # No hook-succeeded: a succeeded Job would go with its pod and the report
+    # in its log. helm.sh/hook-output-log-policy cannot stand in for that, since
+    # helm-controller calls a nil output writer for it
+    # (https://github.com/fluxcd/helm-controller/issues/1562).
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  # Under helm's own bound for the hook; see the header.
+  activeDeadlineSeconds: {{ $deadline }}
+  # One run fills the deadline; helm-controller retries the whole uninstall,
+  # with a fresh budget, instead of a second pod racing it out.
+  backoffLimit: 0
+  # The finished Job, and the report in its pod's log, outlive the chart this long.
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: flux-plunger-uninstall-fence-cleanup
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # kubectl keeps its discovery cache under $HOME; under a read-only root
+      # filesystem the emptyDir is the one place it can write it.
+      volumes:
+        - name: kube-cache
+          emptyDir: {}
+      containers:
+        - name: cleanup
+          image: {{ $img }}
+          imagePullPolicy: {{ .Values.kubectlImage.pullPolicy }}
+          # Same small fixed footprint as the other hooks that run this image,
+          # so the pod is scheduled promptly inside the deadline.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: kube-cache
+              mountPath: /tmp
+          command:
+            - sh
+            - -c
+            - |
+              set -u
+              fence=flux-plunger.cozystack.io/uninstall-fence
+              deploy=flux-plunger
+              hr=helmreleases.helm.toolkit.fluxcd.io
+              # HR_SCOPE narrows the sweep so the script can be exercised against
+              # one namespace; the hook itself always covers the cluster.
+              scope="${HR_SCOPE:---all-namespaces}"
+              # The pod is given its grace period, and a little more, to drain.
+              pod_wait={{ $podWait }}
+              # Retries stop here, a minute short of activeDeadlineSeconds, which
+              # counts from the Job's start, so the report is still written when
+              # scheduling and the image pull took part of it. The pod wait is cut
+              # to what is left of this window too.
+              retry_until=$(( $(date +%s) + {{ $retryWindow }} ))
+              # Each fenced release once, however many copies of the fence it
+              # carries: the apiserver accepts a finalizer listed twice.
+              listing='{{`{{range .items}}{{$fenced := false}}{{range .metadata.finalizers}}{{if eq . "flux-plunger.cozystack.io/uninstall-fence"}}{{$fenced = true}}{{end}}{{end}}{{if $fenced}}{{.metadata.namespace}}/{{.metadata.name}}{{"\n"}}{{end}}{{end}}`}}'
+
+              # No per-call --request-timeout: any client override makes kubectl
+              # skip the in-cluster config and dial localhost:8080. A wedged call
+              # is bounded by activeDeadlineSeconds instead, and a Job killed by
+              # it fails the uninstall, which helm-controller then retries.
+
+              # retry <cmd>...: run until it succeeds or the retry window closes,
+              # at least once. Only the successful attempt's output is printed:
+              # kubectl prints what it has before it fails, and that must not be
+              # read as part of the answer. Each failure's stderr stays in the log.
+              retry() {
+                while :; do
+                  if out=$("$@"); then
+                    printf '%s\n' "$out"
+                    return 0
+                  fi
+                  [ "$(date +%s)" -lt "$retry_until" ] || return 1
+                  sleep 2
+                done
+              }
+
+              # lift_suspension <ns> <name>: lift the spec.suspend flux-plunger's
+              # apply owns, with the same outcome as the controller's relinquish: a
+              # suspension another manager also holds is left standing. Not with
+              # kubectl apply --server-side: on a release created by a client-side
+              # kubectl apply it hands every field that apply set to flux-plunger
+              # and then strips them. The patch is preconditioned on the
+              # resourceVersion and uid of the read that decided on it, and a write
+              # landing in between makes it read again. Returns 2 when the release
+              # cannot be read, 1 when the suspension cannot be lifted.
+              lift_suspension() {
+                ls_ns=$1
+                ls_name=$2
+                while :; do
+                  if ! read_out=$(retry kubectl --namespace "$ls_ns" get "$hr" "$ls_name" --ignore-not-found --output go-template='{{`{{.metadata.resourceVersion}} {{.metadata.uid}} {{if .spec.suspend}}{{range .metadata.managedFields}}{{$owns := false}}{{range $k, $v := .fieldsV1}}{{if eq $k "f:spec"}}{{range $k2, $v2 := $v}}{{if eq $k2 "f:suspend"}}{{$owns = true}}{{end}}{{end}}{{end}}{{end}}{{if $owns}}{{if and (eq .manager "flux-plunger") (eq .operation "Apply")}} yes{{end}}{{if ne .manager "flux-plunger"}} other{{end}}{{end}}{{end}}{{end}}`}}'); then
+                    return 2
+                  fi
+                  # shellcheck disable=SC2086 # split into resourceVersion, uid, marks
+                  set -- $read_out
+                  [ "$#" -ge 2 ] || return 0
+                  ls_rv=$1
+                  ls_uid=$2
+                  shift 2
+                  case "$*" in
+                    *other*) return 0 ;;
+                    *yes*) ;;
+                    *) return 0 ;;
+                  esac
+                  if kubectl --namespace "$ls_ns" patch "$hr" "$ls_name" --type json --field-manager flux-plunger \
+                    --patch "[{\"op\":\"test\",\"path\":\"/metadata/resourceVersion\",\"value\":\"$ls_rv\"},{\"op\":\"test\",\"path\":\"/metadata/uid\",\"value\":\"$ls_uid\"},{\"op\":\"replace\",\"path\":\"/spec/suspend\",\"value\":false}]"; then
+                    return 0
+                  fi
+                  [ "$(date +%s)" -lt "$retry_until" ] || return 1
+                  sleep 2
+                done
+              }
+
+              # release_fence <ns> <name>: remove the fence at the index it holds
+              # now, and again if the apiserver, which accepts a finalizer listed
+              # twice, has it twice. A failed patch is retried with a fresh read,
+              # because helm-controller keeps adding and dropping its own finalizer
+              # ahead of the fence while this runs. A release or fence already
+              # gone counts as released; one whose fence keeps coming back, as
+              # under a flux-plunger still running, gives up after a few copies.
+              release_fence() {
+                removed=0
+                while :; do
+                  if idx=$(kubectl --namespace "$1" get "$hr" "$2" --ignore-not-found --output go-template='{{`{{range $i, $f := .metadata.finalizers}}{{if eq $f "flux-plunger.cozystack.io/uninstall-fence"}}{{$i}} {{end}}{{end}}`}}'); then
+                    idx=${idx%% *}
+                    [ -n "$idx" ] || return 0
+                    [ "$removed" -lt 8 ] || return 1
+                    case "$idx" in
+                      *[!0-9]*) echo "unexpected finalizer index '$idx' on $1/$2" >&2 ;;
+                      *)
+                        if kubectl --namespace "$1" patch "$hr" "$2" --type json \
+                          --patch "[{\"op\":\"test\",\"path\":\"/metadata/finalizers/$idx\",\"value\":\"$fence\"},{\"op\":\"remove\",\"path\":\"/metadata/finalizers/$idx\"}]"; then
+                          removed=$((removed + 1))
+                          continue
+                        fi ;;
+                    esac
+                  fi
+                  [ "$(date +%s)" -lt "$retry_until" ] || return 1
+                  sleep 2
+                done
+              }
+
+              # flux-plunger gives up its fences itself when it stops: it lifts its
+              # suspensions and waits, within its grace period, for helm-controller
+              # to uninstall each release being deleted. So stop it and wait for
+              # the pod to go before sweeping. A scale-down that fails exits before
+              # any fence is touched, since a flux-plunger still running could set a
+              # fence behind the sweep and the retried uninstall should start from
+              # the same state; a Deployment already gone has nothing to stop.
+              if ! present=$(retry kubectl --namespace "$NAMESPACE" get deployment "$deploy" --ignore-not-found --output name); then
+                echo "could not read the $deploy Deployment; no fence was touched" >&2
+                exit 1
+              fi
+              if [ -z "$present" ]; then
+                echo "no $deploy Deployment in $NAMESPACE; nothing to stop"
+              elif ! retry kubectl --namespace "$NAMESPACE" scale deployment "$deploy" --replicas=0; then
+                echo "could not scale $deploy down; no fence was touched" >&2
+                exit 1
+              fi
+              # A pod still there after its grace period is named, not failed on:
+              # the usual one is stuck Terminating on a NotReady node until the node
+              # returns or the pod is force-deleted, and failing would fail every
+              # retried uninstall. A wait that failed for another reason is told
+              # apart by listing the pods.
+              wait_for=$(( retry_until - $(date +%s) ))
+              [ "$wait_for" -le "$pod_wait" ] || wait_for=$pod_wait
+              [ "$wait_for" -ge 1 ] || wait_for=1
+              pods_gone=yes
+              if ! kubectl --namespace "$NAMESPACE" wait --for=delete pod \
+                --selector app.kubernetes.io/name=flux-plunger,app.kubernetes.io/instance={{ .Release.Name }} \
+                --timeout="${wait_for}s"; then
+                if ! left_pods=$(retry kubectl --namespace "$NAMESPACE" get pod \
+                  --selector app.kubernetes.io/name=flux-plunger,app.kubernetes.io/instance={{ .Release.Name }} \
+                  --output name); then
+                  echo "could not tell whether $deploy pods are still running; sweeping anyway" >&2
+                  pods_gone=no
+                elif [ -n "$left_pods" ]; then
+                  # shellcheck disable=SC2086 # one line for the names
+                  echo "$deploy pods are still running, sweeping anyway:" $left_pods >&2
+                  pods_gone=no
+                else
+                  echo "the wait for $deploy pods to go failed, but none is left" >&2
+                fi
+              fi
+
+              # An unanswered listing is not an empty one.
+              # shellcheck disable=SC2086 # scope is one or two words on purpose
+              if ! fenced=$(retry kubectl get "$hr" $scope --output "go-template=$listing"); then
+                echo "could not list fenced HelmReleases; no fence was released" >&2
+                exit 1
+              fi
+
+              # What is left is what the drain could not finish: flux-plunger did
+              # not stop gracefully, or helm-controller did not uninstall a release
+              # being deleted within the grace period. Each loses flux-plunger's
+              # suspension and the fence without waiting any longer. One being
+              # deleted that helm-controller's own finalizer no longer holds, and
+              # whose latest generation it has not observed, is then deleted
+              # without an uninstall, and is named as such.
+              total=0
+              released=0
+              unhandled=0
+              for ref in $fenced; do
+                total=$((total + 1))
+                hns=${ref%%/*}
+                name=${ref#*/}
+                lift_suspension "$hns" "$name"
+                case $? in
+                  2)
+                    echo "NOT released $ref: it could not be read" >&2
+                    continue ;;
+                  1)
+                    # Without the fence a deleted release that is still
+                    # suspended is removed without an uninstall.
+                    echo "NOT released $ref: flux-plunger's suspension could not be lifted" >&2
+                    continue ;;
+                esac
+                state=$(kubectl --namespace "$hns" get "$hr" "$name" --ignore-not-found --output go-template='{{`{{if .metadata.deletionTimestamp}}{{$held := false}}{{range .metadata.finalizers}}{{if eq . "finalizers.fluxcd.io"}}{{$held = true}}{{end}}{{end}}{{if and (not $held) (ne (printf "%v" .status.observedGeneration) (printf "%v" .metadata.generation))}}unhandled{{end}}{{end}}`}}') || state=unknown
+                if ! release_fence "$hns" "$name"; then
+                  echo "NOT released $ref: the fence could not be removed" >&2
+                  continue
+                fi
+                released=$((released + 1))
+                case "$state" in
+                  unhandled)
+                    unhandled=$((unhandled + 1))
+                    echo "released $fence from $ref without an uninstall: helm-controller had not handled it" ;;
+                  unknown)
+                    echo "released $fence from $ref; whether helm-controller had handled it could not be read" ;;
+                  *)
+                    echo "released $fence from $ref" ;;
+                esac
+              done
+
+              echo "released $released of $total fenced HelmReleases, $unhandled without an uninstall"
+              # A flux-plunger still running could have fenced a release after the
+              # listing, and with the chart gone nothing would remove that fence.
+              if [ "$pods_gone" = no ]; then
+                # shellcheck disable=SC2086 # scope is one or two words on purpose
+                if ! again=$(retry kubectl get "$hr" $scope --output "go-template=$listing"); then
+                  echo "could not list fenced HelmReleases again after the sweep" >&2
+                  exit 1
+                fi
+                if [ -n "$again" ]; then
+                  for ref in $again; do
+                    echo "NOT released $ref: fenced after the sweep; a flux-plunger is still running" >&2
+                  done
+                  exit 1
+                fi
+              fi
+              if [ "$released" -eq "$total" ]; then
+                exit 0
+              fi
+              exit 1

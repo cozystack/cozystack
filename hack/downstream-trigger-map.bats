@@ -119,7 +119,7 @@ map_section() {
   [ "$code_if" = "needs.plan.outputs.code == 'true'" ]
   [ "$docs_if" = "needs.plan.outputs.code == 'false'" ]
   [ "$docs_run" = 'make bats-unit-tests' ]
-  [ "$code_run" = 'make unit-tests test-controllers -j4 -k --output-sync=target' ]
+  [ "$code_run" = 'make unit-tests test-controllers test-controllers-envtest -j4 -k --output-sync=target' ]
 }
 
 @test "the trigger map and the PR-template checklist list the same repositories" {
