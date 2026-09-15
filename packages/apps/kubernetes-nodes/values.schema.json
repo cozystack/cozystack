@@ -260,18 +260,6 @@
           "default": "v1.13.6"
         }
       }
-    },
-    "images": {
-      "description": "Optional image overrides for air-gapped or rate-limited registries.",
-      "type": "object",
-      "default": {},
-      "properties": {
-        "kubectl": {
-          "description": "Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag.",
-          "type": "string",
-          "default": ""
-        }
-      }
     }
   }
 }
