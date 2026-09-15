@@ -126,7 +126,9 @@ func main() {
 	}
 
 	if err = (&fluxplunger.FluxPlunger{
-		Client: mgr.GetClient(),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Recorder:  mgr.GetEventRecorderFor("flux-plunger"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "FluxPlunger")
 		os.Exit(1)

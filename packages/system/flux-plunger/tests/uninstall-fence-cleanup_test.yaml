@@ -1,0 +1,96 @@
+suite: flux-plunger pre-delete uninstall-fence cleanup
+# flux-plunger holds a finalizer (flux-plunger.cozystack.io/uninstall-fence) on a
+# HelmRelease it is recovering. Nothing else in the tree knows that finalizer, so
+# uninstalling this chart must release it, or a release deleted meanwhile stays
+# Terminating forever.
+release:
+  name: flux-plunger
+  namespace: cozy-fluxcd
+templates:
+  - templates/uninstall-fence-cleanup.yaml
+tests:
+  - it: runs before the release is deleted, bounded, and cleans itself up afterwards
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: hook-succeeded,before-hook-creation
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 300
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: flux-plunger-uninstall-fence-cleanup
+
+  - it: strips the fence by name and stops flux-plunger first
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'fence=flux-plunger\.cozystack\.io/uninstall-fence'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'scale deployment "\$deploy" --replicas=0'
+      # The hook must never be the reason the chart cannot be uninstalled.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'exit 0\s*$'
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: NAMESPACE
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: cozy-fluxcd
+
+  - it: may read and patch HelmReleases cluster-wide, and nothing more there
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["helm.toolkit.fluxcd.io"]
+              resources: ["helmreleases"]
+              verbs: ["get", "list", "patch"]
+
+  - it: may scale down only its own Deployment and watch its pods go
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-fluxcd
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["apps"]
+              resources: ["deployments", "deployments/scale"]
+              resourceNames: ["flux-plunger"]
+              verbs: ["get", "patch", "update"]
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list", "watch"]
+
+  - it: runs under the restricted pod security standard
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true

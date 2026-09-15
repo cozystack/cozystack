@@ -1,4 +1,4 @@
-.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check rd-presets-check migrations-target-check test test-controllers preflight
+.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check rd-presets-check migrations-target-check test test-controllers test-controllers-envtest preflight
 
 include hack/common-envs.mk
 
@@ -143,6 +143,19 @@ go-unit-tests:
 # unit-tests; locally invoke it directly or chain the two targets.
 test-controllers:
 	go test ./internal/... -count=1
+
+# Controller suites that need a real apiserver (build tag `envtest`): server-side
+# apply ownership, apply preconditions and finalizer handling, which a fake client
+# does not implement. setup-envtest fetches a kube-apiserver and etcd matching
+# the k8s.io/api minor in go.mod into _out/envtest; the HelmRelease CRD comes from
+# the in-tree Flux manifests (envtest skips their non-CRD objects). CI runs it
+# next to test-controllers.
+ENVTEST_K8S_VERSION ?= 1.35.0
+SETUP_ENVTEST_VERSION ?= v0.0.0-20260305142021-f9589b9f2b9d
+test-controllers-envtest:
+	KUBEBUILDER_ASSETS="$$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION) use $(ENVTEST_K8S_VERSION) --bin-dir $(CURDIR)/_out/envtest --print path)" \
+		HELMRELEASE_CRD_DIR=$(CURDIR)/internal/fluxinstall/manifests \
+		go test -tags envtest -run '^TestEnvtest' ./internal/... -count=1
 
 # Black-box golden test for cmd/check-readiness. Builds the binary and runs it
 # against a mock kubectl (fixtures under test/check-readiness/testdata),

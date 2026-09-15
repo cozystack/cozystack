@@ -1,0 +1,188 @@
+{{- /*
+  flux-plunger sets a finalizer, flux-plunger.cozystack.io/uninstall-fence, on a
+  HelmRelease it is recovering, and only flux-plunger removes it. Uninstalling this
+  chart would leave any fence in place, and a release deleted meanwhile would stay
+  Terminating forever: helm-controller has already dropped its own finalizer on
+  the suspended delete, and the fence is held by a controller that is gone. Tenant
+  teardown waits on exactly those deletes.
+
+  So, before the chart is removed: stop flux-plunger, so it cannot set a new fence
+  behind this sweep; lift any suspension flux-plunger holds, so a release is not
+  left suspended by a controller that is going away; give helm-controller a
+  bounded chance to uninstall a release that is already being deleted; then
+  remove the fence.
+
+  The hook always exits 0. A cleanup that cannot complete must not be the reason
+  the chart cannot be uninstalled.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+rules:
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flux-plunger-uninstall-fence-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: flux-plunger-uninstall-fence-cleanup
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    resourceNames: ["flux-plunger"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: flux-plunger-uninstall-fence-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: flux-plunger-uninstall-fence-cleanup
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flux-plunger-uninstall-fence-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  # Bounded so a wedged API call cannot hold helm uninstall open indefinitely.
+  activeDeadlineSeconds: 300
+  backoffLimit: 1
+  # Failed pods outlive the hook bundle so their logs can still be read.
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: flux-plunger-uninstall-fence-cleanup
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # kubectl writes its discovery cache under $HOME; with a read-only root
+      # filesystem it aborts before running any subcommand unless HOME points at
+      # something writable.
+      volumes:
+        - name: kube-cache
+          emptyDir: {}
+      containers:
+        - name: cleanup
+          image: docker.io/clastix/kubectl:v1.32
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: kube-cache
+              mountPath: /tmp
+          command:
+            - sh
+            - -c
+            - |
+              set -u
+              fence=flux-plunger.cozystack.io/uninstall-fence
+              deploy=flux-plunger
+              hr=helmreleases.helm.toolkit.fluxcd.io
+              # HR_SCOPE narrows the sweep so the script can be exercised against
+              # one namespace; the hook itself always covers the cluster.
+              scope="${HR_SCOPE:---all-namespaces}"
+
+              kubectl --namespace "$NAMESPACE" scale deployment "$deploy" --replicas=0 || true
+              kubectl --namespace "$NAMESPACE" wait --for=delete pod \
+                --selector app.kubernetes.io/name=flux-plunger,app.kubernetes.io/instance={{ .Release.Name }} \
+                --timeout=60s || true
+
+              # shellcheck disable=SC2086 # scope is one or two words on purpose
+              fenced=$(kubectl get "$hr" $scope --output go-template='{{`{{range .items}}{{$ns := .metadata.namespace}}{{$name := .metadata.name}}{{range .metadata.finalizers}}{{if eq . "flux-plunger.cozystack.io/uninstall-fence"}}{{$ns}}/{{$name}}{{"\n"}}{{end}}{{end}}{{end}}`}}') || fenced=""
+
+              for ref in $fenced; do
+                hns=${ref%%/*}
+                name=${ref#*/}
+
+                # A suspension flux-plunger's own apply holds is lifted.
+                owned=$(kubectl --namespace "$hns" get "$hr" "$name" --output go-template='{{`{{if .spec.suspend}}{{range .metadata.managedFields}}{{if and (eq .manager "flux-plunger") (eq .operation "Apply")}}{{range $k, $v := .fieldsV1}}{{if eq $k "f:spec"}}{{range $k2, $v2 := $v}}{{if eq $k2 "f:suspend"}}yes{{end}}{{end}}{{end}}{{end}}{{end}}{{end}}{{end}}`}}' 2>/dev/null) || owned=""
+                if [ "$owned" = yes ]; then
+                  kubectl --namespace "$hns" patch "$hr" "$name" --type merge \
+                    --patch '{"spec":{"suspend":false}}' --field-manager flux-plunger || true
+                fi
+
+                # On a release being deleted, helm-controller may already have
+                # dropped its own finalizer without an uninstall; wait, bounded, for
+                # it to handle the unsuspended generation before the fence goes.
+                i=0
+                while [ "$i" -lt 15 ]; do
+                  state=$(kubectl --namespace "$hns" get "$hr" "$name" --output go-template='{{`{{if .metadata.deletionTimestamp}}{{$held := false}}{{range .metadata.finalizers}}{{if eq . "finalizers.fluxcd.io"}}{{$held = true}}{{end}}{{end}}{{if or $held (ne (printf "%v" .status.observedGeneration) (printf "%v" .metadata.generation))}}wait{{end}}{{end}}`}}' 2>/dev/null) || break
+                  [ "$state" = wait ] || break
+                  i=$((i + 1))
+                  sleep 2
+                done
+
+                idx=$(kubectl --namespace "$hns" get "$hr" "$name" --output go-template='{{`{{range $i, $f := .metadata.finalizers}}{{if eq $f "flux-plunger.cozystack.io/uninstall-fence"}}{{$i}}{{end}}{{end}}`}}' 2>/dev/null) || continue
+                [ -n "$idx" ] || continue
+                kubectl --namespace "$hns" patch "$hr" "$name" --type json \
+                  --patch "[{\"op\":\"test\",\"path\":\"/metadata/finalizers/$idx\",\"value\":\"$fence\"},{\"op\":\"remove\",\"path\":\"/metadata/finalizers/$idx\"}]" || true
+                echo "released $fence from $ref"
+              done
+              exit 0
