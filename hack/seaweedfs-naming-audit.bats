@@ -183,6 +183,10 @@ EOF
 #           chart.metadata.name with a different value. Helm marshals "config"
 #           (the values) AFTER "chart", so a last-match extraction returns the
 #           decoy and silently declares the tenant non-SeaweedFS.
+#   FIRSTDEP a payload that carries info.first_deployed, so the first_deployed
+#           date call site (the other one #4273 names) is actually exercised --
+#           the default blob omits the field, so first_deployed returns early
+#           without ever touching date.
 _release_blob() {
   _rb_name=${1:-cozy-seaweedfs}
   case "$_rb_name" in
@@ -198,6 +202,7 @@ _release_blob() {
   }
 }' ;;
     DECOY)  _rb_json='{"name":"seaweedfs-system","chart":{"metadata":{"name":"cozy-seaweedfs"}},"config":{"chart":{"metadata":{"name":"decoy-not-seaweedfs"}}}}' ;;
+    FIRSTDEP) _rb_json='{"name":"seaweedfs-system","info":{"first_deployed":"2019-01-01T00:00:00Z"},"chart":{"metadata":{"name":"cozy-seaweedfs"}}}' ;;
     *)      _rb_json='{"name":"seaweedfs-system","chart":{"metadata":{"name":"'"$_rb_name"'"}}}' ;;
   esac
   printf '%s' "$_rb_json" | gzip | base64 | base64 | tr -d '\n'
@@ -215,6 +220,9 @@ _release_blob() {
 #   <absent-pv>  a PV name (pv-legacy|pv-legacy2|pv-renamed) to report as absent
 #                (exit 0, empty), exercising the "bound claim, PV gone" path.
 #   <pvcs>       newline-separated `get pvc -o name` LIST output.
+#   <bad-ts-pv>  optional PV name whose creationTimestamp GET returns a present
+#                but UNPARSEABLE value (exit 0, garbage), exercising the parse-
+#                failure path #4273 splits from absent evidence.
 # It otherwise walks one confirmed seaweedfs-system tenant. The by-name PVC->PV and
 # PV->timestamp maps are fixed here; timestamps are chosen so the two legacy PVs
 # straddle the single renamed PV (true answer OVERLAP), which is what makes the
@@ -230,6 +238,7 @@ _write_fake_kubectl() {
     printf "ABSENT_PV='%s'\n" "$3"
     printf "BLOB='%s'\n" "$4"
     printf "PVCS='%s'\n" "$5"
+    printf "BAD_TS_PV='%s'\n" "${6:-}"
     cat <<'FAKE'
 verb=${1:-}; res=${2:-}; args="$*"
 fail() { echo "fake kubectl: $1 (real error)" >&2; exit 1; }
@@ -280,6 +289,9 @@ if [ "$verb $res" = "get sts" ]; then
 fi
 if [ "$verb $res" = "get pv" ]; then
   [ "$FAIL" = pvget ] && fail "get pv"
+  if [ -n "$BAD_TS_PV" ]; then
+    case "$args" in *"$BAD_TS_PV"*) printf 'not-a-timestamp\n'; exit 0 ;; esac
+  fi
   case "$args" in
     *pv-legacy2*) [ "$ABSENT_PV" = pv-legacy2 ] && exit 0; printf '2099-01-01T00:00:00Z\n'; exit 0 ;;
     *pv-legacy*)  [ "$ABSENT_PV" = pv-legacy ]  && exit 0; printf '2020-01-01T00:00:00Z\n'; exit 0 ;;
@@ -291,6 +303,44 @@ unmodelled
 FAKE
   } > "$1/kubectl"
   chmod +x "$1/kubectl"
+}
+
+# _write_fake_date <dir> -- drop a BSD-flavoured `date` shim into <dir>. It rejects
+# the GNU `-d` spelling exactly as macOS/BSD date does, forcing the audited script
+# down its portable BSD branch, and services that branch with whatever real date
+# lives beneath us (GNU on a CI runner, BSD on a developer's mac). That is what
+# reproduces issue #4273 on EITHER kind of host: without the shim a GNU runner
+# never hits the failing spelling and the bug is invisible in CI. Same heredoc
+# discipline as _write_fake_kubectl -- indented grouped-redirect brace, no
+# column-0 `}` inside, so cozytest.sh's awk converter leaves it untouched.
+_write_fake_date() {
+  {
+    cat <<'FAKEDATE'
+#!/bin/sh
+for _a in "$@"; do
+  case "$_a" in
+    -d) echo "date: illegal option -- d" >&2; exit 1 ;;
+  esac
+done
+# The audit's only other date form: -u -j -f FMT VALUE +%s. Pull VALUE (the arg
+# after the format) and recompute it with a real date, trying the GNU spelling
+# then the BSD one so this shim is itself host-agnostic.
+_val=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -f ]; then shift; shift; _val=${1:-}; break; fi
+  shift
+done
+if [ -n "$_val" ]; then
+  /usr/bin/date -u -d "$_val" +%s 2>/dev/null && exit 0
+  /bin/date -u -d "$_val" +%s 2>/dev/null && exit 0
+  /bin/date -u -j -f '%Y-%m-%dT%H:%M:%S' "$_val" +%s 2>/dev/null && exit 0
+  /usr/bin/date -u -j -f '%Y-%m-%dT%H:%M:%S' "$_val" +%s 2>/dev/null && exit 0
+fi
+echo "fake date: unsupported invocation: $*" >&2
+exit 1
+FAKEDATE
+  } > "$1/date"
+  chmod +x "$1/date"
 }
 
 # _pvcs_mixed -- the `get pvc -o name` LIST for a MIXED tenant: two legacy claims
@@ -602,4 +652,99 @@ _expected_mixed_overlap() {
   [ "$rc" -ne 0 ]
   printf '%s\n' "$out" | grep -q 'FATAL'
   printf '%s\n' "$out" | grep -q "get PVC '"
+}
+
+# -----------------------------------------------------------------------------
+# Portable timestamp parsing (issue #4273).
+#
+# first_deployed and pv_epoch turn an RFC3339 timestamp into epoch seconds. The
+# call sites used `date -u -d`, which only GNU date accepts; on a host with BSD
+# date (macOS) the call failed, its stderr was swallowed, and `|| return 0`
+# converted that host-tool failure into the script's "no epoch" signal -- so every
+# tenant read as MIXED / "direction cannot be established". These drive both call
+# sites, the parse_epoch helper directly, and the split the fix introduces between
+# an ABSENT timestamp (benign, still silent) and a PRESENT-but-unreadable one
+# (fatal, loud). The BSD-date reproduction shims `date` on PATH so it is
+# deterministic on a GNU CI runner too, where the raw bug is otherwise invisible.
+
+@test "parse_epoch reads an RFC3339 timestamp on either GNU or BSD date" {
+  # The fix's core: whichever spelling the host's date speaks, the same epoch
+  # comes out. On a BSD host this exercises the branch #4273 was about; on a GNU
+  # runner the other. Either way the answer is the known epoch, Z-suffix and all.
+  #
+  # These are ABSOLUTE epochs and hold on any host timezone: both forms carry
+  # `-u`, which forces the zoneless string (the fix strips the Z at 19 chars) to
+  # be parsed as UTC on GNU and BSD alike -- not just formatted as UTC. So a
+  # non-UTC TZ shifts neither value, which is also why the audit's clock-free
+  # relative comparison is timezone-immune. Run under a deliberately non-UTC TZ
+  # so this stays a regression guard on that `-u`: drop it and the values move.
+  [ "$(TZ='XXX5'; export TZ; parse_epoch 2026-09-15T11:00:00Z)" = 1789470000 ]
+  [ "$(TZ='XXX5'; export TZ; parse_epoch 2020-01-01T00:00:00Z)" = 1577836800 ]
+}
+
+@test "parse_epoch fails loudly on a value neither date form can read" {
+  # A present-but-unreadable timestamp is NOT the absent-evidence case: it is a
+  # clock the host could not read. It must be fatal and name the value, never
+  # folded into the silent "no epoch" path (#4273). audit_fatal writes to stderr.
+  rc=0
+  out=$(parse_epoch 'not-a-timestamp' 2>&1) || rc=$?
+  echo "rc=$rc out=$out"
+  [ "$rc" -ne 0 ]
+  # Nothing on stdout: a caller capturing the epoch gets empty, not garbage.
+  [ -z "$(parse_epoch 'not-a-timestamp' 2>/dev/null)" ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'not-a-timestamp'
+}
+
+@test "MIXED classifies under a BSD-only date, not 'direction cannot be established'" {
+  # #4273 reproduced end-to-end at the pv_epoch call site. With a date that has no
+  # GNU -d, the OLD code swallowed every parse, marked both generations INCOMPLETE,
+  # and reported "direction cannot be established" for a tenant whose PV ages ARE
+  # readable. The portable parse must classify the SAME fixtures as OVERLAP,
+  # byte-identical to the golden the GNU path produces.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob)" "$(_pvcs_mixed)"
+  _write_fake_date "$d"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  printf '%s\n' "$out" > "$d/got"
+  _expected_mixed_overlap > "$d/want"
+  echo "rc=$rc"; echo "--- got ---"; cat "$d/got"; echo "--- want ---"; cat "$d/want"
+  [ "$rc" -eq 0 ]
+  [ "$(printf '%s\n' "$out" | grep -c 'direction cannot be established')" -eq 0 ]
+  diff "$d/want" "$d/got"
+  rm -rf "$d"
+}
+
+@test "first_deployed parses under a BSD-only date (the second call site)" {
+  # #4273 names BOTH date call sites. With a payload that carries first_deployed
+  # and a BSD-only date, the OLD line returned non-zero and aborted the whole
+  # audit before the MIXED report; the portable parse reads it, so the
+  # 'oldest PV vs first_deployed' context line appears and the audit completes.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob FIRSTDEP)" "$(_pvcs_mixed)"
+  _write_fake_date "$d"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -eq 0 ]
+  printf '%s\n' "$out" | grep -q 'oldest PV vs first_deployed'
+}
+
+@test "an unparseable PV timestamp is fatal, not absent evidence" {
+  # The distinction #4273 asks for, at the pv_epoch site: a PV whose
+  # creationTimestamp is PRESENT but unreadable must abort loudly, NOT degrade to
+  # the absent-evidence 'direction cannot be established' branch that a Pending
+  # claim legitimately takes. The fake returns garbage for one bound PV; real
+  # host date is used, so this fails on GNU and BSD alike.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob)" "$(_pvcs_mixed)" pv-renamed
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'not-a-timestamp'
+  [ "$(printf '%s\n' "$out" | grep -c 'direction cannot be established')" -eq 0 ]
 }
