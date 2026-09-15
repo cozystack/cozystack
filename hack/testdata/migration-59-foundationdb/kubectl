@@ -1,0 +1,52 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-59-foundationdb-version.bats. It serves only
+# the calls migration 59 (and lib/cozystack-version.sh) make and appends one
+# line per call to $FAKE_CMDLOG.
+#
+#   FAKE_CMDLOG      file to append a record of each call to
+#   FAKE_HR_LIST     file holding the HelmRelease list JSON the fleet scan returns
+#   FAKE_LIST_FAIL   non-empty => the fleet scan fails
+#   FAKE_PATCH_FAIL  non-empty => every patch fails
+#
+# Any other call fails loudly, so drift between the script and this fake does
+# not pass unnoticed.
+set -u
+
+log() { printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+
+arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
+
+args="$*"
+
+case "$args" in
+  "get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output json")
+    if [ -n "${FAKE_LIST_FAIL:-}" ]; then
+      echo 'error: the server was unable to return a response in the time allotted' >&2
+      exit 1
+    fi
+    cat "$FAKE_HR_LIST"
+    exit 0
+    ;;
+  "patch helmreleases.helm.toolkit.fluxcd.io "*)
+    if [ -n "${FAKE_PATCH_FAIL:-}" ]; then
+      echo 'The request is invalid: the server rejected our request due to an error in our request' >&2
+      exit 1
+    fi
+    ns=$(arg_after --namespace "$@")
+    log "PATCH $ns $(arg_after "$ns" "$@") $(arg_after --type "$@") $(arg_after --patch "$@")"
+    exit 0
+    ;;
+  "annotate configmap "*)
+    log "ANNOTATE $*"
+    exit 0
+    ;;
+  "apply --filename -")
+    v=$(sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+    log "STAMP ${v:-unknown}"
+    exit 0
+    ;;
+esac
+
+log "UNHANDLED $args"
+echo "fake kubectl: unmodelled call: $args" >&2
+exit 1
