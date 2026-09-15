@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -67,13 +68,6 @@ const (
 	psmdbBackupNameKey      = "psmdb.percona.com/backup-name"
 	psmdbBackupNamespaceKey = "psmdb.percona.com/backup-namespace"
 	psmdbDestinationKey     = "psmdb.percona.com/destination"
-
-	// psmdbUseSystemBucketKey records, on the Cozystack Backup, that the archive
-	// lives in the shared platform bucket (the useSystemBucket flow). The cleanup
-	// path keys off it: only system-bucket archives are the driver's to prune, so
-	// a legacy backup (tenant's own bucket, tenant-owned lifecycle) stays a no-op
-	// on deletion exactly as before.
-	psmdbUseSystemBucketKey = "backups.cozystack.io/use-system-bucket"
 
 	// psmdbDeleteBackupFinalizer is the psmdb-operator finalizer that removes the
 	// pbm archive from object storage when its PerconaServerMongoDBBackup CR is
@@ -270,11 +264,23 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 	// cluster, so a legacy app that ships its own static storage is left alone.
 	// The path prefix is deterministic (<namespace>/<application>), so
 	// re-applying the whole entry never splits the archive the way CNPG's
-	// serverName would.
-	if shouldInjectMongoDBSystemStorage(useSystemBucket, rendered) {
+	// serverName would. Gated additionally on backups being enabled: a cluster
+	// that can never service a backup should not be mutated just to fail the
+	// precondition below on the enabled check anyway.
+	if cluster.Spec.Backup.Enabled && shouldInjectMongoDBSystemStorage(useSystemBucket, rendered) {
 		injected, err := r.applyMongoDBSystemStorage(ctx, j.Namespace, psmdbName, storageName, rendered.S3)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to inject system-bucket storage onto psmdb.percona.com/PerconaServerMongoDB %s/%s: %v", j.Namespace, psmdbName, err))
+			// A server-side apply can fail transiently — an apiserver hiccup, or a
+			// conflict while the psmdb operator writes the same cluster — so requeue
+			// with backoff rather than failing the BackupJob outright. The deadline
+			// still turns a permanently-failing apply terminal, matching how the
+			// cluster/app read errors above are handled.
+			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+					"failed to inject system-bucket storage onto psmdb.percona.com/PerconaServerMongoDB %s/%s within %s: %v",
+					j.Namespace, psmdbName, psmdbDefaultBackupDeadline, err))
+			}
+			return ctrl.Result{}, err
 		}
 		cluster = injected
 	}
@@ -596,8 +602,11 @@ func (r *BackupJobReconciler) ensureMongoDBBackup(ctx context.Context, j *backup
 		// delete-backup finalizer prunes the pbm object from storage when this CR
 		// is deleted, which is how the cleanup path (Plan retention) reclaims
 		// cozy-backups. A legacy backup writes to the tenant's own bucket and its
-		// lifecycle stays the tenant's, so it is left unfinalized.
-		obj.Finalizers = append(obj.Finalizers, psmdbDeleteBackupFinalizer)
+		// lifecycle stays the tenant's, so it is left unfinalized. This finalizer
+		// is also the sole ownership marker cleanup reads back: the psmdb operator
+		// never adds it on its own (verified against v1.22.0 checkFinalizers), so
+		// its presence unambiguously means "the driver owns this archive".
+		controllerutil.AddFinalizer(obj, psmdbDeleteBackupFinalizer)
 	}
 
 	if err := r.Create(ctx, obj); err != nil {
@@ -662,11 +671,6 @@ func (r *BackupJobReconciler) createMongoDBBackupArtifact(
 	if mdbBackup.Status.Destination != "" {
 		driverMD[psmdbDestinationKey] = mdbBackup.Status.Destination
 	}
-	if useSystemBucket {
-		// The cleanup path prunes only system-bucket archives (the shared bucket
-		// the driver owns); record the flow so a legacy backup stays hands-off.
-		driverMD[psmdbUseSystemBucketKey] = "true"
-	}
 
 	underlyingResources, err := marshalMongoDBBackupSnapshot(mdbBackup, rendered, storageName, resolved.Parameters, useSystemBucket)
 	if err != nil {
@@ -712,22 +716,24 @@ func (r *BackupJobReconciler) createMongoDBBackupArtifact(
 
 // cleanupMongoDBBackup prunes the pbm archive a system-bucket Backup wrote to
 // the shared cozy-backups bucket when that Backup is deleted (Plan retention or
-// manual). It deletes the operator PerconaServerMongoDBBackup CR and waits for
-// the operator's delete-backup finalizer (stamped at creation by
-// ensureMongoDBBackup) to remove the object from storage before releasing the
-// Cozystack Backup, so no object is orphaned — the same "own the artifact, wait
-// for the delete" contract the Redis/Rabbitmq branches use. A legacy backup
-// (its own tenant bucket, no system-bucket marker) is left untouched, matching
-// the pre-existing no-op contract for the operator-backed drivers.
+// manual). Ownership is read from the operator CR's delete-backup finalizer,
+// which ensureMongoDBBackup stamps only on the useSystemBucket flow and the
+// psmdb operator never adds on its own — so its presence is the single,
+// unambiguous "the driver owns this archive" marker (no separate driverMetadata
+// flag that could disagree with the finalizer if the app's useSystemBucket flag
+// flipped mid-backup). When the driver owns it, this deletes the operator CR and
+// waits for the finalizer to remove the object before releasing the Cozystack
+// Backup, so nothing is orphaned — the "own the artifact, wait for the delete"
+// contract the Redis/Rabbitmq branches use. A legacy backup (no such finalizer)
+// is left untouched, the pre-existing no-op contract for the operator-backed
+// drivers.
+//
+// The wait is bounded by give-up conditions, so a wedged operator never pins a
+// tenant namespace in Terminating: when the namespace is going away (the psmdb
+// delete-backup exec cannot run there) or the escape-hatch annotation is set,
+// the driver strips its own finalizer and releases, leaving the object for a
+// bucket lifecycle policy to reclaim.
 func (r *BackupReconciler) cleanupMongoDBBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
-	logger := getLogger(ctx)
-
-	if backup.Spec.DriverMetadata[psmdbUseSystemBucketKey] != "true" {
-		// Legacy flow: the archive is in the tenant's own bucket and its
-		// lifecycle is the tenant's / psmdb operator's, not the platform's.
-		return ctrl.Result{}, nil
-	}
-
 	sourceBackupName := backup.Spec.DriverMetadata[psmdbBackupNameKey]
 	if sourceBackupName == "" {
 		// Nothing recorded to delete (Backup written before the name was tracked).
@@ -737,18 +743,29 @@ func (r *BackupReconciler) cleanupMongoDBBackup(ctx context.Context, backup *bac
 	live := &psmdbtypes.PerconaServerMongoDBBackup{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: sourceBackupName}, live)
 	if apierrors.IsNotFound(err) {
-		// The operator CR is gone, which — with the delete-backup finalizer set
-		// at creation — means the archive was pruned with it. Release.
+		// The operator CR is gone: a driver-owned archive was pruned with it (the
+		// finalizer ran), and a legacy CR that is gone was nothing of ours. Release.
 		return ctrl.Result{}, nil
 	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if backup.Annotations[psmdbSkipArtifactCleanupAnnotation] == "true" {
-		logger.Debug("skipping MongoDB artifact cleanup per annotation; object left in bucket",
-			"backup", backup.Name, "annotation", psmdbSkipArtifactCleanupAnnotation)
+	if !controllerutil.ContainsFinalizer(live, psmdbDeleteBackupFinalizer) {
+		// Legacy backup: the driver never stamped the prune finalizer, so the
+		// archive is the tenant's (its own bucket) and its lifecycle is not ours.
 		return ctrl.Result{}, nil
+	}
+
+	terminating, nsErr := r.namespaceTerminating(ctx, backup.Namespace)
+	if nsErr != nil {
+		return ctrl.Result{}, nsErr
+	}
+	if terminating {
+		return r.releaseMongoDBCleanup(ctx, backup, live, "namespace is terminating")
+	}
+	if backup.Annotations[psmdbSkipArtifactCleanupAnnotation] == "true" {
+		return r.releaseMongoDBCleanup(ctx, backup, live, "skip-artifact-cleanup annotation set")
 	}
 
 	if live.DeletionTimestamp.IsZero() {
@@ -758,9 +775,37 @@ func (r *BackupReconciler) cleanupMongoDBBackup(ctx context.Context, backup *bac
 	}
 	// Requeue until the operator finalizer has removed the CR (and the archive
 	// with it).
-	logger.Debug("waiting for psmdb operator to prune system-bucket archive",
+	getLogger(ctx).Debug("waiting for psmdb operator to prune system-bucket archive",
 		"backup", backup.Name, "sourceBackup", sourceBackupName)
 	return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
+}
+
+// releaseMongoDBCleanup gives up pruning the archive and lets the Cozystack
+// Backup (and any enclosing namespace) finish deleting: it strips the driver's
+// delete-backup finalizer from the operator CR so the CR no longer blocks
+// teardown, best-effort deletes that CR, and records a Warning naming the object
+// left in the bucket. Mirrors the Redis/Rabbitmq release path — the prune is
+// best-effort, not guaranteed.
+func (r *BackupReconciler) releaseMongoDBCleanup(ctx context.Context, backup *backupsv1alpha1.Backup, live *psmdbtypes.PerconaServerMongoDBBackup, reason string) (ctrl.Result, error) {
+	if controllerutil.ContainsFinalizer(live, psmdbDeleteBackupFinalizer) {
+		base := live.DeepCopy()
+		controllerutil.RemoveFinalizer(live, psmdbDeleteBackupFinalizer)
+		if err := r.Patch(ctx, live, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+	}
+	if live.DeletionTimestamp.IsZero() {
+		if derr := r.Delete(ctx, live); derr != nil && !apierrors.IsNotFound(derr) {
+			return ctrl.Result{}, derr
+		}
+	}
+	getLogger(ctx).Info("releasing MongoDB Backup without pruning its object",
+		"backup", backup.Name, "sourceBackup", live.Name, "reason", reason)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactNotDeleted",
+			"left MongoDB archive in the bucket: %s", reason)
+	}
+	return ctrl.Result{}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -988,13 +1033,14 @@ var errTransientRestoreSource = errors.New("transient backup-source resolution e
 // wrapped in errTransientRestoreSource so the caller can requeue instead.
 func (r *RestoreJobReconciler) resolveMongoDBBackupSource(ctx context.Context, backup *backupsv1alpha1.Backup) (*psmdbtypes.BackupSource, error) {
 	// Snapshot persisted at backup time. Decoded up front so the live path can
-	// backfill an S3 block the operator status omits: on the useSystemBucket
-	// flow the driver injected the storage rather than the chart declaring it,
-	// and the operator can report status.destination while leaving status.s3
-	// empty. Without the S3 block the restore has no endpoint/credentialsSecret,
-	// and a system-bucket target has no declared storage to resolve from either
-	// (injection runs only on the BackupJob path), so a live CR that echoes a
-	// destination but no s3 would otherwise strand the restore.
+	// backfill an S3 block the operator status omits. The pinned psmdb operator
+	// (v1.22.0) always echoes status.s3 once a backup reaches a destination
+	// (reconcilePBMConfig resolves the storage), so on that operator the live
+	// path already carries coordinates and this backfill is a defensive guard —
+	// an operator that reported a bare destination would otherwise strand a
+	// system-bucket restore, whose target has no chart-declared storage to
+	// resolve from (injection runs only on the BackupJob path). It keeps the
+	// snapshot the single fallback source, matching the reaped-CR path below.
 	snap, snapErr := unmarshalMongoDBBackupSnapshot(backup.Status.UnderlyingResources)
 
 	// Live operator Backup CR (same namespace as the Cozystack Backup).
