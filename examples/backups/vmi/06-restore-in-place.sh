@@ -25,7 +25,7 @@ spec:
     kind: VMInstance
     name: test
   options:
-    failIfTargetExists: true # if true, restore will fail when the target resource already exists
+    failIfTargetExists: true # only enforced for restore-to-copy; a no-op for in-place, whose source is expected to exist
     keepOriginalPVC: true # renames original VMI PVC before restore to <name>-orig-<hash>, only for in-place restore
     keepOriginalIpAndMac: true # restores original IP and MAC address of VMI via OVN annotations
 EOF

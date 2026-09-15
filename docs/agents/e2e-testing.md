@@ -59,7 +59,7 @@ Trap-based cleanup was the single biggest source of false failures in the BATS s
 
 ### 4. Do not mask cleanup or teardown failures
 
-- Resources a test creates that Chainsaw cannot reclaim — because a controller, not the test, owns them (e.g. the Velero `Backup`, `BackupStorageLocation`, and credentials secret in `cozy-velero` in the disabled `hack/e2e-chainsaw/backup/` suite) — must be pruned explicitly. Do not `|| true` over a stuck delete and leave stale state for the next run.
+- Resources a test creates that Chainsaw cannot reclaim — because a controller, not the test, owns them (e.g. the Velero `Backup`/`Restore` in `cozy-velero`, which the `vminstance` backup round-trips prune by deleting the cozystack `BackupJob`/`RestoreJob`/`Backup` CRs that cascade to them, plus an explicit delete of the throwaway `BackupStorageLocation`) — must be pruned explicitly. Do not `|| true` over a stuck delete and leave stale state for the next run.
 - For nested tenants, tear down **child → parent with a hard wait for deletion between** each. Deleting the parent while a child is still uninstalling wedges the parent's cleanup Job on the child namespace, and both stuck uninstalls occupy helm-controller workers past the end of the test — starving whichever suite runs next. The kubernetes suites encode this ordering in `hack/e2e-chainsaw/_lib/run-kubernetes.sh`.
 
 ### 5. The install gate must have teeth

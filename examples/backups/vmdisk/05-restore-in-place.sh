@@ -25,7 +25,7 @@ spec:
     kind: VMDisk
     name: backup-src
   options:
-    failIfTargetExists: true # fail if the restore target already exists
+    failIfTargetExists: true # only enforced for restore-to-copy; a no-op for in-place, whose source is expected to exist
     keepOriginalPVC: true # rename the original PVC to <name>-orig-<hash> before restoring
 EOF
 

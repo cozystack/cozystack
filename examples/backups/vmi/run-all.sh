@@ -55,5 +55,7 @@ echo "  2. Created BackupClass binding strategies to application types" >&2
 echo "  3. Provisioned a VMDisk and VMInstance" >&2
 echo "  4. Created a backup of the VMInstance via BackupJob" >&2
 echo "  5. Restored the VMInstance in-place" >&2
-echo "  6. Restored the VMInstance to a copy in a different namespace" >&2
+if [[ "${SKIP_RESTORE_TO_COPY:-0}" != "1" ]]; then
+    echo "  6. Restored the VMInstance to a copy in a different namespace" >&2
+fi
 log_info "To clean up resources: ./cleanup.sh"
