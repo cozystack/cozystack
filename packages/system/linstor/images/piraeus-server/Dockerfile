@@ -1,9 +1,9 @@
-ARG DISTRO=bookworm@sha256:30482e873082e906a4908c10529180aefb6f77620aea7404b909829fadc5d168
+ARG DISTRO=bookworm@sha256:6ebd97fa83deb272194a2cf015b3d26a4d538e9ad3a7a79d544c8af5b0a01443
 ARG LINSTOR_VERSION
 
 # ------------------------------------------------------------------------------
 # Build linstor-server from source
-FROM debian:bookworm@sha256:30482e873082e906a4908c10529180aefb6f77620aea7404b909829fadc5d168 AS builder
+FROM debian:bookworm@sha256:6ebd97fa83deb272194a2cf015b3d26a4d538e9ad3a7a79d544c8af5b0a01443 AS builder
 
 ARG LINSTOR_VERSION
 ARG VERSION=${LINSTOR_VERSION}
