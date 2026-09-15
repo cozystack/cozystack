@@ -94,14 +94,6 @@ Every release listed with `EXTERNAL` true was annotated for `opensearch-<name>.<
 | `tls.issuer` | Who issues the HTTP server certificate: `operator` uses the CA the opster operator manages itself, `cert-manager` gives the release its own CA, covers the external hostname and publishes a trust anchor the tenant can verify against. Unset follows external: `cert-manager` when it is true, `operator` when it is false. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off. | `string` | `{}`  |
 
 
-### Image configuration
-
-| Name                | Description                            | Type     | Value |
-| ------------------- | -------------------------------------- | -------- | ----- |
-| `images`            | Container images used by the operator. | `object` | `{}`  |
-| `images.opensearch` | OpenSearch image.                      | `string` | `""`  |
-
-
 ### Node roles configuration
 
 | Name               | Description                   | Type     | Value   |
