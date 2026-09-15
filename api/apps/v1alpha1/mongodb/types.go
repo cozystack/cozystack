@@ -60,28 +60,28 @@ type ConfigSpec struct {
 }
 
 type Backup struct {
-	// Destination path for backups (e.g. s3://bucket/path/).
+	// Destination path for backups (e.g. s3://bucket/path/). Ignored when useSystemBucket is true (the driver injects the platform bucket).
 	// +kubebuilder:default:="s3://bucket/path/to/folder/"
 	DestinationPath string `json:"destinationPath,omitempty"`
 	// Enable regular backups.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// S3 endpoint URL for uploads.
+	// S3 endpoint URL for uploads. Ignored when useSystemBucket is true (the strategy supplies the platform endpoint).
 	// +kubebuilder:default:="http://minio-gateway-service:9000"
 	EndpointURL string `json:"endpointURL,omitempty"`
-	// Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs).
+	// Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs). Ignored when useSystemBucket is true (the platform backupStorage knob applies instead).
 	// +kubebuilder:default:=false
 	InsecureSkipTLSVerify bool `json:"insecureSkipTLSVerify,omitempty"`
-	// Retention policy (e.g. "30d").
+	// Retention policy (e.g. "30d"). Ignored when useSystemBucket is true (no engine-side retention on that flow).
 	// +kubebuilder:default:="30d"
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`
-	// Access key for S3 authentication.
+	// Access key for S3 authentication. Ignored when useSystemBucket is true (credentials come from the projected cozy-backups-creds).
 	// +kubebuilder:default:=""
 	S3AccessKey string `json:"s3AccessKey,omitempty"`
-	// Secret key for S3 authentication.
+	// Secret key for S3 authentication. Ignored when useSystemBucket is true (credentials come from the projected cozy-backups-creds).
 	// +kubebuilder:default:=""
 	S3SecretKey string `json:"s3SecretKey,omitempty"`
-	// Cron schedule for automated backups.
+	// Cron schedule for automated backups. Ignored when useSystemBucket is true (scheduling moves to the BackupClass Plan).
 	// +kubebuilder:default:="0 2 * * *"
 	Schedule string `json:"schedule,omitempty"`
 	// Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `<namespace>/<application>`. Scheduling and retention move to the BackupClass Plan, so `schedule`, `retentionPolicy` and PITR are ignored while this is on. See docs/operations/backup-classes.md.

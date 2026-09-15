@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -1505,6 +1506,59 @@ func TestCleanupMongoDBBackup(t *testing.T) {
 		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(nil))
 		if err != nil || res.RequeueAfter != 0 {
 			t.Fatalf("NoMatchError must be treated as gone and release, got res=%+v err=%v", res, err)
+		}
+	})
+
+	// The annotation reaches releaseMongoDBCleanup before the ownership check, so
+	// the release must itself refuse to touch a CR the driver does not own — the
+	// legacy operator-side backup record is what a psmdb restore-by-name resolves
+	// against, and the RBAC comment and docs both promise it is never deleted.
+	t.Run("legacy backup with the skip annotation keeps its operator CR", func(t *testing.T) {
+		c := newMongoDBStrategyTestClient(t, opBackup(false), liveNamespace)
+		r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(map[string]string{psmdbSkipArtifactCleanupAnnotation: "true"}))
+		if err != nil || res.RequeueAfter != 0 {
+			t.Fatalf("legacy + annotation must release, got res=%+v err=%v", res, err)
+		}
+		got := getOp(t, c)
+		if !got.DeletionTimestamp.IsZero() {
+			t.Errorf("the escape hatch must not delete a legacy (unowned) operator CR")
+		}
+	})
+
+	// When the finalizer strip fails, the CR keeps percona.com/delete-backup and
+	// can pin its namespace in Terminating; the release still proceeds, but it
+	// must say which object is stuck rather than emit the success-case Event.
+	t.Run("a failed finalizer strip surfaces the stuck object", func(t *testing.T) {
+		s := runtime.NewScheme()
+		_ = scheme.AddToScheme(s)
+		_ = backupsv1alpha1.AddToScheme(s)
+		_ = psmdbtypes.AddToScheme(s)
+		c := clientfake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(opBackup(true)).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if _, ok := obj.(*psmdbtypes.PerconaServerMongoDBBackup); ok {
+						return apierrors.NewServiceUnavailable("apiserver down")
+					}
+					return cl.Patch(ctx, obj, patch, opts...)
+				},
+			}).
+			Build()
+		rec := record.NewFakeRecorder(10)
+		r := &BackupReconciler{Client: c, Recorder: rec}
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(map[string]string{psmdbSkipArtifactCleanupAnnotation: "true"}))
+		if err != nil || res.RequeueAfter != 0 {
+			t.Fatalf("release must proceed even when the strip fails, got res=%+v err=%v", res, err)
+		}
+		select {
+		case ev := <-rec.Events:
+			if !strings.Contains(ev, "FinalizerNotStripped") || !strings.Contains(ev, "op-bk") {
+				t.Errorf("expected a FinalizerNotStripped event naming the object, got %q", ev)
+			}
+		default:
+			t.Errorf("expected an event surfacing the stuck finalizer, got none")
 		}
 	})
 }
