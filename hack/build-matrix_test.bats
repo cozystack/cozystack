@@ -50,6 +50,14 @@
   [ "$out" = '["packages/apps/mariadb"]' ]
 }
 
+@test "kubeovn source patch selects the kubeovn image build" {
+  tmp=$(mktemp)
+  echo "packages/system/kubeovn/images/kubeovn/patches/fix-vmim-scheduling-retry.diff" > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '["packages/system/kubeovn"]' ]
+  rm -f "$tmp"
+}
+
 @test "two-package diff selects both units" {
   tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
   printf 'packages/apps/mariadb/values.yaml\npackages/system/dashboard/values.yaml\n' > "$tmp"
