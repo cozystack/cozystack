@@ -211,13 +211,13 @@ tests:
           content:
             apiGroups: [""]
             resources: ["persistentvolumeclaims"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
       - contains:
           path: rules
           content:
             apiGroups: ["cert-manager.io"]
             resources: ["certificates"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
       # Only "challenges" are granted: the host-scoped sweep lists/deletes
       # them, while Orders are cascade-deleted by cert-manager itself when the
       # Certificate is removed, so the hook needs no RBAC for orders.
@@ -226,13 +226,13 @@ tests:
           content:
             apiGroups: ["acme.cert-manager.io"]
             resources: ["challenges"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
       - notContains:
           path: rules
           content:
             apiGroups: ["acme.cert-manager.io"]
             resources: ["orders", "challenges"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
       # We list+delete orphaned http01 solver Ingresses by name, so we need
       # get/list/delete on networking.k8s.io ingresses.
       - contains:
@@ -240,7 +240,7 @@ tests:
           content:
             apiGroups: ["networking.k8s.io"]
             resources: ["ingresses"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
       # The hook must not grant services/pods: solver Pods/Services cascade
       # from the Challenge/Certificate and are never deleted directly.
       - notContains:
@@ -248,13 +248,13 @@ tests:
           content:
             apiGroups: [""]
             resources: ["services"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
       - notContains:
           path: rules
           content:
             apiGroups: [""]
             resources: ["pods"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
 
   - it: binds the Role to the cleanup ServiceAccount
     documentSelector:
