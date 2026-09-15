@@ -225,6 +225,33 @@ system_releases() {
   done
 }
 
+# parse_epoch <rfc3339> -- an RFC3339 timestamp -> epoch seconds, portably across
+# GNU and BSD date. GNU spells this `date -d`, BSD spells it `date -j -f <fmt>`,
+# and each REJECTS the other's flag, so both are attempted (each with its own
+# stderr muted) and the first that yields an epoch wins. Only the leading 19
+# chars are fed in -- "YYYY-MM-DDTHH:MM:SS", dropping any fractional seconds and
+# the zone suffix -- which both accept and which the callers compare purely
+# against each other, never against a wall clock.
+#
+# The value passed here is always NON-EMPTY: an absent field is a benign "no
+# evidence" case the callers settle BEFORE reaching this. So a value that NEITHER
+# form can read is not absent evidence -- it is a clock the host could not read: a
+# `date` with no usable form on PATH, or a value no healthy apiserver / Helm
+# payload emits. Folding that into the empty-field "direction cannot be
+# established" branch is exactly issue #4273 -- a host-tool failure printed as a
+# statement about the cluster, on every tenant, on any host without GNU date. So
+# it is FATAL and names the value, kept loud and distinct from the silent
+# absent-evidence path by construction. The muted stderr above hides only the
+# expected "illegal option" from the wrong spelling; a genuine total failure is
+# reported here, not swallowed.
+parse_epoch() {
+  _pe_in=$(printf '%s' "$1" | cut -c1-19)
+  if _pe_out=$(date -u -d "$_pe_in" +%s 2>/dev/null); then printf '%s' "$_pe_out"; return 0; fi
+  if _pe_out=$(date -u -j -f '%Y-%m-%dT%H:%M:%S' "$_pe_in" +%s 2>/dev/null); then printf '%s' "$_pe_out"; return 0; fi
+  audit_fatal "could not parse timestamp '$1' as epoch seconds with either GNU (date -d) or BSD (date -j -f) date. The host has no usable date on PATH, or the value is not an RFC3339 timestamp."
+  return 1
+}
+
 # first_deployed <ns> <release> -- epoch seconds of the release's first install,
 # from any retained revision (the field is identical on all of them).
 first_deployed() {
@@ -234,14 +261,18 @@ first_deployed() {
     # Same extraction discipline as the chart name above: fold newlines so a
     # pretty-printed payload parses at all, tolerate whitespace around the
     # punctuation, and take the FIRST match (.info precedes .config, so a values
-    # subtree cannot shadow the real timestamp). A miss here is not fatal -- the
-    # caller degrades to the documented safe fallback -- but a WRONG timestamp
-    # would silently change a vintage verdict, which is worse than none.
+    # subtree cannot shadow the real timestamp). An ABSENT first_deployed is not
+    # fatal -- the loop simply falls through and the caller degrades to the
+    # documented safe fallback -- but a WRONG timestamp would silently change a
+    # vintage verdict, which is worse than none. A PRESENT-but-unparseable one is
+    # handled by parse_epoch, which fails loudly rather than degrading (#4273):
+    # the two are different, an absent field being no evidence and an unreadable
+    # field being a clock the host could not read.
     ts=$(printf '%s' "$_fd_json" | tr '\n' ' ' \
       | grep -o '"first_deployed"[[:space:]]*:[[:space:]]*"[^"]*"' \
       | head -1 \
       | sed -n 's/.*"\([^"]*\)"$/\1/p')
-    if [ -n "$ts" ]; then date -u -d "$(printf '%s' "$ts" | cut -c1-19)" +%s 2>/dev/null; return; fi
+    if [ -n "$ts" ]; then parse_epoch "$ts"; return; fi
   done
 }
 
@@ -255,7 +286,9 @@ rev1_scheme() {
 }
 
 # pv_epoch <ns> <pvc> -- creation epoch of the PV the claim is BOUND to, or "" when
-# there is no usable PV age. Two by-NAME GETs.
+# there is no PV age to read (an unbound claim, or a NotFound PVC/PV). A PV age
+# that is PRESENT but unreadable is not this case -- it is fatal (see below). Two
+# by-NAME GETs.
 #
 # A real API error must abort (an epoch silently missing from a range can invert
 # the strict-newer comparison and name the WRONG deletion candidate), so both GETs
@@ -272,9 +305,14 @@ rev1_scheme() {
 #     stamps it), but if it ever did the only effect is one missing epoch, i.e. the
 #     same safe incomplete fallback, so a hard stop is not warranted here.
 # `--ignore-not-found` keeps a genuinely-absent PVC/PV (NotFound) on that same
-# benign path rather than turning it into a run_kubectl failure, and the final
-# `|| return 0` keeps an unparseable timestamp there too; only a real run_kubectl
-# error propagates.
+# benign path rather than turning it into a run_kubectl failure. A timestamp that
+# is PRESENT but unparseable is deliberately NOT on that path: parse_epoch makes
+# it FATAL (issue #4273), because a host whose `date` cannot read the clock is not
+# the same as a claim that carries no evidence, and the old `2>/dev/null || return
+# 0` collapsed the two -- reporting every tenant "direction cannot be established"
+# on any host without GNU date. Only a real run_kubectl error, or now an
+# unreadable-but-present timestamp, propagates; the two empty-field cases above
+# stay benign.
 pv_epoch() {
   pv=$(run_kubectl "get PVC '$2' in namespace '$1'" \
     get pvc -n "$1" "$2" --ignore-not-found -o jsonpath='{.spec.volumeName}') || return $?
@@ -282,7 +320,7 @@ pv_epoch() {
   t=$(run_kubectl "get PV '$pv' (bound by PVC '$2' in namespace '$1')" \
     get pv "$pv" --ignore-not-found -o jsonpath='{.metadata.creationTimestamp}') || return $?
   [ -n "$t" ] || return 0
-  date -u -d "$(printf '%s' "$t" | cut -c1-19)" +%s 2>/dev/null || return 0
+  parse_epoch "$t"
 }
 
 # classify_mixed_direction <lmin> <lmax> <rmin> <rmax> -- direction of a MIXED
