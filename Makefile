@@ -10,7 +10,6 @@ build-deps:
 	@awk --version | grep -q GNU || (echo "GNU awk is required" && exit 1)
 
 build: build-deps
-	make -C packages/apps/http-cache image
 	make -C packages/apps/mariadb image
 	make -C packages/apps/clickhouse image
 	make -C packages/apps/kubernetes image
