@@ -8,7 +8,7 @@
 # upgrade. These drive the real migration script against a fake kubectl
 # (hack/testdata/migration-59-foundationdb/) and pin that:
 #   - each release that set cluster.version on 7.1, 7.3 or 7.4 gets version for
-#     that line, through a JSON patch that tests the value it read and leaves
+#     that line, through a JSON patch that tests the values it read and leaves
 #     cluster.version in place for the old chart;
 #   - releases that never set cluster.version, already have version, or are not
 #     FoundationDB are not touched;
@@ -66,10 +66,10 @@ JSON
   cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
 
-  grep -qxF 'PATCH tenant-a foundationdb-old71 json [{"op":"test","path":"/spec/values/cluster/version","value":"7.1.67"},{"op":"add","path":"/spec/values/version","value":"v7.1"}]' "$FAKE_CMDLOG"
-  grep -qxF 'PATCH tenant-a foundationdb-new74 json [{"op":"test","path":"/spec/values/cluster/version","value":"7.4.3"},{"op":"add","path":"/spec/values/version","value":"v7.4"}]' "$FAKE_CMDLOG"
-  grep -qxF 'PATCH tenant-b foundationdb-pinned73 json [{"op":"test","path":"/spec/values/cluster/version","value":"7.3.63"},{"op":"add","path":"/spec/values/version","value":"v7.3"}]' "$FAKE_CMDLOG"
-  grep -qxF 'PATCH tenant-c foundationdb-unlabelled json [{"op":"test","path":"/spec/values/cluster/version","value":"7.1.0"},{"op":"add","path":"/spec/values/version","value":"v7.1"}]' "$FAKE_CMDLOG"
+  grep -qxF 'PATCH tenant-a foundationdb-old71 json [{"op":"test","path":"/spec/values","value":{"cluster":{"version":"7.1.67","redundancyMode":"double"}}},{"op":"add","path":"/spec/values/version","value":"v7.1"}]' "$FAKE_CMDLOG"
+  grep -qxF 'PATCH tenant-a foundationdb-new74 json [{"op":"test","path":"/spec/values","value":{"cluster":{"version":"7.4.3"}}},{"op":"add","path":"/spec/values/version","value":"v7.4"}]' "$FAKE_CMDLOG"
+  grep -qxF 'PATCH tenant-b foundationdb-pinned73 json [{"op":"test","path":"/spec/values","value":{"cluster":{"version":"7.3.63"}}},{"op":"add","path":"/spec/values/version","value":"v7.3"}]' "$FAKE_CMDLOG"
+  grep -qxF 'PATCH tenant-c foundationdb-unlabelled json [{"op":"test","path":"/spec/values","value":{"cluster":{"version":"7.1.0"}}},{"op":"add","path":"/spec/values/version","value":"v7.1"}]' "$FAKE_CMDLOG"
 
   [ "$(grep -c '^PATCH ' "$FAKE_CMDLOG")" -eq 4 ]
   if grep -q 'PATCH [^ ]* foundationdb-defaults ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* foundationdb-defaults '"; exit 1; fi
