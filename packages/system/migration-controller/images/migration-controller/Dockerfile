@@ -3,7 +3,7 @@
 # instead makes its garbage collector die with "found bad pointer in Go heap"
 # on an arm64 host building for amd64. The output binary is identical either
 # way, and a native build is far faster.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
