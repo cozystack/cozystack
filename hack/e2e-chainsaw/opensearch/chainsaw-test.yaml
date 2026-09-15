@@ -32,6 +32,23 @@ spec:
       apiVersion: opensearch.opster.io/v1
       kind: OpenSearchCluster
       name: opensearch-test
+  # The roll's own fields — updateRevision, currentRevision, generation,
+  # updatedReplicas — are what separate a template that was never rewritten from
+  # one the operator has not restarted the pod onto (#4259). The nodePool
+  # StatefulSet is OnDelete (opensearch-k8s-operator v2.8.0, builders/cluster.go
+  # sets UpdateStrategy.Type OnDelete), so the roll is the operator's
+  # rolling-restart reconciler's to drive — it deletes the pod itself — not the
+  # StatefulSet controller's. describe omits those fields, so the StatefulSet is
+  # captured both ways: get -o yaml carries the revisions and the rendered volume
+  # list, describe carries the pod template and the controller's events.
+  - get:
+      apiVersion: apps/v1
+      kind: StatefulSet
+      format: yaml
+  - describe:
+      apiVersion: apps/v1
+      kind: StatefulSet
+      name: opensearch-test-nodes
   # cert-manager records a refusal to issue in the Certificate's conditions.
   # Without this an unissued chain shows up only as an absent Secret, and the
   # CR then names a Secret that is never going to appear.
@@ -45,6 +62,14 @@ spec:
       kind: TenantProjection
   - podLogs:
       selector: opster.io/opensearch-cluster=opensearch-test
+      tail: 100
+  # The restart is the operator's to start, gated on status.Initialized, on
+  # ReadyReplicas == replicas and on CheckClusterStatusForRestart reaching the
+  # cluster (rollingRestart.go). That verdict is logged in the operator, not in
+  # the cluster pods above, and the operator runs in its own namespace.
+  - podLogs:
+      namespace: cozy-opensearch-operator
+      selector: control-plane=controller-manager
       tail: 100
   # The external Service is a LoadBalancer, so an address pool with nothing left
   # in it holds the HelmRelease short of Ready with nothing in the HelmRelease
@@ -234,6 +259,52 @@ spec:
   # same reason — the replacement pod pulls and starts OpenSearch from scratch.
   - name: verify-statefulset-rolled-onto-the-new-mount-plan
     try:
+    # Two asserts, not one, so a timeout names which half did not happen (#4259).
+    # The template rewrite and the roll onto it are separate outcomes with
+    # separate owners, and folding them into one assert cost the first run its
+    # diagnosis: the failure surfaced only as the status mismatch, while the
+    # volume projections in the diff read as absent even though they were present
+    # — the projection trap e2e-testing.md calls out ("the actual side is a
+    # projection"). Split, the two candidates the issue names fail on their own
+    # lines.
+    #
+    # First half: the operator rewrote the template onto the subPath mount plan.
+    # That is the operator's to do the moment the CR names the cert-manager
+    # Secrets, which verify-cr-dropped-generate and the certificate steps already
+    # waited for, so it lands within a reconcile or two rather than a pod
+    # lifetime. A shorter budget than the roll below, and a failure here is the
+    # operator not writing the volumes — not a pod that will not start.
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: opensearch-test-nodes
+          (spec.template.spec.volumes[?name == 'http-cert'].secret.secretName):
+          - opensearch-test-http-server
+          (spec.template.spec.volumes[?name == 'http-key'].secret.secretName):
+          - opensearch-test-http-server
+          (spec.template.spec.volumes[?name == 'http-ca'].secret.secretName):
+          - opensearch-test.http-ca
+    # Second half: the operator restarted the pod onto that template and the
+    # StatefulSet finished rolling. currentRevision only advances here once the
+    # operator's rolling-restart reconciler patches it (rollingRestart.go), so
+    # equal revisions plus a ready updated replica is that reconciler having run
+    # to the end. A failure here with the assert above green is the operator not
+    # restarting the pod onto the new template — gated on status.Initialized, on
+    # ReadyReplicas == replicas and on its client reaching the cluster — not a
+    # template that was never written. Same 12m as the first boot, for the same
+    # reason: the operator deletes the pod and the replacement pulls and starts
+    # OpenSearch from scratch.
+    #
+    # The three volume projections are carried in here too, so the roll is pinned
+    # to the template the first half checked and not to whatever revision happens
+    # to be current when the status converges (#4259 review). The CR moves only
+    # once in this suite, but the split otherwise lets a rewrite landing after the
+    # first assert satisfy this half on its own. observedGeneration == generation
+    # is compared at the resource root because a status-scoped expression cannot
+    # reach metadata from its own node.
     - assert:
         timeout: 12m
         resource:
@@ -241,6 +312,7 @@ spec:
           kind: StatefulSet
           metadata:
             name: opensearch-test-nodes
+          (status.observedGeneration == metadata.generation): true
           (spec.template.spec.volumes[?name == 'http-cert'].secret.secretName):
           - opensearch-test-http-server
           (spec.template.spec.volumes[?name == 'http-key'].secret.secretName):
