@@ -456,6 +456,20 @@ authentication:
     enabled: false
     insecureSkipVerify: false
     keycloakExtraRedirectUri: ""
+    # Technical name of the Keycloak realm that owns the cozystack clients and
+    # the cozystack-cluster-admin roles. keycloak-configure creates the realm
+    # under this name, and every SSO consumer (dashboard, linstor-gui, the
+    # generated kubeconfig, and the derived keycloakInternalUrl below) points at
+    # /realms/<realmName>. The apiserver OIDC issuer is set out-of-band via talm
+    # oidcIssuerUrl and must carry the same realm, or the tokens minted here are
+    # rejected. Rename it in one place; keep it in step with talm.
+    #
+    # Set this at install time. Changing it on a running cluster does not rename
+    # the realm: the keycloak-operator provisions a fresh, empty realm under the
+    # new name and abandons the old one, so every account, session and client
+    # living in the previous realm is orphaned. Treat a rename on a live cluster
+    # as a from-scratch re-provision of identities, not an in-place migration.
+    realmName: "cozy"
     # In-cluster URL of the KeyCloak realm, used for backend-to-backend requests. oauth2-proxy runs
     # with --skip-oidc-discovery and sends every backend call (token, jwks, userinfo, logout) to this
     # URL, while browser-facing redirects keep pointing at the external host.
@@ -470,7 +484,13 @@ authentication:
     #
     # Override only for a KeyCloak that does not live at the standard in-cluster address. Setting it
     # to an empty string restores full OIDC discovery against the external issuer.
-    keycloakInternalUrl: "http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy"
+    #
+    # Left unset (null), it is derived from realmName as
+    # http://keycloak-http.cozy-keycloak.svc:8080/realms/<realmName>, so a realm rename reaches these
+    # backend calls automatically. The tri-state is: null -> derive from realmName; "" -> external
+    # OIDC discovery; any other value -> used verbatim. An explicit value is not rewritten, so a
+    # custom realm paired with an explicit URL must name the same realm.
+    keycloakInternalUrl: null
 # Gateway API configuration
 gateway:
   # Enable Gateway API support across the platform. When true:

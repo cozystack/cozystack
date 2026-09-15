@@ -34,9 +34,7 @@ Three modes:
   `<release>-admin-kubeconfig` Secret (the Kamaji-minted `super-admin.svc`
   kubeconfig). This is the default; existing clusters render byte-identical
   to before.
-- **System** — the apiserver trusts the platform `cozy` Keycloak realm via a
-  per-cluster public client. Authenticates the users already in `cozy` (the
-  realm cozystack ships with). Zero-config default.
+- **System** — the apiserver trusts the platform Keycloak realm (`cozy` by default, set via `authentication.oidc.realmName`) via a per-cluster public client. Authenticates the users already in that realm (the one cozystack provisions). Zero-config default.
 - **CustomConfig** — the apiserver trusts a tenant-supplied OIDC issuer
   directly. `cozy` is not in the path. Use for BYO IdPs (Okta, Auth0, a
   customer's own Keycloak).

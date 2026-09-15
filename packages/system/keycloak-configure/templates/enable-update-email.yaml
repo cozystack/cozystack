@@ -1,5 +1,7 @@
+{{- $realmName := index .Values._cluster "oidc-realm-name" | default "cozy" | toString }}
 {{/*
-  Enable the UPDATE_EMAIL required action in the `cozy` realm.
+  Enable the UPDATE_EMAIL required action in the platform realm (cozy by
+  default, authentication.oidc.realmName).
 
   The portal user-settings page lets a user change their email via a
   Keycloak `kc_action=UPDATE_EMAIL` redirect. That flow only works when
@@ -73,7 +75,7 @@ spec:
               set -eu
               KCADM=/opt/keycloak/bin/kcadm.sh
               CFG=/tmp/kcadm.config
-              REALM=cozy
+              REALM={{ $realmName | squote }}
 
               # The realm is reconciled asynchronously by the
               # keycloak-operator, so wait for it before configuring it.

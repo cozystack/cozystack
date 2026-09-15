@@ -1,4 +1,5 @@
 {{- $host := index .Values._cluster "root-host" }}
+{{- $realmName := index .Values._cluster "oidc-realm-name" | default "cozy" }}
 {{- $extraRedirectUris := splitList "," ((index .Values._cluster "extra-keycloak-redirect-uri-for-dashboard") | default "") }}
 {{- $k8sCa := index .Values._cluster "kube-root-ca" }}
 
@@ -25,7 +26,7 @@ metadata:
   name: keycloakrealm-cozy
   namespace: {{ .Release.Namespace }}
 spec:
-  realmName: cozy
+  realmName: {{ $realmName | quote }}
   clusterKeycloakRef: keycloak-cozy
   {{- if $brandingConfig }}
   {{- if hasKey $brandingConfig "brandName" }}
