@@ -1,0 +1,1066 @@
+diff --git a/api/v1alpha1/kubevirtcluster_types.go b/api/v1alpha1/kubevirtcluster_types.go
+index c13a714..b1cfdbc 100644
+--- a/api/v1alpha1/kubevirtcluster_types.go
++++ b/api/v1alpha1/kubevirtcluster_types.go
+@@ -38,6 +38,20 @@ const ( //labels
+ const ( // annotations
+ 	VmiDeletionGraceTime       = "capk.cluster.x-k8s.io/vmi-deletion-grace-time"
+ 	VmiDeletionGraceTimeEscape = "capk.cluster.x-k8s.io~1vmi-deletion-grace-time"
++
++	// NodeCordonedByCapk is set on KubevirtMachine when CAPK cordons the
++	// guest node during an eviction drain. It is used to uncordon the node
++	// after the VMI is recreated on a different host.
++	NodeCordonedByCapk       = "capk.cluster.x-k8s.io/node-cordoned"
++	NodeCordonedByCapkEscape = "capk.cluster.x-k8s.io~1node-cordoned"
++
++	// VmiMigrationSubmitted is set on KubevirtMachine when CAPK creates a
++	// VirtualMachineInstanceMigration for a migratable VMI. It prevents
++	// duplicate migration creates and decouples the grace period timer from
++	// migration submission -- the timer only starts when the migration is
++	// actively in progress. The value "draining" marks the drain+delete
++	// fallback, whose separate deadline must survive subsequent reconciles.
++	VmiMigrationSubmitted = "capk.cluster.x-k8s.io/migration-submitted"
+ )
+ 
+ // KubevirtClusterSpec defines the desired state of KubevirtCluster.
+diff --git a/config/rbac/role.yaml b/config/rbac/role.yaml
+index 19f9dc6..80cf730 100644
+--- a/config/rbac/role.yaml
++++ b/config/rbac/role.yaml
+@@ -71,6 +71,12 @@ rules:
+   - get
+   - patch
+   - update
++- apiGroups:
++  - kubevirt.io
++  resources:
++  - virtualmachineinstancemigrations
++  verbs:
++  - create
+ - apiGroups:
+   - kubevirt.io
+   resources:
+diff --git a/controllers/kubevirtmachine_controller.go b/controllers/kubevirtmachine_controller.go
+index 9832a96..9bf7a4a 100644
+--- a/controllers/kubevirtmachine_controller.go
++++ b/controllers/kubevirtmachine_controller.go
+@@ -66,6 +66,7 @@ type KubevirtMachineReconciler struct {
+ // +kubebuilder:rbac:groups="",resources=secrets;,verbs=get;list;watch;create;update;patch;delete
+ // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines;,verbs=get;create;update;patch;delete
+ // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachineinstances;,verbs=get;delete
++// +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachineinstancemigrations;,verbs=create
+ // +kubebuilder:rbac:groups=cdi.kubevirt.io,resources=datavolumes;,verbs=get;list;watch
+ 
+ // Reconcile handles KubevirtMachine events.
+diff --git a/pkg/kubevirt/machine.go b/pkg/kubevirt/machine.go
+index 38a839d..1dc17f6 100644
+--- a/pkg/kubevirt/machine.go
++++ b/pkg/kubevirt/machine.go
+@@ -25,6 +25,7 @@ import (
+ 	corev1 "k8s.io/api/core/v1"
+ 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+ 	"k8s.io/apimachinery/pkg/types"
+ 	kubedrain "k8s.io/kubectl/pkg/drain"
+ 	kubevirtv1 "kubevirt.io/api/core/v1"
+@@ -413,14 +414,51 @@ func (m *Machine) Delete() error {
+ 
+ func (m *Machine) DrainNodeIfNeeded(wrkldClstr workloadcluster.WorkloadCluster) (time.Duration, error) {
+ 	if m.vmiInstance == nil || !m.shouldGracefulDeleteVMI() {
+-		if _, anntExists := m.machineContext.KubevirtMachine.Annotations[infrav1.VmiDeletionGraceTime]; anntExists {
+-			if err := m.removeGracePeriodAnnotation(); err != nil {
+-				return 100 * time.Millisecond, err
++		if err := m.cleanupMigrationAnnotations(); err != nil {
++			return 100 * time.Millisecond, err
++		}
++
++		// Only uncordon when the VMI is back and not being deleted. If the VMI
++		// is nil (not yet recreated) or still has a DeletionTimestamp, the
++		// eviction cycle is not complete and the node must stay cordoned.
++		if m.vmiInstance != nil && m.vmiInstance.DeletionTimestamp == nil {
++			if err := m.uncordonNodeIfNeeded(wrkldClstr); err != nil {
++				m.machineContext.Logger.Error(err, "failed to uncordon guest node")
++				return 100 * time.Millisecond, nil
+ 			}
+ 		}
++
+ 		return 0, nil
+ 	}
+ 
++	// For migratable VMIs, attempt live migration before the disruptive
++	// drain+delete path. If migration succeeds, the guest node is untouched.
++	// Once fallback starts, preserve its deadline and do not retry migration.
++	// A migration may still finish after its timeout; honor that success before
++	// draining or deleting a VMI which has already left the evacuation source.
++	if m.vmiInstance.IsMigratable() &&
++		(m.machineContext.KubevirtMachine.Annotations[infrav1.VmiMigrationSubmitted] != migrationDraining ||
++			m.vmiInstance.Status.NodeName != m.vmiInstance.Status.EvacuationNodeName) {
++		migrated, requeueAfter, err := m.tryMigrateVMI()
++		if err != nil {
++			return 0, err
++		}
++		if migrated {
++			if err := m.cleanupMigrationAnnotations(); err != nil {
++				return 100 * time.Millisecond, err
++			}
++			return 0, nil
++		}
++		if requeueAfter > 0 {
++			return requeueAfter, nil
++		}
++		// Enter fallback once. Persist its phase and fresh deadline together
++		// so retries cannot extend the drain timeout indefinitely.
++		if err := m.beginDrainFallback(); err != nil {
++			return 100 * time.Millisecond, err
++		}
++	}
++
+ 	exceeded, err := m.drainGracePeriodExceeded()
+ 	if err != nil {
+ 		return 0, err
+@@ -455,6 +493,21 @@ func (m *Machine) DrainNodeIfNeeded(wrkldClstr workloadcluster.WorkloadCluster)
+ 
+ const removeGracePeriodAnnotationPatch = `[{"op": "remove", "path": "/metadata/annotations/` + infrav1.VmiDeletionGraceTimeEscape + `"}]`
+ 
++const cleanupMigrationAnnotationsPatch = `{"metadata":{"annotations":{"` + infrav1.VmiMigrationSubmitted + `": null, "` + infrav1.VmiDeletionGraceTime + `": null}}}`
++
++const migrationDraining = "draining"
++
++func (m *Machine) beginDrainFallback() error {
++	graceTime := time.Now().Add(vmiDeleteGraceTimeoutDurationSeconds * time.Second).UTC().Format(time.RFC3339)
++	patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s","%s":"%s"}}}`,
++		infrav1.VmiMigrationSubmitted, migrationDraining, infrav1.VmiDeletionGraceTime, graceTime)
++	patchRequest := client.RawPatch(types.MergePatchType, []byte(patch))
++	if err := m.client.Patch(m.machineContext, m.machineContext.KubevirtMachine, patchRequest); err != nil {
++		return fmt.Errorf("failed to start drain fallback on KubevirtMachine %s: %w", m.machineContext.KubevirtMachine.Name, err)
++	}
++	return nil
++}
++
+ func (m *Machine) removeGracePeriodAnnotation() error {
+ 	patch := client.RawPatch(types.JSONPatchType, []byte(removeGracePeriodAnnotationPatch))
+ 
+@@ -465,6 +518,183 @@ func (m *Machine) removeGracePeriodAnnotation() error {
+ 	return nil
+ }
+ 
++// cleanupMigrationAnnotations removes both the migration-submitted marker and
++// the grace period annotation in a single merge patch. Setting a key to null
++// in a merge patch removes it; if the key does not exist, it is a no-op.
++func (m *Machine) cleanupMigrationAnnotations() error {
++	annotations := m.machineContext.KubevirtMachine.Annotations
++	_, hasMigration := annotations[infrav1.VmiMigrationSubmitted]
++	_, hasGrace := annotations[infrav1.VmiDeletionGraceTime]
++	if !hasMigration && !hasGrace {
++		return nil
++	}
++
++	patchRequest := client.RawPatch(types.MergePatchType, []byte(cleanupMigrationAnnotationsPatch))
++	if err := m.client.Patch(m.machineContext, m.machineContext.KubevirtMachine, patchRequest); err != nil {
++		return fmt.Errorf("failed to clean up migration annotations on KubevirtMachine %s: %w", m.machineContext.KubevirtMachine.Name, err)
++	}
++	return nil
++}
++
++func (m *Machine) setNodeCordonedAnnotation() error {
++	patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s": "true"}}}`, infrav1.NodeCordonedByCapk)
++	patchRequest := client.RawPatch(types.MergePatchType, []byte(patch))
++
++	if err := m.client.Patch(m.machineContext, m.machineContext.KubevirtMachine, patchRequest); err != nil {
++		return fmt.Errorf("failed to set the %s annotation on KubeVirtMachine %s; %w", infrav1.NodeCordonedByCapk, m.machineContext.KubevirtMachine.Name, err)
++	}
++
++	return nil
++}
++
++const removeNodeCordonedAnnotationPatch = `[{"op": "remove", "path": "/metadata/annotations/` + infrav1.NodeCordonedByCapkEscape + `"}]`
++
++func (m *Machine) removeNodeCordonedAnnotation() error {
++	patch := client.RawPatch(types.JSONPatchType, []byte(removeNodeCordonedAnnotationPatch))
++
++	if err := m.client.Patch(m.machineContext, m.machineContext.KubevirtMachine, patch); err != nil {
++		return fmt.Errorf("failed to remove the %s annotation from KubeVirtMachine %s; %w", infrav1.NodeCordonedByCapk, m.machineContext.KubevirtMachine.Name, err)
++	}
++
++	return nil
++}
++
++func (m *Machine) uncordonNodeIfNeeded(wrkldClstr workloadcluster.WorkloadCluster) error {
++	if _, exists := m.machineContext.KubevirtMachine.Annotations[infrav1.NodeCordonedByCapk]; !exists {
++		return nil
++	}
++
++	if wrkldClstr == nil {
++		m.machineContext.Logger.Info("Workload cluster client is nil, skipping uncordon")
++		return nil
++	}
++
++	kubeClient, err := wrkldClstr.GenerateWorkloadClusterK8sClient(m.machineContext)
++	if err != nil {
++		return fmt.Errorf("failed to get client to remote cluster for uncordon; %w", err)
++	}
++
++	nodeName := m.machineContext.KubevirtMachine.Name
++	node, err := kubeClient.CoreV1().Nodes().Get(m.machineContext, nodeName, metav1.GetOptions{})
++	if err != nil {
++		if apierrors.IsNotFound(err) {
++			m.machineContext.Logger.Info("Node not found during uncordon, removing annotation", "node", nodeName)
++			return m.removeNodeCordonedAnnotation()
++		}
++		return fmt.Errorf("unable to get node %q for uncordon: %w", nodeName, err)
++	}
++
++	if !node.Spec.Unschedulable {
++		m.machineContext.Logger.Info("Node is already schedulable, removing stale cordon annotation", "node", nodeName)
++		return m.removeNodeCordonedAnnotation()
++	}
++
++	drainer := &kubedrain.Helper{
++		Client: kubeClient,
++		Ctx:    m.machineContext,
++	}
++
++	m.machineContext.Logger.Info("Uncordoning guest node after VMI restart", "node", nodeName)
++	if err = kubedrain.RunCordonOrUncordon(drainer, node, false); err != nil {
++		return fmt.Errorf("unable to uncordon node %s: %w", nodeName, err)
++	}
++
++	return m.removeNodeCordonedAnnotation()
++}
++
++// tryMigrateVMI attempts to live-migrate a migratable VMI instead of the
++// disruptive drain+delete path. It returns:
++//   - migrated=true when the VMI has already moved to a different host
++//   - requeueAfter>0 when a migration is in progress or was just created
++//   - both zero when migration failed/timed out (caller should fall through to drain+delete)
++//
++// The grace period timer is deliberately deferred until the migration is
++// actively in progress (MigrationState is set). This ensures that on dense
++// nodes where KubeVirt serializes outbound migrations (1 at a time), VMs
++// waiting in the migration queue don't burn through their timeout window
++// before their migration even starts.
++func (m *Machine) tryMigrateVMI() (migrated bool, requeueAfter time.Duration, err error) {
++	// If the VMI is already on a different node than the evacuation source,
++	// migration has succeeded -- no guest disruption needed.
++	if m.vmiInstance.Status.NodeName != m.vmiInstance.Status.EvacuationNodeName {
++		m.machineContext.Logger.Info("VMI successfully migrated, skipping drain+delete",
++			"from", m.vmiInstance.Status.EvacuationNodeName,
++			"to", m.vmiInstance.Status.NodeName)
++		return true, 0, nil
++	}
++
++	if ms := m.vmiInstance.Status.MigrationState; ms != nil {
++		if ms.Failed {
++			m.machineContext.Logger.Info("VMI migration failed, falling back to drain+delete",
++				"vmi", m.vmiInstance.Name)
++			return false, 0, nil
++		}
++		if !ms.Completed {
++			// Migration is actively in progress -- the grace period timer
++			// starts here (not when the migration CR was first created).
++			exceeded, err := m.drainGracePeriodExceeded()
++			if err != nil {
++				return false, 0, err
++			}
++			if exceeded {
++				m.machineContext.Logger.Info("Migration timeout exceeded while migration in progress, falling back to drain+delete",
++					"vmi", m.vmiInstance.Name)
++				return false, 0, nil
++			}
++			m.machineContext.Logger.Info("VMI migration in progress, waiting",
++				"vmi", m.vmiInstance.Name)
++			return false, 10 * time.Second, nil
++		}
++	}
++
++	// No active migration. Check if we've already submitted a migration CR
++	// on a previous reconcile (waiting for KubeVirt to pick it up).
++	if _, exists := m.machineContext.KubevirtMachine.Annotations[infrav1.VmiMigrationSubmitted]; exists {
++		m.machineContext.Logger.Info("Migration already submitted, waiting for KubeVirt to start it",
++			"vmi", m.vmiInstance.Name)
++		return false, 10 * time.Second, nil
++	}
++
++	// First reconcile for this evacuation -- create a migration CR.
++	// Priority is reserved for virt-controller, including when KubeVirt
++	// enables MigrationPriorityQueue. Ordinary migrations retain cluster limits.
++	migration := &unstructured.Unstructured{Object: map[string]interface{}{
++		"apiVersion": "kubevirt.io/v1",
++		"kind":       "VirtualMachineInstanceMigration",
++		"metadata": map[string]interface{}{
++			"generateName": m.vmiInstance.Name + "-migration-",
++			"namespace":    m.vmiInstance.Namespace,
++		},
++		"spec": map[string]interface{}{
++			"vmiName": m.vmiInstance.Name,
++		},
++	}}
++
++	if err := m.client.Create(m.machineContext, migration); err != nil {
++		m.machineContext.Logger.Error(err, "Failed to create VirtualMachineInstanceMigration, falling back to drain+delete",
++			"vmi", m.vmiInstance.Name)
++		return false, 0, nil
++	}
++
++	if err := m.setMigrationSubmittedAnnotation(); err != nil {
++		return false, 0, err
++	}
++
++	m.machineContext.Logger.Info("Created VirtualMachineInstanceMigration for migratable VMI",
++		"migration", migration.GetName(), "vmi", m.vmiInstance.Name)
++
++	return false, 10 * time.Second, nil
++}
++
++func (m *Machine) setMigrationSubmittedAnnotation() error {
++	patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s": "true"}}}`, infrav1.VmiMigrationSubmitted)
++	patchRequest := client.RawPatch(types.MergePatchType, []byte(patch))
++	if err := m.client.Patch(m.machineContext, m.machineContext.KubevirtMachine, patchRequest); err != nil {
++		return fmt.Errorf("failed to set the %s annotation on KubevirtMachine %s: %w", infrav1.VmiMigrationSubmitted, m.machineContext.KubevirtMachine.Name, err)
++	}
++	return nil
++}
++
+ func (m *Machine) shouldGracefulDeleteVMI() bool {
+ 	if m.vmiInstance.DeletionTimestamp != nil {
+ 		m.machineContext.Logger.V(4).Info("DrainNode: the virtualMachineInstance is already in deletion process. Nothing to do here")
+@@ -531,7 +761,7 @@ func (m *Machine) drainNode(wrkldClstr workloadcluster.WorkloadCluster) (time.Du
+ 		return 0, fmt.Errorf("failed to get client to remote cluster; %w", err)
+ 	}
+ 
+-	nodeName := m.vmiInstance.Status.EvacuationNodeName
++	nodeName := m.machineContext.KubevirtMachine.Name
+ 	node, err := kubeClient.CoreV1().Nodes().Get(m.machineContext, nodeName, metav1.GetOptions{})
+ 	if err != nil {
+ 		if apierrors.IsNotFound(err) {
+@@ -577,6 +807,11 @@ func (m *Machine) drainNode(wrkldClstr workloadcluster.WorkloadCluster) (time.Du
+ 		return 0, errors.Errorf("unable to cordon node %s: %v", nodeName, err)
+ 	}
+ 
++	if err = m.setNodeCordonedAnnotation(); err != nil {
++		m.machineContext.Logger.Error(err, "Failed to set node-cordoned annotation after cordon")
++		return 100 * time.Millisecond, nil
++	}
++
+ 	if err = kubedrain.RunNodeDrain(drainer, node.Name); err != nil {
+ 		// Machine will be re-reconciled after a drain failure.
+ 		m.machineContext.Logger.Error(err, "Drain failed, retry in a second", "node name", nodeName)
+diff --git a/pkg/kubevirt/machine_test.go b/pkg/kubevirt/machine_test.go
+index 1858970..5371370 100644
+--- a/pkg/kubevirt/machine_test.go
++++ b/pkg/kubevirt/machine_test.go
+@@ -28,6 +28,7 @@ import (
+ 	corev1 "k8s.io/api/core/v1"
+ 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+ 	"k8s.io/apimachinery/pkg/runtime"
+ 	k8sfake "k8s.io/client-go/kubernetes/fake"
+ 	k8stesting "k8s.io/client-go/testing"
+@@ -321,7 +322,7 @@ var _ = Describe("With KubeVirt VM running", func() {
+ 	})
+ 
+ 	Context("test DrainNodeIfNeeded", func() {
+-		const nodeName = "control-plane1"
++		const hostNodeName = "host-node-1"
+ 
+ 		var (
+ 			wlCluster *mock.MockWorkloadCluster
+@@ -331,11 +332,15 @@ var _ = Describe("With KubeVirt VM running", func() {
+ 			virtualMachineInstance = testing.NewVirtualMachineInstance(kubevirtMachine)
+ 			strategy := kubevirtv1.EvictionStrategyExternal
+ 			virtualMachineInstance.Spec.EvictionStrategy = &strategy
+-			virtualMachineInstance.Status.EvacuationNodeName = nodeName
++			virtualMachineInstance.Status.EvacuationNodeName = hostNodeName
+ 
+ 			if kubevirtMachine.Annotations == nil {
+ 				kubevirtMachine.Annotations = make(map[string]string)
+ 			}
++			// The fixture is shared by specs; each eviction starts independently.
++			delete(kubevirtMachine.Annotations, v1alpha1.VmiDeletionGraceTime)
++			delete(kubevirtMachine.Annotations, v1alpha1.VmiMigrationSubmitted)
++			delete(kubevirtMachine.Annotations, v1alpha1.NodeCordonedByCapk)
+ 
+ 			mockCtrl := gomock.NewController(GinkgoT())
+ 			wlCluster = mock.NewMockWorkloadCluster(mockCtrl)
+@@ -460,7 +465,7 @@ var _ = Describe("With KubeVirt VM running", func() {
+ 			It("Should drain the node", func() {
+ 				node := &corev1.Node{
+ 					ObjectMeta: metav1.ObjectMeta{
+-						Name: nodeName,
++						Name: kubevirtMachineName,
+ 					},
+ 				}
+ 
+@@ -476,6 +481,11 @@ var _ = Describe("With KubeVirt VM running", func() {
+ 				Expect(err).NotTo(HaveOccurred())
+ 				Expect(requeueDuration).To(Equal(time.Duration(10 * time.Second)))
+ 
++				By("draining the guest node rather than looking up the physical host")
++				guestNode, err := cl.CoreV1().Nodes().Get(gocontext.Background(), kubevirtMachineName, metav1.GetOptions{})
++				Expect(err).ToNot(HaveOccurred())
++				Expect(guestNode.Spec.Unschedulable).To(BeTrue())
++
+ 				vmi := &kubevirtv1.VirtualMachineInstance{}
+ 				err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: virtualMachineInstance.Namespace, Name: virtualMachineInstance.Name}, vmi)
+ 				Expect(err).To(HaveOccurred())
+@@ -486,6 +496,9 @@ var _ = Describe("With KubeVirt VM running", func() {
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(machine).ToNot(BeNil())
+ 				Expect(machine.Annotations).ToNot(HaveKey(v1alpha1.VmiDeletionGraceTime))
++
++				By("The node-cordoned annotation should be set after cordon")
++				Expect(machine.Annotations).To(HaveKey(v1alpha1.NodeCordonedByCapk))
+ 			})
+ 		})
+ 
+@@ -498,7 +511,7 @@ var _ = Describe("With KubeVirt VM running", func() {
+ 			It("Should not drain the node", func() {
+ 				node := &corev1.Node{
+ 					ObjectMeta: metav1.ObjectMeta{
+-						Name: nodeName,
++						Name: kubevirtMachineName,
+ 					},
+ 				}
+ 
+@@ -563,6 +576,598 @@ var _ = Describe("With KubeVirt VM running", func() {
+ 				Expect(machine.Annotations).ToNot(HaveKey(v1alpha1.VmiDeletionGraceTime))
+ 			})
+ 		})
++
++		Context("migration-first eviction for migratable VMIs", func() {
++			BeforeEach(func() {
++				virtualMachineInstance.Status.NodeName = hostNodeName
++				virtualMachineInstance.Status.Conditions = append(
++					virtualMachineInstance.Status.Conditions,
++					kubevirtv1.VirtualMachineInstanceCondition{
++						Type:   kubevirtv1.VirtualMachineInstanceIsMigratable,
++						Status: corev1.ConditionTrue,
++					},
++				)
++			})
++
++			Context("bounded fallback deadline", func() {
++				DescribeTable("preserves one fallback deadline across reconciles",
++					func(migrationFailed, deadlineExpired bool) {
++						virtualMachineInstance.Status.MigrationState = &kubevirtv1.VirtualMachineInstanceMigrationState{
++							Failed: migrationFailed, StartTimestamp: nowTimestamp(),
++						}
++						// Update the VMI already stored by the enclosing JustBeforeEach.
++						Expect(fakeClient.Update(gocontext.Background(), virtualMachineInstance)).To(Succeed())
++						kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted] = "true"
++						kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime] = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
++						Expect(fakeClient.Update(gocontext.Background(), kubevirtMachine)).To(Succeed())
++
++						node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: kubevirtMachineName}}
++						cl := k8sfake.NewClientset(node)
++						cl.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
++							return true, nil, errors.New("drain has not completed")
++						})
++						calls := 2
++						if deadlineExpired {
++							calls = 1 // An expired fallback must not try another drain.
++						}
++						wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Return(cl, nil).Times(calls)
++						externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++						Expect(err).NotTo(HaveOccurred())
++
++						By("starting a separate fallback window after failure or migration timeout")
++						requeue, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++						Expect(err).NotTo(HaveOccurred())
++						Expect(requeue).To(Equal(time.Second))
++						Expect(kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted]).To(Equal("draining"))
++						firstDeadline, err := time.Parse(time.RFC3339, kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime])
++						Expect(err).NotTo(HaveOccurred())
++						Expect(firstDeadline.After(time.Now().UTC().Add(9 * time.Minute))).To(BeTrue())
++
++						By("reconciling again with the same failed or timed-out migration")
++						deadline := time.Now().UTC().Add(time.Minute).Format(time.RFC3339)
++						if deadlineExpired {
++							deadline = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
++						}
++						kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime] = deadline
++						Expect(fakeClient.Update(gocontext.Background(), kubevirtMachine)).To(Succeed())
++						externalMachine, err = defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++						Expect(err).NotTo(HaveOccurred())
++						requeue, err = externalMachine.DrainNodeIfNeeded(wlCluster)
++						Expect(err).NotTo(HaveOccurred())
++						vmi := &kubevirtv1.VirtualMachineInstance{}
++						err = fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(virtualMachineInstance), vmi)
++						if deadlineExpired {
++							Expect(requeue).To(Equal(10 * time.Second))
++							Expect(apierrors.IsNotFound(err)).To(BeTrue())
++							Expect(kubevirtMachine.Annotations).NotTo(HaveKey(v1alpha1.VmiDeletionGraceTime))
++						} else {
++							Expect(requeue).To(Equal(time.Second))
++							Expect(err).NotTo(HaveOccurred())
++							Expect(kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime]).To(Equal(deadline))
++						}
++						migrations := &kubevirtv1.VirtualMachineInstanceMigrationList{}
++						Expect(fakeClient.List(gocontext.Background(), migrations)).To(Succeed())
++						Expect(migrations.Items).To(BeEmpty())
++					},
++					Entry("failed migration, fallback still has time", true, false),
++					Entry("failed migration, fallback has expired", true, true),
++					Entry("migration timeout, fallback still has time", false, false),
++					Entry("migration timeout, fallback has expired", false, true),
++				)
++
++				DescribeTable("cleans both annotations when migration succeeds",
++					func(phase string) {
++						virtualMachineInstance.Status.NodeName = "target-node-2"
++						Expect(fakeClient.Update(gocontext.Background(), virtualMachineInstance)).To(Succeed())
++						kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted] = phase
++						kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime] = time.Now().UTC().Add(time.Minute).Format(time.RFC3339)
++						Expect(fakeClient.Update(gocontext.Background(), kubevirtMachine)).To(Succeed())
++						wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Times(0)
++						externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++						Expect(err).NotTo(HaveOccurred())
++						requeue, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++						Expect(err).NotTo(HaveOccurred())
++						Expect(requeue).To(BeZero())
++						Expect(kubevirtMachine.Annotations).NotTo(HaveKey(v1alpha1.VmiMigrationSubmitted))
++						Expect(kubevirtMachine.Annotations).NotTo(HaveKey(v1alpha1.VmiDeletionGraceTime))
++						Expect(fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(virtualMachineInstance), &kubevirtv1.VirtualMachineInstance{})).To(Succeed())
++					},
++					Entry("during the migration window", "true"),
++					Entry("late completion after fallback was entered", "draining"),
++				)
++
++				It("keeps the original state when the atomic fallback patch fails", func() {
++					virtualMachineInstance.Status.MigrationState = &kubevirtv1.VirtualMachineInstanceMigrationState{Failed: true}
++					Expect(fakeClient.Update(gocontext.Background(), virtualMachineInstance)).To(Succeed())
++					deadline := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
++					kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted] = "true"
++					kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime] = deadline
++					Expect(fakeClient.Update(gocontext.Background(), kubevirtMachine)).To(Succeed())
++					wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Times(0)
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++					externalMachine.client = &fallbackPatchFailClient{Client: fakeClient}
++					_, err = externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).To(MatchError(ContainSubstring("failed to start drain fallback")))
++					Expect(kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted]).To(Equal("true"))
++					Expect(kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime]).To(Equal(deadline))
++					Expect(fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(virtualMachineInstance), &kubevirtv1.VirtualMachineInstance{})).To(Succeed())
++				})
++
++				It("removes fallback state after deletion without uncordoning before recreation", func() {
++					kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted] = "draining"
++					kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime] = time.Now().UTC().Add(time.Minute).Format(time.RFC3339)
++					kubevirtMachine.Annotations[v1alpha1.NodeCordonedByCapk] = "true"
++					Expect(fakeClient.Update(gocontext.Background(), kubevirtMachine)).To(Succeed())
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++					externalMachine.vmiInstance = nil
++					requeue, err := externalMachine.DrainNodeIfNeeded(nil)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeue).To(BeZero())
++					Expect(kubevirtMachine.Annotations).NotTo(HaveKey(v1alpha1.VmiMigrationSubmitted))
++					Expect(kubevirtMachine.Annotations).NotTo(HaveKey(v1alpha1.VmiDeletionGraceTime))
++					Expect(kubevirtMachine.Annotations).To(HaveKey(v1alpha1.NodeCordonedByCapk))
++				})
++			})
++
++			When("no migration exists yet", func() {
++				It("Should create a VirtualMachineInstanceMigration and requeue", func() {
++					wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Times(0)
++
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++					recorder := &migrationRecordingClient{Client: externalMachine.client}
++					externalMachine.client = recorder
++
++					requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeueDuration).To(Equal(10 * time.Second))
++
++					By("VMI should still exist (not drained+deleted)")
++					vmi := &kubevirtv1.VirtualMachineInstance{}
++					err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: virtualMachineInstance.Namespace, Name: virtualMachineInstance.Name}, vmi)
++					Expect(err).ToNot(HaveOccurred())
++
++					By("A VirtualMachineInstanceMigration should have been created")
++					migrationList := &kubevirtv1.VirtualMachineInstanceMigrationList{}
++					err = fakeClient.List(gocontext.Background(), migrationList, client.InNamespace(virtualMachineInstance.Namespace))
++					Expect(err).ToNot(HaveOccurred())
++					Expect(migrationList.Items).To(HaveLen(1))
++					Expect(migrationList.Items[0].Spec.VMIName).To(Equal(virtualMachineInstance.Name))
++
++					By("Migration must omit priority reserved for virt-controller")
++					Expect(recorder.created).ToNot(BeNil())
++					_, found, err := unstructured.NestedString(recorder.created.Object, "spec", "priority")
++					Expect(err).ToNot(HaveOccurred())
++					Expect(found).To(BeFalse())
++
++					By("Migration-submitted annotation should be set, but NOT the grace period timer")
++					updatedKM := &v1alpha1.KubevirtMachine{}
++					err = fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(kubevirtMachine), updatedKM)
++					Expect(err).ToNot(HaveOccurred())
++					Expect(updatedKM.Annotations).To(HaveKey(v1alpha1.VmiMigrationSubmitted))
++					Expect(updatedKM.Annotations).ToNot(HaveKey(v1alpha1.VmiDeletionGraceTime))
++				})
++			})
++
++			When("migration already submitted but not yet started by KubeVirt", func() {
++				BeforeEach(func() {
++					kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted] = "true"
++				})
++
++				It("Should requeue without creating a duplicate migration", func() {
++					wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Times(0)
++
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++
++					requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeueDuration).To(Equal(10 * time.Second))
++
++					By("No new VirtualMachineInstanceMigration should have been created")
++					migrationList := &kubevirtv1.VirtualMachineInstanceMigrationList{}
++					err = fakeClient.List(gocontext.Background(), migrationList, client.InNamespace(virtualMachineInstance.Namespace))
++					Expect(err).ToNot(HaveOccurred())
++					Expect(migrationList.Items).To(BeEmpty())
++
++					By("Grace period timer should NOT be set yet")
++					updatedKM := &v1alpha1.KubevirtMachine{}
++					err = fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(kubevirtMachine), updatedKM)
++					Expect(err).ToNot(HaveOccurred())
++					Expect(updatedKM.Annotations).ToNot(HaveKey(v1alpha1.VmiDeletionGraceTime))
++				})
++			})
++
++			When("migration is in progress", func() {
++				BeforeEach(func() {
++					virtualMachineInstance.Status.MigrationState = &kubevirtv1.VirtualMachineInstanceMigrationState{
++						StartTimestamp: nowTimestamp(),
++					}
++					graceTime := time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
++					kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime] = graceTime
++				})
++
++				It("Should requeue and wait for migration", func() {
++					wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Times(0)
++
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++
++					requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeueDuration).To(Equal(10 * time.Second))
++
++					By("VMI should still exist")
++					vmi := &kubevirtv1.VirtualMachineInstance{}
++					err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: virtualMachineInstance.Namespace, Name: virtualMachineInstance.Name}, vmi)
++					Expect(err).ToNot(HaveOccurred())
++				})
++			})
++
++			When("migration succeeded (VMI on different node)", func() {
++				BeforeEach(func() {
++					virtualMachineInstance.Status.NodeName = "target-node-2"
++					virtualMachineInstance.Status.MigrationState = &kubevirtv1.VirtualMachineInstanceMigrationState{
++						Completed:  true,
++						SourceNode: hostNodeName,
++						TargetNode: "target-node-2",
++					}
++				})
++
++				It("Should skip drain+delete and return success", func() {
++					wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Times(0)
++
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++
++					requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeueDuration).Should(BeZero())
++
++					By("VMI should still exist (not deleted)")
++					vmi := &kubevirtv1.VirtualMachineInstance{}
++					err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: virtualMachineInstance.Namespace, Name: virtualMachineInstance.Name}, vmi)
++					Expect(err).ToNot(HaveOccurred())
++				})
++			})
++
++			When("migration failed", func() {
++				BeforeEach(func() {
++					virtualMachineInstance.Status.MigrationState = &kubevirtv1.VirtualMachineInstanceMigrationState{
++						Failed: true,
++					}
++				})
++
++				It("Should fall through to drain+delete", func() {
++					node := &corev1.Node{
++						ObjectMeta: metav1.ObjectMeta{
++							Name: kubevirtMachineName,
++						},
++					}
++					Expect(k8sfake.AddToScheme(setupRemoteScheme())).ToNot(HaveOccurred())
++					cl := k8sfake.NewClientset(node)
++					wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Return(cl, nil).Times(1)
++
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++
++					requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeueDuration).To(Equal(10 * time.Second))
++
++					By("VMI should be deleted (drain+delete fallback)")
++					vmi := &kubevirtv1.VirtualMachineInstance{}
++					err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: virtualMachineInstance.Namespace, Name: virtualMachineInstance.Name}, vmi)
++					Expect(err).To(HaveOccurred())
++					Expect(apierrors.IsNotFound(err)).To(BeTrue())
++				})
++			})
++
++			When("migration timed out (grace period exceeded during migration)", func() {
++				BeforeEach(func() {
++					virtualMachineInstance.Status.MigrationState = &kubevirtv1.VirtualMachineInstanceMigrationState{
++						StartTimestamp: nowTimestamp(),
++					}
++					graceTime := time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339)
++					kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime] = graceTime
++				})
++
++				It("Should fall through to drain+delete", func() {
++					node := &corev1.Node{
++						ObjectMeta: metav1.ObjectMeta{
++							Name: kubevirtMachineName,
++						},
++					}
++					Expect(k8sfake.AddToScheme(setupRemoteScheme())).ToNot(HaveOccurred())
++					cl := k8sfake.NewClientset(node)
++					wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Return(cl, nil).Times(1)
++
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++
++					requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeueDuration).To(Equal(10 * time.Second))
++
++					By("VMI should be deleted (drain+delete fallback)")
++					vmi := &kubevirtv1.VirtualMachineInstance{}
++					err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: virtualMachineInstance.Namespace, Name: virtualMachineInstance.Name}, vmi)
++					Expect(err).To(HaveOccurred())
++					Expect(apierrors.IsNotFound(err)).To(BeTrue())
++				})
++			})
++
++			When("migration creation fails", func() {
++				It("Should fall through to drain+delete gracefully", func() {
++					node := &corev1.Node{
++						ObjectMeta: metav1.ObjectMeta{
++							Name: kubevirtMachineName,
++						},
++					}
++					Expect(k8sfake.AddToScheme(setupRemoteScheme())).ToNot(HaveOccurred())
++					cl := k8sfake.NewClientset(node)
++					wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Return(cl, nil).Times(1)
++
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++
++					By("Inject a create failure for migrations")
++					origClient := externalMachine.client
++					externalMachine.client = &migrationFailClient{Client: origClient}
++
++					requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeueDuration).To(Equal(10 * time.Second))
++
++					By("VMI should be deleted (drain+delete fallback)")
++					vmi := &kubevirtv1.VirtualMachineInstance{}
++					err = origClient.Get(gocontext.Background(), client.ObjectKey{Namespace: virtualMachineInstance.Namespace, Name: virtualMachineInstance.Name}, vmi)
++					Expect(err).To(HaveOccurred())
++					Expect(apierrors.IsNotFound(err)).To(BeTrue())
++				})
++			})
++		})
++
++		When("VMI was recreated after eviction and guest node is still cordoned", func() {
++			BeforeEach(func() {
++				virtualMachineInstance.Spec.EvictionStrategy = nil
++				virtualMachineInstance.Status.EvacuationNodeName = ""
++				kubevirtMachine.Annotations[v1alpha1.NodeCordonedByCapk] = "true"
++			})
++
++			It("Should uncordon the guest node and remove the annotation", func() {
++				node := &corev1.Node{
++					ObjectMeta: metav1.ObjectMeta{
++						Name: kubevirtMachineName,
++					},
++					Spec: corev1.NodeSpec{
++						Unschedulable: true,
++					},
++				}
++
++				Expect(k8sfake.AddToScheme(setupRemoteScheme())).ToNot(HaveOccurred())
++				cl := k8sfake.NewClientset(node)
++
++				wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Return(cl, nil).Times(1)
++
++				externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++				Expect(err).NotTo(HaveOccurred())
++
++				requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++				Expect(err).NotTo(HaveOccurred())
++				Expect(requeueDuration).Should(BeZero())
++
++				By("Guest node should be uncordoned")
++				updatedNode, err := cl.CoreV1().Nodes().Get(gocontext.Background(), kubevirtMachineName, metav1.GetOptions{})
++				Expect(err).ToNot(HaveOccurred())
++				Expect(updatedNode.Spec.Unschedulable).To(BeFalse())
++
++				By("The node-cordoned annotation should be removed")
++				kvMachine := &v1alpha1.KubevirtMachine{}
++				err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: kubevirtMachine.Namespace, Name: kubevirtMachine.Name}, kvMachine)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(kvMachine.Annotations).ToNot(HaveKey(v1alpha1.NodeCordonedByCapk))
++			})
++		})
++
++		When("VMI was recreated but guest node is already schedulable", func() {
++			BeforeEach(func() {
++				virtualMachineInstance.Spec.EvictionStrategy = nil
++				virtualMachineInstance.Status.EvacuationNodeName = ""
++				kubevirtMachine.Annotations[v1alpha1.NodeCordonedByCapk] = "true"
++			})
++
++			It("Should just remove the stale annotation", func() {
++				node := &corev1.Node{
++					ObjectMeta: metav1.ObjectMeta{
++						Name: kubevirtMachineName,
++					},
++					Spec: corev1.NodeSpec{
++						Unschedulable: false,
++					},
++				}
++
++				Expect(k8sfake.AddToScheme(setupRemoteScheme())).ToNot(HaveOccurred())
++				cl := k8sfake.NewClientset(node)
++
++				wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Return(cl, nil).Times(1)
++
++				externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++				Expect(err).NotTo(HaveOccurred())
++
++				requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++				Expect(err).NotTo(HaveOccurred())
++				Expect(requeueDuration).Should(BeZero())
++
++				By("The node-cordoned annotation should be removed")
++				kvMachine := &v1alpha1.KubevirtMachine{}
++				err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: kubevirtMachine.Namespace, Name: kubevirtMachine.Name}, kvMachine)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(kvMachine.Annotations).ToNot(HaveKey(v1alpha1.NodeCordonedByCapk))
++			})
++		})
++
++		When("No cordon annotation exists and no eviction in progress", func() {
++			BeforeEach(func() {
++				virtualMachineInstance.Spec.EvictionStrategy = nil
++				virtualMachineInstance.Status.EvacuationNodeName = ""
++			})
++
++			It("Should not attempt to uncordon", func() {
++				wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Times(0)
++
++				externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++				Expect(err).NotTo(HaveOccurred())
++
++				requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++				Expect(err).NotTo(HaveOccurred())
++				Expect(requeueDuration).Should(BeZero())
++			})
++		})
++
++		When("VMI still has DeletionTimestamp with cordon annotation present", func() {
++			BeforeEach(func() {
++				deletionTimeStamp := metav1.NewTime(time.Now().UTC().Add(-5 * time.Second))
++				virtualMachineInstance.DeletionTimestamp = &deletionTimeStamp
++				virtualMachineInstance.Finalizers = []string{"fake/finalizer"}
++				kubevirtMachine.Annotations[v1alpha1.NodeCordonedByCapk] = "true"
++			})
++
++			It("Should not uncordon while VMI is still being deleted", func() {
++				wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Times(0)
++
++				externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++				Expect(err).NotTo(HaveOccurred())
++
++				requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++				Expect(err).NotTo(HaveOccurred())
++				Expect(requeueDuration).Should(BeZero())
++
++				By("The node-cordoned annotation should still be present")
++				kvMachine := &v1alpha1.KubevirtMachine{}
++				err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: kubevirtMachine.Namespace, Name: kubevirtMachine.Name}, kvMachine)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(kvMachine.Annotations).To(HaveKey(v1alpha1.NodeCordonedByCapk))
++			})
++		})
++
++		When("VMI was recreated and guest node is not found", func() {
++			BeforeEach(func() {
++				virtualMachineInstance.Spec.EvictionStrategy = nil
++				virtualMachineInstance.Status.EvacuationNodeName = ""
++				kubevirtMachine.Annotations[v1alpha1.NodeCordonedByCapk] = "true"
++			})
++
++			It("Should remove the annotation when node is not found", func() {
++				Expect(k8sfake.AddToScheme(setupRemoteScheme())).ToNot(HaveOccurred())
++				cl := k8sfake.NewClientset()
++
++				wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Return(cl, nil).Times(1)
++
++				externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++				Expect(err).NotTo(HaveOccurred())
++
++				requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++				Expect(err).NotTo(HaveOccurred())
++				Expect(requeueDuration).Should(BeZero())
++
++				By("The node-cordoned annotation should be removed")
++				kvMachine := &v1alpha1.KubevirtMachine{}
++				err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: kubevirtMachine.Namespace, Name: kubevirtMachine.Name}, kvMachine)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(kvMachine.Annotations).ToNot(HaveKey(v1alpha1.NodeCordonedByCapk))
++			})
++		})
++
++		When("Cordon annotation present but workload cluster is nil", func() {
++			BeforeEach(func() {
++				virtualMachineInstance.Spec.EvictionStrategy = nil
++				virtualMachineInstance.Status.EvacuationNodeName = ""
++				kubevirtMachine.Annotations[v1alpha1.NodeCordonedByCapk] = "true"
++			})
++
++			It("Should skip uncordon without error and keep annotation", func() {
++				externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++				Expect(err).NotTo(HaveOccurred())
++
++				requeueDuration, err := externalMachine.DrainNodeIfNeeded(nil)
++				Expect(err).NotTo(HaveOccurred())
++				Expect(requeueDuration).Should(BeZero())
++
++				By("The node-cordoned annotation should still be present")
++				kvMachine := &v1alpha1.KubevirtMachine{}
++				err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: kubevirtMachine.Namespace, Name: kubevirtMachine.Name}, kvMachine)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(kvMachine.Annotations).To(HaveKey(v1alpha1.NodeCordonedByCapk))
++			})
++		})
++
++		When("Cordon annotation present but workload cluster client fails", func() {
++			BeforeEach(func() {
++				virtualMachineInstance.Spec.EvictionStrategy = nil
++				virtualMachineInstance.Status.EvacuationNodeName = ""
++				kubevirtMachine.Annotations[v1alpha1.NodeCordonedByCapk] = "true"
++			})
++
++			It("Should requeue with 100ms on client error", func() {
++				fakeErr := errors.New("fake error: can't create workload cluster client")
++				wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Return(nil, fakeErr).Times(1)
++
++				externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++				Expect(err).NotTo(HaveOccurred())
++
++				requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++				Expect(err).NotTo(HaveOccurred())
++				Expect(requeueDuration).To(Equal(100 * time.Millisecond))
++
++				By("The node-cordoned annotation should still be present")
++				kvMachine := &v1alpha1.KubevirtMachine{}
++				err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: kubevirtMachine.Namespace, Name: kubevirtMachine.Name}, kvMachine)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(kvMachine.Annotations).To(HaveKey(v1alpha1.NodeCordonedByCapk))
++			})
++		})
++
++		When("Cordon annotation present but node get fails with non-NotFound error", func() {
++			BeforeEach(func() {
++				virtualMachineInstance.Spec.EvictionStrategy = nil
++				virtualMachineInstance.Status.EvacuationNodeName = ""
++				kubevirtMachine.Annotations[v1alpha1.NodeCordonedByCapk] = "true"
++			})
++
++			It("Should requeue with 100ms on node get error", func() {
++				node := &corev1.Node{
++					ObjectMeta: metav1.ObjectMeta{
++						Name: kubevirtMachineName,
++					},
++				}
++
++				Expect(k8sfake.AddToScheme(setupRemoteScheme())).ToNot(HaveOccurred())
++				cl := k8sfake.NewClientset(node)
++
++				fakeErr := errors.New("fake error: can't get node")
++				cl.PrependReactor("get", "nodes", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
++					return true, nil, fakeErr
++				})
++
++				wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Return(cl, nil).Times(1)
++
++				externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++				Expect(err).NotTo(HaveOccurred())
++
++				requeueDuration, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++				Expect(err).NotTo(HaveOccurred())
++				Expect(requeueDuration).To(Equal(100 * time.Millisecond))
++
++				By("The node-cordoned annotation should still be present")
++				kvMachine := &v1alpha1.KubevirtMachine{}
++				err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: kubevirtMachine.Namespace, Name: kubevirtMachine.Name}, kvMachine)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(kvMachine.Annotations).To(HaveKey(v1alpha1.NodeCordonedByCapk))
++			})
++		})
+ 	})
+ })
+ 
+@@ -1028,3 +1633,40 @@ func setupRemoteScheme() *runtime.Scheme {
+ 	}
+ 	return s
+ }
++
++func nowTimestamp() *metav1.Time {
++	t := metav1.Now()
++	return &t
++}
++
++// migrationFailClient wraps a controller-runtime client and fails Create
++// calls for VirtualMachineInstanceMigration objects.
++type migrationFailClient struct {
++	client.Client
++}
++
++func (c *migrationFailClient) Create(ctx gocontext.Context, obj client.Object, opts ...client.CreateOption) error {
++	if obj.GetObjectKind().GroupVersionKind().Kind == "VirtualMachineInstanceMigration" {
++		return fmt.Errorf("fake error: can't create migration")
++	}
++	return c.Client.Create(ctx, obj, opts...)
++}
++
++type migrationRecordingClient struct {
++	client.Client
++	created *unstructured.Unstructured
++}
++
++func (c *migrationRecordingClient) Create(ctx gocontext.Context, obj client.Object, opts ...client.CreateOption) error {
++	if migration, ok := obj.(*unstructured.Unstructured); ok && migration.GetKind() == "VirtualMachineInstanceMigration" {
++		c.created = migration.DeepCopy()
++	}
++	return c.Client.Create(ctx, obj, opts...)
++}
++
++// fallbackPatchFailClient simulates an API failure before either annotation is committed.
++type fallbackPatchFailClient struct{ client.Client }
++
++func (c *fallbackPatchFailClient) Patch(ctx gocontext.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
++	return fmt.Errorf("fake error: can't patch fallback state")
++}
