@@ -49,6 +49,9 @@
     {{- if gt (len $g) 253 }}
       {{- fail (printf "the Grant resource name %q for (database %q, user %q) exceeds the 253-character limit Kubernetes puts on a resource name; shorten the database or user name" $g $name $user) }}
     {{- end }}
+    {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $g) }}
+      {{- fail (printf "invalid role member %q for database %q: it names the Grant resource %q, which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, \"-\" and \".\", starting and ending with a letter or digit). A name in databases.<db>.roles.admin/readonly is not one of .Values.users, so the username guard never sees it - use a lowercase name without special characters" $user $name $g) }}
+    {{- end }}
     {{- $desc := printf "(database %q, user %q)" $name $user }}
     {{- if hasKey $seenGrant $g }}
       {{- fail (printf "the Grant resource name %q is produced by both %s and %s (\"_\" renders as \"-\"); rename a database or user so their Grants do not collide" $g (index $seenGrant $g) $desc) }}

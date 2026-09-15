@@ -120,6 +120,24 @@ tests:
           path: spec.privileges[0]
           value: ALL
 
+  # A name in databases.<db>.roles.admin/readonly is NOT one of .Values.users,
+  # so it never passes the username guard in secret.yaml, yet it forms the Grant
+  # CR name <release>-<db>-<user>. A member outside the DNS-1123 charset (here
+  # "Weird.User!") renders a Grant name the apiserver rejects opaquely — the
+  # class the guards exist to close. The Grant guard must check the charset too,
+  # not only the length.
+  - it: fails for a role member that is not a valid DNS-1123 name
+    set:
+      users:
+        gooduser:
+          maxUserConnections: 10
+      databases:
+        mydb:
+          roles:
+            admin: ["Weird.User!"]
+    asserts:
+      - failedTemplate: {}
+
   - it: renders normally for a valid lowercase database name
     set:
       databases:
