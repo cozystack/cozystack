@@ -18,3 +18,7 @@ Custom patches for piraeus-server (linstor-server) v1.33.3.
 - **retry-secondary-after-mkfs.diff** — Retry `drbdadm secondary` after mkfs when DRBD reports the device as held open by an external probe (Talos block-controller, udev, multipathd, etc.). Without this retry, a transient `Device is held open by someone` aborts resource initialization, leaves the satellite in an intermediate state, and prevents the controller from receiving the final `UpToDate` event — orphan PVs in `Released` then cannot be cleaned up.
   - Related upstream issue: [#268](https://github.com/LINBIT/linstor-server/issues/268)
   - Related upstream issue: [drbd #74](https://github.com/LINBIT/drbd/issues/74) (same EBUSY pattern with multipathd)
+
+- **fix-min-io-probe-device-wait.diff** — Wait for temporary probe devices before reading pool I/O properties; retry failures and fall back to a probe when ZFS volumes have no usable device path.
+  - Source PR: [#528](https://github.com/LINBIT/linstor-server/pull/528), fixes [#527](https://github.com/LINBIT/linstor-server/issues/527)
+  - Adapted for v1.33.3; inactive LVM volumes retain the existing no-probe behavior.
