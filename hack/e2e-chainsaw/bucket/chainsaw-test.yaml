@@ -134,3 +134,169 @@ spec:
           ($error == null): true
 # The Bucket CR was applied by chainsaw and is deleted automatically during
 # cleanup — no explicit teardown step needed.
+---
+# Slot exhaustion leaves every COSI object green and fails only the write, so
+# readiness alone cannot see it: the master answers `assign` with a grow that
+# returns no volume, and the S3 gateway times the PUT out. Each bucket here
+# therefore has to take an object, not just report ready.
+#
+# Three buckets, because the count has to exceed what the old volume sizing
+# could serve without depending on how many slots the unnamed default
+# collection holds — a number this suite cannot observe. At the old sizing the
+# platform's own cozy-backups collection plus one more exhausts the per-server
+# slots whether or not that default collection took any, so the third bucket
+# cannot be served under either reading.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: bucket-1-capacity
+spec:
+  catch:
+  - events: {}
+  - get:
+      apiVersion: objectstorage.k8s.io/v1alpha1
+      kind: Bucket
+      format: yaml
+  - podLogs:
+      namespace: tenant-root
+      selector: app.kubernetes.io/component=master
+      tail: 200
+  # The master logs a grow failure without the slot accounting behind it, so a
+  # log alone reads the same whether the shipped limit is too coarse for the
+  # PVC or an earlier collection in this run is still holding the budget. Max
+  # against Volumes per server separates those two.
+  # Read from inside the master rather than through a port-forward: the image
+  # ships curl, so this needs nothing on the host and adds no second fixed
+  # port to the reason this suite cannot run in parallel.
+  - description: master slot accounting
+    script:
+      timeout: 2m
+      content: |
+        set -u
+        echo "» master /dir/status (Max is the slot count per server, Volumes what is held):"
+        kubectl -n tenant-root exec statefulset/seaweedfs-master -- \
+          curl -s --max-time 20 http://localhost:9333/dir/status \
+          || echo "» /dir/status read failed"
+        echo
+        exit 0
+  steps:
+  - name: create-buckets
+    try:
+    - apply:
+        file: buckets-capacity.yaml
+
+  - name: wait-buckets-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: bucket-cap1
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: bucket-cap2
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: bucket-cap3
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketClaim
+          metadata:
+            name: bucket-cap1
+          status:
+            bucketReady: true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketClaim
+          metadata:
+            name: bucket-cap2
+          status:
+            bucketReady: true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketClaim
+          metadata:
+            name: bucket-cap3
+          status:
+            bucketReady: true
+    # BucketAccess reconciles separately from the claim, and the write step
+    # reads the Secret it produces. Without these the step can fail on a
+    # missing Secret rather than on the capacity it is here to measure.
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: bucket-cap1-admin
+          status:
+            accessGranted: true
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: bucket-cap2-admin
+          status:
+            accessGranted: true
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: bucket-cap3-admin
+          status:
+            accessGranted: true
+
+  - name: verify-every-bucket-takes-a-write
+    try:
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          workdir=$(mktemp -d)
+          trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
+
+          kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 >/dev/null 2>&1 &
+          pf_pid=$!
+          timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
+
+          echo "capacity probe" > "$workdir/probe.txt"
+
+          for name in cap1 cap2 cap3; do
+            kubectl -n "$NAMESPACE" get secret "bucket-${name}-admin" \
+              -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/${name}.json"
+            ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/${name}.json")
+            SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/${name}.json")
+            BUCKET_NAME=$(jq -r '.spec.bucketName' "$workdir/${name}.json")
+
+            mc alias set "$name" https://localhost:8333 "$ACCESS_KEY" "$SECRET_KEY" --insecure
+            mc cp --insecure "$workdir/probe.txt" "$name/$BUCKET_NAME/probe.txt"
+            mc rm --insecure "$name/$BUCKET_NAME/probe.txt"
+          done
+        check:
+          ($error == null): true

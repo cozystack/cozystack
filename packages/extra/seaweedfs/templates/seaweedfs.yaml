@@ -8,6 +8,23 @@
 {{- if lt (int .Values.replicationFactor) 1 }}
 {{-   fail "Invalid value for .Values.replicationFactor. Must be at least 1." }}
 {{- end }}
+{{- /* Both ends take an instance down, so both are refused. Zero is not a
+       smaller limit but an off switch: this value is the divisor the volume
+       server derives its slot count with, and it leaves that calculation
+       untouched at 0, so it keeps reporting no capacity, nothing is grown and
+       every write fails. Above 30000 the master does not start at all, exiting
+       on "volumeSizeLimitMB should be smaller than 30000". That ceiling is
+       VolumeSizeLimitGB in the standard SeaweedFS build, which is the one the
+       image carries; a large-disk build raises it, so read that constant there
+       before widening this. The bound lives in the template because the schema
+       cannot hold one: cozyvalues-gen rewrites values.schema.json on every
+       make generate and emits no numeric bounds, so a hand-added minimum is
+       erased on the next regenerate, and the ApplicationDefinition's
+       openAPISchema is derived from that same file. Moving it there loses it
+       silently. */}}
+{{- if or (lt (int .Values.master.volumeSizeLimitMB) 1) (gt (int .Values.master.volumeSizeLimitMB) 30000) }}
+{{-   fail "Invalid value for .Values.master.volumeSizeLimitMB. Must be between 1 and 30000." }}
+{{- end }}
 {{- if eq .Values.topology "MultiZone" }}
 {{-   if (eq (len .Values.volume.zones) 0) }}
 {{-     fail "Zones must be defined for MultiZone topology." }}
@@ -234,6 +251,7 @@ spec:
         defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
         {{- end }}
         replicas: {{ .Values.master.replicas }}
+        volumeSizeLimitMB: {{ .Values.master.volumeSizeLimitMB }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.master.resourcesPreset .Values.master.resources $) | nindent 10 }}
       volume:
         {{ if eq .Values.topology "MultiZone" }}

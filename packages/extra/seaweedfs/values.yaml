@@ -92,12 +92,18 @@ db:
 ## @field {int} [replicas] - Number of master replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @field {int} [volumeSizeLimitMB] - Size in MB at which a volume stops taking writes, and the divisor that sets how many buckets a volume server can serve. Lower it to fit more buckets on the same disk, at the cost of more volume files for the same stored data; on a large volume it is worth raising instead.
 
 ## @param {Master} [master] - Master service configuration.
 master:
   replicas: 3
   resources: {}
   resourcesPreset: "t1.small"
+  # Effective default for every release: the template sends it, so it wins over
+  # the data-plane chart's own value. What 500 buys and what it costs is worked
+  # out beside that one, in packages/system/seaweedfs/values.yaml, together with
+  # the growth count it multiplies against.
+  volumeSizeLimitMB: 500
 
 ## @typedef {struct} Filer - Filer service configuration.
 ## @field {int} [replicas] - Number of filer replicas.

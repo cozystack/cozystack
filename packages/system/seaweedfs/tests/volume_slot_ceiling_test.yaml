@@ -1,0 +1,90 @@
+suite: seaweedfs volume slot ceiling
+
+# The bucket ceiling rests on two constants and a third rendered flag; how they
+# combine into it is worked out once, beside the values themselves, in
+# packages/system/seaweedfs/values.yaml. Each is pinned on its own below,
+# because losing one is a silent capacity regression rather than a render
+# error, and only an assertion that fails alone can catch it.
+#
+# What each assertion covers differs, and the difference matters when reading a
+# failure here. COPY_2 is sent by nothing else, so that one pins the value every
+# install runs. The size limit and the volume server's own -max are both
+# supplied per release by extra/seaweedfs, so the two assertions for them pin
+# this chart's defaults: the fallback a standalone render gets, and the values
+# that apply if the app chart ever stops sending them. What an install actually
+# runs with is pinned beside them, in
+# packages/extra/seaweedfs/tests/master_volume_budget_test.yaml.
+#
+# All three are asserted on rendered output rather than on the values keys: a
+# subchart bump changes the rendering, not the overlay.
+#
+# The zero branch in the volume template is a workaround for Go template
+# truthiness — 0 is falsy, so `not $dir.maxVolumes` is true for zero and the
+# next branch would render 7. It therefore reads as a redundant special case
+# for a value the following branch already covers. `make update` refetches
+# charts/, so the edit to guard against is upstream dropping that branch and
+# this chart picking it up on a bump, which would leave the master flags
+# intact while the slot arithmetic stopped applying.
+
+templates:
+  - charts/seaweedfs/templates/master/master-statefulset.yaml
+  - charts/seaweedfs/templates/volume/volume-statefulset.yaml
+
+release:
+  name: seaweedfs
+  namespace: cozy-seaweedfs
+
+tests:
+  - it: starts the master with the pinned volume size limit
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-volumeSizeLimitMB=500\s'
+
+  - it: starts the master with the pinned two-copy growth count
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WEED_MASTER_VOLUME_GROWTH_COPY_2
+            value: "3"
+
+  - it: keeps the sibling growth counts through the deep-merge
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WEED_MASTER_VOLUME_GROWTH_COPY_1
+            value: "7"
+
+  - it: leaves the volume server slot count auto-derived
+    template: charts/seaweedfs/templates/volume/volume-statefulset.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-max 0\s'
+
+  # The shape the platform actually runs: the app chart sends a master block of
+  # its own, and Helm merges it over this chart's. The size limit is meant to be
+  # replaced and the growth count is meant to survive, since nothing sends one.
+  # Neither of the two suites covers the overlap on its own, so a merge that
+  # started dropping the sibling keys would take the growth count with it while
+  # both suites stayed green.
+  - it: keeps the growth count when the app chart overrides the size limit
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    set:
+      seaweedfs:
+        master:
+          volumeSizeLimitMB: 2000
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-volumeSizeLimitMB=2000\s'
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WEED_MASTER_VOLUME_GROWTH_COPY_2
+            value: "3"

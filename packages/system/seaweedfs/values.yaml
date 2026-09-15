@@ -26,16 +26,66 @@ seaweedfs:
   # The guard also refuses to render at all if this pin is ever lifted.
   fullnameOverride: seaweedfs
   master:
-    # 30 GB per volume × 10 GiB PVC = 0 → rounded to 1 maxVolume per
-    # volume server. With defaultReplication=001 (one replica on a
-    # different node) two volume servers can host exactly one logical
-    # volume between them. The platform now ships a default
-    # bucket-cozy-backups Bucket that grabs that single slot, so any
-    # second collection (the bucket E2E, a tenant app bucket, etc.)
-    # blocks on `assign volume: No writable volumes` until the test
-    # times out. Smaller volumes = more parallel collections on a
-    # 10 GiB E2E sandbox PVC. The upstream chart default is 1000.
-    volumeSizeLimitMB: 1000
+    # At the shipped replicationFactor of 2, this value and
+    # master.extraEnvironmentVars.WEED_MASTER_VOLUME_GROWTH_COPY_2 below are one
+    # budget rather than two settings. At 1 or 3 copies the master reads COPY_1
+    # or COPY_3 instead, so that one governs nothing there while this one
+    # still does.
+    #
+    # Only one of the two is decided here, though. extra/seaweedfs exposes the
+    # size limit and sends it on every release, so the number below is what a
+    # standalone render of this chart gets and the effective default lives in
+    # packages/extra/seaweedfs/values.yaml. COPY_2 is sent by nothing, so the
+    # value here is the live one.
+    #
+    # A volume server runs with -max 0, so the master hands it a slot count
+    # derived from disk rather than a fixed one, replication 001 spends a slot
+    # on each of the two servers per logical volume, and a collection claims
+    # COPY_2 volumes whenever it grows. What matters for changing either number
+    # is the upshot: the ceiling is their PRODUCT, so 500 x 3 is one budget of
+    # 1500 MB per collection, and moving one alone moves the ceiling. Upstream
+    # `MaybeAdjustVolumeMax` (weed/storage/store.go) and `findVolumeCount`
+    # (weed/topology/volume_growth.go) are where that comes from, read at the
+    # 4.31 the vendored chart pins; `make update` refetches charts/ from
+    # whatever tag is newest, so check them again after a bump.
+    #
+    # Measured, not derived, so do not recompute from the PVC size: the shipped
+    # 10Gi volume PVC gives 19 slots per server at 500 MB and 9 at the upstream
+    # 1000, which is seven collections against two. Seven because the last one
+    # takes the slots left over rather than a full batch of COPY_2; six get a
+    # whole one. Two is what the platform's own cozy-backups bucket and a
+    # single tenant bucket already use, and past it every S3 PUT to a new
+    # bucket times out while the disk still reads as nearly empty. The figures
+    # fall short of what the nominal PVC size divides to, because what the
+    # server counts is the space the filesystem makes available rather than the
+    # volume's advertised size.
+    #
+    # Three prices, two of them standing. Volume files scale with stored bytes
+    # rather than with the PVC: halving the limit doubles them, so a 10 TiB
+    # server holds roughly 42k of them here (a .dat and an .idx per volume)
+    # against 21k upstream. And a collection absorbs the budget before it needs
+    # another grow, so growth requests come four times as often as at the
+    # upstream pair. Splitting the reduction across both numbers is what keeps
+    # the file count off the larger of the two curves.
+    #
+    # The third is due on the upgrade that carries this change, not at some
+    # later date: every existing instance runs at 1000, so its volumes between
+    # 500 MB and 1000 MB go oversized on the next heartbeat and leave the
+    # master's writable set, and each affected collection needs one successful
+    # grow before its next write lands. Nothing is lost and the volumes stay
+    # readable. The room left inside them for further writes is given up and
+    # does not return as capacity, since such a volume is charged no headroom
+    # while its own bytes still come out of the budget.
+    #
+    # Deriving the limit from volume.size was rejected: pools and zones each
+    # carry their own PVC size while this setting is master-wide, so it would
+    # have to track the smallest pool.
+    volumeSizeLimitMB: 500
+    # The other half of the budget above. The subchart already declares all
+    # four COPY_* growth counts at their upstream defaults; Helm merges this
+    # key over that map and leaves the rest standing.
+    extraEnvironmentVars:
+      WEED_MASTER_VOLUME_GROWTH_COPY_2: "3"
     replicas: 3
     #  replication type is XYZ:
     # X number of replica in other data centers
