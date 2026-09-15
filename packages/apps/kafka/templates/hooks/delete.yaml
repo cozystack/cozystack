@@ -17,6 +17,13 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   ttlSecondsAfterFinished: 3600
+  # 270 + terminationGracePeriodSeconds 10 stays under helm-controller's 300s
+  # default, and leaves 90s over the 180s wait below for scheduling and the
+  # image pull. That headroom is the part to keep in mind when either number is
+  # tuned: a deadline that fires mid-wait kills the Job, and with
+  # backoffLimit: 0 the hook returns non-zero, which is the wedged uninstall the
+  # deliberate exit 0 on the timeout branch exists to avoid. Raise this and the
+  # wait together, or not at all.
   activeDeadlineSeconds: 270
   backoffLimit: 0
   template:
