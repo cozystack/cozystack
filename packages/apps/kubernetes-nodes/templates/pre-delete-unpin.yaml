@@ -14,7 +14,7 @@
 {{- $clusterName := include "kubernetes-nodes.clusterName" . }}
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
 {{- $base := printf "%s-%s" $clusterName $groupName }}
-{{- $kubectlImage := default ($.Files.Get "images/kubectl.tag" | trim) $.Values.images.kubectl }}
+{{- $kubectlImage := $.Files.Get "images/kubectl.tag" | trim }}
 ---
 apiVersion: v1
 kind: ServiceAccount
