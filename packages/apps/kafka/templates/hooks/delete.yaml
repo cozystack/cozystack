@@ -8,8 +8,15 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # No hook-succeeded: the script exits 0 on the degraded path too, where the
+    # finalizer outlived the 180s wait and the only record that it did is this
+    # Job's log. Deleting on success takes that record seconds after it is
+    # written, leaving an operator with a namespace that will not finalize and
+    # nothing to read. ttlSecondsAfterFinished reclaims it on a timescale a
+    # human can act within instead.
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
+  ttlSecondsAfterFinished: 3600
   activeDeadlineSeconds: 270
   backoffLimit: 0
   template:

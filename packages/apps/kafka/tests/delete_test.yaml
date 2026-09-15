@@ -31,6 +31,18 @@ tests:
           path: spec.backoffLimit
           value: 0
         documentIndex: 0
+      # The hook exits 0 on the degraded path as well as the clean one, so
+      # hook-succeeded would delete the Job holding the only account of a
+      # finalizer that outlived the wait. Pinned here because the difference is
+      # invisible until someone is debugging a namespace that will not finalize.
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+        documentIndex: 0
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 3600
+        documentIndex: 0
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: "strimzi\\.io/cluster=kafka-test"
@@ -39,9 +51,14 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: "--wait=true"
         documentIndex: 0
-      - equal:
+      # Digest-agnostic on purpose: Renovate rewrites the digest under
+      # packages/.+/templates/hooks/.+\.yaml and nothing rewrites tests/, so a
+      # literal here turns the next bump red for no defect. What matters is that
+      # the ref stays pinned by digest at all. Same shape as
+      # packages/system/etcd-operator/tests/selector-fix-hook_test.yaml.
+      - matchRegex:
           path: spec.template.spec.containers[0].image
-          value: clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+          pattern: ^clastix/kubectl:v1\.32@sha256:[0-9a-f]{64}$
         documentIndex: 0
       - isKind:
           of: ServiceAccount
