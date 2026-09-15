@@ -61,6 +61,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 PHD='{{- with .Values.permittedHostDevices }}'
 MDC='{{- with .Values.mediatedDevicesConfiguration }}'
 DFG='{{- range .Values.disabledFeatureGates }}'
+MIG='{{- with .Values.migrations }}'
 
 # The disabledFeatureGates block, comment lines included, ending on the
 # featureGates: line that follows it. Cases below either delete this range or
@@ -108,7 +109,8 @@ for guard in \
 	'{{- range .Values.extraFeatureGates }}' \
 	"$DFG" \
 	"$PHD" \
-	"$MDC"; do
+	"$MDC" \
+	"$MIG"; do
 	assert_count 1 "$guard" "$missing_mdev"
 done
 
@@ -235,6 +237,40 @@ if run_update_logged "$headerless" "$headerless_log"; then
 fi
 if ! grep -qF 'staticDisabledFeatureGates := ' "$headerless_log"; then
 	fail "make update did not name the missing guard-header line: $(cat "$headerless_log")"
+fi
+
+# A hand-merge may drop migrations while preserving both device blocks.
+# Restoring it must reproduce the committed template, including the YAML key
+# and indentation, rather than merely reintroduce the directive.
+missing_migrations="$tmpdir/missing-migrations.yaml"
+sed '/{{- with .Values.migrations }}/,/{{- end }}/d' "$src" >"$missing_migrations"
+assert_absent "$MIG" "$missing_migrations"
+assert_present "$PHD" "$missing_migrations"
+assert_present "$MDC" "$missing_migrations"
+if ! run_update "$missing_migrations"; then
+	fail "make update exited non-zero on a template missing only migrations"
+fi
+assert_present "$MIG" "$missing_migrations"
+if ! diff -u "$src" "$missing_migrations" >/dev/null; then
+	fail "make update rebuilt migrations differently from the committed template"
+fi
+run_update "$missing_migrations"
+assert_count 1 "$MIG" "$missing_migrations"
+if ! diff -u "$src" "$missing_migrations" >/dev/null; then
+	fail "repeated make update changed the restored migrations template"
+fi
+
+# sed succeeds even when its insertion anchor is absent; the target's sanity
+# check must reject a hand-merged CR that cannot restore migration settings.
+anchorless_migrations="$tmpdir/anchorless-migrations.yaml"
+sed -e '/{{- with .Values.migrations }}/,/{{- end }}/d' \
+	-e '/^    evictionStrategy:/d' "$src" >"$anchorless_migrations"
+anchorless_migrations_log="$tmpdir/anchorless-migrations.log"
+if run_update_logged "$anchorless_migrations" "$anchorless_migrations_log"; then
+	fail "make update exited zero without the migrations block or its evictionStrategy anchor"
+fi
+if ! grep -qF "directive '$MIG' not inserted" "$anchorless_migrations_log"; then
+	fail "make update did not name the missing migrations directive: $(cat "$anchorless_migrations_log")"
 fi
 
 echo "PASS update_idempotency_test"

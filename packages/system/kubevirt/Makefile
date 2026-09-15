@@ -53,6 +53,7 @@ update:
 	@# sanity-check tail below.
 	grep -q '{{- with .Values.permittedHostDevices }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.permittedHostDevices }}\n    permittedHostDevices:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
 	grep -q '{{- with .Values.mediatedDevicesConfiguration }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.mediatedDevicesConfiguration }}\n    mediatedDevicesConfiguration:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
+	grep -q '{{- with .Values.migrations }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.migrations }}\n    migrations:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
 	@# Sanity-check: every cozystack patch MUST end up in the file. If the
 	@# hand-merge step moved or renamed an anchor (developerConfiguration:,
 	@# - VMExport, featureGates:, evictionStrategy:) the sed silently no-ops and the chart
@@ -88,3 +89,4 @@ update:
 	@grep -q '{{- $$staticDisabledFeatureGates := ' $(CR_FILE) || { echo "ERROR: marker '{{- \$$staticDisabledFeatureGates := ' missing from the guard header — the disabledFeatureGates block below references it and the render would fail. Restore the header block at the top of $(CR_FILE)" >&2; exit 1; }
 	@grep -q '{{- with .Values.permittedHostDevices }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.permittedHostDevices }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
 	@grep -q '{{- with .Values.mediatedDevicesConfiguration }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.mediatedDevicesConfiguration }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
+	@grep -q '{{- with .Values.migrations }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.migrations }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }

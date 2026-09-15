@@ -713,6 +713,9 @@ kubevirt:
   # render and names the gate rather than ship a CR the cluster would reject
   # on update and misread on install.
   disabledFeatureGates: []
+  # Passed to spec.configuration.migrations on the KubeVirt CR.
+  # Empty keeps KubeVirt's defaults. bandwidthPerMigration is bytes/second.
+  migrations: {}
 # GPU host-device wiring for VirtualMachine workloads. Merged into the KubeVirt
 # CR's permittedHostDevices when bundles.enabledPackages contains
 # cozystack.gpu-operator and bundles.iaas.gpuOperatorVariant is one of the two
