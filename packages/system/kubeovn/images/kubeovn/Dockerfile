@@ -11,6 +11,8 @@ WORKDIR /source
 
 COPY patches /patches
 RUN git apply /patches/*.diff
+COPY tests/kubevirt_migration_test.go.txt /source/pkg/controller/kubevirt_migration_test.go
+RUN go test ./pkg/controller -run '^TestVMIMigrationSchedulingRetry$' -count=1
 RUN make build-go
 
 WORKDIR /source/dist/images
