@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
-  version: {{ .Values.cluster.version | quote }}
+  version: {{ include "foundationdb.versionMap" . | quote }}
 
   databaseConfiguration:
     redundancy_mode: {{ .Values.cluster.redundancyMode }}
