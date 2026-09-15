@@ -50,6 +50,41 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 8000
+      # The pre-auth login page reads its branding from the same
+      # cozy-dashboard-console-config ConfigMap the SPA consumes, mounted
+      # read-only. The volume is optional so a cluster without branding still
+      # starts and renders the historical unbranded page.
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].name
+          value: branding
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /etc/cozystack/branding
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].readOnly
+          value: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: branding
+            configMap:
+              name: cozy-dashboard-console-config
+              optional: true
+
+  # The OIDC branch runs oauth2-proxy, whose login is served by Keycloak (already
+  # branded via the realm theme), so the branding ConfigMap must not be mounted
+  # there — pin its absence so a refactor that hoists the volume out of the
+  # non-OIDC guard is a test failure.
+  - it: oidc-enabled=true does not mount the branding config
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
 
   # authentication.oidc.enabled defaults to false while keycloakInternalUrl now
   # defaults to the in-cluster Service, so THIS pair — OIDC off, internal URL
