@@ -133,7 +133,10 @@ done
 # its digest (platformSourceRef) is reset by the caller after the GHCR re-push.
 SRC_ESC=$(printf '%s' "$SRC_REGISTRY" | sed -e 's/[].[^$*/\\]/\\&/g')
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "DRY-RUN sed -i 's|${SRC_REGISTRY}/|${DST_REGISTRY}/|g' over $(image_ref_files "$TREE" | wc -l | tr -d ' ') ref-bearing files under ${TREE}"
+  # Name the rewrite by intent, not by the `sed -i` idiom the real path stopped
+  # using, and report both expressions it applies: the `<host>/` prefix and the
+  # bare-host scalar. Printing only the first understated what the run touches.
+  echo "DRY-RUN rewrite image host ${SRC_REGISTRY}/ -> ${DST_REGISTRY}/ (and a bare ${SRC_REGISTRY} host scalar -> ${DST_REGISTRY}) over $(image_ref_files "$TREE" | wc -l | tr -d ' ') ref-bearing files under ${TREE}"
 else
   # Exactly the files collect_refs scanned, via the same enumeration: the set
   # whose hosts are rewritten must equal the set scanned for images to mirror.
@@ -159,12 +162,16 @@ else
   # In-place edit written portably: `sed -i` takes the next argument as the
   # backup suffix on BSD but as a flag on GNU, so `sed -i -e` diverges between
   # them. Route the output through a temp file and copy it back over the original
-  # (cat, not mv, keeps the file's inode and permissions).
+  # (cat, not mv, keeps the file's inode and permissions). `cat` truncates before
+  # it writes, so an interrupt here can leave a half-written file where `mv` would
+  # not; that is the lesser evil against `mv` stamping mktemp's 0600 onto every
+  # rewritten file in the tree.
   image_ref_files "$TREE" | while IFS= read -r f; do
     # `\{0,1\}` rather than the `\?` optional-quantifier: `\?` is a GNU BRE
-    # extension that BSD sed reads as a literal `?`, so the quote-optional group
-    # would never match a bare host on macOS. `\{0,1\}` is POSIX BRE and behaves
-    # the same on both.
+    # extension that BSD sed reads as a literal `?`, turning each `["']\?` into
+    # "a quote followed by a literal ?". On macOS that makes the whole expression
+    # dead -- it matches neither a bare host nor a quoted one, not just the bare
+    # case. `\{0,1\}` is POSIX BRE and behaves the same on both.
     tmp_f=$(mktemp)
     sed \
       -e "s|${SRC_ESC}/|${DST_REGISTRY}/|g" \

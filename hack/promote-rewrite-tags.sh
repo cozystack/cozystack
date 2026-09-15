@@ -74,7 +74,10 @@ while IFS= read -r f; do
     # Written through a temp file rather than `sed -i`: the in-place flag takes
     # the substitution as its backup suffix on BSD and edits nothing, so the
     # rewrite would silently no-op on a macOS `make unit-tests`. cat back over the
-    # original to keep its inode and permissions.
+    # original to keep its inode and permissions. `cat` truncates before it
+    # writes, so an interrupt can leave a half-written file where `mv` would not;
+    # that is the lesser evil against `mv` stamping mktemp's 0600 onto a file in
+    # the release tree.
     tmp_f=$(mktemp)
     sed "s/${RC_ESC}/${STABLE_VERSION}/g" "$f" > "$tmp_f"
     cat "$tmp_f" > "$f"

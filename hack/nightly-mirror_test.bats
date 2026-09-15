@@ -187,8 +187,12 @@ _make_tree() {
   # The cozystack-packages artifact is excluded — it is rebuilt downstream.
   ! grep -qE 'skopeo copy.*cozystack-packages' "$tmp/out"
 
-  # The host rewrite is planned source->dest.
-  grep -q "s|iad.ocir.io/idyksih5sir9/cozystack/|ghcr.io/cozystack/cozystack/|g" "$tmp/out"
+  # The host rewrite is planned source->dest, reported by intent for both
+  # expressions the real path applies: the '<host>/' prefix and the bare-host
+  # scalar. The message must not name `sed -i` -- the path no longer uses it.
+  grep -q "rewrite image host iad.ocir.io/idyksih5sir9/cozystack/ -> ghcr.io/cozystack/cozystack/" "$tmp/out"
+  grep -q "bare iad.ocir.io/idyksih5sir9/cozystack host scalar -> ghcr.io/cozystack/cozystack" "$tmp/out"
+  ! grep -q 'sed -i' "$tmp/out"
 }
 
 @test "empty selection (wrong source registry) exits non-zero with a diagnostic" {
