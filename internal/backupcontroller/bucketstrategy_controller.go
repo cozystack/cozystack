@@ -326,7 +326,7 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 
 	// Provision (idempotently) the read-only BucketAccess the mirror reads
 	// the source bucket through, then gate on the COSI grant.
-	access, err := r.ensureBucketAccess(ctx, j.Namespace, backupAccessName(release), bucketReleaseName(release), deriveAccessClassName(claim.Spec.BucketClassName, true))
+	access, err := r.ensureBucketAccess(ctx, j.Namespace, backupAccessName(release), claim, deriveAccessClassName(claim.Spec.BucketClassName, true))
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to provision source BucketAccess: %v", err))
 	}
@@ -413,21 +413,30 @@ func (r *BackupJobReconciler) requeueBucketWaiting(ctx context.Context, j *backu
 // same-named object without the label belongs to someone else and is refused
 // (COSI would otherwise populate a Secret for a claim/class the driver never
 // asked for, while the mirror reads the deterministic Secret), and an
-// owned-but-drifted object is re-applied back to the desired spec. The object
-// carries no controllerRef - it persists across jobs and is reused.
-func reconcileBucketAccess(ctx context.Context, c client.Client, namespace, name, claimName, accessClass string) (*buckettypes.BucketAccess, error) {
+// owned-but-drifted object is re-applied back to the desired spec. It is
+// owner-referenced to the app's BucketClaim so garbage collection reaps it when
+// the app is deleted, rather than leaking a Terminating orphan whose stale
+// credentials a same-named app would silently reuse.
+func reconcileBucketAccess(ctx context.Context, c client.Client, namespace, name string, claim *buckettypes.BucketClaim, accessClass string) (*buckettypes.BucketAccess, error) {
+	owner := metav1.OwnerReference{
+		APIVersion: buckettypes.GroupVersion.String(),
+		Kind:       "BucketClaim",
+		Name:       claim.Name,
+		UID:        claim.UID,
+	}
 	desired := &buckettypes.BucketAccess{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: buckettypes.GroupVersion.String(),
 			Kind:       "BucketAccess",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      name,
-			Labels:    map[string]string{managedByLabel: managedByValue},
+			Namespace:       namespace,
+			Name:            name,
+			Labels:          map[string]string{managedByLabel: managedByValue},
+			OwnerReferences: []metav1.OwnerReference{owner},
 		},
 		Spec: buckettypes.BucketAccessSpec{
-			BucketClaimName:       claimName,
+			BucketClaimName:       claim.Name,
 			BucketAccessClassName: accessClass,
 			Protocol:              bucketProtocolS3,
 			CredentialsSecretName: name,
@@ -441,10 +450,11 @@ func reconcileBucketAccess(ctx context.Context, c client.Client, namespace, name
 		if existing.Labels[managedByLabel] != managedByValue {
 			return nil, fmt.Errorf("BucketAccess %s/%s exists but is not managed by the backup driver (missing %s=%s); refusing to reuse it", namespace, name, managedByLabel, managedByValue)
 		}
-		if existing.Spec == desired.Spec {
+		if existing.Spec == desired.Spec && hasOwnerUID(existing, claim.UID) {
 			return existing, nil
 		}
-		// Owned but drifted: fall through and re-apply the desired spec.
+		// Owned but drifted, or created before the ownerRef existed: fall through
+		// and re-apply the desired spec (which backfills the ownerRef).
 	case apierrors.IsNotFound(err):
 		// Fall through and create via apply.
 	default:
@@ -457,9 +467,18 @@ func reconcileBucketAccess(ctx context.Context, c client.Client, namespace, name
 	return desired, nil
 }
 
+func hasOwnerUID(obj metav1.Object, uid types.UID) bool {
+	for _, o := range obj.GetOwnerReferences() {
+		if o.UID == uid {
+			return true
+		}
+	}
+	return false
+}
+
 // ensureBucketAccess is the BackupJob-side entry point to reconcileBucketAccess.
-func (r *BackupJobReconciler) ensureBucketAccess(ctx context.Context, namespace, name, claimName, accessClass string) (*buckettypes.BucketAccess, error) {
-	return reconcileBucketAccess(ctx, r.Client, namespace, name, claimName, accessClass)
+func (r *BackupJobReconciler) ensureBucketAccess(ctx context.Context, namespace, name string, claim *buckettypes.BucketClaim, accessClass string) (*buckettypes.BucketAccess, error) {
+	return reconcileBucketAccess(ctx, r.Client, namespace, name, claim, accessClass)
 }
 
 // createBucketBackupArtifact materialises a Cozystack Backup with the restore
@@ -634,7 +653,7 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 
 	// Provision the read-write BucketAccess the mirror writes the target
 	// through, then gate on the grant.
-	access, err := r.ensureBucketAccess(ctx, targetNamespace, restoreAccessName(targetAppName), bucketReleaseName(targetAppName), deriveAccessClassName(claim.Spec.BucketClassName, false))
+	access, err := r.ensureBucketAccess(ctx, targetNamespace, restoreAccessName(targetAppName), claim, deriveAccessClassName(claim.Spec.BucketClassName, false))
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to provision target BucketAccess: %v", err))
 	}
@@ -741,9 +760,10 @@ func bucketRestoreParameters(b *backupsv1alpha1.Backup) map[string]string {
 
 // ensureBucketAccess is the RestoreJob-side entry point to
 // reconcileBucketAccess. The BucketAccess lives in the target application's
-// namespace and persists (no controllerRef) so a re-restore reuses the grant.
-func (r *RestoreJobReconciler) ensureBucketAccess(ctx context.Context, namespace, name, claimName, accessClass string) (*buckettypes.BucketAccess, error) {
-	return reconcileBucketAccess(ctx, r.Client, namespace, name, claimName, accessClass)
+// namespace and is owner-referenced to its BucketClaim so a re-restore reuses
+// the grant while app deletion still GCs it.
+func (r *RestoreJobReconciler) ensureBucketAccess(ctx context.Context, namespace, name string, claim *buckettypes.BucketClaim, accessClass string) (*buckettypes.BucketAccess, error) {
+	return reconcileBucketAccess(ctx, r.Client, namespace, name, claim, accessClass)
 }
 
 // requeueRestoreBucketWaiting mirrors requeueBucketWaiting for the restore path.
@@ -822,10 +842,11 @@ func buildBucketMirrorPod(mode string, tmpl strategyv1alpha1.BucketTemplate, app
 	}
 
 	container := corev1.Container{
-		Name:  "mirror",
-		Image: tmpl.Image,
-		Args:  args,
-		Env:   env,
+		Name:            "mirror",
+		Image:           tmpl.Image,
+		Args:            args,
+		Env:             env,
+		SecurityContext: restrictedSecurityContext(),
 	}
 	if tmpl.Resources != nil {
 		container.Resources = *tmpl.Resources
@@ -840,22 +861,16 @@ func buildBucketMirrorPod(mode string, tmpl strategyv1alpha1.BucketTemplate, app
 				MountPath: bucketCAMountPath,
 				ReadOnly:  true,
 			})
-			volumes = append(volumes, corev1.Volume{
-				Name: "s3-ca",
-				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-					SecretName: dest.TLS.CASecretKeyRef.Name,
-					Items: []corev1.KeyToPath{{
-						Key:  dest.TLS.CASecretKeyRef.Key,
-						Path: bucketCAFileName,
-					}},
-				}},
-			})
+			volumes = append(volumes, bucketCAVolume(dest.TLS.CASecretKeyRef))
 		} else if dest.TLS.InsecureSkipVerify {
 			container.Args = append(container.Args, "--insecure")
 		}
 	}
 
 	deadline := bucketMirrorDeadlineSeconds
+	if tmpl.TimeoutSeconds != nil && *tmpl.TimeoutSeconds > 0 {
+		deadline = *tmpl.TimeoutSeconds
+	}
 	return &corev1.PodTemplateSpec{
 		Spec: corev1.PodSpec{
 			RestartPolicy:         corev1.RestartPolicyNever,
@@ -863,6 +878,35 @@ func buildBucketMirrorPod(mode string, tmpl strategyv1alpha1.BucketTemplate, app
 			Containers:            []corev1.Container{container},
 			Volumes:               volumes,
 		},
+	}
+}
+
+// restrictedSecurityContext hardens the one-shot mirror/cleanup containers the
+// way the sibling default strategies harden theirs (strategy-redis/kafka):
+// no privilege escalation, every capability dropped, the runtime seccomp profile.
+func restrictedSecurityContext() *corev1.SecurityContext {
+	no := false
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &no,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+}
+
+// bucketCAVolume mounts the S3 CA bundle optionally: nothing projects an
+// externally-managed CA Secret into the tenant namespace, so a required mount
+// would wedge the Pod on FailedMount for the whole deadline. Absent, the mirror
+// falls through to the system trust store (a private-CA endpoint then fails the
+// handshake fast, which is the same signal).
+func bucketCAVolume(ref *strategyv1alpha1.BucketSecretKeySelector) corev1.Volume {
+	optional := true
+	return corev1.Volume{
+		Name: "s3-ca",
+		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+			SecretName: ref.Name,
+			Optional:   &optional,
+			Items:      []corev1.KeyToPath{{Key: ref.Key, Path: bucketCAFileName}},
+		}},
 	}
 }
 
@@ -902,7 +946,7 @@ func buildBucketCleanupPod(snapshot *bucketBackupSnapshot, image string) *corev1
 		},
 	}
 
-	container := corev1.Container{Name: "cleanup", Image: image, Args: args, Env: env}
+	container := corev1.Container{Name: "cleanup", Image: image, Args: args, Env: env, SecurityContext: restrictedSecurityContext()}
 
 	var volumes []corev1.Volume
 	if snapshot.RepoCACertSecret != "" {
@@ -912,13 +956,7 @@ func buildBucketCleanupPod(snapshot *bucketBackupSnapshot, image string) *corev1
 			MountPath: bucketCAMountPath,
 			ReadOnly:  true,
 		})
-		volumes = append(volumes, corev1.Volume{
-			Name: "s3-ca",
-			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-				SecretName: snapshot.RepoCACertSecret,
-				Items:      []corev1.KeyToPath{{Key: snapshot.RepoCACertKey, Path: bucketCAFileName}},
-			}},
-		})
+		volumes = append(volumes, bucketCAVolume(&strategyv1alpha1.BucketSecretKeySelector{Name: snapshot.RepoCACertSecret, Key: snapshot.RepoCACertKey}))
 	} else if snapshot.InsecureSkipVerify {
 		container.Args = append(container.Args, "--insecure")
 	}
@@ -965,6 +1003,18 @@ func (r *BackupReconciler) cleanupBucketBackup(ctx context.Context, backup *back
 		// A Backup written before the snapshot recorded repo coordinates names
 		// nothing to delete.
 		return ctrl.Result{}, nil
+	}
+
+	// Refuse to purge while a RestoreJob is still reading this Backup: an in-place
+	// restore lists snapshot.RepoPrefix to build its keep-set, and a concurrent
+	// purge removing a key before the listing reaches it drops that key from the
+	// set, so deleteUnseen then wipes the live copy too. Wait for the restore to
+	// reach a terminal phase before reclaiming.
+	if active, aerr := r.restoreJobActiveForBackup(ctx, backup); aerr != nil {
+		return ctrl.Result{}, aerr
+	} else if active {
+		logger.Debug("holding Bucket artifact cleanup while a RestoreJob reads the Backup", "backup", backup.Name)
+		return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
 	}
 
 	strategy := &strategyv1alpha1.Bucket{}
@@ -1038,6 +1088,29 @@ func (r *BackupReconciler) cleanupBucketBackup(ctx context.Context, backup *back
 func (r *BackupReconciler) deleteBucketCleanupJob(ctx context.Context, job *batchv1.Job) error {
 	policy := metav1.DeletePropagationBackground
 	return client.IgnoreNotFound(r.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &policy}))
+}
+
+// restoreJobActiveForBackup reports whether a non-terminal RestoreJob in the
+// Backup's namespace still references it, so its repo objects must not be
+// reclaimed out from under an in-flight restore.
+func (r *BackupReconciler) restoreJobActiveForBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (bool, error) {
+	list := &backupsv1alpha1.RestoreJobList{}
+	if err := r.List(ctx, list, client.InNamespace(backup.Namespace)); err != nil {
+		return false, err
+	}
+	for i := range list.Items {
+		rj := &list.Items[i]
+		if rj.Spec.BackupRef.Name != backup.Name {
+			continue
+		}
+		switch rj.Status.Phase {
+		case backupsv1alpha1.RestoreJobPhaseSucceeded, backupsv1alpha1.RestoreJobPhaseFailed:
+			continue
+		default:
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *BackupReconciler) releaseBucketCleanup(ctx context.Context, backup *backupsv1alpha1.Backup, prefix, reason string) ctrl.Result {

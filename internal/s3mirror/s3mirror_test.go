@@ -13,6 +13,16 @@ func TestRunRejectsEmptyRestorePrefix(t *testing.T) {
 	}
 }
 
+func TestRunRejectsDeleteExtraneousWithoutPrefix(t *testing.T) {
+	// backup mode allows an empty prefix, but --delete-extraneous without one
+	// would sweep the whole repo bucket, so Run must reject the pair regardless
+	// of mode.
+	code := Run([]string{"--mode=backup", "--repo-endpoint=s3.example.com", "--repo-bucket=cozy-backups", "--delete-extraneous"})
+	if code != 2 {
+		t.Fatalf("Run(backup, --delete-extraneous, no prefix) = %d, want 2", code)
+	}
+}
+
 func TestParseBucketInfo(t *testing.T) {
 	valid := `{"spec":{"bucketName":"bucket-abc","secretS3":{"accessKeyID":"AK","accessSecretKey":"SK","endpoint":"https://s3.example.com:8333"}}}`
 	bi, err := parseBucketInfo([]byte(valid))

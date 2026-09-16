@@ -218,17 +218,21 @@ func newBucketAccessTestClient(t *testing.T, objs ...*buckettypes.BucketAccess) 
 	return b.Build()
 }
 
-func bucketAccess(name string, labels map[string]string, spec buckettypes.BucketAccessSpec) *buckettypes.BucketAccess {
+func bucketAccess(name string, labels map[string]string, owners []metav1.OwnerReference, spec buckettypes.BucketAccessSpec) *buckettypes.BucketAccess {
 	return &buckettypes.BucketAccess{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: name, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: name, Labels: labels, OwnerReferences: owners},
 		Spec:       spec,
 	}
+}
+
+func testBucketClaim() *buckettypes.BucketClaim {
+	return &buckettypes.BucketClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bucket-web", UID: "claim-uid"}}
 }
 
 func TestReconcileBucketAccessRefusesUnownedName(t *testing.T) {
 	// A same-named object without the driver's label belongs to someone else:
 	// reusing it would point the mirror at whatever claim/class/Secret it names.
-	squatted := bucketAccess("bucket-web-cozy-backup", nil, buckettypes.BucketAccessSpec{
+	squatted := bucketAccess("bucket-web-cozy-backup", nil, nil, buckettypes.BucketAccessSpec{
 		BucketClaimName:       "attacker-claim",
 		BucketAccessClassName: "attacker-class",
 		Protocol:              bucketProtocolS3,
@@ -236,14 +240,16 @@ func TestReconcileBucketAccessRefusesUnownedName(t *testing.T) {
 	})
 	c := newBucketAccessTestClient(t, squatted)
 
-	if _, err := reconcileBucketAccess(context.Background(), c, "tenant-x", "bucket-web-cozy-backup", "bucket-web", "bucket-web-readonly"); err == nil {
+	if _, err := reconcileBucketAccess(context.Background(), c, "tenant-x", "bucket-web-cozy-backup", testBucketClaim(), "bucket-web-readonly"); err == nil {
 		t.Fatal("reconcileBucketAccess: want conflict error for an unowned same-named object, got nil")
 	}
 }
 
 func TestReconcileBucketAccessReusesOwnedMatch(t *testing.T) {
+	claim := testBucketClaim()
 	owned := bucketAccess("bucket-web-cozy-backup",
 		map[string]string{managedByLabel: managedByValue},
+		[]metav1.OwnerReference{{APIVersion: buckettypes.GroupVersion.String(), Kind: "BucketClaim", Name: claim.Name, UID: claim.UID}},
 		buckettypes.BucketAccessSpec{
 			BucketClaimName:       "bucket-web",
 			BucketAccessClassName: "bucket-web-readonly",
@@ -252,12 +258,15 @@ func TestReconcileBucketAccessReusesOwnedMatch(t *testing.T) {
 		})
 	c := newBucketAccessTestClient(t, owned)
 
-	got, err := reconcileBucketAccess(context.Background(), c, "tenant-x", "bucket-web-cozy-backup", "bucket-web", "bucket-web-readonly")
+	got, err := reconcileBucketAccess(context.Background(), c, "tenant-x", "bucket-web-cozy-backup", claim, "bucket-web-readonly")
 	if err != nil {
 		t.Fatalf("reconcileBucketAccess: %v", err)
 	}
 	if got.Spec != owned.Spec {
 		t.Fatalf("returned spec = %+v, want the existing %+v", got.Spec, owned.Spec)
+	}
+	if !hasOwnerUID(got, claim.UID) {
+		t.Fatalf("returned access has no ownerRef to the BucketClaim: %+v", got.OwnerReferences)
 	}
 }
 

@@ -75,6 +75,22 @@ backupStrategyController:
       cpu: "1"
       memory: 1Gi
       ephemeral-storage: 4Gi
+  # bucketBackupResources sizes the S3 Bucket mirror Pod so one tenant's backup
+  # cannot starve a node. The mirror streams object-by-object S3-to-S3 (no full
+  # dataset in memory, no disk staging), so memory stays modest; raise the limits
+  # for tenants pushing many concurrent large objects.
+  bucketBackupResources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  # bucketBackupTimeoutSeconds bounds a single S3 Bucket mirror attempt (the
+  # Pod's activeDeadlineSeconds). A bucket that cannot stream within it can never
+  # be backed up or restored, so raise it for tenants holding hundreds of GB; the
+  # mirror skips already-copied objects, so a retry after a bump resumes.
+  bucketBackupTimeoutSeconds: 7200
   # The Kafka metadata strategy carries no client image here: unlike the Altinity
   # and RabbitMQ drivers (curl-only, so a shared platform-migrations image works),
   # its driver runs the Kafka Admin-API CLI (kafka-topics / kafka-configs), which

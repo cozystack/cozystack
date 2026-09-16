@@ -4,11 +4,20 @@ package s3mirror
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"io"
 	"sort"
 	"strings"
 	"testing"
 )
+
+// fakeETag mimics the S3 single-part ETag (md5 of the content) so the resume
+// skip in mirror keys on content identity, not size.
+func fakeETag(data []byte) string {
+	sum := md5.Sum(data)
+	return hex.EncodeToString(sum[:])
+}
 
 type fakeObject struct {
 	data            []byte
@@ -34,7 +43,7 @@ func (s *fakeStore) seed(bucket, key string, obj fakeObject) {
 	s.buckets[bucket][key] = obj
 }
 
-func (s *fakeStore) list(_ context.Context, bucket, prefix string, fn func(key string, size int64) error) error {
+func (s *fakeStore) list(_ context.Context, bucket, prefix string, fn func(key string, size int64, etag string) error) error {
 	keys := make([]string, 0, len(s.buckets[bucket]))
 	for k := range s.buckets[bucket] {
 		if strings.HasPrefix(k, prefix) {
@@ -43,7 +52,8 @@ func (s *fakeStore) list(_ context.Context, bucket, prefix string, fn func(key s
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		if err := fn(k, int64(len(s.buckets[bucket][k].data))); err != nil {
+		data := s.buckets[bucket][k].data
+		if err := fn(k, int64(len(data)), fakeETag(data)); err != nil {
 			return err
 		}
 	}
@@ -60,6 +70,14 @@ func (s *fakeStore) get(_ context.Context, bucket, key string) (object, error) {
 		userMetadata:    o.userMetadata,
 		body:            io.NopCloser(bytes.NewReader(o.data)),
 	}, nil
+}
+
+func (s *fakeStore) statETag(_ context.Context, bucket, key string) (string, bool, error) {
+	o, ok := s.buckets[bucket][key]
+	if !ok {
+		return "", false, nil
+	}
+	return fakeETag(o.data), true, nil
 }
 
 func (s *fakeStore) put(_ context.Context, bucket, key string, obj object) error {
@@ -147,6 +165,52 @@ func TestMirrorZeroObjectSourceDoesNotWipe(t *testing.T) {
 	}
 	if got := s.keys("app"); len(got) != 0 {
 		t.Fatalf("app keys = %v, want empty after allow-empty-source purge", got)
+	}
+}
+
+func TestMirrorResumeSkipsAlreadyPresent(t *testing.T) {
+	// A retried restore whose destination already holds every object with
+	// identical content (matching ETag) copies nothing (resume), and the
+	// empty-source guard does not fire because the source is fully mirrored.
+	s := newFakeStore()
+	s.seed("repo", "p/a", fakeObject{data: []byte("AAA")})
+	s.seed("repo", "p/b", fakeObject{data: []byte("BB")})
+	s.seed("app", "a", fakeObject{data: []byte("AAA")})
+	s.seed("app", "b", fakeObject{data: []byte("BB")})
+
+	from := copySide{store: s, bucket: "repo", prefix: "p/"}
+	to := copySide{store: s, bucket: "app", prefix: ""}
+	copied, err := mirror(context.Background(), from, to, false, true, true, false)
+	if err != nil {
+		t.Fatalf("mirror: %v", err)
+	}
+	if copied != 0 {
+		t.Fatalf("copied = %d, want 0 (all present, nothing re-transferred)", copied)
+	}
+	if got := strings.Join(s.keys("app"), ","); got != "a,b" {
+		t.Fatalf("app keys = %q, want \"a,b\" (both retained)", got)
+	}
+}
+
+func TestMirrorRestoresSameSizeInPlaceModification(t *testing.T) {
+	// An in-place restore must overwrite a live object modified since the backup
+	// even when it kept the same byte size: the resume skip keys on ETag, not
+	// size, so different content is never mistaken for an already-copied object.
+	s := newFakeStore()
+	s.seed("repo", "p/a", fakeObject{data: []byte("AAA")}) // snapshot
+	s.seed("app", "a", fakeObject{data: []byte("ZZZ")})    // live, modified, same size
+
+	from := copySide{store: s, bucket: "repo", prefix: "p/"}
+	to := copySide{store: s, bucket: "app", prefix: ""}
+	copied, err := mirror(context.Background(), from, to, false, true, true, false)
+	if err != nil {
+		t.Fatalf("mirror: %v", err)
+	}
+	if copied != 1 {
+		t.Fatalf("copied = %d, want 1 (same-size modification must be re-copied)", copied)
+	}
+	if string(s.buckets["app"]["a"].data) != "AAA" {
+		t.Fatalf("app/a = %q, want restored snapshot bytes \"AAA\"", s.buckets["app"]["a"].data)
 	}
 }
 

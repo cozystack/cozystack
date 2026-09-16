@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -217,6 +218,15 @@ func Run(args []string) int {
 		to = copySide{store: appStore, bucket: app.bucket, prefix: ""}
 	}
 
+	// A freshly granted COSI BucketAccess reports accessGranted before the S3
+	// server has necessarily reloaded the new IAM identity, so the first request
+	// can 403. Retry a light read against the application bucket until it works
+	// (or times out) so the first BackupJob does not fail on propagation lag.
+	if err := waitForBucketReady(ctx, appStore, app.bucket, bucketPreflightTimeout); err != nil {
+		fmt.Fprintf(os.Stderr, "s3-mirror: application bucket preflight: %v\n", err)
+		return 1
+	}
+
 	sameEndpoint := hostOf(app.endpoint) == hostOf(repo.endpoint)
 	copied, err := mirror(ctx, from, to, *serverSide && sameEndpoint, *deleteExtraneous, *mode == "restore", *allowEmptySource)
 	if err != nil {
@@ -233,6 +243,33 @@ func Run(args []string) int {
 	return 0
 }
 
+// bucketPreflightTimeout budgets how long to wait for a freshly granted
+// BucketAccess to become usable, matching the e2e preflight's 90s.
+const bucketPreflightTimeout = 90 * time.Second
+
+// waitForBucketReady retries a light listing against bucket until it succeeds or
+// timeout elapses, so a not-yet-propagated S3 credential does not fail the copy.
+func waitForBucketReady(ctx context.Context, store objectStore, bucket string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	delay := time.Second
+	for {
+		// A prefix that matches nothing keeps the probe cheap: a working
+		// credential returns an empty listing, a not-yet-loaded one returns the
+		// server's auth error.
+		err := store.list(ctx, bucket, "\x00s3-mirror-preflight", func(string, int64, string) error { return nil })
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("bucket %s not reachable within %s: %w", bucket, timeout, err)
+		}
+		time.Sleep(delay)
+		if delay < 10*time.Second {
+			delay *= 2
+		}
+	}
+}
+
 func hostOf(endpoint string) string {
 	h, _ := splitEndpoint(endpoint)
 	return h
@@ -245,6 +282,13 @@ func buildTransport(insecure bool, caFile string) (http.RoundTripper, error) {
 	tlsConfig := &tls.Config{InsecureSkipVerify: insecure} //nolint:gosec // insecure is an explicit opt-in for self-signed in-cluster endpoints
 	if caFile != "" {
 		pem, err := os.ReadFile(caFile)
+		if os.IsNotExist(err) {
+			// The CA Secret is mounted optionally, so an admin who set no CA (or
+			// mis-mounted one) leaves the file absent: fall through to the system
+			// trust store rather than failing the copy. A genuinely private-CA
+			// endpoint then fails the handshake fast, which is the same signal.
+			return &http.Transport{TLSClientConfig: tlsConfig}, nil
+		}
 		if err != nil {
 			return nil, fmt.Errorf("read CA file %s: %w", caFile, err)
 		}
@@ -294,9 +338,11 @@ type object struct {
 type objectStore interface {
 	// list streams the key+size of every object under prefix to fn; an error
 	// from fn or the listing aborts and propagates.
-	list(ctx context.Context, bucket, prefix string, fn func(key string, size int64) error) error
+	list(ctx context.Context, bucket, prefix string, fn func(key string, size int64, etag string) error) error
 	// get opens one object; the caller closes the returned body.
 	get(ctx context.Context, bucket, key string) (object, error)
+	// statETag reports an object's ETag (content identity) and whether it exists.
+	statETag(ctx context.Context, bucket, key string) (etag string, exists bool, err error)
 	put(ctx context.Context, bucket, key string, obj object) error
 	// copyServerSide attempts an in-server copy; a returned error signals the
 	// caller to fall back to a streamed copy.
@@ -318,11 +364,28 @@ type copySide struct {
 func mirror(ctx context.Context, from, to copySide, serverSide, deleteExtraneous, restore, allowEmptySource bool) (int, error) {
 	seen := map[string]struct{}{}
 	copied := 0
+	skipped := 0
 
-	err := from.store.list(ctx, from.bucket, from.prefix, func(key string, _ int64) error {
+	err := from.store.list(ctx, from.bucket, from.prefix, func(key string, _ int64, etag string) error {
 		rel := strings.TrimPrefix(key, from.prefix)
 		destKey := to.prefix + rel
 		seen[destKey] = struct{}{}
+
+		// Resume: skip an object already at the destination with the SAME content
+		// (matching ETag), so a retried run does not re-transfer what an earlier
+		// attempt copied. Comparing content, not size, is what keeps an in-place
+		// restore faithful: an object modified in place at the same byte size has
+		// a different ETag, so it is re-copied to the snapshot content rather than
+		// left as the live bytes. An empty source ETag (some backends omit it)
+		// falls through to a copy, which is safe.
+		if etag != "" {
+			if detag, ok, serr := to.store.statETag(ctx, to.bucket, destKey); serr != nil {
+				return serr
+			} else if ok && detag == etag {
+				skipped++
+				return nil
+			}
+		}
 
 		if serverSide {
 			if err := to.store.copyServerSide(ctx, to.bucket, destKey, from.bucket, key); err == nil {
@@ -350,7 +413,7 @@ func mirror(ctx context.Context, from, to copySide, serverSide, deleteExtraneous
 	// restore would silently "succeed" having restored nothing - so refuse both.
 	// Backup mode legitimately copies zero from an empty application bucket, so
 	// this is gated on restore. --allow-empty-source overrides it.
-	if restore && copied == 0 && !allowEmptySource {
+	if restore && copied+skipped == 0 && !allowEmptySource {
 		detail := "would restore nothing"
 		if deleteExtraneous {
 			detail = "would delete every object in the destination"
@@ -383,7 +446,7 @@ func streamCopy(ctx context.Context, from, to copySide, srcKey, destKey string) 
 // used to reclaim a backup's repo objects when its Backup is deleted.
 func purge(ctx context.Context, side copySide) (int, error) {
 	removed := 0
-	err := side.store.list(ctx, side.bucket, side.prefix, func(key string, _ int64) error {
+	err := side.store.list(ctx, side.bucket, side.prefix, func(key string, _ int64, _ string) error {
 		if err := side.store.remove(ctx, side.bucket, key); err != nil {
 			return fmt.Errorf("remove %s/%s: %w", side.bucket, key, err)
 		}
@@ -394,7 +457,7 @@ func purge(ctx context.Context, side copySide) (int, error) {
 }
 
 func deleteUnseen(ctx context.Context, to copySide, seen map[string]struct{}) error {
-	return to.store.list(ctx, to.bucket, to.prefix, func(key string, _ int64) error {
+	return to.store.list(ctx, to.bucket, to.prefix, func(key string, _ int64, _ string) error {
 		if _, ok := seen[key]; ok {
 			return nil
 		}
@@ -411,12 +474,12 @@ type minioStore struct {
 	client *minio.Client
 }
 
-func (s *minioStore) list(ctx context.Context, bucket, prefix string, fn func(key string, size int64) error) error {
+func (s *minioStore) list(ctx context.Context, bucket, prefix string, fn func(key string, size int64, etag string) error) error {
 	for info := range s.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
 		if info.Err != nil {
 			return fmt.Errorf("list %s/%s: %w", bucket, prefix, info.Err)
 		}
-		if err := fn(info.Key, info.Size); err != nil {
+		if err := fn(info.Key, info.Size, normalizeETag(info.ETag)); err != nil {
 			return err
 		}
 	}
@@ -444,6 +507,24 @@ func (s *minioStore) get(ctx context.Context, bucket, key string) (object, error
 		userMetadata:    userMetadataOf(info.Metadata),
 		body:            o,
 	}, nil
+}
+
+func (s *minioStore) statETag(ctx context.Context, bucket, key string) (string, bool, error) {
+	info, err := s.client.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		resp := minio.ToErrorResponse(err)
+		if resp.Code == "NoSuchKey" || resp.StatusCode == http.StatusNotFound {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return normalizeETag(info.ETag), true, nil
+}
+
+// normalizeETag strips the optional surrounding quotes S3 ETags carry so a
+// listing ETag and a stat ETag for the same object compare equal.
+func normalizeETag(etag string) string {
+	return strings.Trim(etag, `"`)
 }
 
 func (s *minioStore) put(ctx context.Context, bucket, key string, obj object) error {

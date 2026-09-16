@@ -42,7 +42,6 @@ import (
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/backupcontroller"
-	"github.com/cozystack/cozystack/internal/backupcontroller/bucketapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/buckettypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/cnpgtypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/etcdapp"
@@ -85,7 +84,6 @@ func init() {
 	utilruntime.Must(rabbitmqtypes.AddToScheme(scheme))
 	utilruntime.Must(kafkatypes.AddToScheme(scheme))
 	utilruntime.Must(buckettypes.AddToScheme(scheme))
-	utilruntime.Must(bucketapp.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

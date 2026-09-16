@@ -240,6 +240,15 @@ spec:
                       the mirror always streams, which works regardless of the S3 identity
                       model.
                     type: boolean
+                  timeoutSeconds:
+                    description: |-
+                      TimeoutSeconds bounds a single mirror Pod attempt. A bucket that cannot
+                      stream within it can never be backed up or restored by this strategy, so
+                      raise it for tenants holding hundreds of GB; unset falls back to a two-hour
+                      default. Templating is not applied to this field.
+                    format: int64
+                    minimum: 1
+                    type: integer
                 required:
                 - destination
                 - image

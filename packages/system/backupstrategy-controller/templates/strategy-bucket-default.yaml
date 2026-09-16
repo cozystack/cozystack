@@ -27,5 +27,31 @@ spec:
       secretAccessKeySecretKeyRef:
         name: cozy-backups-creds
         key: AWS_SECRET_ACCESS_KEY
+      {{- /*
+        Reach a private-CA or self-signed S3 endpoint the same way the sibling
+        strategies do, from the platform-wide backupStorage TLS values. Without
+        this an external S3 (provisionBucket=false) behind a private CA fails the
+        handshake while Redis on the same values keeps working. The CA Secret is
+        mounted optionally by the driver, so a missing one falls through to the
+        system trust store rather than wedging the mirror Pod.
+      */}}
+      {{- if or .Values.backupStorage.insecureSkipTLSVerify .Values.backupStorage.endpointCASecretName }}
+      tls:
+        {{- if .Values.backupStorage.insecureSkipTLSVerify }}
+        insecureSkipVerify: true
+        {{- end }}
+        {{- if .Values.backupStorage.endpointCASecretName }}
+        caSecretKeyRef:
+          name: {{ .Values.backupStorage.endpointCASecretName | quote }}
+          key: ca.crt
+        {{- end }}
+      {{- end }}
     image: {{ .Values.backupStrategyController.image | quote }}
+    {{- with .Values.backupStrategyController.bucketBackupResources }}
+    resources:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.backupStrategyController.bucketBackupTimeoutSeconds }}
+    timeoutSeconds: {{ . }}
+    {{- end }}
 {{- end -}}

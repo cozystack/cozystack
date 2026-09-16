@@ -106,6 +106,14 @@ type BucketTemplate struct {
 	// backup cannot starve a node. Templating is not applied to this field.
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// TimeoutSeconds bounds a single mirror Pod attempt. A bucket that cannot
+	// stream within it can never be backed up or restored by this strategy, so
+	// raise it for tenants holding hundreds of GB; unset falls back to a two-hour
+	// default. Templating is not applied to this field.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	TimeoutSeconds *int64 `json:"timeoutSeconds,omitempty"`
 }
 
 // BucketDestination mirrors the S3 target of the copy. Bucket, Endpoint,
