@@ -45,7 +45,7 @@ echo "Supported major.minor versions: $SUPPORTED_VERSIONS"
 # <version>-1), unified runs fdb-kubernetes-monitor, so a version is usable
 # only when all three are published.
 echo "Fetching available image tags from registry..."
-SERVER_TAGS=$(skopeo list-tags docker://docker.io/foundationdb/foundationdb | jq -r '.Tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' | sort -V)
+SERVER_TAGS=$(skopeo list-tags docker://docker.io/foundationdb/foundationdb | jq -r '.Tags[]')
 SIDECAR_TAGS=$(skopeo list-tags docker://docker.io/foundationdb/foundationdb-kubernetes-sidecar | jq -r '.Tags[]')
 MONITOR_TAGS=$(skopeo list-tags docker://docker.io/foundationdb/fdb-kubernetes-monitor | jq -r '.Tags[]')
 
@@ -54,24 +54,29 @@ if [ -z "$SERVER_TAGS" ] || [ -z "$SIDECAR_TAGS" ] || [ -z "$MONITOR_TAGS" ]; th
     exit 1
 fi
 
-# Build versions map: major.minor version -> latest patch version
+# Build versions map: major.minor version -> the patch the operator carries.
+# The patch comes from the operator chart rather than from the newest tag in
+# the registry: the operator talks to the cluster through the client library of
+# that exact build, and a server ahead of it is a combination nobody ships.
 declare -A VERSION_MAP
 MAJOR_VERSIONS=()
 
 for major_version in $SUPPORTED_VERSIONS; do
-    latest_tag=""
-    for tag in $(echo "$SERVER_TAGS" | grep "^${major_version//./\\.}\\." || true); do
-        if echo "$SIDECAR_TAGS" | grep -qx "${tag}-1" && echo "$MONITOR_TAGS" | grep -qx "${tag}"; then
-            latest_tag="$tag"
-        fi
-    done
+    tag=$(yq -r ".initContainers.\"${major_version}\".image.tag" "$OPERATOR_VALUES_FILE")
 
-    if [ -n "$latest_tag" ]; then
-        VERSION_MAP["v${major_version}"]="${latest_tag}"
+    if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+        echo "Warning: The operator chart carries no image tag for ${major_version}, skipping..." >&2
+        continue
+    fi
+
+    if echo "$SERVER_TAGS" | grep -qx "$tag" \
+        && echo "$SIDECAR_TAGS" | grep -qx "${tag}-1" \
+        && echo "$MONITOR_TAGS" | grep -qx "$tag"; then
+        VERSION_MAP["v${major_version}"]="${tag}"
         MAJOR_VERSIONS+=("v${major_version}")
-        echo "Found version: v${major_version} -> ${latest_tag}"
+        echo "Found version: v${major_version} -> ${tag}"
     else
-        echo "Warning: No complete set of images found for ${major_version}, skipping..." >&2
+        echo "Warning: No complete set of images published for ${tag}, skipping ${major_version}..." >&2
     fi
 done
 
@@ -85,6 +90,36 @@ IFS=$'\n' MAJOR_VERSIONS=($(printf '%s\n' "${MAJOR_VERSIONS[@]}" | sort -V -r))
 unset IFS
 
 echo "Major versions to add: ${MAJOR_VERSIONS[*]}"
+
+# Keep the default where it is. It decides what every release that never set a
+# version runs, so moving it is an upgrade decision of its own rather than
+# something a refresh of the tags carries along.
+CURRENT_DEFAULT=$(awk '/^version: / { gsub(/"/, "", $2); print $2; exit }' "$VALUES_FILE")
+DEFAULT_VERSION="${MAJOR_VERSIONS[0]}"
+for major_ver in "${MAJOR_VERSIONS[@]}"; do
+    if [ "$major_ver" = "$CURRENT_DEFAULT" ]; then
+        DEFAULT_VERSION="$CURRENT_DEFAULT"
+        break
+    fi
+done
+
+if [ "$DEFAULT_VERSION" != "$CURRENT_DEFAULT" ]; then
+    echo "WARNING: the current default ${CURRENT_DEFAULT:-<none>} is no longer available, so the default becomes ${DEFAULT_VERSION}; every release that never set a version moves with it" >&2
+fi
+
+# A line that disappears upstream leaves the enum, and the versionMap helper
+# then fails the render of every release still on it.
+PREVIOUS_VERSIONS=$(awk '
+    /^## @enum \{string\} Version$/ { in_enum = 1; next }
+    in_enum && /^## @value / { print $3; next }
+    in_enum { in_enum = 0 }
+' "$VALUES_FILE")
+for old_ver in $PREVIOUS_VERSIONS; do
+    case " ${MAJOR_VERSIONS[*]} " in
+        *" $old_ver "*) ;;
+        *) echo "WARNING: $old_ver has left the supported set; a release still on it will fail to render" >&2 ;;
+    esac
+done
 
 # Create/update versions.yaml file
 echo "Updating $VERSIONS_FILE..."
@@ -109,7 +144,7 @@ done
 NEW_VERSION_SECTION="${NEW_VERSION_SECTION}
 
 ## @param {Version} version - FoundationDB major.minor version to deploy
-version: ${MAJOR_VERSIONS[0]}"
+version: ${DEFAULT_VERSION}"
 
 # Check if version section already exists
 if grep -q "^## @enum {string} Version" "$VALUES_FILE"; then
@@ -148,4 +183,4 @@ else
     mv "$TEMP_FILE.tmp" "$VALUES_FILE"
 fi
 
-echo "Successfully updated $VALUES_FILE with major.minor versions: ${MAJOR_VERSIONS[*]}"
+echo "Successfully updated $VALUES_FILE (default ${DEFAULT_VERSION}) with major.minor versions: ${MAJOR_VERSIONS[*]}"
