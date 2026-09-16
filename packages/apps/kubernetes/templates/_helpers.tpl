@@ -90,7 +90,7 @@ must exist on the pod and mount at /etc/kubernetes/kubeconfig.
 */}}
 {{- define "kubernetes.waitForAdminKubeconfig" -}}
 - name: wait-for-kubeconfig
-  image: "{{ .Files.Get "images/busybox.tag" | trim }}"
+  image: {{ include "cozy-lib.image" (list (.Files.Get "images/busybox.tag" | trim) $) | quote }}
   command:
   - sh
   - -c
