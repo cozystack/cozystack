@@ -112,3 +112,20 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: '`users.postgres` is forbidden by policy. Use a different username.'
+
+  # On an upgrade the credentials Secret must exist; a lookup that finds nothing
+  # means it was deleted or the release renamed, and re-minting would rotate every
+  # role behind the running database, so the render fails loudly. A first install
+  # (no Secret expected) is let through. Removing the .Release.IsUpgrade guard makes
+  # this render instead of failing — the mutation signal.
+  - it: fails an upgrade when the credentials Secret is missing
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        app: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'pg-test-credentials Secret not found while upgrading: refusing to mint fresh passwords, which would rotate every role at once behind the running database. If the Secret was deleted, restore it before upgrading (a first install does not hit this path).'

@@ -137,6 +137,22 @@ tests:
       name: mdb-test
       namespace: tenant-test
       upgrade: true
+    # A real upgrade finds the credentials Secret, so seed it: otherwise the
+    # upgrade-with-missing-Secret guard fires first and this would not exercise the
+    # collision gate at all.
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mdb-test-credentials
+            namespace: tenant-test
+          data:
+            root: cm9vdHNlZWRwYXNzd29yZDA=
     set:
       users:
         a_b:
@@ -147,6 +163,35 @@ tests:
       - matchRegex:
           path: stringData["a-b"]
           pattern: ^[a-zA-Z0-9]{16}$
+
+  # On a first install there is no credentials Secret yet, so minting fresh
+  # passwords is correct and the render succeeds (lookup returns nothing here).
+  - it: mints on a first install when no credentials Secret exists
+    set:
+      users:
+        app:
+          maxUserConnections: 10
+    asserts:
+      - matchRegex:
+          path: stringData.root
+          pattern: ^[a-zA-Z0-9]{16}$
+
+  # On an upgrade the Secret must exist; a lookup that finds nothing means it was
+  # deleted or the release renamed, and re-minting would rotate every account (root
+  # unrecoverable after bootstrap), so the render fails loudly. Removing the
+  # .Release.IsUpgrade guard lets it mint instead — the mutation signal.
+  - it: fails an upgrade when the credentials Secret is missing
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        app:
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'mdb-test-credentials Secret not found while upgrading: refusing to mint fresh passwords, which would rotate every account and, because mariadb-operator applies root only at datadir bootstrap, leave the cluster advertising a root password it never set. If the Secret was deleted, restore it before upgrading (a first install does not hit this path).'
 
   # A charset/DNS-invalid name never applied at all, so its guard stays on the
   # upgrade path too: gating it would only defer the same failure to the apiserver
