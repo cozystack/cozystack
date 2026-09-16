@@ -49,3 +49,16 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].image
           pattern: '^docker\.io/alpine/k8s:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: moves the kubectl image to the platform registry
+    template: templates/talos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      _cluster:
+        images-registry: registry.airgap.example.test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^registry\.airgap\.example\.test/docker\.io/alpine/k8s:'
