@@ -1,0 +1,192 @@
+suite: harbor managementWhitelist restricts everything but the registry paths
+templates:
+  - templates/ingress.yaml
+  - templates/httproute.yaml
+  - templates/dashboard-resourcemap.yaml
+
+release:
+  name: harbor
+  namespace: tenant-root
+
+set:
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+    gateway: ""
+  _cluster:
+    issuer-name: letsencrypt-prod
+    solver: http01
+
+tests:
+  - it: renders the single Ingress unchanged when the list is empty
+    template: templates/ingress.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata
+          value:
+            name: harbor-ingress
+            annotations:
+              nginx.ingress.kubernetes.io/proxy-body-size: "0"
+              nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+              nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+              nginx.ingress.kubernetes.io/ssl-redirect: "true"
+              nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+              acme.cert-manager.io/http01-ingress-ingressclassname: tenant-root
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+      - equal:
+          path: spec
+          value:
+            ingressClassName: tenant-root
+            tls:
+              - hosts:
+                  - harbor.example.org
+                secretName: harbor-ingress-tls
+            rules:
+              - host: harbor.example.org
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: harbor
+                          port:
+                            number: 80
+
+  - it: splits into a management and a registry Ingress when the list is set
+    template: templates/ingress.yaml
+    set:
+      managementWhitelist:
+        - 192.0.2.0/24
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: restricts the management Ingress to the listed ranges
+    template: templates/ingress.yaml
+    documentSelector:
+      path: metadata.name
+      value: harbor-ingress
+    set:
+      managementWhitelist:
+        - 192.0.2.0/24
+        - 198.51.100.7/32
+    asserts:
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/whitelist-source-range"]
+          value: 192.0.2.0/24,198.51.100.7/32
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: spec.rules[0].http.paths
+          value:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: harbor
+                  port:
+                    number: 80
+
+  - it: serves the registry API and token endpoint from an unrestricted Ingress on the same host and certificate
+    template: templates/ingress.yaml
+    documentSelector:
+      path: metadata.name
+      value: harbor-registry-ingress
+    set:
+      managementWhitelist:
+        - 192.0.2.0/24
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            nginx.ingress.kubernetes.io/proxy-body-size: "0"
+            nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+            nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+      - equal:
+          path: spec
+          value:
+            ingressClassName: tenant-root
+            tls:
+              - hosts:
+                  - harbor.example.org
+                secretName: harbor-ingress-tls
+            rules:
+              - host: harbor.example.org
+                http:
+                  paths:
+                    - path: /v2
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: harbor
+                          port:
+                            number: 80
+                    - path: /service/token
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: harbor
+                          port:
+                            number: 80
+
+  - it: leaves the registry Ingress without a secretName in wildcard mode
+    template: templates/ingress.yaml
+    documentSelector:
+      path: metadata.name
+      value: harbor-registry-ingress
+    set:
+      managementWhitelist:
+        - 192.0.2.0/24
+      _cluster:
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - equal:
+          path: spec.tls
+          value:
+            - hosts:
+                - harbor.example.org
+
+  - it: refuses a whitelist in Gateway API mode instead of dropping it
+    template: templates/httproute.yaml
+    set:
+      managementWhitelist:
+        - 192.0.2.0/24
+      _namespace:
+        gateway: tenant-root
+    asserts:
+      - failedTemplate:
+          errorPattern: managementWhitelist
+
+  - it: renders the HTTPRoute in Gateway API mode without a whitelist
+    template: templates/httproute.yaml
+    set:
+      _namespace:
+        gateway: tenant-root
+    asserts:
+      - equal:
+          path: kind
+          value: HTTPRoute
+
+  - it: lets the dashboard read both Ingress objects
+    template: templates/dashboard-resourcemap.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - networking.k8s.io
+            resources:
+              - ingresses
+            resourceNames:
+              - harbor-ingress
+              - harbor-registry-ingress
+            verbs: ["get", "list", "watch"]
