@@ -156,8 +156,8 @@ mysql_exec() {
     local pod pass
     pod=$(mariadb_primary_pod "$cr")
     [[ -n "$pod" ]] || { log_error "no primary pod for MariaDB CR '$cr'"; return 1; }
-    pass=$(kubectl -n "$NAMESPACE" get secret "${cr}-credentials" \
-        -o "jsonpath={.data['${MARIADB_APP_USER}']}" | base64 -d)
+    pass=$(kubectl -n "$NAMESPACE" get secret "${cr}-credentials" -o json \
+        | jq -r --arg u "$MARIADB_APP_USER" '.data[$u] // empty' | base64 -d)
     [[ -n "$pass" ]] || { log_error "no password for '$MARIADB_APP_USER' in ${cr}-credentials"; return 1; }
     kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
         mariadb -u"$MARIADB_APP_USER" -p"$pass" -h "${cr}-primary" -e "$sql"
