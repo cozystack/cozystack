@@ -113,12 +113,16 @@ tests:
       - failedTemplate:
           errorMessage: '`users.postgres` is forbidden by policy. Use a different username.'
 
-  # On an upgrade the credentials Secret must exist; a lookup that finds nothing
-  # means it was deleted or the release renamed, and re-minting would rotate every
-  # role behind the running database, so the render fails loudly. A first install
-  # (no Secret expected) is let through. Removing the .Release.IsUpgrade guard makes
-  # this render instead of failing — the mutation signal.
-  - it: fails an upgrade when the credentials Secret is missing
+  # The credentials Secret is gated on .Values.users, so a release installed with
+  # the default `users: {}` has none. Adding its FIRST user is an upgrade whose
+  # lookup is legitimately empty — indistinguishable at render time from a deleted
+  # Secret — so postgres must NOT reject an empty-lookup upgrade (that would hard-
+  # block the common first-user path). It mints instead; the post-upgrade init-job
+  # applies the password. Re-adding a `not $existingSecret` fail on IsUpgrade turns
+  # this red — the regression this pins (a userless release could no longer gain a
+  # user). MariaDB is the opposite case (its Secret always exists via root, and
+  # root desyncs permanently), so its guard stays; see mariadb secret.yaml.
+  - it: mints when the first user is added to a userless release on upgrade
     release:
       name: pg-test
       namespace: tenant-test
@@ -126,6 +130,10 @@ tests:
     set:
       users:
         app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-credentials
     asserts:
-      - failedTemplate:
-          errorMessage: 'pg-test-credentials Secret not found while upgrading: refusing to mint fresh passwords, which would rotate every role at once behind the running database. If the Secret was deleted, restore it before upgrading (a first install does not hit this path).'
+      - matchRegex:
+          path: stringData.app
+          pattern: ^[a-zA-Z0-9]{16}$

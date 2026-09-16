@@ -40,18 +40,17 @@
 {{- end }}
 
 {{/*
-  Distinguish a first install from an upgrade whose lookup came back empty. The
-  passwords below are minted only for a user the lookup did not already carry, so
-  an upgrade that finds NO credentials Secret at all (it was deleted, or the
-  release was renamed out from under it) would silently re-mint every password at
-  once. Helm's lookup returns empty only on a genuine NotFound, so on a normal
-  upgrade the Secret is found and this never fires; when it does fire the Secret is
-  really gone, and re-minting would rotate every role's password behind the running
-  app. Fail instead, and let a first install (no Secret expected) through.
+  Unlike MariaDB (secret.yaml carries the same lookup with a guard), postgres does
+  NOT reject an upgrade whose credentials lookup came back empty. The credentials
+  Secret here is gated on .Values.users, so a release installed with the default
+  `users: {}` has no Secret at all; adding its FIRST user is an upgrade whose
+  lookup is legitimately empty, and a guard on `IsUpgrade and not $existingSecret`
+  cannot tell that apart from a deleted Secret (both are empty). Postgres also has
+  no equivalent of MariaDB's bootstrap-only root: every role's password is applied
+  by the post-upgrade init-job (ALTER ROLE), so a re-mint on a genuinely deleted
+  Secret self-heals on the next reconcile rather than desyncing forever. So mint on
+  an empty lookup, and let the common first-user-on-upgrade path through.
 */}}
-{{- if and .Release.IsUpgrade .Values.users (not $existingSecret) }}
-  {{- fail (printf "%s-credentials Secret not found while upgrading: refusing to mint fresh passwords, which would rotate every role at once behind the running database. If the Secret was deleted, restore it before upgrading (a first install does not hit this path)." .Release.Name) }}
-{{- end }}
 
 {{/*
   Passwords are always chart-generated and preserved across reconciles via the
