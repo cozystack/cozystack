@@ -1,0 +1,48 @@
+suite: the init-job is bounded so a purged restore target cannot deadlock the Helm hook
+
+# Clearing bootstrap.enabled arms the init Job as a post-install,post-upgrade Helm
+# hook that Helm blocks on. Its pod mounts <release>-superuser (which CNPG deletes
+# with the Cluster) and waited `until pg_isready; do sleep 5; done` with no bound
+# and no activeDeadlineSeconds. When a second restore purges the same target while
+# that hook is still pending, the hook can never finish and Helm deadlocks on it —
+# the postgres-2-backup-roundtrip E2E caught exactly this. Bound the Job (a hard
+# activeDeadlineSeconds and no retries) and the readiness wait (a bounded loop that
+# exits) so a purged target fails the hook fast instead of hanging forever.
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+  users:
+    app: {}
+
+tests:
+  - it: the init Job carries a hard activeDeadlineSeconds and does not retry
+    template: templates/init-job.yaml
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - isNotNullOrEmpty:
+          path: spec.activeDeadlineSeconds
+      - matchRegex:
+          path: metadata.annotations["helm.sh/hook"]
+          pattern: post-upgrade
+
+  - it: the readiness wait is bounded, not an unbounded until-loop
+    template: templates/init-script.yaml
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'until pg_isready ; do sleep 5; done'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'attempts'

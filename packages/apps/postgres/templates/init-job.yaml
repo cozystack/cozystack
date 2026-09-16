@@ -20,6 +20,14 @@ metadata:
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
+  # This Job is a post-upgrade Helm hook Helm blocks on. If a concurrent restore
+  # purges the target Cluster (and its <release>-superuser Secret) while the hook
+  # is pending, the pod's mount fails and its readiness wait can never succeed, so
+  # without a hard cap the hook — and every later reconcile of this release —
+  # deadlocks. Bound the whole Job and do not retry the pod, so a purged target
+  # fails the hook within the deadline instead of hanging forever.
+  activeDeadlineSeconds: 600
+  backoffLimit: 0
   ttlSecondsAfterFinished: 3600
   template:
     metadata:

@@ -73,7 +73,21 @@ stringData:
     #!/bin/bash
     set -e
 
-    until pg_isready ; do sleep 5; done
+    # Bounded readiness wait: this script runs as a post-upgrade Helm hook Helm
+    # blocks on, so an unbounded `until pg_isready` would hang the hook forever if
+    # a concurrent restore purges the Cluster out from under it. Fail after ~9m so
+    # the hook resolves (as failed) rather than deadlocking every later reconcile;
+    # the Job's activeDeadlineSeconds is the hard backstop for a mount that never
+    # succeeds (a deleted superuser Secret).
+    attempts=0
+    until pg_isready ; do
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 110 ]; then
+        echo "postgres not ready after ~9m; the restore target may have been purged by a concurrent restore - failing the init-job rather than blocking the Helm post-upgrade hook" >&2
+        exit 1
+      fi
+      sleep 5
+    done
 
     echo "== create users"
     {{- if and .Values.users (not (hasKey .Values.users "postgres")) }}
