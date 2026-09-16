@@ -179,3 +179,19 @@ mysql_root_login() {
     kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
         mariadb -uroot -p"$pass" -h "${cr}-primary" -e "SELECT 1;"
 }
+
+# Run a single SQL statement against a MariaDB CR's primary as root over TCP.
+# Used for statements the app user is not privileged for (CREATE USER / GRANT),
+# e.g. seeding an out-of-band account the chart does not declare. root has no dot,
+# so a plain jsonpath read of its key is safe here. Args: <cr-name> <sql>
+mysql_root_exec() {
+    local cr="$1" sql="$2"
+    local pod pass
+    pod=$(mariadb_primary_pod "$cr")
+    [[ -n "$pod" ]] || { log_error "no primary pod for MariaDB CR '$cr'"; return 1; }
+    pass=$(kubectl -n "$NAMESPACE" get secret "${cr}-credentials" \
+        -o "jsonpath={.data['root']}" | base64 -d)
+    [[ -n "$pass" ]] || { log_error "no root password in ${cr}-credentials"; return 1; }
+    kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
+        mariadb -uroot -p"$pass" -h "${cr}-primary" -e "$sql"
+}
