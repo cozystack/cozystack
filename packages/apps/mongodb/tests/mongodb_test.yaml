@@ -93,10 +93,10 @@ tests:
           path: spec.backup.pitr
         documentIndex: 0
 
-  - it: rejects a non-default retentionPolicy on useSystemBucket
-    # The platform flow cannot honour retentionPolicy (no engine-side trim, no
-    # Plan retention yet), so a value the tenant changed from the default is a
-    # hard error rather than a silent no-op that grows the shared bucket.
+  - it: ignores retentionPolicy and schedule on useSystemBucket (renders, no tasks)
+    # On this flow retentionPolicy and schedule are inert (documented as ignored),
+    # handled the same way: a custom value renders cleanly without emitting the
+    # tasks block, never a hard render error.
     release:
       name: test-mongodb
       namespace: tenant-test
@@ -107,27 +107,14 @@ tests:
         enabled: true
         useSystemBucket: true
         retentionPolicy: 7d
-    asserts:
-      - failedTemplate:
-          errorMessage: 'backup.retentionPolicy="7d" cannot be honoured when backup.useSystemBucket=true: the platform flow has no engine-side retention and Plan-level retention is not yet available (see docs/operations/backup-classes.md). Remove backup.retentionPolicy, or drive scheduled backups and retention through a backups.cozystack.io/Plan.'
-
-  - it: allows the default retentionPolicy on useSystemBucket
-    # The untouched default must still render, so the guard only fires on a
-    # tenant-changed value (this pins the discriminator, not just the reject).
-    release:
-      name: test-mongodb
-      namespace: tenant-test
-    set:
-      _cluster:
-        cluster-domain: cozy.local
-      backup:
-        enabled: true
-        useSystemBucket: true
-        retentionPolicy: 30d
+        schedule: "0 5 * * *"
     asserts:
       - equal:
           path: spec.backup.enabled
           value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.backup.tasks
         documentIndex: 0
 
   ##################
