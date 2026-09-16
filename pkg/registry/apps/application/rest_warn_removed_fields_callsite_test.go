@@ -36,8 +36,8 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 )
 
-// The Phase 2 inert-field warning is only useful if it is actually wired into
-// the write path. TestWarnRemovedKubernetesFields (rest_validation_test.go)
+// The inert-field warning is only useful if it is actually wired into
+// the write path. TestWarnRemovedFields (rest_validation_test.go)
 // pins the helper in isolation, but deleting either call site
 // (rest.go Create / Update) leaves that test green while an operator editing a
 // removed field silently gets no warning. These two tests drive Create and
@@ -99,7 +99,7 @@ func TestCreate_WarnsOnRemovedKubernetesFields(t *testing.T) {
 	ctx := warning.WithWarningRecorder(request.WithNamespace(context.Background(), "tenant-foo"), rec)
 
 	// Short-circuit right after the warning (createValidation runs immediately
-	// after warnRemovedKubernetesFields), so the test does not depend on
+	// after warnRemovedFields), so the test does not depend on
 	// conversion or the fake client's write path.
 	sentinel := errors.New("stop after warning")
 	createValidation := func(_ context.Context, _ runtime.Object) error { return sentinel }
@@ -128,7 +128,7 @@ func TestUpdate_WarnsOnRemovedKubernetesFields(t *testing.T) {
 	rec := &fakeWarningRecorder{}
 	ctx := warning.WithWarningRecorder(request.WithNamespace(context.Background(), "tenant-foo"), rec)
 
-	// updateValidation runs BEFORE warnRemovedKubernetesFields, so it must pass
+	// updateValidation runs BEFORE warnRemovedFields, so it must pass
 	// (return nil) for the warning to be reached. The final Update result is
 	// irrelevant — the warning is recorded before any conversion/write — so any
 	// downstream error is ignored; only the recorded warning is asserted.
