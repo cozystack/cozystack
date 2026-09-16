@@ -2152,7 +2152,7 @@ func TestReconcileCNPGRestore_RepeatInPlacePurgesStaleRecoveryCluster(t *testing
 		stale := metav1.NewTime(startedAt.Add(-time.Hour))
 		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, cnpgBackup,
 			newPostgresApp(appName, ns), mkRecoveryCluster(stale), mkClusterPVC())
-		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
 
 		rj := &backupsv1alpha1.RestoreJob{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
@@ -2182,7 +2182,7 @@ func TestReconcileCNPGRestore_RepeatInPlacePurgesStaleRecoveryCluster(t *testing
 		fresh := metav1.NewTime(startedAt.Add(time.Minute))
 		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, cnpgBackup,
 			newPostgresApp(appName, ns), mkRecoveryCluster(fresh))
-		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
 
 		rj := &backupsv1alpha1.RestoreJob{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
@@ -2267,7 +2267,8 @@ func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
 	}
 
 	c := newCNPGStrategyTestClient(t, backup, restoreJob, strategy, newPostgresApp(appName, ns), healthyCluster)
-	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+	rec := record.NewFakeRecorder(10)
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: rec}
 
 	// A healthy recovery now converges in two reconciles: the first latches
 	// RecoveryConverged durably and requeues, the second disables bootstrap and
@@ -2281,6 +2282,17 @@ func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
 	}
 	if c := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondRecoveryConverged); c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatalf("expected RecoveryConverged=True, got %+v", c)
+	}
+	// The terminal write must also emit the pending-convergence Event, so the
+	// credential handoff is discoverable in `kubectl get events`, not only in
+	// .status. Dropping the r.Recorder.Eventf call leaves this channel empty.
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "CredentialsConvergencePending") {
+			t.Fatalf("expected a CredentialsConvergencePending event, got %q", ev)
+		}
+	default:
+		t.Fatalf("expected a CredentialsConvergencePending event, got none")
 	}
 }
 
@@ -2353,7 +2365,7 @@ func TestReconcileCNPGRestore_HealthyDisablesBootstrap(t *testing.T) {
 	}
 
 	c := newCNPGStrategyTestClient(t, backup, restoreJob, strategy, app, healthyCluster)
-	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
 
 	got := reconcileCNPGRestoreToTerminal(t, ctx, r, c, backup, ns, "rj")
 	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
@@ -2460,7 +2472,7 @@ func TestReconcileCNPGRestore_BootstrapDisableFailsPastDeadline(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
 
 	rj := &backupsv1alpha1.RestoreJob{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
@@ -2571,7 +2583,7 @@ func TestReconcileCNPGRestore_BootstrapDisableTransientErrorRequeues(t *testing.
 			},
 		}).
 		Build()
-	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
 
 	rj := &backupsv1alpha1.RestoreJob{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
@@ -2686,7 +2698,7 @@ func TestReconcileCNPGRestore_BootstrapDisableShortTimeoutHonorsGraceFloor(t *te
 			},
 		}).
 		Build()
-	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
 
 	rj := &backupsv1alpha1.RestoreJob{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
@@ -2781,6 +2793,7 @@ func TestReconcileCNPGRestore_HealthyPastDeadlineSucceeds(t *testing.T) {
 	r := &RestoreJobReconciler{
 		Client:    c,
 		Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)),
+		Recorder:  record.NewFakeRecorder(10),
 		// If the deadline/classification branch runs before the health check,
 		// it reaches the log reader - which must never happen for a healthy cluster.
 		readPodLog: func(context.Context, string, string, string) (string, error) {

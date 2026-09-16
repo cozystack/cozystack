@@ -1028,6 +1028,18 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			// already reconciled; confirm by an application login.
 			Message: "target cnpg.io Cluster reached a healthy state and spec.bootstrap.enabled was cleared; the app's post-upgrade init-job reconciles the generated passwords onto the recovered roles on the next HelmRelease reconcile (this RestoreJob does not wait for it - confirm by logging in as an application user)",
 		})
+		// The status message above is honest that credential convergence is still
+		// pending; back it with an Event so the handoff is discoverable in
+		// `kubectl describe`/`get events`, not only by reading .status. This
+		// RestoreJob's contract is the DATA restore (healthy Cluster + bootstrap
+		// cleared); the ALTER ROLE convergence belongs to the chart's post-upgrade
+		// init-job, and gating this terminal write on that Helm-hook Job would couple
+		// two controllers and wedge the restore whenever a GitOps source re-asserts
+		// bootstrap.enabled. Announce the pending convergence instead of blocking on
+		// it.
+		r.Recorder.Eventf(restoreJob, corev1.EventTypeNormal, "CredentialsConvergencePending",
+			"Data restored and spec.bootstrap.enabled cleared on Postgres app %s/%s; application credentials converge when the chart's post-upgrade init-job runs ALTER ROLE on the next HelmRelease reconcile. This RestoreJob does not wait for it - verify with an application login.",
+			target.Namespace, target.AppName)
 		if err := r.Status().Update(ctx, restoreJob); err != nil {
 			return ctrl.Result{}, err
 		}
