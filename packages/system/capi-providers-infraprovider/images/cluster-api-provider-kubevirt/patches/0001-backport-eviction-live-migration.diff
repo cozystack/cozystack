@@ -1,8 +1,8 @@
 diff --git a/api/v1alpha1/kubevirtcluster_types.go b/api/v1alpha1/kubevirtcluster_types.go
-index c13a714..b1cfdbc 100644
+index c13a714..f9aff9c 100644
 --- a/api/v1alpha1/kubevirtcluster_types.go
 +++ b/api/v1alpha1/kubevirtcluster_types.go
-@@ -38,6 +38,20 @@ const ( //labels
+@@ -38,6 +38,18 @@ const ( //labels
  const ( // annotations
  	VmiDeletionGraceTime       = "capk.cluster.x-k8s.io/vmi-deletion-grace-time"
  	VmiDeletionGraceTimeEscape = "capk.cluster.x-k8s.io~1vmi-deletion-grace-time"
@@ -13,12 +13,10 @@ index c13a714..b1cfdbc 100644
 +	NodeCordonedByCapk       = "capk.cluster.x-k8s.io/node-cordoned"
 +	NodeCordonedByCapkEscape = "capk.cluster.x-k8s.io~1node-cordoned"
 +
-+	// VmiMigrationSubmitted is set on KubevirtMachine when CAPK creates a
-+	// VirtualMachineInstanceMigration for a migratable VMI. It prevents
-+	// duplicate migration creates and decouples the grace period timer from
-+	// migration submission -- the timer only starts when the migration is
-+	// actively in progress. The value "draining" marks the drain+delete
-+	// fallback, whose separate deadline must survive subsequent reconciles.
++	// VmiMigrationSubmitted stores an RFC3339 deadline for a submitted
++	// VirtualMachineInstanceMigration to start, separate from the active
++	// migration grace period. The value "draining" marks the drain+delete
++	// fallback, whose deadline must survive subsequent reconciles.
 +	VmiMigrationSubmitted = "capk.cluster.x-k8s.io/migration-submitted"
  )
  
@@ -53,7 +51,7 @@ index 9832a96..9bf7a4a 100644
  
  // Reconcile handles KubevirtMachine events.
 diff --git a/pkg/kubevirt/machine.go b/pkg/kubevirt/machine.go
-index 38a839d..1dc17f6 100644
+index 38a839d..74a591c 100644
 --- a/pkg/kubevirt/machine.go
 +++ b/pkg/kubevirt/machine.go
 @@ -25,6 +25,7 @@ import (
@@ -64,7 +62,15 @@ index 38a839d..1dc17f6 100644
  	"k8s.io/apimachinery/pkg/types"
  	kubedrain "k8s.io/kubectl/pkg/drain"
  	kubevirtv1 "kubevirt.io/api/core/v1"
-@@ -413,14 +414,51 @@ func (m *Machine) Delete() error {
+@@ -42,6 +43,7 @@ import (
+ 
+ const (
+ 	vmiDeleteGraceTimeoutDurationSeconds = 600 // 10 minutes
++	vmiMigrationSubmissionTimeout        = 10 * time.Minute
+ )
+ 
+ // Machine implement a service for managing the KubeVirt VM hosting a kubernetes node.
+@@ -413,14 +415,51 @@ func (m *Machine) Delete() error {
  
  func (m *Machine) DrainNodeIfNeeded(wrkldClstr workloadcluster.WorkloadCluster) (time.Duration, error) {
  	if m.vmiInstance == nil || !m.shouldGracefulDeleteVMI() {
@@ -119,7 +125,7 @@ index 38a839d..1dc17f6 100644
  	exceeded, err := m.drainGracePeriodExceeded()
  	if err != nil {
  		return 0, err
-@@ -455,6 +493,21 @@ func (m *Machine) DrainNodeIfNeeded(wrkldClstr workloadcluster.WorkloadCluster)
+@@ -455,6 +494,21 @@ func (m *Machine) DrainNodeIfNeeded(wrkldClstr workloadcluster.WorkloadCluster)
  
  const removeGracePeriodAnnotationPatch = `[{"op": "remove", "path": "/metadata/annotations/` + infrav1.VmiDeletionGraceTimeEscape + `"}]`
  
@@ -141,7 +147,7 @@ index 38a839d..1dc17f6 100644
  func (m *Machine) removeGracePeriodAnnotation() error {
  	patch := client.RawPatch(types.JSONPatchType, []byte(removeGracePeriodAnnotationPatch))
  
-@@ -465,6 +518,183 @@ func (m *Machine) removeGracePeriodAnnotation() error {
+@@ -465,6 +519,188 @@ func (m *Machine) removeGracePeriodAnnotation() error {
  	return nil
  }
  
@@ -235,11 +241,9 @@ index 38a839d..1dc17f6 100644
 +//   - requeueAfter>0 when a migration is in progress or was just created
 +//   - both zero when migration failed/timed out (caller should fall through to drain+delete)
 +//
-+// The grace period timer is deliberately deferred until the migration is
-+// actively in progress (MigrationState is set). This ensures that on dense
-+// nodes where KubeVirt serializes outbound migrations (1 at a time), VMs
-+// waiting in the migration queue don't burn through their timeout window
-+// before their migration even starts.
++// Submission has a separate deadline: a lost or unprocessed VMIM must not
++// block eviction indefinitely, while queueing must not consume the active
++// migration grace period, which starts when MigrationState is set.
 +func (m *Machine) tryMigrateVMI() (migrated bool, requeueAfter time.Duration, err error) {
 +	// If the VMI is already on a different node than the evacuation source,
 +	// migration has succeeded -- no guest disruption needed.
@@ -276,7 +280,13 @@ index 38a839d..1dc17f6 100644
 +
 +	// No active migration. Check if we've already submitted a migration CR
 +	// on a previous reconcile (waiting for KubeVirt to pick it up).
-+	if _, exists := m.machineContext.KubevirtMachine.Annotations[infrav1.VmiMigrationSubmitted]; exists {
++	if submitted, exists := m.machineContext.KubevirtMachine.Annotations[infrav1.VmiMigrationSubmitted]; exists {
++		deadline, err := time.Parse(time.RFC3339, submitted)
++		if err != nil || !time.Now().Before(deadline) {
++			m.machineContext.Logger.Info("Migration submission deadline expired or invalid, falling back to drain+delete",
++				"vmi", m.vmiInstance.Name)
++			return false, 0, nil
++		}
 +		m.machineContext.Logger.Info("Migration already submitted, waiting for KubeVirt to start it",
 +			"vmi", m.vmiInstance.Name)
 +		return false, 10 * time.Second, nil
@@ -314,7 +324,8 @@ index 38a839d..1dc17f6 100644
 +}
 +
 +func (m *Machine) setMigrationSubmittedAnnotation() error {
-+	patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s": "true"}}}`, infrav1.VmiMigrationSubmitted)
++	deadline := time.Now().Add(vmiMigrationSubmissionTimeout).UTC().Format(time.RFC3339)
++	patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s": "%s"}}}`, infrav1.VmiMigrationSubmitted, deadline)
 +	patchRequest := client.RawPatch(types.MergePatchType, []byte(patch))
 +	if err := m.client.Patch(m.machineContext, m.machineContext.KubevirtMachine, patchRequest); err != nil {
 +		return fmt.Errorf("failed to set the %s annotation on KubevirtMachine %s: %w", infrav1.VmiMigrationSubmitted, m.machineContext.KubevirtMachine.Name, err)
@@ -325,7 +336,7 @@ index 38a839d..1dc17f6 100644
  func (m *Machine) shouldGracefulDeleteVMI() bool {
  	if m.vmiInstance.DeletionTimestamp != nil {
  		m.machineContext.Logger.V(4).Info("DrainNode: the virtualMachineInstance is already in deletion process. Nothing to do here")
-@@ -531,7 +761,7 @@ func (m *Machine) drainNode(wrkldClstr workloadcluster.WorkloadCluster) (time.Du
+@@ -531,7 +767,7 @@ func (m *Machine) drainNode(wrkldClstr workloadcluster.WorkloadCluster) (time.Du
  		return 0, fmt.Errorf("failed to get client to remote cluster; %w", err)
  	}
  
@@ -334,7 +345,7 @@ index 38a839d..1dc17f6 100644
  	node, err := kubeClient.CoreV1().Nodes().Get(m.machineContext, nodeName, metav1.GetOptions{})
  	if err != nil {
  		if apierrors.IsNotFound(err) {
-@@ -577,6 +807,11 @@ func (m *Machine) drainNode(wrkldClstr workloadcluster.WorkloadCluster) (time.Du
+@@ -577,6 +813,11 @@ func (m *Machine) drainNode(wrkldClstr workloadcluster.WorkloadCluster) (time.Du
  		return 0, errors.Errorf("unable to cordon node %s: %v", nodeName, err)
  	}
  
@@ -347,7 +358,7 @@ index 38a839d..1dc17f6 100644
  		// Machine will be re-reconciled after a drain failure.
  		m.machineContext.Logger.Error(err, "Drain failed, retry in a second", "node name", nodeName)
 diff --git a/pkg/kubevirt/machine_test.go b/pkg/kubevirt/machine_test.go
-index 1858970..5371370 100644
+index 1858970..3fc5506 100644
 --- a/pkg/kubevirt/machine_test.go
 +++ b/pkg/kubevirt/machine_test.go
 @@ -28,6 +28,7 @@ import (
@@ -424,7 +435,7 @@ index 1858970..5371370 100644
  					},
  				}
  
-@@ -563,6 +576,598 @@ var _ = Describe("With KubeVirt VM running", func() {
+@@ -563,6 +576,672 @@ var _ = Describe("With KubeVirt VM running", func() {
  				Expect(machine.Annotations).ToNot(HaveKey(v1alpha1.VmiDeletionGraceTime))
  			})
  		})
@@ -599,13 +610,17 @@ index 1858970..5371370 100644
 +					err = fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(kubevirtMachine), updatedKM)
 +					Expect(err).ToNot(HaveOccurred())
 +					Expect(updatedKM.Annotations).To(HaveKey(v1alpha1.VmiMigrationSubmitted))
++					submissionDeadline, err := time.Parse(time.RFC3339, updatedKM.Annotations[v1alpha1.VmiMigrationSubmitted])
++					Expect(err).NotTo(HaveOccurred())
++					Expect(submissionDeadline).To(BeTemporally(">", time.Now().Add(9*time.Minute)))
++					Expect(submissionDeadline).To(BeTemporally("<=", time.Now().Add(10*time.Minute)))
 +					Expect(updatedKM.Annotations).ToNot(HaveKey(v1alpha1.VmiDeletionGraceTime))
 +				})
 +			})
 +
 +			When("migration already submitted but not yet started by KubeVirt", func() {
 +				BeforeEach(func() {
-+					kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted] = "true"
++					kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted] = time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
 +				})
 +
 +				It("Should requeue without creating a duplicate migration", func() {
@@ -629,8 +644,62 @@ index 1858970..5371370 100644
 +					err = fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(kubevirtMachine), updatedKM)
 +					Expect(err).ToNot(HaveOccurred())
 +					Expect(updatedKM.Annotations).ToNot(HaveKey(v1alpha1.VmiDeletionGraceTime))
++
++					deadline := updatedKM.Annotations[v1alpha1.VmiMigrationSubmitted]
++					machineContext.KubevirtMachine = updatedKM
++					externalMachine, err = defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++					requeueDuration, err = externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeueDuration).To(Equal(10 * time.Second))
++					Expect(fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(updatedKM), updatedKM)).To(Succeed())
++					Expect(updatedKM.Annotations[v1alpha1.VmiMigrationSubmitted]).To(Equal(deadline))
++					Expect(updatedKM.Annotations).NotTo(HaveKey(v1alpha1.VmiDeletionGraceTime))
++					Expect(fakeClient.List(gocontext.Background(), migrationList)).To(Succeed())
++					Expect(migrationList.Items).To(BeEmpty())
 +				})
 +			})
++
++			DescribeTable("falls back when the submission deadline has expired or is invalid",
++				func(submissionDeadline string) {
++					kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted] = submissionDeadline
++					Expect(fakeClient.Update(gocontext.Background(), kubevirtMachine)).To(Succeed())
++					node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: kubevirtMachineName}}
++					cl := k8sfake.NewClientset(node)
++					cl.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
++						return true, nil, errors.New("drain has not completed")
++					})
++					wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Return(cl, nil).Times(1)
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++
++					requeue, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeue).To(Equal(time.Second))
++					Expect(kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted]).To(Equal("draining"))
++					fallbackDeadline, err := time.Parse(time.RFC3339, kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime])
++					Expect(err).NotTo(HaveOccurred())
++					Expect(fallbackDeadline).To(BeTemporally(">", time.Now().Add(9*time.Minute)))
++					Expect(fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(virtualMachineInstance), &kubevirtv1.VirtualMachineInstance{})).To(Succeed())
++
++					kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime] = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
++					Expect(fakeClient.Update(gocontext.Background(), kubevirtMachine)).To(Succeed())
++					externalMachine, err = defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++					requeue, err = externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeue).To(Equal(10 * time.Second))
++					err = fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(virtualMachineInstance), &kubevirtv1.VirtualMachineInstance{})
++					Expect(apierrors.IsNotFound(err)).To(BeTrue())
++					migrationList := &kubevirtv1.VirtualMachineInstanceMigrationList{}
++					Expect(fakeClient.List(gocontext.Background(), migrationList)).To(Succeed())
++					Expect(migrationList.Items).To(BeEmpty())
++				},
++				Entry("expired deadline", time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)),
++				Entry("legacy marker", "true"),
++				Entry("invalid timestamp", "not-a-timestamp"),
++				Entry("empty timestamp", ""),
++			)
 +
 +			When("migration is in progress", func() {
 +				BeforeEach(func() {
@@ -655,6 +724,22 @@ index 1858970..5371370 100644
 +					vmi := &kubevirtv1.VirtualMachineInstance{}
 +					err = fakeClient.Get(gocontext.Background(), client.ObjectKey{Namespace: virtualMachineInstance.Namespace, Name: virtualMachineInstance.Name}, vmi)
 +					Expect(err).ToNot(HaveOccurred())
++				})
++
++				It("starts a separate active migration window after the submission deadline", func() {
++					kubevirtMachine.Annotations[v1alpha1.VmiMigrationSubmitted] = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
++					delete(kubevirtMachine.Annotations, v1alpha1.VmiDeletionGraceTime)
++					Expect(fakeClient.Update(gocontext.Background(), kubevirtMachine)).To(Succeed())
++					wlCluster.EXPECT().GenerateWorkloadClusterK8sClient(gomock.Any()).Times(0)
++					externalMachine, err := defaultTestMachine(machineContext, namespace, fakeClient, fakeVMCommandExecutor, []byte(sshKey))
++					Expect(err).NotTo(HaveOccurred())
++					requeue, err := externalMachine.DrainNodeIfNeeded(wlCluster)
++					Expect(err).NotTo(HaveOccurred())
++					Expect(requeue).To(Equal(10 * time.Second))
++					deadline, err := time.Parse(time.RFC3339, kubevirtMachine.Annotations[v1alpha1.VmiDeletionGraceTime])
++					Expect(err).NotTo(HaveOccurred())
++					Expect(deadline).To(BeTemporally(">", time.Now().Add(9*time.Minute)))
++					Expect(fakeClient.Get(gocontext.Background(), client.ObjectKeyFromObject(virtualMachineInstance), &kubevirtv1.VirtualMachineInstance{})).To(Succeed())
 +				})
 +			})
 +
@@ -1023,7 +1108,7 @@ index 1858970..5371370 100644
  	})
  })
  
-@@ -1028,3 +1633,40 @@ func setupRemoteScheme() *runtime.Scheme {
+@@ -1028,3 +1707,40 @@ func setupRemoteScheme() *runtime.Scheme {
  	}
  	return s
  }
