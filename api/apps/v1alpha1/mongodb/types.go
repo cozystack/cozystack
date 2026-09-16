@@ -84,7 +84,7 @@ type Backup struct {
 	// Cron schedule for automated backups. Ignored when useSystemBucket is true (scheduling moves to the BackupClass Plan).
 	// +kubebuilder:default:="0 2 * * *"
 	Schedule string `json:"schedule,omitempty"`
-	// Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `<namespace>/<application>`. Scheduling and retention move to the BackupClass Plan, so `schedule`, `retentionPolicy` and PITR are ignored while this is on. See docs/operations/backup-classes.md.
+	// Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `<namespace>/<application>`. Scheduling moves to a BackupClass Plan; `schedule`, `retentionPolicy` and PITR are ignored while this is on, and this flow has no retention yet (see docs/operations/backup-classes.md).
 	// +kubebuilder:default:=false
 	UseSystemBucket bool `json:"useSystemBucket,omitempty"`
 }

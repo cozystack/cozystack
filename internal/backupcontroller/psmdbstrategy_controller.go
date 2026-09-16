@@ -352,10 +352,14 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			// behind another and the operator starts it once the slot frees — which
 			// would be after this BackupJob is Failed and never reconciled again,
 			// writing an archive into the shared bucket that no Backup object
-			// represents. Deleting the CR now prevents that late run; on the
-			// useSystemBucket flow its delete-backup finalizer also takes anything
-			// partially written. Best-effort: a delete failure must not stop the
-			// job from failing (a leftover CR is the pre-existing behaviour, not a
+			// represents. Deleting the CR before the operator sends the backup
+			// command prevents that late run: at v1.22.0 the operator returns for a
+			// CR with a deletion timestamp before it reaches the code that calls
+			// Start. (It does not clean up a partial object — the delete-backup
+			// finalizer prunes storage only for a `ready` backup — but nothing is
+			// partially written until the backup actually runs, which the cancel
+			// prevents.) Best-effort: a delete failure must not stop the job from
+			// failing (a leftover CR is the pre-existing behaviour, not a
 			// regression). The terminal Phase=Failed makes reconcileMongoDB return
 			// early next time, so ensureMongoDBBackup never re-creates it.
 			if mdbBackup.DeletionTimestamp.IsZero() {
@@ -591,11 +595,12 @@ func psmdbBackupDeadlineExceeded(startedAt *metav1.Time) bool {
 // (the operator CR carries no ownerRef either). A real dataset routinely outruns
 // 30m, and a genuinely broken dump terminates through the operator's own
 // error/rejected state, so a running backup is left to finish. The deadline
-// still bounds the case it was written for — the operator has not started the
-// backup (state stays "", requested or waiting), where nothing has been written.
-// A `waiting` backup (queued behind another) could still be started later, so
-// the caller cancels the operator CR when this trips, rather than leaving it to
-// run into the shared bucket after the BackupJob is already Failed.
+// still bounds the not-yet-`running` states ("", requested, waiting): a backup
+// the operator has not begun streaming. Those can still be advanced later — a
+// `waiting` backup runs when the slot frees, and `requested` is set as the
+// operator dispatches — so the caller cancels the operator CR when this trips,
+// rather than leaving it to run into the shared bucket after the BackupJob is
+// already Failed.
 func psmdbBackupTimedOut(state string, startedAt *metav1.Time) bool {
 	if state == psmdbtypes.StateRunning {
 		return false
@@ -771,14 +776,18 @@ func (r *BackupJobReconciler) createMongoDBBackupArtifact(
 // is left untouched, the pre-existing no-op contract for the operator-backed
 // drivers.
 //
-// The wait is bounded by give-up conditions, so a wedged operator never pins a
-// tenant namespace in Terminating: the escape-hatch annotation (honoured before
-// any apiserver read, so it still frees a Backup whose operator CR has become
-// unreadable) and a going-away namespace (the psmdb delete-backup exec cannot
-// run there) each make the driver strip its own finalizer and release, leaving
-// the object for a bucket lifecycle policy to reclaim. A down operator in a live
-// namespace is NOT auto-released: the Backup stays Terminating as a visible
-// signal until an operator recovers or the annotation is set.
+// The wait has give-up conditions so a wedged operator does not, on its own,
+// keep this driver holding the Backup in Terminating: the escape-hatch
+// annotation (honoured before any apiserver read, so it still frees a Backup
+// whose operator CR has become unreadable) and a going-away namespace (the psmdb
+// delete-backup exec cannot run there) each make the driver strip its own
+// finalizer and release, leaving the object for a bucket lifecycle policy. This
+// bounds only what the driver contributes: a Get that fails with something other
+// than NotFound/NoMatchError still requeues (below), and the psmdb operator's own
+// release-lock finalizer keeps the CR Terminating while the operator is down,
+// whatever the driver strips. A down operator in a live namespace is likewise
+// not auto-released: the Backup stays Terminating as a visible signal until an
+// operator recovers or the annotation is set.
 func (r *BackupReconciler) cleanupMongoDBBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
 	sourceBackupName := backup.Spec.DriverMetadata[psmdbBackupNameKey]
 	if sourceBackupName == "" {

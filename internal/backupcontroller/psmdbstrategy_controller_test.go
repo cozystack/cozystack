@@ -1515,6 +1515,50 @@ func TestCleanupMongoDBBackup(t *testing.T) {
 		}
 	})
 
+	t.Run("terminating release uses the pre-read CR, not a second Get", func(t *testing.T) {
+		// The terminating path hands the CR it already read and confirmed owned to
+		// releaseMongoDBCleanup, so the strip is not gated on a second Get. Fail
+		// every operator-CR Get after the first: cleanup's initial read succeeds
+		// and confirms ownership, and the release must strip from the passed object
+		// without re-reading. If the call site instead passed nil, the release
+		// would re-Get (fail here) and skip the strip — no ArtifactNotDeleted Event.
+		getN := 0
+		s := runtime.NewScheme()
+		_ = scheme.AddToScheme(s)
+		_ = backupsv1alpha1.AddToScheme(s)
+		_ = psmdbtypes.AddToScheme(s)
+		c := clientfake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(opBackup(true)).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*psmdbtypes.PerconaServerMongoDBBackup); ok {
+						getN++
+						if getN > 1 {
+							return apierrors.NewServiceUnavailable("read throttled after first")
+						}
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
+		rec := record.NewFakeRecorder(10)
+		r := &BackupReconciler{Client: c, Recorder: rec}
+		// No Namespace object → namespaceTerminating reports true (teardown path).
+		res, err := r.cleanupMongoDBBackup(context.Background(), newBackup(nil))
+		if err != nil || res.RequeueAfter != 0 {
+			t.Fatalf("teardown must release, got res=%+v err=%v", res, err)
+		}
+		select {
+		case ev := <-rec.Events:
+			if !strings.Contains(ev, "ArtifactNotDeleted") {
+				t.Errorf("expected the owned-release event proving the pre-read CR was used, got %q", ev)
+			}
+		default:
+			t.Errorf("expected an ArtifactNotDeleted event (pre-read CR used, strip ran), got none")
+		}
+	})
+
 	// A client whose Get on the operator CR hard-fails the way a missing CRD or a
 	// revoked verb does — NoKindMatchError / an arbitrary error — models the case
 	// the escape hatch exists for. The annotation must free the Backup without
