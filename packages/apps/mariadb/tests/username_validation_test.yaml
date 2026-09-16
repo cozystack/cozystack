@@ -124,3 +124,42 @@ tests:
       - matchRegex:
           path: stringData["a-b.c_1"]
           pattern: ^[a-zA-Z0-9]{16}$
+
+  # The "_"/"-" collision guard is gated to install. An existing release that
+  # already carries the pair took the silent overwrite when it was first applied;
+  # a platform-driven chart upgrade must not then wedge it into a failed reconcile
+  # it cannot clear without editing users. On upgrade the colliding pair renders
+  # instead of failing. Dropping ".Release.IsInstall" from the guard turns this
+  # test red (the render fails on upgrade), the mutation signal that the gate is
+  # load-bearing.
+  - it: renders on upgrade for a colliding pair the install path rejects
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        a_b:
+          maxUserConnections: 10
+        a-b:
+          maxUserConnections: 10
+    asserts:
+      - matchRegex:
+          path: stringData["a-b"]
+          pattern: ^[a-zA-Z0-9]{16}$
+
+  # A charset/DNS-invalid name never applied at all, so its guard stays on the
+  # upgrade path too: gating it would only defer the same failure to the apiserver
+  # as an opaque error rather than naming the offending username here.
+  - it: still fails on upgrade for an invalid User CR name
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        Bob:
+          maxUserConnections: 10
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "Bob": it also names the mariadb-operator User resource "mdb-test-Bob", which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, "-" and ".", starting and ending with a letter or digit); use a lowercase name without a leading or trailing "-" or "."'

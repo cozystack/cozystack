@@ -4,9 +4,12 @@
   the same DNS-1123 rule and "_"/"-" collision that the username guard enforces
   apply here — a name like "My.Db" or "foo-" renders but the apiserver rejects
   the Database CR with an opaque error, and two names differing only in "_" vs
-  "-" collide on one Database CR (one silently overwrites the other). Reject both
-  at render time, mirroring the username guard in secret.yaml. Database names are
-  not Secret keys, so the DNS-1123 name is the binding rule.
+  "-" collide on one Database CR (one silently overwrites the other). Reject an
+  invalid name on both install and upgrade (it never applied either way), but the
+  "_"/"-" collision only on a fresh install, mirroring the username guard in
+  secret.yaml: an existing release already took the overwrite, and blocking its
+  upgrades only makes a running release worse. Database names are not Secret keys,
+  so the DNS-1123 name is the binding rule.
 */}}
 {{- $seenDBDNS := dict }}
 {{- range $name, $db := .Values.databases }}
@@ -15,7 +18,7 @@
     {{- fail (printf "invalid database name %q: it also names the Database resource %q, which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, \"-\" and \".\", starting and ending with a letter or digit); use a lowercase name without a leading or trailing \"-\" or \".\"" $name $crName) }}
   {{- end }}
   {{- $dbDNS := replace "_" "-" $name }}
-  {{- if hasKey $seenDBDNS $dbDNS }}
+  {{- if and $.Release.IsInstall (hasKey $seenDBDNS $dbDNS) }}
     {{- fail (printf "database names %q and %q both map to the Database resource name %q (\"_\" renders as \"-\"); rename one of them" (index $seenDBDNS $dbDNS) $name (printf "%s-%s" $.Release.Name $dbDNS)) }}
   {{- end }}
   {{- $_ := set $seenDBDNS $dbDNS $name }}
@@ -32,8 +35,10 @@
   role-scoping renames the Grant, and renaming a Grant on upgrade makes the
   operator revoke the tenant's live privilege while the old CR is pruned. Track
   the whole rendered Grant name plus its length (the apiserver caps a resource
-  name at 253) and reject a collision or an over-long name here rather than let it
-  fail opaquely at apply.
+  name at 253) and reject an over-long or charset-invalid name on both install and
+  upgrade, but the "_"/"-" collision only on a fresh install — like the sibling
+  guards, an existing release already took the overwrite and blocking its upgrades
+  only makes a running release worse.
 */}}
 {{- $seenGrant := dict }}
 {{- range $name, $db := .Values.databases }}
@@ -53,7 +58,7 @@
       {{- fail (printf "invalid role member %q for database %q: it names the Grant resource %q, which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, \"-\" and \".\", starting and ending with a letter or digit). A name in databases.<db>.roles.admin/readonly is not one of .Values.users, so the username guard never sees it - use a lowercase name without special characters" $user $name $g) }}
     {{- end }}
     {{- $desc := printf "(database %q, user %q)" $name $user }}
-    {{- if hasKey $seenGrant $g }}
+    {{- if and $.Release.IsInstall (hasKey $seenGrant $g) }}
       {{- fail (printf "the Grant resource name %q is produced by both %s and %s (\"_\" renders as \"-\"); rename a database or user so their Grants do not collide" $g (index $seenGrant $g) $desc) }}
     {{- end }}
     {{- $_ := set $seenGrant $g $desc }}
