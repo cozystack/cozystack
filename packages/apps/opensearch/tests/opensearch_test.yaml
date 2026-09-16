@@ -98,11 +98,12 @@ tests:
       - notExists:
           path: spec.general.image
         documentIndex: 0
-      - notExists:
-          path: spec.dashboards.image
-        documentIndex: 0
       - equal:
           path: spec.general.version
+          value: "2.11.1"
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.version
           value: "2.11.1"
         documentIndex: 0
 
