@@ -53,6 +53,10 @@ type SourceDisk struct {
 }
 
 type SourceHTTP struct {
+	// Name of a ConfigMap in the release namespace holding the CA bundle to trust for the download, for a source behind a private CA. Passed to the DataVolume as `certConfigMap`.
+	CertConfigMap string `json:"certConfigMap,omitempty"`
+	// Names of Secrets in the release namespace, each holding one extra HTTP header for the download in every value (`Authorization: Bearer ...`, for example). Passed to the DataVolume as `secretExtraHeaders`, so the header never appears in the object itself.
+	SecretExtraHeaders []string `json:"secretExtraHeaders,omitempty"`
 	// URL to download the image.
 	Url string `json:"url"`
 }

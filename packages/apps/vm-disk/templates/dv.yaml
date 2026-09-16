@@ -12,7 +12,10 @@
   {{- if hasKey .Values.source "image" }}
     {{- $desiredSource = dict "pvc" (dict "name" (printf "vm-default-images-%s" (required "A valid .Values.source.image.name entry required!" .Values.source.image.name)) "namespace" "cozy-public") }}
   {{- else if hasKey .Values.source "http" }}
-    {{- $desiredSource = dict "http" (dict "url" (required "A valid .Values.source.http.url entry required!" .Values.source.http.url)) }}
+    {{- $http := dict "url" (required "A valid .Values.source.http.url entry required!" .Values.source.http.url) }}
+    {{- with .Values.source.http.secretExtraHeaders }}{{- $_ := set $http "secretExtraHeaders" . }}{{- end }}
+    {{- with .Values.source.http.certConfigMap }}{{- $_ := set $http "certConfigMap" . }}{{- end }}
+    {{- $desiredSource = dict "http" $http }}
   {{- else if hasKey .Values.source "upload" }}
     {{- $desiredSource = dict "upload" dict }}
   {{- else if hasKey .Values.source "disk" }}
@@ -59,7 +62,15 @@
         {{- if or (eq $storedType "blank") (eq $storedType "upload") }}
           {{- $chartShaped = true }}
         {{- else if eq $storedType "http" }}
-          {{- if eq (keys $storedBody | sortAlpha | join ",") "url" }}{{- $chartShaped = true }}{{- end }}
+          {{- /* url plus any of the keys the chart renders itself; a stored
+                 key it never writes (secretRef, extraHeaders) marks a foreign
+                 source. */}}
+          {{- if hasKey $storedBody "url" }}
+            {{- $chartShaped = true }}
+            {{- range $k, $_ := $storedBody }}
+              {{- if not (has $k (list "url" "secretExtraHeaders" "certConfigMap")) }}{{- $chartShaped = false }}{{- end }}
+            {{- end }}
+          {{- end }}
         {{- else if eq $storedType "pvc" }}
           {{- /* The chart only ever clones a pvc from cozy-public (image) or the
                  release namespace (disk); a pvc in any other namespace is a

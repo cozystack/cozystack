@@ -172,3 +172,37 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'Unknown source type'
+
+  - it: renders an authenticated http source with its header Secrets and CA ConfigMap
+    set:
+      source:
+        http:
+          url: https://portal.example/apis/files.portal.cozystack.io/v1alpha1/namespaces/p/files/img/content
+          secretExtraHeaders: [img-auth]
+          certConfigMap: portal-ca
+    asserts:
+      - equal:
+          path: spec.source.http.url
+          value: https://portal.example/apis/files.portal.cozystack.io/v1alpha1/namespaces/p/files/img/content
+      - equal:
+          path: spec.source.http.secretExtraHeaders
+          value: [img-auth]
+      - equal:
+          path: spec.source.http.certConfigMap
+          value: portal-ca
+      # The extra keys are part of the recorded source, so a later change to
+      # them is caught by the same guard as a URL change.
+      - equal:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+          value: '{"http":{"certConfigMap":"portal-ca","secretExtraHeaders":["img-auth"],"url":"https://portal.example/apis/files.portal.cozystack.io/v1alpha1/namespaces/p/files/img/content"}}'
+
+  - it: leaves the header and CA keys out of a plain http source
+    set:
+      source:
+        http:
+          url: https://example.com/img.qcow2
+    asserts:
+      - notExists:
+          path: spec.source.http.secretExtraHeaders
+      - notExists:
+          path: spec.source.http.certConfigMap

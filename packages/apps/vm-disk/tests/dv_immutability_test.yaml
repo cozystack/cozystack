@@ -883,3 +883,27 @@ tests:
             storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
     asserts:
       - notFailedTemplate: {}
+
+  - it: treats a legacy http source carrying the chart's own auth keys as chart-shaped and rejects a URL change
+    # secretExtraHeaders and certConfigMap are rendered by the chart, so a
+    # stored source with them is still a chart shape the fallback compares.
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/other.qcow2, secretExtraHeaders: [img-auth]}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+          spec:
+            source: {http: {url: https://example.com/original.qcow2, secretExtraHeaders: [img-auth]}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VMDisk source is immutable after creation'

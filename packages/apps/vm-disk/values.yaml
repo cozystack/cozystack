@@ -10,6 +10,8 @@
 
 ## @typedef {struct} SourceHTTP - Download image from an HTTP source.
 ## @field {string} url - URL to download the image.
+## @field {[]string} [secretExtraHeaders] - Names of Secrets in the release namespace, each holding one extra HTTP header for the download in every value (`Authorization: Bearer ...`, for example). Passed to the DataVolume as `secretExtraHeaders`, so the header never appears in the object itself.
+## @field {string} [certConfigMap] - Name of a ConfigMap in the release namespace holding the CA bundle to trust for the download, for a source behind a private CA. Passed to the DataVolume as `certConfigMap`.
 
 ## @typedef {struct} SourceDisk - Clone an existing vm-disk.
 ## @field {string} name - Name of the vm-disk to clone.
