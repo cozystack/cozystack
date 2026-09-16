@@ -348,6 +348,22 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		// BackupJob Running forever), but a running dump is left to finish rather
 		// than stranding its archive — see psmdbBackupTimedOut.
 		if psmdbBackupTimedOut(state, j.Status.StartedAt) {
+			// Cancel the operator CR before failing. A `waiting` backup is queued
+			// behind another and the operator starts it once the slot frees — which
+			// would be after this BackupJob is Failed and never reconciled again,
+			// writing an archive into the shared bucket that no Backup object
+			// represents. Deleting the CR now prevents that late run; on the
+			// useSystemBucket flow its delete-backup finalizer also takes anything
+			// partially written. Best-effort: a delete failure must not stop the
+			// job from failing (a leftover CR is the pre-existing behaviour, not a
+			// regression). The terminal Phase=Failed makes reconcileMongoDB return
+			// early next time, so ensureMongoDBBackup never re-creates it.
+			if mdbBackup.DeletionTimestamp.IsZero() {
+				if derr := r.Delete(ctx, mdbBackup); derr != nil && !apierrors.IsNotFound(derr) {
+					getLogger(ctx).Debug("could not cancel the timed-out operator backup before failing",
+						"backupjob", j.Name, "sourceBackup", mdbBackup.Name, "error", derr)
+				}
+			}
 			detail := "no state observed"
 			if state != "" {
 				detail = fmt.Sprintf("state=%s", state)
@@ -575,9 +591,11 @@ func psmdbBackupDeadlineExceeded(startedAt *metav1.Time) bool {
 // (the operator CR carries no ownerRef either). A real dataset routinely outruns
 // 30m, and a genuinely broken dump terminates through the operator's own
 // error/rejected state, so a running backup is left to finish. The deadline
-// still bounds the case it was written for — the operator never starts the
-// backup (state stays "", requested or waiting), where nothing has been written
-// and failing strands nothing.
+// still bounds the case it was written for — the operator has not started the
+// backup (state stays "", requested or waiting), where nothing has been written.
+// A `waiting` backup (queued behind another) could still be started later, so
+// the caller cancels the operator CR when this trips, rather than leaving it to
+// run into the shared bucket after the BackupJob is already Failed.
 func psmdbBackupTimedOut(state string, startedAt *metav1.Time) bool {
 	if state == psmdbtypes.StateRunning {
 		return false

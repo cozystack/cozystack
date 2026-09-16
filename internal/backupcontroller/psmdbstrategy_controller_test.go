@@ -1234,6 +1234,54 @@ func mongodbInjectFixture(enabled bool) (*backupsv1alpha1.BackupJob, *strategyv1
 	return job, strategy, app, cluster, resolved
 }
 
+// When a backup the operator never started (state=waiting, queued behind
+// another) trips the deadline, the driver must cancel the operator CR before
+// failing the BackupJob — otherwise the operator starts it later and writes an
+// archive into the shared bucket that no Backup object represents.
+func TestReconcileMongoDB_TimedOutBackupIsCancelled(t *testing.T) {
+	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+	// The BackupJob started well past the deadline.
+	old := &metav1.Time{Time: time.Now().Add(-2 * psmdbDefaultBackupDeadline)}
+	job.Status.StartedAt = old
+	// An operator backup already exists for this job, queued (state=waiting), with
+	// the delete-backup finalizer the useSystemBucket flow stamps.
+	opBackup := &psmdbtypes.PerconaServerMongoDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:  "tenant",
+			Name:       "op-waiting",
+			Finalizers: []string{psmdbDeleteBackupFinalizer},
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      job.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+			},
+		},
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateWaiting},
+	}
+
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster, opBackup)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+
+	if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+
+	// The operator CR must be cancelled (deleted): with the finalizer it stays
+	// Terminating, so assert a DeletionTimestamp; without the fix it is untouched.
+	got := &psmdbtypes.PerconaServerMongoDBBackup{}
+	err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-waiting"}, got)
+	if err == nil && got.DeletionTimestamp.IsZero() {
+		t.Errorf("timed-out operator backup must be cancelled (deleted) so it cannot run later; it was left untouched")
+	}
+	// And the BackupJob is failed.
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, persisted); err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if persisted.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("expected the BackupJob to be Failed, got phase=%q", persisted.Status.Phase)
+	}
+}
+
 // A cluster that can never service a backup (backup.enabled=false) must not be
 // mutated: injection is gated on Enabled so the disabled cluster fails the
 // precondition on the enabled check without the driver having written storage
