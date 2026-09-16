@@ -291,7 +291,7 @@ func TestBuildBucketMirrorPod(t *testing.T) {
 		},
 	}
 
-	backupPod := buildBucketMirrorPod(bucketModeBackup, tmpl, "bucket-web-cozy-backup", "tenant-x/web/bk1/", false)
+	backupPod := buildBucketMirrorPod(bucketModeBackup, tmpl, "bucket-web-cozy-backup", "tenant-x/web/bk1/", false, false)
 	c := backupPod.Spec.Containers[0]
 	for _, want := range []string{"s3-mirror", "--mode=backup", "--repo-bucket=cozy-backups", "--repo-prefix=tenant-x/web/bk1/", "--repo-region=us-east-1"} {
 		if !hasArg(c.Args, want) {
@@ -316,9 +316,32 @@ func TestBuildBucketMirrorPod(t *testing.T) {
 
 	// The delete flag (the one that erases objects) rides only on an in-place
 	// restore, so it must appear exactly when the caller asks for it.
-	restorePod := buildBucketMirrorPod(bucketModeRestore, tmpl, "bucket-web-cozy-restore", "tenant-x/web/bk1/", true)
+	restorePod := buildBucketMirrorPod(bucketModeRestore, tmpl, "bucket-web-cozy-restore", "tenant-x/web/bk1/", true, false)
 	if !hasArg(restorePod.Spec.Containers[0].Args, "--delete-extraneous") {
 		t.Errorf("in-place restore must set --delete-extraneous: %v", restorePod.Spec.Containers[0].Args)
+	}
+}
+
+func TestBuildBucketMirrorPodTLSKnobsIndependent(t *testing.T) {
+	// A private CA and an explicit verify opt-out are composable: both --ca-file
+	// and --insecure must be emitted when both are set, not one or the other.
+	tmpl := strategyv1alpha1.BucketTemplate{
+		Image: "controller:latest",
+		Destination: strategyv1alpha1.BucketDestination{
+			Bucket:   "cozy-backups",
+			Endpoint: "https://s3",
+			TLS: &strategyv1alpha1.BucketTLS{
+				InsecureSkipVerify: true,
+				CASecretKeyRef:     &strategyv1alpha1.BucketSecretKeySelector{Name: "my-ca", Key: "ca.crt"},
+			},
+		},
+	}
+	args := buildBucketMirrorPod(bucketModeBackup, tmpl, "acc", "p/", false, false).Spec.Containers[0].Args
+	if !hasArg(args, "--ca-file=/etc/s3-ca/ca.crt") {
+		t.Errorf("want --ca-file with a CA ref: %v", args)
+	}
+	if !hasArg(args, "--insecure") {
+		t.Errorf("want --insecure preserved alongside a CA ref: %v", args)
 	}
 }
 
@@ -361,5 +384,20 @@ func TestCleanupBucketBackupRefusesUnrelatedJob(t *testing.T) {
 	r := &BackupReconciler{Client: c, Scheme: s}
 	if _, err := r.cleanupBucketBackup(context.Background(), backup); err == nil {
 		t.Fatal("cleanupBucketBackup: want a conflict error for an unrelated cleanup Job, got nil")
+	}
+}
+
+func TestIsInPlaceBucketRestore(t *testing.T) {
+	// This decision is what gates the destructive delete-extraneous purge, so
+	// pin both branches: a restore onto the backup's own app deletes extraneous
+	// objects, a restore into a differently-named copy target must not.
+	backup := &backupsv1alpha1.Backup{
+		Spec: backupsv1alpha1.BackupSpec{ApplicationRef: corev1.TypedLocalObjectReference{Kind: "Bucket", Name: "web"}},
+	}
+	if !isInPlaceBucketRestore("web", backup) {
+		t.Error("target == source app must be in-place (delete-extraneous)")
+	}
+	if isInPlaceBucketRestore("web-copy", backup) {
+		t.Error("a differently-named target must be a to-copy restore (no delete-extraneous)")
 	}
 }

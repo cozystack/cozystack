@@ -174,13 +174,14 @@ backupStorage:
   # tolerates the raw COSI Secret format (single BucketInfo JSON key) so a
   # cluster that wires an external S3 Secret manually still works.
   systemSecretName: bucket-cozy-backups-system-credentials
-  # endpointCASecretName — optional Secret (key ca.crt) in the app namespace
-  # that the Redis strategy Pod trusts when the S3 endpoint is https with a
-  # self-signed cert (e.g. SeaweedFS). Empty by default: the projected endpoint
-  # is always https and the platform bucket's ACME cert verifies against the
-  # image's system CA store unaided, so no CA override is needed. Set it only for
-  # a private-CA endpoint. When set, the Secret is required — a missing one fails
-  # the Pod loudly rather than silently skipping verification.
+  # endpointCASecretName — optional Secret (key ca.crt) in the app namespace the
+  # backup/restore Pods trust when the S3 endpoint is https with a self-signed
+  # cert (e.g. SeaweedFS). Empty by default: the projected endpoint is https and
+  # the platform bucket's ACME cert verifies against the image's system CA store
+  # unaided, so no CA override is needed. Set it only for a private-CA endpoint.
+  # The Redis Pod requires the Secret when set; the Bucket mirror mounts it
+  # optionally and falls back to the system trust store when absent (a private-CA
+  # endpoint then fails the handshake fast, which is the same signal).
   endpointCASecretName: ""
   # insecureSkipTLSVerify disables S3 certificate verification (curl -k). Off by
   # default and an explicit opt-in, never a fallback: leaving it false keeps an

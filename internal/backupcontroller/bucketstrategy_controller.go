@@ -39,6 +39,11 @@ const (
 	bucketModeRestore = "restore"
 	bucketModeCleanup = "cleanup"
 
+	// bucketAllowEmptySourceAnnotation on a RestoreJob opts past the empty-source
+	// refusal, letting an operator restore a legitimately empty snapshot (which
+	// would otherwise be indistinguishable from a retention-pruned one).
+	bucketAllowEmptySourceAnnotation = "backups.cozystack.io/allow-empty-source"
+
 	// Driver-metadata key prefix used to round-trip BackupClassStrategy
 	// parameters through the Backup artifact, mirroring the Job driver.
 	bucketParamPrefix = "bucket.strategy.backups.cozystack.io/parameter/"
@@ -194,6 +199,15 @@ func resolveBucketRestoreTarget(restoreJob *backupsv1alpha1.RestoreJob, backup *
 	}
 }
 
+// isInPlaceBucketRestore reports whether a restore targets the backup's own
+// source application. An in-place restore is a true mirror and PURGES objects
+// the snapshot does not name; a restore into a differently-named copy target
+// only merges the snapshot in. This is the single line separating the
+// destructive path from the non-destructive one, so it is kept testable.
+func isInPlaceBucketRestore(targetAppName string, backup *backupsv1alpha1.Backup) bool {
+	return targetAppName == backup.Spec.ApplicationRef.Name
+}
+
 // renderBucketTemplate runs the strategy's BucketTemplate through the
 // repository's template engine with the same context shape as the other
 // drivers.
@@ -324,6 +338,15 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to template Bucket strategy: %v", err))
 	}
 
+	// Refuse to back the repo bucket up into itself. The platform cozy-backups
+	// bucket is an ordinary apps.cozystack.io/Bucket, and the default BackupClass
+	// routes every Bucket to this strategy, so a BackupJob for it would mirror the
+	// whole shared repo (every tenant's backups) into a prefix inside the same
+	// bucket, doubling it each run.
+	if claim.Status.BucketName == rendered.Destination.Bucket {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("source bucket %q is the backup repository bucket; refusing to back it up into itself", claim.Status.BucketName))
+	}
+
 	// Provision (idempotently) the read-only BucketAccess the mirror reads
 	// the source bucket through, then gate on the COSI grant.
 	access, err := r.ensureBucketAccess(ctx, j.Namespace, backupAccessName(release), claim, deriveAccessClassName(claim.Spec.BucketClassName, true))
@@ -335,7 +358,7 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 	}
 
 	repoPrefix := joinRepoPrefix(rendered.Destination.Prefix, j.Name)
-	pod := buildBucketMirrorPod(bucketModeBackup, *rendered, backupAccessName(release), repoPrefix, false)
+	pod := buildBucketMirrorPod(bucketModeBackup, *rendered, backupAccessName(release), repoPrefix, false, false)
 
 	batchJob, err := r.ensureJobStrategyJob(ctx, j, j.Namespace, jobNameForBackupJob(j),
 		bucketModeBackup,
@@ -379,10 +402,53 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 		if message == "" {
 			message = "S3 mirror Job reported Failed"
 		}
+		// streamCopy writes objects one at a time, so a mirror that dies partway
+		// (deadline, OOM, S3 error) has already put a prefix's worth into
+		// cozy-backups, and no Backup artifact is created on failure for
+		// cleanupBucketBackup to key off. Reclaim that partial prefix best-effort
+		// before the BackupJob goes terminal.
+		r.reclaimFailedBucketBackup(ctx, j, *rendered, repoPrefix)
 		return r.markBackupJobFailed(ctx, j, message)
 
 	default:
 		return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
+	}
+}
+
+// reclaimFailedBucketBackup best-effort deletes the partial copy a failed backup
+// mirror may have left under repoPrefix. It runs an s3-mirror --mode=delete Job
+// owner-referenced to the BackupJob (so it is GC'd with it) and does not block
+// the BackupJob's terminal transition; the repo credentials the projector wrote
+// for the backup are still present in the namespace.
+func (r *BackupJobReconciler) reclaimFailedBucketBackup(ctx context.Context, j *backupsv1alpha1.BackupJob, rendered strategyv1alpha1.BucketTemplate, repoPrefix string) {
+	logger := getLogger(ctx)
+	snap := &bucketBackupSnapshot{
+		RepoBucket:                  rendered.Destination.Bucket,
+		RepoEndpoint:                rendered.Destination.Endpoint,
+		RepoPrefix:                  repoPrefix,
+		RepoRegion:                  rendered.Destination.Region,
+		RepoCredentialsSecret:       rendered.Destination.AccessKeyIDSecretKeyRef.Name,
+		RepoCredentialsAccessKeyKey: rendered.Destination.AccessKeyIDSecretKeyRef.Key,
+		RepoCredentialsSecretKeyKey: rendered.Destination.SecretAccessKeySecretKeyRef.Key,
+	}
+	if sk := rendered.Destination.SecretAccessKeySecretKeyRef.Name; sk != snap.RepoCredentialsSecret {
+		snap.RepoCredentialsSecretKeySecret = sk
+	}
+	if tls := rendered.Destination.TLS; tls != nil {
+		snap.InsecureSkipVerify = tls.InsecureSkipVerify
+		if ca := tls.CASecretKeyRef; ca != nil {
+			snap.RepoCACertSecret = ca.Name
+			snap.RepoCACertKey = ca.Key
+		}
+	}
+	pod := buildBucketCleanupPod(snap, rendered.Image)
+	desired := buildJobStrategyBatchJob(j.Namespace, j.Name+"-reclaim", map[string]string{bucketLabelMode: bucketModeCleanup}, pod)
+	if err := controllerutil.SetControllerReference(j, desired, r.Scheme); err != nil {
+		logger.Debug("skipping partial-backup reclaim: cannot set controller reference", "backupjob", j.Name, "err", err)
+		return
+	}
+	if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+		logger.Debug("partial-backup reclaim Job not created (best-effort)", "backupjob", j.Name, "err", err)
 	}
 }
 
@@ -575,6 +641,15 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 		return ctrl.Result{}, nil
 	}
 
+	// Refuse to restore from a Backup that is being deleted: its repo objects may
+	// be mid-purge (cleanupBucketBackup), and an in-place restore listing a
+	// prefix emptied underneath it would mirror a subset and then delete the rest
+	// of the live bucket. This closes the restore side of the cleanup-vs-restore
+	// race that cleanupBucketBackup guards from the purge side.
+	if !backup.DeletionTimestamp.IsZero() {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("Backup %q is being deleted; its objects may be mid-reclaim, so a restore is refused", backup.Name))
+	}
+
 	if err := validateBucketApplicationRef(backup.Spec.ApplicationRef); err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, err.Error())
 	}
@@ -668,7 +743,7 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 	// backup's source app) purges objects the snapshot does not contain so it
 	// is a true mirror; a restore-as-copy into a different app merges the
 	// snapshot in without deleting objects the copy target already holds.
-	inPlace := targetAppName == backup.Spec.ApplicationRef.Name
+	inPlace := isInPlaceBucketRestore(targetAppName, backup)
 	// The secret-key Secret name falls back to the access-key one for snapshots
 	// that predate the separate field (and for the common single-Secret case).
 	secretKeySecret := snapshot.RepoCredentialsSecretKeySecret
@@ -699,7 +774,11 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 		ServerSideCopy:      snapshot.ServerSideCopy,
 		Resources:           rendered.Resources,
 	}
-	pod := buildBucketMirrorPod(bucketModeRestore, restoreTemplate, restoreAccessName(targetAppName), snapshot.RepoPrefix, inPlace)
+	// An operator restoring a legitimately empty snapshot opts past the
+	// empty-source refusal with an annotation on the RestoreJob (the only
+	// supported producer of --allow-empty-source).
+	allowEmptySource := restoreJob.Annotations[bucketAllowEmptySourceAnnotation] == "true"
+	pod := buildBucketMirrorPod(bucketModeRestore, restoreTemplate, restoreAccessName(targetAppName), snapshot.RepoPrefix, inPlace, allowEmptySource)
 
 	batchJob, err := r.ensureJobStrategyRestoreJob(ctx, restoreJob, targetNamespace, jobNameForRestoreJob(restoreJob),
 		bucketModeRestore,
@@ -795,7 +874,7 @@ func (r *RestoreJobReconciler) requeueRestoreBucketWaiting(ctx context.Context, 
 // AWS_* keys of the projected cozy-backups-creds Secret (REPO_*). Endpoints,
 // bucket and prefix travel as non-secret args. buildJobStrategyBatchJob wraps
 // the result and defaults RestartPolicy=Never.
-func buildBucketMirrorPod(mode string, tmpl strategyv1alpha1.BucketTemplate, appAccessSecret, repoPrefix string, deleteExtraneous bool) *corev1.PodTemplateSpec {
+func buildBucketMirrorPod(mode string, tmpl strategyv1alpha1.BucketTemplate, appAccessSecret, repoPrefix string, deleteExtraneous, allowEmptySource bool) *corev1.PodTemplateSpec {
 	dest := tmpl.Destination
 	args := []string{
 		"s3-mirror",
@@ -815,6 +894,9 @@ func buildBucketMirrorPod(mode string, tmpl strategyv1alpha1.BucketTemplate, app
 	}
 	if deleteExtraneous {
 		args = append(args, "--delete-extraneous")
+	}
+	if allowEmptySource {
+		args = append(args, "--allow-empty-source")
 	}
 
 	env := []corev1.EnvVar{
@@ -854,6 +936,10 @@ func buildBucketMirrorPod(mode string, tmpl strategyv1alpha1.BucketTemplate, app
 
 	var volumes []corev1.Volume
 	if dest.TLS != nil {
+		// The two TLS knobs are independent: an admin may point at a private CA
+		// AND opt out of verification. The CA mount is optional and unprojected,
+		// so gating --insecure behind its absence would silently ignore the
+		// explicit opt-out; emit both when both are set.
 		if dest.TLS.CASecretKeyRef != nil {
 			container.Args = append(container.Args, "--ca-file="+bucketCAMountPath+"/"+bucketCAFileName)
 			container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
@@ -862,7 +948,8 @@ func buildBucketMirrorPod(mode string, tmpl strategyv1alpha1.BucketTemplate, app
 				ReadOnly:  true,
 			})
 			volumes = append(volumes, bucketCAVolume(dest.TLS.CASecretKeyRef))
-		} else if dest.TLS.InsecureSkipVerify {
+		}
+		if dest.TLS.InsecureSkipVerify {
 			container.Args = append(container.Args, "--insecure")
 		}
 	}
@@ -957,7 +1044,8 @@ func buildBucketCleanupPod(snapshot *bucketBackupSnapshot, image string) *corev1
 			ReadOnly:  true,
 		})
 		volumes = append(volumes, bucketCAVolume(&strategyv1alpha1.BucketSecretKeySelector{Name: snapshot.RepoCACertSecret, Key: snapshot.RepoCACertKey}))
-	} else if snapshot.InsecureSkipVerify {
+	}
+	if snapshot.InsecureSkipVerify {
 		container.Args = append(container.Args, "--insecure")
 	}
 
