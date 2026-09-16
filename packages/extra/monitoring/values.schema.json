@@ -338,7 +338,7 @@
         ],
         "properties": {
           "mode": {
-            "description": "Deployment mode: \"cluster\" renders a VTCluster; \"single\" renders a single-binary VTSingle for edge/dev/small clusters.",
+            "description": "Deployment mode: \"cluster\" renders a VTCluster; \"single\" renders a single-binary VTSingle for edge/dev/small clusters. WARNING — changing mode on a running backend is data-destructive and is not a live migration: it re-identifies the object, so \"single\"→\"cluster\" prunes the VTSingle and the operator garbage-collects its PVC (stored traces are lost), while \"cluster\"→\"single\" (or removing the entry) leaves the vtstorage PVCs Bound and billed until the whole Monitoring release is deleted. Switch deliberately, accepting the loss.",
             "type": "string",
             "default": "cluster",
             "enum": [
@@ -351,7 +351,7 @@
             "type": "string"
           },
           "retentionDiskUsageBytes": {
-            "description": "Optional disk-usage cap as a byte quantity (e.g. \"8GB\"); bounds disk in addition to the age-based retentionPeriod.",
+            "description": "Optional disk-usage cap as a VictoriaMetrics BytesString (e.g. \"8GB\" or \"8GiB\"), bounding disk use on top of the age-based retentionPeriod. Uses byte-suffix grammar (kb/mb/gb/tb, KiB/MiB/GiB/TiB), NOT the Kubernetes-quantity grammar of the sibling storage field — \"8Gi\" is rejected by the operator. In cluster mode the cap is per vtstorage replica (replicaCount 2), so the effective total is twice the value.",
             "type": "string"
           },
           "retentionPeriod": {

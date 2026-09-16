@@ -170,3 +170,47 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'monitoring: tracingStorages[generic].mode must be either "cluster" or "single"'
+
+  - it: rejects retentionDiskUsageBytes in Kubernetes-quantity grammar (8Gi)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "8Gi"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: tracingStorages[generic].retentionDiskUsageBytes "8Gi" is not a valid VictoriaMetrics BytesString (^[0-9]+(kb|mb|gb|tb|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$). Its units differ from the sibling `storage` field (a Kubernetes quantity like 10Gi): write 8GB or 8GiB, not 8Gi.'
+
+  - it: rejects duplicate names across tracingStorages
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: dup
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+        - name: dup
+          mode: single
+          retentionPeriod: "7d"
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: tracingStorages[1].name "dup" is duplicated — names must be unique across tracingStorages, since each keys a VTCluster/VTSingle and a GrafanaDatasource and a collision silently overwrites the first.'
+
+  - it: rejects a name that is not an RFC 1123 label
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: Main_1
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[0].name \"Main_1\" must be a valid RFC 1123 label (lowercase alphanumeric and '-', starting and ending alphanumeric) — it is used verbatim as the VTCluster/VTSingle and GrafanaDatasource name."

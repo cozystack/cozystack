@@ -9,11 +9,9 @@
   Flux evaluates them only against CRs present in the release inventory, so with
   nothing rendered they are inert.
 */ -}}
+{{- include "monitoring.tracingStorages.validate" . }}
 {{- range .Values.tracingStorages }}
 {{- $mode := .mode | default "cluster" }}
-{{- if and (ne $mode "cluster") (ne $mode "single") }}
-{{- fail (printf "monitoring: tracingStorages[%s].mode must be either \"cluster\" or \"single\"" .name) }}
-{{- end }}
 ---
 {{- if eq $mode "single" }}
 apiVersion: operator.victoriametrics.com/v1
