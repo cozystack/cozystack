@@ -26,6 +26,20 @@
 {{- end }}
 
 {{/*
+  `postgres` is the CNPG-managed cluster superuser and must never be redefined as
+  an app role. Reject it here, before the bootstrap gate, not only in the
+  create-users block below: that block is skipped while bootstrap.enabled is true,
+  so a restore target carrying users.postgres would install, and the restore
+  controller's automatic bootstrap clear (disablePostgresAppBootstrap) would then
+  wedge the very next reconcile against a fail it never had to see at install while
+  the RestoreJob records Succeeded. Failing regardless of bootstrap keeps the
+  controller from converging a release into an unrenderable state.
+*/}}
+{{- if and .Values.users (hasKey .Values.users "postgres") }}
+  {{- fail "`users.postgres` is forbidden by policy. Use a different username." }}
+{{- end }}
+
+{{/*
   Passwords are always chart-generated and preserved across reconciles via the
   lookup above: a user keeps whatever password is already stored in the Secret,
   and only a user without one yet gets a freshly generated value.
@@ -90,7 +104,7 @@ stringData:
     done
 
     echo "== create users"
-    {{- if and .Values.users (not (hasKey .Values.users "postgres")) }}
+    {{- if .Values.users }}
     {{- range $user, $u := .Values.users }}
     # Read the password from the mounted {{ $.Release.Name }}-credentials Secret at
     # run time rather than rendering it into this script: the init-script Secret is
@@ -106,8 +120,6 @@ stringData:
     COMMENT ON ROLE "{{ $user }}" IS 'user managed by helm';
     EOT
     {{- end }}
-    {{- else if and .Values.users (hasKey .Values.users "postgres") }}
-    {{- fail "`users.postgres` is forbidden by policy. Use a different username." }}
     {{- end }}
 
     echo "== delete users"

@@ -83,3 +83,32 @@ tests:
       - matchRegex:
           path: stringData["a-b.c_1"]
           pattern: ^[a-zA-Z0-9]{16}$
+
+  # `postgres` is the CNPG-managed superuser and is forbidden as an app role. The
+  # rejection must not depend on bootstrap.enabled: while it is true the
+  # create-users block is gated off, so a restore target carrying users.postgres
+  # installs, and the restore controller's automatic bootstrap clear
+  # (disablePostgresAppBootstrap) then wedges the next reconcile against this fail
+  # — a state the controller records as Succeeded. Rejecting it regardless of
+  # bootstrap keeps the controller from converging a release into an unrenderable
+  # one. Moving the guard back inside the `not .Values.bootstrap.enabled` block
+  # turns the bootstrap case green (renders), the mutation signal.
+  - it: rejects users.postgres even while bootstrap.enabled is true
+    set:
+      bootstrap:
+        enabled: true
+      users:
+        postgres:
+          replication: false
+    asserts:
+      - failedTemplate:
+          errorMessage: '`users.postgres` is forbidden by policy. Use a different username.'
+
+  - it: rejects users.postgres on the normal (non-bootstrap) path too
+    set:
+      users:
+        postgres:
+          replication: false
+    asserts:
+      - failedTemplate:
+          errorMessage: '`users.postgres` is forbidden by policy. Use a different username.'
