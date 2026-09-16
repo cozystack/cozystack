@@ -98,18 +98,20 @@ spec:
 {{- range $user := ($roles.readonly | default (list) | uniq) }}
 {{- if not (has $user $adminUsers) }}
 {{ $userDNSName := replace "_" "-" $user }}
+{{- /*
+  No -readonly suffix: the Grant name must not change from the merge base, or the
+  operator revokes the live privilege as the renamed CR is pruned on upgrade. A
+  user also in admin gets ALL and is skipped above, so there is no same-name
+  collision to disambiguate. Corollary of the shared name: when a user moves
+  between readonly-only and admin across an upgrade, this one Grant CR flips its
+  privileges in place (SELECT<->ALL) rather than being replaced, so the effective
+  grant tracks the current role set with no revoke-and-regrant gap. This rationale
+  is a template comment so it does not ship into every rendered Grant manifest.
+*/}}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Grant
 metadata:
-  # No -readonly suffix: the Grant name must not change from the merge base, or
-  # the operator revokes the live privilege as the renamed CR is pruned on
-  # upgrade. A user also in admin gets ALL and is skipped above, so there is no
-  # same-name collision to disambiguate. A corollary of the shared name: when a
-  # user moves between readonly-only and admin across an upgrade, this one Grant
-  # CR flips its privileges in place (SELECT<->ALL) rather than being replaced, so
-  # the effective grant always tracks the current role set with no revoke-and-
-  # regrant gap.
   name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}
 spec:
   mariaDbRef:
