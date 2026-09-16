@@ -20,6 +20,9 @@ type ConfigSpec struct {
 	// Hostname for external access to Harbor (defaults to 'harbor' subdomain for the tenant host).
 	// +kubebuilder:default:=""
 	Host string `json:"host,omitempty"`
+	// IP addresses or CIDR ranges allowed to reach the Harbor web portal and API. Only `/v2/` and `/service/token` stay open to any address, which is what `docker login`, image pulls and pushes use; every other path on the Harbor host is restricted. Empty allows every address. Requires Ingress publishing; rejected when the tenant publishes through Gateway API.
+	// +kubebuilder:default:={}
+	ManagementWhitelist []string `json:"managementWhitelist,omitempty"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"

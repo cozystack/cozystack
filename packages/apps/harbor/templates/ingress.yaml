@@ -1,3 +1,10 @@
+{{- define "harbor.ingress.proxyAnnotations" -}}
+nginx.ingress.kubernetes.io/proxy-body-size: "0"
+nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+nginx.ingress.kubernetes.io/ssl-redirect: "true"
+nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+{{- end }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $gateway := .Values._namespace.gateway | default "" }}
 {{- $host := .Values._namespace.host }}
@@ -12,11 +19,10 @@ kind: Ingress
 metadata:
   name: {{ .Release.Name }}-ingress
   annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "0"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    {{- include "harbor.ingress.proxyAnnotations" . | nindent 4 }}
+    {{- with .Values.managementWhitelist }}
+    nginx.ingress.kubernetes.io/whitelist-source-range: {{ join "," . | quote }}
+    {{- end }}
     {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
     {{- if not $wildcardSecret }}
     {{- if eq $solver "http01" }}
@@ -46,4 +52,40 @@ spec:
                 name: {{ .Release.Name }}
                 port:
                   number: 80
+{{- /* whitelist-source-range is scoped to the locations of the Ingress that
+       carries it, so the registry API and its token endpoint stay open on a
+       second Ingress for the same host. /service/notifications is left behind
+       the whitelist: it only takes internal job callbacks. The certificate is
+       shared without the cert-manager annotations, otherwise ingress-shim
+       sees two owners for one Certificate. */}}
+{{- if .Values.managementWhitelist }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-registry-ingress
+  annotations:
+    {{- include "harbor.ingress.proxyAnnotations" . | nindent 4 }}
+spec:
+  ingressClassName: {{ $ingress }}
+  tls:
+    - hosts:
+        - {{ $harborHost | quote }}
+      {{- if not $wildcardSecret }}
+      secretName: {{ .Release.Name }}-ingress-tls
+      {{- end }}
+  rules:
+    - host: {{ $harborHost | quote }}
+      http:
+        paths:
+          {{- range list "/v2" "/service/token" }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Release.Name }}
+                port:
+                  number: 80
+          {{- end }}
+{{- end }}
 {{- end }}
