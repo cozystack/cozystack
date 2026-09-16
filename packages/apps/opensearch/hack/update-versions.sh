@@ -119,6 +119,36 @@ unset IFS
 
 echo "Major versions to add: ${MAJOR_VERSIONS[*]}"
 
+# Keep the default where it is. It decides what every release that never set a
+# version runs, so moving it is an upgrade decision of its own rather than
+# something a refresh of the tags carries along.
+CURRENT_DEFAULT=$(awk '/^version: / { gsub(/"/, "", $2); print $2; exit }' "$VALUES_FILE")
+DEFAULT_VERSION="${MAJOR_VERSIONS[0]}"
+for major_ver in "${MAJOR_VERSIONS[@]}"; do
+    if [ "$major_ver" = "$CURRENT_DEFAULT" ]; then
+        DEFAULT_VERSION="$CURRENT_DEFAULT"
+        break
+    fi
+done
+
+if [ "$DEFAULT_VERSION" != "$CURRENT_DEFAULT" ]; then
+    echo "WARNING: the current default ${CURRENT_DEFAULT:-<none>} is no longer available, so the default becomes ${DEFAULT_VERSION}; every release that never set a version moves with it" >&2
+fi
+
+# A line that disappears upstream leaves the enum, and the versionMap helper
+# then fails the render of every release still on it.
+PREVIOUS_VERSIONS=$(awk '
+    /^## @enum \{string\} Version$/ { in_enum = 1; next }
+    in_enum && /^## @value / { print $3; next }
+    in_enum { in_enum = 0 }
+' "$VALUES_FILE")
+for old_ver in $PREVIOUS_VERSIONS; do
+    case " ${MAJOR_VERSIONS[*]} " in
+        *" $old_ver "*) ;;
+        *) echo "WARNING: $old_ver has left the supported set; a release still on it will fail to render" >&2 ;;
+    esac
+done
+
 # Create/update versions.yaml file
 echo "Updating $VERSIONS_FILE..."
 {
@@ -142,7 +172,7 @@ done
 NEW_VERSION_SECTION="${NEW_VERSION_SECTION}
 
 ## @param {Version} version - OpenSearch major version to deploy.
-version: ${MAJOR_VERSIONS[0]}"
+version: ${DEFAULT_VERSION}"
 
 # Check if version section already exists
 if grep -q "^## @enum {string} Version" "$VALUES_FILE"; then
@@ -181,4 +211,4 @@ else
     mv "$TEMP_FILE.tmp" "$VALUES_FILE"
 fi
 
-echo "Successfully updated $VALUES_FILE with major versions: ${MAJOR_VERSIONS[*]}"
+echo "Successfully updated $VALUES_FILE (default ${DEFAULT_VERSION}) with major versions: ${MAJOR_VERSIONS[*]}"
