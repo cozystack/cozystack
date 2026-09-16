@@ -34,6 +34,13 @@ tests:
           path: spec.version
           value: "7.4.1"
 
+  - it: names the value and the versions on offer when version is null
+    set:
+      version: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "FoundationDB version <nil> is not supported, allowed versions are [v7.1 v7.3 v7.4]"
+
   - it: ignores a leftover cluster.version
     set:
       cluster:
