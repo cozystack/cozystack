@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -1561,4 +1562,140 @@ func TestCleanupMongoDBBackup(t *testing.T) {
 			t.Errorf("expected an event surfacing the stuck finalizer, got none")
 		}
 	})
+}
+
+// A dump the operator is actively writing (state=running) must never be failed
+// on the wall-clock deadline: pbm keeps streaming into the shared bucket after
+// the driver gives up, so failing it strands an archive no Backup object
+// represents. Only a backup the operator never started trips the deadline.
+func TestPsmdbBackupTimedOut(t *testing.T) {
+	past := &metav1.Time{Time: time.Now().Add(-2 * psmdbDefaultBackupDeadline)}
+	recent := &metav1.Time{Time: time.Now()}
+	cases := []struct {
+		state   string
+		started *metav1.Time
+		want    bool
+	}{
+		{psmdbtypes.StateRunning, past, false},   // progressing: keep polling, never strand the archive
+		{psmdbtypes.StateWaiting, past, true},    // never started: safe to fail, nothing written
+		{psmdbtypes.StateRequested, past, true},  //
+		{"", past, true},                         // operator never observed it
+		{psmdbtypes.StateRunning, recent, false}, // running, deadline not reached
+		{psmdbtypes.StateWaiting, recent, false}, // not yet past the deadline
+		{psmdbtypes.StateRunning, nil, false},    // no StartedAt
+	}
+	for _, tc := range cases {
+		if got := psmdbBackupTimedOut(tc.state, tc.started); got != tc.want {
+			t.Errorf("psmdbBackupTimedOut(state=%q, past=%v): got %v want %v", tc.state, tc.started == past, got, tc.want)
+		}
+	}
+}
+
+// The SSA-patch call site is the one place that could force-overwrite a running
+// legacy tenant's own s3-storage entry. On the legacy flow (useSystemBucket
+// false) the driver must never touch the cluster, even when the cluster is
+// otherwise ready to back up — the injection is gated on the app flag, not on
+// the live storage set.
+func TestReconcileMongoDB_LegacyClusterNotPatched(t *testing.T) {
+	apps := mongodbapp.GroupName
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	now := metav1.Now()
+
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-legacy"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "app1", APIGroup: &apps},
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now},
+	}
+	// Strategy still carries S3 coordinates (they live on the shared default), so
+	// the guard cannot lean on rendered.S3 being nil — only the app flag.
+	strategy := &strategyv1alpha1.MongoDB{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-mongodb"},
+		Spec: strategyv1alpha1.MongoDBSpec{Template: strategyv1alpha1.MongoDBTemplate{
+			StorageName: "s3-storage",
+			Type:        "logical",
+			S3:          &strategyv1alpha1.MongoDBStorageS3{Bucket: "cozy-backups", EndpointURL: "https://s3.example", CredentialsSecret: "cozy-backups-creds"},
+		}},
+	}
+	app := &mongodbapp.MongoDB{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "app1"},
+		Spec:       mongodbapp.MongoDBSpec{Backup: mongodbapp.MongoDBBackupSpec{UseSystemBucket: false}},
+	}
+	// Legacy cluster with backups enabled AND its own tenant-bucket storage.
+	ownStorage := runtime.RawExtension{Raw: []byte(`{"type":"s3","s3":{"bucket":"tenant-own","credentialsSecret":"mongodb-app1-s3-creds"}}`)}
+	cluster := &psmdbtypes.PerconaServerMongoDB{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-app1"},
+		Spec: psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
+			Enabled:  true,
+			Storages: map[string]runtime.RawExtension{"s3-storage": ownStorage},
+		}},
+	}
+
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.MongoDBStrategyKind, Name: "cozy-default-mongodb"},
+		Parameters:  map[string]string{},
+	}
+
+	if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+
+	got := &psmdbtypes.PerconaServerMongoDB{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "mongodb-app1"}, got); err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	bucket, _ := psmdbStorageS3(got.Spec.Backup.Storages["s3-storage"])
+	if bucket != "tenant-own" {
+		t.Errorf("legacy tenant's own s3-storage was overwritten: bucket=%q, want tenant-own", bucket)
+	}
+}
+
+// releaseMongoDBCleanup must strip the finalizer off the object the caller
+// already read and confirmed owned, without a second Get whose transient
+// failure would silently drop the strip and wedge a terminating namespace.
+func TestReleaseMongoDBCleanup_UsesPassedObjectNotReRead(t *testing.T) {
+	owned := &psmdbtypes.PerconaServerMongoDBBackup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-bk", Finalizers: []string{psmdbDeleteBackupFinalizer}},
+	}
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = psmdbtypes.AddToScheme(s)
+	c := clientfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(owned.DeepCopy()).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*psmdbtypes.PerconaServerMongoDBBackup); ok {
+					return apierrors.NewServiceUnavailable("read throttled")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	rec := record.NewFakeRecorder(10)
+	r := &BackupReconciler{Client: c, Recorder: rec}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cozy-bk"},
+		Spec:       backupsv1alpha1.BackupSpec{DriverMetadata: map[string]string{psmdbBackupNameKey: "op-bk"}},
+	}
+
+	res, err := r.releaseMongoDBCleanup(context.Background(), backup, "op-bk", owned.DeepCopy(), "namespace is terminating")
+	if err != nil || res.RequeueAfter != 0 {
+		t.Fatalf("release must proceed, got res=%+v err=%v", res, err)
+	}
+	// The owned-strip path fires ArtifactNotDeleted; if the code had re-read the
+	// CR (Get throttled), it would have taken the quiet "nothing of ours" path
+	// with no event — so the event proves the passed object was used.
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "ArtifactNotDeleted") {
+			t.Errorf("expected the owned-release event proving the passed object was used, got %q", ev)
+		}
+	default:
+		t.Errorf("expected an ArtifactNotDeleted event (passed object used, strip ran), got none")
+	}
 }

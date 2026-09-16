@@ -59,13 +59,15 @@ spec:
     storageName: s3-storage
     type: logical
     compressionType: gzip
-    # System-bucket coordinates the driver SSA-injects onto the source
-    # PerconaServerMongoDB's spec.backup.storages[s3-storage] when the app ran
-    # with backup.useSystemBucket=true (the chart then omits the static
-    # storage). A legacy app leaves the flag false and is never injected, so it
-    # keeps its own static s3-storage. endpointUrl carries the scheme from the
-    # endpoint helper so PBM's aws-sdk client gets a valid URL; credentials come
-    # from the projected cozy-backups-creds.
+    {{- /*
+      System-bucket coordinates the driver SSA-injects onto the source
+      PerconaServerMongoDB's spec.backup.storages[s3-storage] when the app ran
+      with backup.useSystemBucket=true (the chart then omits the static storage).
+      A legacy app leaves the flag false and is never injected, so it keeps its
+      own static s3-storage. endpointUrl carries the scheme from the endpoint
+      helper so PBM's aws-sdk client gets a valid URL; credentials come from the
+      projected cozy-backups-creds. See docs/operations/backup-classes.md.
+    */}}
     s3:
       bucket: {{ $bucketName | quote }}
       endpointUrl: {{ include "backupstrategy-controller.endpoint" . | quote }}

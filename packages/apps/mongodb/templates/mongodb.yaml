@@ -217,6 +217,18 @@ spec:
     {{- end }}
   {{- end }}
 
+  {{- /*
+    useSystemBucket cannot honour backup.retentionPolicy: the tasks[].keep block
+    below (the chart's only retention) is gated out on this flow, and no
+    Plan-level retention exists yet, so a retentionPolicy set here would silently
+    grow the shared cozy-backups bucket. Reject a value the tenant changed from
+    the chart default rather than ignore it — an untouched useSystemBucket install
+    keeps rendering. $defaultRetentionPolicy MUST track the values.yaml default.
+  */}}
+  {{- $defaultRetentionPolicy := "30d" }}
+  {{- if and .Values.backup.useSystemBucket .Values.backup.retentionPolicy (ne .Values.backup.retentionPolicy $defaultRetentionPolicy) }}
+  {{- fail (printf "backup.retentionPolicy=%q cannot be honoured when backup.useSystemBucket=true: the platform flow has no engine-side retention and Plan-level retention is not yet available (see docs/operations/backup-classes.md). Remove backup.retentionPolicy, or drive scheduled backups and retention through a backups.cozystack.io/Plan." .Values.backup.retentionPolicy) }}
+  {{- end }}
   backup:
     enabled: {{ .Values.backup.enabled | default false }}
     image: percona/percona-backup-mongodb:2.11.0
