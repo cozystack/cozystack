@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -387,6 +388,14 @@ func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStar
 	return clusterCreatedAt.After(restoreStartedAt.Time)
 }
 
+// cnpgClusterGVR addresses Clusters on the dynamic client, for reads that must
+// bypass the manager's cache.
+var cnpgClusterGVR = schema.GroupVersionResource{
+	Group:    cnpgtypes.GroupName,
+	Version:  cnpgtypes.Version,
+	Resource: "clusters",
+}
+
 // applyClusterPluginBackup wires the templated strategy onto the live CNPG
 // Cluster through the barman-cloud plugin: it SSA-applies an ObjectStore CR
 // carrying the S3/barman configuration and SSA-patches the Cluster's
@@ -410,9 +419,15 @@ func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStar
 // land under the old prefix while the base backup indexes under the new one,
 // and the eventual restore fails with "WAL not found".
 func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, namespace, clusterName string, t *strategyv1alpha1.CNPGTemplate, serverName string) (string, error) {
+	// Live read: the cached Cluster can predate a restore re-render, and both
+	// the serverName and the UID below must come from the current object.
 	existing := &cnpgtypes.Cluster{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: clusterName}, existing); err != nil {
+	live, err := r.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, clusterName, metav1.GetOptions{})
+	if err != nil {
 		return "", err
+	}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(live.Object, existing); err != nil {
+		return "", fmt.Errorf("decode Cluster %s/%s: %w", namespace, clusterName, err)
 	}
 	if live := currentBarmanServerName(existing); live != "" {
 		serverName = live
