@@ -68,6 +68,9 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Leader election (--leader-elect) is granted by a namespaced Role in cozy-system
+# (see leader-election-role.yaml): the Lease lives in the controller's own
+# namespace, so the write does not need to reach every namespace.
 - apiGroups: ['*']
   resources: ['*']
   verbs: ["get", "list", "watch"]

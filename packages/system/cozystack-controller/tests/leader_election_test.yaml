@@ -1,0 +1,91 @@
+suite: cozystack-controller runs one active manager
+templates:
+  - templates/deployment.yaml
+  - templates/rbac.yaml
+  - templates/leader-election-role.yaml
+
+release:
+  name: cozystack-controller
+  namespace: cozy-system
+
+# Eight reconcilers in this manager write (HelmRelease patches, Gateway and
+# Certificate renders, ResourceQuota, Secret replication, CA projection), so a
+# second replica is only safe behind leader election. --leader-elect is passed
+# unconditionally and the Lease grant ships with it; raising replicas then adds a
+# standby rather than a second writer.
+#
+# The Lease grant is namespaced on purpose: the lock lives in the manager's own
+# namespace, so the ClusterRole does not hand out Lease writes in every
+# namespace.
+
+tests:
+  - it: the manager always asks for leader election
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect
+
+  - it: replicas defaults to the previously hardcoded 1
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: replicas value drives spec.replicas
+    set:
+      cozystackController.replicas: 2
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: the Lease verbs come from a namespaced Role in cozy-system
+    template: templates/leader-election-role.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cozystack-controller-leader-election
+      - equal:
+          path: metadata.namespace
+          value: cozy-system
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["coordination.k8s.io"]
+            resources: ["leases"]
+            verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  - it: the Lease Role reaches the controller ServiceAccount in cozy-system
+    template: templates/leader-election-role.yaml
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: cozystack-controller-leader-election
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: cozystack-controller
+            namespace: cozy-system
+
+  - it: the ClusterRole grants no Lease write, so no other namespace is reachable
+    template: templates/rbac.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["coordination.k8s.io"]
+            resources: ["leases"]
+            verbs: ["get", "list", "watch", "create", "update", "patch"]

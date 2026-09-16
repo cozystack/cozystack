@@ -7,3 +7,9 @@ cozystackController:
   # stack that scrapes it run in a separate cluster. Empty keeps discovery
   # via the namespace.cozystack.io/monitoring label.
   seaweedfsMetricsEndpoint: ""
+  # Raising this gives the reconciliation loop a standby, not a second writer:
+  # the chart always passes --leader-elect, so exactly one manager holds the
+  # Lease and runs the reconcilers. With the default of 1 the extra Lease is
+  # the only difference from the previous hardcoded value.
+  replicas: 1
+  resources: {}
