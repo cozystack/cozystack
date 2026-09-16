@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
 # Unit tests for platform migration 59 --> 60 (carry a FoundationDB
-# application's cluster.version over to the version field that replaces it).
+# application's cluster.version over to the version field that replaces it, and
+# record what cannot be carried over).
 #
 # The chart no longer reads cluster.version, so a cluster that set it to a line
 # other than 7.3 would move to the v7.3 default on its first reconcile after the
@@ -13,7 +14,9 @@
 #   - releases that never set cluster.version, already have version, or are not
 #     FoundationDB are not touched;
 #   - an unlabelled release is still found by its chart;
-#   - a value outside those lines is recorded and does not block the stamp;
+#   - a value outside those lines, a value the apiserver stored as a number, a
+#     spec.values that is not an object at all, and an OpenSearch release still
+#     carrying images.opensearch are recorded and do not block the stamp;
 #   - a failed scan or patch aborts before the stamp.
 #
 # cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
@@ -53,7 +56,15 @@ prep() {
   {"metadata":{"namespace":"tenant-c","name":"postgres-db","labels":{"apps.cozystack.io/application.kind":"Postgres"}},
    "spec":{"values":{"cluster":{"version":"7.1.0"}}}},
   {"metadata":{"namespace":"tenant-d","name":"foundationdb-ancient","labels":{"apps.cozystack.io/application.kind":"FoundationDB"}},
-   "spec":{"values":{"cluster":{"version":"6.3.25"}}}}
+   "spec":{"values":{"cluster":{"version":"6.3.25"}}}},
+  {"metadata":{"namespace":"tenant-d","name":"foundationdb-numeric","labels":{"apps.cozystack.io/application.kind":"FoundationDB"}},
+   "spec":{"values":{"cluster":{"version":7.3}}}},
+  {"metadata":{"namespace":"tenant-d","name":"foundationdb-scalar-values","labels":{"apps.cozystack.io/application.kind":"FoundationDB"}},
+   "spec":{"values":"broken"}},
+  {"metadata":{"namespace":"tenant-e","name":"opensearch-logs","labels":{"apps.cozystack.io/application.kind":"OpenSearch"}},
+   "spec":{"values":{"images":{"opensearch":"registry.example.test/opensearch:2.19.6"}}}},
+  {"metadata":{"namespace":"tenant-e","name":"opensearch-plain","labels":{"apps.cozystack.io/application.kind":"OpenSearch"}},
+   "spec":{"values":{"images":{"opensearch":""},"replicas":3}}}
 ]}
 JSON
 }
@@ -76,8 +87,18 @@ JSON
   if grep -q 'PATCH [^ ]* foundationdb-migrated ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* foundationdb-migrated '"; exit 1; fi
   if grep -q 'PATCH [^ ]* postgres-db ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* postgres-db '"; exit 1; fi
   if grep -q 'PATCH [^ ]* foundationdb-ancient ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* foundationdb-ancient '"; exit 1; fi
+  if grep -q 'PATCH [^ ]* opensearch-plain ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* opensearch-plain '"; exit 1; fi
+  if grep -q 'PATCH [^ ]* opensearch-logs ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* opensearch-logs '"; exit 1; fi
+  if grep -q 'PATCH [^ ]* foundationdb-scalar-values ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* foundationdb-scalar-values '"; exit 1; fi
+  if grep -q 'PATCH [^ ]* foundationdb-numeric ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* foundationdb-numeric '"; exit 1; fi
 
-  grep -q '^ANNOTATE .*cozystack.io/migration-58-unmapped-foundationdb=tenant-d/foundationdb-ancient=6.3.25' "$FAKE_CMDLOG"
+  annotation=$(grep '^ANNOTATE ' "$FAKE_CMDLOG")
+  echo "$annotation" | grep -q 'cozystack.io/migration-59-needs-attention='
+  echo "$annotation" | grep -q 'tenant-d/foundationdb-ancient=cluster.version:6.3.25'
+  echo "$annotation" | grep -q 'tenant-d/foundationdb-numeric=cluster.version:7.3'
+  echo "$annotation" | grep -q 'tenant-d/foundationdb-scalar-values=values-not-an-object'
+  echo "$annotation" | grep -q 'tenant-e/opensearch-logs=images.opensearch:registry.example.test/opensearch:2.19.6'
+  if echo "$annotation" | grep -q 'opensearch-plain'; then echo "recorded an OpenSearch release with no image override"; exit 1; fi
   [ "$(tail -n1 "$FAKE_CMDLOG")" = "STAMP 60" ]
   if grep -q '^UNHANDLED' "$FAKE_CMDLOG"; then echo "unexpected line matching '^UNHANDLED'"; exit 1; fi
   rm -rf "$WORK"
