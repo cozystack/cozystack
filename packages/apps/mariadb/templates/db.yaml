@@ -105,7 +105,11 @@ metadata:
   # No -readonly suffix: the Grant name must not change from the merge base, or
   # the operator revokes the live privilege as the renamed CR is pruned on
   # upgrade. A user also in admin gets ALL and is skipped above, so there is no
-  # same-name collision to disambiguate.
+  # same-name collision to disambiguate. A corollary of the shared name: when a
+  # user moves between readonly-only and admin across an upgrade, this one Grant
+  # CR flips its privileges in place (SELECT<->ALL) rather than being replaced, so
+  # the effective grant always tracks the current role set with no revoke-and-
+  # regrant gap.
   name: {{ $.Release.Name }}-{{ $dbDNSName }}-{{ $userDNSName }}
 spec:
   mariaDbRef:
