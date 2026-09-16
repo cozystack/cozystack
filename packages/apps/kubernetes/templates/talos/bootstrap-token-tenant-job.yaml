@@ -100,7 +100,7 @@ spec:
       {{- include "kubernetes.waitForAdminKubeconfig" . | nindent 6 }}
       containers:
         - name: kubectl
-          image: "{{ .Files.Get "images/kubectl.tag" | trim }}"
+          image: {{ include "cozy-lib.image" (list (.Files.Get "images/kubectl.tag" | trim) $) | quote }}
           env:
             - name: KUBECONFIG
               value: /etc/kubernetes/kubeconfig/super-admin.svc

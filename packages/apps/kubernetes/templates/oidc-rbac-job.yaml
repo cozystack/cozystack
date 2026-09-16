@@ -144,7 +144,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: bootstrap
-          image: "{{ .Files.Get "images/kubectl.tag" | trim }}"
+          image: {{ include "cozy-lib.image" (list (.Files.Get "images/kubectl.tag" | trim) $) | quote }}
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -379,7 +379,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cleanup
-          image: "{{ .Files.Get "images/kubectl.tag" | trim }}"
+          image: {{ include "cozy-lib.image" (list (.Files.Get "images/kubectl.tag" | trim) $) | quote }}
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
