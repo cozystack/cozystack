@@ -95,19 +95,17 @@ const (
 	// large enough that 30 minutes isn't enough.
 	cnpgDefaultRestoreDeadline = 30 * time.Minute
 
-	// Floor on the post-convergence grace window for the bootstrap-disable
-	// step. That window must NOT collapse with restoreTimeoutSeconds: the
-	// timeout is a tenant knob for bounding the *recovery* wait (a tenant sets
-	// it short to fail fast on a stuck PITR target), while the disable step's
-	// window exists to absorb a transient control-plane blip (an apiserver
-	// restart, a webhook timeout) between convergence and clearing
-	// bootstrap.enabled. Sizing the grace off the tenant's recovery timeout
-	// let a short timeout terminate a genuinely-converged restore Failed on a
-	// brief blip - and a resubmit's purge-guard would then delete the healthy
-	// restored Cluster + PVCs. Floor the window here so the disable step keeps
-	// a window wide enough to ride out those blips regardless of how short the
-	// recovery timeout is.
-	cnpgPostConvergenceGraceMin = 5 * time.Minute
+	// Fixed grace window the post-convergence bootstrap-disable step keeps
+	// requeueing over a transient error before it terminates the restore Failed.
+	// It is deliberately NOT tied to restoreTimeoutSeconds: that knob bounds the
+	// *recovery* wait (a tenant sets it short to fail fast on a stuck PITR
+	// target), whereas this window absorbs a transient control-plane blip (an
+	// apiserver restart, a webhook timeout) between convergence and clearing
+	// bootstrap.enabled - a blip whose duration has nothing to do with how long
+	// recovery is allowed to take or how big the database is. A fixed 5m rides
+	// out those blips without letting a short timeout shrink it or a large one
+	// inflate it.
+	cnpgBootstrapDisableGrace = 5 * time.Minute
 
 	// Wall-clock cap on how long the WALArchiveReady gate can stay False
 	// before the RestoreJob is marked Failed. The gate fires before the
@@ -1003,8 +1001,8 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			// resubmit's purge-guard would then delete the healthy restored
 			// Cluster + PVCs. Only a failure that persists across the whole window
 			// AFTER convergence terminates as Failed; a transient one requeues.
-			// The window is floored (see cnpgPostConvergenceGraceMin) so a short
-			// restoreTimeoutSeconds cannot shrink it below what a blip needs.
+			// The window is a fixed cnpgBootstrapDisableGrace, independent of
+			// restoreTimeoutSeconds, sized for a control-plane blip.
 			grace := options.effectiveBootstrapDisableGrace()
 			if cond := apimeta.FindStatusCondition(restoreJob.Status.Conditions, restoreCondRecoveryConverged); cond != nil &&
 				time.Since(cond.LastTransitionTime.Time) > grace {
@@ -1019,10 +1017,16 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		restoreJob.Status.CompletedAt = &now
 		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
 		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
-			Type:    "Ready",
-			Status:  metav1.ConditionTrue,
-			Reason:  "RestoreCompleted",
-			Message: "target cnpg.io Cluster reached healthy state; bootstrap disabled so the chart reconciles credentials onto the recovered roles",
+			Type:   "Ready",
+			Status: metav1.ConditionTrue,
+			Reason: "RestoreCompleted",
+			// The DATA is restored and the Cluster is healthy - that is what this
+			// terminal Succeeded asserts. Clearing bootstrap only STARTS the
+			// credential convergence: the chart's post-upgrade init-job runs
+			// ALTER ROLE on the next HelmRelease reconcile, which this controller
+			// does not wait for. Say so rather than claim the passwords are
+			// already reconciled; confirm by an application login.
+			Message: "target cnpg.io Cluster reached a healthy state and spec.bootstrap.enabled was cleared; the app's post-upgrade init-job reconciles the generated passwords onto the recovered roles on the next HelmRelease reconcile (this RestoreJob does not wait for it - confirm by logging in as an application user)",
 		})
 		if err := r.Status().Update(ctx, restoreJob); err != nil {
 			return ctrl.Result{}, err
@@ -1896,14 +1900,13 @@ func (o CNPGRestoreOptions) effectiveRestoreDeadline() time.Duration {
 	return cnpgDefaultRestoreDeadline
 }
 
-// effectiveBootstrapDisableGrace returns the window the post-convergence
-// bootstrap-disable step is allowed to keep requeueing over a transient error
-// before it terminates the restore Failed. It floors effectiveRestoreDeadline
-// at cnpgPostConvergenceGraceMin so a tenant who sets a short
-// restoreTimeoutSeconds (to fail fast on a stuck recovery) does not also shrink
-// this unrelated grace window below what a control-plane blip needs to clear.
+// effectiveBootstrapDisableGrace returns the fixed window the post-convergence
+// bootstrap-disable step keeps requeueing over a transient error before it
+// terminates the restore Failed. It is independent of restoreTimeoutSeconds:
+// that knob bounds the recovery wait, which is unrelated to how long a
+// control-plane blip takes to clear (see cnpgBootstrapDisableGrace).
 func (o CNPGRestoreOptions) effectiveBootstrapDisableGrace() time.Duration {
-	return max(o.effectiveRestoreDeadline(), cnpgPostConvergenceGraceMin)
+	return cnpgBootstrapDisableGrace
 }
 
 // effectiveWALArchiveDeadline returns the configured WAL-archive gate

@@ -329,31 +329,30 @@ func TestEffectiveRestoreDeadline(t *testing.T) {
 	}
 }
 
-// TestEffectiveBootstrapDisableGrace pins the floor on the post-convergence
-// bootstrap-disable window: a tenant who sets a short restoreTimeoutSeconds to
-// fail fast on a stuck recovery must NOT thereby shrink the disable grace below
-// cnpgPostConvergenceGraceMin, or a brief control-plane blip would terminate a
-// genuinely-converged restore Failed and expose the healthy Cluster to a
-// resubmit's purge-guard. The window still tracks a *longer* recovery timeout
-// (a big-DB restore keeps its generous window).
+// TestEffectiveBootstrapDisableGrace pins that the post-convergence
+// bootstrap-disable window is a FIXED cnpgBootstrapDisableGrace, independent of
+// restoreTimeoutSeconds: that knob bounds the recovery wait, whereas this window
+// absorbs a control-plane blip whose duration is unrelated to it. A short timeout
+// must not shrink the window (a blip would then falsely fail a converged restore
+// and expose the healthy Cluster to a resubmit's purge-guard), and a long timeout
+// must not inflate it.
 func TestEffectiveBootstrapDisableGrace(t *testing.T) {
+	// The grace is a FIXED window, independent of restoreTimeoutSeconds: a short,
+	// a long and an unset recovery timeout all yield the same control-plane-blip
+	// window. Re-coupling it to the deadline turns these red.
 	cases := []struct {
 		name string
 		opts CNPGRestoreOptions
-		want time.Duration
 	}{
-		{"unset uses default, above floor", CNPGRestoreOptions{}, cnpgDefaultRestoreDeadline},
-		{"short timeout floored", CNPGRestoreOptions{RestoreTimeoutSeconds: 60}, cnpgPostConvergenceGraceMin},
-		{"long timeout kept", CNPGRestoreOptions{RestoreTimeoutSeconds: 7200}, 2 * time.Hour},
+		{"unset", CNPGRestoreOptions{}},
+		{"short timeout", CNPGRestoreOptions{RestoreTimeoutSeconds: 60}},
+		{"long timeout", CNPGRestoreOptions{RestoreTimeoutSeconds: 7200}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.opts.effectiveBootstrapDisableGrace()
-			if got != tc.want {
-				t.Errorf("got %s want %s", got, tc.want)
-			}
-			if got < cnpgPostConvergenceGraceMin {
-				t.Errorf("grace %s fell below the floor %s", got, cnpgPostConvergenceGraceMin)
+			if got != cnpgBootstrapDisableGrace {
+				t.Errorf("grace %s should be the fixed %s regardless of restoreTimeoutSeconds", got, cnpgBootstrapDisableGrace)
 			}
 		})
 	}
@@ -2602,7 +2601,7 @@ func TestReconcileCNPGRestore_BootstrapDisableTransientErrorRequeues(t *testing.
 // Without the floor the disable grace collapses to 60s (the recovery timeout),
 // so 90s-since-convergence terminates the restore Failed on a blip - and a
 // resubmit's purge-guard would then delete the healthy restored Cluster. With
-// the floor (cnpgPostConvergenceGraceMin) the window stays open and the
+// the floor (cnpgBootstrapDisableGrace) the window stays open and the
 // transient error requeues. Reverting effectiveBootstrapDisableGrace back to
 // effectiveRestoreDeadline turns this red.
 func TestReconcileCNPGRestore_BootstrapDisableShortTimeoutHonorsGraceFloor(t *testing.T) {
