@@ -44,6 +44,12 @@ const (
 	// would otherwise be indistinguishable from a retention-pruned one).
 	bucketAllowEmptySourceAnnotation = "backups.cozystack.io/allow-empty-source"
 
+	// bucketRestoreBackupLabel stamps a restore mirror Job with the Backup name
+	// it reads, so cleanupBucketBackup can hold the purge while a restore Job for
+	// that Backup still has active Pods - even after its RestoreJob has gone
+	// terminal or been deleted, whose Pods a background GC has not yet stopped.
+	bucketRestoreBackupLabel = "backups.cozystack.io/restore-backup"
+
 	// Driver-metadata key prefix used to round-trip BackupClassStrategy
 	// parameters through the Backup artifact, mirroring the Job driver.
 	bucketParamPrefix = "bucket.strategy.backups.cozystack.io/parameter/"
@@ -357,7 +363,11 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 		return r.requeueBucketWaiting(ctx, j, "SourceAccessPending", fmt.Sprintf("source BucketAccess %q not granted yet", access.Name))
 	}
 
-	repoPrefix := joinRepoPrefix(rendered.Destination.Prefix, j.Name)
+	// Scope the repo prefix by the BackupJob UID, not just its name: an ad-hoc
+	// BackupJob can reuse a deleted one's name, and a name-only prefix would let a
+	// new run write into (and its failure-reclaim purge) an older, still-Ready
+	// Backup's objects. The UID makes every run's prefix its own.
+	repoPrefix := joinRepoPrefix(rendered.Destination.Prefix, j.Name+"-"+string(j.UID))
 	pod := buildBucketMirrorPod(bucketModeBackup, *rendered, backupAccessName(release), repoPrefix, false, false)
 
 	batchJob, err := r.ensureJobStrategyJob(ctx, j, j.Namespace, jobNameForBackupJob(j),
@@ -380,7 +390,12 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 		}
 		artifact, err := r.createBucketBackupArtifact(ctx, j, resolved, *rendered, claim.Status.BucketName, repoPrefix)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			// The mirror already wrote the full copy; failing terminally here
+			// would strand it with no Backup for cleanup to key off. Requeue so a
+			// transient artifact-write error retries (BackupRef gates re-create).
+			logger := getLogger(ctx)
+			logger.Debug("Backup artifact create failed, will retry", "backupjob", j.Name, "err", err)
+			return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -641,13 +656,23 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 		return ctrl.Result{}, nil
 	}
 
-	// Refuse to restore from a Backup that is being deleted: its repo objects may
-	// be mid-purge (cleanupBucketBackup), and an in-place restore listing a
-	// prefix emptied underneath it would mirror a subset and then delete the rest
-	// of the live bucket. This closes the restore side of the cleanup-vs-restore
-	// race that cleanupBucketBackup guards from the purge side.
+	// Refuse to START a restore from a Backup that is being deleted: its repo
+	// objects may be mid-purge (cleanupBucketBackup), and an in-place restore
+	// listing a prefix emptied underneath it would mirror a subset and then
+	// delete the rest of the live bucket. A restore whose mirror Job already
+	// exists is left to run to a terminal state instead of being abandoned mid-
+	// write; cleanupBucketBackup holds the purge (via the restore-backup label)
+	// while that Job still has active Pods, so the two never overlap.
 	if !backup.DeletionTimestamp.IsZero() {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("Backup %q is being deleted; its objects may be mid-reclaim, so a restore is refused", backup.Name))
+		mirrorJob := &batchv1.Job{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: restoreJob.Namespace, Name: jobNameForRestoreJob(restoreJob)}, mirrorJob)
+		if apierrors.IsNotFound(err) {
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("Backup %q is being deleted; its objects may be mid-reclaim, so a restore is refused", backup.Name))
+		}
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		// else: the mirror is already running; fall through to poll it to terminal.
 	}
 
 	if err := validateBucketApplicationRef(backup.Spec.ApplicationRef); err != nil {
@@ -773,6 +798,7 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 		AppEndpointOverride: rendered.AppEndpointOverride,
 		ServerSideCopy:      snapshot.ServerSideCopy,
 		Resources:           rendered.Resources,
+		TimeoutSeconds:      rendered.TimeoutSeconds,
 	}
 	// An operator restoring a legitimately empty snapshot opts past the
 	// empty-source refusal with an annotation on the RestoreJob (the only
@@ -784,6 +810,7 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 		bucketModeRestore,
 		map[string]string{
 			bucketLabelMode:                         bucketModeRestore,
+			bucketRestoreBackupLabel:                backup.Name,
 			backupsv1alpha1.OwningJobNameLabel:      restoreJob.Name,
 			backupsv1alpha1.OwningJobNamespaceLabel: restoreJob.Namespace,
 		},
@@ -1182,6 +1209,7 @@ func (r *BackupReconciler) deleteBucketCleanupJob(ctx context.Context, job *batc
 // Backup's namespace still references it, so its repo objects must not be
 // reclaimed out from under an in-flight restore.
 func (r *BackupReconciler) restoreJobActiveForBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (bool, error) {
+	// A non-terminal RestoreJob referencing this Backup is still going to read it.
 	list := &backupsv1alpha1.RestoreJobList{}
 	if err := r.List(ctx, list, client.InNamespace(backup.Namespace)); err != nil {
 		return false, err
@@ -1195,6 +1223,19 @@ func (r *BackupReconciler) restoreJobActiveForBackup(ctx context.Context, backup
 		case backupsv1alpha1.RestoreJobPhaseSucceeded, backupsv1alpha1.RestoreJobPhaseFailed:
 			continue
 		default:
+			return true, nil
+		}
+	}
+
+	// A restore mirror Job with live Pods is still writing the target even if its
+	// RestoreJob has been marked Failed or deleted (its Pods outlive the object
+	// until a background GC stops them), so hold the purge while any remains.
+	jobs := &batchv1.JobList{}
+	if err := r.List(ctx, jobs, client.InNamespace(backup.Namespace), client.MatchingLabels{bucketRestoreBackupLabel: backup.Name}); err != nil {
+		return false, err
+	}
+	for i := range jobs.Items {
+		if jobs.Items[i].Status.Active > 0 {
 			return true, nil
 		}
 	}

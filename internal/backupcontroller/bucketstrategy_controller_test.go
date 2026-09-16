@@ -7,8 +7,15 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -343,6 +350,27 @@ func TestBuildBucketMirrorPodTLSKnobsIndependent(t *testing.T) {
 	if !hasArg(args, "--insecure") {
 		t.Errorf("want --insecure preserved alongside a CA ref: %v", args)
 	}
+
+	// The other direction: a CA without the opt-out must NOT turn verification
+	// off. Pins that the independence did not flip --insecure always-on.
+	caOnly := tmpl
+	caOnly.Destination.TLS = &strategyv1alpha1.BucketTLS{CASecretKeyRef: &strategyv1alpha1.BucketSecretKeySelector{Name: "my-ca", Key: "ca.crt"}}
+	caArgs := buildBucketMirrorPod(bucketModeBackup, caOnly, "acc", "p/", false, false).Spec.Containers[0].Args
+	if hasArg(caArgs, "--insecure") {
+		t.Errorf("CA ref without insecureSkipVerify must not set --insecure: %v", caArgs)
+	}
+}
+
+func TestBuildBucketMirrorPodAllowEmptySource(t *testing.T) {
+	tmpl := strategyv1alpha1.BucketTemplate{Image: "img", Destination: strategyv1alpha1.BucketDestination{Bucket: "cozy-backups", Endpoint: "https://s3"}}
+	on := buildBucketMirrorPod(bucketModeRestore, tmpl, "acc", "p/", true, true).Spec.Containers[0].Args
+	if !hasArg(on, "--allow-empty-source") {
+		t.Errorf("want --allow-empty-source when the annotation opts in: %v", on)
+	}
+	off := buildBucketMirrorPod(bucketModeRestore, tmpl, "acc", "p/", true, false).Spec.Containers[0].Args
+	if hasArg(off, "--allow-empty-source") {
+		t.Errorf("must not set --allow-empty-source by default: %v", off)
+	}
 }
 
 func TestCleanupBucketBackupRefusesUnrelatedJob(t *testing.T) {
@@ -400,4 +428,270 @@ func TestIsInPlaceBucketRestore(t *testing.T) {
 	if isInPlaceBucketRestore("web-copy", backup) {
 		t.Error("a differently-named target must be a to-copy restore (no delete-extraneous)")
 	}
+}
+
+func TestRestoreJobActiveForBackupHoldsOnActiveMirrorJob(t *testing.T) {
+	// The purge must be held while a restore mirror Job for the Backup still has
+	// active Pods, even after its RestoreJob has gone Failed (whose Pods a GC has
+	// not yet stopped) - otherwise cleanup purges next to a live restore.
+	s := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{backupsv1alpha1.AddToScheme, batchv1.AddToScheme} {
+		if err := add(s); err != nil {
+			t.Fatalf("AddToScheme: %v", err)
+		}
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bk1"}}
+	failedRJ := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "rj1"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk1"}},
+		Status:     backupsv1alpha1.RestoreJobStatus{Phase: backupsv1alpha1.RestoreJobPhaseFailed},
+	}
+	mirrorJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "rj1-restore", Labels: map[string]string{bucketRestoreBackupLabel: "bk1"}},
+		Status:     batchv1.JobStatus{Active: 1},
+	}
+	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(backup, failedRJ, mirrorJob).Build()
+	r := &BackupReconciler{Client: c, Scheme: s}
+
+	active, err := r.restoreJobActiveForBackup(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("restoreJobActiveForBackup: %v", err)
+	}
+	if !active {
+		t.Fatal("want the purge held while a labelled restore mirror Job has active Pods")
+	}
+}
+
+// newBucketApp returns an apps.cozystack.io/Bucket the driver's dynamic client
+// serves. The GVK must align with the RESTMapping newBucketReconcileEnv builds.
+func newBucketApp(name, namespace string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   backupsv1alpha1.DefaultApplicationAPIGroup,
+		Version: "v1alpha1",
+		Kind:    bucketAppKind,
+	})
+	u.SetName(name)
+	u.SetNamespace(namespace)
+	return u
+}
+
+// newBucketReconcileEnv wires the controller-runtime fake client (with the
+// buckettypes scheme the mirror provisioning needs), a dynamic client serving
+// the target app, and a fixed REST mapper into the reconciler harness.
+func newBucketReconcileEnv(t *testing.T, app *unstructured.Unstructured, builder *clientfake.ClientBuilder) (*BackupJobReconciler, *RestoreJobReconciler) {
+	t.Helper()
+
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	_ = backupsv1alpha1.AddToScheme(testScheme)
+	_ = strategyv1alpha1.AddToScheme(testScheme)
+	_ = buckettypes.AddToScheme(testScheme)
+
+	gvr := schema.GroupVersionResource{
+		Group:    backupsv1alpha1.DefaultApplicationAPIGroup,
+		Version:  "v1alpha1",
+		Resource: "buckets",
+	}
+	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		testScheme,
+		map[schema.GroupVersionResource]string{gvr: "BucketList"},
+		app,
+	)
+	mapping := &meta.RESTMapping{
+		Resource:         gvr,
+		GroupVersionKind: app.GroupVersionKind(),
+		Scope:            meta.RESTScopeNamespace,
+	}
+	restMapper := &mockRESTMapper{mapping: mapping}
+
+	c := builder.WithScheme(testScheme).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
+		Build()
+
+	return &BackupJobReconciler{
+			Client:     c,
+			Interface:  dynamicClient,
+			RESTMapper: restMapper,
+			Scheme:     testScheme,
+			Recorder:   record.NewFakeRecorder(10),
+		}, &RestoreJobReconciler{
+			Client:     c,
+			Interface:  dynamicClient,
+			RESTMapper: restMapper,
+			Scheme:     testScheme,
+			Recorder:   record.NewFakeRecorder(10),
+		}
+}
+
+func TestReconcileBucketRefusesSourceEqualsDestination(t *testing.T) {
+	// The default BackupClass routes every apps.cozystack.io/Bucket to this
+	// strategy, the cozy-backups repo bucket included. Backing that one up would
+	// mirror every tenant's backups into a prefix inside the same bucket, so a
+	// source whose S3 bucket IS the repo destination is refused. The distinct
+	// source is exercised too, so an inverted comparison cannot pass both cases.
+	now := metav1.Now()
+	strategy := &strategyv1alpha1.Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-bucket"},
+		Spec: strategyv1alpha1.BucketSpec{Template: strategyv1alpha1.BucketTemplate{
+			Image:       "controller:latest",
+			Destination: strategyv1alpha1.BucketDestination{Bucket: "cozy-backups", Endpoint: "http://s3"},
+		}},
+	}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+			Kind:     strategyv1alpha1.BucketStrategyKind,
+			Name:     "cozy-default-bucket",
+		},
+	}
+	newJob := func() *backupsv1alpha1.BackupJob {
+		return &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bj1"},
+			Spec: backupsv1alpha1.BackupJobSpec{
+				ApplicationRef: corev1.TypedLocalObjectReference{Kind: bucketAppKind, Name: "web"},
+			},
+			Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+		}
+	}
+	newClaim := func(s3Bucket string) *buckettypes.BucketClaim {
+		return &buckettypes.BucketClaim{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bucket-web", UID: "claim-uid"},
+			Spec:       buckettypes.BucketClaimSpec{BucketClassName: "seaweedfs"},
+			Status:     buckettypes.BucketClaimStatus{BucketReady: true, BucketName: s3Bucket},
+		}
+	}
+	phaseAfterReconcile := func(t *testing.T, objs ...client.Object) backupsv1alpha1.BackupJobPhase {
+		t.Helper()
+		job := newJob()
+		builder := clientfake.NewClientBuilder().WithObjects(job, strategy)
+		for _, o := range objs {
+			builder = builder.WithObjects(o)
+		}
+		r, _ := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"), builder)
+		if _, err := r.reconcileBucket(context.Background(), job, resolved); err != nil {
+			t.Fatalf("reconcileBucket: %v", err)
+		}
+		updated := &backupsv1alpha1.BackupJob{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(job), updated); err != nil {
+			t.Fatalf("get backupjob: %v", err)
+		}
+		return updated.Status.Phase
+	}
+
+	t.Run("source is the repo bucket", func(t *testing.T) {
+		if got := phaseAfterReconcile(t, newClaim("cozy-backups")); got != backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("phase = %q, want Failed (self-backup refused)", got)
+		}
+	})
+	t.Run("distinct source proceeds past the check", func(t *testing.T) {
+		// Pre-grant the source access so the reconcile clears the grant gate and
+		// reaches Job creation rather than failing on provisioning; the phase then
+		// stays Running, proving the refusal did not fire for a distinct bucket.
+		access := bucketAccess("bucket-web-cozy-backup",
+			map[string]string{managedByLabel: managedByValue},
+			[]metav1.OwnerReference{{APIVersion: buckettypes.GroupVersion.String(), Kind: "BucketClaim", Name: "bucket-web", UID: "claim-uid"}},
+			buckettypes.BucketAccessSpec{
+				BucketClaimName:       "bucket-web",
+				BucketAccessClassName: "seaweedfs-readonly",
+				Protocol:              bucketProtocolS3,
+				CredentialsSecretName: "bucket-web-cozy-backup",
+			})
+		access.Status.AccessGranted = true
+		if got := phaseAfterReconcile(t, newClaim("bucket-web-data"), access); got == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("a distinct source bucket must not be refused as self-backup (phase = %q)", got)
+		}
+	})
+}
+
+func TestReconcileBucketRestoreInPlaceVsToCopyJobArgs(t *testing.T) {
+	// The delete-extraneous purge erases live objects the snapshot does not name.
+	// It must ride an in-place restore (target == the backup's own app) and NOT a
+	// restore into a differently-named copy target. Drive the reconcile both ways
+	// and read the flag off the mirror Job it creates, catching a regression in
+	// the inPlace plumbing end to end, not only in the pure predicate.
+	raw, err := marshalBucketSnapshot(bucketBackupSnapshot{
+		Kind:                        bucketSnapshotKind,
+		RepoBucket:                  "cozy-backups",
+		RepoEndpoint:                "http://s3",
+		RepoPrefix:                  "tenant-x/web/bk1/",
+		RepoCredentialsSecret:       "cozy-backups-creds",
+		RepoCredentialsAccessKeyKey: "AWS_ACCESS_KEY_ID",
+		RepoCredentialsSecretKeyKey: "AWS_SECRET_ACCESS_KEY",
+	})
+	if err != nil {
+		t.Fatalf("marshalBucketSnapshot: %v", err)
+	}
+	strategy := &strategyv1alpha1.Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-bucket"},
+		Spec:       strategyv1alpha1.BucketSpec{Template: strategyv1alpha1.BucketTemplate{Image: "controller:latest"}},
+	}
+	newBackup := func() *backupsv1alpha1.Backup {
+		return &backupsv1alpha1.Backup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bk1", UID: "backup-uid"},
+			Spec: backupsv1alpha1.BackupSpec{
+				ApplicationRef: corev1.TypedLocalObjectReference{Kind: bucketAppKind, Name: "web"},
+				StrategyRef:    corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.BucketStrategyKind, Name: "cozy-default-bucket"},
+			},
+			Status: backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+		}
+	}
+	grantedClaim := func(app string) *buckettypes.BucketClaim {
+		claimName := bucketReleaseName(app)
+		return &buckettypes.BucketClaim{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: claimName, UID: types.UID(claimName + "-uid")},
+			Spec:       buckettypes.BucketClaimSpec{BucketClassName: "seaweedfs"},
+			Status:     buckettypes.BucketClaimStatus{BucketReady: true, BucketName: "bucket-" + app + "-data"},
+		}
+	}
+	grantedAccess := func(app string) *buckettypes.BucketAccess {
+		claimName := bucketReleaseName(app)
+		a := bucketAccess(restoreAccessName(app),
+			map[string]string{managedByLabel: managedByValue},
+			[]metav1.OwnerReference{{APIVersion: buckettypes.GroupVersion.String(), Kind: "BucketClaim", Name: claimName, UID: types.UID(claimName + "-uid")}},
+			buckettypes.BucketAccessSpec{
+				BucketClaimName:       claimName,
+				BucketAccessClassName: "seaweedfs",
+				Protocol:              bucketProtocolS3,
+				CredentialsSecretName: restoreAccessName(app),
+			})
+		a.Status.AccessGranted = true
+		return a
+	}
+	now := metav1.Now()
+
+	restoreArgs := func(t *testing.T, targetApp string, target *corev1.TypedLocalObjectReference) []string {
+		t.Helper()
+		rj := &backupsv1alpha1.RestoreJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "rj1"},
+			Spec: backupsv1alpha1.RestoreJobSpec{
+				BackupRef:            corev1.LocalObjectReference{Name: "bk1"},
+				TargetApplicationRef: target,
+			},
+			Status: backupsv1alpha1.RestoreJobStatus{StartedAt: &now, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+		}
+		backup := newBackup()
+		_, rr := newBucketReconcileEnv(t, newBucketApp(targetApp, "tenant-x"),
+			clientfake.NewClientBuilder().WithObjects(rj, backup, strategy, grantedClaim(targetApp), grantedAccess(targetApp)))
+		if _, err := rr.reconcileBucketRestore(context.Background(), rj, backup); err != nil {
+			t.Fatalf("reconcileBucketRestore: %v", err)
+		}
+		mirror := &batchv1.Job{}
+		if err := rr.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: jobNameForRestoreJob(rj)}, mirror); err != nil {
+			t.Fatalf("get mirror Job: %v", err)
+		}
+		return mirror.Spec.Template.Spec.Containers[0].Args
+	}
+
+	t.Run("in-place restore purges", func(t *testing.T) {
+		if args := restoreArgs(t, "web", nil); !hasArg(args, "--delete-extraneous") {
+			t.Errorf("in-place restore Job must carry --delete-extraneous: %v", args)
+		}
+	})
+	t.Run("to-copy restore merges", func(t *testing.T) {
+		target := &corev1.TypedLocalObjectReference{Kind: bucketAppKind, Name: "web-copy"}
+		if args := restoreArgs(t, "web-copy", target); hasArg(args, "--delete-extraneous") {
+			t.Errorf("to-copy restore Job must NOT carry --delete-extraneous: %v", args)
+		}
+	})
 }
