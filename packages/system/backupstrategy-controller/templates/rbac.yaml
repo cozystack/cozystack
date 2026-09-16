@@ -171,8 +171,9 @@ rules:
   # delete-backup finalizer frees the object (see cleanupMongoDBBackup). A legacy
   # backup lives in the tenant's own bucket and is never deleted here.
   # patch: strip the driver's own delete-backup finalizer to release a wedged
-  # cleanup (namespace terminating, or the skip-artifact-cleanup annotation) so a
-  # stuck operator never pins a tenant namespace in Terminating.
+  # cleanup (namespace terminating, or the skip-artifact-cleanup annotation) so
+  # the driver's finalizer is not what holds a tenant namespace in Terminating
+  # (the operator's own release-lock finalizer can still hold it if it is down).
   verbs: ["get", "list", "watch", "create", "delete", "patch"]
 - apiGroups: ["psmdb.percona.com"]
   resources: ["perconaservermongodbrestores"]
