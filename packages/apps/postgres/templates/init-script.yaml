@@ -105,13 +105,20 @@ stringData:
 
     echo "== create users"
     {{- if .Values.users }}
+    {{- /*
+      Each password is read from the mounted <release>-credentials Secret at run
+      time rather than rendered into this script: the init-script Secret is stored
+      verbatim in the Helm release manifest and kept for MaxHistory revisions, so a
+      literal password here would linger in cleartext history a tenant cannot scrub.
+      psql's :'pw' quotes and escapes the value, so it applies safely whatever
+      characters it holds. The password does reach psql through -v, i.e. its argv,
+      readable via /proc/<pid>/cmdline to a process sharing this container's PID
+      namespace -- but this init container runs alone, and any code with that reach
+      can already read the mounted /credentials/* files directly, so the argv path
+      widens no exposure. This rationale is a template comment so it ships ONCE, not
+      once per user, into the rendered init.sh.
+    */}}
     {{- range $user, $u := .Values.users }}
-    # Read the password from the mounted {{ $.Release.Name }}-credentials Secret at
-    # run time rather than rendering it into this script: the init-script Secret is
-    # stored verbatim in the Helm release manifest and kept for MaxHistory
-    # revisions, so a literal password here would linger in cleartext history a
-    # tenant cannot scrub. psql's :'pw' quotes and escapes the value, so it is
-    # applied safely whatever characters it contains.
     pw=$(cat "/credentials/{{ $user }}")
     psql -v ON_ERROR_STOP=1 -v pw="$pw" <<\EOT
     SELECT 'CREATE ROLE "{{ $user }}" LOGIN INHERIT;'
