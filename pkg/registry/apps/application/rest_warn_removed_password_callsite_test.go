@@ -166,21 +166,10 @@ func TestWarnRemovedUserPasswords(t *testing.T) {
 		{"mariadb warns", mariadbKind, rawWithPassword, true},
 		{"other kind stays quiet", "Redis", rawWithPassword, false},
 		{"no password stays quiet", postgresKind, `{"users":{"app":{}}}`, false},
-		{"postgres warns on passwordRotation", postgresKind, `{"passwordRotation":3}`, true},
-		{"mariadb warns on passwordRotation", mariadbKind, `{"passwordRotation":1}`, true},
-		{"other kind quiet on passwordRotation", "Redis", `{"passwordRotation":3}`, false},
 		{"warns on a good user despite a non-object user", postgresKind, `{"users":{"good":{"password":"x"},"bad":"str"}}`, true},
-		{"warns on passwordRotation despite a non-object user", postgresKind, `{"passwordRotation":1,"users":{"bad":"str"}}`, true},
-		// A malformed users SHAPE (an array, not a map) must not suppress the
-		// sibling passwordRotation warning: a single typed unmarshal returns the
-		// first type error and discards every field it already decoded.
-		{"passwordRotation survives a malformed users shape", postgresKind, `{"passwordRotation":1,"users":["oops"]}`, true},
-		{"mariadb passwordRotation survives a malformed users shape", mariadbKind, `{"passwordRotation":1,"users":["oops"]}`, true},
-		// An explicit null counts as absent (matches the pre-split behaviour, where
-		// a *json.RawMessage decoded from null was nil), so a client that always
-		// emits the field does not draw a spurious warning.
-		{"passwordRotation null stays quiet", postgresKind, `{"passwordRotation":null}`, false},
-		{"passwordRotation zero still warns", postgresKind, `{"passwordRotation":0}`, true},
+		// A malformed users SHAPE (an array, not a map) carries no per-user password
+		// we recognise and must not fail the decode into a spurious warning.
+		{"malformed users shape stays quiet", postgresKind, `{"users":["oops"]}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

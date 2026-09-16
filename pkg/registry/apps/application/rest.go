@@ -2000,20 +2000,19 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 	if !removedUserPasswordKinds[r.kindName] || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
 		return
 	}
-	// Decode the top level as raw keys, then each field on its own, so a
-	// malformed SHAPE for one field cannot suppress the warning for another: a
-	// single json.Unmarshal into a typed struct returns the first type error and
-	// discards every field it already decoded, so a `users` sent as an array
-	// would mute the passwordRotation warning below (the write path accepts such
-	// a value; the schema only guards the read/defaulting path).
+	// Decode the users map leniently, then each user on its own, so one malformed
+	// entry cannot suppress the warning for another: a single json.Unmarshal into a
+	// typed struct returns the first type error and discards every field it already
+	// decoded, so one user sent with a non-object value would mute the warning for a
+	// sibling user that does carry a removed password.
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(app.Spec.Raw, &top); err != nil {
 		return
 	}
 	var users map[string]json.RawMessage
 	if raw, ok := top["users"]; ok {
-		// A malformed users shape (not a map) is not one this warning is about;
-		// ignore it rather than let it mute the passwordRotation warning below.
+		// A malformed users shape (not a map) carries no per-user password we
+		// recognise; ignore it rather than fail the whole decode.
 		_ = json.Unmarshal(raw, &users)
 	}
 	for user, raw := range users {
@@ -2027,18 +2026,6 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 			warning.AddWarning(ctx, "", fmt.Sprintf(
 				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.", user))
 		}
-	}
-	// spec.passwordRotation is not a supported field: chart-based rotation cannot
-	// revoke a leaked password (a chart-rendered Secret keeps its cleartext in
-	// Helm release history). The key is still accepted and dropped by the schema,
-	// so without this an operator rotating after a leak gets a silent 200 and no
-	// effect. Rotation is being reworked as a controller — cozystack/community#72.
-	// A literal null counts as absent: a struct-based client (a Terraform provider,
-	// a codegen client) that always serialises every optional field would otherwise
-	// draw this warning on every apply of a resource that never set the field.
-	if raw, present := top["passwordRotation"]; present && strings.TrimSpace(string(raw)) != "null" {
-		warning.AddWarning(ctx, "",
-			"spec.passwordRotation is ignored: chart-based password rotation is not supported (a chart-rendered Secret cannot revoke a leaked credential). Setting this field has no effect; rotation is being reworked as a controller (cozystack/community#72).")
 	}
 }
 
