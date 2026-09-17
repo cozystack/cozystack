@@ -20,27 +20,41 @@ set:
     app: {}
 
 tests:
-  - it: the init Job carries a hard activeDeadlineSeconds and does not retry
+  # On an UPGRADE the Cluster is already up, so the deadline is tight (300s): well
+  # below the platform's 10m (600s) hook budget, so a purged target's Job fails with
+  # its own diagnostic before Helm's generic timeout. A bump back to 600 (== the
+  # Helm timeout) reddens here.
+  - it: the init Job is tightly bounded on upgrade and does not retry
     template: templates/init-job.yaml
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
     asserts:
       - isKind:
           of: Job
       - equal:
           path: spec.backoffLimit
           value: 0
-      # The Job's deadline must sit strictly BELOW the platform's 10m (600s)
-      # HelmRelease hook budget, or on a purged target the Job's own failure fires
-      # no earlier than Helm's generic timeout and the operator loses the
-      # diagnostic. Pin the exact value so a bump back to 600 (== the Helm timeout)
-      # reddens here.
       - equal:
           path: spec.activeDeadlineSeconds
           value: 300
       - matchRegex:
           path: metadata.annotations["helm.sh/hook"]
           pattern: post-upgrade
+  # On a fresh INSTALL nothing is running yet — the same release is provisioning the
+  # Cluster (PVC, image pull, initdb) — and there is no purge hazard, so the cold
+  # start gets the near-full budget (570s) rather than the tight upgrade deadline
+  # that would fail a slow-but-healthy first boot. Collapsing this back to one number
+  # for both contexts reddens one side or the other.
+  - it: the init Job gives a cold install the near-full budget
+    template: templates/init-job.yaml
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 570
 
-  - it: the readiness wait is bounded, not an unbounded until-loop
+  - it: the readiness wait is bounded, generous on install and tight on upgrade
     template: templates/init-script.yaml
     documentSelector:
       path: metadata.name
@@ -49,6 +63,22 @@ tests:
       - notMatchRegex:
           path: stringData["init.sh"]
           pattern: 'until pg_isready ; do sleep 5; done'
+      # Install (the suite default) gets ~9m so a cold, still-provisioning Cluster
+      # is not failed prematurely.
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: 'attempts'
+          pattern: 'attempts" -ge 110'
+
+  - it: the readiness wait is tight on upgrade (Cluster already up, purge hazard)
+    template: templates/init-script.yaml
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'attempts" -ge 50'
