@@ -14,7 +14,14 @@ import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 
-from statelib import load_json, save_json
+from statelib import (
+    load_json,
+    save_json,
+    cve_age_days,
+    review_after_passed,
+    override_review_due,
+    age_drops,
+)
 
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -117,18 +124,6 @@ def notify_slack(vulns):
         print(f"  WARN: Slack notification failed: {e}")
 
 
-def cve_age_days(cve_id):
-    """Estimate CVE age from its ID (CVE-YYYY-NNNNN)."""
-    match = re.match(r"CVE-(\d{4})-", cve_id)
-    if not match:
-        return 0
-    cve_year = int(match.group(1))
-    now = datetime.now(timezone.utc)
-    # Approximate: assume CVE was published Jan 1 of its year
-    age = (now - datetime(cve_year, 1, 1, tzinfo=timezone.utc)).days
-    return max(age, 0)
-
-
 def is_dev_only(vuln):
     """Check if a CVE only affects dev/build images or test components."""
     # Fast path: scan.sh already tagged this
@@ -153,20 +148,6 @@ def is_dev_only(vuln):
     return True
 
 
-def _review_after_passed(entry):
-    """True if the override carries a review_after date that is now due/past."""
-    raw = entry.get("review_after")
-    if not raw:
-        return False
-    try:
-        due = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if due.tzinfo is None:
-        due = due.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) >= due
-
-
 def classify_filter(vuln, triage_overrides):
     """Classify a CVE for filtering. Returns (skip, reason) or (False, None).
 
@@ -180,42 +161,44 @@ def classify_filter(vuln, triage_overrides):
     if severity == "UNKNOWN":
         return True, "unknown severity"
 
-    # Already triaged as resolved — UNLESS its review_after date has passed. A
-    # suppression with an expired review date has done its job; keeping it would
-    # dismiss the finding forever, which is exactly what review_after exists to
-    # prevent. Let it surface again for re-review.
-    if cve_id in triage_overrides:
-        entry = triage_overrides[cve_id]
-        status = entry.get("status", "")
-        if status in RESOLVED_STATUSES and not _review_after_passed(entry):
-            return True, f"triaged as {status}"
+    # A resolved override suppresses the finding, but only until its review_after
+    # date passes: an expired suppression has done its job, and surfacing the
+    # finding again for re-review is exactly what review_after exists for. This
+    # also covers the pipeline-auto accepted-risk entries written below — once
+    # their date passes they surface here rather than being re-dropped by the age
+    # branch, which is what made the check unreachable before.
+    entry = triage_overrides.get(cve_id)
+    if entry and entry.get("status") in RESOLVED_STATUSES:
+        if review_after_passed(entry):
+            return False, None
+        return True, f"triaged as {entry['status']}"
 
     # Dev/build-only image or test component
     if is_dev_only(vuln):
         return True, "dev/build dependency only"
 
-    # Unfixed upstream older than threshold. Only auto-demote MEDIUM/LOW: a
-    # CRITICAL or HIGH with no fix is exactly what a human must see and decide on
-    # (accepted-risk with a review date), not something to silently drop by age.
-    if not vuln.get("fixed_version"):
-        age = cve_age_days(cve_id)
-        if age > UNFIXED_AGE_THRESHOLD_DAYS and severity not in ("CRITICAL", "HIGH"):
-            # PERSIST the auto-dismissal as accepted-risk with a review_after date.
-            # Returning skip alone records nothing, so the finding is re-filtered on
-            # every run forever and never reaches the 90-day re-review the status
-            # model requires. Writing it makes the drop auditable and time-boxed.
-            if cve_id not in triage_overrides:
-                now = datetime.now(timezone.utc)
-                triage_overrides[cve_id] = {
-                    "status": "accepted-risk",
-                    "decided_by": "pipeline-auto",
-                    "decided_at": now.date().isoformat(),
-                    "review_after": (now + timedelta(days=90)).date().isoformat(),
-                    "reason": (f"[{vuln.get('package', '')}] Auto-demoted: {severity} finding with no "
-                               f"upstream fix, CVE approximately {age} days old (older than the "
-                               f"{UNFIXED_AGE_THRESHOLD_DAYS}-day threshold). Re-review on the date above."),
-                }
-            return True, f"unfixed upstream ({age} days old, {severity or 'no severity'})"
+    # Unfixed upstream older than the threshold. age_drops() carries the
+    # CRITICAL/HIGH carve-out so it stays in one place (statelib), shared with
+    # backfill_issues.py.
+    if age_drops(vuln, cve_id):
+        # PERSIST the auto-dismissal as accepted-risk with a review_after date.
+        # Returning skip alone records nothing, so the finding is re-filtered on
+        # every run forever and never reaches the 90-day re-review the status model
+        # requires. Writing it makes the drop auditable and time-boxed — and once
+        # the date passes the block above surfaces it again.
+        if cve_id not in triage_overrides:
+            now = datetime.now(timezone.utc)
+            age = cve_age_days(cve_id)
+            triage_overrides[cve_id] = {
+                "status": "accepted-risk",
+                "decided_by": "pipeline-auto",
+                "decided_at": now.date().isoformat(),
+                "review_after": (now + timedelta(days=90)).date().isoformat(),
+                "reason": (f"[{vuln.get('package', '')}] Auto-demoted: {severity} finding with no "
+                           f"upstream fix, CVE approximately {age} days old (older than the "
+                           f"{UNFIXED_AGE_THRESHOLD_DAYS}-day threshold). Re-review on the date above."),
+            }
+        return True, f"unfixed upstream ({cve_age_days(cve_id)} days old, {severity or 'no severity'})"
 
     return False, None
 
@@ -485,7 +468,9 @@ def process_critical(scan_results, reported, triage_overrides):
         cve_id = vuln["cve_id"]
         if vuln["severity"] != "CRITICAL":
             continue
-        if cve_id in reported:
+        # Skip already-reported CVEs — except one whose triage override is now due
+        # for re-review, which must pass through to the filter and surface again.
+        if cve_id in reported and not override_review_due(cve_id, triage_overrides):
             continue
         skip, reason = classify_filter(vuln, triage_overrides)
         if skip:
@@ -555,7 +540,9 @@ def process_weekly(scan_results, reported, pending, triage_overrides):
 
         if severity == "CRITICAL":
             continue
-        if cve_id in reported:
+        # Skip already-reported CVEs — except one whose triage override is now due
+        # for re-review, which must pass through to the filter and surface again.
+        if cve_id in reported and not override_review_due(cve_id, triage_overrides):
             continue
         skip, reason = classify_filter(vuln, triage_overrides)
         if skip:

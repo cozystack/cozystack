@@ -108,7 +108,12 @@ def main():
     # Count new by severity
     new_by_sev = Counter(v["severity"] for v in new_this_month)
     total_tracked = len(reported)
-    total_triaged = len(triage)
+    # Separate human triage decisions from machine auto-dismissals: report.py writes
+    # `decided_by: pipeline-auto` accepted-risk entries into the same file, and a
+    # "Total triaged" figure the prose calls maintainer-reviewed must not silently
+    # grow with findings nobody looked at.
+    total_triaged = sum(1 for v in triage.values() if v.get("decided_by") != "pipeline-auto")
+    total_auto_suppressed = sum(1 for v in triage.values() if v.get("decided_by") == "pipeline-auto")
 
     # Build report
     new_summary_parts = []
@@ -165,7 +170,8 @@ def main():
 | Accepted risk | {len(accepted_risk)} |
 | False positives dismissed | {false_positives_count} |
 | Total tracked | {total_tracked} |
-| Total triaged | {total_triaged} |
+| Total triaged (maintainer-reviewed) | {total_triaged} |
+| Auto-suppressed by age (machine, pending review) | {total_auto_suppressed} |
 
 ## Security Updates Released
 
@@ -208,6 +214,7 @@ See [SECURITY.md](https://github.com/cozystack/cozystack/blob/main/SECURITY.md) 
         "stats": {
             "total_tracked": total_tracked,
             "total_triaged": total_triaged,
+            "total_auto_suppressed": total_auto_suppressed,
             "false_positives": false_positives_count,
         },
     }

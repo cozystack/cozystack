@@ -9,6 +9,12 @@ OUTFILE="$WORKSPACE/discovery.json"
 CLONE_DIR="$WORKSPACE/repos"
 TMP_DIR="$WORKSPACE/tmp-discover"
 
+# The heredoc Python at the end reads these from the environment; a subprocess
+# only inherits EXPORTED variables. Without this a non-default WORKSPACE silently
+# falls back to the hardcoded workspace/... defaults and the script reports a
+# discovery.json it did not write.
+export WORKSPACE OUTFILE CLONE_DIR TMP_DIR
+
 mkdir -p "$CLONE_DIR" "$TMP_DIR"
 
 echo "==> Discovering repos in $ORG..."

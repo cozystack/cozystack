@@ -31,3 +31,8 @@ not-yet-fixed findings are not named, because a CVE ID plus an affected package 
 project's public, version-pinned component list is enough to locate unpatched exposure in a
 running deployment. That is why the per-finding reports and triage state in the private
 repository are not mirrored here.
+
+One exception, consistent with [`../reports/README.md`](../reports/README.md): a finding
+with **no upstream fix available** is named, with mitigation guidance. There is nothing to
+wait for, and silence serves nobody — an adopter needs to know when a mitigation is the only
+available control. Findings awaiting a released fix stay aggregate-only until it ships.

@@ -20,7 +20,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
-from statelib import load_json, save_json
+from statelib import load_json, save_json, override_suppresses, age_drops, cve_age_days
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 STATE_DIR = os.path.join(REPO_ROOT, "state")
@@ -38,29 +38,16 @@ SEVERITY_LABELS = {
 UNFIXED_AGE_THRESHOLD_DAYS = 365
 
 
-def cve_age_days(cve_id):
-    match = re.match(r"CVE-(\d{4})-", cve_id)
-    if not match:
-        return 0
-    cve_year = int(match.group(1))
-    now = datetime.now(timezone.utc)
-    return max((now - datetime(cve_year, 1, 1, tzinfo=timezone.utc)).days, 0)
 
 
 def should_skip(cve_id, data, triage):
-    """Apply same filters as report.py."""
-    # Already triaged
-    if cve_id in triage:
-        status = triage[cve_id].get("status", "")
-        if status in ("false-positive", "accepted-risk", "fixed"):
-            return True, f"triaged as {status}"
-
-    # Unfixed > 365 days
-    if not data.get("fixed_version"):
-        age = cve_age_days(cve_id)
-        if age > UNFIXED_AGE_THRESHOLD_DAYS:
-            return True, f"unfixed {age}d"
-
+    """Apply the same filters as report.py — via the shared statelib helpers, so
+    the CRITICAL/HIGH age carve-out and the review_after check cannot drift out of
+    sync between the two scripts (which is exactly what happened before)."""
+    if override_suppresses(cve_id, triage):
+        return True, f"triaged as {triage[cve_id].get('status', '')}"
+    if age_drops(data, cve_id):
+        return True, f"unfixed {cve_age_days(cve_id)}d"
     return False, None
 
 
