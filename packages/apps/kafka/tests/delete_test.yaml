@@ -82,7 +82,17 @@ tests:
       - isKind:
           of: ServiceAccount
         documentIndex: 1
-      # The RBAC resources are cleaned up after the hook succeeds.
+      # Pinned as an asymmetry, not as a value: the Job above carries no
+      # hook-succeeded because the script exits 0 on the degraded path too and
+      # its log is the only record that a finalizer outlived the wait, while
+      # these three have no ttlSecondsAfterFinished and without a terminal
+      # policy would sit in the tenant namespace for the life of the cluster,
+      # still granting delete over every KafkaTopic in it. Reaping them cannot
+      # strand a running pod: helm reaps on hook-succeeded only once the Job is
+      # terminal, and activeDeadlineSeconds 270 ends it inside the uninstall
+      # hook timeout, HelmReleaseSpec.Timeout, 5m by default. hook-failed adds
+      # nothing, since a failing hook already reaps the earlier successful ones
+      # under hook-succeeded.
       - equal:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
           value: before-hook-creation,hook-succeeded
