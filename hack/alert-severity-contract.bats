@@ -1,5 +1,11 @@
 #!/usr/bin/env bats
 
+# Alerta's default alarm model, the set the webhook accepts. `none` is left out
+# on purpose: the Alertmanager config routes severity="none" to a blackhole
+# receiver, so such an alert is never delivered, which is the outcome this
+# contract exists to catch. Rule files under packages/**/charts/** are out of
+# scope: they are re-vendored by `make update`, so a bad severity there is
+# fixed upstream or in patches/, not by editing the label.
 ALERT_SEVERITY_ALLOWED=" security critical major minor warning indeterminate informational normal ok cleared debug trace unknown "
 
 helm_actions_stripped() {
@@ -76,13 +82,17 @@ alert_severity_contract() {
   bad=0
   tab=$(printf '\t')
   while IFS="$tab" read -r file alert severity; do
-    case "$ALERT_SEVERITY_ALLOWED" in
-      *" $severity "*) ;;
-      *)
-        echo "$file: $alert -> '$severity'" >&2
-        bad=$((bad + 1))
-        ;;
-    esac
+    accepted=0
+    for allowed in $ALERT_SEVERITY_ALLOWED; do
+      if [ "$allowed" = "$severity" ]; then
+        accepted=1
+        break
+      fi
+    done
+    if [ "$accepted" -eq 0 ]; then
+      echo "$file: $alert -> '$severity'" >&2
+      bad=$((bad + 1))
+    fi
   done < "$rows"
   rm -f "$rows"
   [ "$bad" -eq 0 ] || return 1
@@ -192,5 +202,28 @@ alert_severity_contract() {
   rm -rf "$fixture" "$rows"
   [ "$parser_succeeded" -eq 0 ]
   [ "$found" -eq 1 ]
+  [ "$contract_succeeded" -ne 0 ]
+}
+
+@test "two accepted words in one severity are rejected" {
+  fixture=$(mktemp -d)
+  mkdir -p "$fixture/packages/system/example/alerts"
+  printf '%s\n' \
+    'apiVersion: operator.victoriametrics.com/v1beta1' \
+    'kind: VMRule' \
+    'spec:' \
+    '  groups:' \
+    '  - name: joined' \
+    '    rules:' \
+    '    - alert: JoinedSeverity' \
+    '      labels:' \
+    '        severity: critical major' \
+    > "$fixture/packages/system/example/alerts/00-joined.yaml"
+  git -C "$fixture" init -q
+  git -C "$fixture" add packages/system/example/alerts/00-joined.yaml
+
+  contract_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || contract_succeeded=$?
+  rm -rf "$fixture"
   [ "$contract_succeeded" -ne 0 ]
 }
