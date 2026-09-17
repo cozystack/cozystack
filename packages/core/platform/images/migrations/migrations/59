@@ -39,10 +39,19 @@
 #     x-kubernetes-preserve-unknown-fields, so a direct edit of the HelmRelease
 #     can put a number or a list there);
 #   - a whole spec.values that is not an object, for the same reason;
-#   - an OpenSearch release that still carries images.opensearch, which the
-#     chart has stopped reading. There is nothing to carry over there, since an
-#     image does not map to a version, so the list is the point: those releases
-#     roll onto the image of their version on the first reconcile.
+#   - a carried cluster.version whose patch differs from the tag the chart ships
+#     for its line: the release is carried over and still moves to that tag,
+#     which can be a step down;
+#   - an OpenSearch, Kubernetes or KubernetesNodes release that still sets one of
+#     the images.* overrides, which those charts have stopped reading. There is
+#     nothing to carry over there, since an image does not map to a version, so
+#     the list is the point: those releases roll onto the chart's images, or the
+#     platform-wide images-registry, on the first reconcile.
+#
+# FOUNDATIONDB_TAGS repeats packages/apps/foundationdb/files/versions.yaml,
+# because the migrations image carries no charts. The migration always runs
+# from the release being upgraded to, so the copy has to follow that file;
+# hack/migration-59-foundationdb-version.bats fails when the two differ.
 #
 # If another migration 59 lands first, renumber this one and bump
 # migrations.targetVersion; the collision surfaces as a loud add/add conflict on
@@ -59,13 +68,28 @@ FDB_CHART_REF_NAME="cozystack-foundationdb-application-default-foundationdb"
 FDB_INLINE_CHART_NAME="foundationdb"
 OS_CHART_REF_NAME="cozystack-opensearch-application-default-opensearch"
 OS_INLINE_CHART_NAME="opensearch"
+K8S_CHART_REF_NAME="cozystack-kubernetes-application-kubevirt-kubernetes"
+K8S_INLINE_CHART_NAME="kubernetes"
+NODES_CHART_REF_NAME="cozystack-kubernetes-nodes-application-kubevirt-kubernetes-nodes"
+NODES_INLINE_CHART_NAME="kubernetes-nodes"
+
+FOUNDATIONDB_TAGS='{"v7.4": "7.4.1", "v7.3": "7.3.63", "v7.1": "7.1.67"}'
 
 # One JSON line per release that needs attention, carrying the values as read.
 # Releases are matched by the application label or by the chart they install,
 # since the label postdates some releases (see migration 56).
 plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output json | jq -c \
   --arg fdbchart "$FDB_CHART_REF_NAME" --arg fdbinline "$FDB_INLINE_CHART_NAME" \
-  --arg oschart "$OS_CHART_REF_NAME" --arg osinline "$OS_INLINE_CHART_NAME" '
+  --arg oschart "$OS_CHART_REF_NAME" --arg osinline "$OS_INLINE_CHART_NAME" \
+  --arg k8schart "$K8S_CHART_REF_NAME" --arg k8sinline "$K8S_INLINE_CHART_NAME" \
+  --arg nodeschart "$NODES_CHART_REF_NAME" --arg nodesinline "$NODES_INLINE_CHART_NAME" \
+  --argjson fdbtags "$FOUNDATIONDB_TAGS" '
+  def installs($chart; $inline): (.spec.chartRef.name == $chart) or (.spec.chart.spec.chart == $inline);
+  def image_overrides:
+    if (.images | type) == "object"
+    then [.images | to_entries[] | select((.value | type) == "string" and .value != "")
+          | "images.\(.key):\(.value)"]
+    else [] end;
   .items[]
   | (.metadata.labels["apps.cozystack.io/application.kind"] // "") as $kind
   | (.spec.values // {}) as $raw
@@ -84,19 +108,25 @@ plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output
       else
         ($v.cluster.version) as $cv
         | (($cv | capture("^(?<line>7\\.(1|3|4))\\.[0-9]+$") | .line) // null) as $line
-        | if $line then $id + {action: "carry", version: "v\($line)", detail: $cv, values: $v}
+        | if $line then $id + {action: "carry", version: "v\($line)", tag: $fdbtags["v\($line)"], detail: $cv, values: $v}
           else $id + {action: "unmapped", detail: $cv} end
       end
-    elif ($kind == "OpenSearch")
-         or ((.metadata.name | startswith("opensearch-"))
-             and ((.spec.chartRef.name == $oschart) or (.spec.chart.spec.chart == $osinline)))
-    then
-      if (($v.images | type) == "object")
-         and (($v.images.opensearch | type) == "string")
-         and ($v.images.opensearch != "")
-      then $id + {action: "image", detail: $v.images.opensearch}
-      else empty end
-    else empty end')
+    else
+      (if ($kind == "OpenSearch")
+          or ((.metadata.name | startswith("opensearch-")) and installs($oschart; $osinline))
+       then "OpenSearch"
+       elif ($kind == "KubernetesNodes")
+          or ((.metadata.name | startswith("kubernetes-nodes-")) and installs($nodeschart; $nodesinline))
+       then "KubernetesNodes"
+       elif ($kind == "Kubernetes")
+          or ((.metadata.name | startswith("kubernetes-")) and installs($k8schart; $k8sinline))
+       then "Kubernetes"
+       else null end) as $app
+      | ($v | image_overrides) as $overrides
+      | if $app != null and ($overrides | length) > 0
+        then $id + {action: "image", app: $app, detail: ($overrides | join(";"))}
+        else empty end
+    end')
 
 CARRIED=0
 LEFTOVERS=""
@@ -112,6 +142,8 @@ while IFS= read -r row; do
   action=$(printf '%s' "$row" | jq -r '.action')
   detail=$(printf '%s' "$row" | jq -r '.detail')
   version=$(printf '%s' "$row" | jq -r '.version // ""')
+  tag=$(printf '%s' "$row" | jq -r '.tag // ""')
+  app=$(printf '%s' "$row" | jq -r '.app // ""')
 
   case "$action" in
     carry)
@@ -128,6 +160,10 @@ while IFS= read -r row; do
         --type json --patch "$patch" >/dev/null
       echo "Set version=$version on FoundationDB $ns/$name (cluster.version $detail)"
       CARRIED=$((CARRIED + 1))
+      if [ "$detail" != "$tag" ]; then
+        echo "WARN: FoundationDB $ns/$name runs $detail, and $version renders $tag after the upgrade" >&2
+        record_leftover "${ns}/${name}=cluster.version:${detail}->${tag}"
+      fi
       ;;
     unmapped)
       echo "WARN: FoundationDB $ns/$name has cluster.version $detail, which is not on a supported line (7.1, 7.3, 7.4); it will render the v7.3 default after the upgrade" >&2
@@ -138,8 +174,8 @@ while IFS= read -r row; do
       record_leftover "${ns}/${name}=values-not-an-object"
       ;;
     image)
-      echo "WARN: OpenSearch $ns/$name still sets images.opensearch to $detail, which the chart no longer reads; it will roll onto the image of its version after the upgrade" >&2
-      record_leftover "${ns}/${name}=images.opensearch:${detail}"
+      echo "WARN: $app $ns/$name still sets $detail, which the chart no longer reads; it will roll onto the chart's image after the upgrade" >&2
+      record_leftover "${ns}/${name}=${detail}"
       ;;
   esac
 done <<EOF
