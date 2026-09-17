@@ -63,11 +63,22 @@ k get backup "$BACKUPJOB_NAME" >/dev/null || { echo -e "${RED}Backup $BACKUPJOB_
 
 step "Drop the sentinel from the source, then restore in-place"
 mc rm --insecure "src/$SRC_BUCKET/$SENTINEL_KEY"
+# Seed an object the backup never captured. An in-place restore is a true mirror
+# and must delete it: this is the destructive half of the contract that the
+# sentinel round-trip does not exercise on its own.
+EXTRANEOUS_KEY="extraneous/written-after-backup.txt"
+printf 'written-after-backup' | mc pipe --insecure "src/$SRC_BUCKET/$EXTRANEOUS_KEY"
 k apply -f "$DIR/35-restorejob-in-place.yaml"
 wait_field restorejob "$RESTOREJOB_INPLACE_NAME" '{.status.phase}' Succeeded 480
 GOT="$(mc cat --insecure "src/$SRC_BUCKET/$SENTINEL_KEY")"
 [ "$GOT" = "$SENTINEL_VALUE" ] || { echo -e "${RED}in-place restore mismatch: got '$GOT'${NC}" >&2; exit 1; }
-echo -e "${GREEN}in-place restore round-tripped the sentinel${NC}"
+# The extraneous object must be gone: the in-place restore purged what the
+# snapshot did not name. mc stat exits non-zero when the object is absent.
+if mc stat --insecure "src/$SRC_BUCKET/$EXTRANEOUS_KEY" >/dev/null 2>&1; then
+  echo -e "${RED}in-place restore did not purge the extraneous object${NC}" >&2
+  exit 1
+fi
+echo -e "${GREEN}in-place restore round-tripped the sentinel and purged the extraneous object${NC}"
 
 step "Provision the to-copy target and restore into it"
 k apply -f "$DIR/30-bucket-target.yaml"
