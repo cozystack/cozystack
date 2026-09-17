@@ -14,7 +14,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -94,6 +96,14 @@ const (
 	// Plan-controller queue. Mirrors the MariaDB/CNPG deadline.
 	psmdbDefaultBackupDeadline = 30 * time.Minute
 
+	// psmdbBackupStallWindow is how long an operator backup may sit in
+	// state=running without its status.lastTransition advancing before the driver
+	// treats it as stalled and surfaces it (Ready=False + a Warning). A streaming
+	// dump keeps transitioning well inside this; the window is generous so a slow
+	// but progressing dump is never mistaken for a stall. A stalled dump is
+	// surfaced, not killed — cancelling it would strand a partial archive.
+	psmdbBackupStallWindow = 30 * time.Minute
+
 	// Default deadline on a RestoreJob waiting for the operator Restore to
 	// terminate. Tenants override via spec.options.restoreTimeoutSeconds.
 	psmdbDefaultRestoreDeadline = 30 * time.Minute
@@ -111,6 +121,14 @@ const (
 // Borrows the Cozystack backups group so the field is self-typed within the
 // existing API surface. Mirrors the MariaDB driver.
 var psmdbBackupSnapshotAPIVersion = backupsv1alpha1.GroupVersion.String()
+
+// psmdbBackupGVR addresses PerconaServerMongoDBBackup through the dynamic client
+// for an uncached, live status read (see psmdbBackupLiveState).
+var psmdbBackupGVR = schema.GroupVersionResource{
+	Group:    psmdbtypes.GroupVersion.Group,
+	Version:  psmdbtypes.GroupVersion.Version,
+	Resource: "perconaservermongodbbackups",
+}
 
 // mongodbNameForApp returns the psmdb.percona.com/PerconaServerMongoDB CR name
 // for a cozystack MongoDB application instance.
@@ -295,9 +313,18 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			// minting the CR in the same pass: on the next reconcile this driver's
 			// own cache reflects the storage (storageDeclared is true), which is a
 			// good proxy that the operator's does too, and only then do we mint.
-			// One 5s poll per app, well inside the deadline; later BackupJobs find
-			// the storage already declared and skip straight through.
-			return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
+			// Later BackupJobs find the storage already declared and skip through.
+			//
+			// Bounded and observable like the other waits: consult the deadline so
+			// a cluster whose cache never reflects the storage cannot poll forever,
+			// and write Ready=False so the wait is named in kubectl describe.
+			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+					"psmdb.percona.com/PerconaServerMongoDB %s/%s did not reflect the injected storage %q within %s",
+					j.Namespace, psmdbName, storageName, psmdbDefaultBackupDeadline))
+			}
+			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageInjected",
+				fmt.Sprintf("injected storage %q; waiting for the cluster to reflect it before starting the backup", storageName))
 		}
 	}
 	if msg := psmdbBackupPrecondition(cluster, storageName); msg != "" {
@@ -349,49 +376,87 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		return ctrl.Result{}, nil
 
 	case state == psmdbtypes.StateError || state == psmdbtypes.StateRejected:
+		message := mdbBackup.Status.Error
+		// The residual half of the injection race: on the useSystemBucket flow the
+		// operator can latch state=error because it resolved the injected storage
+		// from a cluster cache that had not yet observed the apply. That is the
+		// driver's own race, not the tenant's failure, so retry it (bounded by the
+		// deadline) — delete the errored CR so a fresh one resolves against a
+		// caught-up cache — rather than failing the BackupJob terminally.
+		if useSystemBucket && psmdbErrorIsUnresolvedStorage(message, storageName) && !psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+			if mdbBackup.DeletionTimestamp.IsZero() {
+				if derr := r.Delete(ctx, mdbBackup); derr != nil && !apierrors.IsNotFound(derr) {
+					return ctrl.Result{}, derr
+				}
+			}
+			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageRace",
+				fmt.Sprintf("operator has not observed the injected storage %q yet; retrying the backup", storageName))
+		}
 		// Terminal failure. The operator sets state=error/rejected once the pbm
 		// backup fails or is refused, so fail the BackupJob immediately rather
 		// than waiting for the driver-side deadline.
-		message := mdbBackup.Status.Error
 		if message == "" {
 			message = fmt.Sprintf("psmdb.percona.com PerconaServerMongoDBBackup reported state=%s", state)
 		}
 		return r.markBackupJobFailed(ctx, j, message)
 
 	default:
-		// Still in progress ("", requested, running, waiting). A wall-clock
-		// deadline fails a backup the operator never starts (so it cannot pin the
-		// BackupJob Running forever), but a running dump is left to finish rather
-		// than stranding its archive — see psmdbBackupTimedOut.
-		if psmdbBackupTimedOut(state, j.Status.StartedAt) {
-			// Cancel the operator CR before failing. A `waiting` backup is queued
-			// behind another and the operator starts it once the slot frees — which
-			// would be after this BackupJob is Failed and never reconciled again,
-			// writing an archive into the shared bucket that no Backup object
-			// represents. Deleting the CR before the operator sends the backup
-			// command prevents that late run: at v1.22.0 the operator returns for a
-			// CR with a deletion timestamp before it reaches the code that calls
-			// Start. (It does not clean up a partial object — the delete-backup
-			// finalizer prunes storage only for a `ready` backup — but nothing is
-			// partially written until the backup actually runs, which the cancel
-			// prevents.) Best-effort: a delete failure must not stop the job from
-			// failing (a leftover CR is the pre-existing behaviour, not a
-			// regression). The terminal Phase=Failed makes reconcileMongoDB return
-			// early next time, so ensureMongoDBBackup never re-creates it.
-			if mdbBackup.DeletionTimestamp.IsZero() {
-				if derr := r.Delete(ctx, mdbBackup); derr != nil && !apierrors.IsNotFound(derr) {
-					getLogger(ctx).Debug("could not cancel the timed-out operator backup before failing",
-						"backupjob", j.Name, "sourceBackup", mdbBackup.Name, "error", derr)
+		// Still in progress ("", requested, running, waiting).
+		if state == psmdbtypes.StateRunning {
+			// A dump that is streaming is never killed — failing it would strand a
+			// partial archive on the shared bucket. But `running` is also where a CR
+			// freezes when nothing progresses (a cluster gone unhealthy mid-dump, an
+			// unrecognised pbm status): a progressing dump keeps bumping its
+			// status.lastTransition, a stalled one leaves it stale. A stalled backup
+			// holds the operator's backup lease and parks every later BackupJob for
+			// the app behind it, so past the stall window it must not pin things in
+			// silence — surface it (Ready=False + a Warning) without cancelling and
+			// stranding whatever pbm has written.
+			if psmdbBackupRunningStalled(mdbBackup, j.Status.StartedAt) {
+				if r.Recorder != nil {
+					r.Recorder.Eventf(j, corev1.EventTypeWarning, "BackupStalled",
+						"psmdb.percona.com/PerconaServerMongoDBBackup %s is stuck in state=running with no status transition for over %s; left running to avoid stranding a partial archive — investigate the operator/cluster",
+						mdbBackup.Name, psmdbBackupStallWindow)
 				}
+				return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBBackupStalled",
+					fmt.Sprintf("backup stuck in state=running with no status transition for over %s; left running to avoid stranding a partial archive", psmdbBackupStallWindow))
 			}
-			detail := "no state observed"
-			if state != "" {
-				detail = fmt.Sprintf("state=%s", state)
-			}
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-				"psmdb.percona.com PerconaServerMongoDBBackup did not start within %s (%s)", psmdbDefaultBackupDeadline, detail))
+			return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
 		}
-		return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
+		// Not-yet-started states ("", requested, waiting). A wall-clock deadline
+		// fails a backup the operator never starts, so it cannot pin the BackupJob
+		// Running forever.
+		if !psmdbBackupTimedOut(state, j.Status.StartedAt) {
+			return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
+		}
+		// The deadline hit for a not-yet-started backup. mdbBackup came from the
+		// cache, so re-read the CR live before cancelling: a `waiting` CR whose
+		// live state has just turned running at the deadline boundary must not be
+		// deleted mid-dump, stranding the partial the running branch avoids. If it
+		// started, defer to the running branch on the next reconcile.
+		if r.psmdbBackupLiveState(ctx, mdbBackup.Namespace, mdbBackup.Name) == psmdbtypes.StateRunning {
+			return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
+		}
+		// Cancel the operator CR before failing. On the observed (and re-read)
+		// not-started state nothing is written, and at v1.22.0 the operator returns
+		// for a CR with a deletion timestamp before it dispatches to pbm, so the
+		// delete prevents a late run into the shared bucket that no Backup object
+		// would represent. Best-effort: a delete failure must not stop the job from
+		// failing (a leftover CR is the pre-existing behaviour, not a regression).
+		// The terminal Phase=Failed makes reconcileMongoDB return early next time,
+		// so ensureMongoDBBackup never re-creates it.
+		if mdbBackup.DeletionTimestamp.IsZero() {
+			if derr := r.Delete(ctx, mdbBackup); derr != nil && !apierrors.IsNotFound(derr) {
+				getLogger(ctx).Debug("could not cancel the timed-out operator backup before failing",
+					"backupjob", j.Name, "sourceBackup", mdbBackup.Name, "error", derr)
+			}
+		}
+		detail := "no state observed"
+		if state != "" {
+			detail = fmt.Sprintf("state=%s", state)
+		}
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+			"psmdb.percona.com PerconaServerMongoDBBackup did not start within %s (%s)", psmdbDefaultBackupDeadline, detail))
 	}
 }
 
@@ -622,6 +687,49 @@ func psmdbBackupTimedOut(state string, startedAt *metav1.Time) bool {
 		return false
 	}
 	return psmdbBackupDeadlineExceeded(startedAt)
+}
+
+// psmdbBackupRunningStalled reports whether an operator backup left in
+// state=running has stopped making progress. The operator copies pbm's
+// last-transition timestamp into status.lastTransition, which advances while a
+// dump streams and freezes when nothing progresses (a cluster gone unhealthy
+// mid-dump, or a pbm status the operator maps to running but never updates). A
+// stale lastTransition past the stall window is the signal; when it is unset the
+// operator has not written progress at all, so the BackupJob's own deadline
+// stands in. A stalled running backup is surfaced, never cancelled — cancelling
+// would strand whatever pbm has already written.
+func psmdbBackupRunningStalled(b *psmdbtypes.PerconaServerMongoDBBackup, startedAt *metav1.Time) bool {
+	if lt := b.Status.LastTransition; lt != nil {
+		return time.Since(lt.Time) > psmdbBackupStallWindow
+	}
+	return psmdbBackupDeadlineExceeded(startedAt)
+}
+
+// psmdbErrorIsUnresolvedStorage reports whether a PerconaServerMongoDBBackup
+// error is the operator failing to resolve the named storage — the message the
+// v1.22.0 backup reconciler sets ("unable to get storage '<name>'") when it
+// reads a cluster cache that has not yet observed the driver's storage
+// injection. That is the residual half of the injection race, retryable rather
+// than a tenant failure.
+func psmdbErrorIsUnresolvedStorage(errMsg, storageName string) bool {
+	return strings.Contains(errMsg, "unable to get storage") && strings.Contains(errMsg, storageName)
+}
+
+// psmdbBackupLiveState reads the operator backup CR straight from the apiserver
+// (bypassing the informer cache) and returns its status.state, or "" when the CR
+// cannot be read. The timeout-cancel path uses it to avoid deleting a CR whose
+// cached state still reads not-started at the deadline boundary while its live
+// state has just turned running.
+func (r *BackupJobReconciler) psmdbBackupLiveState(ctx context.Context, namespace, name string) string {
+	if r.Interface == nil {
+		return ""
+	}
+	u, err := r.Interface.Resource(psmdbBackupGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	state, _, _ := unstructured.NestedString(u.Object, "status", "state")
+	return state
 }
 
 // ensureMongoDBBackup creates a one-shot PerconaServerMongoDBBackup CR labelled
@@ -887,11 +995,24 @@ func (r *BackupReconciler) releaseMongoDBCleanup(ctx context.Context, backup *ba
 	logger := getLogger(ctx)
 	if live == nil {
 		fetched := &psmdbtypes.PerconaServerMongoDBBackup{}
-		if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: sourceBackupName}, fetched); err != nil ||
-			!controllerutil.ContainsFinalizer(fetched, psmdbDeleteBackupFinalizer) {
-			// Legacy backup (no delete-backup finalizer) or an unreadable CR:
-			// nothing of the driver's to strip or delete. Leave the operator CR
-			// untouched and release the Cozystack Backup.
+		err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: sourceBackupName}, fetched)
+		switch {
+		case err != nil:
+			// The CR could not be read (its CRD removed, the verb revoked, a
+			// throttle). It may still carry the driver's delete-backup finalizer, so
+			// the annotation releases the Backup regardless — but this is the same
+			// class of leftover as a failed strip below, so surface which object may
+			// be left finalized rather than a Debug line nobody sees.
+			logger.Info("releasing MongoDB Backup; could not read the operator CR to strip its finalizer",
+				"backup", backup.Name, "sourceBackup", sourceBackupName, "reason", reason, "error", err)
+			if r.Recorder != nil {
+				r.Recorder.Eventf(backup, corev1.EventTypeWarning, "FinalizerNotStripped",
+					"released Backup but could not read PerconaServerMongoDBBackup %s to strip its delete-backup finalizer (%v); if it carries the finalizer it may hold its namespace in Terminating", sourceBackupName, err)
+			}
+			return ctrl.Result{}, nil
+		case !controllerutil.ContainsFinalizer(fetched, psmdbDeleteBackupFinalizer):
+			// Legacy backup (no delete-backup finalizer): genuinely not the
+			// driver's, so leave the operator CR untouched and release quietly.
 			logger.Debug("releasing MongoDB Backup; no driver-owned archive to prune",
 				"backup", backup.Name, "sourceBackup", sourceBackupName, "reason", reason)
 			return ctrl.Result{}, nil
@@ -1027,6 +1148,16 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 			return ctrl.Result{}, err
 		}
 		return r.markRestoreJobFailed(ctx, restoreJob, err.Error())
+	}
+
+	// Point-in-time recovery needs an oplog stream, which the useSystemBucket flow
+	// never captures — the chart leaves spec.backup.pitr unset there (see
+	// backup-classes.md). Refuse a recoveryTime restore of a system-bucket backup
+	// with a named error rather than hand the operator a PITR target it cannot
+	// serve; the source's projected cozy-backups-creds identifies the flow.
+	if pitr != nil && source.S3 != nil && source.S3.CredentialsSecret == psmdbDefaultCredentialsSecret {
+		return r.markRestoreJobFailed(ctx, restoreJob,
+			"restoreJob.spec.options.recoveryTime is set, but point-in-time recovery is not available for a backup taken on the useSystemBucket flow (no oplog is captured there); omit recoveryTime to restore the backup as taken. See docs/operations/backup-classes.md.")
 	}
 
 	// The operator Restore replays into a live cluster, so the target
