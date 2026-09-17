@@ -1,0 +1,81 @@
+suite: init-script rejects database and extension names that break out of the SQL
+
+# A database name is interpolated into CREATE DATABASE "<db>", the "<db>_admin"
+# role, a single-quoted literal in the superuser DO block, and a shell role list;
+# an extension name into CREATE EXTENSION in the superuser session. The username
+# guard already hardens the same class for users. These guards mirror it for
+# databases and extensions, so a "'"/'"'/";"/space cannot escape into arbitrary
+# superuser SQL or the shell. The extension is quoted at the call site (real names
+# carry "-", e.g. uuid-ossp). Reverting either guard turns a reject test green;
+# unquoting CREATE EXTENSION turns the quoting test red.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: fails the render for a database name with a single quote (DO-block breakout)
+    set:
+      databases:
+        "x' OR true": {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "x'' OR true": a database name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 253 characters (it is interpolated into SQL identifiers, a superuser DO block and a shell role list)'
+
+  - it: fails the render for a database name with a semicolon and space
+    set:
+      databases:
+        "a; DROP": {}
+    asserts:
+      - failedTemplate: {}
+
+  - it: fails the render for an extension name carrying injection
+    set:
+      databases:
+        mydb:
+          extensions:
+            - "x; ALTER ROLE app SUPERUSER; --"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid extension name "x; ALTER ROLE app SUPERUSER; --" for database "mydb": an extension name may contain only letters, digits and the characters -._ (it is interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site)'
+
+  - it: quotes the extension name so a hyphenated one (uuid-ossp) is valid SQL
+    set:
+      databases:
+        mydb:
+          extensions:
+            - uuid-ossp
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS uuid-ossp;'
+
+  - it: renders normally for a valid database and extension
+    set:
+      databases:
+        mydb:
+          extensions:
+            - pg_trgm
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE DATABASE "mydb"'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "pg_trgm";'

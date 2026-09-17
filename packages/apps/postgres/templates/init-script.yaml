@@ -26,6 +26,28 @@
 {{- end }}
 
 {{/*
+  A database name is interpolated into SQL identifiers (CREATE DATABASE "<db>", the
+  "<db>_admin"/"<db>_readonly" role names), into a single-quoted SQL string literal
+  in the superuser DO block ('<db>_admin' as a format() argument), and into a
+  space-separated shell list (DEFINED_ROLES). Reject any name outside the same safe
+  charset the username guard enforces so none of those contexts can be broken out
+  of: a "'" would escape the DO-block literal into arbitrary superuser SQL, a "\""
+  the CREATE DATABASE identifier, a space or ";" the shell list. This is a
+  diagnosability + injection guard; the username guard already carries the analogous
+  rationale.
+*/}}
+{{- range $database, $d := .Values.databases }}
+  {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $database)) (eq $database ".") (hasPrefix ".." $database) (gt (len $database) 253) }}
+    {{- fail (printf "invalid database name %q: a database name may contain only letters, digits and the characters -._ , must not be \".\" or start with \"..\", and must be at most 253 characters (it is interpolated into SQL identifiers, a superuser DO block and a shell role list)" $database) }}
+  {{- end }}
+  {{- range $extension := ($d.extensions | default (list)) }}
+    {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $extension)) (eq $extension ".") (hasPrefix ".." $extension) (gt (len $extension) 253) }}
+      {{- fail (printf "invalid extension name %q for database %q: an extension name may contain only letters, digits and the characters -._ (it is interpolated into CREATE EXTENSION in a superuser session; real names carry \"-\", e.g. uuid-ossp, so it is quoted at the call site)" $extension $database) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+{{/*
   `postgres` is the CNPG-managed cluster superuser and must never be redefined as
   an app role. Reject it here, before the bootstrap gate, not only in the
   create-users block below: that block is skipped while bootstrap.enabled is true,
@@ -319,7 +341,7 @@ stringData:
     {{- if $d.extensions }}
     psql -v ON_ERROR_STOP=1 --echo-all -d "{{ $database }}" <<\EOT
     {{- range $extension := $d.extensions }}
-    CREATE EXTENSION IF NOT EXISTS {{ $extension }};
+    CREATE EXTENSION IF NOT EXISTS "{{ $extension }}";
     {{- end }}
     EOT
     {{- end }}
