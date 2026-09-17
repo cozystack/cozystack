@@ -3,6 +3,7 @@ package backupcontroller
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -355,6 +356,7 @@ func newTestRestoreJobReconcilerWithDynamic(t *testing.T, dynamicObjects []runti
 	fakeClient := clientfake.NewClientBuilder().
 		WithScheme(testScheme).
 		WithObjects(objects...).
+		WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).
 		Build()
 
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(testScheme, dynamicObjects...)
@@ -385,6 +387,7 @@ func newTestRestoreJobReconciler(t *testing.T, objects ...client.Object) *Restor
 	fakeClient := clientfake.NewClientBuilder().
 		WithScheme(testScheme).
 		WithObjects(objects...).
+		WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).
 		Build()
 
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(testScheme)
@@ -727,6 +730,72 @@ func TestReconcileVeleroRestore_UnusableVeleroBackupTouchesNothing(t *testing.T)
 				t.Errorf("VirtualMachine runStrategy = %q, want it left at %q", rs, "Always")
 			}
 		})
+	}
+}
+
+func TestCollectUnderlyingResources_VMDisk(t *testing.T) {
+	// A standalone VMDisk must report its own disk as an underlying resource so
+	// the restore controller suspends the vm-disk-<name> HelmRelease and deletes
+	// its DataVolume before the data mover repopulates the PVC. Without this,
+	// prepareForRestore does nothing for a VMDisk (vmRes == nil) and Flux/CDI
+	// race the data mover over the same PVC name, wedging the restore.
+	r := &BackupJobReconciler{}
+	app := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "apps.cozystack.io/v1alpha1",
+		"kind":       "VMDisk",
+		"metadata":   map[string]interface{}{"name": "backup-src", "namespace": "tenant-root"},
+	}}
+
+	ur, err := r.collectUnderlyingResources(context.Background(), app, "VMDisk", "tenant-root")
+	if err != nil {
+		t.Fatalf("collectUnderlyingResources returned error: %v", err)
+	}
+	res := getVMInstanceResources(ur)
+	if res == nil {
+		t.Fatal("expected non-nil underlying resources for a VMDisk, got nil (prepareForRestore would skip the HR suspend and DataVolume delete)")
+	}
+	if len(res.DataVolumes) != 1 {
+		t.Fatalf("expected exactly one DataVolume, got %d", len(res.DataVolumes))
+	}
+	if got, want := res.DataVolumes[0].DataVolumeName, "vm-disk-backup-src"; got != want {
+		t.Errorf("DataVolumeName = %q, want %q", got, want)
+	}
+	if got, want := res.DataVolumes[0].ApplicationName, "backup-src"; got != want {
+		t.Errorf("ApplicationName = %q, want %q", got, want)
+	}
+}
+
+func TestCollectUnderlyingResources_VMInstance(t *testing.T) {
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	r := &BackupJobReconciler{Client: clientfake.NewClientBuilder().WithScheme(testScheme).Build()}
+	app := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "apps.cozystack.io/v1alpha1",
+		"kind":       "VMInstance",
+		"metadata":   map[string]interface{}{"name": "test", "namespace": "tenant-root"},
+		"spec": map[string]interface{}{
+			"disks": []interface{}{
+				map[string]interface{}{"name": "system"},
+				map[string]interface{}{"name": "data"},
+			},
+		},
+	}}
+
+	ur, err := r.collectUnderlyingResources(context.Background(), app, "VMInstance", "tenant-root")
+	if err != nil {
+		t.Fatalf("collectUnderlyingResources returned error: %v", err)
+	}
+	res := getVMInstanceResources(ur)
+	if res == nil {
+		t.Fatal("expected non-nil underlying resources for a VMInstance with disks, got nil")
+	}
+	var got []string
+	for _, dv := range res.DataVolumes {
+		got = append(got, dv.DataVolumeName+"/"+dv.ApplicationName)
+	}
+	want := []string{"vm-disk-system/system", "vm-disk-data/data"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("DataVolumes = %v, want %v (one per spec.disks[] entry, not the VMInstance itself)", got, want)
 	}
 }
 
