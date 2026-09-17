@@ -469,6 +469,24 @@ func TestWarnRemovedFields(t *testing.T) {
 			wantKeys: []string{"images"},
 		},
 		{
+			name:     "kubernetes with the defaulted empty image overrides does not warn",
+			kindName: "Kubernetes",
+			specJSON: `{"images":{"kubectl":"","talosCsrSigner":"","waitForKubeconfig":""}}`,
+			wantKeys: nil,
+		},
+		{
+			name:     "opensearch with the defaulted empty image override does not warn",
+			kindName: "OpenSearch",
+			specJSON: `{"version":"v2","images":{"opensearch":""}}`,
+			wantKeys: nil,
+		},
+		{
+			name:     "foundationdb with an empty cluster.version does not warn",
+			kindName: "FoundationDB",
+			specJSON: `{"cluster":{"version":""}}`,
+			wantKeys: nil,
+		},
+		{
 			name:     "opensearch with the removed image override warns",
 			kindName: "OpenSearch",
 			specJSON: `{"version":"v2","images":{"opensearch":"example.test/opensearch:1"}}`,
