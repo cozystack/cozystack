@@ -5,9 +5,9 @@ scripts, so that its method is auditable independently of the finding data it pr
 The **source of truth is the private `cozystack/security-scanner` repository**, which also
 holds the per-finding reports and triage state that are **not** published here.
 
-These copies correspond to `cozystack/security-scanner` PR #1004 (commit `b40462c1`), the
-revision that carries the state-integrity, HIGH-path and scan-failure hardening described
-below. They are kept byte-for-byte in step with it; once #1004 merges they match
+These copies correspond to `cozystack/security-scanner` PR #1004, the revision that carries
+the state-integrity, HIGH-path, review_after and scan-failure hardening described below.
+They are kept byte-for-byte in step with its head; once #1004 merges they match
 `security-scanner` `main`, the revision that runs on schedule.
 
 ## Contents
