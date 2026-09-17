@@ -15,7 +15,11 @@ export BOLD='\033[1m'
 
 # Default settings
 export NAMESPACE="${NAMESPACE:-tenant-root}"
-export BACKUP_STORAGE_LOCATION="${BACKUP_STORAGE_LOCATION:-default}"
+# The platform ships the SeaweedFS-backed BackupStorageLocation as cozy-default
+# (packages/system/backupstrategy-controller). Point the demo/e2e strategies at
+# it by default so the flow works out of the box on a backups-enabled cluster;
+# override for an external S3 whose BSL carries a different name.
+export BACKUP_STORAGE_LOCATION="${BACKUP_STORAGE_LOCATION:-cozy-default}"
 
 # Logging functions (output to stderr to avoid polluting captured output)
 log_info() {
