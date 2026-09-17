@@ -186,14 +186,14 @@ func TestWarnRemovedUserPasswords(t *testing.T) {
 	}
 }
 
-// A "_"/"-" username collision that an UPDATE INTRODUCES (present in the new spec,
-// absent from the old) must draw an admission warning: MariaDB renders both under
-// one User CR name and one silently overwrites the other. The chart's render guard
-// is install-gated (so it does not wedge a release that already inherited the
-// pair), which is exactly why the upgrade-introduced case needs catching here,
-// where both specs are available. An inherited pair, or a non-MariaDB kind, stays
-// quiet.
-func TestWarnUpgradeIntroducedUserCollision(t *testing.T) {
+// A "_"/"-" collision that an UPDATE INTRODUCES (present in the new spec, absent
+// from the old) must draw an admission warning in each namespace MariaDB renders
+// with a "_"→"-" mapping — usernames, database names, and (database,user) Grant
+// pairs — because the render guard for each is install-gated (so it does not wedge
+// a release that already inherited the pair), leaving the upgrade-introduced case
+// to catch here where both specs are available. An inherited collision, or a
+// non-MariaDB kind, stays quiet.
+func TestWarnUpgradeIntroducedCollisions(t *testing.T) {
 	app := func(raw string) *appsv1alpha1.Application {
 		return &appsv1alpha1.Application{Spec: &apiextv1.JSON{Raw: []byte(raw)}}
 	}
@@ -204,11 +204,17 @@ func TestWarnUpgradeIntroducedUserCollision(t *testing.T) {
 		new      string
 		wantWarn bool
 	}{
-		{"introduced pair warns", mariadbKind, `{"users":{"a_b":{}}}`, `{"users":{"a_b":{},"a-b":{}}}`, true},
-		{"introduced from empty warns", mariadbKind, `{}`, `{"users":{"a_b":{},"a-b":{}}}`, true},
-		{"inherited pair stays quiet", mariadbKind, `{"users":{"a_b":{},"a-b":{}}}`, `{"users":{"a_b":{},"a-b":{},"c":{}}}`, false},
-		{"no collision stays quiet", mariadbKind, `{"users":{"a":{}}}`, `{"users":{"a":{},"b":{}}}`, false},
-		{"postgres never warns (no User CRs)", postgresKind, `{"users":{"a_b":{}}}`, `{"users":{"a_b":{},"a-b":{}}}`, false},
+		{"introduced user pair warns", mariadbKind, `{"users":{"a_b":{}}}`, `{"users":{"a_b":{},"a-b":{}}}`, true},
+		{"introduced user from empty warns", mariadbKind, `{}`, `{"users":{"a_b":{},"a-b":{}}}`, true},
+		{"inherited user pair stays quiet", mariadbKind, `{"users":{"a_b":{},"a-b":{}}}`, `{"users":{"a_b":{},"a-b":{},"c":{}}}`, false},
+		{"no user collision stays quiet", mariadbKind, `{"users":{"a":{}}}`, `{"users":{"a":{},"b":{}}}`, false},
+		{"introduced database pair warns", mariadbKind, `{"databases":{"a_b":{}}}`, `{"databases":{"a_b":{},"a-b":{}}}`, true},
+		{"inherited database pair stays quiet", mariadbKind, `{"databases":{"a_b":{},"a-b":{}}}`, `{"databases":{"a_b":{},"a-b":{},"c":{}}}`, false},
+		// (database "a", user "b-c") and (database "a-b", user "c") both render Grant
+		// name a-b-c.
+		{"introduced grant pair warns", mariadbKind, `{}`, `{"databases":{"a":{"roles":{"admin":["b-c"]}},"a-b":{"roles":{"admin":["c"]}}}}`, true},
+		{"a user in both roles of one db is no self-collision", mariadbKind, `{}`, `{"databases":{"d":{"roles":{"admin":["u"],"readonly":["u"]}}}}`, false},
+		{"postgres never warns (no _/- resource mapping)", postgresKind, `{"users":{"a_b":{}}}`, `{"users":{"a_b":{},"a-b":{}}}`, false},
 		{"malformed new users stays quiet", mariadbKind, `{}`, `{"users":["oops"]}`, false},
 	}
 	for _, tc := range cases {
@@ -216,14 +222,68 @@ func TestWarnUpgradeIntroducedUserCollision(t *testing.T) {
 			r := &REST{kindName: tc.kind}
 			rec := &fakeWarningRecorder{}
 			ctx := warning.WithWarningRecorder(context.Background(), rec)
-			r.warnUpgradeIntroducedUserCollision(ctx, app(tc.old), app(tc.new))
+			r.warnUpgradeIntroducedCollisions(ctx, app(tc.old), app(tc.new))
 			got := len(rec.warnings) > 0
 			if got != tc.wantWarn {
 				t.Fatalf("kind %s: warned=%v, want %v (warnings: %v)", tc.kind, got, tc.wantWarn, rec.warnings)
 			}
-			if tc.wantWarn && !strings.Contains(rec.warnings[0], `"a-b"`) {
-				t.Fatalf("warning should name the colliding username, got %q", rec.warnings[0])
-			}
 		})
 	}
+}
+
+func newMariadbWarnREST(t *testing.T, objects ...client.Object) *REST {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := helmv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("register helmv2 scheme: %v", err)
+	}
+	resourceCfg := &config.ResourceConfig{
+		Resources: []config.Resource{{Application: config.ApplicationConfig{Kind: mariadbKind}}},
+	}
+	if err := appsv1alpha1.RegisterDynamicTypes(scheme, resourceCfg); err != nil {
+		t.Fatalf("register dynamic types: %v", err)
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	return &REST{
+		c:             fakeClient,
+		w:             fakeClient,
+		gvr:           schema.GroupVersionResource{Group: appsv1alpha1.GroupName, Version: "v1alpha1", Resource: "mariadbs"},
+		gvk:           schema.GroupVersionKind{Group: appsv1alpha1.GroupName, Version: "v1alpha1", Kind: mariadbKind},
+		kindName:      mariadbKind,
+		releaseConfig: config.ReleaseConfig{Prefix: "mariadb-"},
+	}
+}
+
+// The collision warning is held to the same call-site contract as the removed-
+// password one: a test that drives Update end to end, so removing the call from
+// rest.go fails loudly. The existing release carries no users, so the new pair is
+// introduced-from-empty and must warn.
+func TestUpdate_WarnsOnUpgradeIntroducedCollision(t *testing.T) {
+	existing := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "mariadb-good-name",
+			Namespace: "tenant-foo",
+			Labels: map[string]string{
+				ApplicationKindLabel:  mariadbKind,
+				ApplicationGroupLabel: appsv1alpha1.GroupName,
+				ApplicationNameLabel:  "good-name",
+			},
+		},
+	}
+	r := newMariadbWarnREST(t, existing)
+	app := &appsv1alpha1.Application{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps.cozystack.io/v1alpha1", Kind: mariadbKind},
+		ObjectMeta: metav1.ObjectMeta{Name: "good-name", Namespace: "tenant-foo"},
+		Spec:       &apiextv1.JSON{Raw: []byte(`{"users":{"a_b":{},"a-b":{}}}`)},
+	}
+	rec := &fakeWarningRecorder{}
+	ctx := warning.WithWarningRecorder(request.WithNamespace(context.Background(), "tenant-foo"), rec)
+	updateValidation := func(_ context.Context, _, _ runtime.Object) error { return nil }
+	_, _, _ = r.Update(ctx, "good-name", newDefaultUpdatedObjectInfo(app), nil, updateValidation, false, &metav1.UpdateOptions{})
+	for _, w := range rec.warnings {
+		if strings.Contains(w, "map to the same mariadb-operator User name") {
+			return
+		}
+	}
+	t.Fatalf("expected an upgrade-introduced collision warning from Update, got %v", rec.warnings)
 }

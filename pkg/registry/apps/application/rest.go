@@ -555,7 +555,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
 	r.warnRemovedUserPasswords(ctx, app)
-	r.warnUpgradeIntroducedUserCollision(ctx, oldObj, app)
+	r.warnUpgradeIntroducedCollisions(ctx, oldObj, app)
 
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
@@ -2031,77 +2031,115 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 	}
 }
 
-// userNameSet leniently extracts the set of spec.users keys from an Application's
-// raw spec. A malformed users shape yields an empty set rather than an error, for
-// the same reason warnRemovedUserPasswords decodes leniently.
-func userNameSet(raw []byte) map[string]struct{} {
-	out := map[string]struct{}{}
+func dnsName(s string) string { return strings.ReplaceAll(s, "_", "-") }
+
+// collisionSpec buckets the three "_"/"-" collision namespaces the mariadb chart
+// guards — usernames, database names, and (database,user) Grant pairs — as maps
+// from a rendered DNS name to the human-readable sources that produce it. A key
+// with >=2 sources is a collision. The chart renders each name as
+// <release>-<replace "_" "-">, so the constant release prefix is dropped here; it
+// does not change which names collide.
+type collisionSpec struct {
+	users     map[string][]string
+	databases map[string][]string
+	grants    map[string][]string
+}
+
+// parseCollisionSpec decodes an Application's raw spec leniently (a malformed
+// shape contributes nothing rather than erroring), mirroring the chart's Grant
+// derivation: admin members plus readonly members not already in admin.
+func parseCollisionSpec(raw []byte) collisionSpec {
+	cs := collisionSpec{users: map[string][]string{}, databases: map[string][]string{}, grants: map[string][]string{}}
 	if len(raw) == 0 {
-		return out
+		return cs
 	}
 	var top map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &top); err != nil {
-		return out
+	if json.Unmarshal(raw, &top) != nil {
+		return cs
 	}
 	var users map[string]json.RawMessage
 	if u, ok := top["users"]; ok {
 		_ = json.Unmarshal(u, &users)
 	}
 	for name := range users {
-		out[name] = struct{}{}
+		d := dnsName(name)
+		cs.users[d] = append(cs.users[d], name)
+	}
+	var dbs map[string]json.RawMessage
+	if d, ok := top["databases"]; ok {
+		_ = json.Unmarshal(d, &dbs)
+	}
+	for db, rawDB := range dbs {
+		cs.databases[dnsName(db)] = append(cs.databases[dnsName(db)], db)
+		var body struct {
+			Roles struct {
+				Admin    []string `json:"admin"`
+				Readonly []string `json:"readonly"`
+			} `json:"roles"`
+		}
+		if json.Unmarshal(rawDB, &body) != nil {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, u := range append(append([]string{}, body.Roles.Admin...), body.Roles.Readonly...) {
+			if seen[u] {
+				continue // a user in both roles renders one Grant (admin ALL wins)
+			}
+			seen[u] = true
+			g := dnsName(db) + "-" + dnsName(u)
+			cs.grants[g] = append(cs.grants[g], fmt.Sprintf("(database %q, user %q)", db, u))
+		}
+	}
+	return cs
+}
+
+// introducedCollisions returns, per DNS name, the sorted new sources that collide
+// on it — but only when the old spec did not already carry that collision (an
+// inherited one is left alone, exactly as the install-gated render guard does).
+func introducedCollisions(oldByDNS, newByDNS map[string][]string) map[string][]string {
+	out := map[string][]string{}
+	for dns, names := range newByDNS {
+		if len(names) < 2 || len(oldByDNS[dns]) >= 2 {
+			continue
+		}
+		s := append([]string(nil), names...)
+		sort.Strings(s)
+		out[dns] = s
 	}
 	return out
 }
 
-// warnUpgradeIntroducedUserCollision warns when an UPDATE introduces a "_"/"-"
-// username collision the old object did not carry. MariaDB renders each User CR
-// name as <release>-<replace "_" "-" name>, so "a_b" and "a-b" collide on one
-// resource and one silently overwrites the other, leaving a user with a
-// credentials-Secret entry but no backing User. The chart's render guard for this
-// is gated to install — blocking it on upgrade would wedge a release that already
-// inherited the pair — so an upgrade that INTRODUCES the pair renders silently.
-// The aggregated apiserver holds both specs here and can tell an introduced
-// collision from an inherited one, closing that gap without touching the inherited
-// case. Warns rather than rejects, matching the removed-password warning and
-// keeping an already-broken release editable.
-func (r *REST) warnUpgradeIntroducedUserCollision(ctx context.Context, oldObj runtime.Object, newApp *appsv1alpha1.Application) {
+// warnUpgradeIntroducedCollisions warns when an UPDATE introduces a "_"/"-"
+// collision the old object did not carry, in any of the three namespaces MariaDB
+// renders as <release>-<replace "_" "-">: usernames (one User CR), database names
+// (one Database CR), and (database,user) Grant pairs (one Grant CR). In each the
+// colliding names produce one resource and one silently overwrites the other. The
+// chart's render guards for all three are gated to install — blocking on upgrade
+// would wedge a release that already inherited the pair — so an upgrade that
+// INTRODUCES one renders silently. The aggregated apiserver holds both specs here
+// and can tell an introduced collision from an inherited one, closing the gap for
+// all three without touching the inherited case. Warns rather than rejects,
+// matching the removed-password warning and keeping an already-broken release
+// editable. MariaDB-only; Postgres has no "_"→"-" resource mapping.
+func (r *REST) warnUpgradeIntroducedCollisions(ctx context.Context, oldObj runtime.Object, newApp *appsv1alpha1.Application) {
 	if r.kindName != mariadbKind || newApp == nil || newApp.Spec == nil {
 		return
 	}
-	newUsers := userNameSet(newApp.Spec.Raw)
-	if len(newUsers) < 2 {
-		return
-	}
-	var oldUsers map[string]struct{}
+	newCS := parseCollisionSpec(newApp.Spec.Raw)
+	oldCS := parseCollisionSpec(nil)
 	if oldApp, ok := oldObj.(*appsv1alpha1.Application); ok && oldApp.Spec != nil {
-		oldUsers = userNameSet(oldApp.Spec.Raw)
+		oldCS = parseCollisionSpec(oldApp.Spec.Raw)
 	}
-	byDNS := map[string][]string{}
-	for u := range newUsers {
-		dns := strings.ReplaceAll(u, "_", "-")
-		byDNS[dns] = append(byDNS[dns], u)
+	warn := func(kind, resource string, oldG, newG map[string][]string) {
+		for dns, names := range introducedCollisions(oldG, newG) {
+			warning.AddWarning(ctx, "", fmt.Sprintf(
+				"%s %v map to the same mariadb-operator %s name %q (\"_\" renders as \"-\"); one silently overwrites the other. Rename one before applying.",
+				kind, names, resource, dns))
+		}
 	}
-	for dns, names := range byDNS {
-		if len(names) < 2 {
-			continue
-		}
-		oldCount := 0
-		for u := range oldUsers {
-			if strings.ReplaceAll(u, "_", "-") == dns {
-				oldCount++
-			}
-		}
-		if oldCount >= 2 {
-			// Already a collision on the old object; leave it, exactly as the
-			// install-gated render guard does, so an upgrade of a release that
-			// inherited it is not blocked here either.
-			continue
-		}
-		sort.Strings(names)
-		warning.AddWarning(ctx, "", fmt.Sprintf(
-			"spec.users %v map to the same mariadb-operator User resource name %q (\"_\" renders as \"-\"); one silently overwrites the other, leaving a user with a credentials-Secret entry but no backing User. Rename one before applying.",
-			names, dns))
-	}
+	warn("spec.users", "User", oldCS.users, newCS.users)
+	warn("spec.databases", "Database", oldCS.databases, newCS.databases)
+	warn("Grant pairs", "Grant", oldCS.grants, newCS.grants)
 }
 
 // errNotAcceptable indicates that the resource does not support conversion to Table
