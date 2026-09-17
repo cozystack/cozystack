@@ -112,15 +112,7 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "0"
-    # Matches the Job's policy deliberately. The Job carries no hook-succeeded:
-    # it outlives the run so the degraded path leaves a readable record, and
-    # ttlSecondsAfterFinished reclaims it. Reaping the ServiceAccount, Role or
-    # RoleBinding on hook-succeeded or hook-failed would leave that Job able to
-    # start a pod whose ServiceAccount no longer exists: kubelet then mounts the
-    # projected volume without a token, kubectl finds no in-cluster config and
-    # falls back to localhost:8080, and the pre-delete hook fails every uninstall
-    # from then on.
-    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -131,15 +123,7 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "5"
-    # Matches the Job's policy deliberately. The Job carries no hook-succeeded:
-    # it outlives the run so the degraded path leaves a readable record, and
-    # ttlSecondsAfterFinished reclaims it. Reaping the ServiceAccount, Role or
-    # RoleBinding on hook-succeeded or hook-failed would leave that Job able to
-    # start a pod whose ServiceAccount no longer exists: kubelet then mounts the
-    # projected volume without a token, kubectl finds no in-cluster config and
-    # falls back to localhost:8080, and the pre-delete hook fails every uninstall
-    # from then on.
-    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
   - apiGroups: ["kafka.strimzi.io"]
     resources: ["kafkatopics"]
@@ -154,15 +138,7 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "5"
-    # Matches the Job's policy deliberately. The Job carries no hook-succeeded:
-    # it outlives the run so the degraded path leaves a readable record, and
-    # ttlSecondsAfterFinished reclaims it. Reaping the ServiceAccount, Role or
-    # RoleBinding on hook-succeeded or hook-failed would leave that Job able to
-    # start a pod whose ServiceAccount no longer exists: kubelet then mounts the
-    # projected volume without a token, kubectl finds no in-cluster config and
-    # falls back to localhost:8080, and the pre-delete hook fails every uninstall
-    # from then on.
-    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

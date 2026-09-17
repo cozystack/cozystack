@@ -82,23 +82,17 @@ tests:
       - isKind:
           of: ServiceAccount
         documentIndex: 1
-      # The Job carries no hook-succeeded, so it outlives the hook run. Every
-      # credential it needs has to outlive it too. A ServiceAccount reaped on
-      # hook-succeeded or hook-failed leaves the Job able to start a pod whose
-      # ServiceAccount is gone: the projected volume mounts without a token,
-      # kubectl falls back to localhost:8080, and the uninstall wedges on a hook
-      # that can no longer reach the apiserver. That is #4276, and it reached
-      # main because nothing here compared the two policies.
+      # The RBAC resources are cleaned up after the hook succeeds.
       - equal:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
-          value: before-hook-creation
+          value: before-hook-creation,hook-succeeded
         documentIndex: 1
       - isKind:
           of: Role
         documentIndex: 2
       - equal:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
-          value: before-hook-creation
+          value: before-hook-creation,hook-succeeded
         documentIndex: 2
       - contains:
           path: rules
@@ -112,7 +106,7 @@ tests:
         documentIndex: 3
       - equal:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
-          value: before-hook-creation
+          value: before-hook-creation,hook-succeeded
         documentIndex: 3
       - equal:
           path: roleRef.name
