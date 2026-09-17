@@ -15,9 +15,11 @@
 #     FoundationDB are not touched;
 #   - an unlabelled release is still found by its chart;
 #   - a value outside those lines, a value the apiserver stored as a number, a
-#     spec.values that is not an object at all, and an OpenSearch release still
-#     carrying images.opensearch are recorded and do not block the stamp;
-#   - a failed scan or patch aborts before the stamp.
+#     spec.values that is not an object at all, a carried release whose patch
+#     moves, and an OpenSearch, Kubernetes or KubernetesNodes release still
+#     setting an image override are recorded and do not block the stamp;
+#   - a failed scan or patch aborts before the stamp;
+#   - the tag map the migration carries matches the chart's.
 #
 # cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
 # own line; there is no bats `run`/`$status`/`setup`/`teardown`. Assertions are
@@ -64,7 +66,14 @@ prep() {
   {"metadata":{"namespace":"tenant-e","name":"opensearch-logs","labels":{"apps.cozystack.io/application.kind":"OpenSearch"}},
    "spec":{"values":{"images":{"opensearch":"registry.example.test/opensearch:2.19.6"}}}},
   {"metadata":{"namespace":"tenant-e","name":"opensearch-plain","labels":{"apps.cozystack.io/application.kind":"OpenSearch"}},
-   "spec":{"values":{"images":{"opensearch":""},"replicas":3}}}
+   "spec":{"values":{"images":{"opensearch":""},"replicas":3}}},
+  {"metadata":{"namespace":"tenant-f","name":"kubernetes-mirrored","labels":{"apps.cozystack.io/application.kind":"Kubernetes"}},
+   "spec":{"values":{"images":{"kubectl":"","talosCsrSigner":"mirror.example.test/talos-csr-signer:1","waitForKubeconfig":"mirror.example.test/busybox:1"}}}},
+  {"metadata":{"namespace":"tenant-f","name":"kubernetes-plain","labels":{"apps.cozystack.io/application.kind":"Kubernetes"}},
+   "spec":{"values":{"images":{"kubectl":"","talosCsrSigner":"","waitForKubeconfig":""}}}},
+  {"metadata":{"namespace":"tenant-f","name":"kubernetes-nodes-mirrored-md0"},
+   "spec":{"chartRef":{"kind":"ExternalArtifact","name":"cozystack-kubernetes-nodes-application-kubevirt-kubernetes-nodes"},
+           "values":{"images":{"kubectl":"mirror.example.test/kubectl:1"}}}}
 ]}
 JSON
 }
@@ -90,6 +99,7 @@ JSON
   if grep -q 'PATCH [^ ]* opensearch-plain ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* opensearch-plain '"; exit 1; fi
   if grep -q 'PATCH [^ ]* opensearch-logs ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* opensearch-logs '"; exit 1; fi
   if grep -q 'PATCH [^ ]* foundationdb-scalar-values ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* foundationdb-scalar-values '"; exit 1; fi
+  if grep -q 'PATCH [^ ]* kubernetes' "$FAKE_CMDLOG"; then echo "patched a Kubernetes release"; exit 1; fi
   if grep -q 'PATCH [^ ]* foundationdb-numeric ' "$FAKE_CMDLOG"; then echo "unexpected line matching 'PATCH [^ ]* foundationdb-numeric '"; exit 1; fi
 
   annotation=$(grep '^ANNOTATE ' "$FAKE_CMDLOG")
@@ -98,7 +108,13 @@ JSON
   echo "$annotation" | grep -q 'tenant-d/foundationdb-numeric=cluster.version:7.3'
   echo "$annotation" | grep -q 'tenant-d/foundationdb-scalar-values=values-not-an-object'
   echo "$annotation" | grep -q 'tenant-e/opensearch-logs=images.opensearch:registry.example.test/opensearch:2.19.6'
-  if echo "$annotation" | grep -q 'opensearch-plain'; then echo "recorded an OpenSearch release with no image override"; exit 1; fi
+  echo "$annotation" | grep -q 'tenant-a/foundationdb-new74=cluster.version:7.4.3->7.4.1'
+  echo "$annotation" | grep -q 'tenant-c/foundationdb-unlabelled=cluster.version:7.1.0->7.1.67'
+  echo "$annotation" | grep -q 'tenant-f/kubernetes-mirrored=images.talosCsrSigner:mirror.example.test/talos-csr-signer:1;images.waitForKubeconfig:mirror.example.test/busybox:1'
+  echo "$annotation" | grep -q 'tenant-f/kubernetes-nodes-mirrored-md0=images.kubectl:mirror.example.test/kubectl:1'
+  for quiet in opensearch-plain kubernetes-plain foundationdb-old71 foundationdb-pinned73; do
+    if echo "$annotation" | grep -q "/$quiet="; then echo "recorded $quiet, which needs no attention"; exit 1; fi
+  done
   [ "$(tail -n1 "$FAKE_CMDLOG")" = "STAMP 60" ]
   if grep -q '^UNHANDLED' "$FAKE_CMDLOG"; then echo "unexpected line matching '^UNHANDLED'"; exit 1; fi
   rm -rf "$WORK"
@@ -138,4 +154,13 @@ JSON
   if grep -q '^PATCH' "$FAKE_CMDLOG"; then echo "unexpected line matching '^PATCH'"; exit 1; fi
   if grep -q '^STAMP' "$FAKE_CMDLOG"; then echo "unexpected line matching '^STAMP'"; exit 1; fi
   rm -rf "$WORK"
+}
+
+@test "the tag map matches the chart's versions.yaml" {
+  migration=$(sed -n "s/^FOUNDATIONDB_TAGS='\\(.*\\)'$/\\1/p" "$MIG" | jq -S .)
+  chart=$(yq -o=json '.' packages/apps/foundationdb/files/versions.yaml | jq -S .)
+  echo "migration: $migration"
+  echo "chart:     $chart"
+  [ -n "$migration" ]
+  [ "$migration" = "$chart" ]
 }
