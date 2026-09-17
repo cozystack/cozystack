@@ -189,3 +189,24 @@ tests:
       - equal:
           path: spec.template.spec.restartPolicy
           value: Never
+
+  - it: pre-delete Job keeps its kubectl image on a standard install
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/clastix/kubectl:v1.32
+
+  - it: pre-delete Job follows the platform registry
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      _cluster:
+        images-registry: registry.airgap.example.test
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.airgap.example.test/docker.io/clastix/kubectl:v1.32
