@@ -2,11 +2,38 @@
 
 ALERT_SEVERITY_ALLOWED=" security critical major minor warning indeterminate informational normal ok cleared debug trace unknown "
 
+helm_actions_stripped() {
+  awk '
+    function strip_comments(s,    pre, rest) {
+      while (1) {
+        if (incomment) {
+          if (match(s, /\*\/[ \t]*-?[}][}]/)) { s = substr(s, RSTART + RLENGTH); incomment = 0 } else { return "" }
+        }
+        if (match(s, /[{][{]-?[ \t]*\/\*/)) {
+          pre = substr(s, 1, RSTART - 1); rest = substr(s, RSTART + RLENGTH)
+          if (match(rest, /\*\/[ \t]*-?[}][}]/)) { s = pre substr(rest, RSTART + RLENGTH) } else { incomment = 1; return pre }
+        } else { return s }
+      }
+    }
+    {
+      line = strip_comments($0)
+      if (incomment && line ~ /^[ \t]*$/) { next }
+      if (line ~ /^[ \t]*[{][{].*[}][}][ \t]*$/) { next }
+      gsub(/[{][{][^}]*[}][}]/, "TEMPLATED", line)
+      print line
+    }
+  ' "$1"
+}
+
 alert_severity_rows() {
   severity_root=${ALERT_SEVERITY_ROOT:-"$(dirname "${BATS_TEST_FILENAME:-$0}")/.."}
   severity_files=$(mktemp) || return 1
   severity_rows=$(mktemp) || {
     rm -f "$severity_files"
+    return 1
+  }
+  severity_stripped=$(mktemp) || {
+    rm -f "$severity_files" "$severity_rows"
     return 1
   }
 
@@ -17,27 +44,27 @@ alert_severity_rows() {
         'packages/**/*.yml' \
         ':(exclude)packages/**/charts/**'
   ) > "$severity_files"; then
-    rm -f "$severity_files" "$severity_rows"
+    rm -f "$severity_files" "$severity_rows" "$severity_stripped"
     return 1
   fi
 
   if ! : > "$severity_rows"; then
-    rm -f "$severity_files" "$severity_rows"
+    rm -f "$severity_files" "$severity_rows" "$severity_stripped"
     return 1
   fi
   while IFS= read -r file; do
-    if ! (cd "$severity_root" && FILE="$file" yq 'select(.kind == "PrometheusRule" or .kind == "VMRule") | .spec.groups[]? | .rules[]? | select(has("alert")) | [strenv(FILE), .alert, ((.labels.severity // "<missing>") | tostring)] | @tsv' "$file") >> "$severity_rows"; then
+    if ! (cd "$severity_root" && helm_actions_stripped "$file" > "$severity_stripped" && FILE="$file" yq 'select(.kind == "PrometheusRule" or .kind == "VMRule") | .spec.groups[]? | .rules[]? | select(has("alert")) | [strenv(FILE), .alert, ((.labels.severity // "<missing>") | tostring)] | @tsv' "$severity_stripped") >> "$severity_rows"; then
       echo "$file: failed to parse alert rules" >&2
-      rm -f "$severity_files" "$severity_rows"
+      rm -f "$severity_files" "$severity_rows" "$severity_stripped"
       return 1
     fi
   done < "$severity_files"
 
   if ! sed '/^[[:space:]]*$/d' "$severity_rows"; then
-    rm -f "$severity_files" "$severity_rows"
+    rm -f "$severity_files" "$severity_rows" "$severity_stripped"
     return 1
   fi
-  rm -f "$severity_files" "$severity_rows"
+  rm -f "$severity_files" "$severity_rows" "$severity_stripped"
 }
 
 alert_severity_contract() {
@@ -124,5 +151,46 @@ alert_severity_contract() {
   contract_succeeded=0
   ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || contract_succeeded=$?
   rm -rf "$fixture"
+  [ "$contract_succeeded" -ne 0 ]
+}
+
+@test "helm template actions do not hide a rule from the contract" {
+  fixture=$(mktemp -d)
+  mkdir -p "$fixture/packages/system/example/templates"
+  printf '%s\n' \
+    '{{- if .Values.alerts.enabled }}' \
+    '{{- /*' \
+    'Rules gated on a value, behind a comment that spans lines.' \
+    '*/}}' \
+    'apiVersion: monitoring.coreos.com/v1' \
+    'kind: PrometheusRule' \
+    'metadata:' \
+    '  name: example' \
+    '  namespace: {{ .Release.Namespace }}' \
+    'spec:' \
+    '  groups:' \
+    '  - name: example' \
+    '    rules:' \
+    '    {{- /* one-line comment */}}' \
+    '    - alert: TemplatedRuleWithBadSeverity' \
+    '      expr: up == 0' \
+    '      labels:' \
+    '        severity: warn' \
+    '      annotations:' \
+    '        description: {{ "{{ $labels.instance }}" }} is down' \
+    '{{- end }}' \
+    > "$fixture/packages/system/example/templates/alerts.yaml"
+  git -C "$fixture" init -q
+  git -C "$fixture" add packages/system/example/templates/alerts.yaml
+
+  rows=$(mktemp)
+  parser_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_rows > "$rows" 2>/dev/null || parser_succeeded=$?
+  found=$(grep -c 'TemplatedRuleWithBadSeverity' "$rows" || true)
+  contract_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || contract_succeeded=$?
+  rm -rf "$fixture" "$rows"
+  [ "$parser_succeeded" -eq 0 ]
+  [ "$found" -eq 1 ]
   [ "$contract_succeeded" -ne 0 ]
 }
