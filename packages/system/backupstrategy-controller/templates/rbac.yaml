@@ -11,7 +11,7 @@ rules:
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backupclasses"]
   verbs: ["get", "list", "watch"]
-# BackupJob / RestoreJob: reconcile; update for RestoreJob finalizers
+# BackupJob / RestoreJob: reconcile; update for RestoreJob and Bucket BackupJob finalizers
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backupjobs", "restorejobs"]
   verbs: ["get", "list", "watch", "update", "patch"]

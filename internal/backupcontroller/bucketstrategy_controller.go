@@ -51,6 +51,21 @@ const (
 	// terminal or been deleted, whose Pods a background GC has not yet stopped.
 	bucketRestoreBackupLabel = "backups.cozystack.io/restore-backup"
 
+	// bucketBackupFinalizer holds a Bucket BackupJob during deletion so a run
+	// cancelled mid-mirror can reclaim the partial copy it wrote into the shared
+	// repo bucket, instead of leaking it. Other drivers add no finalizer.
+	bucketBackupFinalizer = "backups.cozystack.io/bucket-reclaim"
+
+	// bucketReclaimStashAnnotation carries the repo coordinates a delete-time
+	// reclaim needs, stamped once before the mirror writes, so the finalizer can
+	// purge the prefix even after the strategy or app is gone.
+	bucketReclaimStashAnnotation = "backups.cozystack.io/reclaim-coordinates"
+
+	// bucketReclaimJobTTLSeconds lets a delete-time reclaim Job self-delete: it
+	// cannot be owner-referenced to the BackupJob being deleted (GC would remove
+	// it before it runs), so it is cleaned up by TTL instead.
+	bucketReclaimJobTTLSeconds = 600
+
 	// bucketArtifactWritePendingCondition tracks the window in which the mirror
 	// has completed but recording the Backup artifact is still being retried. Its
 	// own LastTransitionTime clocks the retry budget, which cannot ride StartedAt:
@@ -377,6 +392,13 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 	repoPrefix := joinRepoPrefix(rendered.Destination.Prefix, j.Name+"-"+string(j.UID))
 	pod := buildBucketMirrorPod(bucketModeBackup, *rendered, backupAccessName(release), repoPrefix, false, false)
 
+	// Hold the BackupJob with a finalizer (stashing the reclaim coordinates)
+	// before the mirror writes into the shared repo bucket, so cancelling a
+	// running backup reclaims the partial copy instead of leaking it.
+	if err := r.ensureBucketReclaimGuard(ctx, j, *rendered, repoPrefix); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	batchJob, err := r.ensureJobStrategyJob(ctx, j, j.Namespace, jobNameForBackupJob(j),
 		bucketModeBackup,
 		map[string]string{
@@ -483,25 +505,7 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 // for the backup are still present in the namespace.
 func (r *BackupJobReconciler) reclaimFailedBucketBackup(ctx context.Context, j *backupsv1alpha1.BackupJob, rendered strategyv1alpha1.BucketTemplate, repoPrefix string) {
 	logger := getLogger(ctx)
-	snap := &bucketBackupSnapshot{
-		RepoBucket:                  rendered.Destination.Bucket,
-		RepoEndpoint:                rendered.Destination.Endpoint,
-		RepoPrefix:                  repoPrefix,
-		RepoRegion:                  rendered.Destination.Region,
-		RepoCredentialsSecret:       rendered.Destination.AccessKeyIDSecretKeyRef.Name,
-		RepoCredentialsAccessKeyKey: rendered.Destination.AccessKeyIDSecretKeyRef.Key,
-		RepoCredentialsSecretKeyKey: rendered.Destination.SecretAccessKeySecretKeyRef.Key,
-	}
-	if sk := rendered.Destination.SecretAccessKeySecretKeyRef.Name; sk != snap.RepoCredentialsSecret {
-		snap.RepoCredentialsSecretKeySecret = sk
-	}
-	if tls := rendered.Destination.TLS; tls != nil {
-		snap.InsecureSkipVerify = tls.InsecureSkipVerify
-		if ca := tls.CASecretKeyRef; ca != nil {
-			snap.RepoCACertSecret = ca.Name
-			snap.RepoCACertKey = ca.Key
-		}
-	}
+	snap := bucketReclaimSnapshot(rendered, repoPrefix)
 	pod := buildBucketCleanupPod(snap, rendered.Image)
 	desired := buildJobStrategyBatchJob(j.Namespace, j.Name+"-reclaim", map[string]string{bucketLabelMode: bucketModeCleanup}, pod)
 	if err := controllerutil.SetControllerReference(j, desired, r.Scheme); err != nil {
@@ -521,6 +525,103 @@ func (r *BackupJobReconciler) reclaimFailedBucketBackup(ctx context.Context, j *
 func (r *BackupJobReconciler) warnReclaimNotStarted(j *backupsv1alpha1.BackupJob, repoPrefix string, err error) {
 	if r.Recorder != nil {
 		r.Recorder.Eventf(j, corev1.EventTypeWarning, "ReclaimNotStarted", "partial backup copy under %s left in the repo bucket: %v", repoPrefix, err)
+	}
+}
+
+// bucketReclaimSnapshot builds the repo coordinates a cleanup/reclaim Job needs
+// to purge repoPrefix, from the rendered strategy destination.
+func bucketReclaimSnapshot(rendered strategyv1alpha1.BucketTemplate, repoPrefix string) *bucketBackupSnapshot {
+	snap := &bucketBackupSnapshot{
+		RepoBucket:                  rendered.Destination.Bucket,
+		RepoEndpoint:                rendered.Destination.Endpoint,
+		RepoPrefix:                  repoPrefix,
+		RepoRegion:                  rendered.Destination.Region,
+		RepoCredentialsSecret:       rendered.Destination.AccessKeyIDSecretKeyRef.Name,
+		RepoCredentialsAccessKeyKey: rendered.Destination.AccessKeyIDSecretKeyRef.Key,
+		RepoCredentialsSecretKeyKey: rendered.Destination.SecretAccessKeySecretKeyRef.Key,
+	}
+	if sk := rendered.Destination.SecretAccessKeySecretKeyRef.Name; sk != snap.RepoCredentialsSecret {
+		snap.RepoCredentialsSecretKeySecret = sk
+	}
+	if tls := rendered.Destination.TLS; tls != nil {
+		snap.InsecureSkipVerify = tls.InsecureSkipVerify
+		if ca := tls.CASecretKeyRef; ca != nil {
+			snap.RepoCACertSecret = ca.Name
+			snap.RepoCACertKey = ca.Key
+		}
+	}
+	return snap
+}
+
+// bucketReclaimStash is the self-contained payload stamped on the BackupJob so a
+// delete-time reclaim can build a cleanup Job without re-rendering the strategy.
+type bucketReclaimStash struct {
+	Snapshot bucketBackupSnapshot `json:"snapshot"`
+	Image    string               `json:"image"`
+}
+
+// ensureBucketReclaimGuard stamps the reclaim finalizer and stashes the repo
+// coordinates on the BackupJob, once, before the mirror writes into the shared
+// repo bucket. A BackupJob otherwise carries no finalizer, so deleting a running
+// one drops its mirror Job through the ownerRef and leaks whatever it had
+// already written under this run's prefix; the finalizer lets the delete reclaim
+// it (finalizeBucketBackupJob).
+func (r *BackupJobReconciler) ensureBucketReclaimGuard(ctx context.Context, j *backupsv1alpha1.BackupJob, rendered strategyv1alpha1.BucketTemplate, repoPrefix string) error {
+	raw, err := json.Marshal(bucketReclaimStash{Snapshot: *bucketReclaimSnapshot(rendered, repoPrefix), Image: rendered.Image})
+	if err != nil {
+		return err
+	}
+	if controllerutil.ContainsFinalizer(j, bucketBackupFinalizer) && j.Annotations[bucketReclaimStashAnnotation] == string(raw) {
+		return nil
+	}
+	base := j.DeepCopy()
+	controllerutil.AddFinalizer(j, bucketBackupFinalizer)
+	if j.Annotations == nil {
+		j.Annotations = map[string]string{}
+	}
+	j.Annotations[bucketReclaimStashAnnotation] = string(raw)
+	return r.Patch(ctx, j, client.MergeFrom(base))
+}
+
+// finalizeBucketBackupJob reclaims a partial copy a cancelled run may have left
+// and clears the finalizer so the delete proceeds. A recorded Backup owns its
+// objects (cleanupBucketBackup reclaims them), so only an in-flight run can have
+// stranded a copy. Reclaim is best-effort - the finalizer is always removed, so
+// a broken reclaim cannot wedge the deletion.
+func (r *BackupJobReconciler) finalizeBucketBackupJob(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
+	if j.Status.BackupRef == nil {
+		r.reclaimDeletedBucketBackup(ctx, j)
+	}
+	controllerutil.RemoveFinalizer(j, bucketBackupFinalizer)
+	if err := r.Update(ctx, j); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// reclaimDeletedBucketBackup best-effort purges the prefix a cancelled run wrote,
+// from the coordinates stashed on the BackupJob. The reclaim Job cannot be
+// owner-referenced to the BackupJob being deleted (GC would remove it before it
+// runs), so it self-deletes via TTL.
+func (r *BackupJobReconciler) reclaimDeletedBucketBackup(ctx context.Context, j *backupsv1alpha1.BackupJob) {
+	logger := getLogger(ctx)
+	raw := j.Annotations[bucketReclaimStashAnnotation]
+	if raw == "" {
+		// The mirror never started, so nothing was written to reclaim.
+		return
+	}
+	var stash bucketReclaimStash
+	if err := json.Unmarshal([]byte(raw), &stash); err != nil {
+		logger.Debug("cannot decode reclaim coordinates on delete", "backupjob", j.Name, "err", err)
+		return
+	}
+	pod := buildBucketCleanupPod(&stash.Snapshot, stash.Image)
+	desired := buildJobStrategyBatchJob(j.Namespace, j.Name+"-reclaim", map[string]string{bucketLabelMode: bucketModeCleanup}, pod)
+	ttl := int32(bucketReclaimJobTTLSeconds)
+	desired.Spec.TTLSecondsAfterFinished = &ttl
+	if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+		r.warnReclaimNotStarted(j, stash.Snapshot.RepoPrefix, err)
+		logger.Debug("delete-time reclaim Job not created (best-effort)", "backupjob", j.Name, "err", err)
 	}
 }
 

@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -1206,5 +1208,117 @@ func TestReconcileBucketRestoreRefusesUnownedMirrorJob(t *testing.T) {
 	}
 	if updated.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
 		t.Fatalf("phase = %q, want Failed (unowned mirror Job must not be adopted as this restore's completion)", updated.Status.Phase)
+	}
+}
+
+func TestReconcileBucketStampsReclaimGuard(t *testing.T) {
+	// Before the mirror writes into the shared repo bucket, the BackupJob must
+	// carry the reclaim finalizer and the stashed coordinates, so cancelling a
+	// running backup can reclaim the partial copy.
+	job, resolved, objs := bucketBackupScenario("uid-guard")
+	objs = append(objs, job) // no mirror Job seeded: the reconcile creates one and requeues
+	r, _ := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"), clientfake.NewClientBuilder().WithObjects(objs...))
+	if _, err := r.reconcileBucket(context.Background(), job, resolved); err != nil {
+		t.Fatalf("reconcileBucket: %v", err)
+	}
+	updated := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(job), updated); err != nil {
+		t.Fatalf("get backupjob: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(updated, bucketBackupFinalizer) {
+		t.Fatal("BackupJob must carry the reclaim finalizer once the mirror is started")
+	}
+	if updated.Annotations[bucketReclaimStashAnnotation] == "" {
+		t.Fatal("BackupJob must stash the reclaim coordinates")
+	}
+}
+
+func deletingBucketBackupJob(t *testing.T, name string, withStash, withBackupRef bool) *backupsv1alpha1.BackupJob {
+	t.Helper()
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: name, UID: types.UID(name + "-uid"), Finalizers: []string{bucketBackupFinalizer}},
+	}
+	if withStash {
+		raw, err := json.Marshal(bucketReclaimStash{
+			Snapshot: bucketBackupSnapshot{
+				RepoBucket: "cozy-backups", RepoEndpoint: "http://s3", RepoPrefix: "tenant-x/web/" + name + "-uid/",
+				RepoCredentialsSecret: "cozy-backups-creds", RepoCredentialsAccessKeyKey: "AWS_ACCESS_KEY_ID", RepoCredentialsSecretKeyKey: "AWS_SECRET_ACCESS_KEY",
+			},
+			Image: "controller:latest",
+		})
+		if err != nil {
+			t.Fatalf("marshal stash: %v", err)
+		}
+		j.Annotations = map[string]string{bucketReclaimStashAnnotation: string(raw)}
+	}
+	if withBackupRef {
+		j.Status.BackupRef = &corev1.LocalObjectReference{Name: name}
+	}
+	return j
+}
+
+func newBucketBackupReconciler(t *testing.T, objs ...client.Object) *BackupJobReconciler {
+	t.Helper()
+	s := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{backupsv1alpha1.AddToScheme, batchv1.AddToScheme} {
+		if err := add(s); err != nil {
+			t.Fatalf("AddToScheme: %v", err)
+		}
+	}
+	c := clientfake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}).
+		WithObjects(objs...).Build()
+	return &BackupJobReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+}
+
+func TestFinalizeBucketBackupJobReclaimsInFlight(t *testing.T) {
+	// Cancelling a running backup (no Backup recorded) must reclaim the partial
+	// copy: a reclaim Job is created, not owner-referenced to the deleting
+	// BackupJob (GC would remove it first) and self-deleting via TTL, and the
+	// finalizer is cleared so the delete proceeds.
+	j := deletingBucketBackupJob(t, "bj1", true, false)
+	r := newBucketBackupReconciler(t, j)
+	if err := r.Delete(context.Background(), j); err != nil {
+		t.Fatalf("delete (sets DeletionTimestamp; finalizer holds it): %v", err)
+	}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(j), j); err != nil {
+		t.Fatalf("re-get deleting backupjob: %v", err)
+	}
+
+	if _, err := r.finalizeBucketBackupJob(context.Background(), j); err != nil {
+		t.Fatalf("finalizeBucketBackupJob: %v", err)
+	}
+	reclaim := &batchv1.Job{}
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: "bj1-reclaim"}, reclaim); err != nil {
+		t.Fatalf("reclaim Job not created on delete: %v", err)
+	}
+	if reclaim.Spec.TTLSecondsAfterFinished == nil {
+		t.Error("delete-time reclaim Job must self-delete via TTL")
+	}
+	if metav1.IsControlledBy(reclaim, j) {
+		t.Error("reclaim Job must not be owner-referenced to the deleting BackupJob")
+	}
+	// Finalizer cleared -> the fake client removes the object.
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(j), &backupsv1alpha1.BackupJob{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer must be cleared so the delete completes (err=%v)", err)
+	}
+}
+
+func TestFinalizeBucketBackupJobSkipsReclaimWhenBackupRecorded(t *testing.T) {
+	// A recorded Backup owns its objects (cleanupBucketBackup reclaims them), so
+	// finalizing a completed run must not create a second reclaim Job.
+	j := deletingBucketBackupJob(t, "bj2", true, true)
+	r := newBucketBackupReconciler(t, j)
+	if err := r.Delete(context.Background(), j); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(j), j); err != nil {
+		t.Fatalf("re-get: %v", err)
+	}
+	if _, err := r.finalizeBucketBackupJob(context.Background(), j); err != nil {
+		t.Fatalf("finalizeBucketBackupJob: %v", err)
+	}
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: "bj2-reclaim"}, &batchv1.Job{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("no reclaim Job expected when a Backup was recorded (err=%v)", err)
 	}
 }
