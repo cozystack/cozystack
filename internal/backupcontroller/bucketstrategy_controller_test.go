@@ -3,10 +3,14 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -18,6 +22,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -742,8 +747,9 @@ func TestReconcileBucketFailsOnArtifactNameCollision(t *testing.T) {
 	access.Status.AccessGranted = true
 	completedMirror := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "tenant-x",
-			Name:      jobNameForBackupJob(job),
+			Namespace:       "tenant-x",
+			Name:            jobNameForBackupJob(job),
+			OwnerReferences: bucketJobControllerRef(job),
 			Labels: map[string]string{
 				backupsv1alpha1.OwningJobNameLabel:      job.Name,
 				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
@@ -780,5 +786,361 @@ func TestReconcileBucketFailsOnArtifactNameCollision(t *testing.T) {
 	}
 	if updated.Status.BackupRef != nil {
 		t.Fatalf("BackupRef = %+v, want nil (must not point at the stale snapshot)", updated.Status.BackupRef)
+	}
+	// The mirror wrote a fresh copy under this run's prefix; a terminal exit must
+	// reclaim it, so a reclaim Job is created rather than leaving the copy stranded.
+	reclaim := &batchv1.Job{}
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: job.Name + "-reclaim"}, reclaim); err != nil {
+		t.Fatalf("reclaim Job not created on the collision exit: %v", err)
+	}
+}
+
+// bucketJobControllerRef builds the controller ownerRef ensureJobStrategyJob
+// stamps on a mirror Job it creates, so a test fixture Job is adopted rather
+// than refused by the ownership guard.
+func bucketJobControllerRef(job *backupsv1alpha1.BackupJob) []metav1.OwnerReference {
+	yes := true
+	return []metav1.OwnerReference{{
+		APIVersion: backupsv1alpha1.GroupVersion.String(),
+		Kind:       "BackupJob",
+		Name:       job.Name,
+		UID:        job.UID,
+		Controller: &yes,
+	}}
+}
+
+func TestReconcileBucketRefusesUnownedMirrorJob(t *testing.T) {
+	// A finished mirror Job left by a prior identically-named ad-hoc BackupJob is
+	// adopted by name; without an ownership check this run would read JobComplete
+	// and record a Backup for a prefix nothing wrote. The run must refuse instead.
+	strategy := &strategyv1alpha1.Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-bucket"},
+		Spec: strategyv1alpha1.BucketSpec{Template: strategyv1alpha1.BucketTemplate{
+			Image:       "controller:latest",
+			Destination: strategyv1alpha1.BucketDestination{Bucket: "cozy-backups", Endpoint: "http://s3"},
+		}},
+	}
+	resolved := &ResolvedBackupConfig{StrategyRef: corev1.TypedLocalObjectReference{
+		APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+		Kind:     strategyv1alpha1.BucketStrategyKind,
+		Name:     "cozy-default-bucket",
+	}}
+	now := metav1.Now()
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "manual-1", UID: "new-uid"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: corev1.TypedLocalObjectReference{Kind: bucketAppKind, Name: "web"}},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	claim := &buckettypes.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bucket-web", UID: "claim-uid"},
+		Spec:       buckettypes.BucketClaimSpec{BucketClassName: "seaweedfs"},
+		Status:     buckettypes.BucketClaimStatus{BucketReady: true, BucketName: "app-bucket"},
+	}
+	access := bucketAccess("bucket-web-cozy-backup",
+		map[string]string{managedByLabel: managedByValue},
+		[]metav1.OwnerReference{{APIVersion: buckettypes.GroupVersion.String(), Kind: "BucketClaim", Name: "bucket-web", UID: "claim-uid"}},
+		buckettypes.BucketAccessSpec{
+			BucketClaimName: "bucket-web", BucketAccessClassName: "seaweedfs-readonly",
+			Protocol: bucketProtocolS3, CredentialsSecretName: "bucket-web-cozy-backup",
+		})
+	access.Status.AccessGranted = true
+	// A completed Job of the right name owned by a DIFFERENT BackupJob UID.
+	yes := true
+	alienMirror := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant-x", Name: jobNameForBackupJob(job),
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: backupsv1alpha1.GroupVersion.String(), Kind: "BackupJob", Name: "manual-1", UID: "old-uid", Controller: &yes}},
+		},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}},
+	}
+	r, _ := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"),
+		clientfake.NewClientBuilder().WithObjects(job, strategy, claim, access, alienMirror))
+	if _, err := r.reconcileBucket(context.Background(), job, resolved); err != nil {
+		t.Fatalf("reconcileBucket: %v", err)
+	}
+	updated := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(job), updated); err != nil {
+		t.Fatalf("get backupjob: %v", err)
+	}
+	if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("phase = %q, want Failed (unowned mirror Job must not be adopted)", updated.Status.Phase)
+	}
+	if updated.Status.BackupRef != nil {
+		t.Fatalf("BackupRef must stay nil, got %+v", updated.Status.BackupRef)
+	}
+}
+
+func TestReclaimFailedBucketBackupWarnsWhenJobCannotStart(t *testing.T) {
+	// The ReclaimNotStarted Event is the only signal that a partial copy was left
+	// in the shared repo bucket, so it must fire when the reclaim Job cannot be
+	// created. A scheme without BackupJob makes SetControllerReference fail.
+	s := runtime.NewScheme()
+	_ = batchv1.AddToScheme(s)
+	rec := record.NewFakeRecorder(10)
+	r := &BackupJobReconciler{
+		Client:   clientfake.NewClientBuilder().WithScheme(s).Build(),
+		Scheme:   s,
+		Recorder: rec,
+	}
+	j := &backupsv1alpha1.BackupJob{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bj1"}}
+	rendered := strategyv1alpha1.BucketTemplate{Image: "img", Destination: strategyv1alpha1.BucketDestination{Bucket: "cozy-backups", Endpoint: "http://s3"}}
+	r.reclaimFailedBucketBackup(context.Background(), j, rendered, "tenant-x/web/bj1-uid/")
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "ReclaimNotStarted") {
+			t.Fatalf("event = %q, want a ReclaimNotStarted warning", ev)
+		}
+	default:
+		t.Fatal("no Event emitted when the reclaim Job could not be created")
+	}
+}
+
+func TestBuildBucketCleanupPodHasRestrictedSecurityContext(t *testing.T) {
+	snap := &bucketBackupSnapshot{
+		RepoBucket: "cozy-backups", RepoEndpoint: "http://s3", RepoPrefix: "tenant-x/web/bk1/",
+		RepoCredentialsSecret: "cozy-backups-creds", RepoCredentialsAccessKeyKey: "AWS_ACCESS_KEY_ID", RepoCredentialsSecretKeyKey: "AWS_SECRET_ACCESS_KEY",
+	}
+	assertRestrictedSecurityContext(t, "cleanup", buildBucketCleanupPod(snap, "img").Spec.Containers[0].SecurityContext)
+}
+
+func TestBuildBucketMirrorPodHasRestrictedSecurityContext(t *testing.T) {
+	tmpl := strategyv1alpha1.BucketTemplate{Image: "img", Destination: strategyv1alpha1.BucketDestination{Bucket: "cozy-backups", Endpoint: "http://s3"}}
+	assertRestrictedSecurityContext(t, "mirror", buildBucketMirrorPod(bucketModeBackup, tmpl, "acc", "p/", false, false).Spec.Containers[0].SecurityContext)
+}
+
+func assertRestrictedSecurityContext(t *testing.T, name string, sc *corev1.SecurityContext) {
+	t.Helper()
+	if sc == nil {
+		t.Fatalf("%s container has no SecurityContext", name)
+	}
+	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+		t.Errorf("%s: AllowPrivilegeEscalation must be false", name)
+	}
+	if sc.Capabilities == nil || len(sc.Capabilities.Drop) == 0 || sc.Capabilities.Drop[0] != "ALL" {
+		t.Errorf("%s: capabilities must drop ALL, got %+v", name, sc.Capabilities)
+	}
+	if sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("%s: seccomp profile must be RuntimeDefault", name)
+	}
+}
+
+// bucketBackupScenario builds a BackupJob past its preconditions (ready claim,
+// granted source access, strategy resolved) so a seeded mirror Job drives the
+// JobComplete/JobFailed branch of reconcileBucket.
+func bucketBackupScenario(uid string) (*backupsv1alpha1.BackupJob, *ResolvedBackupConfig, []client.Object) {
+	now := metav1.Now()
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "manual-1", UID: types.UID(uid)},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: corev1.TypedLocalObjectReference{Kind: bucketAppKind, Name: "web"}},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	strategy := &strategyv1alpha1.Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-bucket"},
+		Spec: strategyv1alpha1.BucketSpec{Template: strategyv1alpha1.BucketTemplate{
+			Image:       "controller:latest",
+			Destination: strategyv1alpha1.BucketDestination{Bucket: "cozy-backups", Endpoint: "http://s3"},
+		}},
+	}
+	resolved := &ResolvedBackupConfig{StrategyRef: corev1.TypedLocalObjectReference{
+		APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group), Kind: strategyv1alpha1.BucketStrategyKind, Name: "cozy-default-bucket",
+	}}
+	claim := &buckettypes.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bucket-web", UID: "claim-uid"},
+		Spec:       buckettypes.BucketClaimSpec{BucketClassName: "seaweedfs"},
+		Status:     buckettypes.BucketClaimStatus{BucketReady: true, BucketName: "app-bucket"},
+	}
+	access := bucketAccess("bucket-web-cozy-backup",
+		map[string]string{managedByLabel: managedByValue},
+		[]metav1.OwnerReference{{APIVersion: buckettypes.GroupVersion.String(), Kind: "BucketClaim", Name: "bucket-web", UID: "claim-uid"}},
+		buckettypes.BucketAccessSpec{BucketClaimName: "bucket-web", BucketAccessClassName: "seaweedfs-readonly", Protocol: bucketProtocolS3, CredentialsSecretName: "bucket-web-cozy-backup"})
+	access.Status.AccessGranted = true
+	return job, resolved, []client.Object{strategy, claim, access}
+}
+
+func ownedMirrorJob(job *backupsv1alpha1.BackupJob, cond batchv1.JobConditionType) *batchv1.Job {
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: jobNameForBackupJob(job), OwnerReferences: bucketJobControllerRef(job)},
+		Status:     batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: cond, Status: corev1.ConditionTrue}}},
+	}
+}
+
+func reclaimJobExists(t *testing.T, c client.Client, jobName string) bool {
+	t.Helper()
+	err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: jobName + "-reclaim"}, &batchv1.Job{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("get reclaim Job: %v", err)
+	}
+	return err == nil
+}
+
+func TestReconcileBucketReclaimsOnMirrorJobFailed(t *testing.T) {
+	// A mirror that dies partway has already put a prefix's worth into the shared
+	// repo bucket with no Backup for cleanup to key off, so a JobFailed must
+	// reclaim the partial prefix before the BackupJob goes terminal.
+	job, resolved, objs := bucketBackupScenario("new-uid")
+	objs = append(objs, job, ownedMirrorJob(job, batchv1.JobFailed))
+	r, _ := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"), clientfake.NewClientBuilder().WithObjects(objs...))
+	if _, err := r.reconcileBucket(context.Background(), job, resolved); err != nil {
+		t.Fatalf("reconcileBucket: %v", err)
+	}
+	updated := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(job), updated); err != nil {
+		t.Fatalf("get backupjob: %v", err)
+	}
+	if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("phase = %q, want Failed", updated.Status.Phase)
+	}
+	if !reclaimJobExists(t, r.Client, job.Name) {
+		t.Fatal("a reclaim Job must be created on the JobFailed exit")
+	}
+}
+
+var errTransientArtifactCreate = errors.New("transient artifact create conflict")
+
+func failBackupCreate() interceptor.Funcs {
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*backupsv1alpha1.Backup); ok {
+				return apierrors.NewConflict(schema.GroupResource{Group: "backups.cozystack.io", Resource: "backups"}, obj.GetName(), errTransientArtifactCreate)
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	}
+}
+
+func TestArtifactWriteRetryUsesOwnClock(t *testing.T) {
+	// StartedAt is stamped before the mirror Job, which may run for hours, so the
+	// artifact-write retry cannot be clocked off it. A transient Backup create
+	// failure requeues while the ArtifactWritePending condition is young and only
+	// fails (reclaiming the copy) once that condition's own clock is spent.
+	t.Run("young condition requeues", func(t *testing.T) {
+		job, resolved, objs := bucketBackupScenario("uid-a")
+		objs = append(objs, job, ownedMirrorJob(job, batchv1.JobComplete))
+		r, _ := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"),
+			clientfake.NewClientBuilder().WithObjects(objs...).WithInterceptorFuncs(failBackupCreate()))
+		res, err := r.reconcileBucket(context.Background(), job, resolved)
+		if err != nil {
+			t.Fatalf("reconcileBucket: %v", err)
+		}
+		if res.RequeueAfter <= 0 {
+			t.Fatalf("want a requeue while the retry clock is young, got %+v", res)
+		}
+		updated := &backupsv1alpha1.BackupJob{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(job), updated); err != nil {
+			t.Fatalf("get backupjob: %v", err)
+		}
+		if updated.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatal("must not fail while the artifact-write clock is young")
+		}
+		if cond := meta.FindStatusCondition(updated.Status.Conditions, bucketArtifactWritePendingCondition); cond == nil {
+			t.Fatal("ArtifactWritePending condition must be set to start the retry clock")
+		}
+		if reclaimJobExists(t, r.Client, job.Name) {
+			t.Fatal("must not reclaim while still retrying")
+		}
+	})
+
+	t.Run("spent condition reclaims and fails", func(t *testing.T) {
+		job, resolved, objs := bucketBackupScenario("uid-b")
+		job.Status.Conditions = []metav1.Condition{{
+			Type:               bucketArtifactWritePendingCondition,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ArtifactWriteFailing",
+			Message:            "retrying",
+			LastTransitionTime: metav1.NewTime(time.Now().Add(-StrategyNotReadyDeadline - time.Minute)),
+		}}
+		objs = append(objs, job, ownedMirrorJob(job, batchv1.JobComplete))
+		r, _ := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"),
+			clientfake.NewClientBuilder().WithObjects(objs...).WithInterceptorFuncs(failBackupCreate()))
+		if _, err := r.reconcileBucket(context.Background(), job, resolved); err != nil {
+			t.Fatalf("reconcileBucket: %v", err)
+		}
+		updated := &backupsv1alpha1.BackupJob{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(job), updated); err != nil {
+			t.Fatalf("get backupjob: %v", err)
+		}
+		if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("phase = %q, want Failed once the retry clock is spent", updated.Status.Phase)
+		}
+		if !reclaimJobExists(t, r.Client, job.Name) {
+			t.Fatal("must reclaim the stranded copy when giving up on the artifact write")
+		}
+	})
+}
+
+func TestCleanupBucketBackupHoldsPurgeWhileRestoreActive(t *testing.T) {
+	// An in-place restore lists the repo prefix to build its keep-set; a purge
+	// removing a key before the listing reaches it drops that key and the restore
+	// then wipes the live copy. Cleanup must hold while a RestoreJob still reads
+	// the Backup, creating no cleanup Job.
+	s := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{backupsv1alpha1.AddToScheme, batchv1.AddToScheme, strategyv1alpha1.AddToScheme} {
+		if err := add(s); err != nil {
+			t.Fatalf("AddToScheme: %v", err)
+		}
+	}
+	raw, err := marshalBucketSnapshot(bucketBackupSnapshot{
+		Kind: bucketSnapshotKind, RepoBucket: "cozy-backups", RepoEndpoint: "http://s3", RepoPrefix: "tenant-x/web/bk1/",
+	})
+	if err != nil {
+		t.Fatalf("marshalBucketSnapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bk1"},
+		Spec:       backupsv1alpha1.BackupSpec{StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.BucketStrategyKind, Name: "cozy-default-bucket"}},
+		Status:     backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+	}
+	activeRJ := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "rj1"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk1"}},
+		Status:     backupsv1alpha1.RestoreJobStatus{Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+	}
+	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(backup, activeRJ).Build()
+	r := &BackupReconciler{Client: c, Scheme: s}
+
+	res, err := r.cleanupBucketBackup(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupBucketBackup: %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Fatalf("want a requeue while a restore is active, got %+v", res)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: "bk1-cleanup"}, &batchv1.Job{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("a cleanup Job must not be created while the purge is held (err=%v)", err)
+	}
+}
+
+func TestReconcileBucketRestoreRefusesDeletingBackup(t *testing.T) {
+	// A Backup mid-reclaim may have its repo objects half-purged; starting an
+	// in-place restore against it would mirror a subset and then delete the rest
+	// of the live bucket, so a restore whose mirror Job does not yet exist is
+	// refused while the Backup is being deleted.
+	now := metav1.Now()
+	raw, err := marshalBucketSnapshot(bucketBackupSnapshot{
+		Kind: bucketSnapshotKind, RepoBucket: "cozy-backups", RepoEndpoint: "http://s3", RepoPrefix: "tenant-x/web/bk1/",
+	})
+	if err != nil {
+		t.Fatalf("marshalBucketSnapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bk1", DeletionTimestamp: &now, Finalizers: []string{"backups.cozystack.io/cleanup"}},
+		Spec:       backupsv1alpha1.BackupSpec{ApplicationRef: corev1.TypedLocalObjectReference{Kind: bucketAppKind, Name: "web"}, StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.BucketStrategyKind, Name: "cozy-default-bucket"}},
+		Status:     backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+	}
+	rj := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "rj1"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk1"}},
+		Status:     backupsv1alpha1.RestoreJobStatus{Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+	}
+	_, rr := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"), clientfake.NewClientBuilder().WithObjects(rj))
+	if _, err := rr.reconcileBucketRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileBucketRestore: %v", err)
+	}
+	updated := &backupsv1alpha1.RestoreJob{}
+	if err := rr.Get(context.Background(), client.ObjectKeyFromObject(rj), updated); err != nil {
+		t.Fatalf("get restorejob: %v", err)
+	}
+	if updated.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("phase = %q, want Failed (restore from a deleting Backup must be refused)", updated.Status.Phase)
 	}
 }

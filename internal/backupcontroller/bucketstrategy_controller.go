@@ -51,6 +51,12 @@ const (
 	// terminal or been deleted, whose Pods a background GC has not yet stopped.
 	bucketRestoreBackupLabel = "backups.cozystack.io/restore-backup"
 
+	// bucketArtifactWritePendingCondition tracks the window in which the mirror
+	// has completed but recording the Backup artifact is still being retried. Its
+	// own LastTransitionTime clocks the retry budget, which cannot ride StartedAt:
+	// that is stamped before the mirror Job, which may legitimately run for hours.
+	bucketArtifactWritePendingCondition = "ArtifactWritePending"
+
 	// Driver-metadata key prefix used to round-trip BackupClassStrategy
 	// parameters through the Backup artifact, mirroring the Job driver.
 	bucketParamPrefix = "bucket.strategy.backups.cozystack.io/parameter/"
@@ -383,6 +389,14 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure mirror Job: %v", err))
 	}
+	// ensureJobStrategyJob adopts any Job that already carries the name. The repo
+	// prefix is UID-scoped, so a finished Job left by a prior identically-named
+	// ad-hoc BackupJob would otherwise be read as JobComplete and record a Backup
+	// pointing at this run's prefix, where nothing was written. Only a Job this
+	// BackupJob controls may drive the completion decision.
+	if !metav1.IsControlledBy(batchJob, j) {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("mirror Job %s/%s exists but is not owned by this BackupJob; refusing to adopt it", j.Namespace, batchJob.Name))
+	}
 
 	switch jobConditionState(batchJob) {
 	case batchv1.JobComplete:
@@ -391,34 +405,44 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 		}
 		artifact, err := r.createBucketBackupArtifact(ctx, j, resolved, *rendered, claim.Status.BucketName, repoPrefix)
 		if err != nil {
+			// The mirror has already written the full copy under repoPrefix, so
+			// every terminal exit here must reclaim it first or it is stranded in
+			// the shared repo bucket with no Backup for cleanup to key off.
+			//
 			// A collision with a prior run's Backup is terminal - retrying cannot
 			// resolve it, and this run must not report success against the stale
 			// snapshot.
 			if errors.Is(err, errBucketArtifactNameCollision) {
+				r.reclaimFailedBucketBackup(ctx, j, *rendered, repoPrefix)
 				return r.markBackupJobFailed(ctx, j, err.Error())
 			}
-			// Otherwise the mirror already wrote the full copy, so failing here
-			// would strand it with no Backup for cleanup to key off: requeue the
-			// transient artifact write (BackupRef gates re-create), bounded by the
-			// same deadline as the wait helpers and surfaced through a condition
-			// and Event so a persistently-rejected write is not silent.
-			if strategyNotReadyDeadlineExceeded(j.Status.StartedAt) {
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("mirror completed but recording the Backup artifact did not succeed within %s: %v", StrategyNotReadyDeadline, err))
-			}
+			// Otherwise the create is failing transiently (apiserver conflict,
+			// webhook timeout, etcd leader change): requeue and retry. Bound the
+			// retry on its OWN clock - the ArtifactWritePending condition's first
+			// transition - not on StartedAt, which is stamped before the mirror Job
+			// and can already be past StrategyNotReadyDeadline the first time this
+			// branch runs for a bucket whose mirror legitimately took longer.
 			if r.Recorder != nil {
 				r.Recorder.Eventf(j, corev1.EventTypeWarning, "ArtifactWritePending", "mirror completed but the Backup artifact is not yet recorded: %v", err)
 			}
 			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
-				Type:    "Ready",
-				Status:  metav1.ConditionFalse,
-				Reason:  "ArtifactWritePending",
+				Type:    bucketArtifactWritePendingCondition,
+				Status:  metav1.ConditionTrue,
+				Reason:  "ArtifactWriteFailing",
 				Message: fmt.Sprintf("mirror completed; recording Backup artifact: %v", err),
 			})
 			if updateErr := r.Status().Update(ctx, j); updateErr != nil {
 				getLogger(ctx).Error(updateErr, "failed to update BackupJob status after artifact write error")
+				return ctrl.Result{}, updateErr
+			}
+			if cond := apimeta.FindStatusCondition(j.Status.Conditions, bucketArtifactWritePendingCondition); cond != nil &&
+				time.Since(cond.LastTransitionTime.Time) > StrategyNotReadyDeadline {
+				r.reclaimFailedBucketBackup(ctx, j, *rendered, repoPrefix)
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("mirror completed but recording the Backup artifact did not succeed within %s: %v", StrategyNotReadyDeadline, err))
 			}
 			return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
 		}
+		apimeta.RemoveStatusCondition(&j.Status.Conditions, bucketArtifactWritePendingCondition)
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
 		j.Status.CompletedAt = &now

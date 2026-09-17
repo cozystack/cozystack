@@ -371,7 +371,13 @@ func mirror(ctx context.Context, from, to copySide, serverSide, deleteExtraneous
 	err := from.store.list(ctx, from.bucket, from.prefix, func(key string, _ int64, etag string) error {
 		rel := strings.TrimPrefix(key, from.prefix)
 		destKey := to.prefix + rel
-		seen[destKey] = struct{}{}
+		// Only the delete-extraneous pass reads this set, so a backup or a to-copy
+		// restore must not accumulate a key per source object: a large bucket would
+		// hold its whole key list for the length of the run for nothing and risk an
+		// OOM well before the byte stream does.
+		if deleteExtraneous {
+			seen[destKey] = struct{}{}
+		}
 
 		// Resume: skip an object already at the destination with the SAME content
 		// (matching ETag), so a retried run does not re-transfer what an earlier

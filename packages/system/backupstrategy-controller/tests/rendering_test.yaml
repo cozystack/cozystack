@@ -215,9 +215,20 @@ tests:
         template: templates/strategy-bucket-default.yaml
       # The endpoint keeps its scheme: the mirror reads a scheme-less endpoint
       # as HTTPS, so an http:// SeaweedFS must survive the render as http://.
-      - matchRegex:
+      # Pin the exact value - ^https?:// would pass an https:// regression too.
+      - equal:
           path: spec.template.destination.endpoint
-          pattern: ^https?://
+          value: http://seaweedfs-s3.tenant-root.svc.cozy.local:8333
+        template: templates/strategy-bucket-default.yaml
+      # The mirror Pod's resource envelope and per-attempt deadline ride the
+      # shipped strategy; deleting either block from the template must fail here.
+      - equal:
+          path: spec.template.resources.limits.memory
+          value: 512Mi
+        template: templates/strategy-bucket-default.yaml
+      - equal:
+          path: spec.template.timeoutSeconds
+          value: 7200
         template: templates/strategy-bucket-default.yaml
       # The namespace segment of the prefix is the only thing separating two
       # tenants inside the shared cozy-backups bucket, so pin the shipped value:
@@ -239,6 +250,25 @@ tests:
           path: spec.config.s3ForcePathStyle
           value: "true"
         template: templates/velero-bsl.yaml
+
+  - it: "Bucket strategy carries the TLS block when the platform sets a CA or opts out of verification"
+    set:
+      backupStorage.bucketNameOverride: test-bucket
+      backupStorage.insecureSkipTLSVerify: true
+      backupStorage.endpointCASecretName: my-s3-ca
+    asserts:
+      - equal:
+          path: spec.template.destination.tls.insecureSkipVerify
+          value: true
+        template: templates/strategy-bucket-default.yaml
+      - equal:
+          path: spec.template.destination.tls.caSecretKeyRef.name
+          value: my-s3-ca
+        template: templates/strategy-bucket-default.yaml
+      - equal:
+          path: spec.template.destination.tls.caSecretKeyRef.key
+          value: ca.crt
+        template: templates/strategy-bucket-default.yaml
 
   - it: "external S3 (provisionBucket=false): Strategy CRs render against the configured bucketName, no Bucket CR is created"
     set:
