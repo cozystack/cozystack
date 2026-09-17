@@ -1,8 +1,9 @@
 {{/*
   Skip the post-install/post-upgrade init Job entirely while the chart
-  renders bootstrap.recovery. Helm waits up to 5m for hooks to succeed,
-  but the Job's pg_isready loop can't drain that budget while CNPG is
-  still streaming the restore from S3 - the hook then times out and
+  renders bootstrap.recovery. The platform gives hooks the HelmRelease
+  upgrade timeout (10m, cozystack-api HelmReleaseUpgradeTimeout), but the
+  Job's pg_isready loop can't drain that budget while CNPG is still
+  streaming the restore from S3 - the hook then times out and
   Helm rolls the upgrade back to the previous bootstrap.initdb spec,
   which makes every subsequent recovery pod panic in CNPG's
   InitInfo.loadBackup (Recovery == nil after the rollback).
@@ -24,9 +25,13 @@ spec:
   # purges the target Cluster (and its <release>-superuser Secret) while the hook
   # is pending, the pod's mount fails and its readiness wait can never succeed, so
   # without a hard cap the hook — and every later reconcile of this release —
-  # deadlocks. Bound the whole Job and do not retry the pod, so a purged target
-  # fails the hook within the deadline instead of hanging forever.
-  activeDeadlineSeconds: 600
+  # deadlocks. Bound the whole Job well UNDER the 10m hook budget (the readiness
+  # loop below caps itself lower still), so on a purged target the Job's own
+  # DeadlineExceeded — or the loop's diagnostic exit — surfaces first, instead of
+  # Helm's generic 10m timeout that says nothing about why. Do not retry the pod:
+  # the script is idempotent and the purged-target pod stays Pending on the missing
+  # mount, so a retry buys nothing.
+  activeDeadlineSeconds: 300
   backoffLimit: 0
   ttlSecondsAfterFinished: 3600
   template:

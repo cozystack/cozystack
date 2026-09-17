@@ -28,8 +28,14 @@ tests:
       - equal:
           path: spec.backoffLimit
           value: 0
-      - isNotNullOrEmpty:
+      # The Job's deadline must sit strictly BELOW the platform's 10m (600s)
+      # HelmRelease hook budget, or on a purged target the Job's own failure fires
+      # no earlier than Helm's generic timeout and the operator loses the
+      # diagnostic. Pin the exact value so a bump back to 600 (== the Helm timeout)
+      # reddens here.
+      - equal:
           path: spec.activeDeadlineSeconds
+          value: 300
       - matchRegex:
           path: metadata.annotations["helm.sh/hook"]
           pattern: post-upgrade

@@ -102,15 +102,18 @@ stringData:
 
     # Bounded readiness wait: this script runs as a post-upgrade Helm hook Helm
     # blocks on, so an unbounded `until pg_isready` would hang the hook forever if
-    # a concurrent restore purges the Cluster out from under it. Fail after ~9m so
-    # the hook resolves (as failed) rather than deadlocking every later reconcile;
-    # the Job's activeDeadlineSeconds is the hard backstop for a mount that never
-    # succeeds (a deleted superuser Secret).
+    # a concurrent restore purges the Cluster out from under it. The recovered
+    # Cluster is already running when this hook fires, so pg_isready answers in
+    # seconds on the healthy path; fail after ~4m (under the Job's 300s
+    # activeDeadlineSeconds, itself well under Helm's 10m hook budget) so a purged
+    # target surfaces THIS diagnostic first rather than Helm's generic timeout. The
+    # Job's activeDeadlineSeconds is the hard backstop for a mount that never
+    # succeeds (a deleted superuser Secret), where this loop never runs at all.
     attempts=0
     until pg_isready ; do
       attempts=$((attempts + 1))
-      if [ "$attempts" -ge 110 ]; then
-        echo "postgres not ready after ~9m; the restore target may have been purged by a concurrent restore - failing the init-job rather than blocking the Helm post-upgrade hook" >&2
+      if [ "$attempts" -ge 50 ]; then
+        echo "postgres not ready after ~4m; the restore target may have been purged by a concurrent restore - failing the init-job rather than blocking the Helm post-upgrade hook" >&2
         exit 1
       fi
       sleep 5
