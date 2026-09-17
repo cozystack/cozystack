@@ -45,6 +45,24 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'exit "\$\{cleanup_failed\}"'
 
+  - it: "bounds the cleanup Job so a claim that will not go cannot hang the uninstall"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 270
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 10
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-test -l app\.kubernetes\.io/instance=mariadb-test --ignore-not-found --wait=true --timeout=120s'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '--request-timeout='
+
   - it: "cleanup Role grants get/list/watch/delete on persistentvolumeclaims"
     documentSelector:
       path: kind
@@ -70,7 +88,7 @@ tests:
             resourceNames:
               - mariadb-test-metrics-password
               - mariadb-test-repl-password
-            verbs: ["get", "watch", "delete"]
+            verbs: ["get", "delete"]
       # Lock the exact rule set (PVC rule + the single scoped secrets rule).
       # Without this, a broader unscoped `secrets` rule could be added and the
       # `contains` checks above would still pass.

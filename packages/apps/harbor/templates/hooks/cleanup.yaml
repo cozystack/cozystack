@@ -11,6 +11,7 @@ metadata:
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  activeDeadlineSeconds: 270
   template:
     metadata:
       labels:
@@ -19,6 +20,7 @@ spec:
     spec:
       serviceAccountName: {{ .Release.Name }}-cleanup
       restartPolicy: Never
+      terminationGracePeriodSeconds: 10
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -69,7 +71,7 @@ spec:
               # this selector matches only those two kept PVCs.
               echo "Deleting orphaned PVCs for {{ .Release.Name }}-system..."
               kubectl delete pvc -n {{ .Release.Namespace }} \
-                -l release={{ .Release.Name }}-system --ignore-not-found \
+                -l release={{ .Release.Name }}-system --ignore-not-found --wait=true --timeout=120s \
                 || echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
 
               # Remove the cert-manager Certificate owned by this release's

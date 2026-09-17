@@ -74,6 +74,24 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: kubectl delete[^\n]*-l acme.cert-manager.io/http01-solver=true
 
+  - it: bounds the cleanup Job so a claim that will not go cannot hang the uninstall
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 270
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 10
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-l release=harbor-test-system --ignore-not-found --wait=true --timeout=120s'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '--request-timeout='
+
   - it: pins the cleanup image by digest and routes it through the images registry
     documentIndex: 0
     asserts:
