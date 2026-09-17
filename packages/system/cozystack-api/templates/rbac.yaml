@@ -27,12 +27,13 @@ rules:
 - apiGroups: ["cozystack.io"]
   resources: ["*"]
   verbs: ["get", "watch", "list"]
-# Marketplace Tap resource: disconnecting a community tap deletes its
-# (cluster-scoped) PackageSource. The tap's Flux OCIRepository is read here for
-# List/Get/Watch; its write verbs are scoped to a namespaced Role in cozy-system
-# (see tap-source-role.yaml), since the API only ever manages tap sources there.
+# Marketplace Tap resource: disconnecting a tap deletes its (cluster-scoped)
+# PackageSource and the tap-managed registration Package that de-registers its
+# apps. The tap's Flux OCIRepository is read here for List/Get/Watch; its write
+# verbs are scoped to a namespaced Role in cozy-system (see tap-source-role.yaml),
+# since the API only ever manages tap sources there.
 - apiGroups: ["cozystack.io"]
-  resources: ["packagesources"]
+  resources: ["packagesources", "packages"]
   verbs: ["delete"]
 - apiGroups: ["source.toolkit.fluxcd.io"]
   resources: ["ocirepositories"]

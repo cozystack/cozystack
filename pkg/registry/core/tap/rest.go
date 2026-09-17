@@ -327,6 +327,16 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 		return nil, false, apierrors.NewInternalError(fmt.Errorf("delete PackageSource %q: %w", name, err))
 	}
 
+	// Remove the tap-managed registration Package too, so the repository's apps
+	// de-register from the catalog (deleting it garbage-collects the registration
+	// HelmReleases and their ApplicationDefinitions). A Package not managed by
+	// this tap is left in place.
+	if pu, err := r.dyn.Resource(gvrPackages).Get(ctx, name, metav1.GetOptions{}); err == nil && pu.GetLabels()[tapconst.Label] == "true" {
+		if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, metav1.DeleteOptions{DryRun: deleteDryRun(opts)}); err != nil && !apierrors.IsNotFound(err) {
+			klog.V(2).InfoS("tap disconnected but its registration Package could not be deleted", "package", name, "err", err)
+		}
+	}
+
 	// Remove the Flux source too, but only when no other PackageSource still
 	// references it. Installed Packages are intentionally left untouched.
 	if ref := ps.Spec.SourceRef; ref != nil && ref.Kind == "OCIRepository" && ref.Name != "" {

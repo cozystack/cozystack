@@ -335,10 +335,11 @@ charts in your management cluster: tap only sources you trust.`,
 var untapCmd = &cobra.Command{
 	Use:   "untap <packagesource-name>",
 	Short: "Remove a tapped repository",
-	Long: `Untap removes a tapped PackageSource and its Flux source.
-Already-installed Packages are left untouched (delete them explicitly with
-cozypkg del). Only tapped sources (marked with the marketplace-tap label) can
-be untapped; official sources are refused.`,
+	Long: `Untap removes a tapped PackageSource, its Flux source, and the
+tap-managed registration Package that de-registers the repository's apps from
+the catalog. Running application instances are left in place but become
+unmanaged until the repository is tapped again. Only tapped sources (marked
+with the marketplace-tap label) can be untapped; official sources are refused.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
@@ -358,11 +359,21 @@ be untapped; official sources are refused.`,
 			return fmt.Errorf("refusing to untap %q: not a tapped repository (missing the %s label); official sources cannot be untapped", name, tapconst.Label)
 		}
 
-		// Warn if a Package by this name is installed (add.go names the Package
-		// after its PackageSource).
+		// The registration Package (auto-created on connect, tap-managed)
+		// de-registers the repository's apps and is removed with the untap.
+		// Deleting it garbage-collects its registration HelmReleases and the
+		// ApplicationDefinitions they render. A Package NOT managed by this tap is
+		// left in place and blocks the untap without --yes.
 		pkg := &cozyv1alpha1.Package{}
-		if err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg); err == nil && !untapConfirmFlag {
-			return fmt.Errorf("package %s is still installed from this source; delete it with 'cozypkg del %s' first, or pass --yes to untap anyway (the Package stays installed)", name, name)
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg); err == nil {
+			if pkg.GetLabels()[tapconst.Label] == "true" {
+				if err := k8sClient.Delete(ctx, pkg); err != nil {
+					return fmt.Errorf("failed to delete registration Package %s: %w", name, err)
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Removed Package/%s\n", name)
+			} else if !untapConfirmFlag {
+				return fmt.Errorf("package %s is still installed from this source; delete it with 'cozypkg del %s' first, or pass --yes to untap anyway (the Package stays installed)", name, name)
+			}
 		}
 
 		srcName := ""

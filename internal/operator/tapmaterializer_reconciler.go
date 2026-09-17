@@ -29,6 +29,8 @@ import (
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -163,6 +165,15 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err := r.Patch(ctx, ps, client.Apply, client.FieldOwner(tapFieldOwner), client.ForceOwnership); err != nil {
 			return ctrl.Result{}, fmt.Errorf("materialize PackageSource %s: %w", ps.GetName(), err)
 		}
+		// Register the repository's apps on connect (not on a later `cozypkg
+		// add`): create a tap-managed Package so the install-marked components
+		// (the ApplicationDefinition registrations) deploy and the apps appear in
+		// the catalog, mirroring how the platform ships a Package per built-in
+		// app. The app components themselves carry no install block and are not
+		// deployed by the Package; they are instantiated per user resource.
+		if err := r.ensureRegistrationPackage(ctx, ps, repo.Name); err != nil {
+			return ctrl.Result{}, fmt.Errorf("register apps for %s: %w", ps.GetName(), err)
+		}
 		applied[ps.GetName()] = true
 		logger.Info("materialized PackageSource from tap", "name", ps.GetName(), "tap", repo.Name)
 	}
@@ -210,6 +221,45 @@ func (r *TapMaterializerReconciler) failMaterialize(ctx context.Context, repo *s
 	}
 	log.FromContext(ctx).Info("tap materialization blocked", "tap", repo.Name, "reason", cause.Error())
 	return ctrl.Result{}, nil
+}
+
+// ensureRegistrationPackage creates a tap-managed Package for a materialized
+// PackageSource, so its install-marked components (the ApplicationDefinition
+// registrations) deploy and its apps become browsable in the catalog on connect
+// rather than only after a manual `cozypkg add`. It is idempotent (an existing
+// Package is left as-is) and labels the Package so untap can remove it. A source
+// with no variants registers nothing.
+func (r *TapMaterializerReconciler) ensureRegistrationPackage(ctx context.Context, ps *cozyv1alpha1.PackageSource, sourceName string) error {
+	variant := defaultVariantName(ps)
+	if variant == "" {
+		return nil
+	}
+	pkg := &cozyv1alpha1.Package{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        ps.GetName(),
+			Labels:      map[string]string{tapconst.Label: "true"},
+			Annotations: map[string]string{tapconst.SourceAnnotation: sourceName},
+		},
+		Spec: cozyv1alpha1.PackageSpec{Variant: variant},
+	}
+	if err := r.Create(ctx, pkg); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+// defaultVariantName picks the variant a registration Package installs: the one
+// named "default" if present, otherwise the first declared variant.
+func defaultVariantName(ps *cozyv1alpha1.PackageSource) string {
+	for i := range ps.Spec.Variants {
+		if ps.Spec.Variants[i].Name == "default" {
+			return "default"
+		}
+	}
+	if len(ps.Spec.Variants) > 0 {
+		return ps.Spec.Variants[0].Name
+	}
+	return ""
 }
 
 // deleteMaterialized removes every PackageSource materialized from the given

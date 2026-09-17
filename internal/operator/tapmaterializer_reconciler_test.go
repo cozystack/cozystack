@@ -248,6 +248,77 @@ func TestPruneMaterializedKeepsCurrentSet(t *testing.T) {
 	}
 }
 
+func TestDefaultVariantName(t *testing.T) {
+	dflt := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
+		Variants: []cozyv1alpha1.Variant{{Name: "big"}, {Name: "default"}},
+	}}
+	if got := defaultVariantName(dflt); got != "default" {
+		t.Errorf("expected the default variant to win, got %q", got)
+	}
+	first := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
+		Variants: []cozyv1alpha1.Variant{{Name: "only"}, {Name: "second"}},
+	}}
+	if got := defaultVariantName(first); got != "only" {
+		t.Errorf("expected the first variant when there is no default, got %q", got)
+	}
+	if got := defaultVariantName(&cozyv1alpha1.PackageSource{}); got != "" {
+		t.Errorf("expected empty for no variants, got %q", got)
+	}
+}
+
+// TestReconcileRegistersApps asserts the happy path: a materialized tap creates
+// a tap-managed registration Package so the repository's apps register in the
+// catalog on connect, without a manual `cozypkg add`.
+func TestReconcileRegistersApps(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{
+		// samplePS declares PackageSource "example.hello" with a default variant.
+		"packages/core/platform/sources/hello.yaml": samplePS,
+	})
+	repo := tapRepo(true)
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+
+	var live sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &live); err != nil {
+		t.Fatal(err)
+	}
+	live.Status.Artifact = &fluxmeta.Artifact{URL: "http://example.com/a.tar.gz", Digest: digest, Revision: "rev1"}
+	if err := cl.Status().Update(context.Background(), &live); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &TapMaterializerReconciler{
+		Client: cl,
+		Scheme: scheme,
+		Fetch:  func(context.Context, string) ([]byte, error) { return data, nil },
+	}
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// The PackageSource is materialized under its declared name.
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &cozyv1alpha1.PackageSource{}); err != nil {
+		t.Fatalf("PackageSource not materialized: %v", err)
+	}
+	// A tap-managed registration Package was created for it.
+	var pkg cozyv1alpha1.Package
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &pkg); err != nil {
+		t.Fatalf("registration Package not created: %v", err)
+	}
+	if pkg.GetLabels()[tapconst.Label] != "true" {
+		t.Errorf("registration Package must be tap-managed (labelled), got %v", pkg.GetLabels())
+	}
+	if pkg.GetAnnotations()[tapconst.SourceAnnotation] != repo.Name {
+		t.Errorf("registration Package must record its source, got %v", pkg.GetAnnotations())
+	}
+	if pkg.Spec.Variant != "default" {
+		t.Errorf("registration Package variant = %q, want default", pkg.Spec.Variant)
+	}
+}
+
 // TestReconcileBlocksNameCollision asserts that when a tapped artifact declares
 // a PackageSource name already owned by a core component, the materializer
 // refuses: it does not overwrite the foreign object, records the reason on the
