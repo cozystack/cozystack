@@ -100,20 +100,23 @@ stringData:
     #!/bin/bash
     set -e
 
-    # Bounded readiness wait: this script runs as a post-upgrade Helm hook Helm
-    # blocks on, so an unbounded `until pg_isready` would hang the hook forever if
-    # a concurrent restore purges the Cluster out from under it. The recovered
-    # Cluster is already running when this hook fires, so pg_isready answers in
-    # seconds on the healthy path; fail after ~4m (under the Job's 300s
-    # activeDeadlineSeconds, itself well under Helm's 10m hook budget) so a purged
-    # target surfaces THIS diagnostic first rather than Helm's generic timeout. The
-    # Job's activeDeadlineSeconds is the hard backstop for a mount that never
-    # succeeds (a deleted superuser Secret), where this loop never runs at all.
+    {{- /*
+      Bounded readiness wait: this script runs as a post-install,post-upgrade Helm
+      hook Helm blocks on, so an unbounded `until pg_isready` would hang the hook
+      forever. The budget differs by context. On UPGRADE the Cluster is already up,
+      so answer in seconds and fail after ~4m (under the Job's 300s deadline, itself
+      under Helm's 10m budget) so a purged target surfaces THIS diagnostic first. On
+      INSTALL the Cluster is still provisioning (PVC, image pull, initdb), so allow
+      ~9m for a cold-but-healthy first boot rather than failing it prematurely; the
+      install Job deadline (570s) and Helm's 10m install timeout are the backstops.
+      A deleted-superuser-Secret mount never lets this loop run at all - the Job
+      deadline covers that.
+    */}}
     attempts=0
     until pg_isready ; do
       attempts=$((attempts + 1))
-      if [ "$attempts" -ge 50 ]; then
-        echo "postgres not ready after ~4m; the restore target may have been purged by a concurrent restore - failing the init-job rather than blocking the Helm post-upgrade hook" >&2
+      if [ "$attempts" -ge {{ if .Release.IsInstall }}110{{ else }}50{{ end }} ]; then
+        echo "postgres did not become ready in time; on a fresh install the Cluster may still be provisioning (check the cnpg.io/Cluster), on an upgrade the restore target may have been purged by a concurrent restore - failing the init-job rather than blocking the Helm hook" >&2
         exit 1
       fi
       sleep 5
@@ -153,10 +156,15 @@ stringData:
     echo "users to delete: $DELETE_USERS"
     for user in $DELETE_USERS; do
     # https://stackoverflow.com/a/51257346/2931267
+    # Quote the identifier: the username charset guard admits "-", "." and
+    # uppercase (a valid role name CREATE ROLE quotes), so a bare $user here would
+    # emit REASSIGN OWNED BY my-app - a syntax error that fails this post-upgrade
+    # hook under ON_ERROR_STOP and wedges every later reconcile. The orphaned-roles
+    # and database loops below already quote for the same reason.
     psql -v ON_ERROR_STOP=1 --echo-all <<EOT
-    REASSIGN OWNED BY $user TO postgres;
-    DROP OWNED BY $user;
-    DROP USER $user;
+    REASSIGN OWNED BY "$user" TO postgres;
+    DROP OWNED BY "$user";
+    DROP USER "$user";
     EOT
     done
 
