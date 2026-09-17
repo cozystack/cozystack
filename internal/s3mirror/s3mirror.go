@@ -253,10 +253,12 @@ func waitForBucketReady(ctx context.Context, store objectStore, bucket string, t
 	deadline := time.Now().Add(timeout)
 	delay := time.Second
 	for {
-		// A prefix that matches nothing keeps the probe cheap: a working
+		// A prefix unlikely to match real keys keeps the probe cheap: a working
 		// credential returns an empty listing, a not-yet-loaded one returns the
-		// server's auth error.
-		err := store.list(ctx, bucket, "\x00s3-mirror-preflight", func(string, int64, string) error { return nil })
+		// server's auth error. The prefix must stay plain ASCII - SeaweedFS
+		// answers a list whose prefix carries a NUL/control byte with a 500
+		// InternalError, which would make this readiness probe never succeed.
+		err := store.list(ctx, bucket, ".cozy-s3-mirror-preflight", func(string, int64, string) error { return nil })
 		if err == nil {
 			return nil
 		}

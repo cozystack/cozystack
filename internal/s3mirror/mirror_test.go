@@ -6,10 +6,12 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeETag mimics the S3 single-part ETag (md5 of the content) so the resume
@@ -165,6 +167,30 @@ func TestMirrorZeroObjectSourceDoesNotWipe(t *testing.T) {
 	}
 	if got := s.keys("app"); len(got) != 0 {
 		t.Fatalf("app keys = %v, want empty after allow-empty-source purge", got)
+	}
+}
+
+// controlCharRejectingStore emulates SeaweedFS answering a LIST whose prefix
+// carries a control byte with a 500 InternalError instead of an empty listing.
+type controlCharRejectingStore struct{ *fakeStore }
+
+func (s controlCharRejectingStore) list(ctx context.Context, bucket, prefix string, fn func(string, int64, string) error) error {
+	for _, r := range prefix {
+		if r < 0x20 {
+			return fmt.Errorf("InternalError: We encountered an internal error, please try again")
+		}
+	}
+	return s.fakeStore.list(ctx, bucket, prefix, fn)
+}
+
+func TestWaitForBucketReadyUsesBackendSafeProbe(t *testing.T) {
+	// The readiness probe must reach a live bucket on a backend that rejects a
+	// control-char list prefix. A NUL/control-byte prefix would make the probe
+	// error every attempt and time out, failing every backup and restore.
+	s := controlCharRejectingStore{newFakeStore()}
+	s.seed("app", "data/object", fakeObject{data: []byte("x")})
+	if err := waitForBucketReady(context.Background(), s, "app", time.Second); err != nil {
+		t.Fatalf("waitForBucketReady must probe with a backend-safe prefix: %v", err)
 	}
 }
 
