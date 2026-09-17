@@ -251,6 +251,10 @@ src_to_suites() {
     # not exist, is dropped by intersect_suites(), and a CDI change reaches
     # nothing runnable through it.
     vm-disk-application) echo vminstance ;;
+    # The VMInstance and VMDisk backup round-trips are the only Tests that run a
+    # Velero backup and restore; without this the source maps to a `velero`
+    # suite that does not exist and a Velero change runs neither.
+    velero) echo vminstance ;;
     # Both sources own system/ingress-nginx, and the gateway suite carries the
     # legacy Ingress admission regression coverage. Without these explicit
     # mappings their derived names point at suites that do not exist, so an
@@ -274,7 +278,7 @@ src_to_suites() {
     # harbor stores its registry in a BucketClaim the seaweedfs COSI driver
     # serves. etcd's round-trip is left out because CI gates it off. A test
     # derives this set from the suites.
-    seaweedfs-application) echo "bucket clickhouse harbor kafka kafka-metadata mariadb mongodb postgres rabbitmq redis seaweedfs" ;;
+    seaweedfs-application) echo "bucket clickhouse harbor kafka kafka-metadata mariadb mongodb postgres rabbitmq redis seaweedfs vminstance" ;;
     # Both suites create a KeycloakClient and wait for the operator's finalizer
     # to remove it. kubernetes-application has no dependsOn on keycloak-operator
     # (#4680), so the graph reaches only monitoring and would drop the tenant
@@ -460,6 +464,17 @@ while IFS= read -r file || [ -n "$file" ]; do
       # selected_apps would empty the final intersection and trip the
       # full-suite safety net).
       app=$(echo "$file" | sed -nE 's,^examples/backups/([^/]+)/.*,\1,p')
+      # The vmi and vmdisk backup demos are both harnessed by the vminstance
+      # suite, which owns VMDisk coverage too (see vm-disk-application in
+      # src_to_suites), so their dirs need the same source-style translation.
+      # The suite runs the vmi demo with SKIP_RESTORE_TO_COPY=1, so the to-copy
+      # step is docs-only: selecting the suite would pass without executing it.
+      case "$file" in
+        examples/backups/vmi/07-restore-to-copy.sh) continue ;;
+      esac
+      case "$app" in
+        vmi|vmdisk) app=vminstance ;;
+      esac
       if echo "$all_apps" | grep -Fxq "$app"; then
         selected_apps="$selected_apps $app"
         trigger_any=1
