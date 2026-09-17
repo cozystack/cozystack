@@ -112,6 +112,10 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "0"
+    # hook-succeeded, unlike the Job above: the Job reclaims itself through
+    # ttlSecondsAfterFinished, this has no such clock and would otherwise
+    # outlive the release. Reaping runs only once the Job is terminal, which
+    # activeDeadlineSeconds guarantees happens first.
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -123,6 +127,7 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "5"
+    # Reaped with the ServiceAccount above, for the reason recorded there.
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
   - apiGroups: ["kafka.strimzi.io"]
@@ -138,6 +143,7 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "5"
+    # Reaped with the ServiceAccount above, for the reason recorded there.
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 roleRef:
   apiGroup: rbac.authorization.k8s.io
