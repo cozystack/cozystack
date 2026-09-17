@@ -1956,6 +1956,11 @@ type removedField struct {
 	path string
 	// replacement says what happens instead, in the second half of the warning.
 	replacement string
+	// emptyDefault marks a key whose schema defaulted it to an empty string or
+	// to a map of them. The read path fills those defaults in and a client that
+	// writes back what it read stores them, so for such a key only a value
+	// counts as set, not its presence.
+	emptyDefault bool
 }
 
 var removedFieldsByKind = map[string][]removedField{
@@ -1963,16 +1968,16 @@ var removedFieldsByKind = map[string][]removedField{
 		{path: "nodeGroups", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
 		{path: "nodeHealthCheck", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
 		{path: "maxNodeProvisionTime", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
-		{path: "images", replacement: "the images come from the chart, and an air-gapped install moves them with the platform-wide registry"},
+		{path: "images", replacement: "the images come from the chart, and an air-gapped install moves them with the platform-wide registry", emptyDefault: true},
 	},
 	"KubernetesNodes": {
-		{path: "images", replacement: "the images come from the chart, and an air-gapped install moves them with the platform-wide registry"},
+		{path: "images", replacement: "the images come from the chart, and an air-gapped install moves them with the platform-wide registry", emptyDefault: true},
 	},
 	"OpenSearch": {
-		{path: "images", replacement: "the image follows spec.version"},
+		{path: "images", replacement: "the image follows spec.version", emptyDefault: true},
 	},
 	"FoundationDB": {
-		{path: "cluster.version", replacement: "the version is selected with spec.version"},
+		{path: "cluster.version", replacement: "the version is selected with spec.version", emptyDefault: true},
 	},
 }
 
@@ -1990,7 +1995,8 @@ func (r *REST) warnRemovedFields(ctx context.Context, app *appsv1alpha1.Applicat
 		return
 	}
 	for _, f := range fields {
-		if !hasValuesPath(values, strings.Split(f.path, ".")) {
+		value, present := lookupValuesPath(values, strings.Split(f.path, "."))
+		if !present || (f.emptyDefault && !carriesValue(value)) {
 			continue
 		}
 		warning.AddWarning(ctx, "", fmt.Sprintf(
@@ -1999,25 +2005,41 @@ func (r *REST) warnRemovedFields(ctx context.Context, app *appsv1alpha1.Applicat
 	}
 }
 
-// hasValuesPath reports whether the values carry every segment of the path,
-// walking only objects: a segment under a scalar is not present.
-func hasValuesPath(values map[string]any, path []string) bool {
-	current := values
-	for i, segment := range path {
-		value, present := current[segment]
-		if !present {
-			return false
-		}
-		if i == len(path)-1 {
-			return true
-		}
-		next, ok := value.(map[string]any)
+// lookupValuesPath returns the value at the path, walking only objects: a
+// segment under a scalar is not present.
+func lookupValuesPath(values map[string]any, path []string) (any, bool) {
+	var current any = values
+	for _, segment := range path {
+		object, ok := current.(map[string]any)
 		if !ok {
-			return false
+			return nil, false
 		}
-		current = next
+		current, ok = object[segment]
+		if !ok {
+			return nil, false
+		}
 	}
-	return false
+	return current, true
+}
+
+// carriesValue reports whether a value is more than an empty default: not null,
+// not an empty string, and for a map, at least one entry that carries a value.
+func carriesValue(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case string:
+		return v != ""
+	case map[string]any:
+		for _, nested := range v {
+			if carriesValue(nested) {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
+	}
 }
 
 // errNotAcceptable indicates that the resource does not support conversion to Table
