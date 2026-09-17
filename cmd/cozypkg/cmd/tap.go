@@ -327,7 +327,7 @@ charts in your management cluster: tap only sources you trust.`,
 		for _, n := range names {
 			fmt.Fprintf(cmd.OutOrStdout(), "  PackageSource/%s\n", n)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Install with: cozypkg add %s\n", names[0])
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "The repository's applications are registered automatically; browse them in the dashboard catalog and create instances there.\n")
 		return nil
 	},
 }

@@ -27,6 +27,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -498,6 +499,12 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 		}
 
 		if err := k8sClient.Create(ctx, pkg); err != nil {
+			// A tapped repository registers its apps on connect, so the Package
+			// may already exist; treat that as done rather than an error.
+			if apierrors.IsAlreadyExists(err) {
+				_, _ = fmt.Fprintf(os.Stderr, "Package %s is already registered\n", pkgName)
+				continue
+			}
 			return fmt.Errorf("failed to create Package %s: %w", pkgName, err)
 		}
 
