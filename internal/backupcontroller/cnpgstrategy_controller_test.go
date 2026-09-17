@@ -2294,11 +2294,12 @@ func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
 	default:
 		t.Fatalf("expected a CredentialsConvergencePending event, got none")
 	}
-	// And a DURABLE counterpart the Event cannot provide: CredentialsConverged=False
-	// survives on .status after the Event ages out. Dropping the SetStatusCondition
-	// removes it.
-	if c := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondCredentialsConverged); c == nil || c.Status != metav1.ConditionFalse {
-		t.Fatalf("expected CredentialsConverged=False on the terminal write, got %+v", c)
+	// The pending credential handoff is carried as the REASON on Ready=True (not a
+	// standalone never-True condition): a durable, readable marker that does not
+	// look like a standing failure. Changing the reason back to a bare
+	// "RestoreCompleted" reddens this.
+	if c := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); c == nil || c.Reason != "RestoreCompletedCredentialsPending" {
+		t.Fatalf("expected Ready reason RestoreCompletedCredentialsPending, got %+v", c)
 	}
 }
 

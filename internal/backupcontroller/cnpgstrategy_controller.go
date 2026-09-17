@@ -89,14 +89,6 @@ const (
 	// is failing before the full restore deadline elapses.
 	restoreCondRecoveryConverged = "RecoveryConverged"
 
-	// Set False beside the terminal Succeeded write: the data is restored but the
-	// generated credentials have NOT been reconciled onto the recovered roles yet
-	// (the chart's post-upgrade init-job does that, which this controller does not
-	// wait for). Unlike the one-shot CredentialsConvergencePending Event, a
-	// condition survives on .status, so an operator reading a copy restored
-	// overnight still sees that convergence was pending and unverified here.
-	restoreCondCredentialsConverged = "CredentialsConverged"
-
 	// True while clearing spec.bootstrap.enabled keeps failing transiently, before
 	// the grace window is exhausted. Without it the RestoreJob sits non-terminal
 	// for up to the whole window with nothing on .status explaining the wait.
@@ -1054,29 +1046,22 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		now := metav1.Now()
 		restoreJob.Status.CompletedAt = &now
 		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
+		// The DATA is restored and the Cluster is healthy - that is what this
+		// terminal Succeeded asserts. Clearing bootstrap only STARTS the credential
+		// convergence: the chart's post-upgrade init-job runs ALTER ROLE on the next
+		// HelmRelease reconcile, which this controller does not wait for. Carry that
+		// pending handoff as the REASON on Ready rather than as a standalone
+		// CredentialsConverged condition: this controller never observes the
+		// convergence, so such a condition would be structurally False on every
+		// success - indistinguishable from a standing failure to a generic
+		// conditions view - and answer nothing. A reason on Ready=True says the same
+		// thing without pretending to a lifecycle it cannot complete; the message
+		// and the Event below carry the how-to-confirm.
 		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
-			Type:   "Ready",
-			Status: metav1.ConditionTrue,
-			Reason: "RestoreCompleted",
-			// The DATA is restored and the Cluster is healthy - that is what this
-			// terminal Succeeded asserts. Clearing bootstrap only STARTS the
-			// credential convergence: the chart's post-upgrade init-job runs
-			// ALTER ROLE on the next HelmRelease reconcile, which this controller
-			// does not wait for. Say so rather than claim the passwords are
-			// already reconciled; confirm by an application login.
+			Type:    "Ready",
+			Status:  metav1.ConditionTrue,
+			Reason:  "RestoreCompletedCredentialsPending",
 			Message: "target cnpg.io Cluster reached a healthy state and spec.bootstrap.enabled was cleared; the app's post-upgrade init-job reconciles the generated passwords onto the recovered roles on the next HelmRelease reconcile (this RestoreJob does not wait for it - confirm by logging in as an application user)",
-		})
-		// A durable counterpart to the one-shot Event below: the data is restored but
-		// credential convergence has NOT been verified by this controller (the chart's
-		// init-job does it, unwatched here). Recorded as a condition so it survives on
-		// .status - an operator reading a copy restored overnight still sees the
-		// pending state after the Event has aged out of the API. It stays False on
-		// purpose; this controller never observes the convergence that would flip it.
-		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
-			Type:    restoreCondCredentialsConverged,
-			Status:  metav1.ConditionFalse,
-			Reason:  "PendingInitJob",
-			Message: "data restored and spec.bootstrap.enabled cleared; the app's post-upgrade init-job reconciles the generated passwords onto the recovered roles on the next HelmRelease reconcile, which this RestoreJob does not wait for - confirm by an application login",
 		})
 		// If the disable retried within the window, close out that pending condition.
 		if apimeta.FindStatusCondition(restoreJob.Status.Conditions, restoreCondBootstrapDisablePending) != nil {
