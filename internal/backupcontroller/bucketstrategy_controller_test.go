@@ -1144,3 +1144,67 @@ func TestReconcileBucketRestoreRefusesDeletingBackup(t *testing.T) {
 		t.Fatalf("phase = %q, want Failed (restore from a deleting Backup must be refused)", updated.Status.Phase)
 	}
 }
+
+func TestReconcileBucketRestoreRefusesUnownedMirrorJob(t *testing.T) {
+	// The restore path adopts a same-named mirror Job by name (<restoreJob>-restore).
+	// A finished Job left by a prior identically-named RestoreJob must not be read
+	// as this run's completion: without an ownership check the new RestoreJob is
+	// marked Succeeded though no mirror ran for the current target - a green
+	// restore that never happened. Symmetric to the backup-path guard.
+	raw, err := marshalBucketSnapshot(bucketBackupSnapshot{
+		Kind: bucketSnapshotKind, RepoBucket: "cozy-backups", RepoEndpoint: "http://s3", RepoPrefix: "tenant-x/web/bk1/",
+		RepoCredentialsSecret: "cozy-backups-creds", RepoCredentialsAccessKeyKey: "AWS_ACCESS_KEY_ID", RepoCredentialsSecretKeyKey: "AWS_SECRET_ACCESS_KEY",
+	})
+	if err != nil {
+		t.Fatalf("marshalBucketSnapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bk1", UID: "backup-uid"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: bucketAppKind, Name: "web"},
+			StrategyRef:    corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.BucketStrategyKind, Name: "cozy-default-bucket"},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+	}
+	strategy := &strategyv1alpha1.Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-bucket"},
+		Spec:       strategyv1alpha1.BucketSpec{Template: strategyv1alpha1.BucketTemplate{Image: "controller:latest"}},
+	}
+	claim := &buckettypes.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bucket-web", UID: "claim-uid"},
+		Spec:       buckettypes.BucketClaimSpec{BucketClassName: "seaweedfs"},
+		Status:     buckettypes.BucketClaimStatus{BucketReady: true, BucketName: "app-bucket"},
+	}
+	access := bucketAccess(restoreAccessName("web"),
+		map[string]string{managedByLabel: managedByValue},
+		[]metav1.OwnerReference{{APIVersion: buckettypes.GroupVersion.String(), Kind: "BucketClaim", Name: "bucket-web", UID: "claim-uid"}},
+		buckettypes.BucketAccessSpec{BucketClaimName: "bucket-web", BucketAccessClassName: "seaweedfs", Protocol: bucketProtocolS3, CredentialsSecretName: restoreAccessName("web")})
+	access.Status.AccessGranted = true
+	now := metav1.Now()
+	rj := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "rj1", UID: "new-uid"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk1"}},
+		Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &now, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+	}
+	// A completed restore Job of the right name owned by a DIFFERENT RestoreJob UID.
+	yes := true
+	alienMirror := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant-x", Name: jobNameForRestoreJob(rj),
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: backupsv1alpha1.GroupVersion.String(), Kind: "RestoreJob", Name: "rj1", UID: "old-uid", Controller: &yes}},
+		},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}},
+	}
+	_, rr := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"),
+		clientfake.NewClientBuilder().WithObjects(rj, strategy, claim, access, alienMirror))
+	if _, err := rr.reconcileBucketRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileBucketRestore: %v", err)
+	}
+	updated := &backupsv1alpha1.RestoreJob{}
+	if err := rr.Get(context.Background(), client.ObjectKeyFromObject(rj), updated); err != nil {
+		t.Fatalf("get restorejob: %v", err)
+	}
+	if updated.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("phase = %q, want Failed (unowned mirror Job must not be adopted as this restore's completion)", updated.Status.Phase)
+	}
+}

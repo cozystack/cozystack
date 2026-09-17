@@ -894,6 +894,17 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure mirror Job: %v", err))
 	}
+	// ensureJobStrategyRestoreJob adopts any Job that already carries the name,
+	// which is name-only (<restoreJob>-restore). A finished restore Job left by a
+	// prior identically-named RestoreJob (a Plan re-run or a retry, whose own Job
+	// a background GC has not yet removed) would otherwise be read as JobComplete
+	// and mark this RestoreJob Succeeded without a mirror ever running for the
+	// current target - a green restore that never happened. Only a Job this
+	// RestoreJob controls may drive the completion decision, mirroring the guard
+	// the backup path applies after ensureJobStrategyJob.
+	if !metav1.IsControlledBy(batchJob, restoreJob) {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("mirror Job %s/%s exists but is not owned by this RestoreJob; refusing to adopt it", targetNamespace, batchJob.Name))
+	}
 
 	switch jobConditionState(batchJob) {
 	case batchv1.JobComplete:
