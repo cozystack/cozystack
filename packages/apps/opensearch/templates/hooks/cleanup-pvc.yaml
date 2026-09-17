@@ -8,9 +8,10 @@ metadata:
   annotations:
     "helm.sh/hook": post-delete
     "helm.sh/hook-weight": "10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: 1
+  activeDeadlineSeconds: 120
   template:
     metadata:
       labels:
@@ -49,11 +50,11 @@ spec:
             - |
               set -u
               echo "Deleting orphaned PVCs for {{ .Release.Name }}..."
-              if ! kubectl delete pvc -n {{ .Release.Namespace }} -l opster.io/opensearch-cluster={{ .Release.Name }} --ignore-not-found; then
+              if ! kubectl delete pvc -n {{ .Release.Namespace }} -l opster.io/opensearch-cluster={{ .Release.Name }} --ignore-not-found --wait=false; then
                 echo "ERROR: failed to delete PVCs matching opster.io/opensearch-cluster={{ .Release.Name }} in {{ .Release.Namespace }}; orphaned PVCs may remain" >&2
                 exit 1
               fi
-              echo "PVC cleanup complete."
+              echo "PVC deletion requested for {{ .Release.Name }}; the claims are released once their pods have stopped."
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -85,7 +86,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "delete"]
+    verbs: ["get", "list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

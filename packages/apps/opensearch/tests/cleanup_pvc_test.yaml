@@ -21,16 +21,19 @@ tests:
           value: post-delete
       - equal:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
-          value: before-hook-creation,hook-succeeded
+          value: before-hook-creation
       - equal:
           path: spec.backoffLimit
           value: 1
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 120
       - equal:
           path: spec.template.spec.serviceAccountName
           value: os-test-cleanup
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'kubectl delete pvc -n tenant-test -l opster\.io/opensearch-cluster=os-test --ignore-not-found'
+          pattern: 'kubectl delete pvc -n tenant-test -l opster\.io/opensearch-cluster=os-test --ignore-not-found --wait=false'
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'exit 1'
@@ -71,7 +74,7 @@ tests:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           content: ALL
 
-  - it: grants get/list/watch/delete on persistentvolumeclaims and nothing else
+  - it: grants get/list/delete on persistentvolumeclaims and nothing else
     documentSelector:
       path: kind
       value: Role
@@ -84,7 +87,7 @@ tests:
           value:
             - apiGroups: [""]
               resources: ["persistentvolumeclaims"]
-              verbs: ["get", "list", "watch", "delete"]
+              verbs: ["get", "list", "delete"]
 
   - it: binds the cleanup ServiceAccount to the cleanup Role
     documentSelector:
