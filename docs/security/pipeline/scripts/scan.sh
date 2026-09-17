@@ -100,9 +100,15 @@ if [ -f "$IMAGES_FILE" ]; then
 fi
 
 if [ "$SCAN_FAILURES" -gt 0 ]; then
-  echo "ERROR: $SCAN_FAILURES scan target(s) failed — the aggregate is INCOMPLETE, not clean." >&2
-  echo "       Investigate the *.err files in $RESULTS_DIR before trusting this run." >&2
-  exit 1
+  # Do NOT abort here. On production data a fixed set of references is unscannable
+  # by construction (Helm values parsed into names carrying no registry) and fails
+  # every run; aborting before the merge would stop all CVE reporting for the whole
+  # org, every scheduled run, until someone fixes them. Instead merge what
+  # succeeded, record the failure count in scan-results.json, and let report.py
+  # fail the run at the very end — so it still goes red without discarding the
+  # aggregate (including the CRITICALs) that was collected.
+  echo "WARNING: $SCAN_FAILURES scan target(s) failed — the aggregate will be marked INCOMPLETE." >&2
+  echo "         Investigate the *.err files in $RESULTS_DIR." >&2
 fi
 
 # --- Phase 3: Merge all results into one file ---
@@ -146,6 +152,7 @@ for repo in discovery["repos"]:
             dev_only_images.add(pkg["image"])
 
 all_vulns = {}  # CVE-ID -> details
+scan_errors = 0  # targets that failed to scan (marker files), carried into the output
 
 for filename in sorted(os.listdir(results_dir)):
     if not filename.endswith(".json"):
@@ -158,10 +165,10 @@ for filename in sorted(os.listdir(results_dir)):
     except (json.JSONDecodeError, FileNotFoundError):
         continue
 
-    # A failed scan writes {"__scan_error__": true, "Results": []}. The run aborts
-    # before this stage when a target fails, so reaching here with the marker means
-    # a stale error file from an earlier run; do not merge it as a clean target.
+    # A failed scan writes {"__scan_error__": true, "Results": []}. Count it and do
+    # NOT merge it as a clean target — a failed scan is not "zero findings".
     if data.get("__scan_error__"):
+        scan_errors += 1
         print(f"   WARN: skipping errored scan result {filename}", file=sys.stderr)
         continue
 
@@ -249,6 +256,7 @@ vulns_list = sorted(all_vulns.values(), key=lambda v: (sev_order.get(v["severity
 output = {
     "scan_date": __import__("datetime").datetime.utcnow().isoformat() + "Z",
     "total_vulnerabilities": len(vulns_list),
+    "scan_errors": scan_errors,
     "by_severity": {},
     "vulnerabilities": vulns_list,
 }
@@ -264,6 +272,8 @@ for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
     count = output["by_severity"].get(sev, 0)
     if count:
         print(f"  {sev}: {count}")
+if scan_errors:
+    print(f"INCOMPLETE: {scan_errors} target(s) failed to scan (recorded as scan_errors)")
 PYEOF
 
 echo "==> Scan complete: $OUTFILE"

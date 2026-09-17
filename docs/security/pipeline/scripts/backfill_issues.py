@@ -35,8 +35,6 @@ SEVERITY_LABELS = {
     "LOW": "security/low",
 }
 
-UNFIXED_AGE_THRESHOLD_DAYS = 365
-
 
 
 

@@ -12,7 +12,7 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from statelib import load_json, save_json
 
@@ -122,7 +122,7 @@ def main():
         assignees = [a["login"] for a in issue.get("assignees", [])]
         decided_by = assignees[0] if assignees else "unknown"
 
-        triage[cve_id] = {
+        entry = {
             "status": status,
             "reason": f"Triaged via issue #{issue['number']}",
             "decided_by": decided_by,
@@ -130,6 +130,15 @@ def main():
             "issue_number": issue["number"],
             "issue_url": f"https://github.com/{ISSUES_REPO}/issues/{issue['number']}",
         }
+        # accepted-risk carries a 90-day re-review: without a review_after date the
+        # label-driven acceptance (the main triage channel) would be permanent, the
+        # same gap report.py's age filter now avoids. false-positive is terminal and
+        # gets none.
+        if status == "accepted-risk":
+            entry["review_after"] = (
+                datetime.now(timezone.utc) + timedelta(days=90)
+            ).strftime("%Y-%m-%d")
+        triage[cve_id] = entry
         updated += 1
         print(f"  {cve_id}: {status} (issue #{issue['number']}, by {decided_by})")
 

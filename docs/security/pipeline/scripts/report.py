@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 
 from statelib import (
@@ -21,6 +22,8 @@ from statelib import (
     review_after_passed,
     override_review_due,
     age_drops,
+    RESOLVED_STATUSES,
+    UNFIXED_AGE_THRESHOLD_DAYS,
 )
 
 
@@ -31,8 +34,8 @@ REPORTED_FILE = os.path.join(STATE_DIR, "reported-cves.json")
 PENDING_FILE = os.path.join(STATE_DIR, "pending-weekly.json")
 TRIAGE_FILE = os.path.join(STATE_DIR, "triage-overrides.json")
 
-# Statuses that mean "already handled, skip in new reports"
-RESOLVED_STATUSES = {"false-positive", "accepted-risk", "fixed"}
+# RESOLVED_STATUSES and UNFIXED_AGE_THRESHOLD_DAYS are imported from statelib so the
+# filter functions there and classify_filter here compare against one definition.
 
 # Build/dev image patterns — CVEs in these are informational only
 DEV_IMAGE_PATTERNS = [
@@ -54,9 +57,6 @@ DEV_COMPONENT_PATTERNS = [
     "test/",
     "e2e/",
 ]
-
-# How old an unfixed CVE must be (days) before we auto-demote it
-UNFIXED_AGE_THRESHOLD_DAYS = 365
 
 # Repository where issues are created (this repo)
 ISSUES_REPO = os.environ.get("ISSUES_REPO", "cozystack/security-scanner")
@@ -169,9 +169,22 @@ def classify_filter(vuln, triage_overrides):
     # branch, which is what made the check unreachable before.
     entry = triage_overrides.get(cve_id)
     if entry and entry.get("status") in RESOLVED_STATUSES:
-        if review_after_passed(entry):
-            return False, None
-        return True, f"triaged as {entry['status']}"
+        if not review_after_passed(entry):
+            return True, f"triaged as {entry['status']}"
+        # Due for re-review. Stamp the entry in this same run so the condition does
+        # not stay true forever: move it to the non-resolved `needs-review` status
+        # and clear the date. Without this the finding re-files an issue and a draft
+        # advisory on every six-hourly tick, because nothing else writes the date
+        # back (sync_issues.py only rewrites on a status change). It surfaces ONCE
+        # for a maintainer; next run its status is no longer resolved, so the
+        # already-reported guard skips it until the re-triage lands.
+        entry["status"] = "needs-review"
+        entry["review_after"] = None
+        entry["decided_by"] = "pipeline-auto"
+        # A due override still must not resurrect a dev/build-only finding.
+        if is_dev_only(vuln):
+            return True, "dev/build dependency only"
+        return False, None
 
     # Dev/build-only image or test component
     if is_dev_only(vuln):
@@ -500,13 +513,16 @@ def process_critical(scan_results, reported, triage_overrides):
         issue_url = create_issue(vuln, report_path)
         ghsa_url = create_ghsa_draft(vuln)
 
-        # If both the issue and the advisory failed to create, do NOT record the
-        # CVE as reported — otherwise the skip check passes over it forever, and a
-        # CRITICAL is left with no issue, no advisory and no trace. Leave it out so
-        # the next run retries it.
-        if not issue_url and not ghsa_url:
-            print(f"  WARN: {cve_id} — both issue and advisory creation failed; "
-                  f"not recording as reported so the next run retries it")
+        # If EITHER the issue or the advisory failed to create, do NOT record the
+        # CVE as reported. A partial success (issue OK, advisory None, or the
+        # reverse) is recorded with an empty URL and the skip check then passes over
+        # it forever, so the missing half is never created and the CRITICAL has no
+        # venue to be triaged in. Leave it out so the next run retries the missing
+        # half.
+        if not issue_url or not ghsa_url:
+            print(f"  WARN: {cve_id} — issue/advisory creation incomplete "
+                  f"(issue={'ok' if issue_url else 'FAILED'}, advisory={'ok' if ghsa_url else 'FAILED'}); "
+                  f"not recording as reported so the next run retries the missing half")
             continue
 
         affected = vuln.get("affected_repos", [])
@@ -627,6 +643,15 @@ def main():
     with open(args.scan_results) as f:
         scan_results = json.load(f)
 
+    # scan.sh records how many targets it could not scan rather than aborting, so
+    # the report is still produced from what succeeded. Surface it, and make the
+    # run go red at the very end — after the reports and state are written — so an
+    # incomplete run is visible without suppressing what was collected.
+    scan_errors = scan_results.get("scan_errors", 0)
+    if scan_errors:
+        print(f"WARNING: scan was INCOMPLETE — {scan_errors} target(s) could not be "
+              f"scanned; reports below cover only the targets that succeeded.")
+
     triaged_count = len([v for v in triage_overrides.values() if v.get("status") in RESOLVED_STATUSES])
     print(f"Scan date: {scan_results.get('scan_date', 'unknown')}")
     print(f"Total CVEs in scan: {scan_results.get('total_vulnerabilities', 0)}")
@@ -648,6 +673,13 @@ def main():
     save_json(TRIAGE_FILE, triage_overrides)
     print(f"\nState saved. Reported: {len(reported)}, Pending: {len(pending)}, "
           f"Triage overrides: {len(triage_overrides)}")
+
+    # Now that the reports and state are written, fail the run if the scan was
+    # incomplete, so it goes red without having suppressed what was collected.
+    if scan_errors:
+        print(f"\nFAILING: {scan_errors} scan target(s) could not be scanned — this "
+              f"run's aggregate is incomplete.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

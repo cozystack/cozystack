@@ -13,6 +13,7 @@ forget when the guard changes.
 import json
 import os
 import re
+import sys
 import tempfile
 from datetime import datetime, timezone
 
@@ -88,7 +89,12 @@ def review_after_passed(entry):
     try:
         due = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except ValueError:
-        return False
+        # review_after is hand-edited by maintainers, so "2026-13-01" is ordinary
+        # input. Fail toward review: surface the finding rather than letting a
+        # typo turn a time-boxed acceptance into a silent permanent one.
+        print(f"WARNING: unparsable review_after {raw!r} on a triage override — "
+              f"treating as due so the finding surfaces for review", file=sys.stderr)
+        return True
     if due.tzinfo is None:
         due = due.replace(tzinfo=timezone.utc)
     return datetime.now(timezone.utc) >= due
