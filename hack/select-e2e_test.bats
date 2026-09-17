@@ -285,6 +285,35 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "a velero change selects the vminstance suite" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/velero/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    rm -rf "$tmp"
+    case " $output " in *" vminstance "*) ;; *) echo "a velero change selected '$output'" >&2; exit 1 ;; esac
+}
+
+@test "vmi/vmdisk backup harness edit selects the vminstance suite" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    for f in examples/backups/vmi/run-all.sh examples/backups/vmdisk/run-all.sh; do
+        echo "$f" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+        [ "$output" = "vminstance" ]
+    done
+    rm -rf "$tmp"
+}
+
+@test "vmi restore-to-copy step, which the suite skips, selects nothing" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "examples/backups/vmi/07-restore-to-copy.sh" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources") || true
+    rm -rf "$tmp"
+    [ -z "$output" ]
+}
+
 @test "backup example without a matching suite selects nothing" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -484,7 +513,7 @@ assert_full_suite() {
     # escalated to the full run.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
-    echo "hack/e2e-chainsaw/backup/chainsaw-test.yaml.disabled" > "$tmp/diff"
+    echo "hack/e2e-chainsaw/kubernetes-proxmox/chainsaw-test.yaml.disabled" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ -z "$output" ]
     rm -rf "$tmp"
@@ -496,7 +525,7 @@ assert_full_suite() {
     # that would silently unselect real work committed in the same change.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
-    printf '%s\n' hack/e2e-chainsaw/backup/chainsaw-test.yaml.disabled \
+    printf '%s\n' hack/e2e-chainsaw/kubernetes-proxmox/chainsaw-test.yaml.disabled \
         packages/apps/postgres/values.yaml > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "postgres" ]
