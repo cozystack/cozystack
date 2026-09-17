@@ -20,6 +20,8 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
+from statelib import load_json, save_json
+
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 STATE_DIR = os.path.join(REPO_ROOT, "state")
 REPORTED_FILE = os.path.join(STATE_DIR, "reported-cves.json")
@@ -34,19 +36,6 @@ SEVERITY_LABELS = {
 }
 
 UNFIXED_AGE_THRESHOLD_DAYS = 365
-
-
-def load_json(path, default):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return default
-
-
-def save_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
 
 
 def cve_age_days(cve_id):

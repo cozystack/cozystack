@@ -10,6 +10,12 @@ CLONE_DIR="$WORKSPACE/repos"
 RESULTS_DIR="$WORKSPACE/scan-results"
 OUTFILE="$WORKSPACE/scan-results.json"
 
+# The Phase-3 merge runs as a heredoc Python subprocess and reads these paths from
+# the environment; a subprocess only inherits EXPORTED variables. Without this the
+# merge silently falls back to its hardcoded workspace/... defaults, so any run
+# invoked with a non-default WORKSPACE would merge the wrong directory.
+export WORKSPACE DISCOVERY IMAGES_FILE CLONE_DIR RESULTS_DIR OUTFILE
+
 mkdir -p "$RESULTS_DIR"
 
 if [ ! -f "$DISCOVERY" ]; then
@@ -150,6 +156,13 @@ for filename in sorted(os.listdir(results_dir)):
         with open(filepath) as f:
             data = json.load(f)
     except (json.JSONDecodeError, FileNotFoundError):
+        continue
+
+    # A failed scan writes {"__scan_error__": true, "Results": []}. The run aborts
+    # before this stage when a target fails, so reaching here with the marker means
+    # a stale error file from an earlier run; do not merge it as a clean target.
+    if data.get("__scan_error__"):
+        print(f"   WARN: skipping errored scan result {filename}", file=sys.stderr)
         continue
 
     # Determine source (repo name or image name)

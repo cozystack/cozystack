@@ -12,7 +12,9 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+from statelib import load_json, save_json
 
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -115,33 +117,6 @@ def notify_slack(vulns):
         print(f"  WARN: Slack notification failed: {e}")
 
 
-def load_json(path, default):
-    # A missing file is a legitimate first run -> default. A present-but-corrupt
-    # file must NOT be silently treated as empty and then overwritten (that erases
-    # the historic record — issue/advisory URLs, triage state). Fail loudly instead.
-    if not os.path.exists(path):
-        return default
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
-        raise SystemExit(
-            f"FATAL: {path} exists but is not valid JSON ({e}). Refusing to "
-            f"continue and overwrite it with an empty default — restore it from "
-            f"git history (it may be a truncated write) and re-run."
-        )
-
-
-def save_json(path, data):
-    # Atomic write: a run killed mid-dump must not leave a truncated file that the
-    # next run reads as empty. Write to a temp file, then rename over the target.
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, path)
-
-
 def cve_age_days(cve_id):
     """Estimate CVE age from its ID (CVE-YYYY-NNNNN)."""
     match = re.match(r"CVE-(\d{4})-", cve_id)
@@ -178,6 +153,20 @@ def is_dev_only(vuln):
     return True
 
 
+def _review_after_passed(entry):
+    """True if the override carries a review_after date that is now due/past."""
+    raw = entry.get("review_after")
+    if not raw:
+        return False
+    try:
+        due = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= due
+
+
 def classify_filter(vuln, triage_overrides):
     """Classify a CVE for filtering. Returns (skip, reason) or (False, None).
 
@@ -191,10 +180,14 @@ def classify_filter(vuln, triage_overrides):
     if severity == "UNKNOWN":
         return True, "unknown severity"
 
-    # Already triaged as resolved
+    # Already triaged as resolved — UNLESS its review_after date has passed. A
+    # suppression with an expired review date has done its job; keeping it would
+    # dismiss the finding forever, which is exactly what review_after exists to
+    # prevent. Let it surface again for re-review.
     if cve_id in triage_overrides:
-        status = triage_overrides[cve_id].get("status", "")
-        if status in RESOLVED_STATUSES:
+        entry = triage_overrides[cve_id]
+        status = entry.get("status", "")
+        if status in RESOLVED_STATUSES and not _review_after_passed(entry):
             return True, f"triaged as {status}"
 
     # Dev/build-only image or test component
@@ -207,6 +200,21 @@ def classify_filter(vuln, triage_overrides):
     if not vuln.get("fixed_version"):
         age = cve_age_days(cve_id)
         if age > UNFIXED_AGE_THRESHOLD_DAYS and severity not in ("CRITICAL", "HIGH"):
+            # PERSIST the auto-dismissal as accepted-risk with a review_after date.
+            # Returning skip alone records nothing, so the finding is re-filtered on
+            # every run forever and never reaches the 90-day re-review the status
+            # model requires. Writing it makes the drop auditable and time-boxed.
+            if cve_id not in triage_overrides:
+                now = datetime.now(timezone.utc)
+                triage_overrides[cve_id] = {
+                    "status": "accepted-risk",
+                    "decided_by": "pipeline-auto",
+                    "decided_at": now.date().isoformat(),
+                    "review_after": (now + timedelta(days=90)).date().isoformat(),
+                    "reason": (f"[{vuln.get('package', '')}] Auto-demoted: {severity} finding with no "
+                               f"upstream fix, CVE approximately {age} days old (older than the "
+                               f"{UNFIXED_AGE_THRESHOLD_DAYS}-day threshold). Re-review on the date above."),
+                }
             return True, f"unfixed upstream ({age} days old, {severity or 'no severity'})"
 
     return False, None
@@ -587,6 +595,14 @@ def send_weekly_report(reported, pending):
         print(f"Creating issues for {len(high_vulns)} HIGH CVEs...")
     for vuln in high_vulns:
         issue_url = create_issue(vuln, report_path)
+        # Same guard as the CRITICAL path: if the issue failed to create, do NOT
+        # record the CVE as reported. Recording it with an empty issue_url makes the
+        # skip check pass over it on every later run, so the 3-business-day triage
+        # clock never starts. Leave it out so the next run retries it.
+        if not issue_url:
+            print(f"  WARN: {vuln['cve_id']} — issue creation failed; not recording "
+                  f"as reported so the next run retries it")
+            continue
         reported[vuln["cve_id"]] = {
             "severity": vuln["severity"],
             "reported_at": datetime.now(timezone.utc).isoformat(),
@@ -640,7 +656,11 @@ def main():
 
     save_json(REPORTED_FILE, reported)
     save_json(PENDING_FILE, pending)
-    print(f"\nState saved. Reported: {len(reported)}, Pending: {len(pending)}")
+    # triage_overrides may have gained pipeline-auto accepted-risk entries from the
+    # age filter; persist them so the dismissals are recorded and re-reviewed.
+    save_json(TRIAGE_FILE, triage_overrides)
+    print(f"\nState saved. Reported: {len(reported)}, Pending: {len(pending)}, "
+          f"Triage overrides: {len(triage_overrides)}")
 
 
 if __name__ == "__main__":

@@ -15,19 +15,13 @@ import os
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 
+from statelib import load_json
+
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 STATE_DIR = os.path.join(REPO_ROOT, "state")
 REPORTS_DIR = os.path.join(REPO_ROOT, "reports")
 REPORTED_FILE = os.path.join(STATE_DIR, "reported-cves.json")
 TRIAGE_FILE = os.path.join(STATE_DIR, "triage-overrides.json")
-
-
-def load_json(path, default):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return default
 
 
 def save_report(content, filename):
