@@ -215,3 +215,24 @@ affinity:
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Guests whose interfaces are rendered by netplan, which is the population the
+cloud-init network-data below exists for. Non-empty means netplan.
+
+instanceProfile is a KubeVirt preference rather than a declaration of the guest
+network stack, so this is a proxy; it is the same proxy the Windows node
+affinity above already relies on, and the field that replaced the
+systemDisk.image the network-data template was gated on before the
+virtual-machine chart was split into vm-disk and vm-instance. Narrow by design:
+cloud-init passes a v2 config through verbatim only for the netplan renderer,
+so widening this to a guest that renders through sysconfig or eni would hand it
+a match stanza and a dhcp4-overrides key that renderer drops, leaving the
+interface with no DHCP at all.
+*/}}
+{{- define "virtual-machine.netplanGuest" -}}
+{{- $profile := toString .Values.instanceProfile -}}
+{{- if or (hasPrefix "ubuntu" $profile) (hasPrefix "debian" $profile) -}}
+true
+{{- end -}}
+{{- end -}}
