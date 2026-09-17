@@ -22,23 +22,28 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   {{- /*
-    This Job is a post-install,post-upgrade Helm hook Helm blocks on, and the two
-    contexts want different budgets. On UPGRADE the recovered/existing Cluster is
-    already up, so the readiness loop answers in seconds; the hazard is a concurrent
-    restore purging the target Cluster (and its <release>-superuser Secret) while
-    the hook is pending, whose pod then FailedMounts and can never become ready.
-    Bound the Job well under the 10m hook budget (the loop caps itself lower still)
-    so the Job's own DeadlineExceeded - or the loop's diagnostic exit - surfaces
-    first, instead of Helm's generic 10m timeout that says nothing about why. On
-    INSTALL nothing is running yet: the same release is provisioning the Cluster
-    (PVC, image pull, initdb), Helm's wait does not cover a CR, and there is no
-    purge hazard (a restore-to-copy installs with bootstrap.enabled=true, which
-    skips this Job), so give the cold start the near-full budget instead of failing
-    a slow-but-healthy first boot. Do not retry the pod either way: the script is
-    idempotent and the purged pod stays Pending on the missing mount, so a retry
+    This Job is a post-install,post-upgrade Helm hook Helm blocks on. Bound it under
+    the 10m hook budget so its own DeadlineExceeded - or the readiness loop's
+    diagnostic exit - surfaces first, instead of Helm's generic 10m timeout that
+    says nothing about why. Both contexts get a value well below 600s but with real
+    headroom for the work the Job does after the pod is running: the "grant
+    privileges" step below runs a per-schema DO block (GRANT ALL + ALTER DEFAULT
+    PRIVILEGES over every schema of every managed database), so a large existing
+    database needs room, not just the seconds pg_isready takes. On UPGRADE the
+    Cluster is already up (the loop answers in seconds) and the hazard is a
+    concurrent restore purging the target and its <release>-superuser Secret, whose
+    pod then FailedMounts forever; 540s bounds that while leaving the grant loop
+    ~9m. On INSTALL nothing is running yet - the same release is provisioning the
+    Cluster (PVC, image pull, initdb), Helm's wait does not cover a CR, and there is
+    no purge hazard (a restore-to-copy installs with bootstrap.enabled=true, which
+    skips this Job) - so the cold start gets 570s rather than a tight deadline that
+    would fail a slow-but-healthy first boot. A database with a pathological number
+    of schemas can still outrun even this; that is the documented ceiling, the same
+    one Helm's own hook budget imposes. Do not retry the pod either way: the script
+    is idempotent and the purged pod stays Pending on the missing mount, so a retry
     buys nothing.
   */}}
-  activeDeadlineSeconds: {{ if .Release.IsInstall }}570{{ else }}300{{ end }}
+  activeDeadlineSeconds: {{ if .Release.IsInstall }}570{{ else }}540{{ end }}
   backoffLimit: 0
   ttlSecondsAfterFinished: 3600
   template:

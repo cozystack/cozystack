@@ -20,11 +20,13 @@ set:
     app: {}
 
 tests:
-  # On an UPGRADE the Cluster is already up, so the deadline is tight (300s): well
-  # below the platform's 10m (600s) hook budget, so a purged target's Job fails with
-  # its own diagnostic before Helm's generic timeout. A bump back to 600 (== the
-  # Helm timeout) reddens here.
-  - it: the init Job is tightly bounded on upgrade and does not retry
+  # On an UPGRADE the Cluster is already up, so pg_isready answers in seconds, but
+  # the deadline must still leave room for the per-schema grant DO block on a large
+  # existing database — 540s, well below the 10m (600s) hook budget so a purged
+  # target's Job fails with its own diagnostic before Helm's generic timeout, yet
+  # not the tight 300s that would fail a legitimate long grant pass. A bump back to
+  # 600 (== the Helm timeout) reddens here.
+  - it: the init Job is bounded on upgrade with grant-loop headroom and does not retry
     template: templates/init-job.yaml
     release:
       name: pg-test
@@ -38,7 +40,7 @@ tests:
           value: 0
       - equal:
           path: spec.activeDeadlineSeconds
-          value: 300
+          value: 540
       - matchRegex:
           path: metadata.annotations["helm.sh/hook"]
           pattern: post-upgrade
