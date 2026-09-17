@@ -116,17 +116,30 @@ def notify_slack(vulns):
 
 
 def load_json(path, default):
+    # A missing file is a legitimate first run -> default. A present-but-corrupt
+    # file must NOT be silently treated as empty and then overwritten (that erases
+    # the historic record — issue/advisory URLs, triage state). Fail loudly instead.
+    if not os.path.exists(path):
+        return default
     try:
         with open(path) as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return default
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"FATAL: {path} exists but is not valid JSON ({e}). Refusing to "
+            f"continue and overwrite it with an empty default — restore it from "
+            f"git history (it may be a truncated write) and re-run."
+        )
 
 
 def save_json(path, data):
+    # Atomic write: a run killed mid-dump must not leave a truncated file that the
+    # next run reads as empty. Write to a temp file, then rename over the target.
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp, path)
 
 
 def cve_age_days(cve_id):
@@ -188,11 +201,13 @@ def classify_filter(vuln, triage_overrides):
     if is_dev_only(vuln):
         return True, "dev/build dependency only"
 
-    # Unfixed upstream older than threshold
+    # Unfixed upstream older than threshold. Only auto-demote MEDIUM/LOW: a
+    # CRITICAL or HIGH with no fix is exactly what a human must see and decide on
+    # (accepted-risk with a review date), not something to silently drop by age.
     if not vuln.get("fixed_version"):
         age = cve_age_days(cve_id)
-        if age > UNFIXED_AGE_THRESHOLD_DAYS:
-            return True, f"unfixed upstream ({age} days old)"
+        if age > UNFIXED_AGE_THRESHOLD_DAYS and severity not in ("CRITICAL", "HIGH"):
+            return True, f"unfixed upstream ({age} days old, {severity or 'no severity'})"
 
     return False, None
 
@@ -491,6 +506,15 @@ def process_critical(scan_results, reported, triage_overrides):
 
         issue_url = create_issue(vuln, report_path)
         ghsa_url = create_ghsa_draft(vuln)
+
+        # If both the issue and the advisory failed to create, do NOT record the
+        # CVE as reported — otherwise the skip check passes over it forever, and a
+        # CRITICAL is left with no issue, no advisory and no trace. Leave it out so
+        # the next run retries it.
+        if not issue_url and not ghsa_url:
+            print(f"  WARN: {cve_id} — both issue and advisory creation failed; "
+                  f"not recording as reported so the next run retries it")
+            continue
 
         affected = vuln.get("affected_repos", [])
         target_repos = sorted(set(r.split(":")[0] for r in affected))

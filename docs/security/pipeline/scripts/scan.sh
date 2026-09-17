@@ -24,6 +24,7 @@ if ! command -v trivy &>/dev/null; then
 fi
 
 echo "==> Starting vulnerability scans..."
+SCAN_FAILURES=0
 
 # --- Phase 1: Scan repos (go.mod, Dockerfiles, lock files) ---
 
@@ -53,9 +54,12 @@ for repo_name in $REPO_NAMES; do
     --severity CRITICAL,HIGH,MEDIUM,LOW \
     --scanners vuln \
     --quiet \
-    > "$result_file" 2>/dev/null || {
-      echo "   WARN: trivy fs failed for $repo_name"
-      echo '{"Results": []}' > "$result_file"
+    > "$result_file" 2>"$result_file.err" || {
+      echo "   ERROR: trivy fs failed for $repo_name (see $result_file.err)" >&2
+      # Mark the target as ERRORED, not clean — a failed scan must not be merged
+      # into the aggregate as "no findings".
+      echo '{"__scan_error__": true, "Results": []}' > "$result_file"
+      SCAN_FAILURES=$((SCAN_FAILURES + 1))
     }
 done
 
@@ -81,11 +85,18 @@ if [ -f "$IMAGES_FILE" ]; then
       --scanners vuln \
       --quiet \
       --timeout 5m \
-      > "$result_file" 2>/dev/null || {
-        echo "   WARN: trivy image failed for $image"
-        echo '{"Results": []}' > "$result_file"
+      > "$result_file" 2>"$result_file.err" || {
+        echo "   ERROR: trivy image failed for $image (see $result_file.err)" >&2
+        echo '{"__scan_error__": true, "Results": []}' > "$result_file"
+        SCAN_FAILURES=$((SCAN_FAILURES + 1))
       }
   done < "$IMAGES_FILE"
+fi
+
+if [ "$SCAN_FAILURES" -gt 0 ]; then
+  echo "ERROR: $SCAN_FAILURES scan target(s) failed — the aggregate is INCOMPLETE, not clean." >&2
+  echo "       Investigate the *.err files in $RESULTS_DIR before trusting this run." >&2
+  exit 1
 fi
 
 # --- Phase 3: Merge all results into one file ---

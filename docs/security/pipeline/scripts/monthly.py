@@ -137,30 +137,23 @@ def main():
         fixed_table = "| — | — | — | — | — |"
 
     # In-progress table
-    if in_progress:
-        ip_rows = []
-        for v in sorted(in_progress, key=lambda x: {"CRITICAL": 0, "HIGH": 1}.get(x["severity"], 2)):
-            pr_link = f"[PR]({v['fix_pr']})" if v.get("fix_pr") else "—"
-            ip_rows.append(
-                f"| [{v['cve_id']}](https://nvd.nist.gov/vuln/detail/{v['cve_id']}) "
-                f"| {v['severity']} | `{v['package']}` | {pr_link} |"
-            )
-        ip_table = "\n".join(ip_rows)
-    else:
-        ip_table = "| — | — | — | — |"
+    # Disclosure rule: in-progress and accepted-risk findings have NO released fix.
+    # Naming them (CVE id + package) in a public report, crossed with the project's
+    # public, version-pinned component list, locates unpatched exposure in a running
+    # deployment. Publish severity COUNTS only; per-finding detail stays private.
+    def sev_counts(rows):
+        c = Counter(v.get("severity", "UNKNOWN") for v in rows)
+        parts = [f"{c[s]} {s}" for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW") if c.get(s)]
+        return ", ".join(parts) if parts else "none"
 
-    # Accepted risk table
-    if accepted_risk:
-        ar_rows = []
-        for v in sorted(accepted_risk, key=lambda x: x["cve_id"]):
-            reason = v.get("reason", "")[:80]
-            ar_rows.append(
-                f"| [{v['cve_id']}](https://nvd.nist.gov/vuln/detail/{v['cve_id']}) "
-                f"| {v['severity']} | `{v['package']}` | {reason} |"
-            )
-        ar_table = "\n".join(ar_rows)
-    else:
-        ar_table = "| — | — | — | — |"
+    in_progress_summary = (
+        f"{len(in_progress)} finding(s) in progress ({sev_counts(in_progress)}). "
+        f"Individual identifiers are withheld until a fix is released."
+    )
+    accepted_risk_summary = (
+        f"{len(accepted_risk)} accepted-risk finding(s) ({sev_counts(accepted_risk)}). "
+        f"Individual identifiers are withheld; details are kept in the private triage state."
+    )
 
     content = f"""# Cozystack Security Summary — {month_label}
 
@@ -188,15 +181,11 @@ def main():
 
 ## In Progress
 
-| CVE | Severity | Package | Fix PR |
-|-----|----------|---------|--------|
-{ip_table}
+{in_progress_summary}
 
 ## Accepted Risks
 
-| CVE | Severity | Package | Reason |
-|-----|----------|---------|--------|
-{ar_table}
+{accepted_risk_summary}
 
 ## How to Report
 
@@ -220,8 +209,8 @@ See [SECURITY.md](https://github.com/cozystack/cozystack/blob/main/SECURITY.md) 
         "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "new_count": len(new_this_month),
         "fixed": [{"cve_id": v["cve_id"], "severity": v["severity"], "package": v["package"], "fixed_version": v.get("fixed_version", "")} for v in fixed_this_month],
-        "in_progress": [{"cve_id": v["cve_id"], "severity": v["severity"], "package": v["package"]} for v in in_progress],
-        "accepted_risk": [{"cve_id": v["cve_id"], "severity": v["severity"], "package": v["package"], "reason": v.get("reason", "")[:100]} for v in accepted_risk],
+        "in_progress_by_severity": dict(Counter(v.get("severity", "UNKNOWN") for v in in_progress)),
+        "accepted_risk_by_severity": dict(Counter(v.get("severity", "UNKNOWN") for v in accepted_risk)),
         "stats": {
             "total_tracked": total_tracked,
             "total_triaged": total_triaged,
