@@ -70,8 +70,11 @@ spec:
         - controllerrevisions.apps
       includeClusterResources: false
       storageLocation: '{{ .Parameters.backupStorageLocationName }}'
-      volumeSnapshotLocations:
-        - '{{ .Parameters.backupStorageLocationName }}'
+      # No volumeSnapshotLocations: with snapshotMoveData the CSI data mover
+      # uploads the volume data through the BackupStorageLocation, so a VSL of
+      # the same name is not required (and referencing a non-existent one fails
+      # the backup). The platform's own cozy-default-velero-vminstance strategy
+      # omits it for the same reason.
       snapshotVolumes: true
       snapshotMoveData: true
       ttl: 720h0m0s
@@ -123,8 +126,8 @@ spec:
         - configmaps
       includeClusterResources: false
       storageLocation: '{{ .Parameters.backupStorageLocationName }}'
-      volumeSnapshotLocations:
-        - '{{ .Parameters.backupStorageLocationName }}'
+      # See the VMInstance strategy above: snapshotMoveData routes volume data
+      # through the BackupStorageLocation, so no VolumeSnapshotLocation is needed.
       snapshotVolumes: true
       snapshotMoveData: true
       ttl: 720h0m0s
