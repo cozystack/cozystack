@@ -168,6 +168,37 @@ func TestMirrorZeroObjectSourceDoesNotWipe(t *testing.T) {
 	}
 }
 
+func TestMirrorToCopyKeepsUnrelatedDestinationObjects(t *testing.T) {
+	// A to-copy restore (deleteExtraneous=false) merges the snapshot into the
+	// target: objects the snapshot names are (over)written, but objects the
+	// target already holds and the snapshot does not name must survive. This is
+	// the merge half of the contract the in-place path inverts, so it is pinned
+	// separately from the delete-extraneous purge.
+	s := newFakeStore()
+	s.seed("repo", "p/a", fakeObject{data: []byte("A")})
+	s.seed("target", "a", fakeObject{data: []byte("stale")})   // named by the snapshot
+	s.seed("target", "keep", fakeObject{data: []byte("mine")}) // not named; must survive
+
+	from := copySide{store: s, bucket: "repo", prefix: "p/"}
+	to := copySide{store: s, bucket: "target", prefix: ""}
+	copied, err := mirror(context.Background(), from, to, false, false, true, false)
+	if err != nil {
+		t.Fatalf("mirror: %v", err)
+	}
+	if copied != 1 {
+		t.Fatalf("copied = %d, want 1", copied)
+	}
+	if got := strings.Join(s.keys("target"), ","); got != "a,keep" {
+		t.Fatalf("target keys = %q, want \"a,keep\" (unnamed object must not be purged)", got)
+	}
+	if string(s.buckets["target"]["a"].data) != "A" {
+		t.Fatalf("target/a = %q, want the snapshot bytes \"A\" merged in", s.buckets["target"]["a"].data)
+	}
+	if string(s.buckets["target"]["keep"].data) != "mine" {
+		t.Fatalf("target/keep = %q, want it left untouched", s.buckets["target"]["keep"].data)
+	}
+}
+
 func TestMirrorResumeSkipsAlreadyPresent(t *testing.T) {
 	// A retried restore whose destination already holds every object with
 	// identical content (matching ETag) copies nothing (resume), and the

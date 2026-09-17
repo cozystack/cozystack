@@ -4,6 +4,7 @@ package backupcontroller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -390,11 +391,32 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 		}
 		artifact, err := r.createBucketBackupArtifact(ctx, j, resolved, *rendered, claim.Status.BucketName, repoPrefix)
 		if err != nil {
-			// The mirror already wrote the full copy; failing terminally here
-			// would strand it with no Backup for cleanup to key off. Requeue so a
-			// transient artifact-write error retries (BackupRef gates re-create).
-			logger := getLogger(ctx)
-			logger.Debug("Backup artifact create failed, will retry", "backupjob", j.Name, "err", err)
+			// A collision with a prior run's Backup is terminal - retrying cannot
+			// resolve it, and this run must not report success against the stale
+			// snapshot.
+			if errors.Is(err, errBucketArtifactNameCollision) {
+				return r.markBackupJobFailed(ctx, j, err.Error())
+			}
+			// Otherwise the mirror already wrote the full copy, so failing here
+			// would strand it with no Backup for cleanup to key off: requeue the
+			// transient artifact write (BackupRef gates re-create), bounded by the
+			// same deadline as the wait helpers and surfaced through a condition
+			// and Event so a persistently-rejected write is not silent.
+			if strategyNotReadyDeadlineExceeded(j.Status.StartedAt) {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("mirror completed but recording the Backup artifact did not succeed within %s: %v", StrategyNotReadyDeadline, err))
+			}
+			if r.Recorder != nil {
+				r.Recorder.Eventf(j, corev1.EventTypeWarning, "ArtifactWritePending", "mirror completed but the Backup artifact is not yet recorded: %v", err)
+			}
+			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
+				Reason:  "ArtifactWritePending",
+				Message: fmt.Sprintf("mirror completed; recording Backup artifact: %v", err),
+			})
+			if updateErr := r.Status().Update(ctx, j); updateErr != nil {
+				getLogger(ctx).Error(updateErr, "failed to update BackupJob status after artifact write error")
+			}
 			return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
 		}
 		now := metav1.Now()
@@ -459,11 +481,22 @@ func (r *BackupJobReconciler) reclaimFailedBucketBackup(ctx context.Context, j *
 	pod := buildBucketCleanupPod(snap, rendered.Image)
 	desired := buildJobStrategyBatchJob(j.Namespace, j.Name+"-reclaim", map[string]string{bucketLabelMode: bucketModeCleanup}, pod)
 	if err := controllerutil.SetControllerReference(j, desired, r.Scheme); err != nil {
+		r.warnReclaimNotStarted(j, repoPrefix, err)
 		logger.Debug("skipping partial-backup reclaim: cannot set controller reference", "backupjob", j.Name, "err", err)
 		return
 	}
 	if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+		r.warnReclaimNotStarted(j, repoPrefix, err)
 		logger.Debug("partial-backup reclaim Job not created (best-effort)", "backupjob", j.Name, "err", err)
+	}
+}
+
+// warnReclaimNotStarted surfaces a failed partial-backup reclaim on the
+// BackupJob, matching releaseBucketCleanup's ArtifactNotDeleted signal so a
+// leaked partial copy is visible rather than only logged at debug level.
+func (r *BackupJobReconciler) warnReclaimNotStarted(j *backupsv1alpha1.BackupJob, repoPrefix string, err error) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(j, corev1.EventTypeWarning, "ReclaimNotStarted", "partial backup copy under %s left in the repo bucket: %v", repoPrefix, err)
 	}
 }
 
@@ -567,6 +600,12 @@ func (r *BackupJobReconciler) ensureBucketAccess(ctx context.Context, namespace,
 // credentials Secret name) and the strategy parameters on driverMetadata.
 // Follows the MongoDB artifact pattern - Create persists status because the
 // core Backup type carries no status subresource.
+// errBucketArtifactNameCollision marks a Backup whose name already belongs to a
+// different run. A Backup carries no ownerRef to its BackupJob and outlives it,
+// so a reused BackupJob name finds a stale same-named Backup; the run must fail
+// rather than report success against that older snapshot.
+var errBucketArtifactNameCollision = errors.New("a Backup of this name already exists for a different run")
+
 func (r *BackupJobReconciler) createBucketBackupArtifact(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,
@@ -637,6 +676,18 @@ func (r *BackupJobReconciler) createBucketBackupArtifact(
 		existing := &backupsv1alpha1.Backup{}
 		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
 			return nil, getErr
+		}
+		// The repo prefix is scoped by BackupJob UID, so a Backup this same run
+		// created points at repoPrefix (a genuine idempotent retry) while a stale
+		// one from a prior run with the reused name points elsewhere. Returning
+		// the latter would report Succeeded against the old snapshot and leave the
+		// fresh copy this run wrote unreferenced in the shared repo bucket.
+		existingPrefix := ""
+		if snap, decErr := unmarshalBucketSnapshot(existing.Status.UnderlyingResources); decErr == nil && snap != nil {
+			existingPrefix = snap.RepoPrefix
+		}
+		if existingPrefix != repoPrefix {
+			return nil, fmt.Errorf("%w: Backup %q points at repo prefix %q, this run wrote %q", errBucketArtifactNameCollision, backup.Name, existingPrefix, repoPrefix)
 		}
 		return existing, nil
 	}

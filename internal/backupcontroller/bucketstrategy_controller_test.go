@@ -695,3 +695,90 @@ func TestReconcileBucketRestoreInPlaceVsToCopyJobArgs(t *testing.T) {
 		}
 	})
 }
+
+func TestReconcileBucketFailsOnArtifactNameCollision(t *testing.T) {
+	// A Backup carries no ownerRef to its BackupJob and outlives it, so a
+	// BackupJob whose name is reused after the old one was deleted finds a stale
+	// same-named Backup pointing at the previous run's UID-scoped prefix. The
+	// mirror has already written a fresh copy under this run's prefix; returning
+	// the stale Backup would report Succeeded against the old snapshot and strand
+	// the fresh copy unreferenced. The run must fail instead.
+	strategy := &strategyv1alpha1.Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-bucket"},
+		Spec: strategyv1alpha1.BucketSpec{Template: strategyv1alpha1.BucketTemplate{
+			Image:       "controller:latest",
+			Destination: strategyv1alpha1.BucketDestination{Bucket: "cozy-backups", Endpoint: "http://s3"},
+		}},
+	}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+			Kind:     strategyv1alpha1.BucketStrategyKind,
+			Name:     "cozy-default-bucket",
+		},
+	}
+	now := metav1.Now()
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "manual-1", UID: "new-uid"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: bucketAppKind, Name: "web"},
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	claim := &buckettypes.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bucket-web", UID: "claim-uid"},
+		Spec:       buckettypes.BucketClaimSpec{BucketClassName: "seaweedfs"},
+		Status:     buckettypes.BucketClaimStatus{BucketReady: true, BucketName: "app-bucket"},
+	}
+	access := bucketAccess("bucket-web-cozy-backup",
+		map[string]string{managedByLabel: managedByValue},
+		[]metav1.OwnerReference{{APIVersion: buckettypes.GroupVersion.String(), Kind: "BucketClaim", Name: "bucket-web", UID: "claim-uid"}},
+		buckettypes.BucketAccessSpec{
+			BucketClaimName:       "bucket-web",
+			BucketAccessClassName: "seaweedfs-readonly",
+			Protocol:              bucketProtocolS3,
+			CredentialsSecretName: "bucket-web-cozy-backup",
+		})
+	access.Status.AccessGranted = true
+	completedMirror := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant-x",
+			Name:      jobNameForBackupJob(job),
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      job.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+			},
+		},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{
+			{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+		}},
+	}
+	staleRaw, err := marshalBucketSnapshot(bucketBackupSnapshot{
+		Kind:       bucketSnapshotKind,
+		RepoBucket: "cozy-backups",
+		RepoPrefix: "manual-1-old-uid/", // a prior run's prefix, not this run's
+	})
+	if err != nil {
+		t.Fatalf("marshalBucketSnapshot: %v", err)
+	}
+	staleBackup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "manual-1"},
+		Status:     backupsv1alpha1.BackupStatus{UnderlyingResources: staleRaw},
+	}
+
+	r, _ := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"),
+		clientfake.NewClientBuilder().WithObjects(job, strategy, claim, access, completedMirror, staleBackup))
+	if _, err := r.reconcileBucket(context.Background(), job, resolved); err != nil {
+		t.Fatalf("reconcileBucket: %v", err)
+	}
+	updated := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(job), updated); err != nil {
+		t.Fatalf("get backupjob: %v", err)
+	}
+	if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("phase = %q, want Failed (stale same-named Backup must not be reused)", updated.Status.Phase)
+	}
+	if updated.Status.BackupRef != nil {
+		t.Fatalf("BackupRef = %+v, want nil (must not point at the stale snapshot)", updated.Status.BackupRef)
+	}
+}
