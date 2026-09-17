@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/config"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -67,6 +69,33 @@ func (r *ApplicationDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) err
 type appDefHashView struct {
 	Name string                                 `json:"name"`
 	Spec cozyv1alpha1.ApplicationDefinitionSpec `json:"spec"`
+	// Annotations holds the release.cozystack.io/* subset of the definition's
+	// metadata annotations. They belong in the hash because cozystack-api reads
+	// them once, at start-up (buildResourceFromCRD in pkg/cmd/server/start.go),
+	// and this rollout is the only thing that delivers a change in one: a
+	// definition whose whole change is an annotation would otherwise leave the
+	// running api serving the previous behaviour until its pod restarted for an
+	// unrelated reason. Only that prefix is hashed, because kubectl and Helm
+	// rewrite annotations of their own on every apply and hashing those would
+	// roll the api Deployment on every reconcile.
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// releaseAnnotations returns the release.cozystack.io/* annotations of a
+// definition, or nil when it carries none, so a definition without them hashes
+// exactly as it did before this field existed.
+func releaseAnnotations(annotations map[string]string) map[string]string {
+	var selected map[string]string
+	for k, v := range annotations {
+		if !strings.HasPrefix(k, config.ReleaseAnnotationPrefix) {
+			continue
+		}
+		if selected == nil {
+			selected = make(map[string]string)
+		}
+		selected[k] = v
+	}
+	return selected
 }
 
 func (r *ApplicationDefinitionReconciler) computeConfigHash(ctx context.Context) (string, error) {
@@ -80,8 +109,9 @@ func (r *ApplicationDefinitionReconciler) computeConfigHash(ctx context.Context)
 	views := make([]appDefHashView, 0, len(list.Items))
 	for i := range list.Items {
 		views = append(views, appDefHashView{
-			Name: list.Items[i].Name,
-			Spec: list.Items[i].Spec,
+			Name:        list.Items[i].Name,
+			Spec:        list.Items[i].Spec,
+			Annotations: releaseAnnotations(list.Items[i].Annotations),
 		})
 	}
 	b, err := json.Marshal(views)
