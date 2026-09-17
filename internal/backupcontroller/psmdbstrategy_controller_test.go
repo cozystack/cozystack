@@ -278,6 +278,16 @@ func TestMongoDBRestoreCredentialsSecret(t *testing.T) {
 			target: target(map[string]runtime.RawExtension{"s3-storage": s3Storage("tenant-bucket", "target-s3-creds")}),
 			want:   "",
 		},
+		{
+			// Source archive with no bucket recorded (wantBucket==""): the swap
+			// must be refused even against a lone target storage that also has an
+			// empty bucket, keeping the source reference. Pins the wantBucket==""
+			// short-circuit — without it that sole storage would be adopted.
+			name:   "no-bucket source: keep source creds against an empty-bucket target storage",
+			source: src("", "src-s3-creds"),
+			target: target(map[string]runtime.RawExtension{"only": s3Storage("", "empty-bucket-creds")}),
+			want:   "src-s3-creds",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1166,31 +1176,46 @@ func TestReconcileMongoDB_InjectsSystemStorageBeforePrecondition(t *testing.T) {
 		Parameters:  map[string]string{},
 	}
 
+	// First pass: the storage is freshly injected, so the driver requeues rather
+	// than minting the Backup CR in the same reconcile (see the injection-race
+	// note in reconcileMongoDB). The apply is persisted onto the live cluster.
 	res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
 	if err != nil {
-		t.Fatalf("reconcileMongoDB: %v", err)
+		t.Fatalf("reconcileMongoDB pass 1: %v", err)
 	}
 	if res.RequeueAfter == 0 {
-		t.Fatalf("expected a poll requeue while the operator Backup runs, got %+v", res)
+		t.Fatalf("expected a requeue after the first injection, got %+v", res)
 	}
-
-	// The precondition passed only because it read the injected cluster: an
-	// operator Backup CR now exists.
 	list := &psmdbtypes.PerconaServerMongoDBBackupList{}
 	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
 		t.Fatalf("list operator backups: %v", err)
 	}
-	if len(list.Items) != 1 {
-		t.Fatalf("expected the injection to let the precondition pass and create 1 operator Backup, got %d", len(list.Items))
+	if len(list.Items) != 0 {
+		t.Fatalf("no operator Backup should be minted before the requeue, got %d", len(list.Items))
 	}
-
-	// The storage was actually persisted onto the live cluster.
 	got := &psmdbtypes.PerconaServerMongoDB{}
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "mongodb-app1"}, got); err != nil {
 		t.Fatalf("get cluster: %v", err)
 	}
 	if _, ok := got.Spec.Backup.Storages["s3-storage"]; !ok {
 		t.Errorf("expected injected s3-storage on the cluster, got %#v", got.Spec.Backup.Storages)
+	}
+
+	// Second pass: the cluster already declares the storage (the operator cache
+	// has had a poll to observe it), so the precondition passes off the injected
+	// storage and the operator Backup CR is minted.
+	res, err = r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+	if err != nil {
+		t.Fatalf("reconcileMongoDB pass 2: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected a poll requeue while the operator Backup runs, got %+v", res)
+	}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list operator backups: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("expected the injected storage to let the precondition pass and create 1 operator Backup, got %d", len(list.Items))
 	}
 }
 
@@ -1234,6 +1259,34 @@ func mongodbInjectFixture(enabled bool) (*backupsv1alpha1.BackupJob, *strategyv1
 	return job, strategy, app, cluster, resolved
 }
 
+// The first BackupJob of a useSystemBucket app injects the storage; the psmdb
+// operator resolves it from a cached cluster read when it services the Backup
+// CR, so minting the CR in the same pass races that cache and can latch it at
+// State=error. The driver must requeue after a fresh injection instead of
+// minting, giving the cache a poll to observe the storage.
+func TestReconcileMongoDB_FirstInjectionRequeuesBeforeMinting(t *testing.T) {
+	// Fixture seeds a cluster with backups enabled and NO storage declared.
+	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+
+	res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+	if err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected a requeue after the first injection, got %+v", res)
+	}
+	// No operator Backup CR minted yet — that waits for the next pass.
+	list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("no operator Backup should be created in the same pass as a fresh injection, got %d", len(list.Items))
+	}
+}
+
 // When a backup the operator never started (state=waiting, queued behind
 // another) trips the deadline, the driver must cancel the operator CR before
 // failing the BackupJob — otherwise the operator starts it later and writes an
@@ -1256,6 +1309,12 @@ func TestReconcileMongoDB_TimedOutBackupIsCancelled(t *testing.T) {
 			},
 		},
 		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateWaiting},
+	}
+	// The storage is already declared (injected on the pass that minted the
+	// backup 30m ago), so this reconcile re-applies it without the first-injection
+	// requeue and reaches the timeout branch.
+	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups"}}`)},
 	}
 
 	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster, opBackup)

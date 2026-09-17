@@ -268,6 +268,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 	// that can never service a backup should not be mutated just to fail the
 	// precondition below on the enabled check anyway.
 	if cluster.Spec.Backup.Enabled && shouldInjectMongoDBSystemStorage(useSystemBucket, rendered) {
+		_, storageDeclared := cluster.Spec.Backup.Storages[storageName]
 		injected, err := r.applyMongoDBSystemStorage(ctx, j.Namespace, psmdbName, storageName, rendered.S3)
 		if err != nil {
 			// A server-side apply can fail transiently — an apiserver hiccup, or a
@@ -283,6 +284,21 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			return ctrl.Result{}, err
 		}
 		cluster = injected
+		if !storageDeclared {
+			// First injection for this app: the storage is now applied, but the
+			// psmdb operator resolves spec.backup.storages from a CACHED cluster
+			// read when it services the PerconaServerMongoDBBackup, and its cache
+			// may not have observed the apply yet. A miss there latches the CR at
+			// State=error with nothing to re-drive it (the operator returns for a
+			// terminal-state CR and watches only the Backup CR and Pods), and the
+			// driver reads that as a terminal failure. So requeue instead of
+			// minting the CR in the same pass: on the next reconcile this driver's
+			// own cache reflects the storage (storageDeclared is true), which is a
+			// good proxy that the operator's does too, and only then do we mint.
+			// One 5s poll per app, well inside the deadline; later BackupJobs find
+			// the storage already declared and skip straight through.
+			return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
+		}
 	}
 	if msg := psmdbBackupPrecondition(cluster, storageName); msg != "" {
 		if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
