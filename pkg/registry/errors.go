@@ -40,6 +40,7 @@ func WrapPreservingStatus(msg string, err error, resource schema.GroupResource, 
 		st.Details.Group = resource.Group
 		st.Details.Kind = resource.Resource
 		st.Details.Name = name
+		st.Details.UID = ""
 		st.Message = fmt.Sprintf("%s: %s", msg, st.Message)
 		return &apierrors.StatusError{ErrStatus: *st}
 	}

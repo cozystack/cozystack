@@ -54,6 +54,22 @@ func TestWrapPreservingStatusKeepsBackendErrorUnchanged(t *testing.T) {
 	}
 }
 
+func TestWrapPreservingStatusDropsBackendUID(t *testing.T) {
+	backend := apierrors.NewConflict(schema.GroupResource{Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases"}, "postgresql-example", errors.New("the object has been modified"))
+	backend.ErrStatus.Details.UID = "0f4b6a9e-6c5c-4c1c-9d1e-2b1d0c7a5f11"
+	resource := schema.GroupResource{Group: "apps.cozystack.io", Resource: "postgresqls"}
+	status := responsewriters.ErrorToAPIStatus(WrapPreservingStatus("failed to update HelmRelease", backend, resource, "example"))
+	if status.Details == nil || status.Details.UID != "" {
+		t.Fatalf("wire details = %#v, carry the backing HelmRelease UID into the aggregated status", status.Details)
+	}
+	if status.Details.Group != resource.Group || status.Details.Kind != resource.Resource || status.Details.Name != "example" {
+		t.Fatalf("wire details = %#v, want the requested Application", status.Details)
+	}
+	if status.Code != backend.ErrStatus.Code || status.Reason != backend.ErrStatus.Reason {
+		t.Fatalf("wire status = %#v, lost backend status %#v", status, backend.ErrStatus)
+	}
+}
+
 func TestWrapPreservingStatusKeepsNonStatusCause(t *testing.T) {
 	backend := errors.New("connection lost")
 	err := WrapPreservingStatus("failed to update HelmRelease", backend, schema.GroupResource{Group: "apps.cozystack.io", Resource: "postgresqls"}, "example")
