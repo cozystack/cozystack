@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -554,6 +555,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
 	r.warnRemovedUserPasswords(ctx, app)
+	r.warnUpgradeIntroducedUserCollision(ctx, oldObj, app)
 
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
@@ -2026,6 +2028,79 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 			warning.AddWarning(ctx, "", fmt.Sprintf(
 				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.", user))
 		}
+	}
+}
+
+// userNameSet leniently extracts the set of spec.users keys from an Application's
+// raw spec. A malformed users shape yields an empty set rather than an error, for
+// the same reason warnRemovedUserPasswords decodes leniently.
+func userNameSet(raw []byte) map[string]struct{} {
+	out := map[string]struct{}{}
+	if len(raw) == 0 {
+		return out
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return out
+	}
+	var users map[string]json.RawMessage
+	if u, ok := top["users"]; ok {
+		_ = json.Unmarshal(u, &users)
+	}
+	for name := range users {
+		out[name] = struct{}{}
+	}
+	return out
+}
+
+// warnUpgradeIntroducedUserCollision warns when an UPDATE introduces a "_"/"-"
+// username collision the old object did not carry. MariaDB renders each User CR
+// name as <release>-<replace "_" "-" name>, so "a_b" and "a-b" collide on one
+// resource and one silently overwrites the other, leaving a user with a
+// credentials-Secret entry but no backing User. The chart's render guard for this
+// is gated to install — blocking it on upgrade would wedge a release that already
+// inherited the pair — so an upgrade that INTRODUCES the pair renders silently.
+// The aggregated apiserver holds both specs here and can tell an introduced
+// collision from an inherited one, closing that gap without touching the inherited
+// case. Warns rather than rejects, matching the removed-password warning and
+// keeping an already-broken release editable.
+func (r *REST) warnUpgradeIntroducedUserCollision(ctx context.Context, oldObj runtime.Object, newApp *appsv1alpha1.Application) {
+	if r.kindName != mariadbKind || newApp == nil || newApp.Spec == nil {
+		return
+	}
+	newUsers := userNameSet(newApp.Spec.Raw)
+	if len(newUsers) < 2 {
+		return
+	}
+	var oldUsers map[string]struct{}
+	if oldApp, ok := oldObj.(*appsv1alpha1.Application); ok && oldApp.Spec != nil {
+		oldUsers = userNameSet(oldApp.Spec.Raw)
+	}
+	byDNS := map[string][]string{}
+	for u := range newUsers {
+		dns := strings.ReplaceAll(u, "_", "-")
+		byDNS[dns] = append(byDNS[dns], u)
+	}
+	for dns, names := range byDNS {
+		if len(names) < 2 {
+			continue
+		}
+		oldCount := 0
+		for u := range oldUsers {
+			if strings.ReplaceAll(u, "_", "-") == dns {
+				oldCount++
+			}
+		}
+		if oldCount >= 2 {
+			// Already a collision on the old object; leave it, exactly as the
+			// install-gated render guard does, so an upgrade of a release that
+			// inherited it is not blocked here either.
+			continue
+		}
+		sort.Strings(names)
+		warning.AddWarning(ctx, "", fmt.Sprintf(
+			"spec.users %v map to the same mariadb-operator User resource name %q (\"_\" renders as \"-\"); one silently overwrites the other, leaving a user with a credentials-Secret entry but no backing User. Rename one before applying.",
+			names, dns))
 	}
 }
 

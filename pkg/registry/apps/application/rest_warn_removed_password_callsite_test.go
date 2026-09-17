@@ -185,3 +185,45 @@ func TestWarnRemovedUserPasswords(t *testing.T) {
 		})
 	}
 }
+
+// A "_"/"-" username collision that an UPDATE INTRODUCES (present in the new spec,
+// absent from the old) must draw an admission warning: MariaDB renders both under
+// one User CR name and one silently overwrites the other. The chart's render guard
+// is install-gated (so it does not wedge a release that already inherited the
+// pair), which is exactly why the upgrade-introduced case needs catching here,
+// where both specs are available. An inherited pair, or a non-MariaDB kind, stays
+// quiet.
+func TestWarnUpgradeIntroducedUserCollision(t *testing.T) {
+	app := func(raw string) *appsv1alpha1.Application {
+		return &appsv1alpha1.Application{Spec: &apiextv1.JSON{Raw: []byte(raw)}}
+	}
+	cases := []struct {
+		name     string
+		kind     string
+		old      string
+		new      string
+		wantWarn bool
+	}{
+		{"introduced pair warns", mariadbKind, `{"users":{"a_b":{}}}`, `{"users":{"a_b":{},"a-b":{}}}`, true},
+		{"introduced from empty warns", mariadbKind, `{}`, `{"users":{"a_b":{},"a-b":{}}}`, true},
+		{"inherited pair stays quiet", mariadbKind, `{"users":{"a_b":{},"a-b":{}}}`, `{"users":{"a_b":{},"a-b":{},"c":{}}}`, false},
+		{"no collision stays quiet", mariadbKind, `{"users":{"a":{}}}`, `{"users":{"a":{},"b":{}}}`, false},
+		{"postgres never warns (no User CRs)", postgresKind, `{"users":{"a_b":{}}}`, `{"users":{"a_b":{},"a-b":{}}}`, false},
+		{"malformed new users stays quiet", mariadbKind, `{}`, `{"users":["oops"]}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &REST{kindName: tc.kind}
+			rec := &fakeWarningRecorder{}
+			ctx := warning.WithWarningRecorder(context.Background(), rec)
+			r.warnUpgradeIntroducedUserCollision(ctx, app(tc.old), app(tc.new))
+			got := len(rec.warnings) > 0
+			if got != tc.wantWarn {
+				t.Fatalf("kind %s: warned=%v, want %v (warnings: %v)", tc.kind, got, tc.wantWarn, rec.warnings)
+			}
+			if tc.wantWarn && !strings.Contains(rec.warnings[0], `"a-b"`) {
+				t.Fatalf("warning should name the colliding username, got %q", rec.warnings[0])
+			}
+		})
+	}
+}
