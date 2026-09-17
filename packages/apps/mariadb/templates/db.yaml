@@ -103,10 +103,12 @@ spec:
   operator revokes the live privilege as the renamed CR is pruned on upgrade. A
   user also in admin gets ALL and is skipped above, so there is no same-name
   collision to disambiguate. Corollary of the shared name: when a user moves
-  between readonly-only and admin across an upgrade, this one Grant CR flips its
-  privileges in place (SELECT<->ALL) rather than being replaced, so the effective
-  grant tracks the current role set with no revoke-and-regrant gap. This rationale
-  is a template comment so it does not ship into every rendered Grant manifest.
+  between readonly-only and admin across an upgrade, the chart keeps ONE Grant CR
+  under a stable name and only its `privileges` value changes (SELECT<->ALL) — the
+  chart never forces a rename, so it never drives a revoke-and-prune. How the
+  operator applies that privilege change on the live grant is the operator's
+  concern and is not asserted here. This rationale is a template comment so it does
+  not ship into every rendered Grant manifest.
 */}}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
