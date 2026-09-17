@@ -166,17 +166,11 @@ rules:
   verbs: ["get", "list", "watch", "patch"]
 - apiGroups: ["psmdb.percona.com"]
   resources: ["perconaservermongodbbackups"]
-  # delete: two paths. On the useSystemBucket flow cleanupMongoDBBackup prunes the
-  # shared-bucket archive on Cozystack Backup deletion by deleting this CR, whose
-  # delete-backup finalizer frees the object (a legacy backup carries no such
-  # finalizer, so its own-bucket archive is left). Independently, the BackupJob's
-  # 30m timeout cancels a not-yet-started operator CR on either flow, so a Failed
-  # job never leaves a CR the operator would run later (see the deadline branch in
-  # reconcileMongoDB).
-  # patch: strip the driver's own delete-backup finalizer to release a wedged
-  # cleanup (namespace terminating, or the skip-artifact-cleanup annotation) so
-  # the driver's finalizer is not what holds a tenant namespace in Terminating
-  # (the operator's own release-lock finalizer can still hold it if it is down).
+  # delete: prune a useSystemBucket archive by deleting its CR (the delete-backup
+  # finalizer frees the object), and cancel a not-yet-started CR at the BackupJob
+  # timeout on either flow. patch: strip the driver's own delete-backup finalizer
+  # to release a wedged cleanup. See reconcileMongoDB / cleanupMongoDBBackup and
+  # docs/operations/backup-classes.md.
   verbs: ["get", "list", "watch", "create", "delete", "patch"]
 - apiGroups: ["psmdb.percona.com"]
   resources: ["perconaservermongodbrestores"]
