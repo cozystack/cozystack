@@ -2294,6 +2294,12 @@ func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
 	default:
 		t.Fatalf("expected a CredentialsConvergencePending event, got none")
 	}
+	// And a DURABLE counterpart the Event cannot provide: CredentialsConverged=False
+	// survives on .status after the Event ages out. Dropping the SetStatusCondition
+	// removes it.
+	if c := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondCredentialsConverged); c == nil || c.Status != metav1.ConditionFalse {
+		t.Fatalf("expected CredentialsConverged=False on the terminal write, got %+v", c)
+	}
 }
 
 // TestReconcileCNPGRestore_HealthyDisablesBootstrap is the regression guard for
@@ -2583,7 +2589,8 @@ func TestReconcileCNPGRestore_BootstrapDisableTransientErrorRequeues(t *testing.
 			},
 		}).
 		Build()
-	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
+	rec := record.NewFakeRecorder(10)
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: rec}
 
 	rj := &backupsv1alpha1.RestoreJob{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
@@ -2603,6 +2610,20 @@ func TestReconcileCNPGRestore_BootstrapDisableTransientErrorRequeues(t *testing.
 	}
 	if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
 		t.Fatalf("a transient disable failure within the post-convergence window must requeue, not Fail; got phase %q", got.Status.Phase)
+	}
+	// The window must not be silent: the requeue records WHY on .status (a durable
+	// condition) and announces it once via an Event. Dropping either leaves the
+	// RestoreJob non-terminal for up to the whole grace window with no explanation.
+	if c := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondBootstrapDisablePending); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("expected BootstrapDisablePending=True during the window, got %+v", c)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "BootstrapDisablePending") {
+			t.Fatalf("expected a BootstrapDisablePending event, got %q", ev)
+		}
+	default:
+		t.Fatalf("expected a BootstrapDisablePending event, got none")
 	}
 }
 

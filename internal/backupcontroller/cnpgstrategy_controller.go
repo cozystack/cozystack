@@ -89,6 +89,19 @@ const (
 	// is failing before the full restore deadline elapses.
 	restoreCondRecoveryConverged = "RecoveryConverged"
 
+	// Set False beside the terminal Succeeded write: the data is restored but the
+	// generated credentials have NOT been reconciled onto the recovered roles yet
+	// (the chart's post-upgrade init-job does that, which this controller does not
+	// wait for). Unlike the one-shot CredentialsConvergencePending Event, a
+	// condition survives on .status, so an operator reading a copy restored
+	// overnight still sees that convergence was pending and unverified here.
+	restoreCondCredentialsConverged = "CredentialsConverged"
+
+	// True while clearing spec.bootstrap.enabled keeps failing transiently, before
+	// the grace window is exhausted. Without it the RestoreJob sits non-terminal
+	// for up to the whole window with nothing on .status explaining the wait.
+	restoreCondBootstrapDisablePending = "BootstrapDisablePending"
+
 	// Default deadline on the time a RestoreJob can spend waiting for the
 	// target Cluster to reach a healthy state. Tenants override this via
 	// RestoreJob.spec.options.restoreTimeoutSeconds when the source DB is
@@ -99,13 +112,18 @@ const (
 	// requeueing over a transient error before it terminates the restore Failed.
 	// It is deliberately NOT tied to restoreTimeoutSeconds: that knob bounds the
 	// *recovery* wait (a tenant sets it short to fail fast on a stuck PITR
-	// target), whereas this window absorbs a transient control-plane blip (an
-	// apiserver restart, a webhook timeout) between convergence and clearing
-	// bootstrap.enabled - a blip whose duration has nothing to do with how long
-	// recovery is allowed to take or how big the database is. A fixed 5m rides
-	// out those blips without letting a short timeout shrink it or a large one
-	// inflate it.
-	cnpgBootstrapDisableGrace = 5 * time.Minute
+	// target), whereas this window absorbs a transient control-plane blip between
+	// convergence and clearing bootstrap.enabled - a blip whose duration has
+	// nothing to do with how long recovery is allowed to take or how big the
+	// database is. A fixed value rides out those blips without letting a short
+	// timeout shrink it or a large one inflate it. It is sized at 30m, near the old
+	// max(restoreDeadline, floor) it replaced, because the disable Patch travels
+	// through the aggregated cozystack-api apiserver and the expensive direction
+	// here is a FALSE Failed (a resubmit's purge-guard then deletes the healthy
+	// restored Cluster + PVCs, per the branch below) - and cozystack-api can itself
+	// be unavailable for several minutes during a platform upgrade, so a 5m window
+	// would fail restores that a slightly longer one rides out.
+	cnpgBootstrapDisableGrace = 30 * time.Minute
 
 	// Wall-clock cap on how long the WALArchiveReady gate can stay False
 	// before the RestoreJob is marked Failed. The gate fires before the
@@ -1011,6 +1029,26 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 						"The data is restored and reachable as the CNPG superuser; clear bootstrap.enabled on the app - and stop any GitOps source from re-asserting it - so the init-job reconciles the passwords.",
 					target.Namespace, target.AppName, grace, err))
 			}
+			// Still inside the window. Record WHY the RestoreJob is non-terminal on
+			// .status so it does not sit silent for up to the whole grace window, and
+			// emit the Event once (on the transition into pending), not on every poll.
+			firstFailure := !apimeta.IsStatusConditionTrue(restoreJob.Status.Conditions, restoreCondBootstrapDisablePending)
+			apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+				Type:   restoreCondBootstrapDisablePending,
+				Status: metav1.ConditionTrue,
+				Reason: "Retrying",
+				Message: fmt.Sprintf(
+					"recovery converged; clearing spec.bootstrap.enabled on Postgres app %s/%s is retrying after a transient error and will fail the restore if it does not clear within %s of convergence: %v",
+					target.Namespace, target.AppName, grace, err),
+			})
+			if updErr := r.Status().Update(ctx, restoreJob); updErr != nil {
+				return ctrl.Result{}, updErr
+			}
+			if firstFailure {
+				r.Recorder.Eventf(restoreJob, corev1.EventTypeWarning, "BootstrapDisablePending",
+					"recovery converged but clearing spec.bootstrap.enabled on Postgres app %s/%s failed; retrying up to %s after convergence: %v",
+					target.Namespace, target.AppName, grace, err)
+			}
 			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 		}
 		now := metav1.Now()
@@ -1028,6 +1066,27 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			// already reconciled; confirm by an application login.
 			Message: "target cnpg.io Cluster reached a healthy state and spec.bootstrap.enabled was cleared; the app's post-upgrade init-job reconciles the generated passwords onto the recovered roles on the next HelmRelease reconcile (this RestoreJob does not wait for it - confirm by logging in as an application user)",
 		})
+		// A durable counterpart to the one-shot Event below: the data is restored but
+		// credential convergence has NOT been verified by this controller (the chart's
+		// init-job does it, unwatched here). Recorded as a condition so it survives on
+		// .status - an operator reading a copy restored overnight still sees the
+		// pending state after the Event has aged out of the API. It stays False on
+		// purpose; this controller never observes the convergence that would flip it.
+		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+			Type:    restoreCondCredentialsConverged,
+			Status:  metav1.ConditionFalse,
+			Reason:  "PendingInitJob",
+			Message: "data restored and spec.bootstrap.enabled cleared; the app's post-upgrade init-job reconciles the generated passwords onto the recovered roles on the next HelmRelease reconcile, which this RestoreJob does not wait for - confirm by an application login",
+		})
+		// If the disable retried within the window, close out that pending condition.
+		if apimeta.FindStatusCondition(restoreJob.Status.Conditions, restoreCondBootstrapDisablePending) != nil {
+			apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+				Type:    restoreCondBootstrapDisablePending,
+				Status:  metav1.ConditionFalse,
+				Reason:  "Cleared",
+				Message: "spec.bootstrap.enabled was cleared",
+			})
+		}
 		// The status message above is honest that credential convergence is still
 		// pending; back it with an Event so the handoff is discoverable in
 		// `kubectl describe`/`get events`, not only by reading .status. This
