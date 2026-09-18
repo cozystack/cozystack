@@ -6,7 +6,33 @@ metadata:
     app.kubernetes.io/name: flux-plunger
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
+  {{- /*
+  flux-plunger keeps its recovery state in a HelmRelease annotation
+  (flux-plunger.cozystack.io/suspended) and treats an owned suspension seen in a
+  fresh reconcile as its own crashed run, so exactly one controller process may act
+  on a given HelmRelease at a time. --leader-elect defaults to false
+  (cmd/flux-plunger/main.go), so nothing but the single-process topology serialises
+  it: replicas must stay 1, and the rollout must not briefly run two pods. The
+  default maxSurge rounds up to 1 at replicas 1, briefly running a second pod that
+  could reap or unsuspend a release the old pod is still recovering; maxSurge 0 with
+  maxUnavailable 1 stops the old pod before starting the new one. This is expressed
+  as RollingUpdate rather than Recreate on purpose: the chart shipped with no
+  strategy block, so every existing install's live Deployment carries the
+  apiserver-defaulted rollingUpdate object, and helm-controller applies server-side,
+  so setting type Recreate over that populated block is rejected on upgrade. Keeping
+  type RollingUpdate and only pinning its fields upgrades cleanly. This covers
+  voluntary rollouts, not an involuntary replacement (an asymmetric node partition
+  where the old process keeps writing while a replacement is scheduled) — closing
+  that needs a fenced leader-election Lease, which is why raising replicas requires
+  enabling leader election first.
+  (Go-template comment: stripped at render, not copied into the manifest.)
+  */}}
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: flux-plunger
