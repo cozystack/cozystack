@@ -1,0 +1,14 @@
+# mariadb-ea-c-metrics is the operator's metrics Service: it carries ea-c's
+# lineage labels, but the MariaDB application definition does not list it as
+# a tenant-facing Service, so the attachment must not resolve it.
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: EndpointAttachment
+metadata:
+  name: ea-c-metrics
+spec:
+  applicationRef:
+    kind: MariaDB
+    name: ea-c
+  endpoint:
+    serviceName: mariadb-ea-c-metrics
+  loadBalancer: {}

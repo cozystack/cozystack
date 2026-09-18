@@ -1,0 +1,97 @@
+# Attaching external addresses to application endpoints
+
+`EndpointAttachment` (`local.sdn.cozystack.io/v1alpha1`, namespaced) attaches one external address to one tenant-facing Service of one managed application. It is the Network load-balancing path: a dedicated address per attachment, drawn from the address substrate (`IPAddressClass` / `IPAddressClaim` / `IPAddress` under `local.sdn.cozystack.io`), either minted for the attachment or bound from a claim the tenant reserved earlier. It sits beside, not in place of, the Application load-balancing path through the tenant Gateway, where several databases share one address and are routed by SNI. A user who wants to save addresses publishes through the Gateway; a user whose client allow-lists an IP, whose protocol cannot carry SNI, or who needs an address they can hold and move, attaches one.
+
+Attaching and detaching never touches the application's own Services, values or Helm release. The chart-level `external: true` keeps its exact behaviour in every chart; attachments are additive beside it.
+
+## The resource
+
+```yaml
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: EndpointAttachment
+metadata:
+  name: mydb-replicas-public
+  namespace: tenant-a
+spec:
+  applicationRef:            # immutable; the application, in this namespace
+    kind: Postgres           # group defaults to apps.cozystack.io
+    name: mydb
+  endpoint:
+    serviceName: postgres-mydb-ro
+  loadBalancer:              # the only mechanism member today; exactly one is required
+    className: public        # mint a claim from this IPAddressClass (omit both for the default class)
+    # claimName: held-ip     # ...or bind a reserved IPAddressClaim (exclusive with className)
+    # family: IPv4           # IPv4 | IPv6 | Dual
+    # ports: [5432]          # a subset of the endpoint's ports
+    # method: WholeIP        # WholeIP | PortList, VM datapath modes (see below)
+    # allowICMP: true        # PortList only
+status:
+  phase: Attached            # Pending | Attached | Detached, a projection of the conditions
+  serviceName: mydb-replicas-public-x7ktq
+  claimName: mydb-replicas-public-k2m9p
+  addresses: ["203.0.113.7"]
+  conditions: [...]          # Resolved, Provisioned
+```
+
+`applicationRef`, `className`, `claimName` and `family` are immutable: they select the address, and changing one under a live attachment could re-mint or release an address a client has allow-listed. Changing the address source is delete-and-recreate, and a reserved claim is how an address survives that. `ports`, `method`, `allowICMP` and the endpoint are render knobs and stay mutable.
+
+## Which Services can be attached
+
+The endpoint must be a Service in the attachment's namespace carrying both label families the platform stamps: the lineage identity labels `apps.cozystack.io/application.{group,kind,name}` matching `applicationRef` on all three, and the tenant-facing marker `internal.cozystack.io/tenantresource: "true"`. The lineage webhook writes the marker on exactly the Services the application's `ApplicationDefinition.spec.services` selects, so what is attachable is whatever that list declares, per kind. A Service the list leaves out is refused with `Resolved=False`, whether it belongs to another application, to the system, to the tenant Gateway, or to the application itself without being declared (mariadb's `-metrics` Service, for one). The list is not a filter for internal or headless Services: some kinds declare such Services and they are attachable, among them openbao's `-internal` and qdrant's `-headless` Services and, for a managed Kubernetes cluster, every Service carrying its `cluster.x-k8s.io/cluster-name` label. Resolution is by condition, not admission, because the Service set is dynamic: a mariadb `-secondary` Service exists only while `replicas > 1`, and an attachment created before its application resolves once the Service appears.
+
+One kind of Service passes both label checks and is still refused with `EndpointNotTenantFacing`: a LoadBalancer Service the cloud-controller-manager of a tenant Kubernetes cluster creates for a Service inside that cluster, recognised by the `cluster.x-k8s.io/tenant-service-name` label that controller writes. It carries the cluster's labels but serves a workload inside the tenant cluster.
+
+Passing that check makes a Service attachable; publishing it also needs a selector, because the rendered Service mirrors the endpoint's selector, not its endpoints. A Service whose endpoints are managed by hand has no selector, so it reports `Provisioned=False` with `NothingToPublish` and nothing is rendered. Headless Services with a selector are published like any other.
+
+The Gateway's own LoadBalancer Service is deliberately not attachable. Pinning a reserved address to a tenant Gateway is a TenantGateway concern, through the substrate's own annotation on the Gateway's infrastructure, and is a separate design item.
+
+## What the controller renders
+
+One additive `type: LoadBalancer` Service per attachment, created with `generateName` from the attachment's name so it can never collide with the Service it publishes. The Service mirrors the endpoint's selector and ports (or the `ports` subset), carries the substrate's consumption annotation `local.sdn.cozystack.io/ip-address-claim: <claim>`, and is created with the `loadBalancerClass` the claim's `IPAddressClass` fixes, read before creation because the field is immutable. It also asks for the claim's families: `SingleStack` in the claim's family for an `IPv4` or `IPv6` claim, `RequireDualStack` for a `Dual` one. Without that the Service would take the cluster's primary family, and the load balancer could not assign it an address of the other. A cluster with no dual-stack service range refuses a `Dual` attachment's Service, which the attachment reports as `RenderFailed`. The rendered Service copies nothing else from the endpoint: no labels, no annotations, so it can never be read as a second tenant-facing endpoint or as a route backend. The controller identifies its Service by the controller owner reference alone; the `cozystack.io/endpoint-attachment` label is a diagnostic carrying the attachment's name, truncated and suffixed with a hash past the 63 characters a label value allows, and a Service carrying it without the owner reference is ignored, never adopted.
+
+The attachment itself is owned by the application's HelmRelease by UID and stamped with the application's lineage labels. Deleting the application collects its attachments, their Services and any minted claims; a same-name recreated application does not re-acquire the previous incarnation's attachments.
+
+## Address lifecycle
+
+- `className` (or neither field): a claim is minted under the attachment and collected with it. The address then follows the class's reclaim policy, which defaults to `Retain`: the `IPAddress` stays `Released`. If the class sets `releaseDelay`, it returns to `Available` once that delay has passed, unless the address is annotated `ipaddress.local.sdn.cozystack.io/held: "true"`; otherwise it stays until an admin clears its `claimRef`.
+- `claimName`: the reserved claim is referenced, never owned or written. Detaching leaves the address held; the same claim can be attached to another endpoint or application later, and the address follows.
+- A claim already worn by another Service is reported as `Provisioned=False` / `ClaimInUse` and not contended.
+- An endpoint Service that disappears (a scale-down) turns the attachment `Detached`: the rendered Service is withdrawn, the claim and its address are kept, and the attachment reattaches when the Service returns.
+
+## Conditions
+
+`Resolved=True` means the endpoint Service exists and passed the tenant-facing check. `Provisioned=True` means the claim is bound and the rendered Service has been assigned its address. That is all it asserts: address and Service wiring. End-to-end reachability additionally depends on the CNI's own policy objects (SecurityGroups, NetworkPolicies and, under a VPC-capable CNI, the VPC gateway's ingress setting), which this controller does not read. `status.phase` is `Attached` when both conditions are true, `Detached` when the endpoint went away after an address was held, and `Pending` otherwise.
+
+## TLS
+
+Attaching a database does not turn its TLS on, nor make the server refuse plaintext. The controller mirrors a Service and knows nothing about engines, and an attachment never sets `external`, which several charts key their TLS defaults on. PostgreSQL, for one, always serves TLS but still accepts plaintext sessions unless `tls.required` is on, and that defaults to the value of `external`; set `tls.required: true` on the application before attaching a public address to it. `tls.enabled` controls only whether the external hostname is added to the certificate, and does not refuse plaintext. For other database kinds, check what each chart does with TLS before attaching, and expect a follow-up that enforces "no plaintext database on a public address" for attachments the same way it is enforced for `external: true`. No chart adds an IP SAN to a server certificate, so a client dialing an attached address verifies by hostname only if it also sets up DNS for a name the certificate carries.
+
+## VM datapath modes
+
+A vm-instance's tenant-facing Service is headless with a single sentinel port until the chart exposes it, so a VM attachment must set `ports` or `method`; neither gives `Provisioned=False` / `NothingToPublish`. `method: PortList` publishes the listed ports and `method: WholeIP` publishes every port through 1:1 NAT, both rendered as the Service contract cozy-proxy implements. The platform declares whether an implementor of that contract is deployed (`cozystackController.endpointAttachments.cozyProxyContractImplemented`, set by the system bundle wherever it emits cozy-proxy); where it is not, a method-bearing attachment renders no Service and reports `DatapathContractUnavailable`, because a load balancer would still attract an address that every proxy skipped.
+
+Two rules follow from the datapath as built. `WholeIP` presumes a single backend: while the endpoint resolves to more than one ready pod, the attachment keeps its Service and its address but selects nothing and reports `MultipleBackends`; a rolling update or a live migration passes through this state and recovers on its own. And the datapath maps one address per backend pod in either mode: a second delegated Service on the same pod, whether another attachment or a chart Service rendered with `external: true`, is refused with `BackendAlreadyDelegated`. A delegation no attachment renders, such as a chart Service with `external: true`, always wins, even when it appears after the attachment, which then withdraws its own Service; between attachments, the oldest wins. The refusal is advisory on the attachment side; the authoritative gate belongs to the component programming the NAT. `allowICMP` is honoured by cozy-proxy in `PortList` mode and may become a no-op under a datapath that passes ICMP unconditionally.
+
+### VMs in a VPC
+
+What a VM in a VPC can be given depends on how the VPC application is built on the cluster.
+
+- **kube-ovn.** The VM keeps its pod-network interface and joins each VPC subnet through an additional interface. The modes above apply unchanged: the public address reaches the VM on its pod-network interface, not on a VPC subnet.
+- **cozyplane.** The VM's only interface is in the VPC, so the pod address a cozy-proxy Service maps to never reaches it. For `method: WholeIP`, the controller instead creates a cozyplane `FloatingIP` in the attachment's namespace, binding the VM's VPC address and wearing the attachment's claim. The FloatingIP is owned by the attachment and removed with it, and `Provisioned` turns true once the FloatingIP is `Ready` with the claim's address; until then its failing condition is in the message. No Service is rendered, so `status.serviceName` stays empty. A FloatingIP wears one address, so this path needs an IPv4 or IPv6 claim; a `Dual` claim is refused with `DualStackUnsupportedInVPC` and nothing is bound.
+
+A cozyplane VPC backend is recognised by the `sdn.cozystack.io/vpc` annotation the VM chart puts on the launcher pod, and its address is the one cozyplane's CNI copies into `sdn.cozystack.io/vpc-ip`; until it is there, the attachment reports `WaitingForVPCAddress`. The FloatingIP path is taken only where the cluster serves `sdn.cozystack.io` FloatingIP; a VPC backend on a cluster that does not reports `DatapathContractUnavailable` and gets no Service. Several refusals follow from what a FloatingIP is:
+
+- `method: PortList` reports `MethodUnsupportedInVPC`. A FloatingIP binds every port, and cozy-proxy cannot reach the VPC address. To publish chosen ports into a VPC, omit `method` and list `ports`: the plain LoadBalancer Service that renders reaches VPC pods through cozyplane's load-balancer datapath, once the VPC's gateway admits LoadBalancer ingress.
+- A VPC owned by another namespace reports `VPCNotInNamespace`, because a FloatingIP references a VPC, and a claim, in its own namespace only.
+- Backends holding different VPC addresses, or mixing VPC and non-VPC pods, report `MultipleBackends`, and the address stays held by the claim. The source and target pods of a live migration share the VM's VPC address, so a migration is a single target and keeps its binding.
+- A stopped VM keeps its FloatingIP, which stays pending until the VM runs again.
+
+Only a backend pod says whether a VM sits in a VPC, so a `method` attachment that has published nothing yet waits for one, reporting `WaitingForBackend`. An attachment created before its VM starts therefore publishes nothing until the launcher pod exists, and then gets the FloatingIP or the cozy-proxy Service its pod calls for. The claim holds the address meanwhile, and anything already published stays when the VM stops.
+
+## Engines with in-protocol discovery
+
+Kafka, MongoDB replica sets and NATS hand clients other addresses in-protocol. Attaching an address to their Services does not yield a working external endpoint until the allocated address is written back into engine configuration, which is not done yet.
+
+## Quota
+
+`count/endpointattachments.local.sdn.cozystack.io` works with a stock `ResourceQuota`, because the `local.` prefix marks the CRD-served half of the sdn family, which the kube-apiserver serves and where quota admission runs; the aggregated `sdn.cozystack.io` kinds never see it. The scarce resource, addresses, is already bounded at the claim.
