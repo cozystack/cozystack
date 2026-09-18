@@ -1,7 +1,18 @@
-# Build the manager binary from the upstream sources with the Cozystack patch
-# applied. The patch keeps a single-replica cluster electable when the operator
-# retires its bootstrap pod; see patches/bootstrap-voting-exclusion.diff and
+# Build the manager binary from the upstream sources with the Cozystack patches
+# applied.
+#
+# patches/bootstrap-voting-exclusion.diff keeps a single-replica cluster
+# electable when the operator retires its bootstrap pod; see
 # https://github.com/opensearch-project/opensearch-k8s-operator/issues/1448.
+#
+# patches/restart-on-permanently-yellow.diff carries
+# https://github.com/opensearch-project/opensearch-k8s-operator/pull/1569 back to
+# this version: a cluster whose replicas can never be assigned stays yellow for
+# good, and the restart gate held every rolling restart and upgrade on it. The
+# part of that change that counts tiered data roles (data_hot and the like) as
+# data nodes is left out, because packages/apps/opensearch renders the plain
+# data role only; carry it as well if that ever changes. Drop the patch on the
+# first operator release that includes the change.
 #
 # patches/trace-stalled-component-reconcilers.diff names the component a
 # reconcile is stuck in. The cluster controller runs nine component reconcilers
