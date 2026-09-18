@@ -511,6 +511,14 @@ resources:
   cpuAllocationRatio: 10
   memoryAllocationRatio: 1
   ephemeralStorageAllocationRatio: 40
+# KubeVirt CR settings that no other platform knob implies. Forwarded into the
+# emitted cozystack.kubevirt Package CR as components.kubevirt.values, next to
+# the entries the iaas bundle derives from resources.cpuAllocationRatio and
+# from the gpu block below.
+kubevirt:
+  # Passed to spec.configuration.migrations on the KubeVirt CR.
+  # Empty keeps KubeVirt's defaults. bandwidthPerMigration is bytes/second.
+  migrations: {}
 # GPU host-device wiring for VirtualMachine workloads. Auto-injected into the
 # KubeVirt CR's permittedHostDevices when bundles.enabledPackages contains
 # cozystack.gpu-operator. Without it the admission webhook rejects any VM
