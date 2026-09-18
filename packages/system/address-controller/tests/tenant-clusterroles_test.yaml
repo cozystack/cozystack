@@ -1,0 +1,57 @@
+suite: address-controller tenant ClusterRoles aggregate into the cozystack base roles
+
+templates:
+  - templates/tenant-clusterroles.yaml
+
+release:
+  name: address-controller
+  namespace: cozy-address-controller
+
+# The aggregation label is the whole wiring: cozy:tenant, cozy:tenant:view and
+# cozy:tenant:admin carry an aggregationRule selecting these, so a typo in a
+# label silently grants a tenant nothing and nothing else fails.
+tests:
+  - it: the tenant ServiceAccount role manages claims and aggregates to cozy:tenant
+    documentSelector:
+      path: metadata.name
+      value: cozy:addresses
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant"]
+          value: "true"
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["local.sdn.cozystack.io"]
+            resources: ["ipaddressclaims"]
+            verbs: ['*']
+
+  - it: the view role reads claims and aggregates to cozy:tenant:view
+    documentSelector:
+      path: metadata.name
+      value: cozy:addresses:view
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-view"]
+          value: "true"
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["local.sdn.cozystack.io"]
+            resources: ["ipaddressclaims"]
+            verbs: ["get", "list", "watch"]
+
+  - it: the admin role writes claims and aggregates to cozy:tenant:admin
+    documentSelector:
+      path: metadata.name
+      value: cozy:addresses:admin
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-admin"]
+          value: "true"
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["local.sdn.cozystack.io"]
+            resources: ["ipaddressclaims"]
+            verbs: ["create", "update", "patch", "delete"]

@@ -1,0 +1,6 @@
+address-controller:
+  # The chart's own default is the floating `:main` tag, which would let the
+  # running controller change with no change in this tree. Pinned here rather
+  # than in charts/, which `make update` regenerates. Bump in lockstep with
+  # ADDRESS_CONTROLLER_REF in the Makefile.
+  image: ghcr.io/cozystack/address-controller:main-90e65ca@sha256:74e4c7cf63f730ebe61527fdcd2b06e1bca2c383a66522dd4734aab9e66a9331

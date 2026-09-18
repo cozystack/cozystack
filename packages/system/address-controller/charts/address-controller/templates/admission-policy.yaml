@@ -1,0 +1,55 @@
+{{- /* Optional admission policy (proposal, Security: "spec.addressName cannot
+       be checked in CEL"): only allowlisted principals may set, change or
+       remove IPAddressClaim.spec.addressName, which binds one specific
+       Available address and so lets its writer pick an address out of a
+       class. Writes that leave the field as it was are always admitted. */ -}}
+{{- if .Values.admissionPolicy.enabled }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: address-controller-claim-address-name
+  labels:
+    {{- include "address-controller.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["local.sdn.cozystack.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["ipaddressclaims"]
+  matchConditions:
+    - name: not-allowlisted
+      expression: >-
+        !(request.userInfo.username in {{ toJson .Values.admissionPolicy.allowedUsernames }}) &&
+        !(has(request.userInfo.groups) &&
+          request.userInfo.groups.exists(g, g in {{ toJson .Values.admissionPolicy.allowedGroups }}))
+  variables:
+    - name: oldAddressName
+      expression: >-
+        request.operation == "UPDATE" && has(oldObject.spec.addressName)
+          ? oldObject.spec.addressName : ""
+    - name: newAddressName
+      expression: >-
+        has(object.spec.addressName) ? object.spec.addressName : ""
+  validations:
+    - expression: variables.newAddressName == variables.oldAddressName
+      message: >-
+        spec.addressName is reserved to the platform; create the claim without it
+        and the class assigns an address
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: address-controller-claim-address-name
+  labels:
+    {{- include "address-controller.labels" . | nindent 4 }}
+spec:
+  policyName: address-controller-claim-address-name
+  validationActions: {{ toJson .Values.admissionPolicy.validationActions }}
+  matchResources:
+    namespaceSelector:
+      {{- toYaml .Values.admissionPolicy.namespaceSelector | nindent 6 }}
+{{- end }}

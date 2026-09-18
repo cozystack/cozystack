@@ -1,0 +1,59 @@
+# Container image for the driver.
+image: ghcr.io/cozystack/metallb-iad:main
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Namespace MetalLB is installed in. The IPAddressPools that classes name
+# (parameters.pool) are looked up here.
+metallbNamespace: metallb-system
+
+# The --lb-class of the MetalLB instance this driver fronts. Empty for a
+# MetalLB that serves Services without a loadBalancerClass, the cluster
+# default. Placeholders carry it as spec.loadBalancerClass.
+loadBalancerClass: ""
+
+# Namespace the reservation placeholder Services live in. Empty means the
+# release namespace. Tenants must have no write access to it: a Service
+# carrying the placeholder label is exempt from conflict detection only
+# inside this namespace, so whoever can create Services there can hold
+# addresses. Setting it to anything other than the release namespace renders
+# a Namespace object as part of the chart.
+placeholderNamespace: ""
+
+controller:
+  replicas: 1
+  # Leader election matters once replicas > 1, but is on by default so scaling
+  # up is safe without a config change.
+  leaderElect: true
+  # ":8443" (HTTPS) or ":8080" (HTTP) to expose controller-runtime metrics;
+  # "0" disables the endpoint.
+  metricsBindAddress: "0"
+  priorityClassName: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+# Optional ValidatingAdmissionPolicy reserving the Service fields that steer
+# MetalLB at a specific address or pool — the metallb.io/ (and legacy
+# metallb.universe.tf/) loadBalancerIPs, address-pool and allow-shared-ip
+# annotations, spec.loadBalancerIP — and the driver's own pinned marker.
+# Only the driver's ServiceAccount and the principals below may set, change
+# or remove them; writes that leave them as they were are always admitted.
+admissionPolicy:
+  enabled: false
+  # [Deny], or e.g. [Warn, Audit] to observe what would be denied first.
+  validationActions: [Deny]
+  # Namespaces the policy applies to. Scope it to tenant namespaces when
+  # platform components elsewhere set these annotations themselves.
+  namespaceSelector: {}
+  # Usernames and groups exempt in addition to the driver's ServiceAccount.
+  # Admission policies bind system:masters too, so cluster admins must be
+  # listed; kubeadm since 1.29 issues admin credentials in
+  # kubeadm:cluster-admins instead.
+  allowedUsernames: []
+  allowedGroups:
+    - system:masters
+    - kubeadm:cluster-admins
