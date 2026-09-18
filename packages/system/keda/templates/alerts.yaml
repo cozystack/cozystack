@@ -146,7 +146,7 @@ spec:
         kube_horizontalpodautoscaler_spec_max_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
       for: 30m
       labels:
-        severity: info
+        severity: informational
       annotations:
         summary: Database autoscaler has been at maxReplicas for 30m.
         description: HPA {{ "{{ $labels.horizontalpodautoscaler }}" }} in namespace {{ "{{ $labels.namespace }}" }} has wanted its maximum replica count (autoscaling.maxReplicas) for 30m under sustained load — raise maxReplicas if more read capacity is needed.
