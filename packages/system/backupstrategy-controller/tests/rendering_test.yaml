@@ -22,6 +22,7 @@ templates:
   - templates/strategy-foundationdb-default.yaml
   - templates/strategy-velero-vminstance-default.yaml
   - templates/strategy-velero-vmdisk-default.yaml
+  - templates/strategy-bucket-default.yaml
 
 release:
   name: t
@@ -93,7 +94,7 @@ tests:
           count: 0
         template: templates/velero-bsl.yaml
 
-  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all ten routes (FoundationDB intentionally unbound)"
+  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all eleven routes (FoundationDB intentionally unbound)"
     asserts:
       - hasDocuments:
           count: 1
@@ -104,7 +105,7 @@ tests:
         template: templates/backupclass-default.yaml
       - lengthEqual:
           path: spec.strategies
-          count: 10
+          count: 11
         template: templates/backupclass-default.yaml
       - contains:
           path: spec.strategies
@@ -138,6 +139,17 @@ tests:
               apiGroup: strategy.backups.cozystack.io
               kind: Kafka
               name: cozy-default-kafka
+        template: templates/backupclass-default.yaml
+      - contains:
+          path: spec.strategies
+          content:
+            application:
+              apiGroup: apps.cozystack.io
+              kind: Bucket
+            strategyRef:
+              apiGroup: strategy.backups.cozystack.io
+              kind: Bucket
+              name: cozy-default-bucket
         template: templates/backupclass-default.yaml
 
   - it: "all Strategy CRs and the Velero BSL render once a bucket name resolves"
@@ -200,6 +212,34 @@ tests:
         template: templates/strategy-velero-vmdisk-default.yaml
       - hasDocuments:
           count: 1
+        template: templates/strategy-bucket-default.yaml
+      # The endpoint keeps its scheme: the mirror reads a scheme-less endpoint
+      # as HTTPS, so an http:// SeaweedFS must survive the render as http://.
+      # Pin the exact value - ^https?:// would pass an https:// regression too.
+      - equal:
+          path: spec.template.destination.endpoint
+          value: http://seaweedfs-s3.tenant-root.svc.cozy.local:8333
+        template: templates/strategy-bucket-default.yaml
+      # The mirror Pod's resource envelope and per-attempt deadline ride the
+      # shipped strategy; deleting either block from the template must fail here.
+      - equal:
+          path: spec.template.resources.limits.memory
+          value: 512Mi
+        template: templates/strategy-bucket-default.yaml
+      - equal:
+          path: spec.template.timeoutSeconds
+          value: 7200
+        template: templates/strategy-bucket-default.yaml
+      # The namespace segment of the prefix is the only thing separating two
+      # tenants inside the shared cozy-backups bucket, so pin the shipped value:
+      # dropping it would let two tenants' same-named Bucket apps collide and a
+      # restore read the wrong tenant's objects.
+      - equal:
+          path: spec.template.destination.prefix
+          value: "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/"
+        template: templates/strategy-bucket-default.yaml
+      - hasDocuments:
+          count: 1
         template: templates/velero-bsl.yaml
       - equal:
           path: spec.objectStorage.bucket
@@ -210,6 +250,25 @@ tests:
           path: spec.config.s3ForcePathStyle
           value: "true"
         template: templates/velero-bsl.yaml
+
+  - it: "Bucket strategy carries the TLS block when the platform sets a CA or opts out of verification"
+    set:
+      backupStorage.bucketNameOverride: test-bucket
+      backupStorage.insecureSkipTLSVerify: true
+      backupStorage.endpointCASecretName: my-s3-ca
+    asserts:
+      - equal:
+          path: spec.template.destination.tls.insecureSkipVerify
+          value: true
+        template: templates/strategy-bucket-default.yaml
+      - equal:
+          path: spec.template.destination.tls.caSecretKeyRef.name
+          value: my-s3-ca
+        template: templates/strategy-bucket-default.yaml
+      - equal:
+          path: spec.template.destination.tls.caSecretKeyRef.key
+          value: ca.crt
+        template: templates/strategy-bucket-default.yaml
 
   - it: "external S3 (provisionBucket=false): Strategy CRs render against the configured bucketName, no Bucket CR is created"
     set:
@@ -251,6 +310,23 @@ tests:
       # A sibling whose CRD shipped in an earlier release keeps rendering, which
       # is what makes the count above an assertion about the MongoDB gate rather
       # than about a chart-wide render failure.
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-cnpg-default.yaml
+
+  - it: "Bucket Strategy gates on its CRD too, so shipping the kind to an installed chart cannot wedge the release"
+    # Same shape as the MongoDB case: provisionBucket=false resolves $bucketName
+    # without the offline override, so only the CRD gate can hold the CR back.
+    # helm-unittest has no apiserver, so the Bucket CRD lookup answers "absent" -
+    # the answer a real cluster gives on the upgrade that first ships the CRD -
+    # where rendering the CR would fail Build() for the whole release.
+    set:
+      backupStorage.provisionBucket: false
+      backupStorage.bucketName: ext-bucket
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-bucket-default.yaml
       - hasDocuments:
           count: 1
         template: templates/strategy-cnpg-default.yaml

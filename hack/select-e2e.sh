@@ -246,6 +246,9 @@ src_to_suites() {
     # roundtrip, so an edit to packages/apps/kafka (or kafka-operator, which
     # reaches this source) selects both.
     kafka-application) echo "kafka kafka-metadata" ;;
+    # The Bucket app source owns both the app-create suite and the backup
+    # round-trip suite, so a bucket-app change exercises both.
+    bucket-application) echo "bucket bucket-backup" ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
   esac
@@ -409,8 +412,17 @@ while IFS= read -r file || [ -n "$file" ]; do
       # selected_apps would empty the final intersection and trip the
       # full-suite safety net).
       app=$(echo "$file" | sed -nE 's,^examples/backups/([^/]+)/.*,\1,p')
-      if echo "$all_apps" | grep -Fxq "$app"; then
-        selected_apps="$selected_apps $app"
+      # The round-trip Test conventionally lives in its app's own suite dir, but
+      # an app that already ships a non-backup suite (the Bucket app-create test
+      # holds the "bucket" suite) keeps its round-trip in "<app>-backup"; prefer
+      # that when it exists so the harness edit selects the suite that exercises
+      # the backup path rather than the app-create one.
+      suite="$app"
+      if echo "$all_apps" | grep -Fxq "${app}-backup"; then
+        suite="${app}-backup"
+      fi
+      if echo "$all_apps" | grep -Fxq "$suite"; then
+        selected_apps="$selected_apps $suite"
         trigger_any=1
       fi
       continue ;;
