@@ -71,7 +71,7 @@ tests:
           value: alertmanager
         matchRegex:
           path: stringData["alertmanager.yaml"]
-          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: email\n    group_by: \[alertname, cluster\]\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".'
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: email\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".'
       - documentSelector:
           path: kind
           value: VMAlertmanager
@@ -79,6 +79,29 @@ tests:
           path: spec.secrets
           value:
             - alertmanager-email-password
+
+  - it: lets the email routes inherit the root group_by
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            alertnames: ["KubeAPIDown"]
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '^global:\n  resolve_timeout: 5m\nroute:\n  group_by: \[alertname, namespace, cluster\]\n'
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: 'group_by: \[alertname, cluster\]'
 
   - it: works without SMTP auth when authUsername is omitted
     set:
@@ -113,7 +136,7 @@ tests:
         notExists:
           path: spec.secrets
 
-  - it: renders no custom subject or html by default
+  - it: never renders a Subject header or html body
     set:
       alerta:
         alerts:
@@ -121,6 +144,7 @@ tests:
             to: "oncall@example.org"
             from: "alerts@example.org"
             smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
     asserts:
       - documentSelector:
           path: metadata.labels.app
@@ -135,161 +159,6 @@ tests:
           path: stringData["alertmanager.yaml"]
           pattern: "html:"
 
-  - it: fails the render when the email block is only partially configured
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
-
-  - it: fails the render when only authUsername is set
-    set:
-      alerta:
-        alerts:
-          email:
-            authUsername: "mailer@example.org"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
-
-  - it: fails the render when only repeatInterval is set
-    set:
-      alerta:
-        alerts:
-          email:
-            repeatInterval: "6h"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
-
-  - it: fails the render when repeatInterval is not a duration
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            repeatInterval: "tomorrow"
-    asserts:
-      - failedTemplate:
-          errorMessage: 'alerta.alerts.email.repeatInterval must be an Alertmanager duration with units in descending order, each at most once, such as 30s, 5m, 12h or 1h30m, got "tomorrow"'
-
-  - it: quotes a custom repeatInterval so a stray value cannot break out of the config
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            repeatInterval: "1h30m"
-    asserts:
-      - documentSelector:
-          path: metadata.labels.app
-          value: alertmanager
-        matchRegex:
-          path: stringData["alertmanager.yaml"]
-          pattern: '    repeat_interval: "1h30m"\n'
-
-  - it: renders the alertname routes after the notify_email routes when alertnames is set
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            alertnames: ["KubeAPIDown", "etcdMembersDown"]
-    asserts:
-      - documentSelector:
-          path: metadata.labels.app
-          value: alertmanager
-        matchRegex:
-          path: stringData["alertmanager.yaml"]
-          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: email\n    group_by: \[alertname, cluster\]\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: alerta\n    continue: true\n    matchers:\n    - .alertname=~"\^\(KubeAPIDown\|etcdMembersDown\)\$".\n  - receiver: email\n    group_by: \[alertname, cluster\]\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .alertname=~"\^\(KubeAPIDown\|etcdMembersDown\)\$".'
-
-  - it: renders no alertname route when alertnames is empty
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-    asserts:
-      - documentSelector:
-          path: metadata.labels.app
-          value: alertmanager
-        notMatchRegex:
-          path: stringData["alertmanager.yaml"]
-          pattern: 'alertname=~"\^'
-
-  - it: renders a custom severities matcher on both notify_email routes
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            severities: ["critical", "major", "warning"]
-    asserts:
-      - documentSelector:
-          path: metadata.labels.app
-          value: alertmanager
-        matchRegex:
-          path: stringData["alertmanager.yaml"]
-          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major\|warning".\n    - .notify_email="true".\n  - receiver: email\n    group_by: \[alertname, cluster\]\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major\|warning".\n    - .notify_email="true".'
-
-  - it: fails the render when an alertnames entry is not a plain alert name
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            alertnames: ["bad name"]
-    asserts:
-      - failedTemplate:
-          errorMessage: 'alerta.alerts.email.alertnames entries must be Prometheus alert names, got "bad name"'
-
-  - it: fails the render when a severities entry is not a plain severity name
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            severities: ['critical"']
-    asserts:
-      - failedTemplate:
-          errorMessage: 'alerta.alerts.email.severities entries must be plain severity names, got "critical\""'
-
-  - it: fails the render when only alertnames is set
-    set:
-      alerta:
-        alerts:
-          email:
-            alertnames: ["KubeAPIDown"]
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
-
-  - it: fails the render when only severities is set
-    set:
-      alerta:
-        alerts:
-          email:
-            severities: ["critical"]
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
   - it: accepts a bracketed IPv6 smarthost
     set:
       alerta:
@@ -353,6 +222,83 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got "smtp://smtp.example.org:465/"'
+
+  - it: fails the render when the email block is only partially configured
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: to)"
+
+  - it: names the residual fields when the addresses are cleared to turn email off
+    set:
+      alerta:
+        alerts:
+          email:
+            to: ""
+            from: ""
+            smarthost: ""
+            repeatInterval: "6h"
+            severities: ["critical"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: repeatInterval, severities)"
+
+  - it: fails the render when only authUsername is set
+    set:
+      alerta:
+        alerts:
+          email:
+            authUsername: "mailer@example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: authUsername)"
+
+  - it: fails the render when only repeatInterval is set
+    set:
+      alerta:
+        alerts:
+          email:
+            repeatInterval: "6h"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: repeatInterval)"
+
+  - it: fails the render when only alertnames is set
+    set:
+      alerta:
+        alerts:
+          email:
+            alertnames: ["KubeAPIDown"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: alertnames)"
+
+  - it: fails the render when only severities is set
+    set:
+      alerta:
+        alerts:
+          email:
+            severities: ["critical"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: severities)"
+
+  - it: fails the render when repeatInterval is not a duration
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "tomorrow"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval must be an Alertmanager duration with units in descending order, each at most once, such as 30s, 5m, 12h or 1h30m, got "tomorrow"'
 
   - it: fails the render when repeatInterval lists its units out of order
     set:
@@ -436,6 +382,23 @@ tests:
           path: stringData["alertmanager.yaml"]
           pattern: '    repeat_interval: "292y"\n'
 
+  - it: quotes a custom repeatInterval so a stray value cannot break out of the config
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "1h30m"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    repeat_interval: "1h30m"\n'
+
   - it: accepts a repeatInterval with every unit in order
     set:
       alerta:
@@ -453,3 +416,78 @@ tests:
           path: stringData["alertmanager.yaml"]
           pattern: '    repeat_interval: "1y2w3d4h5m6s7ms"\n'
 
+  - it: renders the alertname routes after the notify_email routes when alertnames is set
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            alertnames: ["KubeAPIDown", "etcdMembersDown"]
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: email\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: alerta\n    continue: true\n    matchers:\n    - .alertname=~"\^\(KubeAPIDown\|etcdMembersDown\)\$".\n  - receiver: email\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .alertname=~"\^\(KubeAPIDown\|etcdMembersDown\)\$".'
+
+  - it: renders no alertname route when alertnames is empty
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: 'alertname=~"\^'
+
+  - it: renders a custom severities matcher on both notify_email routes
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            severities: ["critical", "major", "warning"]
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major\|warning".\n    - .notify_email="true".\n  - receiver: email\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major\|warning".\n    - .notify_email="true".'
+
+  - it: fails the render when an alertnames entry is not a plain alert name
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            alertnames: ["bad name"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.alertnames entries must be Prometheus alert names, got "bad name"'
+
+  - it: fails the render when a severities entry is not a plain severity name
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            severities: ['critical"']
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.severities entries must be plain severity names, got "critical\""'

@@ -10,10 +10,14 @@
 {{- $emailAlertnames := $email.alertnames | default list }}
 {{- $emailSeverities := $email.severities | default (list "critical" "major") }}
 {{- $emailPasswordSecret := "alertmanager-email-password" }}
-{{- $emailEnabled := or $email.to $email.smarthost $email.from $email.authUsername $email.repeatInterval $email.alertnames $email.severities }}
+{{- $emailSet := list }}
+{{- range $field := list "to" "from" "smarthost" "authUsername" "repeatInterval" "alertnames" "severities" }}
+{{- if index $email $field }}{{ $emailSet = append $emailSet $field }}{{ end }}
+{{- end }}
+{{- $emailEnabled := gt (len $emailSet) 0 }}
 {{- if $emailEnabled }}
 {{- if not (and $email.to $email.smarthost $email.from) }}
-{{- fail "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts" }}
+{{- fail (printf "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: %s)" (join ", " $emailSet)) }}
 {{- end }}
 {{- $smarthost := toString $email.smarthost }}
 {{- if not (regexMatch "^(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*):[0-9]{1,5}$" $smarthost) }}
@@ -316,7 +320,6 @@ stringData:
         - 'severity=~"{{ join "|" $emailSeverities }}"'
         - 'notify_email="true"'
       - receiver: email
-        group_by: [alertname, cluster]
         group_wait: 1m
         group_interval: 5m
         repeat_interval: {{ $email.repeatInterval | default "12h" | quote }}
@@ -329,7 +332,6 @@ stringData:
         matchers:
         - 'alertname=~"^({{ join "|" $emailAlertnames }})$"'
       - receiver: email
-        group_by: [alertname, cluster]
         group_wait: 1m
         group_interval: 5m
         repeat_interval: {{ $email.repeatInterval | default "12h" | quote }}
