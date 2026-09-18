@@ -16,6 +16,15 @@ RUN git clone https://github.com/kubernetes/autoscaler /src/autoscaler \
 WORKDIR /src/autoscaler/cluster-autoscaler
 COPY fix-downscale.diff /fix-downscale.diff
 RUN git apply /fix-downscale.diff
+
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patch touches. Each package is tested from its own directory,
+# below the clone root because the patch names paths from there: that finds
+# the module it belongs to, and an empty list runs nothing.
+RUN cd /src/autoscaler && for dir in $(git apply --numstat /fix-downscale.diff | cut -f3 | grep '\.go$' | xargs -n1 dirname | sort -u); do \
+      (cd "$dir" && go test .) || exit 1; \
+    done
+
 RUN make build
 
 FROM $BASEIMAGE

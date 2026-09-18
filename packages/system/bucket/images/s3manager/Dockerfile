@@ -10,6 +10,14 @@ RUN wget -O- https://github.com/cloudlena/s3manager/archive/9a7c8e446b422f8973b8
 ADD cozystack.patch /
 RUN git apply /cozystack.patch
 RUN go mod tidy
+
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patch touches. Each package is tested from its own directory:
+# that finds the module it belongs to, and an empty list runs nothing.
+RUN for dir in $(git apply --numstat /cozystack.patch | cut -f3 | grep '\.go$' | xargs -n1 dirname | sort -u); do \
+      (cd "$dir" && go test .) || exit 1; \
+    done
+
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -ldflags="-s -w" -a -installsuffix cgo -o bin/s3manager
 
 FROM docker.io/library/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b

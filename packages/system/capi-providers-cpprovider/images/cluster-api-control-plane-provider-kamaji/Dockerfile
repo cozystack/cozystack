@@ -25,6 +25,13 @@ RUN curl -sSL "https://github.com/clastix/cluster-api-control-plane-provider-kam
 COPY patches /patches
 RUN git apply --recount /patches/*.diff
 
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. Each package is tested from its own directory:
+# that finds the module it belongs to, and an empty list runs nothing.
+RUN for dir in $(git apply --numstat --recount /patches/*.diff | cut -f3 | grep '\.go$' | xargs -n1 dirname | sort -u); do \
+      (cd "$dir" && go test .) || exit 1; \
+    done
+
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -o manager main.go
 

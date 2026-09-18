@@ -20,6 +20,15 @@ WORKDIR /go/src/cosi
 COPY --from=source /src/go.mod /src/go.sum /src ./
 RUN go mod download
 
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. Each package is tested from its own directory:
+# that finds the module it belongs to (internal/ is one of its own), and an
+# empty list runs nothing.
+COPY --from=source /patches /patches
+RUN for dir in $(git apply --numstat /patches/*.diff | cut -f3 | grep '\.go$' | xargs -n1 dirname | sort -u); do \
+      (cd "$dir" && go test .) || exit 1; \
+    done
+
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/controller ./controller/cmd \
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/sidecar ./sidecar/cmd
 

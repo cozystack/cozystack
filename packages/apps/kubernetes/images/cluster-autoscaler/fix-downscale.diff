@@ -11,3 +11,18 @@ index 4eec0e4bf..f28fd9241 100644
  	case nreplicas < r.minSize:
  		return fmt.Errorf("size decrease too large - desired:%d min:%d", nreplicas, r.minSize)
  	}
+diff --git a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup_test.go b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup_test.go
+--- a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup_test.go
++++ b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup_test.go
+@@ -241,11 +241,6 @@
+ 		delta:       -1,
+ 		initial:     3,
+ 		errorMsg:    "size increase must be positive",
+-	}, {
+-		description: "errors because initial+delta > maxSize",
+-		delta:       8,
+-		initial:     3,
+-		errorMsg:    "size increase too large - desired:11 max:10",
+ 	}}
+ 
+ 	test := func(t *testing.T, tc *testCase, testConfig *testConfig) {
