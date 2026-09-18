@@ -19,6 +19,21 @@
 {{- if not (and $email.to $email.smarthost $email.from) }}
 {{- fail (printf "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: %s)" (join ", " $emailSet)) }}
 {{- end }}
+{{- $mailboxAddr := "[^\\s<>,;@]+@(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*)" }}
+{{- $mailbox := printf "^(%s|[^<>,;]*<%s>)$" $mailboxAddr $mailboxAddr }}
+{{- $emailFrom := trim (toString $email.from) }}
+{{- if not (regexMatch $mailbox $emailFrom) }}
+{{- fail (printf "alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got %q" $emailFrom) }}
+{{- end }}
+{{- range $recipient := splitList "," (toString $email.to) }}
+{{- $trimmed := trim $recipient }}
+{{- if eq $trimmed "" }}
+{{- fail (printf "alerta.alerts.email.to has an empty entry between commas, got %q" (toString $email.to)) }}
+{{- end }}
+{{- if not (regexMatch $mailbox $trimmed) }}
+{{- fail (printf "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got %q" $trimmed) }}
+{{- end }}
+{{- end }}
 {{- $smarthost := toString $email.smarthost }}
 {{- if not (regexMatch "^(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*):[0-9]{1,5}$" $smarthost) }}
 {{- fail (printf "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got %q" $smarthost) }}

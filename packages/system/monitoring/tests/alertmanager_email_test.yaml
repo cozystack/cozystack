@@ -491,3 +491,124 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'alerta.alerts.email.severities entries must be plain severity names, got "critical\""'
+
+  - it: accepts a comma-separated recipient list
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org, backup@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - to: "oncall@example\.org, backup@example\.org"'
+
+  - it: accepts a display name on both addresses
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "Oncall <oncall@example.org>"
+            from: "Alerts <alerts@example.org>"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - to: "Oncall <oncall@example\.org>"\n    from: "Alerts <alerts@example\.org>"'
+
+  - it: accepts a domain literal, the way smarthost accepts a bracketed address
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@[192.0.2.25]"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - to: "oncall@\[192\.0\.2\.25\]"'
+
+  - it: fails the render when a recipient address has no at sign
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall.example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got "oncall.example.org"'
+
+  - it: fails the render when a recipient address carries a space
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got "oncall example.org"'
+
+  - it: fails the render when one recipient in the list is malformed
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org, backup example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got "backup example.org"'
+
+  - it: fails the render when the recipient list has an empty entry
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org,"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to has an empty entry between commas, got "oncall@example.org,"'
+
+  - it: fails the render when from carries a list instead of one address
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org, second@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got "alerts@example.org, second@example.org"'
+
+  - it: fails the render when the sender address carries a space
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got "alerts example.org"'
+
