@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: v0.7.7-infraprovider-proxmox
+  {{- /*
+    NOT 'infraprovider-components: cozy'. That label already identifies the
+    KubeVirt provider's ConfigMap, and InfrastructureProvider.fetchConfig
+    selects purely by label: sharing it makes the two providers
+    indistinguishable, and whichever ConfigMap is matched first is the one
+    installed. The kubeadm/talos bootstrap packages solve the same problem
+    with a 'bootstrap-provider' key; this mirrors that.
+  */}}
+  labels:
+    infraprovider-provider: proxmox
+  annotations:
+    provider.cluster.x-k8s.io/compressed: "true"
+binaryData:
+  components: {{ .Files.Get "files/components.gz" | b64enc | quote }}
+data:
+  metadata: {{ .Files.Get "files/metadata.yaml" | quote }}
