@@ -72,3 +72,35 @@ func TestIsTapAutoRegistration(t *testing.T) {
 		t.Error("a tap Package already pinned to a variant is not re-openable")
 	}
 }
+
+func TestPinRegistrationToUser(t *testing.T) {
+	pkg := &cozyv1alpha1.Package{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels:      map[string]string{tapconst.Label: "true", "keep": "me"},
+			Annotations: map[string]string{tapconst.SourceAnnotation: "tap-a", "keep": "me"},
+			OwnerReferences: []metav1.OwnerReference{
+				{Kind: "PackageSource", Name: "acme.app"},
+				{Kind: "SomethingElse", Name: "other"},
+			},
+		},
+	}
+	pinRegistrationToUser(pkg, "full")
+	if pkg.Spec.Variant != "full" {
+		t.Errorf("variant not pinned, got %q", pkg.Spec.Variant)
+	}
+	if isTapAutoRegistration(pkg) {
+		t.Error("a pinned Package must no longer be a tap auto-registration")
+	}
+	if _, ok := pkg.Labels[tapconst.Label]; ok {
+		t.Error("tap label must be shed")
+	}
+	if _, ok := pkg.Annotations[tapconst.SourceAnnotation]; ok {
+		t.Error("source annotation must be shed")
+	}
+	if pkg.Labels["keep"] != "me" || pkg.Annotations["keep"] != "me" {
+		t.Error("unrelated labels/annotations must be preserved")
+	}
+	if len(pkg.OwnerReferences) != 1 || pkg.OwnerReferences[0].Kind != "SomethingElse" {
+		t.Errorf("only the PackageSource ownerRef must be dropped, got %+v", pkg.OwnerReferences)
+	}
+}

@@ -488,20 +488,27 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 	for _, pkgName := range installOrder {
 		variant := packageVariants[pkgName]
 
-		// An already-installed Package that reached here is a tap-managed
-		// registration Package: apply the user's variant choice by updating it
-		// (a selection of "default" is a no-op, the empty variant already means
-		// default), rather than creating a duplicate.
 		if installed, exists := installedMap[pkgName]; exists {
-			if variant != "" && variant != "default" {
-				installed.Spec.Variant = variant
-				if err := k8sClient.Update(ctx, installed); err != nil {
-					return fmt.Errorf("failed to set variant %s on Package %s: %w", variant, pkgName, err)
-				}
-				fmt.Fprintf(os.Stderr, "✓ %s (variant set to %s)\n", pkgName, variant)
-			} else {
-				fmt.Fprintf(os.Stderr, "✓ %s (already registered, variant: default)\n", pkgName)
+			// A user's own already-installed Package is left untouched; only a tap
+			// auto-registration Package (label + empty variant) is re-opened for a
+			// variant choice.
+			if !isTapAutoRegistration(installed) {
+				continue
 			}
+			if variant == "" || variant == "default" {
+				fmt.Fprintf(os.Stderr, "✓ %s (already registered, variant: default)\n", pkgName)
+				continue
+			}
+			// Pinning a non-default variant is a deliberate user choice: hand the
+			// Package over to the user (shed the tap markers and the PackageSource
+			// ownerReference) so the materializer no longer manages it. Otherwise a
+			// later revision that turns the DEFAULT variant privileged would
+			// de-register this benign non-default install.
+			pinRegistrationToUser(installed, variant)
+			if err := k8sClient.Update(ctx, installed); err != nil {
+				return fmt.Errorf("failed to set variant %s on Package %s: %w", variant, pkgName, err)
+			}
+			fmt.Fprintf(os.Stderr, "✓ %s (variant set to %s)\n", pkgName, variant)
 			continue
 		}
 
@@ -543,6 +550,24 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 // for variant selection by `add`.
 func isTapAutoRegistration(pkg *cozyv1alpha1.Package) bool {
 	return pkg.GetLabels()[tapconst.Label] == "true" && pkg.Spec.Variant == ""
+}
+
+// pinRegistrationToUser turns a tap auto-registration Package into a plain
+// user-owned Package pinned to variant: it sets the variant and sheds the tap
+// markers (label, source annotation) and the PackageSource ownerReference, so the
+// tap materializer no longer manages or de-registers it and untap treats it as
+// the user's.
+func pinRegistrationToUser(pkg *cozyv1alpha1.Package, variant string) {
+	pkg.Spec.Variant = variant
+	delete(pkg.Labels, tapconst.Label)
+	delete(pkg.Annotations, tapconst.SourceAnnotation)
+	kept := pkg.OwnerReferences[:0]
+	for _, ref := range pkg.OwnerReferences {
+		if ref.Kind != "PackageSource" {
+			kept = append(kept, ref)
+		}
+	}
+	pkg.OwnerReferences = kept
 }
 
 // createPackageIdempotent creates pkg and reports whether it created a new

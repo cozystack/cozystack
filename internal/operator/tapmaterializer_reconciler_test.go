@@ -567,6 +567,37 @@ func drainDeregisterEvent(rec *record.FakeRecorder) bool {
 	}
 }
 
+// TestReconcileKeepsPinnedTapLabelledPackage is defence in depth for the pinned-
+// variant case: even a Package that still carries the tap label but is pinned to
+// a non-empty variant (so managedRegistration is false) must NOT be de-registered
+// on a privileged default flip. The user pinned it deliberately.
+func TestReconcileKeepsPinnedTapLabelledPackage(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePrivilegedHello})
+	pinned := &cozyv1alpha1.Package{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "example.hello",
+			Labels: map[string]string{tapconst.Label: "true"},
+			// Annotation matches the source, so collision.Owns is true; only the
+			// empty-variant clause of managedRegistration keeps it from deletion.
+			Annotations: map[string]string{tapconst.SourceAnnotation: "tap-foo-bar"},
+		},
+		Spec: cozyv1alpha1.PackageSpec{Variant: "full"},
+	}
+	cur := data
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tapRepo(true), pinned).WithStatusSubresource(&sourcev1.OCIRepository{}).Build()
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &cur)
+
+	setArtifact(t, cl, digest, "rev1")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &cozyv1alpha1.Package{}); err != nil {
+		t.Errorf("a pinned (non-empty variant) Package must NOT be de-registered, got err=%v", err)
+	}
+}
+
 // TestReconcileDeregistersWhenDefaultVariantDropped: a later revision that no
 // longer declares a "default" variant must also de-register the standing Package,
 // not leave stale HelmReleases behind a spec that no longer contains them.
