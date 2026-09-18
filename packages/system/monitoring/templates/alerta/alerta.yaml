@@ -9,19 +9,11 @@
 {{- $email := ((.Values.alerta.alerts).email) | default dict }}
 {{- $emailAlertnames := $email.alertnames | default list }}
 {{- $emailSeverities := $email.severities | default (list "critical" "major") }}
-{{- $emailEnabled := or $email.to $email.smarthost $email.from $email.authUsername $email.secretName $email.subject $email.bodyHtml $email.repeatInterval $email.alertnames $email.severities }}
+{{- $emailPasswordSecret := "alertmanager-email-password" }}
+{{- $emailEnabled := or $email.to $email.smarthost $email.from $email.authUsername $email.repeatInterval $email.alertnames $email.severities }}
 {{- if $emailEnabled }}
 {{- if not (and $email.to $email.smarthost $email.from) }}
 {{- fail "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts" }}
-{{- end }}
-{{- if and $email.authUsername (not $email.secretName) }}
-{{- fail "alerta.alerts.email.secretName is required when authUsername is set" }}
-{{- end }}
-{{- if and $email.secretName (not $email.authUsername) }}
-{{- fail "alerta.alerts.email.authUsername is required when secretName is set" }}
-{{- end }}
-{{- if and $email.secretName (or (not (kindIs "string" $email.secretName)) (gt (len (toString $email.secretName)) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" (toString $email.secretName)))) }}
-{{- fail "alerta.alerts.email.secretName must be a Kubernetes Secret name (a DNS subdomain of at most 253 characters)" }}
 {{- end }}
 {{- if and $email.repeatInterval (not (regexMatch "^([0-9]+(ms|[smhdwy]))+$" (toString $email.repeatInterval))) }}
 {{- fail (printf "alerta.alerts.email.repeatInterval must be a duration such as 30s, 5m or 12h, got %q" (toString $email.repeatInterval)) }}
@@ -341,14 +333,7 @@ stringData:
         smarthost: {{ $email.smarthost | quote }}
         {{- if $email.authUsername }}
         auth_username: {{ $email.authUsername | quote }}
-        auth_password_file: {{ printf "/etc/vm/secrets/%s/password" $email.secretName | quote }}
-        {{- end }}
-        {{- if $email.subject }}
-        headers:
-          Subject: {{ $email.subject | quote }}
-        {{- end }}
-        {{- if $email.bodyHtml }}
-        html: {{ $email.bodyHtml | quote }}
+        auth_password_file: {{ printf "/etc/vm/secrets/%s/password" $emailPasswordSecret | quote }}
         {{- end }}
         send_resolved: true
     {{- end }}
@@ -365,9 +350,9 @@ spec:
       apps.cozystack.io/application.name: {{ $.Release.Name }}
   replicaCount: 3
   configSecret: alertmanager
-  {{- if and $emailEnabled $email.secretName }}
+  {{- if and $emailEnabled $email.authUsername }}
   secrets:
-  - {{ $email.secretName | quote }}
+  - {{ $emailPasswordSecret | quote }}
   {{- end }}
   podMetadata:
     labels:

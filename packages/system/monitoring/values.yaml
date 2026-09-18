@@ -75,10 +75,7 @@ alerta:
       from: ""
       smarthost: ""
       authUsername: ""
-      secretName: ""
       repeatInterval: ""
-      subject: ""
-      bodyHtml: ""
       alertnames: []
       severities: []
 grafana:

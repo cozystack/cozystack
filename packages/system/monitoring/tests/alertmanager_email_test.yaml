@@ -50,7 +50,7 @@ tests:
         notExists:
           path: spec.secrets
 
-  - it: renders the email receiver, both routes and the secrets mount when configured
+  - it: renders the email receiver, both routes and the fixed password Secret mount when configured
     set:
       alerta:
         alerts:
@@ -59,14 +59,13 @@ tests:
             from: "alerts@example.org"
             smarthost: "smtp.example.org:465"
             authUsername: "mailer@example.org"
-            secretName: "alertmanager-smtp"
     asserts:
       - documentSelector:
           path: metadata.labels.app
           value: alertmanager
         matchRegex:
           path: stringData["alertmanager.yaml"]
-          pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:465"\n    auth_username: "mailer@example\.org"\n    auth_password_file: "/etc/vm/secrets/alertmanager-smtp/password"\n    send_resolved: true'
+          pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:465"\n    auth_username: "mailer@example\.org"\n    auth_password_file: "/etc/vm/secrets/alertmanager-email-password/password"\n    send_resolved: true'
       - documentSelector:
           path: metadata.labels.app
           value: alertmanager
@@ -79,7 +78,7 @@ tests:
         equal:
           path: spec.secrets
           value:
-            - alertmanager-smtp
+            - alertmanager-email-password
 
   - it: works without SMTP auth when authUsername is omitted
     set:
@@ -113,30 +112,6 @@ tests:
           value: VMAlertmanager
         notExists:
           path: spec.secrets
-
-  - it: renders custom subject header and html body when set
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            subject: "[{{ .Status }}] {{ .CommonLabels.alertname }}"
-            bodyHtml: "<b>{{ .Status }}</b>"
-    asserts:
-      - documentSelector:
-          path: metadata.labels.app
-          value: alertmanager
-        matchRegex:
-          path: stringData["alertmanager.yaml"]
-          pattern: '    headers:\n      Subject: "\[\{\{ \.Status \}\}\] \{\{ \.CommonLabels\.alertname \}\}"'
-      - documentSelector:
-          path: metadata.labels.app
-          value: alertmanager
-        matchRegex:
-          path: stringData["alertmanager.yaml"]
-          pattern: 'html: "<b>\{\{ \.Status \}\}</b>"'
 
   - it: renders no custom subject or html by default
     set:
@@ -180,62 +155,6 @@ tests:
       - failedTemplate:
           errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
 
-  - it: fails the render when only secretName is set
-    set:
-      alerta:
-        alerts:
-          email:
-            secretName: "alertmanager-smtp"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
-
-  - it: fails the render when only subject is set
-    set:
-      alerta:
-        alerts:
-          email:
-            subject: "[{{ .Status }}] {{ .CommonLabels.alertname }}"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
-
-  - it: fails the render when only bodyHtml is set
-    set:
-      alerta:
-        alerts:
-          email:
-            bodyHtml: "<b>{{ .Status }}</b>"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
-
-  - it: fails the render when authUsername is set without secretName
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            authUsername: "mailer@example.org"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email.secretName is required when authUsername is set"
-
-  - it: fails the render when secretName is set without authUsername
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            secretName: "alertmanager-smtp"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email.authUsername is required when secretName is set"
-
   - it: fails the render when only repeatInterval is set
     set:
       alerta:
@@ -275,72 +194,6 @@ tests:
         matchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: '    repeat_interval: "1h30m"\n'
-
-  - it: keeps a numeric Secret name as a string in the mount and password path
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            authUsername: "mailer@example.org"
-            secretName: "123"
-    asserts:
-      - documentSelector:
-          path: metadata.labels.app
-          value: alertmanager
-        matchRegex:
-          path: stringData["alertmanager.yaml"]
-          pattern: '    auth_password_file: "/etc/vm/secrets/123/password"\n'
-      - documentSelector:
-          path: kind
-          value: VMAlertmanager
-        equal:
-          path: spec.secrets
-          value: ["123"]
-
-  - it: fails the render when secretName contains a newline
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            authUsername: "mailer@example.org"
-            secretName: "smtp-creds\n    NOT_A_CONFIG_KEY"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email.secretName must be a Kubernetes Secret name (a DNS subdomain of at most 253 characters)"
-
-  - it: fails the render when secretName contains an empty DNS label
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            authUsername: "mailer@example.org"
-            secretName: "smtp..creds"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email.secretName must be a Kubernetes Secret name (a DNS subdomain of at most 253 characters)"
-
-  - it: fails the render when secretName exceeds 253 characters
-    set:
-      alerta:
-        alerts:
-          email:
-            to: "oncall@example.org"
-            from: "alerts@example.org"
-            smarthost: "smtp.example.org:465"
-            authUsername: "mailer@example.org"
-            secretName: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    asserts:
-      - failedTemplate:
-          errorMessage: "alerta.alerts.email.secretName must be a Kubernetes Secret name (a DNS subdomain of at most 253 characters)"
 
   - it: renders the alertname routes after the notify_email routes when alertnames is set
     set:
