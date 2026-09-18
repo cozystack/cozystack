@@ -18,6 +18,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -807,5 +808,87 @@ func TestReconcileBlocksNameCollision(t *testing.T) {
 	}
 	if ps.GetLabels()[tapconst.Label] == "true" {
 		t.Error("the collision check must not overwrite the foreign PackageSource")
+	}
+}
+
+func managedRegPkg(name, src string) *cozyv1alpha1.Package {
+	return &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{
+		Name:        name,
+		Labels:      map[string]string{tapconst.Label: "true"},
+		Annotations: map[string]string{tapconst.SourceAnnotation: src},
+	}}
+}
+
+// TestDeregisterManagedRetriesOnBenignConflict pins MAJOR-B: a delete conflict is
+// NOT a user pin. A Package's resourceVersion churns on routine status writes, so
+// a 409 must be retried (re-read + re-classify), not treated as "leave it".
+func TestDeregisterManagedRetriesOnBenignConflict(t *testing.T) {
+	scheme := tapScheme(t)
+	store := fake.NewClientBuilder().WithScheme(scheme).WithObjects(managedRegPkg("x", "tap-a")).Build()
+	calls := 0
+	cl := interceptor.NewClient(store, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			calls++
+			if calls == 1 { // first attempt: a benign status write moved the RV
+				return apierrors.NewConflict(cozyv1alpha1.GroupVersion.WithResource("packages").GroupResource(), "x", errors.New("rv moved"))
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	r := &TapMaterializerReconciler{Client: cl, APIReader: store, Scheme: scheme}
+	res, err := r.deregisterManaged(context.Background(), "x", "tap-a")
+	if err != nil || res != deregDeleted {
+		t.Fatalf("a benign conflict must be retried to a delete, got res=%v err=%v", res, err)
+	}
+	if calls < 2 {
+		t.Errorf("expected a retry after the conflict, got %d Delete call(s)", calls)
+	}
+}
+
+// TestDeregisterManagedLiveReadAvoidsStaleDelete pins MAJOR-A: the decision reads
+// live, so a just-pinned Package (unmarked) is left; the control shows a stale
+// cached read would delete the user's install.
+func TestDeregisterManagedLiveReadAvoidsStaleDelete(t *testing.T) {
+	run := func(useLive bool) deregResult {
+		scheme := tapScheme(t)
+		pinned := &cozyv1alpha1.Package{ // live: user pinned it, markers shed
+			ObjectMeta: metav1.ObjectMeta{Name: "x"},
+			Spec:       cozyv1alpha1.PackageSpec{Variant: "full"},
+		}
+		liveStore := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pinned).Build()
+		staleStore := fake.NewClientBuilder().WithScheme(scheme).WithObjects(managedRegPkg("x", "tap-a")).Build()
+		r := &TapMaterializerReconciler{Client: staleStore, Scheme: scheme}
+		if useLive {
+			r.APIReader = liveStore
+		}
+		res, err := r.deregisterManaged(context.Background(), "x", "tap-a")
+		if err != nil {
+			t.Fatalf("deregisterManaged: %v", err)
+		}
+		return res
+	}
+	if run(true) != deregLeftForeign {
+		t.Error("a live read must see the pinned Package and leave it")
+	}
+	if run(false) != deregDeleted {
+		t.Error("control: a stale cached read sees the managed view and deletes it (the bug the live read fixes)")
+	}
+}
+
+// TestDeregisterManagedFailsClosedOnPersistentConflict pins the adversarial path:
+// a Package whose resourceVersion never settles exhausts the retries and returns
+// an error, which the caller turns into a requeue WITHOUT applying the unsafe spec
+// (never a silent skip of the de-register).
+func TestDeregisterManagedFailsClosedOnPersistentConflict(t *testing.T) {
+	scheme := tapScheme(t)
+	store := fake.NewClientBuilder().WithScheme(scheme).WithObjects(managedRegPkg("x", "tap-a")).Build()
+	cl := interceptor.NewClient(store, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			return apierrors.NewConflict(cozyv1alpha1.GroupVersion.WithResource("packages").GroupResource(), "x", errors.New("rv keeps moving"))
+		},
+	})
+	r := &TapMaterializerReconciler{Client: cl, APIReader: store, Scheme: scheme}
+	if _, err := r.deregisterManaged(context.Background(), "x", "tap-a"); err == nil {
+		t.Error("a persistently contended Package must return an error (fail-closed), not a silent leave")
 	}
 }

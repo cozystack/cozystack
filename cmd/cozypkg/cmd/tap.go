@@ -382,23 +382,33 @@ func runUntap(ctx context.Context, k8sClient client.Client, name string, allowYe
 	// The Package is handled BEFORE the PackageSource: a transient error here must
 	// abort the untap, not fall through to delete the PackageSource and OCIRepository
 	// and strand the Package where no later cleanup can find it.
-	pkg := &cozyv1alpha1.Package{}
-	switch err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg); {
-	case err == nil:
-		if collision.ManagedRegistration(pkg, srcName) {
-			// UID precondition: do not delete a Package the user replaced between
-			// this Get and the Delete.
-			if err := k8sClient.Delete(ctx, pkg, client.Preconditions{UID: &pkg.UID}); err != nil {
-				return fmt.Errorf("failed to delete registration Package %s: %w", name, err)
-			}
-			_, _ = fmt.Fprintf(out, "Removed Package/%s\n", name)
-		} else if !allowYes {
-			return fmt.Errorf("package %s is still installed from this source; delete it with 'cozypkg del %s' first, or pass --yes to untap anyway (the Package stays installed)", name, name)
+	// Re-read and re-classify on a conflict rather than assume the Package was
+	// pinned: its resourceVersion also moves on a status write. The UID +
+	// ResourceVersion precondition deletes only the exact object classified.
+	for attempt := 0; ; attempt++ {
+		pkg := &cozyv1alpha1.Package{}
+		err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg)
+		if apierrors.IsNotFound(err) {
+			break // no registration Package; nothing to de-register
 		}
-	case apierrors.IsNotFound(err):
-		// No registration Package; nothing to de-register.
-	default:
-		return fmt.Errorf("failed to check registration Package %s: %w", name, err)
+		if err != nil {
+			return fmt.Errorf("failed to check registration Package %s: %w", name, err)
+		}
+		if !collision.ManagedRegistration(pkg, srcName) {
+			if !allowYes {
+				return fmt.Errorf("package %s is still installed from this source; delete it with 'cozypkg del %s' first, or pass --yes to untap anyway (the Package stays installed)", name, name)
+			}
+			break
+		}
+		delErr := k8sClient.Delete(ctx, pkg, client.Preconditions{UID: &pkg.UID, ResourceVersion: &pkg.ResourceVersion})
+		if delErr == nil || apierrors.IsNotFound(delErr) {
+			_, _ = fmt.Fprintf(out, "Removed Package/%s\n", name)
+			break
+		}
+		if apierrors.IsConflict(delErr) && attempt < 4 {
+			continue
+		}
+		return fmt.Errorf("failed to delete registration Package %s: %w", name, delErr)
 	}
 
 	if err := k8sClient.Delete(ctx, ps); err != nil {
