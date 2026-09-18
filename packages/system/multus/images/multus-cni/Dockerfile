@@ -13,6 +13,9 @@ RUN git init && git config user.email "build@cozystack" && git config user.name 
     git add -A && git commit -m "init" && git tag ${VERSION} && \
     git apply /patches/*.diff
 
+# The tests of pkg/multus, the package the patch touches, create network
+# namespaces (mount --make-rshared /var/run/netns), which a build container is
+# not allowed to do, so the image build does not run them.
 RUN ./hack/build-go.sh
 # The upstream reference CNI plugins, installed into the host /opt/cni/bin by
 # the install-cni-plugins init container. See packages/system/multus/values.yaml
