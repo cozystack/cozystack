@@ -1,0 +1,22 @@
+# A FloatingIP's replies leave the VPC only through a route whose target is
+# internet; without one the address is bound and Ready but never answers. The
+# VPC application renders no route table, so the Test declares the default one.
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: RouteTable
+metadata:
+  name: ea-vpc-main
+spec:
+  vpcRef:
+    name: virtualprivatecloud-ea-vpc
+  default: true
+---
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: Route
+metadata:
+  name: ea-vpc-internet
+spec:
+  routeTableRef:
+    name: ea-vpc-main
+  destination: 0.0.0.0/0
+  target:
+    internet: {}

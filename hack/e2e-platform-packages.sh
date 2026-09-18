@@ -76,6 +76,8 @@ spec:
         bundles:
           enabledPackages:
             - cozystack.external-dns-application
+            - cozystack.address-controller
+            - cozystack.metallb-iad
 EOF
 
 if [ -n "$disabled" ]; then

@@ -1,0 +1,23 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Postgres
+metadata:
+  name: ea-b
+spec:
+  external: false
+  size: 10Gi
+  replicas: 1
+  storageClass: ""
+  quorum:
+    minSyncReplicas: 0
+    maxSyncReplicas: 0
+  users:
+    testuser: {}
+  databases:
+    testdb:
+      roles:
+        admin:
+        - testuser
+  backup:
+    enabled: false
+  resources: {}
+  resourcesPreset: "nano"

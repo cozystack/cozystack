@@ -370,4 +370,53 @@ spec:
   avoidBuggyIPs: false
 EOF
 
+# The address substrate is installed only for the suites that draw addresses
+# from it (hack/select-install.sh), and metallb-iad pulls address-controller in
+# with it. Its class must name a pool MetalLB never assigns from on its own, so
+# that pool is kept apart from the auto-assigning one above.
+case " ${COZY_DISABLED_PACKAGES:-} " in
+  *" cozystack.metallb-iad "*) ;;
+  *)
+    if ! wait_for_object 600 "IPAddressClass CRD" crd ipaddressclasses.local.sdn.cozystack.io; then
+      for ns in cozy-address-controller cozy-metallb-iad; do
+        timeout -k 5 30 kubectl get hr -n "$ns" --request-timeout=10s 2>&1 | tail -n 30 >&2
+      done
+      exit 1
+    fi
+    echo "[post-install-prep] applying the default IPAddressClass and its MetalLB pool"
+    $KUBECTL_BOUND kubectl apply --request-timeout=60s -f - <<'EOF'
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: address-substrate
+  namespace: cozy-metallb
+spec:
+  addresses: [192.168.123.190-192.168.123.199]
+  autoAssign: false
+  avoidBuggyIPs: false
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: address-substrate
+  namespace: cozy-metallb
+spec:
+  ipAddressPools: [address-substrate]
+---
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: IPAddressClass
+metadata:
+  name: sandbox
+  annotations:
+    ipaddressclass.local.sdn.cozystack.io/is-default-class: "true"
+spec:
+  provisioner: metallb.drivers.local.sdn.cozystack.io
+  reclaimPolicy: Delete
+  parameters:
+    pool: address-substrate
+EOF
+    ;;
+esac
+
 echo "[post-install-prep] done"
