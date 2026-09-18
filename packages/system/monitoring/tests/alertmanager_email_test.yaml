@@ -612,3 +612,35 @@ tests:
       - failedTemplate:
           errorMessage: 'alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got "alerts example.org"'
 
+  - it: fails the render when to is the only address missing
+    set:
+      alerta:
+        alerts:
+          email:
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: from, smarthost)"
+
+  - it: fails the render when from is the only address missing
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: to, smarthost)"
+
+  - it: fails the render when smarthost is the only field missing
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: to, from)"
