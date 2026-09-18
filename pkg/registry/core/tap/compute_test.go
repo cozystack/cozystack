@@ -123,6 +123,35 @@ func TestBuildTapNoMatchingAppDef(t *testing.T) {
 	}
 }
 
+func TestBuildTapReflectsMissingRegistration(t *testing.T) {
+	// The PackageSource reports Ready, but its registration (ApplicationDefinition)
+	// is gone — e.g. its registration Package was deleted out-of-band. The Tap must
+	// NOT echo the PackageSource's "ready" while the catalog is empty.
+	ps := cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo.gitea", Labels: map[string]string{tapconst.Label: "true"}},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			Variants: []cozyv1alpha1.Variant{{Name: "default", Components: []cozyv1alpha1.Component{{Name: "gitea", Path: "apps/gitea"}}}},
+		},
+		Status: cozyv1alpha1.PackageSourceStatus{Conditions: []metav1.Condition{
+			{Type: "Ready", Status: metav1.ConditionTrue, Message: "reconciliation succeeded"},
+		}},
+	}
+	tap := buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{}) // no AppDefs resolve
+	if tap.Spec.Ready {
+		t.Error("Tap must not report Ready when the repository declares apps but none are registered")
+	}
+	if tap.Spec.Message == "reconciliation succeeded" {
+		t.Error("Tap must not echo the PackageSource's Ready message when the catalog is empty")
+	}
+
+	// A recorded skip reason (e.g. privileged) is surfaced verbatim.
+	ps.Annotations = map[string]string{tapconst.RegistrationStateAnnotation: "not auto-registered: privileged"}
+	tap = buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{})
+	if tap.Spec.Ready || tap.Spec.Message != "not auto-registered: privileged" {
+		t.Errorf("expected the recorded registration reason as the message, got %+v", tap.Spec)
+	}
+}
+
 func TestBuildPendingTap(t *testing.T) {
 	// No error: a connecting message, not ready, community, identified by source.
 	p := buildPendingTap("tap-acme-repo", "")

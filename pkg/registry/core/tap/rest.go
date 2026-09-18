@@ -256,8 +256,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 				fmt.Errorf("a different repository (%s) is already connected as %q; disconnect it before connecting %s", curURL, target.FluxSourceName, target.URL))
 		}
 		// Update only the fields this API owns (spec, the tap label and name
-		// annotation) on the FETCHED object, so the operator's finalizer and
-		// materialized-revision annotation on the existing source survive.
+		// annotation) on the FETCHED object, so the operator's finalizer survives.
+		// Clear the materialized-revision annotation so a re-connect re-materializes
+		// and recovers a registration Package (or PackageSource) removed out-of-band
+		// since the last materialization, the same recovery `cozypkg tap` performs.
 		cur.Object["spec"] = repo.Object["spec"]
 		labels := cur.GetLabels()
 		if labels == nil {
@@ -270,6 +272,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 			ann = map[string]string{}
 		}
 		ann[tapconst.NameAnnotation] = target.FluxSourceName
+		delete(ann, tapconst.MaterializedRevisionAnnotation)
 		cur.SetAnnotations(ann)
 		if _, err := src.Update(ctx, cur, metav1.UpdateOptions{FieldManager: "cozystack-api", DryRun: createDryRun(opts)}); err != nil {
 			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.FluxSourceName, err))

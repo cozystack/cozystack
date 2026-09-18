@@ -255,10 +255,12 @@ func TestCreateGuards(t *testing.T) {
 	}
 }
 
-func TestCreateRepeatPreservesFinalizerAndRevision(t *testing.T) {
+func TestCreateRepeatPreservesFinalizerAndForcesRematerialize(t *testing.T) {
 	// A source already connected and materialized carries the operator's
 	// finalizer and materialized-revision annotation; a repeat connect must
-	// update the tag without stripping them.
+	// update the tag and preserve the finalizer, but CLEAR the
+	// materialized-revision annotation so the operator re-materializes and
+	// recovers a registration removed out-of-band.
 	existing := ociRepoObj("tap-foo-bar")
 	// Same repository, connected earlier at a different tag.
 	_ = unstructured.SetNestedField(existing.Object, "oci://ghcr.io/foo/bar", "spec", "url")
@@ -277,8 +279,8 @@ func TestCreateRepeatPreservesFinalizerAndRevision(t *testing.T) {
 	if len(u.GetFinalizers()) == 0 {
 		t.Error("repeat connect stripped the operator finalizer")
 	}
-	if u.GetAnnotations()["apps.cozystack.io/materialized-revision"] != "rev-1" {
-		t.Error("repeat connect stripped the materialized-revision annotation")
+	if _, ok := u.GetAnnotations()["apps.cozystack.io/materialized-revision"]; ok {
+		t.Error("repeat connect must clear the materialized-revision annotation to force re-materialization")
 	}
 	if tag, _, _ := unstructured.NestedString(u.Object, "spec", "ref", "tag"); tag != "v2" {
 		t.Errorf("repeat connect did not update the tag, got %q", tag)

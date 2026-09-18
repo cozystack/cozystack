@@ -177,7 +177,31 @@ func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.Applica
 	sort.Slice(tap.Spec.Packages, func(i, j int) bool {
 		return tap.Spec.Packages[i].Name < tap.Spec.Packages[j].Name
 	})
+
+	// Report registration truthfully: the PackageSource can be Ready while its
+	// registration Package was removed out-of-band (or has not materialized yet),
+	// leaving the catalog empty. In that case the PackageSource's own Ready
+	// condition is not the truth the dashboard needs.
+	if len(tap.Spec.Packages) == 0 && declaresComponents(ps) {
+		tap.Spec.Ready = false
+		if reason := ps.GetAnnotations()[tapconst.RegistrationStateAnnotation]; reason != "" {
+			tap.Spec.Message = reason
+		} else {
+			tap.Spec.Message = "the repository's applications are not registered yet; if this persists, re-tap to recover"
+		}
+	}
 	return tap
+}
+
+// declaresComponents reports whether the PackageSource declares at least one
+// component in any variant (i.e. it should register at least one application).
+func declaresComponents(ps cozyv1alpha1.PackageSource) bool {
+	for _, v := range ps.Spec.Variants {
+		if len(v.Components) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // buildPendingTap represents a tap whose OCIRepository exists but whose

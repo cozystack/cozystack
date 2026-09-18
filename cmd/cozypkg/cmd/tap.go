@@ -326,6 +326,24 @@ charts in your management cluster: tap only sources you trust.`,
 			}
 		}
 
+		// Force a fresh materialization on this tap: clear the materialized-revision
+		// annotation so the operator does not short-circuit on the unchanged
+		// artifact revision. This makes a re-tap the supported recovery for a
+		// registration Package (or PackageSource) removed out-of-band since the last
+		// materialization -- e.g. garbage-collected when its PackageSource was
+		// deleted -- while `cozypkg del` of an app stays removed (it is not re-run
+		// here). A first tap has no such annotation, so this is a no-op then.
+		reg := &sourcev1.OCIRepository{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, reg); err == nil {
+			if _, ok := reg.Annotations[tapconst.MaterializedRevisionAnnotation]; ok {
+				base := reg.DeepCopy()
+				delete(reg.Annotations, tapconst.MaterializedRevisionAnnotation)
+				if err := k8sClient.Patch(ctx, reg, client.MergeFrom(base)); err != nil {
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not reset materialization state on OCIRepository/%s: %v\n", srcName, err)
+				}
+			}
+		}
+
 		fmt.Fprintf(cmd.OutOrStdout(), "Tapped %s\n  OCIRepository/%s (%s:%s)\n", fullRef, srcName, ref.URL, ref.Tag)
 		for _, n := range names {
 			fmt.Fprintf(cmd.OutOrStdout(), "  PackageSource/%s\n", n)
