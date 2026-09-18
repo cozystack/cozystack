@@ -1,0 +1,28 @@
+# Leader election (--leader-elect) writes a Lease in the manager's own namespace
+# — controller-runtime defaults LeaderElectionNamespace to the pod's namespace —
+# so the grant stays namespaced rather than giving the controller Lease writes in
+# every namespace, where a compromised controller could disturb another
+# component's election.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozystack-controller-leader-election
+  namespace: cozy-system
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozystack-controller-leader-election
+  namespace: cozy-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozystack-controller-leader-election
+subjects:
+- kind: ServiceAccount
+  name: cozystack-controller
+  namespace: cozy-system

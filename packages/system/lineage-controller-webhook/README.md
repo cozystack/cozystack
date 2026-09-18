@@ -52,6 +52,7 @@ All keys live under the top-level `lineageControllerWebhook:` map.
 | `image`                       | Container image (digest-pinned)                           | `ghcr.io/cozystack/cozystack/lineage-controller-webhook:v1.3.0@sha256:e898…6fb0` |
 | `debug`                       | Enable `--zap-log-level=debug` instead of `info`          | `false`                                                                          |
 | `replicas`                    | Deployment replica count                                  | `2`                                                                              |
+| `resources`                   | Container requests/limits; `{}` renders no key            | `{}`                                                                             |
 | `localK8sAPIEndpoint.enabled` | **Deprecated.** See note below.                           | `false`                                                                          |
 
 ### `localK8sAPIEndpoint.enabled` (deprecated)

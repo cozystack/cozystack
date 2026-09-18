@@ -1,0 +1,39 @@
+suite: cozystack-controller resources knob
+templates:
+  - templates/deployment.yaml
+
+release:
+  name: cozystack-controller
+  namespace: cozy-system
+
+# Same contract as cozystack-api: the shipped `{}` renders no resources key, so
+# the default render stays byte-identical to the hardcoded chart and only an
+# admin who sets the value gets requests or limits.
+
+tests:
+  - it: the shipped default renders no resources key
+    asserts:
+      - isKind:
+          of: Deployment
+      - notExists:
+          path: spec.template.spec.containers[0].resources
+
+  - it: a set value renders on the container, not the pod
+    set:
+      cozystackController.resources:
+        requests:
+          cpu: 1m
+          memory: 96Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 1m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
