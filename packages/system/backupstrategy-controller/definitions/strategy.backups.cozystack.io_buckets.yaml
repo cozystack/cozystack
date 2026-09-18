@@ -167,7 +167,11 @@ spec:
                     description: |-
                       Image is the container image running the mirror. It must carry the
                       backupstrategy-controller binary so the Job can invoke its `s3-mirror`
-                      subcommand; the default strategy sets it to the controller image.
+                      subcommand; the default strategy sets it to the controller image. It must
+                      be a literal reference: unlike the other fields it is consumed unrendered by
+                      the Backup-cleanup Job (which has no application to template against), so a
+                      template expression here would delete-wedge every Backup on an
+                      InvalidImageName pod.
                     minLength: 1
                     type: string
                   resources:

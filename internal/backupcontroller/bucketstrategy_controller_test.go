@@ -21,6 +21,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -1289,7 +1290,7 @@ func TestFinalizeBucketBackupJobReclaimsInFlight(t *testing.T) {
 		t.Fatalf("finalizeBucketBackupJob: %v", err)
 	}
 	reclaim := &batchv1.Job{}
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: "bj1-reclaim"}, reclaim); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: "bj1-reclaim-cancel"}, reclaim); err != nil {
 		t.Fatalf("reclaim Job not created on delete: %v", err)
 	}
 	if reclaim.Spec.TTLSecondsAfterFinished == nil {
@@ -1318,7 +1319,227 @@ func TestFinalizeBucketBackupJobSkipsReclaimWhenBackupRecorded(t *testing.T) {
 	if _, err := r.finalizeBucketBackupJob(context.Background(), j); err != nil {
 		t.Fatalf("finalizeBucketBackupJob: %v", err)
 	}
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: "bj2-reclaim"}, &batchv1.Job{}); !apierrors.IsNotFound(err) {
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: "bj2-reclaim-cancel"}, &batchv1.Job{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("no reclaim Job expected when a Backup was recorded (err=%v)", err)
 	}
+}
+
+func TestReconcileDeletingSucceededBucketBackupJobClearsFinalizer(t *testing.T) {
+	// The finalizer is added when the mirror starts and never removed on success,
+	// so a Succeeded Bucket BackupJob carries it for life. The deletion branch in
+	// Reconcile sits above the terminal-phase early return and must clear it, or a
+	// Succeeded Bucket BackupJob becomes undeletable and wedges its namespace.
+	j := deletingBucketBackupJob(t, "bj-succ", true, true)
+	j.Status.Phase = backupsv1alpha1.BackupJobPhaseSucceeded
+	r := newBucketBackupReconciler(t, j)
+	if err := r.Delete(context.Background(), j); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "tenant-x", Name: "bj-succ"}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: "bj-succ"}, &backupsv1alpha1.BackupJob{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the deletion branch must clear the finalizer on a Succeeded BackupJob (err=%v)", err)
+	}
+}
+
+func TestFinalizeBucketBackupJobWaitsForRunningMirror(t *testing.T) {
+	// A cancelled in-flight run must not purge while the mirror pod may still be
+	// writing: finalize deletes the mirror Job and holds the finalizer until it is
+	// gone, creating no reclaim Job on the pass that still sees the mirror.
+	j := deletingBucketBackupJob(t, "bj-run", true, false)
+	mirror := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: jobNameForBackupJob(j)}}
+	r := newBucketBackupReconciler(t, j, mirror)
+	if err := r.Delete(context.Background(), j); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(j), j); err != nil {
+		t.Fatalf("re-get: %v", err)
+	}
+	res, err := r.finalizeBucketBackupJob(context.Background(), j)
+	if err != nil {
+		t.Fatalf("finalizeBucketBackupJob: %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Fatalf("must requeue while the mirror Job is still present, got %+v", res)
+	}
+	fresh := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(j), fresh); err != nil {
+		t.Fatalf("BackupJob must still exist while waiting for the mirror: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(fresh, bucketBackupFinalizer) {
+		t.Fatal("finalizer must be held while the mirror is still being stopped")
+	}
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-x", Name: "bj-run-reclaim-cancel"}, &batchv1.Job{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("must not reclaim before the mirror Job is gone (err=%v)", err)
+	}
+}
+
+func TestCleanupBucketBackupReleasesAfterDeadline(t *testing.T) {
+	// A cleanup Job whose Pod keeps failing must not churn a Job/Pod pair forever
+	// with the Backup stuck Terminating. Once the Backup has been deleting past the
+	// deadline, release it - surfacing the ArtifactNotDeleted Event - instead of
+	// retrying silently.
+	s := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{backupsv1alpha1.AddToScheme, batchv1.AddToScheme, strategyv1alpha1.AddToScheme} {
+		if err := add(s); err != nil {
+			t.Fatalf("AddToScheme: %v", err)
+		}
+	}
+	raw, err := marshalBucketSnapshot(bucketBackupSnapshot{
+		Kind: bucketSnapshotKind, RepoBucket: "cozy-backups", RepoEndpoint: "http://s3", RepoPrefix: "tenant-x/web/bk1/",
+	})
+	if err != nil {
+		t.Fatalf("marshalBucketSnapshot: %v", err)
+	}
+	old := metav1.NewTime(time.Now().Add(-StrategyNotReadyDeadline - time.Minute))
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: "bk1", UID: "backup-uid", DeletionTimestamp: &old, Finalizers: []string{"backups.cozystack.io/cleanup"}},
+		Spec:       backupsv1alpha1.BackupSpec{StrategyRef: corev1.TypedLocalObjectReference{Kind: strategyv1alpha1.BucketStrategyKind, Name: "cozy-default-bucket"}},
+		Status:     backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+	}
+	strategy := &strategyv1alpha1.Bucket{ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-bucket"}, Spec: strategyv1alpha1.BucketSpec{Template: strategyv1alpha1.BucketTemplate{Image: "controller:latest"}}}
+	yes := true
+	failedCleanup := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant-x", Name: "bk1-cleanup",
+			Labels:          map[string]string{bucketLabelMode: bucketModeCleanup},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: backupsv1alpha1.GroupVersion.String(), Kind: "Backup", Name: "bk1", UID: "backup-uid", Controller: &yes}},
+		},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}},
+	}
+	rec := record.NewFakeRecorder(10)
+	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(strategy, failedCleanup).Build()
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+
+	res, err := r.cleanupBucketBackup(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupBucketBackup: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("must not requeue after releasing past the deadline, got %+v", res)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "ArtifactNotDeleted") {
+			t.Fatalf("event = %q, want ArtifactNotDeleted on release", ev)
+		}
+	default:
+		t.Fatal("release past the deadline must emit an ArtifactNotDeleted Event")
+	}
+}
+
+func TestReconcileBucketAccessErrorTransientVsTerminal(t *testing.T) {
+	t.Run("transient access error requeues", func(t *testing.T) {
+		// A flaky Get on the access path must requeue, not fail the run terminally.
+		job, resolved, objs := bucketBackupScenario("uid-acc-t")
+		objs = append(objs, job)
+		failAccessGet := interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*buckettypes.BucketAccess); ok {
+					return apierrors.NewInternalError(errTransientArtifactCreate)
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}
+		r, _ := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"),
+			clientfake.NewClientBuilder().WithObjects(objs...).WithInterceptorFuncs(failAccessGet))
+		res, err := r.reconcileBucket(context.Background(), job, resolved)
+		if err != nil {
+			t.Fatalf("reconcileBucket: %v", err)
+		}
+		if res.RequeueAfter <= 0 {
+			t.Fatalf("a transient access error must requeue, got %+v", res)
+		}
+		updated := &backupsv1alpha1.BackupJob{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(job), updated); err != nil {
+			t.Fatalf("get backupjob: %v", err)
+		}
+		if updated.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatal("a transient access error must not fail the run terminally")
+		}
+	})
+
+	t.Run("unowned access is terminal", func(t *testing.T) {
+		// A same-named BucketAccess owned by someone else is the one terminal case.
+		job, resolved, objs := bucketBackupScenario("uid-acc-x")
+		// Replace the granted access with an unowned same-named one (no managed-by).
+		filtered := objs[:0]
+		for _, o := range objs {
+			if _, ok := o.(*buckettypes.BucketAccess); ok {
+				continue
+			}
+			filtered = append(filtered, o)
+		}
+		squatted := bucketAccess("bucket-web-cozy-backup", nil, nil, buckettypes.BucketAccessSpec{
+			BucketClaimName: "attacker", BucketAccessClassName: "attacker", Protocol: bucketProtocolS3, CredentialsSecretName: "bucket-web-cozy-backup",
+		})
+		filtered = append(filtered, job, squatted)
+		r, _ := newBucketReconcileEnv(t, newBucketApp("web", "tenant-x"), clientfake.NewClientBuilder().WithObjects(filtered...))
+		if _, err := r.reconcileBucket(context.Background(), job, resolved); err != nil {
+			t.Fatalf("reconcileBucket: %v", err)
+		}
+		updated := &backupsv1alpha1.BackupJob{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(job), updated); err != nil {
+			t.Fatalf("get backupjob: %v", err)
+		}
+		if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("an unowned BucketAccess must fail terminally, got phase %q", updated.Status.Phase)
+		}
+	})
+}
+
+func TestRequeueBucketWaitingUsesOwnClock(t *testing.T) {
+	// The precondition wait clocks off its own PreconditionPending condition, not
+	// StartedAt (which also starts the multi-hour mirror deadline). A run whose
+	// StartedAt is long past still gets a fresh grace window when a precondition
+	// first goes unsatisfied.
+	newJob := func(name string, conds []metav1.Condition) *backupsv1alpha1.BackupJob {
+		staleStart := metav1.NewTime(time.Now().Add(-StrategyNotReadyDeadline - time.Hour))
+		return &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-x", Name: name},
+			Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &staleStart, Phase: backupsv1alpha1.BackupJobPhaseRunning, Conditions: conds},
+		}
+	}
+
+	t.Run("fresh precondition requeues though StartedAt is long past", func(t *testing.T) {
+		j := newJob("bw-fresh", nil)
+		r := newBucketBackupReconciler(t, j)
+		res, err := r.requeueBucketWaiting(context.Background(), j, "SourceAccessPending", "waiting")
+		if err != nil {
+			t.Fatalf("requeueBucketWaiting: %v", err)
+		}
+		if res.RequeueAfter <= 0 {
+			t.Fatalf("a first-seen precondition must requeue regardless of StartedAt, got %+v", res)
+		}
+		updated := &backupsv1alpha1.BackupJob{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(j), updated); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if updated.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatal("must not fail on the first precondition evaluation")
+		}
+		if meta.FindStatusCondition(updated.Status.Conditions, bucketPreconditionPendingCondition) == nil {
+			t.Fatal("PreconditionPending condition must be stamped to start the clock")
+		}
+	})
+
+	t.Run("spent precondition clock fails", func(t *testing.T) {
+		old := metav1.NewTime(time.Now().Add(-StrategyNotReadyDeadline - time.Minute))
+		j := newJob("bw-spent", []metav1.Condition{{
+			Type: bucketPreconditionPendingCondition, Status: metav1.ConditionTrue,
+			Reason: "SourceAccessPending", Message: "waiting", LastTransitionTime: old,
+		}})
+		r := newBucketBackupReconciler(t, j)
+		if _, err := r.requeueBucketWaiting(context.Background(), j, "SourceAccessPending", "waiting"); err != nil {
+			t.Fatalf("requeueBucketWaiting: %v", err)
+		}
+		updated := &backupsv1alpha1.BackupJob{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(j), updated); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("a precondition unsatisfied past its own deadline must fail, got %q", updated.Status.Phase)
+		}
+	})
 }

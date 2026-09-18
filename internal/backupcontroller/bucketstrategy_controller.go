@@ -66,6 +66,13 @@ const (
 	// it before it runs), so it is cleaned up by TTL instead.
 	bucketReclaimJobTTLSeconds = 600
 
+	// bucketPreconditionPendingCondition clocks the precondition wait (source
+	// bucket, access grant) on its own LastTransitionTime rather than StartedAt:
+	// StartedAt starts the mirror deadline too, so a precondition that flaps once
+	// after a long-running mirror would otherwise be instantly terminal. Removed
+	// when the preconditions pass, so a later flap gets a fresh grace window.
+	bucketPreconditionPendingCondition = "PreconditionPending"
+
 	// bucketArtifactWritePendingCondition tracks the window in which the mirror
 	// has completed but recording the Backup artifact is still being retried. Its
 	// own LastTransitionTime clocks the retry budget, which cannot ride StartedAt:
@@ -379,10 +386,19 @@ func (r *BackupJobReconciler) reconcileBucket(ctx context.Context, j *backupsv1a
 	// the source bucket through, then gate on the COSI grant.
 	access, err := r.ensureBucketAccess(ctx, j.Namespace, backupAccessName(release), claim, deriveAccessClassName(claim.Spec.BucketClassName, true))
 	if err != nil {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to provision source BucketAccess: %v", err))
+		// Only a same-named BucketAccess owned by someone else is terminal; a
+		// transient transport error must requeue, not permanently fail the run.
+		if errors.Is(err, errBucketAccessNotManaged) {
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to provision source BucketAccess: %v", err))
+		}
+		return r.requeueBucketWaiting(ctx, j, "SourceAccessError", fmt.Sprintf("provisioning source BucketAccess: %v", err))
 	}
 	if !access.Status.AccessGranted {
 		return r.requeueBucketWaiting(ctx, j, "SourceAccessPending", fmt.Sprintf("source BucketAccess %q not granted yet", access.Name))
+	}
+	// Preconditions met: drop the wait clock so a later flap gets a fresh window.
+	if err := r.clearBucketPrecondition(ctx, j); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Scope the repo prefix by the BackupJob UID, not just its name: an ad-hoc
@@ -589,7 +605,30 @@ func (r *BackupJobReconciler) ensureBucketReclaimGuard(ctx context.Context, j *b
 // stranded a copy. Reclaim is best-effort - the finalizer is always removed, so
 // a broken reclaim cannot wedge the deletion.
 func (r *BackupJobReconciler) finalizeBucketBackupJob(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
+	// A recorded Backup owns its objects (cleanupBucketBackup reclaims them), so
+	// only an in-flight run can have stranded a partial copy.
 	if j.Status.BackupRef == nil {
+		// Stop the mirror before reclaiming. The mirror Job is owner-referenced to
+		// this BackupJob and the finalizer keeps the owner alive, so the mirror pod
+		// is not GC-killed yet and would re-PUT objects after the purge's list pass,
+		// leaving a residual copy. Delete the mirror Job (foreground: pods first)
+		// and hold the finalizer until it is fully gone.
+		mirror := &batchv1.Job{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: j.Namespace, Name: jobNameForBackupJob(j)}, mirror)
+		switch {
+		case err == nil:
+			if mirror.DeletionTimestamp.IsZero() {
+				policy := metav1.DeletePropagationForeground
+				if derr := r.Delete(ctx, mirror, &client.DeleteOptions{PropagationPolicy: &policy}); derr != nil && !apierrors.IsNotFound(derr) {
+					return ctrl.Result{}, derr
+				}
+			}
+			// Still present (terminating): wait, keeping the finalizer.
+			return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
+		case !apierrors.IsNotFound(err):
+			return ctrl.Result{}, err
+		}
+		// The mirror Job (and its pods) are gone: nothing is writing, so purge.
 		r.reclaimDeletedBucketBackup(ctx, j)
 	}
 	controllerutil.RemoveFinalizer(j, bucketBackupFinalizer)
@@ -600,9 +639,13 @@ func (r *BackupJobReconciler) finalizeBucketBackupJob(ctx context.Context, j *ba
 }
 
 // reclaimDeletedBucketBackup best-effort purges the prefix a cancelled run wrote,
-// from the coordinates stashed on the BackupJob. The reclaim Job cannot be
+// from the coordinates stashed on the BackupJob. It runs only after the mirror
+// Job is gone (see finalizeBucketBackupJob). The reclaim Job cannot be
 // owner-referenced to the BackupJob being deleted (GC would remove it before it
-// runs), so it self-deletes via TTL.
+// runs), so it self-deletes via TTL, and it carries its own name so it never
+// collides with a still-pending failure-path reclaim Job (which shares the run's
+// prefix but is owner-referenced and would be GC'd out from under an AlreadyExists
+// no-op).
 func (r *BackupJobReconciler) reclaimDeletedBucketBackup(ctx context.Context, j *backupsv1alpha1.BackupJob) {
 	logger := getLogger(ctx)
 	raw := j.Annotations[bucketReclaimStashAnnotation]
@@ -616,7 +659,7 @@ func (r *BackupJobReconciler) reclaimDeletedBucketBackup(ctx context.Context, j 
 		return
 	}
 	pod := buildBucketCleanupPod(&stash.Snapshot, stash.Image)
-	desired := buildJobStrategyBatchJob(j.Namespace, j.Name+"-reclaim", map[string]string{bucketLabelMode: bucketModeCleanup}, pod)
+	desired := buildJobStrategyBatchJob(j.Namespace, j.Name+"-reclaim-cancel", map[string]string{bucketLabelMode: bucketModeCleanup}, pod)
 	ttl := int32(bucketReclaimJobTTLSeconds)
 	desired.Spec.TTLSecondsAfterFinished = &ttl
 	if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -631,9 +674,12 @@ func (r *BackupJobReconciler) reclaimDeletedBucketBackup(ctx context.Context, j 
 // precondition fails closed instead of requeuing forever.
 func (r *BackupJobReconciler) requeueBucketWaiting(ctx context.Context, j *backupsv1alpha1.BackupJob, reason, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
-	if strategyNotReadyDeadlineExceeded(j.Status.StartedAt) {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("%s (not satisfied within %s)", message, StrategyNotReadyDeadline))
-	}
+	apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+		Type:    bucketPreconditionPendingCondition,
+		Status:  metav1.ConditionTrue,
+		Reason:  reason,
+		Message: message,
+	})
 	apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
 		Type:    "Ready",
 		Status:  metav1.ConditionFalse,
@@ -643,7 +689,38 @@ func (r *BackupJobReconciler) requeueBucketWaiting(ctx context.Context, j *backu
 	if updateErr := r.Status().Update(ctx, j); updateErr != nil {
 		logger.Error(updateErr, "failed to update BackupJob status while waiting on bucket precondition")
 	}
+	if bucketPreconditionDeadlineExceeded(j.Status.Conditions) {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("%s (not satisfied within %s)", message, StrategyNotReadyDeadline))
+	}
 	return ctrl.Result{RequeueAfter: CredentialsProjectionRequeue}, nil
+}
+
+// bucketPreconditionDeadlineExceeded reports whether the precondition wait has
+// run past StrategyNotReadyDeadline on its OWN clock (the PreconditionPending
+// condition's first transition), not on StartedAt.
+func bucketPreconditionDeadlineExceeded(conds []metav1.Condition) bool {
+	if c := apimeta.FindStatusCondition(conds, bucketPreconditionPendingCondition); c != nil {
+		return time.Since(c.LastTransitionTime.Time) > StrategyNotReadyDeadline
+	}
+	return false
+}
+
+// clearBucketPrecondition drops the precondition wait clock once the
+// preconditions are met, so a later flap starts a fresh grace window.
+func (r *BackupJobReconciler) clearBucketPrecondition(ctx context.Context, j *backupsv1alpha1.BackupJob) error {
+	if apimeta.FindStatusCondition(j.Status.Conditions, bucketPreconditionPendingCondition) == nil {
+		return nil
+	}
+	apimeta.RemoveStatusCondition(&j.Status.Conditions, bucketPreconditionPendingCondition)
+	return r.Status().Update(ctx, j)
+}
+
+func (r *RestoreJobReconciler) clearBucketPrecondition(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob) error {
+	if apimeta.FindStatusCondition(restoreJob.Status.Conditions, bucketPreconditionPendingCondition) == nil {
+		return nil
+	}
+	apimeta.RemoveStatusCondition(&restoreJob.Status.Conditions, bucketPreconditionPendingCondition)
+	return r.Status().Update(ctx, restoreJob)
 }
 
 // reconcileBucketAccess provisions the deterministic-named COSI BucketAccess the
@@ -687,7 +764,7 @@ func reconcileBucketAccess(ctx context.Context, c client.Client, namespace, name
 	switch {
 	case err == nil:
 		if existing.Labels[managedByLabel] != managedByValue {
-			return nil, fmt.Errorf("BucketAccess %s/%s exists but is not managed by the backup driver (missing %s=%s); refusing to reuse it", namespace, name, managedByLabel, managedByValue)
+			return nil, fmt.Errorf("%w: BucketAccess %s/%s (missing %s=%s); refusing to reuse it", errBucketAccessNotManaged, namespace, name, managedByLabel, managedByValue)
 		}
 		if existing.Spec == desired.Spec && hasOwnerUID(existing, claim.UID) {
 			return existing, nil
@@ -730,6 +807,13 @@ func (r *BackupJobReconciler) ensureBucketAccess(ctx context.Context, namespace,
 // so a reused BackupJob name finds a stale same-named Backup; the run must fail
 // rather than report success against that older snapshot.
 var errBucketArtifactNameCollision = errors.New("a Backup of this name already exists for a different run")
+
+// errBucketAccessNotManaged marks the one genuinely terminal outcome of
+// reconcileBucketAccess: a same-named BucketAccess owned by someone else, which
+// reusing would point the mirror at the wrong claim/class/Secret. Every other
+// error out of the access path (a flaky Get, a 500 on the SSA patch, a webhook
+// timeout) is transient and must requeue rather than fail the run.
+var errBucketAccessNotManaged = errors.New("BucketAccess exists but is not managed by the backup driver")
 
 func (r *BackupJobReconciler) createBucketBackupArtifact(
 	ctx context.Context,
@@ -931,10 +1015,19 @@ func (r *RestoreJobReconciler) reconcileBucketRestore(ctx context.Context, resto
 	// through, then gate on the grant.
 	access, err := r.ensureBucketAccess(ctx, targetNamespace, restoreAccessName(targetAppName), claim, deriveAccessClassName(claim.Spec.BucketClassName, false))
 	if err != nil {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to provision target BucketAccess: %v", err))
+		// Terminal only for a same-named BucketAccess owned by someone else; a
+		// transient transport error must requeue, not fail the restore.
+		if errors.Is(err, errBucketAccessNotManaged) {
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to provision target BucketAccess: %v", err))
+		}
+		return r.requeueRestoreBucketWaiting(ctx, restoreJob, "TargetAccessError", fmt.Sprintf("provisioning target BucketAccess: %v", err))
 	}
 	if !access.Status.AccessGranted {
 		return r.requeueRestoreBucketWaiting(ctx, restoreJob, "TargetAccessPending", fmt.Sprintf("target BucketAccess %q not granted yet", access.Name))
+	}
+	// Preconditions met: drop the wait clock so a later flap gets a fresh window.
+	if err := r.clearBucketPrecondition(ctx, restoreJob); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Reconstruct the destination (repo) coordinates from the self-contained
@@ -1062,9 +1155,12 @@ func (r *RestoreJobReconciler) ensureBucketAccess(ctx context.Context, namespace
 // requeueRestoreBucketWaiting mirrors requeueBucketWaiting for the restore path.
 func (r *RestoreJobReconciler) requeueRestoreBucketWaiting(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, reason, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
-	if strategyNotReadyDeadlineExceeded(restoreJob.Status.StartedAt) {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("%s (not satisfied within %s)", message, StrategyNotReadyDeadline))
-	}
+	apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+		Type:    bucketPreconditionPendingCondition,
+		Status:  metav1.ConditionTrue,
+		Reason:  reason,
+		Message: message,
+	})
 	apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
 		Type:    "Ready",
 		Status:  metav1.ConditionFalse,
@@ -1073,6 +1169,9 @@ func (r *RestoreJobReconciler) requeueRestoreBucketWaiting(ctx context.Context, 
 	})
 	if updateErr := r.Status().Update(ctx, restoreJob); updateErr != nil {
 		logger.Error(updateErr, "failed to update RestoreJob status while waiting on bucket precondition")
+	}
+	if bucketPreconditionDeadlineExceeded(restoreJob.Status.Conditions) {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("%s (not satisfied within %s)", message, StrategyNotReadyDeadline))
 	}
 	return ctrl.Result{RequeueAfter: CredentialsProjectionRequeue}, nil
 }
@@ -1341,6 +1440,9 @@ func (r *BackupReconciler) cleanupBucketBackup(ctx context.Context, backup *back
 		if perr := ProjectBackupCredentials(ctx, r.Client, r.CredentialsConfig, backup.Namespace); perr != nil {
 			return r.releaseBucketCleanup(ctx, backup, snapshot.RepoPrefix, fmt.Sprintf("cannot project credentials: %v", perr)), nil
 		}
+		// The image is used unrendered: cleanup has no application to template
+		// against, so the strategy's image field is a literal reference by contract
+		// (see BucketTemplate.Image).
 		pod := buildBucketCleanupPod(snapshot, strategy.Spec.Template.Image)
 		desired := buildJobStrategyBatchJob(backup.Namespace, jobName, map[string]string{bucketLabelMode: bucketModeCleanup}, pod)
 		if cerr := controllerutil.SetControllerReference(backup, desired, r.Scheme); cerr != nil {
@@ -1380,6 +1482,15 @@ func (r *BackupReconciler) cleanupBucketBackup(ctx context.Context, backup *back
 		return ctrl.Result{}, nil
 	case batchv1.JobFailed:
 		_ = r.deleteBucketCleanupJob(ctx, job)
+		// Bound the retry loop. A cleanup Job whose Pod keeps failing (rotated
+		// cozy-backups credentials, a moved endpoint, a deleted repo bucket) would
+		// otherwise churn a Job/Pod pair every 5s forever with the Backup stuck
+		// Terminating and only a debug log to read. Once the Backup has been
+		// deleting longer than the deadline, release it - which surfaces the
+		// ArtifactNotDeleted Event - instead of retrying silently.
+		if backup.DeletionTimestamp != nil && time.Since(backup.DeletionTimestamp.Time) > StrategyNotReadyDeadline {
+			return r.releaseBucketCleanup(ctx, backup, snapshot.RepoPrefix, "cleanup Job kept failing past the deadline"), nil
+		}
 		logger.Debug("Bucket cleanup Job failed; retrying", "backup", backup.Name)
 		return ctrl.Result{RequeueAfter: bucketPollInterval}, nil
 	default:

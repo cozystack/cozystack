@@ -73,9 +73,14 @@ wait_field restorejob "$RESTOREJOB_INPLACE_NAME" '{.status.phase}' Succeeded 480
 GOT="$(mc cat --insecure "src/$SRC_BUCKET/$SENTINEL_KEY")"
 [ "$GOT" = "$SENTINEL_VALUE" ] || { echo -e "${RED}in-place restore mismatch: got '$GOT'${NC}" >&2; exit 1; }
 # The extraneous object must be gone: the in-place restore purged what the
-# snapshot did not name. mc stat exits non-zero when the object is absent.
-if mc stat --insecure "src/$SRC_BUCKET/$EXTRANEOUS_KEY" >/dev/null 2>&1; then
+# snapshot did not name. Distinguish a genuine not-found from any other mc
+# failure (broken alias, expired session, wrong endpoint, network) - the latter
+# must fail loud, not pass as a successful purge.
+if stat_err="$(mc stat --insecure "src/$SRC_BUCKET/$EXTRANEOUS_KEY" 2>&1)"; then
   echo -e "${RED}in-place restore did not purge the extraneous object${NC}" >&2
+  exit 1
+elif ! printf '%s' "$stat_err" | grep -qiE 'does not exist|not found|no such|NoSuchKey|key does not exist'; then
+  echo -e "${RED}cannot verify purge: mc stat failed for another reason: $stat_err${NC}" >&2
   exit 1
 fi
 echo -e "${GREEN}in-place restore round-tripped the sentinel and purged the extraneous object${NC}"
