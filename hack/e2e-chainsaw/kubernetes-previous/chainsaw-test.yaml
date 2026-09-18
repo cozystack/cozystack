@@ -29,6 +29,7 @@ spec:
         #   worker network counters
         #   worker block IO counters
         #   serial-console family (~6m25s at worst, ~4m05s at the pool's minimum)
+        #   HelmRelease remediation footprint (90s of its own; below the console because the console alone covers a worker that never reached apid, while these releases stay readable after the run)
         #   worker CPU usage and throttling counters, two samples
         #   sandbox node CPU time, two samples
         #   worker per-thread CPU time inside virt-launcher, two samples
