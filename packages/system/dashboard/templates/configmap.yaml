@@ -4,7 +4,15 @@
        This decouples the displayed version from the VITE_APP_VERSION baked into
        the bundle, so a promoted-by-retag image reports the stable version. */}}
 {{- $tag := .Values.console.image | toString | splitList "@" | first | splitList ":" | last }}
-{{- $config := merge (dict) $branding }}
+{{- /* Serve only the console's white-labeling keys — documented in the website
+       white-labeling guide (recorded here in docs/changelogs/v1.0.3.md) and
+       typed as AppConfig in images/console/.../lib/config.ts. pick is an
+       allow-list, so the Keycloak branding keys (brandName, brandHtmlName,
+       loginTheme, loginThemeImage — the last an OCI reference that may point at
+       a private registry) are dropped: this config.json is now a static asset
+       reachable by anyone past the proxy, and Keycloak reads its keys from
+       _cluster.branding directly. */}}
+{{- $config := pick $branding "titleText" "tenantText" "footerText" "logoText" "logoSvg" "iconSvg" }}
 {{- /* Require digits then a dot (v1.5.0 / 1.5.0), so a tagless ref whose last
        ":"-segment is a repo path with a port (ghcr.io:443/.../console -> last
        "443/.../console") does not get mistaken for a version. */}}

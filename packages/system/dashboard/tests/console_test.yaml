@@ -1,0 +1,89 @@
+suite: console branding static mount
+templates:
+  # configmap.yaml is included by console.yaml for its checksum annotation, so
+  # it must be rendered too or the include fails under helm-unittest.
+  - templates/console.yaml
+  - templates/configmap.yaml
+
+release:
+  name: dashboard
+  namespace: cozy-dashboard
+
+# The SPA fetches /branding/config.json (see config.ts BRANDING_STATIC_PATH),
+# which nginx serves from the cozy-dashboard-console-config ConfigMap mounted at
+# /usr/share/nginx/html/branding. That path is made of three literals in three
+# files that must agree: the ConfigMap data key config.json, the mountPath
+# directory branding, and the SPA URL. Pin the two this chart owns so a rename
+# is a test failure instead of a silent fall-back to the kube-api. The volume is
+# optional so a cluster without branding still starts.
+
+tests:
+  - it: mounts the branding ConfigMap under the nginx web root
+    template: templates/console.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].name
+          value: branding
+      # mountPath directory + the config.json key below = the SPA's
+      # /branding/config.json. Both halves are pinned across the two files.
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /usr/share/nginx/html/branding
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].readOnly
+          value: true
+      # items restricts the mount to config.json, so no other key the ConfigMap
+      # may grow leaks as a file under the public web root.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: branding
+            configMap:
+              name: cozy-dashboard-console-config
+              optional: true
+              items:
+                - key: config.json
+                  path: config.json
+
+  - it: publishes the config.json key the mount serves
+    template: templates/configmap.yaml
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: cozy-dashboard-console-config
+      - exists:
+          path: data["config.json"]
+
+  # The served file is a static asset reachable by anyone past the proxy, so it
+  # must not carry Keycloak-only branding (loginThemeImage can reference a
+  # private registry). config.json is picked down to the documented white-label
+  # keys; the two Keycloak-only keys must be absent, and tenantText must survive.
+  - it: serves white-label keys but not Keycloak-only branding
+    template: templates/configmap.yaml
+    documentIndex: 0
+    set:
+      _cluster:
+        branding:
+          titleText: Acme
+          tenantText: Acme Tenant
+          logoText: Acme Cloud
+          loginTheme: acme
+          loginThemeImage: registry.example.com/acme-keycloak-theme:v1
+    asserts:
+      - matchRegex:
+          path: data["config.json"]
+          pattern: '"titleText":"Acme"'
+      - matchRegex:
+          path: data["config.json"]
+          pattern: '"tenantText":"Acme Tenant"'
+      # Anchor to the JSON key forms so loginTheme does not merely match inside
+      # loginThemeImage: both keys must be genuinely absent.
+      - notMatchRegex:
+          path: data["config.json"]
+          pattern: '"loginTheme":'
+      - notMatchRegex:
+          path: data["config.json"]
+          pattern: '"loginThemeImage":'
