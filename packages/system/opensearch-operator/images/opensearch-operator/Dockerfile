@@ -59,6 +59,12 @@ RUN git apply /patches/*.diff
 
 WORKDIR /workspace/opensearch-operator
 
+# The patches carry their own tests and nothing else in this repository runs
+# them: the build below compiles main.go, so a test file that had stopped
+# compiling, or stopped asserting, would still produce an image. These two
+# package trees are the ones the patches touch, and both run without a cluster.
+RUN go test ./opensearch-gateway/... ./pkg/reconcilers/...
+
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -a -o manager main.go
 
 FROM gcr.io/distroless/static:nonroot@sha256:d29e660cc75a5b6b1334e03c5c81ccf9bc0884a002c6000dbf0fb96034814478
