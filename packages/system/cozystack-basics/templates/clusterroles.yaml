@@ -36,6 +36,9 @@ rules:
 - apiGroups: ["sdn.cozystack.io"]
   resources: ["securitygroups"]
   verbs: ['*']
+- apiGroups: ["local.sdn.cozystack.io"]
+  resources: ["endpointattachments"]
+  verbs: ['*']
 - apiGroups:
   - cozystack.io
   resources:
@@ -131,6 +134,11 @@ rules:
   resources:
   - workloadmonitors
   - workloads
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - local.sdn.cozystack.io
+  resources:
+  - endpointattachments
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - core.cozystack.io
@@ -286,6 +294,14 @@ rules:
 - apiGroups: ["sdn.cozystack.io"]
   resources:
   - securitygroups
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups: ["local.sdn.cozystack.io"]
+  resources:
+  - endpointattachments
   verbs:
   - create
   - update
