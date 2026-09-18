@@ -1394,9 +1394,10 @@ STUB
 @test "pods not ready drops a fully ready running pod" {
   out="$(printf '%s\n' "$SNAPSHOT" | cozyreport_pods_not_ready)"
 
-  # `! cmd` is vacuous under cozytest's `set -e` (errexit is suppressed for a
-  # `!`-negated pipeline), so a regression that let this row through would not
-  # fail the test. Assert the absence via `if cmd; then ...; false`.
+  # `! cmd` is vacuous under cozytest's `set -e` (errexit is suppressed for
+  # any command whose status is inverted with `!`), so a regression that let
+  # this row through would not fail the test. Assert the absence via
+  # `if cmd; then ...; false`.
   if printf '%s\n' "$out" | grep -q 'coredns-abc'; then echo "FAIL: a ready pod must not be collected"; false; fi
 }
 
