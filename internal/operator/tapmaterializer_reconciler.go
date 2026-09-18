@@ -58,11 +58,25 @@ const (
 type TapMaterializerReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// APIReader is an uncached reader used for the registration-ownership decision,
+	// where a cache-backed read can be stale in both directions: it can still show
+	// a just-created Package as absent (skipping a needed de-register), or a
+	// just-pinned Package as the old empty-variant auto-registration (de-registering
+	// a user's install). Optional; falls back to the cached client when nil (tests).
+	APIReader client.Reader
 	// Recorder surfaces materialization failures (e.g. a name collision with a
 	// core component) as Events on the tap source. Optional; nil disables Events.
 	Recorder record.EventRecorder
 	// Fetch downloads a Flux artifact tarball. Defaults to HTTP; overridable in tests.
 	Fetch func(ctx context.Context, url string) ([]byte, error)
+}
+
+// liveReader returns the uncached reader when configured, else the cached client.
+func (r *TapMaterializerReconciler) liveReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -244,14 +258,6 @@ type registrationPlan struct {
 	event  string // Warning Event to emit ("" = none)
 }
 
-// managedRegistration reports whether pkg is THIS tap's auto-created registration
-// Package: owned by the source AND still at the auto default (empty variant). A
-// Package a user pinned to a variant via `cozypkg add` sheds its tap markers and
-// so is never managed here; the empty-variant clause is defence in depth.
-func managedRegistration(pkg *cozyv1alpha1.Package, sourceName string) bool {
-	return collision.Owns(pkg, sourceName) && pkg.Spec.Variant == ""
-}
-
 // prepareRegistration reads the Package once, BEFORE the PackageSource is
 // applied, and de-registers a managed registration Package for an unsafe
 // (privileged / no-default) revision so the PackageSource watch cannot drive the
@@ -261,16 +267,28 @@ func managedRegistration(pkg *cozyv1alpha1.Package, sourceName string) bool {
 // is not removed.
 func (r *TapMaterializerReconciler) prepareRegistration(ctx context.Context, ps *cozyv1alpha1.PackageSource, repo *sourcev1.OCIRepository, skip string) (registrationPlan, error) {
 	name := ps.GetName()
+	// Read live (uncached): the ownership decision must not act on a stale cache
+	// that hides a just-created Package or a just-pinned one.
 	var existing cozyv1alpha1.Package
-	err := r.Get(ctx, types.NamespacedName{Name: name}, &existing)
+	err := r.liveReader().Get(ctx, types.NamespacedName{Name: name}, &existing)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return registrationPlan{}, err
 	}
 	exists := err == nil
 
 	if skip != "" {
-		if exists && managedRegistration(&existing, repo.Name) {
-			if delErr := client.IgnoreNotFound(r.Delete(ctx, &existing, client.Preconditions{UID: &existing.UID})); delErr != nil {
+		if exists && collision.ManagedRegistration(&existing, repo.Name) {
+			// UID + ResourceVersion preconditions: delete only the exact object we
+			// classified as an auto-registration. If a `cozypkg add` pin landed in
+			// the gap (same UID, new ResourceVersion, markers shed) or it was
+			// replaced/removed, the delete is refused — that Package is no longer
+			// ours to de-register, and the pinned one now registers the apps, so
+			// leave it and record no problem.
+			delErr := r.Delete(ctx, &existing, client.Preconditions{UID: &existing.UID, ResourceVersion: &existing.ResourceVersion})
+			if apierrors.IsNotFound(delErr) || apierrors.IsConflict(delErr) {
+				return registrationPlan{}, nil
+			}
+			if delErr != nil {
 				return registrationPlan{}, delErr
 			}
 			// Deleted our own registration; record why the apps are now absent
@@ -288,7 +306,7 @@ func (r *TapMaterializerReconciler) prepareRegistration(ctx context.Context, ps 
 	if !exists {
 		return registrationPlan{create: true}, nil
 	}
-	if managedRegistration(&existing, repo.Name) {
+	if collision.ManagedRegistration(&existing, repo.Name) {
 		return registrationPlan{}, nil // ours already stands
 	}
 	if existing.GetLabels()[tapconst.Label] == "true" && !collision.Owns(&existing, repo.Name) {
@@ -445,7 +463,7 @@ func (r *TapMaterializerReconciler) deleteRegistrationPackage(ctx context.Contex
 	if err := r.Get(ctx, types.NamespacedName{Name: name}, &pkg); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	if !managedRegistration(&pkg, sourceName) {
+	if !collision.ManagedRegistration(&pkg, sourceName) {
 		return nil
 	}
 	// UID precondition: do not delete a Package the user replaced between the Get

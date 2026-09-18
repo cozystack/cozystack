@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -564,6 +565,53 @@ func drainDeregisterEvent(rec *record.FakeRecorder) bool {
 		default:
 			return false
 		}
+	}
+}
+
+// TestReconcileDeRegistersDespiteStaleCache pins the APIReader fix: the operator's
+// cached client can still show a just-created registration Package as absent when a
+// second (privileged) revision reconciles back-to-back. Reading the ownership
+// decision live (APIReader) must still de-register it; a stale-cache read that hid
+// it would leave the privileged component installable. The control (APIReader nil,
+// so the decision reads the stale cache) leaves the Package — the bug.
+func TestReconcileDeRegistersDespiteStaleCache(t *testing.T) {
+	run := func(t *testing.T, useLiveReader bool) bool {
+		scheme := tapScheme(t)
+		data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePrivilegedHello})
+		regPkg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{
+			Name:        "example.hello",
+			Labels:      map[string]string{tapconst.Label: "true"},
+			Annotations: map[string]string{tapconst.SourceAnnotation: "tap-foo-bar"},
+		}}
+		store := fake.NewClientBuilder().WithScheme(scheme).
+			WithObjects(tapRepo(true), regPkg).WithStatusSubresource(&sourcev1.OCIRepository{}).Build()
+		// staleClient wraps the same store but returns NotFound for a Package Get,
+		// modelling a cache that has not yet observed the Package's creation.
+		staleClient := interceptor.NewClient(store, interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*cozyv1alpha1.Package); ok {
+					return apierrors.NewNotFound(cozyv1alpha1.GroupVersion.WithResource("packages").GroupResource(), key.Name)
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		r := &TapMaterializerReconciler{Client: staleClient, Scheme: scheme,
+			Fetch: func(context.Context, string) ([]byte, error) { return data, nil }}
+		if useLiveReader {
+			r.APIReader = store // uncached: sees the Package
+		}
+		setArtifact(t, staleClient, digest, "rev-priv")
+		if _, err := r.Reconcile(context.Background(), req()); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		err := store.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &cozyv1alpha1.Package{})
+		return apierrors.IsNotFound(err) // true = de-registered
+	}
+	if !run(t, true) {
+		t.Error("with a live reader, a privileged flip must de-register the Package despite a stale cache")
+	}
+	if run(t, false) {
+		t.Error("control: a stale-cache read should hide the Package and skip the de-register (guarding the test itself)")
 	}
 }
 

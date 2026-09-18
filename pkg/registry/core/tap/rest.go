@@ -339,12 +339,17 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 		srcName = ps.Spec.SourceRef.Name
 	}
 	if pu, err := r.dyn.Resource(gvrPackages).Get(ctx, name, metav1.GetOptions{}); err == nil {
-		if collision.Owns(pu, srcName) {
-			// UID precondition: do not delete a Package the user replaced between
-			// this Get and the Delete.
+		// Delete only a managed registration Package (owned AND still at the auto
+		// default variant), the same predicate the materializer and untap use, so
+		// a user's pinned install is never removed by disconnect.
+		variant, _, _ := unstructured.NestedString(pu.Object, "spec", "variant")
+		if collision.Owns(pu, srcName) && variant == "" {
+			// UID + ResourceVersion preconditions: delete only this exact object,
+			// not one the user replaced or pinned in-place between Get and Delete.
 			uid := pu.GetUID()
-			delOpts := metav1.DeleteOptions{DryRun: deleteDryRun(opts), Preconditions: &metav1.Preconditions{UID: &uid}}
-			if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, delOpts); err != nil && !apierrors.IsNotFound(err) {
+			rv := pu.GetResourceVersion()
+			delOpts := metav1.DeleteOptions{DryRun: deleteDryRun(opts), Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv}}
+			if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, delOpts); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 				return nil, false, apierrors.NewInternalError(fmt.Errorf("delete registration Package %q: %w", name, err))
 			}
 		}

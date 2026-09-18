@@ -438,12 +438,17 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 	fmt.Fprintf(os.Stderr, "Installing %s and its dependencies...\n\n", packageSourceName)
 	packageVariants := make(map[string]string) // packageName -> variant
 
+	// reopen holds the names whose installed Package is THIS source's managed
+	// auto-registration, which `add` re-opens for a variant choice and then hands
+	// over to the user (below). Every other installed Package is left as is.
+	reopen := make(map[string]bool)
 	for _, pkgName := range installOrder {
-		// Check if already installed. A tap-managed registration Package
-		// (auto-created on connect, empty variant = default) is NOT a user choice
-		// yet, so `add` still offers variant selection and updates it below; a
-		// user's own Package, or one already pinned to a variant, is left as-is.
-		if installed, exists := installedMap[pkgName]; exists && !isTapAutoRegistration(installed) {
+		installed, isInstalled := installedMap[pkgName]
+		ps, psExists := packageSourceMap[pkgName]
+		// A user's own Package, or a foreign leftover, is left untouched; only the
+		// managed auto-registration of THIS source (owned + empty variant, the same
+		// predicate the operator uses) is re-opened for a variant choice.
+		if isInstalled && !collision.ManagedRegistration(installed, tapSourceName(ps)) {
 			variant := installed.Spec.Variant
 			if variant == "" {
 				variant = "default"
@@ -453,9 +458,7 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 			continue
 		}
 
-		// Get PackageSource for this dependency
-		ps, exists := packageSourceMap[pkgName]
-		if !exists {
+		if !psExists {
 			requester := dependencyRequesters[pkgName]
 			if requester != "" {
 				return fmt.Errorf("PackageSource %s not found (required by %s)", pkgName, requester)
@@ -482,33 +485,33 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 		}
 
 		packageVariants[pkgName] = variant
+		if isInstalled {
+			reopen[pkgName] = true
+		}
 	}
 
 	// Now create all Package resources
 	for _, pkgName := range installOrder {
 		variant := packageVariants[pkgName]
 
-		if installed, exists := installedMap[pkgName]; exists {
-			// A user's own already-installed Package is left untouched; only a tap
-			// auto-registration Package (label + empty variant) is re-opened for a
-			// variant choice.
-			if !isTapAutoRegistration(installed) {
-				continue
-			}
-			if variant == "" || variant == "default" {
-				fmt.Fprintf(os.Stderr, "✓ %s (already registered, variant: default)\n", pkgName)
-				continue
-			}
-			// Pinning a non-default variant is a deliberate user choice: hand the
-			// Package over to the user (shed the tap markers and the PackageSource
-			// ownerReference) so the materializer no longer manages it. Otherwise a
-			// later revision that turns the DEFAULT variant privileged would
-			// de-register this benign non-default install.
+		if reopen[pkgName] {
+			// Running `add` is an explicit ownership handover: convert the managed
+			// auto-registration into a plain user Package pinned to the chosen
+			// variant (shedding the tap markers and the PackageSource ownerRef), so
+			// the materializer no longer manages or de-registers it. Otherwise a
+			// later revision that turns the DEFAULT variant privileged would undo
+			// the user's deliberate choice, including a confirmed privileged one.
+			installed := installedMap[pkgName]
 			pinRegistrationToUser(installed, variant)
 			if err := k8sClient.Update(ctx, installed); err != nil {
 				return fmt.Errorf("failed to set variant %s on Package %s: %w", variant, pkgName, err)
 			}
 			fmt.Fprintf(os.Stderr, "✓ %s (variant set to %s)\n", pkgName, variant)
+			continue
+		}
+		// A non-reopened already-installed Package (a user's own, or a foreign
+		// leftover) was reported in phase 1 and needs nothing here.
+		if _, isInstalled := installedMap[pkgName]; isInstalled {
 			continue
 		}
 
@@ -544,12 +547,14 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 	return nil
 }
 
-// isTapAutoRegistration reports whether a Package is a tap materializer's
-// auto-created registration Package (tap label, variant not yet chosen), as
-// opposed to a user's own `cozypkg add` Package. Only the former is re-opened
-// for variant selection by `add`.
-func isTapAutoRegistration(pkg *cozyv1alpha1.Package) bool {
-	return pkg.GetLabels()[tapconst.Label] == "true" && pkg.Spec.Variant == ""
+// tapSourceName returns the PackageSource's tap source (its OCIRepository name),
+// or "" when it is not a tapped source; it is the name collision.ManagedRegistration
+// matches a registration Package's tap-source annotation against.
+func tapSourceName(ps *cozyv1alpha1.PackageSource) string {
+	if ps != nil && ps.Spec.SourceRef != nil {
+		return ps.Spec.SourceRef.Name
+	}
+	return ""
 }
 
 // pinRegistrationToUser turns a tap auto-registration Package into a plain

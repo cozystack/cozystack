@@ -83,3 +83,26 @@ func TestOwnsEmptySourceNeverMatchesLabelOnly(t *testing.T) {
 		t.Error("Owns(owned, \"tap-a\") must be true")
 	}
 }
+
+func TestManagedRegistration(t *testing.T) {
+	auto := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{
+		Labels:      map[string]string{tapconst.Label: "true"},
+		Annotations: map[string]string{tapconst.SourceAnnotation: "tap-a"},
+	}}
+	if !ManagedRegistration(auto, "tap-a") {
+		t.Error("owned + empty variant must be a managed registration")
+	}
+	pinned := auto.DeepCopy()
+	pinned.Spec.Variant = "full"
+	if ManagedRegistration(pinned, "tap-a") {
+		t.Error("a pinned (non-empty variant) Package is not managed")
+	}
+	foreign := auto.DeepCopy()
+	foreign.Annotations[tapconst.SourceAnnotation] = "tap-other"
+	if ManagedRegistration(foreign, "tap-a") {
+		t.Error("a Package owned by another source is not managed")
+	}
+	if ManagedRegistration(auto, "") {
+		t.Error("empty sourceName must never match")
+	}
+}

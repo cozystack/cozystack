@@ -55,24 +55,6 @@ func TestPrivilegedComponents(t *testing.T) {
 	}
 }
 
-func TestIsTapAutoRegistration(t *testing.T) {
-	autoReg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{tapconst.Label: "true"}}}
-	if !isTapAutoRegistration(autoReg) {
-		t.Error("a tap-labelled empty-variant Package is an auto-registration")
-	}
-	userDefault := &cozyv1alpha1.Package{Spec: cozyv1alpha1.PackageSpec{Variant: "default"}}
-	if isTapAutoRegistration(userDefault) {
-		t.Error("a user's Package (no tap label) is not an auto-registration")
-	}
-	pinned := &cozyv1alpha1.Package{
-		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{tapconst.Label: "true"}},
-		Spec:       cozyv1alpha1.PackageSpec{Variant: "full"},
-	}
-	if isTapAutoRegistration(pinned) {
-		t.Error("a tap Package already pinned to a variant is not re-openable")
-	}
-}
-
 func TestPinRegistrationToUser(t *testing.T) {
 	pkg := &cozyv1alpha1.Package{
 		ObjectMeta: metav1.ObjectMeta{
@@ -88,8 +70,8 @@ func TestPinRegistrationToUser(t *testing.T) {
 	if pkg.Spec.Variant != "full" {
 		t.Errorf("variant not pinned, got %q", pkg.Spec.Variant)
 	}
-	if isTapAutoRegistration(pkg) {
-		t.Error("a pinned Package must no longer be a tap auto-registration")
+	if pkg.GetLabels()[tapconst.Label] == "true" {
+		t.Error("a pinned Package must no longer carry the tap label")
 	}
 	if _, ok := pkg.Labels[tapconst.Label]; ok {
 		t.Error("tap label must be shed")

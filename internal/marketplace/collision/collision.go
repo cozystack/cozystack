@@ -36,6 +36,18 @@ func Owns(obj metav1.Object, sourceName string) bool {
 		obj.GetAnnotations()[tapconst.SourceAnnotation] == sourceName
 }
 
+// ManagedRegistration reports whether pkg is the given tap source's auto-created
+// registration Package that the operator still manages: owned by the source AND
+// still at the auto default (empty variant). A Package a user pinned to a variant
+// via `cozypkg add` sheds its tap markers, and the empty-variant clause is a
+// second line of defence. It is the single ownership predicate every path (the
+// materializer's de-register and prune, the CLI untap, the dashboard disconnect,
+// and `cozypkg add`'s re-open) shares, so they can never disagree on which
+// Package is the operator's to manage.
+func ManagedRegistration(pkg *cozyv1alpha1.Package, sourceName string) bool {
+	return Owns(pkg, sourceName) && pkg.Spec.Variant == ""
+}
+
 // PrivilegedInstallComponents lists the names of the given variant's
 // install-marked components that request privileged access. Both the CLI
 // (cozypkg add) and the operator's tap materializer gate on it, so it lives here

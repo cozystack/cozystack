@@ -385,7 +385,7 @@ func runUntap(ctx context.Context, k8sClient client.Client, name string, allowYe
 	pkg := &cozyv1alpha1.Package{}
 	switch err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg); {
 	case err == nil:
-		if collision.Owns(pkg, srcName) {
+		if collision.ManagedRegistration(pkg, srcName) {
 			// UID precondition: do not delete a Package the user replaced between
 			// this Get and the Delete.
 			if err := k8sClient.Delete(ctx, pkg, client.Preconditions{UID: &pkg.UID}); err != nil {

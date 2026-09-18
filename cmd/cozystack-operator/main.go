@@ -321,9 +321,10 @@ func main() {
 
 	// Setup Tap materializer reconciler (dashboard-connected taps)
 	if err := (&operator.TapMaterializerReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("cozystack-tap-materializer"),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("cozystack-tap-materializer"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TapMaterializer")
 		os.Exit(1)
