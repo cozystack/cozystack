@@ -6,6 +6,71 @@
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 
+{{- $email := ((.Values.alerta.alerts).email) | default dict }}
+{{- $emailAlertnames := $email.alertnames | default list }}
+{{- $emailSeverities := $email.severities | default (list "critical" "major") }}
+{{- $emailPasswordSecret := "alertmanager-email-password" }}
+{{- $emailSet := list }}
+{{- range $field := list "to" "from" "smarthost" "authUsername" "repeatInterval" "alertnames" "severities" }}
+{{- if index $email $field }}{{ $emailSet = append $emailSet $field }}{{ end }}
+{{- end }}
+{{- $emailEnabled := gt (len $emailSet) 0 }}
+{{- if $emailEnabled }}
+{{- if not (and $email.to $email.smarthost $email.from) }}
+{{- fail (printf "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts; to turn email off, clear every field under alerta.alerts.email (still set: %s)" (join ", " $emailSet)) }}
+{{- end }}
+{{- $mailboxAddr := "[^\\s<>,;@]+@(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*)" }}
+{{- $mailbox := printf "^(%s|[^<>,;]*<%s>)$" $mailboxAddr $mailboxAddr }}
+{{- $emailFrom := trim (toString $email.from) }}
+{{- if not (regexMatch $mailbox $emailFrom) }}
+{{- fail (printf "alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got %q" $emailFrom) }}
+{{- end }}
+{{- range $recipient := splitList "," (toString $email.to) }}
+{{- $trimmed := trim $recipient }}
+{{- if eq $trimmed "" }}
+{{- fail (printf "alerta.alerts.email.to has an empty entry between commas, got %q" (toString $email.to)) }}
+{{- end }}
+{{- if not (regexMatch $mailbox $trimmed) }}
+{{- fail (printf "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got %q" $trimmed) }}
+{{- end }}
+{{- end }}
+{{- $smarthost := toString $email.smarthost }}
+{{- if not (regexMatch "^(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*):[0-9]{1,5}$" $smarthost) }}
+{{- fail (printf "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got %q" $smarthost) }}
+{{- end }}
+{{- $smtpPort := regexReplaceAll "^.*:" $smarthost "" | int }}
+{{- if or (lt $smtpPort 1) (gt $smtpPort 65535) }}
+{{- fail (printf "alerta.alerts.email.smarthost port must be between 1 and 65535, got %q" $smarthost) }}
+{{- end }}
+{{- if $email.repeatInterval }}
+{{- $repeat := toString $email.repeatInterval }}
+{{- if not (regexMatch "^([0-9]{1,8}y)?([0-9]{1,8}w)?([0-9]{1,8}d)?([0-9]{1,8}h)?([0-9]{1,8}m)?([0-9]{1,8}s)?([0-9]{1,8}ms)?$" $repeat) }}
+{{- fail (printf "alerta.alerts.email.repeatInterval must be an Alertmanager duration with units in descending order, each at most once, such as 30s, 5m, 12h or 1h30m, got %q" $repeat) }}
+{{- end }}
+{{- $repeatMs := int64 0 }}
+{{- $unitMs := dict "y" 31536000000 "w" 604800000 "d" 86400000 "h" 3600000 "m" 60000 "s" 1000 "ms" 1 }}
+{{- range $part := regexFindAll "[0-9]+(ms|[ywdhms])" $repeat -1 }}
+{{- $repeatMs = add $repeatMs (mul (int64 (regexReplaceAll "[a-z]+$" $part "")) (index $unitMs (regexReplaceAll "^[0-9]+" $part ""))) }}
+{{- end }}
+{{- if eq (int64 $repeatMs) (int64 0) }}
+{{- fail (printf "alerta.alerts.email.repeatInterval cannot be zero, got %q" $repeat) }}
+{{- end }}
+{{- if gt (int64 $repeatMs) (int64 9223372036854) }}
+{{- fail (printf "alerta.alerts.email.repeatInterval is out of range for Alertmanager, got %q" $repeat) }}
+{{- end }}
+{{- end }}
+{{- range $name := $emailAlertnames }}
+{{- if not (regexMatch "^[a-zA-Z_:][a-zA-Z0-9_:]*$" (toString $name)) }}
+{{- fail (printf "alerta.alerts.email.alertnames entries must be Prometheus alert names, got %q" (toString $name)) }}
+{{- end }}
+{{- end }}
+{{- range $severity := $emailSeverities }}
+{{- if not (regexMatch "^[a-zA-Z0-9_-]+$" (toString $severity)) }}
+{{- fail (printf "alerta.alerts.email.severities entries must be plain severity names, got %q" (toString $severity)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- $apiKey := randAlphaNum 32 }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace "alerta" }}
 {{- if $existingSecret }}
@@ -239,6 +304,8 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: alertmanager
+  labels:
+    app: alertmanager
 type: Opaque
 stringData:
   alertmanager.yaml: |
@@ -261,6 +328,32 @@ stringData:
       - receiver: blackhole
         matchers:
         - 'alertname=~"CDIDefaultStorageClassDegraded|CDINoDefaultStorageClass"'
+      {{- if $emailEnabled }}
+      - receiver: alerta
+        continue: true
+        matchers:
+        - 'severity=~"{{ join "|" $emailSeverities }}"'
+        - 'notify_email="true"'
+      - receiver: email
+        group_wait: 1m
+        group_interval: 5m
+        repeat_interval: {{ $email.repeatInterval | default "12h" | quote }}
+        matchers:
+        - 'severity=~"{{ join "|" $emailSeverities }}"'
+        - 'notify_email="true"'
+      {{- if $emailAlertnames }}
+      - receiver: alerta
+        continue: true
+        matchers:
+        - 'alertname=~"^({{ join "|" $emailAlertnames }})$"'
+      - receiver: email
+        group_wait: 1m
+        group_interval: 5m
+        repeat_interval: {{ $email.repeatInterval | default "12h" | quote }}
+        matchers:
+        - 'alertname=~"^({{ join "|" $emailAlertnames }})$"'
+      {{- end }}
+      {{- end }}
     receivers:
     - name: blackhole
     - name: "alerta"
@@ -271,6 +364,18 @@ stringData:
       webhook_configs:
       - url: 'http://alerta/api/webhooks/prometheus?api-key={{ $apiKey }}'
         send_resolved: false
+    {{- if $emailEnabled }}
+    - name: email
+      email_configs:
+      - to: {{ $email.to | quote }}
+        from: {{ $email.from | quote }}
+        smarthost: {{ $email.smarthost | quote }}
+        {{- if $email.authUsername }}
+        auth_username: {{ $email.authUsername | quote }}
+        auth_password_file: {{ printf "/etc/vm/secrets/%s/password" $emailPasswordSecret | quote }}
+        {{- end }}
+        send_resolved: true
+    {{- end }}
 ---
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMAlertmanager
@@ -284,6 +389,10 @@ spec:
       apps.cozystack.io/application.name: {{ $.Release.Name }}
   replicaCount: 3
   configSecret: alertmanager
+  {{- if and $emailEnabled $email.authUsername }}
+  secrets:
+  - {{ $emailPasswordSecret | quote }}
+  {{- end }}
   podMetadata:
     labels:
       policy.cozystack.io/allow-to-apiserver: "true"
