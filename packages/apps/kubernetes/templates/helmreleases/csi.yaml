@@ -1,3 +1,10 @@
+{{- /* KubeVirt-only: the cloud-controller-manager and the CSI driver here
+      exist to reach the workers' VirtualMachines and their DataVolumes in
+      THIS cluster. On the proxmox substrate the VMs are on an external
+      hypervisor and the equivalents are separate packages
+      (proxmox-ccm, proxmox-csi), so rendering these would leave a
+      controller in the tenant reconciling objects that do not exist. */}}
+{{- if ne (.Values.substrate | default "kubevirt") "proxmox" }}
 {{- if .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -87,4 +94,5 @@ spec:
     namespace: {{ .Release.Namespace }}
   - name: {{ .Release.Name }}-cilium
     namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

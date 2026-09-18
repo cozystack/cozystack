@@ -1,0 +1,133 @@
+suite: proxmox substrate
+# The substrate switch has to change exactly two things and nothing else: the
+# machine template object and every reference to it. The default path is covered
+# by the render snapshot, so what is asserted here is the Proxmox path plus the
+# guards that stop a pool asking the substrate for something it cannot do.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "4"
+    memory: 8Gi
+  substrate: proxmox
+  proxmox:
+    templateTags:
+      - capmox-template
+      - cozystack
+      - talos
+      - talos-v1.13.6
+    full: true
+    network:
+      bridge: vmbr0
+    storage: ""
+    dnsServers: ["8.8.8.8"]
+tests:
+  - it: renders a ProxmoxMachineTemplate instead of a KubevirtMachineTemplate
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - isKind:
+          of: ProxmoxMachineTemplate
+
+  - it: skips both capmox probes, which Talos can never answer
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.checks.skipQemuGuestAgent
+          value: true
+      - equal:
+          path: spec.template.spec.checks.skipCloudInitStatus
+          value: true
+
+  - it: passes the template tags through verbatim, since capmox compares the set
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.templateSelector.matchTags
+          value:
+            - capmox-template
+            - cozystack
+            - talos
+            - talos-v1.13.6
+
+  - it: sizes the VM from resources, the only sizing source Proxmox has
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.numCores
+          value: 4
+      - equal:
+          path: spec.template.spec.memoryMiB
+          value: 8192
+      - equal:
+          path: spec.template.spec.network.default.bridge
+          value: vmbr0
+
+  - it: points the MachineDeployment at the Proxmox template
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.infrastructureRef.kind
+          value: ProxmoxMachineTemplate
+
+  - it: still renders the MachineHealthCheck, which is substrate-agnostic
+    documentSelector:
+      path: kind
+      value: MachineHealthCheck
+    asserts:
+      - isKind:
+          of: MachineHealthCheck
+
+  - it: still renders the WorkloadMonitor, which is substrate-agnostic
+    documentSelector:
+      path: kind
+      value: WorkloadMonitor
+    asserts:
+      - isKind:
+          of: WorkloadMonitor
+
+  - it: rejects a pool with no template tags, because capmox has no image URL
+    set:
+      proxmox:
+        templateTags: []
+        dnsServers: ["8.8.8.8"]
+        network:
+          bridge: vmbr0
+    asserts:
+      - failedTemplate:
+          errorMessage: "substrate proxmox requires proxmox.templateTags: capmox clones a VM template and has no image URL to fall back on"
+
+  - it: rejects kubevirt-only knobs rather than accepting them silently
+    set:
+      logSerialConsole: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "logSerialConsole is a kubevirt-only field; use the Proxmox serial console on the VM"
+
+  - it: rejects an unknown substrate
+    set:
+      substrate: vsphere
+    asserts:
+      - failedTemplate:
+          errorMessage: 'substrate "vsphere" is not supported; use "kubevirt" or "proxmox"'
