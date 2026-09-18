@@ -128,9 +128,22 @@ EOF
     cleanup
 }
 
-@test "accepts an empty range" {
+@test "fails on an empty range instead of reporting OK" {
+    # The pre-push recipe resolves origin/main..HEAD against the working
+    # directory's HEAD, so an agent whose shell sits in a different checkout
+    # lands on an empty range. A run that examined nothing must not read as a
+    # clean one; grepping the message, not just the exit code, pins that the
+    # verdict names the empty case rather than dropping the OK line by accident.
     make_repo
-    "$CHECK" base..HEAD
+    if out="$("$CHECK" base..HEAD 2>&1)"; then
+        echo "expected an empty range to fail" >&2
+        exit 1
+    fi
+    printf '%s\n' "$out" | grep -q "empty"
+    if printf '%s\n' "$out" | grep -q "Commit trailers OK"; then
+        echo "an empty range still printed the OK verdict" >&2
+        exit 1
+    fi
     cleanup
 }
 
