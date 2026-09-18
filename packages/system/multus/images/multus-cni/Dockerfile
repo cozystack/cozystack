@@ -34,7 +34,7 @@ RUN ./hack/build-go.sh
 # release CNI_PLUGINS_VERSION was last checked against; the same test compares
 # the two.
 #
-# kube-ovn-cni-plugins-checked-against: v1.15.10
+# kube-ovn-cni-plugins-checked-against: v1.15.26
 #
 # Talos strips the same upstream release in siderolabs/talos' Dockerfile down to
 # bridge, firewall, host-local, loopback and portmap, and adds flannel from a
