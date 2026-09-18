@@ -1,0 +1,82 @@
+# The tenant this suite builds and tears down. Its own namespace rather than the
+# shared tenant-test: these objects create VMs on a hypervisor, and a leak is
+# visible in `qm list` rather than only in the API.
+#
+# etcd: true is not optional. KamajiControlPlane.spec.dataStoreName reads
+# _namespace.etcd, and the DataStore is created by the tenant's own etcd module
+# (packages/extra/etcd/templates/datastore.yaml) — without it the control plane
+# does not render at all.
+# Tenant names are validated as lowercase letters and digits only — no dashes —
+# so this is e2eproxmox rather than the e2e-proxmox the namespace would suggest.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: e2eproxmox
+  namespace: tenant-root
+spec:
+  etcd: true
+  host: ""
+  ingress: false
+  monitoring: false
+  seaweedfs: false
+  resourceQuotas: {}
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Kubernetes
+metadata:
+  name: k8s-e2e
+  namespace: tenant-e2eproxmox
+spec:
+  version: "v1.35"
+  substrate: proxmox
+  proxmox:
+    # Empty means any node in the Proxmox cluster; the suite must not hardcode a
+    # hostname it would then only pass on one stand.
+    allowedNodes: []
+    # An off-cluster worker cannot resolve through the management cluster's
+    # CoreDNS, so the resolvers are its own. The chart refuses to render without
+    # them rather than writing an address that cannot answer.
+    dnsServers: ["8.8.8.8", "1.1.1.1"]
+    ipv4Config:
+      # Must not overlap the DHCP range, the CAPI IPAM pool or the MetalLB pool
+      # on the same L2 — four owners hand out addresses there and a collision is
+      # silent. The workflow overrides this per stand.
+      addresses: ["10.0.0.180-10.0.0.185"]
+      gateway: "10.0.0.1"
+      prefix: 24
+    ccm:
+      credentialsSecretName: proxmox-credentials
+    csi:
+      enabled: true
+      credentialsSecretName: proxmox-credentials
+      storageClasses:
+      - name: proxmox
+        storage: vm-disks1
+        fstype: ext4
+        reclaimPolicy: Delete
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: KubernetesNodes
+metadata:
+  name: md0
+  namespace: tenant-e2eproxmox
+spec:
+  cluster: k8s-e2e
+  minReplicas: 1
+  maxReplicas: 1
+  instanceType: ""
+  resources:
+    cpu: 2
+    memory: 4Gi
+  substrate: proxmox
+  proxmox:
+    # capmox matches tags as a SET, not by containment: a template carrying four
+    # tags is not selected by naming one of them.
+    templateTags: [capmox-template, cozystack, talos, talos-v1.13.6]
+    # false is the default and the reason the suite asserts it on the hypervisor:
+    # a full clone costs the whole template disk per worker and breaks nothing.
+    full: false
+    network:
+      bridge: vmbr50
+    storage: main-pool
+    dnsServers: ["8.8.8.8", "1.1.1.1"]

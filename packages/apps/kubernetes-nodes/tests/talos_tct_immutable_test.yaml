@@ -1,0 +1,56 @@
+suite: TalosConfigTemplate replacement on an immutable spec
+# The CRD marks spec immutable, so the Job's kubectl apply fails the moment any
+# input the render depends on genuinely changes — the apiserver address being
+# the one that moves in practice. Before this, that failure stopped the Job and
+# an operator had to delete the template by hand. What is pinned here is that
+# the Job replaces it, that it only does so for that specific failure, and that
+# it may delete nothing else.
+templates:
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+tests:
+  - it: replaces the template when the apiserver reports it immutable
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'is immutable'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete talosconfigtemplate'
+
+  # Deleting on an unrecognised error would turn an unrelated fault — an expired
+  # token, a webhook outage — into worker churn, so the branch must re-raise.
+  - it: still fails the Job on any other apply error
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'echo "\$APPLY_OUT" >&2'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'exit 1'
+
+  - it: may delete only this pool's own template
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["bootstrap.cluster.x-k8s.io"]
+            resources: ["talosconfigtemplates"]
+            resourceNames: ["kubernetes-myk8s-md0"]
+            verbs: ["delete"]

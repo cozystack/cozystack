@@ -1,0 +1,102 @@
+name: E2E (proxmox)
+
+# The Proxmox substrate's own lane, separate from every other e2e workflow for
+# one reason that cannot be engineered away: it needs a Proxmox hypervisor, and
+# the oracle-vm-* runners the other lanes use will never have one.
+#
+# Deliberately NOT triggered by pull_request. A self-hosted runner executes
+# whatever the workflow checks out, and this one holds credentials to a
+# hypervisor and a live cluster; letting an arbitrary fork PR start it would
+# hand both to its author. Manual dispatch and a schedule are the whole trigger
+# surface, and both come from someone who already has write access.
+on:
+  workflow_dispatch:
+    inputs:
+      keep_tenant:
+        description: "Leave the tenant in place after the run, for debugging"
+        type: boolean
+        default: false
+  schedule:
+    # Nightly, offset from the upstream lanes so a shared hypervisor is not
+    # asked to do two things at once.
+    - cron: "40 2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One hypervisor, one tenant namespace, fixed VM ids — two runs would fight
+  # over all three. Never cancel in progress: a killed run leaks VMs.
+  group: e2e-proxmox
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: Proxmox substrate
+    runs-on: [self-hosted, proxmox]
+    timeout-minutes: 90
+    env:
+      COZY_PROXMOX_NS: tenant-e2eproxmox
+      COZY_PROXMOX_CLUSTER: k8s-e2e
+      COZY_PROXMOX_STORAGE: ${{ vars.PROXMOX_STORAGE || 'vm-disks1' }}
+      COZY_PVE_SSH: ${{ vars.PROXMOX_SSH || 'root@192.168.20.1' }}
+      COZY_PVE_SSH_KEY: ${{ github.workspace }}/.ssh-pve
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Stage credentials
+        env:
+          KUBECONFIG_B64: ${{ secrets.COZY_KUBECONFIG }}
+          PVE_SSH_KEY: ${{ secrets.PROXMOX_SSH_KEY }}
+          PVE_TOKEN_ID: ${{ secrets.PROXMOX_TOKEN_ID }}
+          PVE_TOKEN_SECRET: ${{ secrets.PROXMOX_TOKEN_SECRET }}
+          PVE_URL: ${{ vars.PROXMOX_URL }}
+          PVE_REGION: ${{ vars.PROXMOX_REGION }}
+        run: |
+          set -eu
+          umask 077
+          printf '%s' "$KUBECONFIG_B64" | base64 -d > "$GITHUB_WORKSPACE/.kubeconfig"
+          printf '%s' "$PVE_SSH_KEY" > "$COZY_PVE_SSH_KEY"
+          echo "KUBECONFIG=$GITHUB_WORKSPACE/.kubeconfig" >> "$GITHUB_ENV"
+
+          # The credentials the tenant's CCM and CSI read. A Secret rather than
+          # values so no token is ever written into a rendered HelmRelease.
+          kubectl --kubeconfig "$GITHUB_WORKSPACE/.kubeconfig" create namespace "$COZY_PROXMOX_NS" \
+            --dry-run=client -o yaml | kubectl --kubeconfig "$GITHUB_WORKSPACE/.kubeconfig" apply -f -
+          kubectl --kubeconfig "$GITHUB_WORKSPACE/.kubeconfig" -n "$COZY_PROXMOX_NS" \
+            create secret generic proxmox-credentials \
+            --from-literal=url="$PVE_URL" \
+            --from-literal=token_id="$PVE_TOKEN_ID" \
+            --from-literal=token_secret="$PVE_TOKEN_SECRET" \
+            --from-literal=region="$PVE_REGION" \
+            --dry-run=client -o yaml | kubectl --kubeconfig "$GITHUB_WORKSPACE/.kubeconfig" apply -f -
+
+      - name: Enable the suite
+        # It ships disabled so the normal lanes cannot select it; this is the
+        # one place that is allowed to turn it on.
+        run: mv hack/e2e-chainsaw/kubernetes-proxmox/chainsaw-test.yaml.disabled
+               hack/e2e-chainsaw/kubernetes-proxmox/chainsaw-test.yaml
+
+      - name: Run the Proxmox suite
+        run: |
+          chainsaw test \
+            --config hack/e2e-chainsaw/.chainsaw.yaml \
+            --test-dir hack/e2e-chainsaw/kubernetes-proxmox
+
+      - name: Tear down
+        # always(), because the whole point of the teardown is the failing run:
+        # a leaked tenant leaves VMs on the hypervisor and the next run inherits
+        # them.
+        if: always() && !inputs.keep_tenant
+        run: |
+          set -eu
+          kubectl delete kubernetesnodes.apps.cozystack.io -n "$COZY_PROXMOX_NS" --all --ignore-not-found
+          kubectl delete kubernetes.apps.cozystack.io -n "$COZY_PROXMOX_NS" --all --ignore-not-found
+          kubectl delete tenant.apps.cozystack.io e2eproxmox -n tenant-root --ignore-not-found
+
+      - name: Remove staged credentials
+        if: always()
+        run: rm -f "$GITHUB_WORKSPACE/.kubeconfig" "$COZY_PVE_SSH_KEY"
