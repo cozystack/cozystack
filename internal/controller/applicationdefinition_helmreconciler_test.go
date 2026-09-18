@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/config"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -350,5 +351,174 @@ func TestValuesFromEqual(t *testing.T) {
 				t.Errorf("valuesFromEqual(%+v, %+v) = %v, want %v", tc.a, tc.b, got, tc.want)
 			}
 		})
+	}
+}
+
+// vmInstanceRelease builds a VMInstance HelmRelease carrying the application
+// labels this reconciler selects on, with the given wait configuration.
+func vmInstanceRelease(install, upgrade *bool) *helmv2.HelmRelease {
+	hr := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vm-instance-web",
+			Namespace: "tenant-foo",
+			Labels: map[string]string{
+				"apps.cozystack.io/application.kind":  "VMInstance",
+				"apps.cozystack.io/application.group": "apps.cozystack.io",
+			},
+		},
+		Spec: helmv2.HelmReleaseSpec{
+			ChartRef: &helmv2.CrossNamespaceSourceReference{
+				Kind:      "ExternalArtifact",
+				Name:      "vm-instance-app",
+				Namespace: "cozy-system",
+			},
+		},
+	}
+	if install != nil {
+		hr.Spec.Install = &helmv2.Install{DisableWait: *install}
+	}
+	if upgrade != nil {
+		hr.Spec.Upgrade = &helmv2.Upgrade{DisableWait: *upgrade}
+	}
+	return hr
+}
+
+// vmInstanceAppDef builds the VMInstance ApplicationDefinition, optionally
+// carrying the disable-wait annotation.
+func vmInstanceAppDef(annotations map[string]string) *cozyv1alpha1.ApplicationDefinition {
+	return &cozyv1alpha1.ApplicationDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm-instance", Annotations: annotations},
+		Spec: cozyv1alpha1.ApplicationDefinitionSpec{
+			Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "VMInstance"},
+			Release: cozyv1alpha1.ApplicationDefinitionRelease{
+				ChartRef: &helmv2.CrossNamespaceSourceReference{
+					Kind:      "ExternalArtifact",
+					Name:      "vm-instance-app",
+					Namespace: "cozy-system",
+				},
+			},
+		},
+	}
+}
+
+func reconcileVMInstance(t *testing.T, appDef *cozyv1alpha1.ApplicationDefinition, hr *helmv2.HelmRelease) *helmv2.HelmRelease {
+	t.Helper()
+
+	scheme := newAppDefHelmScheme(t)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(appDef, hr).Build()
+	r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
+
+	if _, err := r.Reconcile(context.TODO(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: appDef.Name},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &helmv2.HelmRelease{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}, got); err != nil {
+		t.Fatalf("get HR: %v", err)
+	}
+	return got
+}
+
+// TestAppDefHelm_DisableWaitApplied pins the drift this reconciler exists to
+// close, for the one field a running release cannot pick up on its own: a
+// HelmRelease created before the definition carried
+// release.cozystack.io/helm-install-disable-wait keeps waiting on readiness
+// until its Application is written through the apps API again. On a cluster
+// where the wait is what broke (a KubeVirt VirtualMachine the kstatus poller
+// reads as permanently InProgress), that is every existing VM, each one
+// looping upgrade and timeout, and re-writing them by hand is the operator's
+// only way out. Bring the field to what the definition asks for instead.
+func TestAppDefHelm_DisableWaitApplied(t *testing.T) {
+	no := false
+	got := reconcileVMInstance(t,
+		vmInstanceAppDef(map[string]string{config.HelmInstallDisableWaitAnnotation: "true"}),
+		vmInstanceRelease(&no, &no))
+
+	if got.Spec.Install == nil || !got.Spec.Install.DisableWait {
+		t.Fatalf("expected Install.DisableWait=true, got %+v", got.Spec.Install)
+	}
+	if got.Spec.Upgrade == nil || !got.Spec.Upgrade.DisableWait {
+		t.Fatalf("expected Upgrade.DisableWait=true, got %+v", got.Spec.Upgrade)
+	}
+}
+
+// TestAppDefHelm_DisableWaitAppliedToAbsentBlocks pins the same on a release
+// that carries no install/upgrade block at all: the field still has to land.
+func TestAppDefHelm_DisableWaitAppliedToAbsentBlocks(t *testing.T) {
+	got := reconcileVMInstance(t,
+		vmInstanceAppDef(map[string]string{config.HelmInstallDisableWaitAnnotation: "true"}),
+		vmInstanceRelease(nil, nil))
+
+	if got.Spec.Install == nil || !got.Spec.Install.DisableWait {
+		t.Fatalf("expected Install.DisableWait=true, got %+v", got.Spec.Install)
+	}
+	if got.Spec.Upgrade == nil || !got.Spec.Upgrade.DisableWait {
+		t.Fatalf("expected Upgrade.DisableWait=true, got %+v", got.Spec.Upgrade)
+	}
+}
+
+// TestAppDefHelm_DisableWaitRemoved pins the other direction, because the
+// definition is the source of truth in both: cozystack-api rebuilds the whole
+// spec on every write and emits DisableWait=false once the annotation is gone,
+// so a release left at true would drift back the moment anyone touched it.
+func TestAppDefHelm_DisableWaitRemoved(t *testing.T) {
+	yes := true
+	got := reconcileVMInstance(t, vmInstanceAppDef(nil), vmInstanceRelease(&yes, &yes))
+
+	if got.Spec.Install == nil || got.Spec.Install.DisableWait {
+		t.Fatalf("expected Install.DisableWait=false, got %+v", got.Spec.Install)
+	}
+	if got.Spec.Upgrade == nil || got.Spec.Upgrade.DisableWait {
+		t.Fatalf("expected Upgrade.DisableWait=false, got %+v", got.Spec.Upgrade)
+	}
+}
+
+// TestAppDefHelm_DisableWaitLeavesAbsentBlocksAlone pins that the false case
+// does not materialise empty install/upgrade blocks on a release that has
+// none: writing them would change nothing about the release's behaviour and
+// would make every such reconcile an update.
+func TestAppDefHelm_DisableWaitLeavesAbsentBlocksAlone(t *testing.T) {
+	got := reconcileVMInstance(t, vmInstanceAppDef(nil), vmInstanceRelease(nil, nil))
+
+	if got.Spec.Install != nil {
+		t.Fatalf("expected Install left absent, got %+v", got.Spec.Install)
+	}
+	if got.Spec.Upgrade != nil {
+		t.Fatalf("expected Upgrade left absent, got %+v", got.Spec.Upgrade)
+	}
+}
+
+// TestAppDefHelm_DisableWaitInSyncSkipsUpdate pins idempotence: a release that
+// already matches must not be written, or every reconcile of every definition
+// bumps the resourceVersion of every release it owns and wakes helm-controller.
+func TestAppDefHelm_DisableWaitInSyncSkipsUpdate(t *testing.T) {
+	yes := true
+	hr := vmInstanceRelease(&yes, &yes)
+	hr.Spec.ValuesFrom = expectedValuesFrom()
+
+	scheme := newAppDefHelmScheme(t)
+	appDef := vmInstanceAppDef(map[string]string{config.HelmInstallDisableWaitAnnotation: "true"})
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(appDef, hr).Build()
+
+	before := &helmv2.HelmRelease{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}, before); err != nil {
+		t.Fatalf("get HR: %v", err)
+	}
+
+	r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
+	if _, err := r.Reconcile(context.TODO(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: appDef.Name},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	after := &helmv2.HelmRelease{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}, after); err != nil {
+		t.Fatalf("get HR after reconcile: %v", err)
+	}
+	if after.ResourceVersion != before.ResourceVersion {
+		t.Fatalf("release rewritten with nothing to change: %q -> %q", before.ResourceVersion, after.ResourceVersion)
 	}
 }

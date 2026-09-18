@@ -26,6 +26,13 @@ import (
 	"github.com/fluxcd/pkg/apis/kustomize"
 )
 
+// ReleaseAnnotationPrefix is the prefix shared by every ApplicationDefinition
+// metadata annotation that changes how cozystack-api builds the generated
+// HelmRelease (the four constants below). cozystack-api reads them once, at
+// start-up, so cozystack-operator has to roll the api Deployment when one of
+// them changes; it selects them by this prefix when hashing the definitions.
+const ReleaseAnnotationPrefix = "release.cozystack.io/"
+
 // HelmInstallTimeoutAnnotation is the ApplicationDefinition metadata
 // annotation key that overrides the Flux HelmRelease Install.Timeout and
 // Upgrade.Timeout for a given Application kind.
