@@ -1689,29 +1689,35 @@ func TestCleanupMongoDBBackup(t *testing.T) {
 	})
 }
 
-// A dump the operator is actively writing (state=running) must never be failed
-// on the wall-clock deadline: pbm keeps streaming into the shared bucket after
-// the driver gives up, so failing it strands an archive no Backup object
-// represents. Only a backup the operator never started trips the deadline.
+// On the useSystemBucket flow a dump the operator is actively writing
+// (state=running) is never failed on the wall-clock deadline: pbm keeps
+// streaming into the shared bucket after the driver gives up, so failing it
+// strands an archive no Backup object represents. On the legacy flow the
+// archive lands in the tenant's own bucket under psmdb task retention, so the
+// pre-existing deadline still applies to running. Not-started states trip the
+// deadline on both flows.
 func TestPsmdbBackupTimedOut(t *testing.T) {
 	past := &metav1.Time{Time: time.Now().Add(-2 * psmdbDefaultBackupDeadline)}
 	recent := &metav1.Time{Time: time.Now()}
 	cases := []struct {
+		name    string
 		state   string
 		started *metav1.Time
+		usb     bool
 		want    bool
 	}{
-		{psmdbtypes.StateRunning, past, false},   // progressing: keep polling, never strand the archive
-		{psmdbtypes.StateWaiting, past, true},    // never started: safe to fail, nothing written
-		{psmdbtypes.StateRequested, past, true},  //
-		{"", past, true},                         // operator never observed it
-		{psmdbtypes.StateRunning, recent, false}, // running, deadline not reached
-		{psmdbtypes.StateWaiting, recent, false}, // not yet past the deadline
-		{psmdbtypes.StateRunning, nil, false},    // no StartedAt
+		{"system-bucket running past deadline: never strand the shared archive", psmdbtypes.StateRunning, past, true, false},
+		{"legacy running past deadline: the pre-existing deadline applies", psmdbtypes.StateRunning, past, false, true},
+		{"waiting past deadline: nothing written, safe to fail", psmdbtypes.StateWaiting, past, true, true},
+		{"requested past deadline", psmdbtypes.StateRequested, past, false, true},
+		{"never observed past deadline", "", past, true, true},
+		{"legacy running within deadline", psmdbtypes.StateRunning, recent, false, false},
+		{"waiting within deadline", psmdbtypes.StateWaiting, recent, true, false},
+		{"legacy running with no StartedAt", psmdbtypes.StateRunning, nil, false, false},
 	}
 	for _, tc := range cases {
-		if got := psmdbBackupTimedOut(tc.state, tc.started); got != tc.want {
-			t.Errorf("psmdbBackupTimedOut(state=%q, past=%v): got %v want %v", tc.state, tc.started == past, got, tc.want)
+		if got := psmdbBackupTimedOut(tc.state, tc.started, tc.usb); got != tc.want {
+			t.Errorf("%s: psmdbBackupTimedOut(state=%q, useSystemBucket=%v): got %v want %v", tc.name, tc.state, tc.usb, got, tc.want)
 		}
 	}
 }
@@ -1825,59 +1831,104 @@ func TestReleaseMongoDBCleanup_UsesPassedObjectNotReRead(t *testing.T) {
 	}
 }
 
-// A streaming dump is never cancelled: the pinned operator persists status only
-// on a state/error change, so status.lastTransition freezes at the instant the
-// dump entered running and a real dataset routinely outruns any wall-clock
-// window. The driver must keep polling a running CR quietly even long past the
-// deadline — never fail the BackupJob, never delete the CR (which would strand
-// the partial archive on the shared bucket).
-func TestReconcileMongoDB_RunningNeverCancelled(t *testing.T) {
-	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
-	// Running far longer than the deadline.
-	job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-4 * psmdbDefaultBackupDeadline)}
-	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups"}}`)},
-	}
-	running := &psmdbtypes.PerconaServerMongoDBBackup{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:  "tenant",
-			Name:       "op-running",
-			Finalizers: []string{psmdbDeleteBackupFinalizer},
-			Labels: map[string]string{
-				backupsv1alpha1.OwningJobNameLabel:      job.Name,
-				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+// A streaming dump on the useSystemBucket flow is neither cancelled nor failed
+// on the deadline: the pinned operator persists status only on a state/error
+// change, so status.lastTransition freezes at the instant the dump entered
+// running, and a real dataset routinely outruns any window. The wait is named
+// on the BackupJob (Ready=False with the start time) rather than silent. On the
+// legacy flow the archive lands in the tenant's own bucket under psmdb task
+// retention, so the pre-existing deadline still fails the job — and the operator
+// CR is left alone either way.
+func TestReconcileMongoDB_RunningPastDeadline(t *testing.T) {
+	setup := func(t *testing.T, useSystemBucket bool) (*BackupJobReconciler, client.Client, *ResolvedBackupConfig, *backupsv1alpha1.BackupJob) {
+		job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+		app.Spec.Backup.UseSystemBucket = useSystemBucket
+		job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-4 * psmdbDefaultBackupDeadline)}
+		bucket := "cozy-backups"
+		if !useSystemBucket {
+			// Legacy: the strategy carries no coordinates to inject and the cluster
+			// declares the tenant's own bucket.
+			strategy.Spec.Template.S3 = nil
+			bucket = "tenant-own"
+		}
+		cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+			"s3-storage": {Raw: []byte(fmt.Sprintf(`{"type":"s3","s3":{"bucket":%q}}`, bucket))},
+		}
+		running := &psmdbtypes.PerconaServerMongoDBBackup{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "tenant",
+				Name:      "op-running",
+				Labels: map[string]string{
+					backupsv1alpha1.OwningJobNameLabel:      job.Name,
+					backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+				},
 			},
-		},
-		// lastTransition frozen at the start, as the pinned operator leaves it.
-		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
-			State:          psmdbtypes.StateRunning,
-			LastTransition: &metav1.Time{Time: time.Now().Add(-4 * psmdbDefaultBackupDeadline)},
-		},
+			// lastTransition frozen at the start, as the pinned operator leaves it.
+			Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+				State:          psmdbtypes.StateRunning,
+				LastTransition: &metav1.Time{Time: time.Now().Add(-4 * psmdbDefaultBackupDeadline)},
+			},
+		}
+		if useSystemBucket {
+			running.Finalizers = []string{psmdbDeleteBackupFinalizer}
+		}
+		c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster, running)
+		return &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}, c, resolved, job
 	}
-	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster, running)
-	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	getCR := func(t *testing.T, c client.Client) *psmdbtypes.PerconaServerMongoDBBackup {
+		got := &psmdbtypes.PerconaServerMongoDBBackup{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-running"}, got); err != nil {
+			t.Fatalf("get running backup: %v", err)
+		}
+		return got
+	}
+	getJob := func(t *testing.T, c client.Client, name string) *backupsv1alpha1.BackupJob {
+		p := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: name}, p); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		return p
+	}
 
-	res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
-	if err != nil {
-		t.Fatalf("reconcileMongoDB: %v", err)
-	}
-	if res.RequeueAfter == 0 {
-		t.Fatalf("expected a poll requeue for a running backup, got %+v", res)
-	}
-	got := &psmdbtypes.PerconaServerMongoDBBackup{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-running"}, got); err != nil {
-		t.Fatalf("get running backup: %v", err)
-	}
-	if !got.DeletionTimestamp.IsZero() {
-		t.Errorf("a running backup must never be cancelled, even past the deadline; it was deleted")
-	}
-	persisted := &backupsv1alpha1.BackupJob{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, persisted); err != nil {
-		t.Fatalf("get job: %v", err)
-	}
-	if persisted.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
-		t.Errorf("a running backup must not fail the BackupJob on the deadline, got phase=Failed")
-	}
+	t.Run("system bucket: left to finish, wait named on the job", func(t *testing.T) {
+		r, c, resolved, job := setup(t, true)
+		res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+		if err != nil {
+			t.Fatalf("reconcileMongoDB: %v", err)
+		}
+		if res.RequeueAfter == 0 {
+			t.Fatalf("expected a poll requeue for a running system-bucket backup, got %+v", res)
+		}
+		if !getCR(t, c).DeletionTimestamp.IsZero() {
+			t.Errorf("a running system-bucket backup must never be cancelled; it was deleted")
+		}
+		p := getJob(t, c, job.Name)
+		if p.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Errorf("a running system-bucket backup must not fail the BackupJob on the deadline")
+		}
+		cond := apimeta.FindStatusCondition(p.Status.Conditions, "Ready")
+		if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "PerconaServerMongoDBBackupRunning" || !strings.Contains(cond.Message, "streaming since") {
+			t.Errorf("expected Ready=False PerconaServerMongoDBBackupRunning naming the start time, got %+v", cond)
+		}
+	})
+
+	t.Run("legacy: the deadline still fails the job, CR left alone", func(t *testing.T) {
+		r, c, resolved, job := setup(t, false)
+		if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+			t.Fatalf("reconcileMongoDB: %v", err)
+		}
+		p := getJob(t, c, job.Name)
+		if p.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("a legacy backup running past the deadline must fail the BackupJob, got phase=%q", p.Status.Phase)
+		}
+		cond := apimeta.FindStatusCondition(p.Status.Conditions, "Ready")
+		if cond == nil || !strings.Contains(cond.Message, "did not complete within") {
+			t.Errorf("expected a Ready condition naming the deadline, got %+v", cond)
+		}
+		if !getCR(t, c).DeletionTimestamp.IsZero() {
+			t.Errorf("the legacy operator CR must be left alone (hands-off); it was deleted")
+		}
+	})
 }
 
 // The storage-race retry hinges on recognising the operator's own
@@ -2276,4 +2327,199 @@ func TestReconcileMongoDBRestore_PITRAllowedForNonSystemBucketBackup(t *testing.
 			t.Errorf("PITR must not be refused for a non-system-bucket backup (keyed on Secret name, not the flow): %+v", cond)
 		}
 	}
+}
+
+// A recoveryTime restore must know which flow the backup was taken on; a
+// snapshot that fails to decode leaves that unknown, and the refusal must fail
+// closed rather than hand the operator a point-in-time target it may not serve.
+// The live operator CR is present so source resolution succeeds on the live path
+// (which never consults the snapshot) — exactly the case that reaches this guard.
+func TestReconcileMongoDBRestore_PITRRefusedWhenSnapshotUndecodable(t *testing.T) {
+	apps := mongodbapp.GroupName
+	live := &psmdbtypes.PerconaServerMongoDBBackup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-backup"},
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			State:       psmdbtypes.StateReady,
+			Destination: "s3://cozy-backups/tenant/app1/2026",
+			S3:          &psmdbtypes.BackupStorageS3{Bucket: "cozy-backups", CredentialsSecret: psmdbDefaultCredentialsSecret},
+		},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "src-backup"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "app1", APIGroup: &apps},
+			DriverMetadata: map[string]string{psmdbBackupNameKey: "op-backup"},
+		},
+		// Valid JSON, wrong shape: the flag field is not a bool, so the typed decode fails.
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: &runtime.RawExtension{Raw: []byte(`{"kind":"MongoDBBackupSnapshot","useSystemBucket":"not-a-bool"}`)}},
+	}
+	restoreJob := newMongoDBRestoreJob("rj-pitr-bad", "tenant")
+	restoreJob.Status.StartedAt = &metav1.Time{Time: time.Now()}
+	restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseRunning
+	restoreJob.Spec.Options = &runtime.RawExtension{Raw: []byte(`{"recoveryTime":"2026-08-05T12:34:56Z"}`)}
+
+	c := newMongoDBStrategyTestClient(t, backup, restoreJob, live)
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileMongoDBRestore(context.Background(), restoreJob.DeepCopy(), backup); err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	persisted := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "rj-pitr-bad"}, persisted); err != nil {
+		t.Fatalf("get restore job: %v", err)
+	}
+	if persisted.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("a PITR request over an undecodable snapshot must fail closed, got phase=%q", persisted.Status.Phase)
+	}
+	cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready")
+	if cond == nil || !strings.Contains(cond.Message, "cannot be decoded") {
+		t.Errorf("expected a Ready condition naming the undecodable snapshot, got %+v", cond)
+	}
+}
+
+// After an app opts into useSystemBucket the chart prunes its legacy
+// <release>-s3-creds, and its live storage moves to the platform bucket, so a
+// restore of an older legacy backup finds no same-bucket credential to adopt
+// and keeps the source's — now deleted — Secret. It must fail with a legible,
+// named reason before the operator sees a reference to a Secret that is gone.
+func TestReconcileMongoDBRestore_FailsNamedWhenCredentialsSecretMissing(t *testing.T) {
+	apps := mongodbapp.GroupName
+	snap := &psmdbtypes.PerconaServerMongoDBBackup{
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			Destination: "s3://tenant-own/tenant/app1/2026",
+			S3:          &psmdbtypes.BackupStorageS3{Bucket: "tenant-own", CredentialsSecret: "mongodb-app1-s3-creds"},
+		},
+	}
+	raw, err := marshalMongoDBBackupSnapshot(snap, &strategyv1alpha1.MongoDBTemplate{Type: "logical"}, "s3-storage", nil, false)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	newBackup := func() *backupsv1alpha1.Backup {
+		return &backupsv1alpha1.Backup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "src-backup"},
+			Spec: backupsv1alpha1.BackupSpec{
+				ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "app1", APIGroup: &apps},
+			},
+			Status: backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+		}
+	}
+	// The same app, now on the system bucket: its only storage is on cozy-backups,
+	// so nothing on tenant-own is adoptable.
+	newTarget := func() *psmdbtypes.PerconaServerMongoDB {
+		return &psmdbtypes.PerconaServerMongoDB{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mongodbNameForApp("app1")},
+			Spec: psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
+				Enabled:  true,
+				Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)}},
+			}},
+		}
+	}
+	newRJ := func(name string) *backupsv1alpha1.RestoreJob {
+		rj := newMongoDBRestoreJob(name, "tenant")
+		rj.Status.StartedAt = &metav1.Time{Time: time.Now()}
+		rj.Status.Phase = backupsv1alpha1.RestoreJobPhaseRunning
+		return rj
+	}
+
+	t.Run("missing Secret fails with a named reason", func(t *testing.T) {
+		backup, rj := newBackup(), newRJ("rj-nocred")
+		c := newMongoDBStrategyTestClient(t, backup, rj, newTarget())
+		r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+		if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+			t.Fatalf("reconcileMongoDBRestore: %v", err)
+		}
+		persisted := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "rj-nocred"}, persisted); err != nil {
+			t.Fatalf("get restore job: %v", err)
+		}
+		if persisted.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("a restore naming a missing credentialsSecret must fail, got phase=%q", persisted.Status.Phase)
+		}
+		cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready")
+		if cond == nil || cond.Reason != "RestoreCredentialsMissing" || !strings.Contains(cond.Message, "mongodb-app1-s3-creds") {
+			t.Errorf("expected Ready=False RestoreCredentialsMissing naming the Secret, got %+v", cond)
+		}
+	})
+
+	t.Run("present Secret lets the restore proceed", func(t *testing.T) {
+		backup, rj := newBackup(), newRJ("rj-cred-ok")
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-app1-s3-creds"}}
+		c := newMongoDBStrategyTestClient(t, backup, rj, newTarget(), secret)
+		r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+		if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+			t.Fatalf("reconcileMongoDBRestore: %v", err)
+		}
+		persisted := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "rj-cred-ok"}, persisted); err != nil {
+			t.Fatalf("get restore job: %v", err)
+		}
+		if cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready"); cond != nil && cond.Reason == "RestoreCredentialsMissing" {
+			t.Errorf("an existing credentialsSecret must not be reported missing: %+v", cond)
+		}
+	})
+}
+
+// Opting out (useSystemBucket true→false) stops the injection but leaves the
+// driver's storage on the live cluster until the chart re-renders. A BackupJob
+// in that window must not mint a CR — it would carry no delete-backup finalizer
+// and write an object nothing owns into the platform bucket. The wait is named
+// and deadline-bounded like the others.
+func TestReconcileMongoDB_OptOutRefusesStalePlatformStorage(t *testing.T) {
+	setup := func(t *testing.T, startedAt time.Time) (*BackupJobReconciler, client.Client, *ResolvedBackupConfig, *backupsv1alpha1.BackupJob) {
+		job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+		app.Spec.Backup.UseSystemBucket = false // opted back out; the strategy still names cozy-backups
+		job.Status.StartedAt = &metav1.Time{Time: startedAt}
+		// Live cluster still carries the entry the driver injected.
+		cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+			"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+		}
+		c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
+		return &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}, c, resolved, job
+	}
+	countCRs := func(t *testing.T, c client.Client) int {
+		list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+		if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		return len(list.Items)
+	}
+
+	t.Run("within the deadline: no mint, named wait", func(t *testing.T) {
+		r, c, resolved, job := setup(t, time.Now())
+		res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+		if err != nil {
+			t.Fatalf("reconcileMongoDB: %v", err)
+		}
+		if res.RequeueAfter == 0 {
+			t.Fatalf("expected a waiting requeue while the platform storage lingers, got %+v", res)
+		}
+		if n := countCRs(t, c); n != 0 {
+			t.Errorf("no operator Backup must be minted onto the platform bucket with useSystemBucket=false, got %d", n)
+		}
+		persisted := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, persisted); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready")
+		if cond == nil || cond.Reason != "PerconaServerMongoDBStorageStale" {
+			t.Errorf("expected Ready=False PerconaServerMongoDBStorageStale, got %+v", cond)
+		}
+	})
+
+	t.Run("past the deadline: fails, still no mint", func(t *testing.T) {
+		r, c, resolved, job := setup(t, time.Now().Add(-2*psmdbDefaultBackupDeadline))
+		if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+			t.Fatalf("reconcileMongoDB: %v", err)
+		}
+		if n := countCRs(t, c); n != 0 {
+			t.Errorf("no operator Backup must be minted on the deadline failure either, got %d", n)
+		}
+		persisted := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, persisted); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		if persisted.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+			t.Errorf("expected the BackupJob to fail once the stale storage outlives the deadline, got phase=%q", persisted.Status.Phase)
+		}
+	})
 }

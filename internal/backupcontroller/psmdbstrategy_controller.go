@@ -328,6 +328,25 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBBackupsDisabled", msg)
 	}
 
+	// Opting out (useSystemBucket true→false) stops the injection but leaves the
+	// driver's storage entry on the live cluster until the chart re-renders. A
+	// BackupJob in that window passes the precondition (presence, not content),
+	// would mint a CR without the delete-backup finalizer, and the dump would land
+	// in the platform bucket as an object nothing owns or prunes. Refuse to mint
+	// onto a storage whose bucket is the platform's while the flag reads false;
+	// bounded by the deadline like the other waits.
+	if !useSystemBucket && rendered.S3 != nil {
+		if bucket, _ := psmdbStorageS3(cluster.Spec.Backup.Storages[storageName]); bucket != "" && bucket == rendered.S3.Bucket {
+			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+					"psmdb.percona.com/PerconaServerMongoDB %s/%s storage %q still points at the platform bucket %q with backup.useSystemBucket=false after %s; wait for the chart to re-render the application's own storage",
+					j.Namespace, psmdbName, storageName, bucket, psmdbDefaultBackupDeadline))
+			}
+			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageStale",
+				fmt.Sprintf("storage %q still points at the platform bucket %q with backup.useSystemBucket=false; waiting for the chart to re-render the application's own storage", storageName, bucket))
+		}
+	}
+
 	mdbBackup, err := r.ensureMongoDBBackup(ctx, j, psmdbName, storageName, rendered, useSystemBucket)
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure psmdb.percona.com/PerconaServerMongoDBBackup: %v", err))
@@ -395,22 +414,33 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 	default:
 		// Still in progress ("", requested, running, waiting).
 		if state == psmdbtypes.StateRunning {
-			// A dump that is streaming is never killed — failing it would strand a
-			// partial archive on the shared bucket, and this CR carries no signal to
-			// separate a slow dump from a wedged one: the pinned operator persists
-			// status only when the state string or error changes, so every pbm phase
-			// under `running` collapses to one write and status.lastTransition freezes
-			// at the instant the dump entered `running` (a real dataset routinely
-			// outruns any wall-clock window). So keep polling quietly and let the
-			// operator move the CR to ready/error; a genuinely wedged dump is an
-			// operator/cluster problem surfaced there, not something a driver-side
-			// timer can tell apart here.
-			return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
+			if !psmdbBackupTimedOut(state, j.Status.StartedAt, useSystemBucket) {
+				// The wait is long by nature (a real dataset routinely outruns any
+				// wall-clock window) and the CR carries nothing to tell a slow dump
+				// from a wedged one: the pinned operator persists status only when the
+				// state string or error changes, so status.lastTransition freezes at
+				// the instant the dump entered `running`. Name the wait on the
+				// BackupJob instead of judging it by a timer — Ready=False with the
+				// start time, so `kubectl describe backupjob` shows what it is waiting
+				// on — and let the operator move the CR to ready/error.
+				since := "an unknown start time"
+				if j.Status.StartedAt != nil {
+					since = j.Status.StartedAt.UTC().Format(time.RFC3339)
+				}
+				return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBBackupRunning",
+					fmt.Sprintf("psmdb.percona.com PerconaServerMongoDBBackup %s has been streaming since %s; a running dump is left to finish", mdbBackup.Name, since))
+			}
+			// Legacy flow past the deadline: the archive lands in the tenant's own
+			// bucket under psmdb task retention, so failing the job strands nothing
+			// the platform owns. The operator CR is left alone, as it was before this
+			// driver existed — only a not-started CR is ever cancelled below.
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+				"psmdb.percona.com PerconaServerMongoDBBackup did not complete within %s (state=running)", psmdbDefaultBackupDeadline))
 		}
 		// Not-yet-started states ("", requested, waiting). A wall-clock deadline
 		// fails a backup the operator never starts, so it cannot pin the BackupJob
 		// Running forever.
-		if !psmdbBackupTimedOut(state, j.Status.StartedAt) {
+		if !psmdbBackupTimedOut(state, j.Status.StartedAt, useSystemBucket) {
 			return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
 		}
 		// The deadline hit for a not-yet-started backup. mdbBackup came from the
@@ -463,14 +493,19 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 // waiting-for-precondition branches (cluster absent, backups disabled) that
 // share the same shape.
 func (r *BackupJobReconciler) requeueMongoDBBackupWaiting(ctx context.Context, j *backupsv1alpha1.BackupJob, reason, message string) (ctrl.Result, error) {
-	apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+	// Write only when the condition actually changes: a running dump polls
+	// through here every few seconds for as long as it streams, and rewriting an
+	// identical condition each time would be a status write per poll for hours.
+	changed := apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
 		Type:    "Ready",
 		Status:  metav1.ConditionFalse,
 		Reason:  reason,
 		Message: message,
 	})
-	if err := r.Status().Update(ctx, j); err != nil {
-		return ctrl.Result{}, err
+	if changed {
+		if err := r.Status().Update(ctx, j); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
 }
@@ -666,22 +701,25 @@ func psmdbBackupDeadlineExceeded(startedAt *metav1.Time) bool {
 }
 
 // psmdbBackupTimedOut reports whether an in-progress operator backup should be
-// failed on the wall-clock deadline. A dump the operator is actively writing
-// (state=running) is never timed out: pbm keeps streaming into the shared bucket
-// after the driver gives up, and the BackupJob's terminal-phase guard means the
-// artifact-creating branch never runs again — so failing a running dump would
-// strand an archive that no Backup object represents and no retention can reach
-// (the operator CR carries no ownerRef either). A real dataset routinely outruns
-// 30m, and a genuinely broken dump terminates through the operator's own
-// error/rejected state, so a running backup is left to finish. The deadline
-// still bounds the not-yet-`running` states ("", requested, waiting): a backup
-// the operator has not begun streaming. Those can still be advanced later — a
-// `waiting` backup runs when the slot frees, and `requested` is set as the
-// operator dispatches — so the caller cancels the operator CR when this trips,
-// rather than leaving it to run into the shared bucket after the BackupJob is
-// already Failed.
-func psmdbBackupTimedOut(state string, startedAt *metav1.Time) bool {
-	if state == psmdbtypes.StateRunning {
+// failed on the wall-clock deadline. On the useSystemBucket flow a backup that
+// has begun streaming (state=running) is exempt: pbm keeps writing into the
+// shared bucket after the driver gives up, and the BackupJob's terminal-phase
+// guard means the artifact-creating branch never runs again, so failing it
+// would strand an archive that no Backup object represents and no retention
+// can reach (the operator CR carries no ownerRef either). A real dataset
+// routinely outruns 30m, and a genuinely broken dump terminates through the
+// operator's own error/rejected state, so it is left to finish. On the legacy
+// flow the deadline applies to `running` too: the archive lands in the tenant's
+// own bucket under psmdb task retention, nothing the platform owns is stranded,
+// and the pre-existing contract failed the job on the deadline while leaving
+// the operator CR alone. The deadline bounds the not-yet-`running` states ("",
+// requested, waiting) on both flows: a backup the operator has not begun
+// streaming can still be advanced later — a `waiting` backup runs when the slot
+// frees, and `requested` is set as the operator dispatches — so the caller
+// cancels the operator CR when this trips, rather than leaving it to run into
+// the shared bucket after the BackupJob is already Failed.
+func psmdbBackupTimedOut(state string, startedAt *metav1.Time, useSystemBucket bool) bool {
+	if state == psmdbtypes.StateRunning && useSystemBucket {
 		return false
 	}
 	return psmdbBackupDeadlineExceeded(startedAt)
@@ -1155,7 +1193,15 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 	// Secret, so the Secret name is only a proxy, while the snapshot flag is what
 	// the backup actually ran on.
 	if pitr != nil {
-		snap, _ := unmarshalMongoDBBackupSnapshot(backup.Status.UnderlyingResources)
+		snap, serr := unmarshalMongoDBBackupSnapshot(backup.Status.UnderlyingResources)
+		if serr != nil {
+			// Flow unknown: refuse rather than fall open. resolveMongoDBBackupSource
+			// treats the same decode failure as fatal only on its snapshot-fallback
+			// path and returns from the live-CR path first, so this is the one check
+			// that still sees it while the operator CR is alive.
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+				"restoreJob.spec.options.recoveryTime is set, but the Backup snapshot cannot be decoded (%v), so the flow the backup was taken on is unknown; refusing point-in-time recovery rather than handing the operator a target it may not serve", serr))
+		}
 		if snap != nil && snap.UseSystemBucket {
 			return r.markRestoreJobFailed(ctx, restoreJob,
 				"restoreJob.spec.options.recoveryTime is set, but point-in-time recovery is not available for a backup taken on the useSystemBucket flow (no oplog is captured there); omit recoveryTime to restore the backup as taken. See docs/operations/backup-classes.md.")
@@ -1206,6 +1252,21 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 			logger.Debug("re-pointing MongoDB restore credentials at target cluster storage",
 				"restorejob", restoreJob.Name, "from", source.S3.CredentialsSecret, "to", cred)
 			source.S3.CredentialsSecret = cred
+		}
+		// The reference must resolve before the operator sees it. After an app opts
+		// into useSystemBucket the chart prunes the legacy <release>-s3-creds while
+		// older Backups still name it, and with no same-bucket target credential to
+		// adopt the restore would reach the operator naming a Secret that is gone
+		// and die on a pbm-level message. Check here and fail with a legible one.
+		if source.S3.CredentialsSecret != "" {
+			if err := r.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: source.S3.CredentialsSecret}, &corev1.Secret{}); err != nil {
+				if apierrors.IsNotFound(err) {
+					return r.markRestoreJobFailedReason(ctx, restoreJob, "RestoreCredentialsMissing", fmt.Sprintf(
+						"the backup was written to bucket %q with credentialsSecret %q, which does not exist in namespace %s (the chart prunes it when the application opts into useSystemBucket); re-create a Secret by that name holding credentials for that bucket, or restore into a target whose storage declares that bucket",
+						source.S3.Bucket, source.S3.CredentialsSecret, target.Namespace))
+				}
+				return ctrl.Result{}, err
+			}
 		}
 	}
 
@@ -1455,10 +1516,10 @@ type mongodbBackupSnapshot struct {
 
 func marshalMongoDBBackupSnapshot(mdbBackup *psmdbtypes.PerconaServerMongoDBBackup, rendered *strategyv1alpha1.MongoDBTemplate, storageName string, parameters map[string]string, useSystemBucket bool) (*runtime.RawExtension, error) {
 	snap := mongodbBackupSnapshot{
-		Kind:        psmdbBackupSnapshotKind,
-		APIVersion:  psmdbBackupSnapshotAPIVersion,
-		Destination: mdbBackup.Status.Destination,
-		Type:        psmdbBackupTypeOrDefault(rendered.Type),
+		Kind:            psmdbBackupSnapshotKind,
+		APIVersion:      psmdbBackupSnapshotAPIVersion,
+		Destination:     mdbBackup.Status.Destination,
+		Type:            psmdbBackupTypeOrDefault(rendered.Type),
 		StorageName:     storageName,
 		S3:              mdbBackup.Status.S3.DeepCopy(),
 		Parameters:      parameters,
