@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -37,6 +38,7 @@ var (
 	jwksURL                         string
 	saTokenPath                     string
 	saCACertPath                    string
+	brandingConfigPath              string
 )
 
 func init() {
@@ -51,6 +53,12 @@ func init() {
 	flag.StringVar(&jwksURL, "jwks-url", "https://kubernetes.default.svc/openid/v1/jwks", "JWKS URL for token verification")
 	flag.StringVar(&saTokenPath, "sa-token-path", "/var/run/secrets/kubernetes.io/serviceaccount/token", "Path to service account token")
 	flag.StringVar(&saCACertPath, "sa-ca-cert-path", "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", "Path to service account CA certificate")
+	// The dashboard branding lives in the cozy-dashboard-console-config
+	// ConfigMap, which the SPA reaches only through the authenticated kube-api.
+	// Mounting the same config.json here gives the pre-auth login page a source
+	// for the deployment's branding; an absent or unreadable file falls back to
+	// the unbranded page, so a cluster without branding renders as before.
+	flag.StringVar(&brandingConfigPath, "branding-config-path", "/etc/cozystack/branding/config.json", "Path to the dashboard branding config.json mounted from the console ConfigMap")
 }
 
 // newJWKCache builds the JWK cache used to verify Kubernetes-issued JWTs.
@@ -144,7 +152,7 @@ var loginTmpl = template.Must(template.New("login").Parse(`
 <html lang="en">
 <head>
 	<meta charset="UTF-8">
-	<title>Login</title>
+	<title>{{.Title}}</title>
 	<style>
 		body {
 			margin: 0;
@@ -162,6 +170,16 @@ var loginTmpl = template.Must(template.New("login").Parse(`
 			box-shadow: 0 4px 20px rgba(0,0,0,0.1);
 			width: 400px;
 			text-align: center;
+		}
+		.logo {
+			max-width: 220px;
+			max-height: 72px;
+			margin-bottom: 1rem;
+		}
+		.brand {
+			margin: 0 0 1rem;
+			font-size: 1.3rem;
+			color: #333;
 		}
 		h2 {
 			margin-bottom: 1rem;
@@ -203,6 +221,8 @@ var loginTmpl = template.Must(template.New("login").Parse(`
 </head>
 <body>
 	<div class="card">
+		{{if .LogoSrc}}<img class="logo" src="{{.LogoSrc}}" alt="{{.Title}}" />{{end}}
+		{{if .Heading}}<h1 class="brand">{{.Heading}}</h1>{{end}}
 		<h2>Kubernetes API Token</h2>
 		{{if .Err}}<p class="error">{{.Err}}</p>{{end}}
 		<form method="POST" action="{{.Action}}">
@@ -212,6 +232,75 @@ var loginTmpl = template.Must(template.New("login").Parse(`
 	</div>
 </body>
 </html>`))
+
+// brandingConfig mirrors the subset of the dashboard console config.json that
+// the login page can render. Its JSON tags match the keys the SPA reads from
+// the cozy-dashboard-console-config ConfigMap, so operators set branding once.
+type brandingConfig struct {
+	TitleText string `json:"titleText"`
+	LogoText  string `json:"logoText"`
+	LogoSvg   string `json:"logoSvg"`
+}
+
+// loadBranding reads the mounted branding config.json. Any failure yields the
+// zero value, which newLoginData turns into the historical unbranded page
+// rather than a hard error. It is called per request so a ConfigMap edit is
+// picked up without restarting the pod — the gatekeeper Deployment carries no
+// checksum/config annotation, unlike the console.
+func loadBranding(path string) brandingConfig {
+	var b brandingConfig
+	if path == "" {
+		return b
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// A missing file is the normal "no branding configured" case; anything
+		// else (a broken mount, permissions) is worth a line so it is visible.
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("branding: cannot read %s: %v", path, err)
+		}
+		return b
+	}
+	if err := json.Unmarshal(data, &b); err != nil {
+		log.Printf("branding: ignoring invalid %s: %v", path, err)
+	}
+	return b
+}
+
+// loginData is the template model for loginTmpl.
+type loginData struct {
+	Action  string
+	Err     string
+	Title   string
+	Heading string
+	// LogoSrc is an <img> data: URI. logoSvg is already base64-encoded in the
+	// console config.json — the SPA's Logo.tsx drops it straight after the same
+	// prefix — so it is only prefixed here, never re-encoded. It is typed
+	// template.URL because html/template rewrites a data: URI in a src
+	// attribute to #ZgotmplZ otherwise; serving the SVG through an <img> keeps
+	// any embedded script inert rather than inlining it into the page.
+	LogoSrc template.URL
+}
+
+// logoDataURIPrefix is the only scheme LogoSrc ever carries; because LogoSrc is
+// template.URL (URL filtering off), the single construction site below must be
+// the only thing that ever assigns it.
+const logoDataURIPrefix = "data:image/svg+xml;base64,"
+
+func newLoginData(action, errMsg, brandingPath string) loginData {
+	d := loginData{Action: action, Err: errMsg, Title: "Login"}
+	b := loadBranding(brandingPath)
+	if b.TitleText != "" {
+		d.Title = b.TitleText
+	}
+	if b.LogoText != "" {
+		d.Heading = b.LogoText
+	}
+	if b.LogoSvg != "" {
+		d.LogoSrc = template.URL(logoDataURIPrefix + b.LogoSvg)
+	}
+	return d
+}
 
 /* ----------------------------- JWK cache -------------------------------- */
 
@@ -385,17 +474,11 @@ func main() {
 	http.HandleFunc(signIn, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			_ = loginTmpl.Execute(w, struct {
-				Action string
-				Err    string
-			}{Action: signIn})
+			_ = loginTmpl.Execute(w, newLoginData(signIn, "", brandingConfigPath))
 		case http.MethodPost:
 			token := strings.TrimSpace(r.FormValue("token"))
 			if token == "" {
-				_ = loginTmpl.Execute(w, struct {
-					Action string
-					Err    string
-				}{Action: signIn, Err: "Token required"})
+				_ = loginTmpl.Execute(w, newLoginData(signIn, "Token required", brandingConfigPath))
 				return
 			}
 
@@ -407,10 +490,7 @@ func main() {
 				if errors.Is(err, errJWKSNotReady) {
 					msg = "Service is starting, please retry in a moment"
 				}
-				_ = loginTmpl.Execute(w, struct {
-					Action string
-					Err    string
-				}{Action: signIn, Err: msg})
+				_ = loginTmpl.Execute(w, newLoginData(signIn, msg, brandingConfigPath))
 				return
 			}
 
