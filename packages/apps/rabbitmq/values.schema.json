@@ -8,7 +8,7 @@
       "default": 3
     },
     "resources": {
-      "description": "Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied.",
+      "description": "Explicit CPU and memory configuration for each RabbitMQ replica. Every resource left unset here is taken from `resourcesPreset`.",
       "type": "object",
       "default": {},
       "properties": {
@@ -41,7 +41,7 @@
       }
     },
     "resourcesPreset": {
-      "description": "Default sizing preset used when `resources` is omitted.",
+      "description": "Default sizing preset. It supplies every resource `resources` does not set, not only a `resources` left empty entirely.",
       "type": "string",
       "default": "s1.nano",
       "enum": [

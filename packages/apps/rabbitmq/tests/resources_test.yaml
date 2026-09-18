@@ -57,3 +57,21 @@ tests:
       - equal:
           path: spec.resources.requests.memory
           value: "2147483648"
+
+  - it: fills the preset into every resource a partial resources map leaves unset
+    release:
+      name: rabbitmq-test
+      namespace: tenant-test
+    set:
+      resources:
+        cpu: 700m
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: 700m
+      - equal:
+          path: spec.resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.resources.requests.memory
+          value: "536870912"
