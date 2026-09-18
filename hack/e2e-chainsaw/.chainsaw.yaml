@@ -7,11 +7,10 @@ spec:
   # hack/e2e-install-cozystack.bats), matching the BATS suite. Chainsaw only
   # deletes namespaces it created itself, so tenant-test is safe.
   #
-  # Most of the backup round-trip Tests (the *-2-backup-roundtrip Tests, this
-  # one included) set `namespace: tenant-root`, overriding this per Test: their
-  # S3 client runs inside the tenant, and the e2e tenant-test tenant is created
-  # isolated, so its Cilium egress allowlist blocks its Pods from reaching
-  # tenant-root's seaweedfs.
+  # A Test whose S3 client runs inside the tenant sets `namespace: tenant-root`
+  # itself, overriding this: the e2e tenant-test tenant is created isolated, so
+  # its Cilium egress allowlist blocks its Pods from reaching tenant-root's
+  # seaweedfs.
   namespace:
     name: tenant-test
   # Run tests sequentially, matching the current BATS behavior. The bucket

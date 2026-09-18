@@ -33,6 +33,18 @@ kubectl -n "$NAMESPACE" wait bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_
 # carries the same name.
 kubectl -n "$NAMESPACE" wait bucketaccesses.objectstorage.k8s.io "bucket-${BUCKET_NAME}-backup" --for=jsonpath='{.status.accessGranted}'=true --timeout=300s
 
+# E2E only: accessGranted describes the COSI object, not whether the S3 server
+# has reloaded the new IAM identity, so a freshly granted key can still answer
+# the strategy Pod's SigV4 PUT with 403 - which reds the run as a backup defect
+# rather than the grant-propagation race it is. The shared preflight proves the
+# key works before anything depends on it; the other backup round-trips gate it
+# the same way.
+if [[ "${COZY_E2E_BACKUP_PREFLIGHT:-0}" == "1" ]]; then
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/../../../hack/e2e-chainsaw/_lib/backup-access-preflight.sh"
+    cozy_backup_access_preflight "$NAMESPACE" "bucket-${BUCKET_NAME}-backup" 90
+fi
+
 log_substep "Reading bucket coordinates from BucketInfo Secret..."
 TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT

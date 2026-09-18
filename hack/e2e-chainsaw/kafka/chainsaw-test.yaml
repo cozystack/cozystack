@@ -263,7 +263,7 @@ spec:
             -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="STRIMZI_KAFKA_IMAGES")].value}' \
             | tr '[:space:]' '\n' | grep -E '=.*/kafka:' | sed 's/.*=//' | tail -n1)
           [ -n "$KAFKA_IMAGE" ] || { echo "could not resolve Kafka image from strimzi-cluster-operator" >&2; exit 1; }
-          NAMESPACE="$NAMESPACE" KAFKA_IMAGE="$KAFKA_IMAGE" \
+          COZY_E2E_BACKUP_PREFLIGHT=1 NAMESPACE="$NAMESPACE" KAFKA_IMAGE="$KAFKA_IMAGE" \
             S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
             examples/backups/kafka/run-all.sh
         check:

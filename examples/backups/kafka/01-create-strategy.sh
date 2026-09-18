@@ -191,6 +191,28 @@ spec:
                   # produced while the backup runs.
                   ends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\${t}" --time -1)
                   begins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\${t}" --time -2)
+                  # The partition SET is not self-validating: kafka-get-offsets
+                  # prints only the partitions whose lookup succeeded. GetOffsetShell
+                  # logs a per-partition KafkaException to stderr, skips that
+                  # partition and still exits 0, so a partition lost to a leader
+                  # election would get no manifest line, no data file, and never
+                  # reach the drain check below - a whole partition missing from a
+                  # backup that still reports Succeeded. Re-derive the count from
+                  # the topic itself and fail closed when the listing is short.
+                  # (A short "begins" needs no separate check: its per-partition
+                  # default of 0 can only overstate n, which the drain check then
+                  # catches.)
+                  pc=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --describe --topic "\${t}" \
+                    | sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' | head -1)
+                  case "\${pc}" in
+                    ''|*[!0-9]*) echo "could not read PartitionCount for \${t}" >&2; exit 1 ;;
+                  esac
+                  seen=0
+                  for e in \${ends}; do seen=\$((seen + 1)); done
+                  if [ "\${seen}" -ne "\${pc}" ]; then
+                    echo "offset listing returned \${seen} of \${pc} partition(s) for \${t}; refusing to upload an incomplete backup" >&2
+                    exit 1
+                  fi
                   for e in \${ends}; do
                     p=\${e%:*}; p=\${p##*:}
                     end=\${e##*:}
