@@ -176,7 +176,7 @@ tests:
             repeatInterval: "tomorrow"
     asserts:
       - failedTemplate:
-          errorMessage: 'alerta.alerts.email.repeatInterval must be a duration such as 30s, 5m or 12h, got "tomorrow"'
+          errorMessage: 'alerta.alerts.email.repeatInterval must be an Alertmanager duration with units in descending order, each at most once, such as 30s, 5m, 12h or 1h30m, got "tomorrow"'
 
   - it: quotes a custom repeatInterval so a stray value cannot break out of the config
     set:
@@ -290,3 +290,166 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+  - it: accepts a bracketed IPv6 smarthost
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "[2001:db8::25]:587"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    smarthost: "\[2001:db8::25\]:587"\n'
+
+  - it: fails the render when smarthost has no port
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got "smtp.example.org"'
+
+  - it: fails the render when the smarthost port is zero
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:0"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.smarthost port must be between 1 and 65535, got "smtp.example.org:0"'
+
+  - it: fails the render when the smarthost port is above 65535
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:70000"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.smarthost port must be between 1 and 65535, got "smtp.example.org:70000"'
+
+  - it: fails the render when smarthost carries a scheme or path
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp://smtp.example.org:465/"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got "smtp://smtp.example.org:465/"'
+
+  - it: fails the render when repeatInterval lists its units out of order
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "30s5m"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval must be an Alertmanager duration with units in descending order, each at most once, such as 30s, 5m, 12h or 1h30m, got "30s5m"'
+
+  - it: fails the render when repeatInterval repeats a unit
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "5m5m"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval must be an Alertmanager duration with units in descending order, each at most once, such as 30s, 5m, 12h or 1h30m, got "5m5m"'
+
+  - it: fails the render when repeatInterval is zero
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "0s"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval cannot be zero, got "0s"'
+
+  - it: fails the render when repeatInterval overflows what Alertmanager accepts
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "999y"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval is out of range for Alertmanager, got "999y"'
+
+  - it: fails the render one year past the Alertmanager duration limit
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "293y"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval is out of range for Alertmanager, got "293y"'
+
+  - it: accepts the longest repeatInterval Alertmanager accepts
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "292y"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    repeat_interval: "292y"\n'
+
+  - it: accepts a repeatInterval with every unit in order
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "1y2w3d4h5m6s7ms"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    repeat_interval: "1y2w3d4h5m6s7ms"\n'
+

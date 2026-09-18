@@ -15,8 +15,30 @@
 {{- if not (and $email.to $email.smarthost $email.from) }}
 {{- fail "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts" }}
 {{- end }}
-{{- if and $email.repeatInterval (not (regexMatch "^([0-9]+(ms|[smhdwy]))+$" (toString $email.repeatInterval))) }}
-{{- fail (printf "alerta.alerts.email.repeatInterval must be a duration such as 30s, 5m or 12h, got %q" (toString $email.repeatInterval)) }}
+{{- $smarthost := toString $email.smarthost }}
+{{- if not (regexMatch "^(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*):[0-9]{1,5}$" $smarthost) }}
+{{- fail (printf "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got %q" $smarthost) }}
+{{- end }}
+{{- $smtpPort := regexReplaceAll "^.*:" $smarthost "" | int }}
+{{- if or (lt $smtpPort 1) (gt $smtpPort 65535) }}
+{{- fail (printf "alerta.alerts.email.smarthost port must be between 1 and 65535, got %q" $smarthost) }}
+{{- end }}
+{{- if $email.repeatInterval }}
+{{- $repeat := toString $email.repeatInterval }}
+{{- if not (regexMatch "^([0-9]{1,8}y)?([0-9]{1,8}w)?([0-9]{1,8}d)?([0-9]{1,8}h)?([0-9]{1,8}m)?([0-9]{1,8}s)?([0-9]{1,8}ms)?$" $repeat) }}
+{{- fail (printf "alerta.alerts.email.repeatInterval must be an Alertmanager duration with units in descending order, each at most once, such as 30s, 5m, 12h or 1h30m, got %q" $repeat) }}
+{{- end }}
+{{- $repeatMs := int64 0 }}
+{{- $unitMs := dict "y" 31536000000 "w" 604800000 "d" 86400000 "h" 3600000 "m" 60000 "s" 1000 "ms" 1 }}
+{{- range $part := regexFindAll "[0-9]+(ms|[ywdhms])" $repeat -1 }}
+{{- $repeatMs = add $repeatMs (mul (int64 (regexReplaceAll "[a-z]+$" $part "")) (index $unitMs (regexReplaceAll "^[0-9]+" $part ""))) }}
+{{- end }}
+{{- if eq (int64 $repeatMs) (int64 0) }}
+{{- fail (printf "alerta.alerts.email.repeatInterval cannot be zero, got %q" $repeat) }}
+{{- end }}
+{{- if gt (int64 $repeatMs) (int64 9223372036854) }}
+{{- fail (printf "alerta.alerts.email.repeatInterval is out of range for Alertmanager, got %q" $repeat) }}
+{{- end }}
 {{- end }}
 {{- range $name := $emailAlertnames }}
 {{- if not (regexMatch "^[a-zA-Z_:][a-zA-Z0-9_:]*$" (toString $name)) }}
