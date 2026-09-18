@@ -72,10 +72,13 @@ update:
 	@# for, and their absence cannot surface as a value that stopped taking
 	@# effect — the CR simply goes back to deploying virt-template, to letting
 	@# KubeVirt skip NAD resource injection, and to image volumes an apiserver
-	@# below 1.35 discards. The device/CPU payload lines remain outside these
-	@# checks; migrations validates its complete block below. `make update` cannot
-	@# repair a partial block — the directive guard is what stops the insert — so
-	@# name the missing marker and let the operator restore it.
+	@# below 1.35 discards. Every other payload line stays outside these checks:
+	@# the device tables, the cpuAllocationRatio value, and the extraFeatureGates
+	@# entry, whose deletion leaves `make update` exiting 0 with the range wrapped
+	@# around nothing. migrations is the one block validated whole, below.
+	@# `make update` cannot repair a partial block — the directive guard is what
+	@# stops the insert — so name the missing marker and let the operator restore
+	@# it.
 	@grep -q '{{- if .Values.cpuAllocationRatio }}' $(CR_FILE) || { echo "ERROR: directive '{{- if .Values.cpuAllocationRatio }}' not inserted — restore the 'developerConfiguration:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
 	@grep -q '{{- range .Values.extraFeatureGates }}' $(CR_FILE) || { echo "ERROR: directive '{{- range .Values.extraFeatureGates }}' not inserted — restore the '- VMExport' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
 	@grep -q '{{- range .Values.disabledFeatureGates }}' $(CR_FILE) || { echo "ERROR: directive '{{- range .Values.disabledFeatureGates }}' not inserted — restore the 'featureGates:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
