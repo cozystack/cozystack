@@ -45,13 +45,20 @@ spec:
   # Every catch script below carries an explicit `timeout:`. A Chainsaw script
   # op is bounded by `timeouts.exec` (5m above) unless it overrides it, and the
   # inner wall-clock budgets here sum well past that — so without the override
-  # Chainsaw SIGKILLs the whole script partway through and the catch reports
-  # `SCRIPT | ERROR | signal: killed` having collected nothing. That kill is
-  # strictly worse than an inner `timeout` firing: SIGKILL takes out the process
-  # group, so the collector dies mid-write AND every later step in the script is
-  # skipped, whereas an inner `timeout` leaves a partial capture on disk and
-  # lets the remaining steps run. Keep each op's `timeout:` above the sum of the
-  # inner budgets it contains.
+  # the op ceiling fires and the catch reports `SCRIPT | ERROR | signal: killed`
+  # having collected little. That kill is strictly worse than an inner `timeout`
+  # firing, and worse in a way the process tree makes precise: the ceiling
+  # SIGKILLs the shell process alone — Chainsaw runs it under exec.CommandContext
+  # whose default cancel is Process.Kill() on the shell PID, not a process-group
+  # kill — so every later step in the script is skipped, but any collector the
+  # shell already spawned is orphaned rather than killed and keeps running. It
+  # also keeps the script's stdout/stderr pipe open, and cmd.Wait() does not
+  # return until that pipe closes, so the op does not even come back at its
+  # ceiling until the orphan exits on its own (#4268). An inner `timeout` instead
+  # kills that read at a known budget, exits 124, leaves a partial capture on
+  # disk and lets the remaining steps run — which is why every read below is
+  # itself wrapped in `timeout`, not left to the op ceiling. Keep each op's
+  # `timeout:` above the sum of the inner budgets it contains.
   #
   # Accepted tradeoff, so the arithmetic does not have to be rediscovered: this
   # raises the worst-case catch from ~5m per failed test (the old SIGKILL was the
