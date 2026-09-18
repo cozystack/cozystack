@@ -1015,7 +1015,7 @@ func TestCreateCNPGBackupArtifact_AlreadyExistsReturnsExisting(t *testing.T) {
 // would be rejected by the API server for missing required Cluster fields.
 func TestApplyClusterPluginBackup_NotFoundOnMissingCluster(t *testing.T) {
 	c := newCNPGStrategyTestClient(t)
-	r := &BackupJobReconciler{Client: c}
+	r := &BackupJobReconciler{Client: c, Interface: cnpgDynamicFor(t)}
 	tmpl := &strategyv1alpha1.CNPGTemplate{
 		BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{
 			DestinationPath: "s3://bucket/x/",
@@ -1637,6 +1637,90 @@ func TestRecoveryTargetUnreachable_ClassifiesFromLogs(t *testing.T) {
 
 // testCNPGScheme returns a runtime.Scheme that knows the unstructured
 // HelmRelease GVK used by the dynamic-client tests above.
+// TestApplyClusterPluginBackup_ReadsTheLiveClusterNotTheCache pins the read
+// that decides the WAL-archive prefix.
+//
+// An in-place RestoreJob deletes the Cluster and the chart re-renders it with
+// bootstrap.newServerName seconds later. This controller watches BackupJob and
+// nothing else, so a Cluster only reaches the manager's cache through a lazily
+// started informer, and a read served from it during that window describes the
+// object that was purged. Preserving the serverName it carries puts the
+// restored cluster back on the source's WAL prefix, and
+// barman-cloud-check-wal-archive then refuses to start with "Expected empty
+// archive" — the failure newServerName exists to prevent. The stale UID is the
+// same wound: it owns the ObjectStore to a Cluster that no longer exists, so it
+// is garbage-collected as soon as it is written.
+//
+// The two clients below disagree the way they disagree in that window. The
+// assertion is that the driver believes the live one.
+func TestApplyClusterPluginBackup_ReadsTheLiveClusterNotTheCache(t *testing.T) {
+	archiver := true
+	purged := &cnpgtypes.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app", UID: "uid-before-restore"},
+	}
+	purged.Spec.Plugins = []cnpgtypes.PluginConfiguration{{
+		Name:          cnpgtypes.PluginName,
+		IsWALArchiver: &archiver,
+		Parameters:    map[string]string{barmanObjectNameParam: "postgres-app", barmanServerNameParam: "postgres-app"},
+	}}
+
+	rebootstrapped := purged.DeepCopy()
+	rebootstrapped.UID = "uid-after-restore"
+	rebootstrapped.Spec.Plugins[0].Parameters[barmanServerNameParam] = "postgres-app-restore-0123456789abcdef"
+
+	c := newCNPGStrategyTestClient(t, purged)
+	r := &BackupJobReconciler{Client: c, Interface: cnpgDynamicFor(t, rebootstrapped)}
+	tmpl := &strategyv1alpha1.CNPGTemplate{
+		BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
+	}
+
+	got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "postgres-app-restore-0123456789abcdef"; got != want {
+		t.Fatalf("effective serverName = %q, want %q: the restored cluster would archive onto the source's prefix", got, want)
+	}
+
+	store := &cnpgtypes.ObjectStore{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "postgres-app"}, store); err != nil {
+		t.Fatalf("get ObjectStore after apply: %v", err)
+	}
+	owners := store.GetOwnerReferences()
+	if len(owners) != 1 {
+		t.Fatalf("ObjectStore owner references = %v, want exactly the live Cluster", owners)
+	}
+	if got := string(owners[0].UID); got != "uid-after-restore" {
+		t.Fatalf("ObjectStore owned by UID %q, want the live Cluster's: it would be garbage-collected immediately", got)
+	}
+}
+
+// cnpgDynamicFor builds the dynamic client applyClusterPluginBackup reads
+// Clusters through. Tests that exercise it have to seed both this and the typed
+// client, which is the point: the two can disagree, and the driver is required
+// to believe this one.
+func cnpgDynamicFor(t *testing.T, clusters ...*cnpgtypes.Cluster) dynamic.Interface {
+	t.Helper()
+	s := runtime.NewScheme()
+	s.AddKnownTypeWithName(cnpgtypes.GroupVersion.WithKind("Cluster"), &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(cnpgtypes.GroupVersion.WithKind("ClusterList"), &unstructured.UnstructuredList{})
+	s.AddKnownTypeWithName(cnpgtypes.BarmanGroupVersion.WithKind("ObjectStore"), &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(cnpgtypes.BarmanGroupVersion.WithKind("ObjectStoreList"), &unstructured.UnstructuredList{})
+
+	objs := make([]runtime.Object, 0, len(clusters))
+	for _, c := range clusters {
+		raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(c)
+		if err != nil {
+			t.Fatalf("converting Cluster %s: %v", c.Name, err)
+		}
+		u := &unstructured.Unstructured{Object: raw}
+		u.SetAPIVersion(cnpgtypes.GroupVersion.String())
+		u.SetKind("Cluster")
+		objs = append(objs, u)
+	}
+	return dynamicfake.NewSimpleDynamicClient(s, objs...)
+}
+
 func testCNPGScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
@@ -1693,7 +1777,7 @@ func TestApplyClusterPluginBackup_PreservesLiveServerName(t *testing.T) {
 			}
 			cluster.Spec.Plugins = tc.plugins
 			c := newCNPGStrategyTestClient(t, cluster)
-			r := &BackupJobReconciler{Client: c}
+			r := &BackupJobReconciler{Client: c, Interface: cnpgDynamicFor(t, cluster)}
 			tmpl := &strategyv1alpha1.CNPGTemplate{
 				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
 			}
@@ -1729,7 +1813,7 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app", UID: "cluster-uid-123"},
 	}
 	c := newCNPGStrategyTestClient(t, cluster)
-	r := &BackupJobReconciler{Client: c}
+	r := &BackupJobReconciler{Client: c, Interface: cnpgDynamicFor(t, cluster)}
 	tmpl := &strategyv1alpha1.CNPGTemplate{
 		BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{
 			DestinationPath: "s3://bucket/x/",
