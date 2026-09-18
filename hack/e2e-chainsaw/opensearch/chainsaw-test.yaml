@@ -46,6 +46,16 @@ spec:
   - podLogs:
       selector: opster.io/opensearch-cluster=opensearch-test
       tail: 100
+  # The operator itself, which runs outside the test namespace. The leg above
+  # takes the cluster's own pods, and cozyreport's per-pod walk keeps a pod only
+  # when it is not Running, or Running with an unready container -- a stalled
+  # operator is Running and Ready and simply stops reconciling, so neither
+  # collects it. Without this leg its report lands only in the crust-gather host
+  # snapshot, which is a whole-cluster archive to download and unpack.
+  - podLogs:
+      namespace: cozy-opensearch-operator
+      selector: control-plane=controller-manager
+      tail: 100
   # The external Service is a LoadBalancer, so an address pool with nothing left
   # in it holds the HelmRelease short of Ready with nothing in the HelmRelease
   # itself naming the cause.

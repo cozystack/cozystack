@@ -25,6 +25,18 @@
 # upstream as opensearch-project/opensearch-k8s-operator#1585, fixed by #1586;
 # drop it on the first release carrying that.
 #
+# patches/trace-stalled-component-reconcilers.diff names the component a
+# reconcile is stuck in. The cluster controller runs nine component reconcilers
+# in sequence and none of them logs unconditionally when it is entered, so a
+# call that never returns leaves the operator log ending on whatever ran before
+# it, and an object that is silently no longer reconciled. Twice in e2e the
+# operator went quiet at the moment the chart rewrote the CR and reconciled
+# nothing for the rest of the test, with no line saying where it was:
+# https://github.com/cozystack/cozystack/issues/4332. The watchdog writes
+# nothing while a component behaves, so it costs nothing on a healthy cluster.
+# It reports rather than repairs: drop it once the stall itself is understood
+# and fixed.
+#
 # The patches are applied in the order the glob expands, which is alphabetical,
 # and skip-unusable-drain-exclusion builds on restart-on-permanently-yellow. A
 # rename that reorders them fails the build rather than producing a wrong binary.
