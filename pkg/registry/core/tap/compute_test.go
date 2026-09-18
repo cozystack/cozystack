@@ -160,6 +160,55 @@ func TestBuildTapReflectsMissingRegistration(t *testing.T) {
 	}
 }
 
+// TestBuildTapOfficialSourceStaysReady: the Tap list also carries official
+// (non-tap) PackageSources whose default variant installs a system component with
+// no user-facing ApplicationDefinition (e.g. cozystack.reloader). Their catalog is
+// empty by design, and the truthful-status override must NOT flip them to
+// not-ready — only tap-managed (Community) sources are subject to it.
+func TestBuildTapOfficialSourceStaysReady(t *testing.T) {
+	ps := cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack.reloader"}, // NO tap label
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			Variants: []cozyv1alpha1.Variant{{Name: "default", Components: []cozyv1alpha1.Component{
+				{Name: "reloader", Path: "system/reloader", Install: &cozyv1alpha1.ComponentInstall{Namespace: "cozy-system"}},
+			}}},
+		},
+		Status: cozyv1alpha1.PackageSourceStatus{Conditions: []metav1.Condition{
+			{Type: "Ready", Status: metav1.ConditionTrue, Message: "reconciliation succeeded"},
+		}},
+	}
+	tap := buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{}, true)
+	if tap.Spec.Community {
+		t.Fatal("an official source must not be flagged Community")
+	}
+	if !tap.Spec.Ready || tap.Spec.Message != "reconciliation succeeded" {
+		t.Errorf("an official source's Ready must be preserved, got %+v", tap.Spec)
+	}
+}
+
+// TestBuildTapNoDefaultVariantSurfacesReason: a tapped repo with no "default"
+// variant carries the operator's recorded skip reason, which the Tap must surface
+// even though defaultVariantHasComponents is false.
+func TestBuildTapNoDefaultVariantSurfacesReason(t *testing.T) {
+	ps := cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "demo.only-full",
+			Labels:      map[string]string{tapconst.Label: "true"},
+			Annotations: map[string]string{tapconst.RegistrationStateAnnotation: `not auto-registered: it declares no "default" variant`},
+		},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			Variants: []cozyv1alpha1.Variant{{Name: "full", Components: []cozyv1alpha1.Component{{Name: "x", Path: "apps/x"}}}},
+		},
+		Status: cozyv1alpha1.PackageSourceStatus{Conditions: []metav1.Condition{
+			{Type: "Ready", Status: metav1.ConditionTrue, Message: "reconciliation succeeded"},
+		}},
+	}
+	tap := buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{}, true)
+	if tap.Spec.Ready || tap.Spec.Message != `not auto-registered: it declares no "default" variant` {
+		t.Errorf("a no-default tap must surface its recorded reason, got %+v", tap.Spec)
+	}
+}
+
 // TestBuildTapEmptyDefaultVariantStaysReady: a repo whose default variant declares
 // no components registers nothing; that empty catalog is correct, not a drift.
 func TestBuildTapEmptyDefaultVariantStaysReady(t *testing.T) {

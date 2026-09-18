@@ -178,22 +178,27 @@ func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.Applica
 		return tap.Spec.Packages[i].Name < tap.Spec.Packages[j].Name
 	})
 
-	// Report registration truthfully: the PackageSource can be Ready while its
-	// registration Package was removed out-of-band (or has not materialized yet),
-	// leaving the catalog empty, so the PackageSource's own Ready condition is not
-	// the truth the dashboard needs. Only override when we are sure it is wrong:
-	//   - the index is authoritative (an ApplicationDefinition list that failed
-	//     would look empty and must not flip a healthy tap to not-ready);
-	//   - the DEFAULT variant (the one auto-registration installs) declares
-	//     components, so applications are actually expected (a repo whose default
-	//     variant is empty registers nothing, and that empty catalog is correct).
-	if idxAuthoritative && len(tap.Spec.Packages) == 0 && defaultVariantHasComponents(ps) {
-		tap.Spec.Ready = false
-		if reason := ps.GetAnnotations()[tapconst.RegistrationStateAnnotation]; reason != "" {
+	// Report registration truthfully: a tap's registration Package can be removed
+	// out-of-band (or not materialized yet), leaving the catalog empty while the
+	// PackageSource itself is Ready. Scope this strictly to TAP-managed sources
+	// (Community): the Tap list also carries official platform PackageSources
+	// (e.g. cozystack.reloader) whose default variant installs a system component
+	// with no user-facing ApplicationDefinition, so their catalog is empty by
+	// design and their PackageSource Ready is the truth.
+	if tap.Spec.Community && len(tap.Spec.Packages) == 0 {
+		switch reason := ps.GetAnnotations()[tapconst.RegistrationStateAnnotation]; {
+		case reason != "":
+			// The operator recorded why it did not register (no default variant,
+			// privileged, or a de-register); surface it whatever the variant shape.
+			tap.Spec.Ready = false
 			tap.Spec.Message = reason
-		} else {
-			// Do not promise a re-tap fixes it: a deleted registration is recovered
-			// by a re-tap, but a failing registration chart is not; check the source.
+		case idxAuthoritative && defaultVariantHasComponents(ps):
+			// Apps were expected (the default variant declares components) but the
+			// catalog is empty, and the ApplicationDefinition list is authoritative
+			// (a failed list looks empty and must not flip a healthy tap). This is a
+			// registration removed out-of-band, or a still-materializing tap. Do not
+			// promise a re-tap fixes it (a failing chart is not); point at the source.
+			tap.Spec.Ready = false
 			tap.Spec.Message = "the repository's applications are not registered; check the source's events"
 		}
 	}
