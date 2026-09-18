@@ -374,9 +374,21 @@ type BackupStatus struct {
 
     * List backups for a given application/plan.
     * Anchor `RestoreJob` operations.
-    * Implement higher-level policies (retention) if needed.
+    * Implement higher-level retention policies — see §4.6.
 
 **Note:** Parameters are resolved from `BackupClass` when the `BackupJob` is created. The driver uses these parameters to determine where to store backups. The storage location itself is managed by the driver (e.g., Velero's `BackupStorageLocation` CRD) and is not directly referenced in the `Backup` resource. When restoring, the driver resolves the storage location from the original `BackupClass` parameters or from the driver's own metadata.
+
+**Backup cleanup**
+
+Cozystack owns the lifecycle of a `Backup` artifact end to end. The platform is the single authority that decides when a backup is removed, and it MUST NOT delegate that decision to any mechanism controlled by the application's own operator — not a TTL, not a retention window, not an object-store lifecycle rule (CNPG `Cluster.spec.backup.retentionPolicy`, MariaDB `maxRetention`, and the like are left unset). Retention is expressed only through `BackupRetentionPolicy` (§4.6) and enforced only by the core sweep, so an operator upgrade or a changed operator default can never silently expire, keep, or resurrect a backup the platform still accounts for.
+
+Deletion is driven through the `Backup` object: removing it fires the `backups.cozystack.io/cleanup` finalizer, and the strategy driver reclaims both the record and the physical archive on the platform's behalf.
+
+Every strategy driver MUST honor this contract:
+
+1. **Platform-owned, single authority.** The application operator's native retention MUST be unset; the core retention sweep is the only mechanism that deletes backup artifacts, so the operator and the platform never race over the same archive.
+2. **Idempotency and finalizer-hold.** The `backups.cozystack.io/cleanup` finalizer holds the `Backup` until the driver confirms the archive is gone; a retried or duplicated deletion of the same backup is a no-op.
+3. **Serialization.** Physical deletion for a server MUST NOT run concurrently with an in-flight backup or WAL archiving for that same server.
 
 ---
 
@@ -447,6 +459,162 @@ Drivers must not modify `RestoreJob.spec` or delete `RestoreJob`.
 
 ---
 
+### 4.6 BackupRetentionPolicy
+
+**Group/Kind**
+`backups.cozystack.io/v1alpha1, Kind=BackupRetentionPolicy` (namespaced)
+
+**Purpose**
+Cap how many `Backup` artifacts survive for an application and for how long — the higher-level retention earmarked in §4.4. A policy is a named set of rules; membership is decided by a label on `Backup`, not by a selector.
+
+**Key fields (spec)**
+
+```go
+type BackupRetentionPolicySpec struct {
+    // Never delete below this many newest Ready backups; overrides MaxAge. Defaults to 1.
+    MinCount int32 `json:"minCount"`
+    // Keep at most this many newest Ready backups. Unset means unbounded.
+    MaxCount *int32 `json:"maxCount,omitempty"`
+    // Delete backups older than this, by spec.takenAt, bounded by MinCount.
+    // Suffix h/d/w (e.g. "7d", "90d"); metav1.Duration is not used because it stops at hours.
+    MaxAge string `json:"maxAge,omitempty"`
+}
+```
+
+There is intentionally no selector: a `Backup` carries exactly one policy name in a label — a scalar — so it is never claimed by two policies at once.
+
+**Use cases**
+
+The three knobs are orthogonal, and picking the right one starts from the intent:
+
+* `minCount` is a floor — "keep at least N newest, whatever their age". It guarantees a minimum but sets no ceiling: with many young backups it keeps them all. Example: a fresh backup plus a six-month-old manual one under `minCount: 2, maxAge: 30d` — the old one survives because it is among the two newest, even though it is past `maxAge`.
+* `maxAge` is a TTL — the natural knob for regular scheduled backups, expressing a recovery window in time.
+* `maxCount` is a ceiling — "keep at most N". It is the only knob that bounds the object count (and therefore storage cost) independently of schedule frequency, which matters in three situations `minCount`/`maxAge` cannot cover: an unbounded S3 footprint under a frequent cron, a burst of ad-hoc backups before a migration, and a misconfigured "every minute" schedule. In all three the backups are still young, so `maxAge` does not fire and only a count ceiling trims them.
+
+`minCount` cannot substitute for `maxCount`: a floor never trims a large set of young backups.
+
+| State | `minCount=2, maxAge=30d` | `maxCount=5` |
+|---|---|---|
+| 2 backups (fresh + 180d) | both kept | both kept |
+| 20 young backups (<30d, burst or frequent cron) | all 20 kept | 5 kept |
+
+**Recovery-window caveat.** On a continuous-archiving driver `maxCount` indirectly bounds the recovery window: under an hourly `Plan`, `maxCount: 3` collapses PITR to roughly three hours, because dropping the oldest base backups drops the WALs they anchored. This is intuitive for `maxAge` but surprising for `maxCount` at high frequency — surface the effective window rather than only the count.
+
+**Binding fields**
+
+A `Backup` joins a policy through the `backups.cozystack.io/retention-policy` label, stamped by the core controller when the `Backup` is created. One new optional field, `retentionPolicyName`, feeds it on `Plan`, `BackupJob`, and `BackupClass`, capped at 63 characters because the value lands in a DNS-1123 label:
+
+```go
+// Plan.spec, BackupJob.spec, and BackupClass.spec (BackupClass as the namespace default).
+RetentionPolicyName string `json:"retentionPolicyName,omitempty"`
+```
+
+Resolution when a `Backup` is created, highest precedence first: `BackupJob.spec.retentionPolicyName` (or `Plan.spec.retentionPolicyName`, inherited onto the BackupJob), then `BackupClass.spec.retentionPolicyName`, then none — a `Backup` with no label is never swept.
+
+**Retention semantics**
+
+For a policy `P` in namespace `N`:
+
+1. List `Backup` in `N` labeled `retention-policy=P.name`; keep only `status.phase == Ready`. `Failed`/`Pending` backups never consume the floor and are pruned only by `MaxAge`.
+2. Sort by `spec.takenAt` descending.
+3. Protect the newest `MinCount` unconditionally.
+4. From the rest, delete a backup when its index `>= MaxCount` **or** `now - takenAt > MaxAge`. `MinCount` always wins over `MaxAge`.
+5. Delete via the `Backup` object; the `backups.cozystack.io/cleanup` finalizer runs the driver's cleanup path.
+
+The sweep is an idempotent set difference — safe to run on every reconcile and on `Backup` create/delete/label events.
+
+**Namespace-local matching**
+
+Both `Backup` and `BackupRetentionPolicy` are namespaced, and matching is scoped to the policy's own namespace. A policy named `default` in one namespace and one so named in another are distinct objects governing disjoint backup sets, so identical names never collide. A name identifies a policy only within a namespace, which suffices because a `Backup` and its policy always share one.
+
+**Migration between policies**
+
+Moving artifacts to another policy is a label change, with no `Plan` edit:
+
+```bash
+kubectl label backup -n tenant-acme \
+  -l backups.cozystack.io/retention-policy=default \
+  backups.cozystack.io/retention-policy=keep-90d --overwrite
+```
+
+Changing `retentionPolicyName` on a `Plan` moves only future backups; existing ones stay until relabeled. Relabeling onto a stricter policy may delete artifacts on the next sweep; onto a laxer one, it spares them.
+
+**Examples**
+
+Platform default, shipped per tenant namespace and wired as the BackupClass default:
+
+```yaml
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupRetentionPolicy
+metadata:
+  name: default
+  namespace: tenant-acme
+spec:
+  minCount: 3
+  maxAge: 7d
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupClass
+metadata:
+  name: cozy-default        # cluster-scoped platform BackupClass
+spec:
+  retentionPolicyName: default
+  strategies:
+    - application: { apiGroup: apps.cozystack.io, kind: Postgres }
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: CNPG
+        name: cozy-default-cnpg
+```
+
+A tenant creating one policy and using it from both a scheduled `Plan` and an ad-hoc `BackupJob`:
+
+```yaml
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupRetentionPolicy
+metadata: { name: keep-90d, namespace: tenant-acme }
+spec:
+  minCount: 5
+  maxCount: 60
+  maxAge: 90d
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: Plan
+metadata: { name: pg-src-daily, namespace: tenant-acme }
+spec:
+  applicationRef: { apiGroup: apps.cozystack.io, kind: Postgres, name: pg-src }
+  backupClassName: cozy-default
+  schedule: { type: cron, cron: "0 */6 * * *" }
+  retentionPolicyName: keep-90d          # overrides BackupClass default
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata: { name: pg-src-adhoc, namespace: tenant-acme }
+spec:
+  applicationRef: { apiGroup: apps.cozystack.io, kind: Postgres, name: pg-src }
+  backupClassName: cozy-default
+  retentionPolicyName: keep-90d          # same policy for an ad-hoc run
+```
+
+The resulting `Backup`, with the label stamped by the controller:
+
+```yaml
+apiVersion: backups.cozystack.io/v1alpha1
+kind: Backup
+metadata:
+  name: pg-src-20260910-1040
+  namespace: tenant-acme
+  labels:
+    backups.cozystack.io/retention-policy: keep-90d
+spec:
+  applicationRef: { apiGroup: apps.cozystack.io, kind: Postgres, name: pg-src }
+  planRef: { name: pg-src-daily }
+  strategyRef: { apiGroup: strategy.backups.cozystack.io, kind: CNPG, name: cozy-default-cnpg }
+  takenAt: "2026-09-10T10:40:00Z"
+```
+
+---
+
 ## 5. Strategy drivers (high-level)
 
 Strategy drivers are separate controllers that:
@@ -491,5 +659,6 @@ The Cozystack backups core API:
   * **Execution** (BackupJob) – created by Plan when schedule fires, resolves BackupClass to get strategy and parameters, then delegates to driver.
   * **What backup artifacts exist** (Backup) – driver-created but cluster-visible.
   * **Restore lifecycle** (RestoreJob) – shared contract boundary.
+  * **Retention** (BackupRetentionPolicy) – label-scoped, namespaced pruning of Backup artifacts by min/max count and age.
 * Allows multiple strategy drivers to implement backup/restore logic without entangling their implementation with the core API.
 
