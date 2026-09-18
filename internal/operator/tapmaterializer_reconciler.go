@@ -171,7 +171,7 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// the catalog, mirroring how the platform ships a Package per built-in
 		// app. The app components themselves carry no install block and are not
 		// deployed by the Package; they are instantiated per user resource.
-		if err := r.ensureRegistrationPackage(ctx, ps, repo.Name); err != nil {
+		if err := r.ensureRegistrationPackage(ctx, ps, &repo); err != nil {
 			return ctrl.Result{}, fmt.Errorf("register apps for %s: %w", ps.GetName(), err)
 		}
 		applied[ps.GetName()] = true
@@ -226,40 +226,87 @@ func (r *TapMaterializerReconciler) failMaterialize(ctx context.Context, repo *s
 // ensureRegistrationPackage creates a tap-managed Package for a materialized
 // PackageSource, so its install-marked components (the ApplicationDefinition
 // registrations) deploy and its apps become browsable in the catalog on connect
-// rather than only after a manual `cozypkg add`. It is idempotent (an existing
-// Package is left as-is) and labels the Package so untap can remove it. A source
-// with no variants registers nothing.
-func (r *TapMaterializerReconciler) ensureRegistrationPackage(ctx context.Context, ps *cozyv1alpha1.PackageSource, sourceName string) error {
-	variant := defaultVariantName(ps)
-	if variant == "" {
+// rather than only after a manual `cozypkg add`. The Package is labelled and
+// annotated with its source so untap removes exactly the one this tap created.
+//
+// It only ever auto-registers the "default" variant (leaving Spec.Variant empty,
+// which the Package reconciler resolves to "default"), so the install target is
+// deterministic rather than "whichever variant the artifact lists first". It
+// refuses to auto-install a variant carrying privileged components, because the
+// connect path has none of the confirmation `cozypkg add --allow-privileged`
+// enforces; the operator registers those manually. Both skips are surfaced as a
+// Warning Event on the source.
+func (r *TapMaterializerReconciler) ensureRegistrationPackage(ctx context.Context, ps *cozyv1alpha1.PackageSource, repo *sourcev1.OCIRepository) error {
+	if !hasDefaultVariant(ps) {
+		r.warnNotAutoRegistered(repo, ps, `it declares no "default" variant; register it manually with 'cozypkg add'`)
+		return nil
+	}
+	if privileged := privilegedInstallComponents(ps, "default"); len(privileged) > 0 {
+		r.warnNotAutoRegistered(repo, ps, fmt.Sprintf("its default variant has privileged install component(s) %v; register it manually with 'cozypkg add --allow-privileged'", privileged))
 		return nil
 	}
 	pkg := &cozyv1alpha1.Package{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        ps.GetName(),
 			Labels:      map[string]string{tapconst.Label: "true"},
-			Annotations: map[string]string{tapconst.SourceAnnotation: sourceName},
+			Annotations: map[string]string{tapconst.SourceAnnotation: repo.Name},
 		},
-		Spec: cozyv1alpha1.PackageSpec{Variant: variant},
+		// Spec.Variant left empty: the Package reconciler resolves it to "default".
 	}
-	if err := r.Create(ctx, pkg); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
+	if err := r.Create(ctx, pkg); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+		// It already exists; confirm it is this tap's own before treating the
+		// registration as done, so a foreign Package of the same name is not
+		// silently assumed to register the apps.
+		var existing cozyv1alpha1.Package
+		if gerr := r.Get(ctx, types.NamespacedName{Name: ps.GetName()}, &existing); gerr != nil {
+			return gerr
+		}
+		if !collision.Owns(&existing, repo.Name) {
+			return fmt.Errorf("a Package named %q already exists and is not managed by this tap", ps.GetName())
+		}
 	}
 	return nil
 }
 
-// defaultVariantName picks the variant a registration Package installs: the one
-// named "default" if present, otherwise the first declared variant.
-func defaultVariantName(ps *cozyv1alpha1.PackageSource) string {
+// warnNotAutoRegistered records that a materialized PackageSource was left
+// unregistered, with the reason, so the operator can see why its apps are not in
+// the catalog and register them manually.
+func (r *TapMaterializerReconciler) warnNotAutoRegistered(repo *sourcev1.OCIRepository, ps *cozyv1alpha1.PackageSource, reason string) {
+	if r.Recorder != nil {
+		r.Recorder.Event(repo, corev1.EventTypeWarning, "AppsNotAutoRegistered",
+			fmt.Sprintf("did not auto-register PackageSource %s: %s", ps.GetName(), reason))
+	}
+}
+
+// hasDefaultVariant reports whether the PackageSource declares a variant named
+// "default".
+func hasDefaultVariant(ps *cozyv1alpha1.PackageSource) bool {
 	for i := range ps.Spec.Variants {
 		if ps.Spec.Variants[i].Name == "default" {
-			return "default"
+			return true
 		}
 	}
-	if len(ps.Spec.Variants) > 0 {
-		return ps.Spec.Variants[0].Name
+	return false
+}
+
+// privilegedInstallComponents lists the names of the variant's install-marked
+// components that request privileged access.
+func privilegedInstallComponents(ps *cozyv1alpha1.PackageSource, variant string) []string {
+	var out []string
+	for i := range ps.Spec.Variants {
+		if ps.Spec.Variants[i].Name != variant {
+			continue
+		}
+		for _, c := range ps.Spec.Variants[i].Components {
+			if c.Install != nil && c.Install.Privileged {
+				out = append(out, c.Name)
+			}
+		}
 	}
-	return ""
+	return out
 }
 
 // deleteMaterialized removes every PackageSource materialized from the given
@@ -283,8 +330,29 @@ func (r *TapMaterializerReconciler) pruneMaterialized(ctx context.Context, sourc
 		if err := r.Delete(ctx, ps); err != nil && client.IgnoreNotFound(err) != nil {
 			return err
 		}
+		// Remove the registration Package too, so a package the current artifact
+		// no longer contains (or a whole tap being torn down) leaves the catalog
+		// instead of stranding its ApplicationDefinition.
+		if err := r.deleteRegistrationPackage(ctx, ps.Name, sourceName); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// deleteRegistrationPackage removes the tap-managed registration Package for a
+// PackageSource, but only when it is owned by the given source (label AND source
+// annotation), so a Package a later tap created under a reused name is never
+// deleted by an earlier tap's teardown.
+func (r *TapMaterializerReconciler) deleteRegistrationPackage(ctx context.Context, name, sourceName string) error {
+	var pkg cozyv1alpha1.Package
+	if err := r.Get(ctx, types.NamespacedName{Name: name}, &pkg); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !collision.Owns(&pkg, sourceName) {
+		return nil
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, &pkg))
 }
 
 // resolveArtifactURL rewrites a cluster-DNS artifact host (e.g.

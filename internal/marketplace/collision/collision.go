@@ -14,19 +14,22 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 )
 
-// Owns reports whether an existing PackageSource is the given tap source's own
-// materialization, identified by the marketplace-tap label and the source
-// annotation. Such an object is safe to overwrite on an idempotent re-tap; a
-// foreign object of the same name is never owned.
-func Owns(ps *cozyv1alpha1.PackageSource, sourceName string) bool {
-	return ps.GetLabels()[tapconst.Label] == "true" &&
-		ps.GetAnnotations()[tapconst.SourceAnnotation] == sourceName
+// Owns reports whether an object (a PackageSource or the registration Package)
+// belongs to the given tap source, identified by BOTH the marketplace-tap label
+// and the source annotation. Keying on the label alone is not enough: a leftover
+// object from an earlier tap keeps the label, so a later tap that reuses the
+// name would otherwise adopt or delete an object it did not create. A foreign
+// object of the same name is never owned.
+func Owns(obj metav1.Object, sourceName string) bool {
+	return obj.GetLabels()[tapconst.Label] == "true" &&
+		obj.GetAnnotations()[tapconst.SourceAnnotation] == sourceName
 }
 
 // PackageSourceName returns an error if a PackageSource named name already

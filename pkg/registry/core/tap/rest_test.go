@@ -60,16 +60,17 @@ func ociRepoObj(name string) *unstructured.Unstructured {
 	}}
 }
 
-// tapPkgObj is a tap-managed registration Package (marketplace-tap label).
-func tapPkgObj(name string) *unstructured.Unstructured {
+// tapPkgObj is a tap-managed registration Package, owned by sourceName (the
+// marketplace-tap label plus the tap-source annotation).
+func tapPkgObj(name, sourceName string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "cozystack.io/v1alpha1",
 		"kind":       "Package",
 		"metadata": map[string]interface{}{
-			"name":   name,
-			"labels": map[string]interface{}{"apps.cozystack.io/marketplace-tap": "true"},
+			"name":        name,
+			"labels":      map[string]interface{}{"apps.cozystack.io/marketplace-tap": "true"},
+			"annotations": map[string]interface{}{"apps.cozystack.io/tap-source": sourceName},
 		},
-		"spec": map[string]interface{}{"variant": "default"},
 	}}
 }
 
@@ -114,7 +115,7 @@ func TestDeleteCommunityTapRemovesSource(t *testing.T) {
 func TestDeleteRemovesRegistrationPackage(t *testing.T) {
 	// Disconnect must also remove the tap-managed registration Package so the
 	// repository's apps de-register from the catalog.
-	r := fakeREST(tapPsObj("a.b", "tap-a-b"), ociRepoObj("tap-a-b"), tapPkgObj("a.b"))
+	r := fakeREST(tapPsObj("a.b", "tap-a-b"), ociRepoObj("tap-a-b"), tapPkgObj("a.b", "tap-a-b"))
 	if _, ok, err := r.Delete(context.Background(), "a.b", nil, nil); err != nil || !ok {
 		t.Fatalf("delete failed: ok=%v err=%v", ok, err)
 	}
@@ -124,15 +125,16 @@ func TestDeleteRemovesRegistrationPackage(t *testing.T) {
 }
 
 func TestDeleteKeepsForeignPackage(t *testing.T) {
-	// A Package NOT managed by this tap is left in place on disconnect.
-	foreign := tapPkgObj("a.b")
-	foreign.SetLabels(nil) // not tap-managed
-	r := fakeREST(tapPsObj("a.b", "tap-a-b"), ociRepoObj("tap-a-b"), foreign)
+	// A Package owned by a DIFFERENT tap source (label present, but the
+	// tap-source annotation names another source) must be left in place: a name
+	// reused by a later tap must not have its Package deleted by this teardown.
+	other := tapPkgObj("a.b", "tap-other-source")
+	r := fakeREST(tapPsObj("a.b", "tap-a-b"), ociRepoObj("tap-a-b"), other)
 	if _, ok, err := r.Delete(context.Background(), "a.b", nil, nil); err != nil || !ok {
 		t.Fatalf("delete failed: ok=%v err=%v", ok, err)
 	}
 	if _, err := r.dyn.Resource(gvrPackages).Get(context.Background(), "a.b", metav1.GetOptions{}); err != nil {
-		t.Errorf("a foreign Package must be left in place, got err=%v", err)
+		t.Errorf("a Package owned by another source must be left in place, got err=%v", err)
 	}
 }
 

@@ -18,6 +18,7 @@ package operator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
@@ -248,21 +249,41 @@ func TestPruneMaterializedKeepsCurrentSet(t *testing.T) {
 	}
 }
 
-func TestDefaultVariantName(t *testing.T) {
-	dflt := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
+func TestHasDefaultVariant(t *testing.T) {
+	with := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
 		Variants: []cozyv1alpha1.Variant{{Name: "big"}, {Name: "default"}},
 	}}
-	if got := defaultVariantName(dflt); got != "default" {
-		t.Errorf("expected the default variant to win, got %q", got)
+	if !hasDefaultVariant(with) {
+		t.Error("expected a default variant to be detected")
 	}
-	first := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
+	without := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
 		Variants: []cozyv1alpha1.Variant{{Name: "only"}, {Name: "second"}},
 	}}
-	if got := defaultVariantName(first); got != "only" {
-		t.Errorf("expected the first variant when there is no default, got %q", got)
+	if hasDefaultVariant(without) {
+		t.Error("expected no default variant")
 	}
-	if got := defaultVariantName(&cozyv1alpha1.PackageSource{}); got != "" {
-		t.Errorf("expected empty for no variants, got %q", got)
+	if hasDefaultVariant(&cozyv1alpha1.PackageSource{}) {
+		t.Error("expected no default variant for an empty source")
+	}
+}
+
+func TestPrivilegedInstallComponents(t *testing.T) {
+	ps := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
+		Variants: []cozyv1alpha1.Variant{{
+			Name: "default",
+			Components: []cozyv1alpha1.Component{
+				{Name: "app", Install: &cozyv1alpha1.ComponentInstall{Namespace: "x"}},
+				{Name: "op", Install: &cozyv1alpha1.ComponentInstall{Namespace: "x", Privileged: true}},
+				{Name: "noinstall"},
+			},
+		}},
+	}}
+	got := privilegedInstallComponents(ps, "default")
+	if len(got) != 1 || got[0] != "op" {
+		t.Errorf("expected [op], got %v", got)
+	}
+	if len(privilegedInstallComponents(ps, "missing")) != 0 {
+		t.Error("expected no components for a missing variant")
 	}
 }
 
@@ -314,8 +335,78 @@ func TestReconcileRegistersApps(t *testing.T) {
 	if pkg.GetAnnotations()[tapconst.SourceAnnotation] != repo.Name {
 		t.Errorf("registration Package must record its source, got %v", pkg.GetAnnotations())
 	}
-	if pkg.Spec.Variant != "default" {
-		t.Errorf("registration Package variant = %q, want default", pkg.Spec.Variant)
+	// Variant is left empty so the Package reconciler resolves it to "default"
+	// deterministically, rather than pinning whichever variant was listed first.
+	if pkg.Spec.Variant != "" {
+		t.Errorf("registration Package must leave Variant empty, got %q", pkg.Spec.Variant)
+	}
+}
+
+// samplePrivilegedPS declares a default variant whose install-marked component
+// is privileged.
+const samplePrivilegedPS = `apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: example.priv
+spec:
+  variants:
+    - name: default
+      components:
+        - name: op
+          path: apps/op
+          install:
+            namespace: cozy-system
+            privileged: true
+`
+
+// TestReconcileSkipsPrivilegedAutoRegister asserts a variant with privileged
+// install components is NOT auto-registered (no confirmation exists on the
+// connect path); the PackageSource still materializes and a Warning Event names
+// the reason.
+func TestReconcileSkipsPrivilegedAutoRegister(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{
+		"packages/core/platform/sources/priv.yaml": samplePrivilegedPS,
+	})
+	repo := tapRepo(true)
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	var live sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &live); err != nil {
+		t.Fatal(err)
+	}
+	live.Status.Artifact = &fluxmeta.Artifact{URL: "http://example.com/a.tar.gz", Digest: digest, Revision: "rev1"}
+	if err := cl.Status().Update(context.Background(), &live); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := record.NewFakeRecorder(10)
+	r := &TapMaterializerReconciler{
+		Client:   cl,
+		Scheme:   scheme,
+		Recorder: rec,
+		Fetch:    func(context.Context, string) ([]byte, error) { return data, nil },
+	}
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// The PackageSource materialized, but no registration Package was created.
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.priv"}, &cozyv1alpha1.PackageSource{}); err != nil {
+		t.Fatalf("PackageSource should still materialize: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.priv"}, &cozyv1alpha1.Package{}); !apierrors.IsNotFound(err) {
+		t.Errorf("a privileged variant must not be auto-registered, got Package err=%v", err)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "AppsNotAutoRegistered") || !strings.Contains(ev, "privileged") {
+			t.Errorf("expected an AppsNotAutoRegistered privileged Event, got %q", ev)
+		}
+	default:
+		t.Error("expected a Warning Event for the skipped privileged auto-register")
 	}
 }
 

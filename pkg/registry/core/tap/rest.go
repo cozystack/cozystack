@@ -26,6 +26,7 @@ import (
 	"k8s.io/klog/v2"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
@@ -329,12 +330,21 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 
 	// Remove the tap-managed registration Package too, so the repository's apps
 	// de-register from the catalog (deleting it garbage-collects the registration
-	// HelmReleases and their ApplicationDefinitions). A Package not managed by
-	// this tap is left in place.
-	if pu, err := r.dyn.Resource(gvrPackages).Get(ctx, name, metav1.GetOptions{}); err == nil && pu.GetLabels()[tapconst.Label] == "true" {
-		if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, metav1.DeleteOptions{DryRun: deleteDryRun(opts)}); err != nil && !apierrors.IsNotFound(err) {
-			klog.V(2).InfoS("tap disconnected but its registration Package could not be deleted", "package", name, "err", err)
+	// HelmReleases and their ApplicationDefinitions). It is deleted only when it
+	// belongs to THIS source (label AND source annotation): a Package a later tap
+	// created under a reused name, or a foreign Package, is left in place.
+	srcName := ""
+	if ps.Spec.SourceRef != nil {
+		srcName = ps.Spec.SourceRef.Name
+	}
+	if pu, err := r.dyn.Resource(gvrPackages).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		if collision.Owns(pu, srcName) {
+			if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, metav1.DeleteOptions{DryRun: deleteDryRun(opts)}); err != nil && !apierrors.IsNotFound(err) {
+				klog.ErrorS(err, "tap disconnected but its registration Package could not be deleted; apps may still show as registered", "package", name)
+			}
 		}
+	} else if !apierrors.IsNotFound(err) {
+		klog.ErrorS(err, "tap disconnect could not check the registration Package", "package", name)
 	}
 
 	// Remove the Flux source too, but only when no other PackageSource still

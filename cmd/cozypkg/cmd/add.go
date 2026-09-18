@@ -498,20 +498,32 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 			},
 		}
 
-		if err := k8sClient.Create(ctx, pkg); err != nil {
-			// A tapped repository registers its apps on connect, so the Package
-			// may already exist; treat that as done rather than an error.
-			if apierrors.IsAlreadyExists(err) {
-				_, _ = fmt.Fprintf(os.Stderr, "Package %s is already registered\n", pkgName)
-				continue
-			}
+		created, err := createPackageIdempotent(ctx, k8sClient, pkg)
+		if err != nil {
 			return fmt.Errorf("failed to create Package %s: %w", pkgName, err)
+		}
+		if !created {
+			_, _ = fmt.Fprintf(os.Stderr, "Package %s is already registered\n", pkgName)
+			continue
 		}
 
 		fmt.Fprintf(os.Stderr, "✓ Added Package %s\n", pkgName)
 	}
 
 	return nil
+}
+
+// createPackageIdempotent creates pkg and reports whether it created a new
+// object. A tapped repository registers its apps on connect, so the Package may
+// already exist; that is treated as done (created=false) rather than an error.
+func createPackageIdempotent(ctx context.Context, k8sClient client.Client, pkg *cozyv1alpha1.Package) (bool, error) {
+	if err := k8sClient.Create(ctx, pkg); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // selectVariantInteractive prompts user to select a variant
