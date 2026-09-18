@@ -298,3 +298,50 @@ tests:
       - documentIndex: 1
         isKind:
           of: Secret
+
+  # The realm segment of the browser-facing issuer/login/logout URLs is driven
+  # by _cluster.oidc-realm-name (authentication.oidc.realmName in the platform).
+  # A renamed realm must reach every one of them so SSO keeps matching the
+  # apiserver OIDC issuer.
+  - it: threads a custom realm name through the browser-facing OIDC URLs
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: dev10.example.org
+        oidc-enabled: "true"
+        oidc-realm-name: acme
+        keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/acme
+        expose-services: "linstor-gui"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://keycloak.dev10.example.org/realms/acme
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --login-url=https://keycloak.dev10.example.org/realms/acme/protocol/openid-connect/auth
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://keycloak.dev10.example.org/realms/cozy
+
+  # The external-discovery branch (empty internal URL) builds its own
+  # backend-logout-url on the browser host; its realm segment must follow
+  # oidc-realm-name too.
+  - it: threads a custom realm into the external-discovery logout URL
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: dev10.example.org
+        oidc-enabled: "true"
+        oidc-realm-name: acme
+        keycloak-internal-url: ""
+        expose-services: "linstor-gui"
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --skip-oidc-discovery
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=https://keycloak.dev10.example.org/realms/acme/protocol/openid-connect/logout?id_token_hint={id_token}
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=https://keycloak.dev10.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}

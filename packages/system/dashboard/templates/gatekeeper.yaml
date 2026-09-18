@@ -1,4 +1,5 @@
 {{- $host := index .Values._cluster "root-host" }}
+{{- $realm := index .Values._cluster "oidc-realm-name" | default "cozy" }}
 {{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
 {{- $oidcInsecureSkipVerify := index .Values._cluster "oidc-insecure-skip-verify" }}
 {{- $keycloakInternalUrl := index .Values._cluster "keycloak-internal-url" | default "" }}
@@ -55,16 +56,16 @@ spec:
             - --upstream=http://cozy-dashboard-console.{{ .Release.Namespace }}.svc:8080
             - --http-address=0.0.0.0:8000
             - --redirect-url=https://dashboard.{{ $host }}/oauth2/callback
-            - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/cozy
+            - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/{{ $realm }}
             {{- if $keycloakInternalUrl }}
             - --skip-oidc-discovery
-            - --login-url=https://keycloak.{{ $host }}/realms/cozy/protocol/openid-connect/auth
+            - --login-url=https://keycloak.{{ $host }}/realms/{{ $realm }}/protocol/openid-connect/auth
             - --redeem-url={{ $keycloakInternalUrl }}/protocol/openid-connect/token
             - --oidc-jwks-url={{ $keycloakInternalUrl }}/protocol/openid-connect/certs
             - --validate-url={{ $keycloakInternalUrl }}/protocol/openid-connect/userinfo
             - --backend-logout-url={{ $keycloakInternalUrl }}/protocol/openid-connect/logout?id_token_hint={id_token}
             {{- else }}
-            - --backend-logout-url=https://keycloak.{{ $host }}/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+            - --backend-logout-url=https://keycloak.{{ $host }}/realms/{{ $realm }}/protocol/openid-connect/logout?id_token_hint={id_token}
             {{- end }}
             - --whitelist-domain=keycloak.{{ $host }}
             - --email-domain=*

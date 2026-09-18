@@ -106,7 +106,40 @@ stringData:
       oidc-enabled: {{ .Values.authentication.oidc.enabled | quote }}
       oidc-insecure-skip-verify: {{ .Values.authentication.oidc.insecureSkipVerify | quote }}
       extra-keycloak-redirect-uri-for-dashboard: {{ index .Values.authentication.oidc.keycloakExtraRedirectUri | quote }}
-      keycloak-internal-url: {{ .Values.authentication.oidc.keycloakInternalUrl | quote }}
+      {{- /* The realm name becomes a Keycloak realm, a URL path segment in every
+             issuer/redirect/logout URL, and a shell token in the update-email
+             hook. Reject anything YAML or --set did not resolve to a string (a
+             bare number, or true/false) — coercing it would rename the realm to
+             something never typed and inject a "%!s(...)" into the derived URL —
+             and reject anything outside a safe slug charset, so a stray "/" or
+             space cannot split a URL path or the shell. Fail at the source
+             rather than emit a broken issuer later. The hint does not echo the
+             parsed value back: YAML has already lost the operator's original
+             token (on -> true), so quoting is the fix, not the reprinted bool. */}}
+      {{- /* Unset (null) falls back to cozy; an explicit "" is a meaningless
+             value, not a default request, so let it reach the charset guard
+             below rather than swallowing it — mirrors the keycloakInternalUrl
+             tri-state a few lines down (kindIs "invalid" is null, not ""). */}}
+      {{- $realmName := .Values.authentication.oidc.realmName }}
+      {{- if kindIs "invalid" $realmName }}
+      {{-   $realmName = "cozy" }}
+      {{- end }}
+      {{- if not (kindIs "string" $realmName) }}
+      {{-   fail (printf "authentication.oidc.realmName must be a string (got %s); wrap the value in quotes in the platform values, e.g. realmName: \"my-realm\"" (kindOf $realmName)) }}
+      {{- end }}
+      {{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9._-]*$" $realmName) }}
+      {{-   fail (printf "authentication.oidc.realmName %q is invalid: use only letters, digits, '.', '_' and '-' (it is used verbatim as a URL path segment and a shell token)" $realmName) }}
+      {{- end }}
+      oidc-realm-name: {{ $realmName | quote }}
+      {{- /* null keycloakInternalUrl derives the in-cluster Service URL for the
+             configured realm; "" is the external-discovery escape hatch and an
+             explicit value is passed through, so distinguish null from "" with
+             kindIs rather than `default`, which would also fire on "". */}}
+      {{- $keycloakInternalUrl := .Values.authentication.oidc.keycloakInternalUrl }}
+      {{- if kindIs "invalid" $keycloakInternalUrl }}
+      {{-   $keycloakInternalUrl = printf "http://keycloak-http.cozy-keycloak.svc:8080/realms/%s" $realmName }}
+      {{- end }}
+      keycloak-internal-url: {{ $keycloakInternalUrl | quote }}
       expose-services: {{ .Values.publishing.exposedServices | join "," | quote }}
       {{- /*
         expose-ingress carries two semantically distinct values that
