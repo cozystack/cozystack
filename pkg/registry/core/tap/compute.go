@@ -118,7 +118,7 @@ func indexAppDefsByChartRef(ads []cozyv1alpha1.ApplicationDefinition) map[string
 // index. A package is emitted for each component whose assembled-artifact name
 // matches an ApplicationDefinition, deduplicated by application name across
 // variants (privileged is ORed over occurrences).
-func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.ApplicationDefinition, idxAuthoritative bool) corev1alpha1.Tap {
+func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.ApplicationDefinition) corev1alpha1.Tap {
 	tap := corev1alpha1.Tap{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
@@ -177,44 +177,7 @@ func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.Applica
 	sort.Slice(tap.Spec.Packages, func(i, j int) bool {
 		return tap.Spec.Packages[i].Name < tap.Spec.Packages[j].Name
 	})
-
-	// Report registration truthfully: a tap's registration Package can be removed
-	// out-of-band (or not materialized yet), leaving the catalog empty while the
-	// PackageSource itself is Ready. Scope this strictly to TAP-managed sources
-	// (Community): the Tap list also carries official platform PackageSources
-	// (e.g. cozystack.reloader) whose default variant installs a system component
-	// with no user-facing ApplicationDefinition, so their catalog is empty by
-	// design and their PackageSource Ready is the truth.
-	if tap.Spec.Community && len(tap.Spec.Packages) == 0 {
-		switch reason := ps.GetAnnotations()[tapconst.RegistrationStateAnnotation]; {
-		case reason != "":
-			// The operator recorded why it did not register (no default variant,
-			// privileged, or a de-register); surface it whatever the variant shape.
-			tap.Spec.Ready = false
-			tap.Spec.Message = reason
-		case idxAuthoritative && defaultVariantHasComponents(ps):
-			// Apps were expected (the default variant declares components) but the
-			// catalog is empty, and the ApplicationDefinition list is authoritative
-			// (a failed list looks empty and must not flip a healthy tap). This is a
-			// registration removed out-of-band, or a still-materializing tap. Do not
-			// promise a re-tap fixes it (a failing chart is not); point at the source.
-			tap.Spec.Ready = false
-			tap.Spec.Message = "the repository's applications are not registered; check the source's events"
-		}
-	}
 	return tap
-}
-
-// defaultVariantHasComponents reports whether the PackageSource's "default"
-// variant declares at least one component — the variant auto-registration
-// installs, so the one whose emptiness means "nothing to register".
-func defaultVariantHasComponents(ps cozyv1alpha1.PackageSource) bool {
-	for _, v := range ps.Spec.Variants {
-		if v.Name == "default" {
-			return len(v.Components) > 0
-		}
-	}
-	return false
 }
 
 // buildPendingTap represents a tap whose OCIRepository exists but whose
