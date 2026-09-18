@@ -121,7 +121,18 @@ spec:
           kind: KafkaTopic
           metadata:
             name: kafka-test-test-orders
+    # This delete waits for the projected Kafka to return 404, which happens only
+    # once helm-controller drops finalizers.fluxcd.io from the backing kafka-test
+    # HelmRelease — when its whole uninstall finishes. That is the heaviest
+    # teardown in the suite: since #3938 a pre-delete hook Job runs first
+    # (packages/apps/kafka/templates/hooks/delete.yaml), then Strimzi tears down
+    # the broker and ZooKeeper StatefulSets and their deleteClaim PVCs. The hook
+    # normally finishes in seconds, so that Strimzi teardown dominates, and it was
+    # landing on the suite-default delete: 5m boundary (#4260). Give this one step
+    # finite headroom rather than widen the global. A genuinely stuck uninstall
+    # never drops the finalizer, so this 8m step timeout still reds it loudly.
     - delete:
+        timeout: 8m
         ref:
           apiVersion: apps.cozystack.io/v1alpha1
           kind: Kafka
