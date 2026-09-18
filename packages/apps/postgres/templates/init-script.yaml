@@ -7,10 +7,80 @@
   {{- end }}
 {{- end }}
 
+{{/*
+  Reject a username outside the Secret-key charset before it is interpolated
+  into the credentials Secret key, the init-script shell (pw=$(cat "/credentials/<user>"))
+  and the role SQL. The apiserver already rejects such a name as an invalid
+  Secret data key, but only once Flux applies the render, as an opaque "Secret is
+  invalid" error; failing here names the offending username and keeps a shell
+  metacharacter from ever reaching the script. The check mirrors k8s IsConfigMapKey
+  in full — the charset plus its rejection of ".", of any name starting with ".."
+  (so "..", "..foo" and "..." all go), and of names over 253 chars — so it rejects
+  nothing that could otherwise install, and no legal-charset name slips through to
+  fail later with the opaque apiserver error this guard exists to replace.
+*/}}
 {{- range $user, $u := .Values.users }}
-  {{- if $u.password }}
-    {{- $_ := set $passwords $user $u.password }}
-  {{- else if not (index $passwords $user) }}
+  {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $user)) (eq $user ".") (hasPrefix ".." $user) (gt (len $user) 253) }}
+    {{- fail (printf "invalid username %q: a username may contain only letters, digits and the characters -._ , must not be \".\" or start with \"..\", and must be at most 253 characters (it becomes a Kubernetes Secret key and is interpolated into the init-script shell and SQL)" $user) }}
+  {{- end }}
+{{- end }}
+
+{{/*
+  A database name is interpolated into SQL identifiers (CREATE DATABASE "<db>", the
+  "<db>_admin"/"<db>_readonly" role names), into a single-quoted SQL string literal
+  in the superuser DO block ('<db>_admin' as a format() argument), and into a
+  space-separated shell list (DEFINED_ROLES). Reject any name outside the same safe
+  charset the username guard enforces so none of those contexts can be broken out
+  of: a "'" would escape the DO-block literal into arbitrary superuser SQL, a "\""
+  the CREATE DATABASE identifier, a space or ";" the shell list. This is a
+  diagnosability + injection guard; the username guard already carries the analogous
+  rationale.
+*/}}
+{{- range $database, $d := .Values.databases }}
+  {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $database)) (eq $database ".") (hasPrefix ".." $database) (gt (len $database) 253) }}
+    {{- fail (printf "invalid database name %q: a database name may contain only letters, digits and the characters -._ , must not be \".\" or start with \"..\", and must be at most 253 characters (it is interpolated into SQL identifiers, a superuser DO block and a shell role list)" $database) }}
+  {{- end }}
+  {{- range $extension := ($d.extensions | default (list)) }}
+    {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $extension)) (eq $extension ".") (hasPrefix ".." $extension) (gt (len $extension) 253) }}
+      {{- fail (printf "invalid extension name %q for database %q: an extension name may contain only letters, digits and the characters -._ (it is interpolated into CREATE EXTENSION in a superuser session; real names carry \"-\", e.g. uuid-ossp, so it is quoted at the call site)" $extension $database) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+{{/*
+  `postgres` is the CNPG-managed cluster superuser and must never be redefined as
+  an app role. Reject it here, before the bootstrap gate, not only in the
+  create-users block below: that block is skipped while bootstrap.enabled is true,
+  so a restore target carrying users.postgres would install, and the restore
+  controller's automatic bootstrap clear (disablePostgresAppBootstrap) would then
+  wedge the very next reconcile against a fail it never had to see at install while
+  the RestoreJob records Succeeded. Failing regardless of bootstrap keeps the
+  controller from converging a release into an unrenderable state.
+*/}}
+{{- if and .Values.users (hasKey .Values.users "postgres") }}
+  {{- fail "`users.postgres` is forbidden by policy. Use a different username." }}
+{{- end }}
+
+{{/*
+  Unlike MariaDB (secret.yaml carries the same lookup with a guard), postgres does
+  NOT reject an upgrade whose credentials lookup came back empty. The credentials
+  Secret here is gated on .Values.users, so a release installed with the default
+  `users: {}` has no Secret at all; adding its FIRST user is an upgrade whose
+  lookup is legitimately empty, and a guard on `IsUpgrade and not $existingSecret`
+  cannot tell that apart from a deleted Secret (both are empty). Postgres also has
+  no equivalent of MariaDB's bootstrap-only root: every role's password is applied
+  by the post-upgrade init-job (ALTER ROLE), so a re-mint on a genuinely deleted
+  Secret self-heals on the next reconcile rather than desyncing forever. So mint on
+  an empty lookup, and let the common first-user-on-upgrade path through.
+*/}}
+
+{{/*
+  Passwords are always chart-generated and preserved across reconciles via the
+  lookup above: a user keeps whatever password is already stored in the Secret,
+  and only a user without one yet gets a freshly generated value.
+*/}}
+{{- range $user, $u := .Values.users }}
+  {{- if not (index $passwords $user) }}
     {{- $_ := set $passwords $user (randAlphaNum 16) }}
   {{- end }}
 {{- end }}
@@ -20,6 +90,16 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Release.Name }}-credentials
+  {{- if .Values.bootstrap.enabled }}
+  annotations:
+    # During a restore the roles recovered from the backup keep their original
+    # password hashes, but this Secret holds freshly generated passwords and the
+    # init-job that would apply them (ALTER ROLE) is skipped while bootstrap is
+    # on. So the values below do NOT authenticate yet; they converge once the app
+    # leaves bootstrap and the init-job runs. Flag it so a reader (dashboard,
+    # tenant) does not treat the advertised password as usable mid-restore.
+    postgres.cozystack.io/credentials-pending: "true"
+  {{- end }}
 stringData:
   {{- range $user, $u := .Values.users }}
   {{ quote $user }}: {{ quote (index $passwords $user) }}
@@ -42,20 +122,52 @@ stringData:
     #!/bin/bash
     set -e
 
-    until pg_isready ; do sleep 5; done
+    {{- /*
+      Bounded readiness wait: this script runs as a post-install,post-upgrade Helm
+      hook Helm blocks on, so an unbounded `until pg_isready` would hang the hook
+      forever. The budget differs by context. On UPGRADE the Cluster is already up,
+      so answer in seconds and fail after ~4m (under the Job's 300s deadline, itself
+      under Helm's 10m budget) so a purged target surfaces THIS diagnostic first. On
+      INSTALL the Cluster is still provisioning (PVC, image pull, initdb), so allow
+      ~9m for a cold-but-healthy first boot rather than failing it prematurely; the
+      install Job deadline (570s) and Helm's 10m install timeout are the backstops.
+      A deleted-superuser-Secret mount never lets this loop run at all - the Job
+      deadline covers that.
+    */}}
+    attempts=0
+    until pg_isready ; do
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge {{ if .Release.IsInstall }}110{{ else }}50{{ end }} ]; then
+        echo "postgres did not become ready in time; on a fresh install the Cluster may still be provisioning (check the cnpg.io/Cluster), on an upgrade the restore target may have been purged by a concurrent restore - failing the init-job rather than blocking the Helm hook" >&2
+        exit 1
+      fi
+      sleep 5
+    done
 
     echo "== create users"
-    {{- if and .Values.users (not (hasKey .Values.users "postgres")) }}
-    psql -v ON_ERROR_STOP=1 <<\EOT
+    {{- if .Values.users }}
+    {{- /*
+      Each password is read from the mounted <release>-credentials Secret at run
+      time rather than rendered into this script: the init-script Secret is stored
+      verbatim in the Helm release manifest and kept for MaxHistory revisions, so a
+      literal password here would linger in cleartext history a tenant cannot scrub.
+      psql's :'pw' quotes and escapes the value, so it applies safely whatever
+      characters it holds. The password does reach psql through -v, i.e. its argv,
+      readable via /proc/<pid>/cmdline to a process sharing this container's PID
+      namespace -- but this init container runs alone, and any code with that reach
+      can already read the mounted /credentials/* files directly, so the argv path
+      widens no exposure. This rationale is a template comment so it ships ONCE, not
+      once per user, into the rendered init.sh.
+    */}}
     {{- range $user, $u := .Values.users }}
+    pw=$(cat "/credentials/{{ $user }}")
+    psql -v ON_ERROR_STOP=1 -v pw="$pw" <<\EOT
     SELECT 'CREATE ROLE "{{ $user }}" LOGIN INHERIT;'
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $user }}')\gexec
-    ALTER ROLE "{{ $user }}" WITH PASSWORD '{{ index $passwords $user }}' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }};
+    ALTER ROLE "{{ $user }}" WITH PASSWORD :'pw' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }};
     COMMENT ON ROLE "{{ $user }}" IS 'user managed by helm';
-    {{- end }}
     EOT
-    {{- else if and .Values.users (hasKey .Values.users "postgres") }}
-    {{- fail "`users.postgres` is forbidden by policy. Use a different username." }}
+    {{- end }}
     {{- end }}
 
     echo "== delete users"
@@ -66,10 +178,15 @@ stringData:
     echo "users to delete: $DELETE_USERS"
     for user in $DELETE_USERS; do
     # https://stackoverflow.com/a/51257346/2931267
+    # Quote the identifier: the username charset guard admits "-", "." and
+    # uppercase (a valid role name CREATE ROLE quotes), so a bare $user here would
+    # emit REASSIGN OWNED BY my-app - a syntax error that fails this post-upgrade
+    # hook under ON_ERROR_STOP and wedges every later reconcile. The orphaned-roles
+    # and database loops below already quote for the same reason.
     psql -v ON_ERROR_STOP=1 --echo-all <<EOT
-    REASSIGN OWNED BY $user TO postgres;
-    DROP OWNED BY $user;
-    DROP USER $user;
+    REASSIGN OWNED BY "$user" TO postgres;
+    DROP OWNED BY "$user";
+    DROP USER "$user";
     EOT
     done
 
@@ -224,7 +341,7 @@ stringData:
     {{- if $d.extensions }}
     psql -v ON_ERROR_STOP=1 --echo-all -d "{{ $database }}" <<\EOT
     {{- range $extension := $d.extensions }}
-    CREATE EXTENSION IF NOT EXISTS {{ $extension }};
+    CREATE EXTENSION IF NOT EXISTS "{{ $extension }}";
     {{- end }}
     EOT
     {{- end }}

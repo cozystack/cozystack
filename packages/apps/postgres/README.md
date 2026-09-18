@@ -258,11 +258,10 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 
 ### Users configuration
 
-| Name                      | Description                                  | Type                | Value   |
-| ------------------------- | -------------------------------------------- | ------------------- | ------- |
-| `users`                   | Users configuration map.                     | `map[string]object` | `{}`    |
-| `users[name].password`    | Password for the user.                       | `string`            | `""`    |
-| `users[name].replication` | Whether the user has replication privileges. | `bool`              | `false` |
+| Name                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Type                | Value   |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ------- |
+| `users`                   | Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret. | `map[string]object` | `{}`    |
+| `users[name].replication` | Whether the user has replication privileges.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `bool`              | `false` |
 
 
 ### Databases configuration
@@ -334,15 +333,14 @@ See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-pr
 
 ```yaml
 users:
-  user1:
-    password: strongpassword
-  user2:
-    password: hackme
-  airflow:
-    password: qwerty123
+  user1: {}
+  user2: {}
+  airflow: {}
   debezium:
     replication: true
 ```
+
+Passwords cannot be set here — they are auto-generated and stored in the `<release>-credentials` Secret. Read a user's password with `kubectl get secret <release>-credentials -o jsonpath='{.data.user1}' | base64 -d`.
 
 ### databases
 

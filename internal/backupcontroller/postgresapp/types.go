@@ -71,7 +71,11 @@ type PostgresSpec struct {
 }
 
 type Bootstrap struct {
-	Enabled       bool   `json:"enabled,omitempty"`
+	// No omitempty: the restore driver merge-patches this back to false once
+	// recovery converges, and a bool+omitempty would drop false from the patch
+	// (it deletes the key instead), leaving the server to fall back to a default
+	// rather than being explicitly cleared. Same rule as Backup.UseSystemBucket.
+	Enabled       bool   `json:"enabled"`
 	OldName       string `json:"oldName,omitempty"`
 	ServerName    string `json:"serverName,omitempty"`
 	NewServerName string `json:"newServerName,omitempty"`
@@ -116,6 +120,5 @@ type DatabaseRoles struct {
 }
 
 type User struct {
-	Password    string `json:"password,omitempty"`
-	Replication bool   `json:"replication,omitempty"`
+	Replication bool `json:"replication,omitempty"`
 }

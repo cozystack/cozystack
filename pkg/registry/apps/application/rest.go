@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -204,6 +205,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
+	r.warnRemovedUserPasswords(ctx, app)
 
 	// Run the genericapiserver-supplied validating admission chain
 	// (validating webhooks + ValidatingAdmissionPolicies) before
@@ -552,6 +554,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
+	r.warnRemovedUserPasswords(ctx, app)
+	r.warnUpgradeIntroducedCollisions(ctx, oldObj, app)
 
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
@@ -1972,6 +1976,170 @@ func (r *REST) warnRemovedKubernetesFields(ctx context.Context, app *appsv1alpha
 				"spec.%s is ignored on the Kubernetes resource since Phase 2: worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart). The field is stored but has no effect.", key))
 		}
 	}
+}
+
+// removedUserPasswordKinds are the Application kinds whose per-user `password`
+// field was removed from the chart render -- passwords are chart-generated into
+// the <release>-credentials Secret. Like the Kubernetes fields above the key is
+// still accepted and stored (the user object's schema keeps additionalProperties
+// open, and the render preserves an existing password through lookup), so a value
+// left from before the upgrade stays the LIVE credential and there is no longer a
+// values knob to change it. Warn so an operator editing it is told it has no
+// effect instead of getting a silent 200.
+var removedUserPasswordKinds = map[string]bool{
+	postgresKind: true,
+	mariadbKind:  true,
+}
+
+const (
+	postgresKind = "Postgres"
+	mariadbKind  = "MariaDB"
+)
+
+// warnRemovedUserPasswords emits a client-facing admission warning for every
+// spec.users[<name>].password still present on a Postgres or MariaDB resource.
+func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.Application) {
+	if !removedUserPasswordKinds[r.kindName] || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
+		return
+	}
+	// Decode the users map leniently, then each user on its own, so one malformed
+	// entry cannot suppress the warning for another: a single json.Unmarshal into a
+	// typed struct returns the first type error and discards every field it already
+	// decoded, so one user sent with a non-object value would mute the warning for a
+	// sibling user that does carry a removed password.
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(app.Spec.Raw, &top); err != nil {
+		return
+	}
+	var users map[string]json.RawMessage
+	if raw, ok := top["users"]; ok {
+		// A malformed users shape (not a map) carries no per-user password we
+		// recognise; ignore it rather than fail the whole decode.
+		_ = json.Unmarshal(raw, &users)
+	}
+	for user, raw := range users {
+		var u map[string]json.RawMessage
+		// A non-object user value is not one this warning is about; skip it
+		// rather than letting one malformed entry mute the rest.
+		if json.Unmarshal(raw, &u) != nil {
+			continue
+		}
+		if _, present := u["password"]; present {
+			warning.AddWarning(ctx, "", fmt.Sprintf(
+				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.", user))
+		}
+	}
+}
+
+func dnsName(s string) string { return strings.ReplaceAll(s, "_", "-") }
+
+// collisionSpec buckets the three "_"/"-" collision namespaces the mariadb chart
+// guards — usernames, database names, and (database,user) Grant pairs — as maps
+// from a rendered DNS name to the human-readable sources that produce it. A key
+// with >=2 sources is a collision. The chart renders each name as
+// <release>-<replace "_" "-">, so the constant release prefix is dropped here; it
+// does not change which names collide.
+type collisionSpec struct {
+	users     map[string][]string
+	databases map[string][]string
+	grants    map[string][]string
+}
+
+// parseCollisionSpec decodes an Application's raw spec leniently (a malformed
+// shape contributes nothing rather than erroring), mirroring the chart's Grant
+// derivation: admin members plus readonly members not already in admin.
+func parseCollisionSpec(raw []byte) collisionSpec {
+	cs := collisionSpec{users: map[string][]string{}, databases: map[string][]string{}, grants: map[string][]string{}}
+	if len(raw) == 0 {
+		return cs
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(raw, &top) != nil {
+		return cs
+	}
+	var users map[string]json.RawMessage
+	if u, ok := top["users"]; ok {
+		_ = json.Unmarshal(u, &users)
+	}
+	for name := range users {
+		d := dnsName(name)
+		cs.users[d] = append(cs.users[d], name)
+	}
+	var dbs map[string]json.RawMessage
+	if d, ok := top["databases"]; ok {
+		_ = json.Unmarshal(d, &dbs)
+	}
+	for db, rawDB := range dbs {
+		cs.databases[dnsName(db)] = append(cs.databases[dnsName(db)], db)
+		var body struct {
+			Roles struct {
+				Admin    []string `json:"admin"`
+				Readonly []string `json:"readonly"`
+			} `json:"roles"`
+		}
+		if json.Unmarshal(rawDB, &body) != nil {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, u := range append(append([]string{}, body.Roles.Admin...), body.Roles.Readonly...) {
+			if seen[u] {
+				continue // a user in both roles renders one Grant (admin ALL wins)
+			}
+			seen[u] = true
+			g := dnsName(db) + "-" + dnsName(u)
+			cs.grants[g] = append(cs.grants[g], fmt.Sprintf("(database %q, user %q)", db, u))
+		}
+	}
+	return cs
+}
+
+// introducedCollisions returns, per DNS name, the sorted new sources that collide
+// on it — but only when the old spec did not already carry that collision (an
+// inherited one is left alone, exactly as the install-gated render guard does).
+func introducedCollisions(oldByDNS, newByDNS map[string][]string) map[string][]string {
+	out := map[string][]string{}
+	for dns, names := range newByDNS {
+		if len(names) < 2 || len(oldByDNS[dns]) >= 2 {
+			continue
+		}
+		s := append([]string(nil), names...)
+		sort.Strings(s)
+		out[dns] = s
+	}
+	return out
+}
+
+// warnUpgradeIntroducedCollisions warns when an UPDATE introduces a "_"/"-"
+// collision the old object did not carry, in any of the three namespaces MariaDB
+// renders as <release>-<replace "_" "-">: usernames (one User CR), database names
+// (one Database CR), and (database,user) Grant pairs (one Grant CR). In each the
+// colliding names produce one resource and one silently overwrites the other. The
+// chart's render guards for all three are gated to install — blocking on upgrade
+// would wedge a release that already inherited the pair — so an upgrade that
+// INTRODUCES one renders silently. The aggregated apiserver holds both specs here
+// and can tell an introduced collision from an inherited one, closing the gap for
+// all three without touching the inherited case. Warns rather than rejects,
+// matching the removed-password warning and keeping an already-broken release
+// editable. MariaDB-only; Postgres has no "_"→"-" resource mapping.
+func (r *REST) warnUpgradeIntroducedCollisions(ctx context.Context, oldObj runtime.Object, newApp *appsv1alpha1.Application) {
+	if r.kindName != mariadbKind || newApp == nil || newApp.Spec == nil {
+		return
+	}
+	newCS := parseCollisionSpec(newApp.Spec.Raw)
+	oldCS := parseCollisionSpec(nil)
+	if oldApp, ok := oldObj.(*appsv1alpha1.Application); ok && oldApp.Spec != nil {
+		oldCS = parseCollisionSpec(oldApp.Spec.Raw)
+	}
+	warn := func(kind, resource string, oldG, newG map[string][]string) {
+		for dns, names := range introducedCollisions(oldG, newG) {
+			warning.AddWarning(ctx, "", fmt.Sprintf(
+				"%s %v map to the same mariadb-operator %s name %q (\"_\" renders as \"-\"); one silently overwrites the other. Rename one before applying.",
+				kind, names, resource, dns))
+		}
+	}
+	warn("spec.users", "User", oldCS.users, newCS.users)
+	warn("spec.databases", "Database", oldCS.databases, newCS.databases)
+	warn("Grant pairs", "Grant", oldCS.grants, newCS.grants)
 }
 
 // errNotAcceptable indicates that the resource does not support conversion to Table
