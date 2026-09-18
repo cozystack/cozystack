@@ -1,0 +1,134 @@
+suite: site-router boot DataVolume
+
+# T04/T11 — the boot disk is a CDI DataVolume importing the digest-pinned VyOS
+# appliance containerDisk built by packages/system/vyos-router-image, whose
+# reference this chart carries in images/vyos-router-disk.tag. The source is not
+# tenant-overridable because the guest firewall is the sole compensating control
+# for the relaxed OVN port.
+#
+# WHERE THE RENDER ASSERTIONS LIVE: not here, and not by choice. The committed
+# reference is the digest-less `…/vyos-router-disk:v0.0.0` placeholder — no build
+# path in this repo publishes it, only a release build stamps a real digest (see
+# docs/image-lifecycle.md) — and site-router.applianceDiskUrl now REFUSES to
+# render an appliance reference that carries no digest, so with the chart as
+# committed templates/dv.yaml produces no document at all. helm-unittest cannot
+# inject chart files, so it cannot supply a stamped reference; the rendered URL,
+# the storageClass, the 12Gi request and the registry-only source are therefore
+# asserted in hack/site-router-appliance-ref.bats, which copies the chart and
+# writes the .tag before rendering. What is left here is the guard itself, which
+# is exactly what the committed state can prove.
+#
+# TODO: once the first release build has stamped a real digest into the .tag,
+# move those assertions back into this suite — the render succeeds again then,
+# and this file becomes the digest-less negative case only.
+
+templates:
+  - templates/dv.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+
+tests:
+  # The defect class: CDI's docker:// transport refuses a reference carrying both
+  # a tag and a digest ("Docker references with both a tag and digest are
+  # currently not supported"), and an unstamped reference resolves nowhere at
+  # all. Both used to render happily and fail minutes later as an importer that
+  # restarts forever, so the render is failed at the point of consumption
+  # instead. This case pins the second half; the bats suite pins the first.
+  - it: refuses to render while the appliance reference carries no digest
+    asserts:
+      - failedTemplate:
+          errorPattern: 'images/vyos-router-disk\.tag holds "[^"]*", which carries no @sha256: digest'
+
+  # A guard that names neither the cause nor the fix costs an operator the same
+  # hour the stuck import used to. Assert both halves of the message, so a later
+  # reword cannot quietly reduce it to "invalid reference".
+  - it: names the unstamped appliance as the cause
+    asserts:
+      - failedTemplate:
+          errorPattern: 'the VyOS appliance containerDisk has not been stamped by a build'
+
+  - it: names the remedy the operator can act on
+    asserts:
+      - failedTemplate:
+          errorPattern: 'make -C packages/system/vyos-router-image image'
+
+  # DataVolume.spec is immutable in CDI, and the appliance digest moves on every
+  # release because the image package stays in the root Makefile build: list. So
+  # the ordinary upgrade path is "the rendered source no longer matches the live
+  # one", and re-rendering it turns every release into a failed upgrade for every
+  # installed instance. These three pin the preserve-and-fail-loudly contract.
+  #
+  # They can render at all only because of that same preserve: the committed .tag
+  # is the digest-less placeholder and site-router.applianceDiskUrl refuses it,
+  # but the existing-DV branch never reaches that helper. The fresh-install
+  # assertions stay in hack/site-router-appliance-ref.bats for the reason at the
+  # top of this file.
+  - it: keeps the live DataVolume spec when the appliance digest has moved
+    kubernetesProvider:
+      scheme: &dvscheme
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr:
+            group: "cdi.kubevirt.io"
+            version: "v1beta1"
+            resource: "datavolumes"
+          namespaced: true
+      objects: &installedDV
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: site-router-test-boot
+            namespace: tenant-test
+            annotations:
+              site-router.cozystack.io/storage-class: "replicated"
+          spec:
+            contentType: kubevirt
+            source:
+              # Deliberately not a ghcr.io/cozystack/cozystack ref. What this
+              # fixture stands for is "whatever the live disk was created with",
+              # and the registry host plays no part in that — while a first-party
+              # ref here would be picked up by the image-ref enumeration oracle
+              # (hack/promote-rewrite-tags_test.bats) as an unenumerated shipped
+              # reference, which it is not.
+              registry:
+                url: "docker://registry.invalid/installed-appliance@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            storage:
+              resources:
+                requests:
+                  storage: 12Gi
+              storageClassName: replicated
+    asserts:
+      # The disk the gateway is actually running keeps its own source. Rendering
+      # the new digest here is the failed upgrade this test exists to prevent.
+      - equal:
+          path: spec.source.registry.url
+          value: "docker://registry.invalid/installed-appliance@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+
+  - it: carries the recorded storage class forward instead of restamping it
+    kubernetesProvider:
+      scheme: *dvscheme
+      objects: *installedDV
+    asserts:
+      - equal:
+          path: metadata.annotations["site-router.cozystack.io/storage-class"]
+          value: "replicated"
+
+  - it: refuses a storageClass change on an existing instance rather than ignoring it
+    # The opposite treatment from the digest, and deliberately so: this one is
+    # operator input, so silently not applying it diverges the CR from the
+    # cluster. Same contract as vm-disk (#2985, docs/storage-immutability.md).
+    set:
+      storageClass: local
+    kubernetesProvider:
+      scheme: *dvscheme
+      objects: *installedDV
+    asserts:
+      - failedTemplate:
+          errorPattern: "storageClass is immutable after creation"

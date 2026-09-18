@@ -1,0 +1,40 @@
+suite: "TODO(T08) — Cilium policies (deferred)"
+
+# OUT OF SCOPE for T04 / this Phase-A gate. These templates are owned by:
+#   - T08: platform-owned Cilium policies (templates/networkpolicy.yaml)
+# The intended assertions are drafted below as comments so they can be lifted
+# into active suites when that task lands. The single active test is an inert
+# placeholder that keeps this file a valid helm-unittest suite.
+#
+# T10's gateway WorkloadMonitor is now ACTIVE — see tests/workloadmonitor_test.yaml.
+#
+# --- T08: Cilium egressDeny (link-local + management) ---
+#   templates: [templates/networkpolicy.yaml]
+#   - the gateway CiliumNetworkPolicy/CCNP denies egress to 169.254.0.0/16
+#     (net-new: no default-deny exists in OSS today).
+#   - it denies egress to the cluster management ranges.
+#
+# --- T08: gateway ingress policy ---
+#   - ingress admits ONLY UDP 500 + UDP 4500 from the world (tunnel responder),
+#   - and admits the controller identity on the HTTPS API port (443),
+#   - and does NOT admit 443 from tunnel/world.
+
+templates:
+  - templates/service.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    load-balancer-class: metallb.io/metallb
+
+tests:
+  - it: "placeholder — real T08/T10 assertions activate with those tasks (see comments)"
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - hasDocuments:
+          count: 1
