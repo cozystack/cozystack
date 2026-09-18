@@ -32,6 +32,23 @@ spec:
       apiVersion: opensearch.opster.io/v1
       kind: OpenSearchCluster
       name: opensearch-test
+  # The roll's own fields — updateRevision, currentRevision, generation,
+  # updatedReplicas — are what separate a template that was never rewritten from
+  # one the operator has not restarted the pod onto (#4259). The nodePool
+  # StatefulSet is OnDelete (opensearch-k8s-operator v2.8.0, builders/cluster.go
+  # sets UpdateStrategy.Type OnDelete), so the roll is the operator's
+  # rolling-restart reconciler's to drive — it deletes the pod itself — not the
+  # StatefulSet controller's. describe omits those fields, so the StatefulSet is
+  # captured both ways: get -o yaml carries the revisions and the rendered volume
+  # list, describe carries the pod template and the controller's events.
+  - get:
+      apiVersion: apps/v1
+      kind: StatefulSet
+      format: yaml
+  - describe:
+      apiVersion: apps/v1
+      kind: StatefulSet
+      name: opensearch-test-nodes
   # cert-manager records a refusal to issue in the Certificate's conditions.
   # Without this an unissued chain shows up only as an absent Secret, and the
   # CR then names a Secret that is never going to appear.
@@ -46,6 +63,37 @@ spec:
   - podLogs:
       selector: opster.io/opensearch-cluster=opensearch-test
       tail: 100
+  # The restart is the operator's rolling-restart reconciler's to start (see the
+  # StatefulSet catch note above). It logs "Starting rolling restart of the
+  # StatefulSet" at rollingRestart.go:155 (opensearch-k8s-operator v2.8.0) once
+  # the early gates pass — cluster Initialized (:123), every replica ready (:94),
+  # an update actually pending (:150-154). Just before that line, at :138, it
+  # builds its OpenSearch client, which pings the cluster
+  # (NewOsClusterClientFromConfig, os_client.go:104-112) and returns the error
+  # from the reconcile at :139-141 when the cluster is unreachable. So the line's
+  # absence reads two ways, not one: an early gate held silently, or that client
+  # ping failed — loudly, as a reconcile error — before the line was reached. The
+  # line present and followed by "Couldn't proceed with rolling restart ...
+  # because <reason>" (:182) means the roll reached the health/pod-delete stage,
+  # where CheckClusterStatusForRestart (:177) holds it until cluster health is
+  # green: a yellow cluster no longer holds under an exception — it enables shard
+  # allocation, waits for every data node to join, waits for shard activity to
+  # settle, then proceeds — so only red reaches the health hold, and <reason>
+  # names it "waiting for health to be green" for the mount-plan incident.
+  # That "Couldn't proceed ... because" line is the health hold's signal, one per
+  # ~10s requeue and what the tail below is sized for, and
+  # CheckClusterStatusForRestart is not the last gate: PreparePodForDelete (:195)
+  # follows it. The verdict is in the operator, not the cluster pods above, and it
+  # runs in its own namespace.
+  - podLogs:
+      namespace: cozy-opensearch-operator
+      selector: control-plane=controller-manager
+      # tail spans the whole assert window. The manager logs ~4-5 lines per ~10s
+      # requeue, not one, so 100 lines reach back only about a third of a 12m roll
+      # and can lose a one-shot cause. 2000 is effectively everything the container
+      # has logged, not a sized window — on run 105251129282 it returned all 457
+      # lines since start.
+      tail: 2000
   # The external Service is a LoadBalancer, so an address pool with nothing left
   # in it holds the HelmRelease short of Ready with nothing in the HelmRelease
   # itself naming the cause.
@@ -291,6 +339,46 @@ spec:
   # same reason — the replacement pod pulls and starts OpenSearch from scratch.
   - name: verify-statefulset-rolled-onto-the-new-mount-plan
     try:
+    # Two asserts, not one, so a timeout names which half did not happen: the
+    # template rewrite and the roll onto it are separate outcomes with separate
+    # owners (#4259).
+    #
+    # First half: the operator rewrote the template onto the subPath mount plan.
+    # That is the operator's to do the moment the CR names the cert-manager
+    # Secrets, which verify-cr-dropped-generate and the certificate steps already
+    # waited for, so it lands within a reconcile or two rather than a pod
+    # lifetime. A shorter budget than the roll below, and a failure here is the
+    # operator not writing the volumes — not a pod that will not start.
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: opensearch-test-nodes
+          (spec.template.spec.volumes[?name == 'http-cert'].secret.secretName):
+          - opensearch-test-http-server
+          (spec.template.spec.volumes[?name == 'http-key'].secret.secretName):
+          - opensearch-test-http-server
+          (spec.template.spec.volumes[?name == 'http-ca'].secret.secretName):
+          - opensearch-test.http-ca
+    # Second half: the operator restarted the pod onto that template and the
+    # StatefulSet finished rolling. currentRevision only advances here once the
+    # operator's rolling-restart reconciler patches it (see the StatefulSet catch
+    # note above), so equal revisions plus a ready updated replica is that
+    # reconciler having run to the end. This half also asserts readyReplicas, so a
+    # failure with the assert above green is the roll not completing — either the
+    # operator never restarted the pod (the reconciler holds on the health gate,
+    # per the podLogs note) or a replacement was deleted but never came Ready — not
+    # a template that was never written.
+    #
+    # The three volume projections are carried in here too, so the roll is pinned
+    # to the template the first half checked and not to whatever revision happens
+    # to be current when the status converges. The CR moves only
+    # once in this suite, but the split otherwise lets a rewrite landing after the
+    # first assert satisfy this half on its own. observedGeneration == generation
+    # is compared at the resource root because a status-scoped expression cannot
+    # reach metadata from its own node.
     - assert:
         timeout: 12m
         resource:
@@ -298,6 +386,7 @@ spec:
           kind: StatefulSet
           metadata:
             name: opensearch-test-nodes
+          (status.observedGeneration == metadata.generation): true
           (spec.template.spec.volumes[?name == 'http-cert'].secret.secretName):
           - opensearch-test-http-server
           (spec.template.spec.volumes[?name == 'http-key'].secret.secretName):
