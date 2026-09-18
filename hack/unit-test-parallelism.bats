@@ -29,7 +29,7 @@
 }
 
 @test "PR workflow shares four slots across unit and controller targets" {
-    grep -qF 'run: make unit-tests test-controllers -j4 --output-sync=target' \
+    grep -qF 'run: make unit-tests test-controllers -j4 -k --output-sync=target' \
         .github/workflows/pull-requests.yaml || {
         echo "PR checks do not use the bounded four-slot make invocation" >&2
         exit 1
