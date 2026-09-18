@@ -353,5 +353,11 @@ variants and opt-in on the slim ones. */}}
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.talos-log-collector" $) }}
+{{- /* IP addresses as a first-class resource: the class-agnostic core plus the
+       MetalLB driver. Enable both together — the driver's PackageSource
+       dependsOn the core (and cozystack.metallb, which the isp-hosted variant
+       never emits), so enabling only the driver leaves it waiting forever. */}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.address-controller" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.metallb-iad" $) }}
 
 {{- end }}

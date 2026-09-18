@@ -1,0 +1,6 @@
+address-controller:
+  # The chart's own default is the floating `:main` tag, which would let the
+  # running controller change with no change in this tree. Pinned here rather
+  # than in charts/, which `make update` regenerates. Bump in lockstep with
+  # ADDRESS_CONTROLLER_REF in the Makefile: `crane digest <ref>`.
+  image: ghcr.io/lllamnyp/address-controller:main@sha256:98c21b9803f66c78bd244a72dd84e0d5dbb911693a1c6e8e5d0e7f948447277e

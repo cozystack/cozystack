@@ -1,0 +1,16 @@
+apiVersion: v2
+name: metallb-iad
+description: MetalLB IP Allocation Driver — the reference per-class driver for the address-controller core (local.sdn.cozystack.io)
+type: application
+# Placeholder; the real version is stamped at package time (make helm-package).
+version: 0.0.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"
+keywords:
+  - ipam
+  - metallb
+  - networking
+  - cozystack
+home: https://github.com/lllamnyp/metallb-iad
+sources:
+  - https://github.com/lllamnyp/metallb-iad
