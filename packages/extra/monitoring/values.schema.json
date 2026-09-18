@@ -352,12 +352,12 @@
                   }
                 },
                 "authUsername": {
-                  "description": "Username for SMTP LOGIN/PLAIN authentication. The password is read from the `password` key of a Secret named `alertmanager-email-password` in the release namespace, which the platform operator creates; the name is fixed and the Secret is mounted into Alertmanager, so a missing Secret blocks the whole Alertmanager rollout, not only email delivery.",
+                  "description": "Username for SMTP LOGIN/PLAIN authentication. The password is read from the `password` key of a Secret named `alertmanager-email-password` in the release namespace, which the platform operator creates; the name is fixed and the Secret is mounted into Alertmanager, so a missing Secret blocks the whole Alertmanager rollout, not only email delivery. The credential in it must belong to this tenant alone: `smarthost` is chosen by whoever writes the Monitoring, so one relay credential provisioned under the same name in every namespace can be collected by pointing `smarthost` at a host the tenant controls.",
                   "type": "string",
                   "default": ""
                 },
                 "from": {
-                  "description": "Sender address.",
+                  "description": "Sender address, one only; a display name is accepted. As with `to`, a malformed address fails the render.",
                   "type": "string",
                   "default": ""
                 },
@@ -380,7 +380,7 @@
                   "default": ""
                 },
                 "to": {
-                  "description": "Recipient address(es), separated by commas.",
+                  "description": "Recipient address, or several separated by commas. A display name is accepted, such as `Oncall \u003concall@example.org\u003e`, as long as it carries no comma. A malformed address fails the render, because Alertmanager parses addresses only when it sends and drops the notification with no record a tenant can read.",
                   "type": "string",
                   "default": ""
                 }
