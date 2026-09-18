@@ -1,0 +1,15 @@
+# postgres-ea-a-r is an operator-internal Service: it carries the lineage
+# labels but is not declared tenant-facing by the Postgres application
+# definition, so the attachment must not resolve it.
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: EndpointAttachment
+metadata:
+  name: ea-a-internal
+spec:
+  applicationRef:
+    kind: Postgres
+    name: ea-a
+  endpoint:
+    serviceName: postgres-ea-a-r
+  loadBalancer:
+    claimName: ea-held

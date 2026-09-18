@@ -159,10 +159,28 @@
        platform-level key, so `telemetry.disabled: true` plus the installer
        flag silences both. Without this, an operator who followed the
        documented opt-out kept sending cozy_application_count. */ -}}
+{{- $controllerValues := dict -}}
 {{- if .Values.telemetry.disabled -}}
-{{- $controllerValues := dict "cozystackController" (dict "disableTelemetry" true) -}}
-{{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" $controllerValues) -}}
+{{- $_ := set $controllerValues "disableTelemetry" true -}}
 {{- end -}}
+{{- /* EndpointAttachment's method: WholeIP|PortList modes render the Service
+       contract cozy-proxy implements. A proxy skips a Service delegated to a
+       name it does not claim while the load balancer still attracts the
+       address, so the controller renders those modes only where the platform
+       declares an implementor deployed. This chart is what deploys cozy-proxy
+       (cozystack.platform.system.common-packages, on the full variants, unless
+       disabled), so the declaration is derived here rather than detected in
+       the controller. Node ports follow cozy-lib's convention: only Hetzner
+       RobotLB forwards through them. */ -}}
+{{- $disabledPackages := default (list) .Values.bundles.disabledPackages -}}
+{{- $enabledPackages := default (list) .Values.bundles.enabledPackages -}}
+{{- $fullVariant := or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic") -}}
+{{- $cozyProxyDeployed := and $fullVariant (not (has "cozystack.cozy-proxy" $disabledPackages)) -}}
+{{- $robotLBDeployed := and (has "cozystack.hetzner-robotlb" $enabledPackages) (not (has "cozystack.hetzner-robotlb" $disabledPackages)) -}}
+{{- $_ := set $controllerValues "endpointAttachments" (dict
+  "cozyProxyContractImplemented" $cozyProxyDeployed
+  "allocateLoadBalancerNodePorts" $robotLBDeployed) -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" (dict "cozystackController" $controllerValues)) -}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.keycloak" $) }}

@@ -1,0 +1,13 @@
+# Mints a claim from the default IPAddressClass and publishes the read
+# replicas of ea-a on it. The claim is owned by the attachment and goes with it.
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: EndpointAttachment
+metadata:
+  name: ea-a-ro
+spec:
+  applicationRef:
+    kind: Postgres
+    name: ea-a
+  endpoint:
+    serviceName: postgres-ea-a-ro
+  loadBalancer: {}

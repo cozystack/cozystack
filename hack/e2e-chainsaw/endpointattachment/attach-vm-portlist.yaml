@@ -1,0 +1,13 @@
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: EndpointAttachment
+metadata:
+  name: ea-vm-ssh
+spec:
+  applicationRef:
+    kind: VMInstance
+    name: ea-vm
+  endpoint:
+    serviceName: vm-instance-ea-vm
+  loadBalancer:
+    method: PortList
+    ports: [22]

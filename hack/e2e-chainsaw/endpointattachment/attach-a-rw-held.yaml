@@ -1,0 +1,12 @@
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: EndpointAttachment
+metadata:
+  name: ea-a-rw-held
+spec:
+  applicationRef:
+    kind: Postgres
+    name: ea-a
+  endpoint:
+    serviceName: postgres-ea-a-rw
+  loadBalancer:
+    claimName: ea-held
