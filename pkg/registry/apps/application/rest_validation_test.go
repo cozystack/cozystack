@@ -427,11 +427,11 @@ type fakeWarningRecorder struct{ warnings []string }
 
 func (f *fakeWarningRecorder) AddWarning(_, text string) { f.warnings = append(f.warnings, text) }
 
-// TestWarnRemovedKubernetesFields covers the Phase 2 inert-field warning: a
-// Kubernetes CR that still carries nodeGroups / nodeHealthCheck /
-// maxNodeProvisionTime is accepted (the migration leaves them in place) but the
-// operator is warned that they no longer take effect. Other kinds never warn.
-func TestWarnRemovedKubernetesFields(t *testing.T) {
+// TestWarnRemovedFields covers the inert-field warning: a release that still
+// carries a key its chart has stopped reading is accepted (the migrations leave
+// those keys in place) but the operator is warned that it no longer takes
+// effect. A kind with no removed fields never warns.
+func TestWarnRemovedFields(t *testing.T) {
 	tests := []struct {
 		name     string
 		kindName string
@@ -462,6 +462,54 @@ func TestWarnRemovedKubernetesFields(t *testing.T) {
 			specJSON: `{"nodeGroups":{"md0":{}}}`,
 			wantKeys: nil,
 		},
+		{
+			name:     "kubernetes with the removed image overrides warns",
+			kindName: "Kubernetes",
+			specJSON: `{"images":{"kubectl":"example.test/kubectl:1"}}`,
+			wantKeys: []string{"images"},
+		},
+		{
+			name:     "kubernetes with the defaulted empty image overrides does not warn",
+			kindName: "Kubernetes",
+			specJSON: `{"images":{"kubectl":"","talosCsrSigner":"","waitForKubeconfig":""}}`,
+			wantKeys: nil,
+		},
+		{
+			name:     "opensearch with the defaulted empty image override does not warn",
+			kindName: "OpenSearch",
+			specJSON: `{"version":"v2","images":{"opensearch":""}}`,
+			wantKeys: nil,
+		},
+		{
+			name:     "foundationdb with an empty cluster.version does not warn",
+			kindName: "FoundationDB",
+			specJSON: `{"cluster":{"version":""}}`,
+			wantKeys: nil,
+		},
+		{
+			name:     "opensearch with the removed image override warns",
+			kindName: "OpenSearch",
+			specJSON: `{"version":"v2","images":{"opensearch":"example.test/opensearch:1"}}`,
+			wantKeys: []string{"images"},
+		},
+		{
+			name:     "foundationdb with the removed cluster.version warns",
+			kindName: "FoundationDB",
+			specJSON: `{"version":"v7.3","cluster":{"version":"7.1.67","redundancyMode":"double"}}`,
+			wantKeys: []string{"cluster.version"},
+		},
+		{
+			name:     "foundationdb without cluster.version does not warn",
+			kindName: "FoundationDB",
+			specJSON: `{"version":"v7.3","cluster":{"redundancyMode":"double"}}`,
+			wantKeys: nil,
+		},
+		{
+			name:     "a scalar where the nested path expects an object does not warn",
+			kindName: "FoundationDB",
+			specJSON: `{"cluster":"broken"}`,
+			wantKeys: nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -471,7 +519,7 @@ func TestWarnRemovedKubernetesFields(t *testing.T) {
 			r := &REST{kindName: tt.kindName}
 			app := &appsv1alpha1.Application{Spec: &apiextv1.JSON{Raw: []byte(tt.specJSON)}}
 
-			r.warnRemovedKubernetesFields(ctx, app)
+			r.warnRemovedFields(ctx, app)
 
 			if len(rec.warnings) != len(tt.wantKeys) {
 				t.Fatalf("expected %d warnings, got %d: %v", len(tt.wantKeys), len(rec.warnings), rec.warnings)

@@ -78,20 +78,11 @@ type ConfigSpec struct {
 	// Talos worker image configuration. Keep in sync with the parent cluster's `talos`.
 	// +kubebuilder:default:={}
 	Talos Talos `json:"talos"`
-	// Optional image overrides for air-gapped or rate-limited registries.
-	// +kubebuilder:default:={}
-	Images Images `json:"images"`
 }
 
 type GPU struct {
 	// Name of GPU, such as "nvidia.com/AD102GL_L40S".
 	Name string `json:"name"`
-}
-
-type Images struct {
-	// Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag.
-	// +kubebuilder:default:=""
-	Kubectl string `json:"kubectl,omitempty"`
 }
 
 type Kubelet struct {

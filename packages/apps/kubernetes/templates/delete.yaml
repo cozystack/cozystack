@@ -60,7 +60,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: kubectl
-          image: docker.io/clastix/kubectl:v1.32
+          image: {{ include "cozy-lib.image" (list "docker.io/clastix/kubectl:v1.32" $) }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

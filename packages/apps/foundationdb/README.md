@@ -22,9 +22,11 @@ This package provides a managed FoundationDB cluster deployment using the Founda
 ### Basic Configuration
 
 ```yaml
+# FoundationDB major.minor version (v7.4, v7.3, v7.1)
+version: v7.3
+
 # Cluster process configuration
 cluster:
-  version: "7.3.63"
   processCounts:
     storage: 3           # Number of storage processes (determines cluster size)
     stateless: -1        # Automatically calculated
@@ -157,12 +159,12 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 
 | Name                                       | Description                                                                                                                             | Type       | Value                    |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------ |
+| `version`                                  | FoundationDB major.minor version to deploy                                                                                              | `string`   | `v7.3`                   |
 | `cluster`                                  | Cluster configuration.                                                                                                                  | `object`   | `{}`                     |
 | `cluster.processCounts`                    | Process counts for different roles.                                                                                                     | `object`   | `{}`                     |
 | `cluster.processCounts.stateless`          | Number of stateless processes (-1 for automatic).                                                                                       | `int`      | `-1`                     |
 | `cluster.processCounts.storage`            | Number of storage processes (determines cluster size).                                                                                  | `int`      | `3`                      |
 | `cluster.processCounts.cluster_controller` | Number of cluster controller processes.                                                                                                 | `int`      | `1`                      |
-| `cluster.version`                          | Version of FoundationDB to use.                                                                                                         | `string`   | `7.3.63`                 |
 | `cluster.redundancyMode`                   | Database redundancy mode (single, double, triple, three_datacenter, three_datacenter_fallback).                                         | `string`   | `double`                 |
 | `cluster.storageEngine`                    | Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory).                                                                         | `string`   | `ssd-2`                  |
 | `cluster.faultDomain`                      | Fault domain configuration.                                                                                                             | `object`   | `{}`                     |

@@ -203,7 +203,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	}
 
 	r.warnLegacyPresets(app)
-	r.warnRemovedKubernetesFields(ctx, app)
+	r.warnRemovedFields(ctx, app)
 
 	// Run the genericapiserver-supplied validating admission chain
 	// (validating webhooks + ValidatingAdmissionPolicies) before
@@ -551,7 +551,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 
 	r.warnLegacyPresets(app)
-	r.warnRemovedKubernetesFields(ctx, app)
+	r.warnRemovedFields(ctx, app)
 
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
@@ -1946,31 +1946,99 @@ func (r *REST) warnLegacyPresets(app *appsv1alpha1.Application) {
 	}
 }
 
-// removedKubernetesFields are Kubernetes CR value keys that Phase 2 moved to the
-// separate KubernetesNodes resource. They are still accepted and stored -- an
-// upgraded cluster keeps them in its values until re-edited, and the adoption
-// migration deliberately leaves them in place rather than rewriting parent
-// values mid-upgrade -- but they no longer render anything on the Kubernetes CR.
-var removedKubernetesFields = []string{"nodeGroups", "nodeHealthCheck", "maxNodeProvisionTime"}
+// removedField is a values key whose chart has stopped reading it. Such a key
+// is still accepted and stored -- an upgraded release keeps it until re-edited,
+// and the migrations deliberately leave it in place rather than rewriting
+// values mid-upgrade -- so the write path says so rather than letting the field
+// look effective.
+type removedField struct {
+	// path is the values key, with "." between the segments of a nested one.
+	path string
+	// replacement says what happens instead, in the second half of the warning.
+	replacement string
+	// emptyDefault marks a key whose schema defaulted it to an empty string or
+	// to a map of them. The read path fills those defaults in and a client that
+	// writes back what it read stores them, so for such a key only a value
+	// counts as set, not its presence.
+	emptyDefault bool
+}
 
-// warnRemovedKubernetesFields emits a client-facing admission warning for each
-// Phase 2-removed field still present in a Kubernetes CR's values, so an
-// operator editing one (e.g. bumping spec.nodeGroups.<x>.minReplicas) is told it
-// has no effect instead of silently getting nothing. Non-blocking: the field is
-// preserved as-is; worker pools are managed as KubernetesNodes resources.
-func (r *REST) warnRemovedKubernetesFields(ctx context.Context, app *appsv1alpha1.Application) {
-	if r.kindName != kubernetesKind || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
+var removedFieldsByKind = map[string][]removedField{
+	kubernetesKind: {
+		{path: "nodeGroups", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
+		{path: "nodeHealthCheck", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
+		{path: "maxNodeProvisionTime", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
+		{path: "images", replacement: "the images come from the chart, and an air-gapped install moves them with the platform-wide registry", emptyDefault: true},
+	},
+	"KubernetesNodes": {
+		{path: "images", replacement: "the images come from the chart, and an air-gapped install moves them with the platform-wide registry", emptyDefault: true},
+	},
+	"OpenSearch": {
+		{path: "images", replacement: "the image follows spec.version", emptyDefault: true},
+	},
+	"FoundationDB": {
+		{path: "cluster.version", replacement: "the version is selected with spec.version", emptyDefault: true},
+	},
+}
+
+// warnRemovedFields emits a client-facing admission warning for each removed
+// field still present in the values, so an operator editing one (e.g. bumping
+// spec.nodeGroups.<x>.minReplicas) is told it has no effect instead of silently
+// getting nothing. Non-blocking: the field is preserved as-is.
+func (r *REST) warnRemovedFields(ctx context.Context, app *appsv1alpha1.Application) {
+	fields, ok := removedFieldsByKind[r.kindName]
+	if !ok || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
 		return
 	}
 	var values map[string]any
 	if err := json.Unmarshal(app.Spec.Raw, &values); err != nil {
 		return
 	}
-	for _, key := range removedKubernetesFields {
-		if _, present := values[key]; present {
-			warning.AddWarning(ctx, "", fmt.Sprintf(
-				"spec.%s is ignored on the Kubernetes resource since Phase 2: worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart). The field is stored but has no effect.", key))
+	for _, f := range fields {
+		value, present := lookupValuesPath(values, strings.Split(f.path, "."))
+		if !present || (f.emptyDefault && !carriesValue(value)) {
+			continue
 		}
+		warning.AddWarning(ctx, "", fmt.Sprintf(
+			"spec.%s is ignored on the %s resource: %s. The field is stored but has no effect.",
+			f.path, r.kindName, f.replacement))
+	}
+}
+
+// lookupValuesPath returns the value at the path, walking only objects: a
+// segment under a scalar is not present.
+func lookupValuesPath(values map[string]any, path []string) (any, bool) {
+	var current any = values
+	for _, segment := range path {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[segment]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+// carriesValue reports whether a value is more than an empty default: not null,
+// not an empty string, and for a map, at least one entry that carries a value.
+func carriesValue(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case string:
+		return v != ""
+	case map[string]any:
+		for _, nested := range v {
+			if carriesValue(nested) {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
 	}
 }
 

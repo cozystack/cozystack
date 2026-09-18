@@ -450,7 +450,7 @@ spec:
 {{- $_ := set $jobContext "kubeReservedMemory" $kubeReservedMemory }}
 {{- $_ := set $jobContext "evictionHardMemory" $evictionHardMemory }}
 {{- $_ := set $jobContext "evictionSoftMemory" $evictionSoftMemory }}
-{{- $_ := set $jobContext "kubectlImage" (default ($.Files.Get "images/kubectl.tag" | trim) $.Values.images.kubectl) }}
+{{- $_ := set $jobContext "kubectlImage" (include "cozy-lib.image" (list ($.Files.Get "images/kubectl.tag" | trim) $)) }}
 {{- $jobSpec := include "kubernetes-nodes.talos-reconcile-job-spec" $jobContext }}
 {{- $jobHash := $jobSpec | sha256sum | trunc 6 }}
 {{- $jobName := printf "%s-talos-reconcile-%s" $.Release.Name $groupName | trunc 56 | trimSuffix "-" }}
