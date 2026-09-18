@@ -4,7 +4,7 @@
 apiVersion: "clickhouse-keeper.altinity.com/v1"
 kind: "ClickHouseKeeperInstallation"
 metadata:
-  name: "{{ .Release.Name }}-keeper"
+  name: {{ include "clickhouse.keeperName" $ | quote }}
   annotations:
     prometheus.io/port: "7000"
     prometheus.io/scrape: "true"
