@@ -19,6 +19,13 @@ RUN go get 'k8s.io/endpointslice/util@v0.28' 'k8s.io/apiserver@v0.28'
 RUN go mod tidy
 RUN go mod vendor
 
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. Each package is tested from its own directory:
+# that finds the module it belongs to, and an empty list runs nothing.
+RUN for dir in $(git apply --numstat /patches/*.diff | cut -f3 | grep '\.go$' | xargs -n1 dirname | sort -u); do \
+      (cd "$dir" && go test -mod=vendor .) || exit 1; \
+    done
+
 RUN CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o bin/kubevirt-cloud-controller-manager ./cmd/kubevirt-cloud-controller-manager
 
 FROM scratch
