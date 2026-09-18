@@ -278,3 +278,30 @@ func TestCreatePackageIdempotent(t *testing.T) {
 		t.Fatalf("second create must be a no-op: created=%v err=%v", created, err)
 	}
 }
+
+func TestClearMaterializedRevision(t *testing.T) {
+	s := untapScheme(t)
+	oci := &sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{
+		Name: "tap-acme-hello", Namespace: "cozy-system",
+		Annotations: map[string]string{tapconst.MaterializedRevisionAnnotation: "rev-1", "keep": "me"},
+	}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(oci).Build()
+
+	if err := clearMaterializedRevision(context.Background(), cl, "tap-acme-hello"); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "tap-acme-hello", Namespace: "cozy-system"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Annotations[tapconst.MaterializedRevisionAnnotation]; ok {
+		t.Error("materialized-revision annotation must be cleared to force re-materialization")
+	}
+	if got.Annotations["keep"] != "me" {
+		t.Error("unrelated annotations must be preserved")
+	}
+	// Absent source: no error.
+	if err := clearMaterializedRevision(context.Background(), cl, "missing"); err != nil {
+		t.Errorf("a missing source must not error, got %v", err)
+	}
+}

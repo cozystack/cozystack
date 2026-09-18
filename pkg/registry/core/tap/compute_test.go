@@ -80,7 +80,7 @@ func TestBuildTap(t *testing.T) {
 			&cozyv1alpha1.ApplicationDefinitionDashboard{Description: "A foo", Category: "Storage", Tags: []string{"x"}, Icon: "data:svg"}),
 	})
 
-	tap := buildTap(ps, idx)
+	tap := buildTap(ps, idx, true)
 
 	if !tap.Spec.Community {
 		t.Errorf("expected Community=true for a labeled tap source")
@@ -114,7 +114,7 @@ func TestBuildTapNoMatchingAppDef(t *testing.T) {
 			Variants: []cozyv1alpha1.Variant{{Name: "default", Components: []cozyv1alpha1.Component{{Name: "x", Path: "apps/x"}}}},
 		},
 	}
-	tap := buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{})
+	tap := buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{}, true)
 	if tap.Spec.Community {
 		t.Errorf("a source without the tap label must not be flagged community")
 	}
@@ -136,7 +136,7 @@ func TestBuildTapReflectsMissingRegistration(t *testing.T) {
 			{Type: "Ready", Status: metav1.ConditionTrue, Message: "reconciliation succeeded"},
 		}},
 	}
-	tap := buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{}) // no AppDefs resolve
+	tap := buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{}, true) // no AppDefs resolve
 	if tap.Spec.Ready {
 		t.Error("Tap must not report Ready when the repository declares apps but none are registered")
 	}
@@ -146,9 +146,38 @@ func TestBuildTapReflectsMissingRegistration(t *testing.T) {
 
 	// A recorded skip reason (e.g. privileged) is surfaced verbatim.
 	ps.Annotations = map[string]string{tapconst.RegistrationStateAnnotation: "not auto-registered: privileged"}
-	tap = buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{})
+	tap = buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{}, true)
 	if tap.Spec.Ready || tap.Spec.Message != "not auto-registered: privileged" {
 		t.Errorf("expected the recorded registration reason as the message, got %+v", tap.Spec)
+	}
+	ps.Annotations = nil
+
+	// A NON-authoritative index (an ApplicationDefinition list failed) must not
+	// flip a healthy tap to not-ready.
+	tap = buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{}, false)
+	if !tap.Spec.Ready {
+		t.Error("a non-authoritative (failed) AppDef list must not override Ready")
+	}
+}
+
+// TestBuildTapEmptyDefaultVariantStaysReady: a repo whose default variant declares
+// no components registers nothing; that empty catalog is correct, not a drift.
+func TestBuildTapEmptyDefaultVariantStaysReady(t *testing.T) {
+	ps := cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo.x", Labels: map[string]string{tapconst.Label: "true"}},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			Variants: []cozyv1alpha1.Variant{
+				{Name: "default", Components: nil},
+				{Name: "full", Components: []cozyv1alpha1.Component{{Name: "x", Path: "apps/x"}}},
+			},
+		},
+		Status: cozyv1alpha1.PackageSourceStatus{Conditions: []metav1.Condition{
+			{Type: "Ready", Status: metav1.ConditionTrue, Message: "ok"},
+		}},
+	}
+	tap := buildTap(ps, map[string]cozyv1alpha1.ApplicationDefinition{}, true)
+	if !tap.Spec.Ready {
+		t.Error("an empty default variant registers nothing; the tap must not be flipped to not-ready")
 	}
 }
 

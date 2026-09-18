@@ -118,7 +118,7 @@ func indexAppDefsByChartRef(ads []cozyv1alpha1.ApplicationDefinition) map[string
 // index. A package is emitted for each component whose assembled-artifact name
 // matches an ApplicationDefinition, deduplicated by application name across
 // variants (privileged is ORed over occurrences).
-func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.ApplicationDefinition) corev1alpha1.Tap {
+func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.ApplicationDefinition, idxAuthoritative bool) corev1alpha1.Tap {
 	tap := corev1alpha1.Tap{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
@@ -180,25 +180,33 @@ func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.Applica
 
 	// Report registration truthfully: the PackageSource can be Ready while its
 	// registration Package was removed out-of-band (or has not materialized yet),
-	// leaving the catalog empty. In that case the PackageSource's own Ready
-	// condition is not the truth the dashboard needs.
-	if len(tap.Spec.Packages) == 0 && declaresComponents(ps) {
+	// leaving the catalog empty, so the PackageSource's own Ready condition is not
+	// the truth the dashboard needs. Only override when we are sure it is wrong:
+	//   - the index is authoritative (an ApplicationDefinition list that failed
+	//     would look empty and must not flip a healthy tap to not-ready);
+	//   - the DEFAULT variant (the one auto-registration installs) declares
+	//     components, so applications are actually expected (a repo whose default
+	//     variant is empty registers nothing, and that empty catalog is correct).
+	if idxAuthoritative && len(tap.Spec.Packages) == 0 && defaultVariantHasComponents(ps) {
 		tap.Spec.Ready = false
 		if reason := ps.GetAnnotations()[tapconst.RegistrationStateAnnotation]; reason != "" {
 			tap.Spec.Message = reason
 		} else {
-			tap.Spec.Message = "the repository's applications are not registered yet; if this persists, re-tap to recover"
+			// Do not promise a re-tap fixes it: a deleted registration is recovered
+			// by a re-tap, but a failing registration chart is not; check the source.
+			tap.Spec.Message = "the repository's applications are not registered; check the source's events"
 		}
 	}
 	return tap
 }
 
-// declaresComponents reports whether the PackageSource declares at least one
-// component in any variant (i.e. it should register at least one application).
-func declaresComponents(ps cozyv1alpha1.PackageSource) bool {
+// defaultVariantHasComponents reports whether the PackageSource's "default"
+// variant declares at least one component — the variant auto-registration
+// installs, so the one whose emptiness means "nothing to register".
+func defaultVariantHasComponents(ps cozyv1alpha1.PackageSource) bool {
 	for _, v := range ps.Spec.Variants {
-		if len(v.Components) > 0 {
-			return true
+		if v.Name == "default" {
+			return len(v.Components) > 0
 		}
 	}
 	return false

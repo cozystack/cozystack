@@ -84,7 +84,7 @@ func (r *REST) List(ctx context.Context, _ *metainternal.ListOptions) (runtime.O
 	if err != nil {
 		return nil, apierrors.NewInternalError(fmt.Errorf("list PackageSources: %w", err))
 	}
-	idx := r.appDefIndex(ctx)
+	idx, authoritative := r.appDefIndex(ctx)
 
 	out := &corev1alpha1.TapList{
 		TypeMeta: metav1.TypeMeta{
@@ -95,7 +95,7 @@ func (r *REST) List(ctx context.Context, _ *metainternal.ListOptions) (runtime.O
 	}
 	materializedSources := map[string]bool{}
 	for _, ps := range pss {
-		out.Items = append(out.Items, buildTap(ps, idx))
+		out.Items = append(out.Items, buildTap(ps, idx, authoritative))
 		if ref := ps.Spec.SourceRef; ref != nil && ref.Kind == "OCIRepository" && ref.Name != "" {
 			materializedSources[ref.Name] = true
 		}
@@ -146,8 +146,8 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &ps); err != nil {
 		return nil, apierrors.NewInternalError(fmt.Errorf("decode PackageSource %q: %w", name, err))
 	}
-	idx := r.appDefIndex(ctx)
-	tap := buildTap(ps, idx)
+	idx, authoritative := r.appDefIndex(ctx)
+	tap := buildTap(ps, idx, authoritative)
 	return &tap, nil
 }
 
@@ -320,7 +320,8 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 			fmt.Errorf("%q is not a tapped repository; official sources are protected", name))
 	}
 
-	tap := buildTap(ps, r.appDefIndex(ctx))
+	idx, authoritative := r.appDefIndex(ctx)
+	tap := buildTap(ps, idx, authoritative)
 	if deleteValidation != nil {
 		if err := deleteValidation(ctx, &tap); err != nil {
 			return nil, false, err
@@ -352,6 +353,11 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 			uid := pu.GetUID()
 			rv := pu.GetResourceVersion()
 			delOpts := metav1.DeleteOptions{DryRun: deleteDryRun(opts), Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv}}
+			// A conflict is tolerated here (unlike the operator's retry loop): the
+			// managed registration Package owns its PackageSource by an ownerRef, and
+			// disconnect deletes that PackageSource next, so garbage collection reaps
+			// a Package this delete missed; a Package the user pinned in the gap has
+			// shed that ownerRef (pinRegistrationToUser) and is correctly spared.
 			if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, delOpts); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 				return nil, false, apierrors.NewInternalError(fmt.Errorf("delete registration Package %q: %w", name, err))
 			}
@@ -431,11 +437,15 @@ func (r *REST) fetchPackageSources(ctx context.Context) ([]cozyv1alpha1.PackageS
 // appDefIndex lists ApplicationDefinitions and indexes them by chartRef name. A
 // list failure is tolerated (the catalog degrades to taps with no packages)
 // rather than failing the whole marketplace view.
-func (r *REST) appDefIndex(ctx context.Context) map[string]cozyv1alpha1.ApplicationDefinition {
+// appDefIndex returns the ApplicationDefinition index and whether it is
+// authoritative (the list succeeded). A non-authoritative (empty on error) index
+// must not be read as "nothing is registered", or a transient apiserver blip
+// would flip every healthy tap to not-ready.
+func (r *REST) appDefIndex(ctx context.Context) (map[string]cozyv1alpha1.ApplicationDefinition, bool) {
 	ul, err := r.dyn.Resource(gvrAppDefs).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		klog.V(2).InfoS("could not list ApplicationDefinitions for tap catalog", "err", err)
-		return map[string]cozyv1alpha1.ApplicationDefinition{}
+		return map[string]cozyv1alpha1.ApplicationDefinition{}, false
 	}
 	ads := make([]cozyv1alpha1.ApplicationDefinition, 0, len(ul.Items))
 	for i := range ul.Items {
@@ -446,7 +456,7 @@ func (r *REST) appDefIndex(ctx context.Context) map[string]cozyv1alpha1.Applicat
 		}
 		ads = append(ads, ad)
 	}
-	return indexAppDefsByChartRef(ads)
+	return indexAppDefsByChartRef(ads), true
 }
 
 func fromUnstructured(u *unstructured.Unstructured, target interface{}) error {
