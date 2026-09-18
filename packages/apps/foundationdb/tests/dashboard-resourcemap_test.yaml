@@ -1,0 +1,85 @@
+suite: foundationdb tenant configuration access
+templates:
+  - templates/dashboard-resourcemap.yaml
+release:
+  name: foundationdb-example
+  namespace: tenant-example
+tests:
+  - it: grants read access only to this cluster configuration
+    documentSelector: &role
+      path: kind
+      value: Role
+    asserts: &configAccess
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [configmaps]
+              resourceNames: [foundationdb-example-config]
+              verbs: [get, list, watch]
+
+  - it: keeps configuration accessible with monitoring disabled
+    set:
+      monitoring.enabled: false
+    documentSelector: *role
+    asserts: *configAccess
+
+  - it: binds the configuration role to tenant users and administrators
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: roleRef
+          value:
+            kind: Role
+            name: foundationdb-example-dashboard-resources
+            apiGroup: rbac.authorization.k8s.io
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: tenant-example
+              namespace: tenant-example
+            - kind: Group
+              name: tenant-example-admin
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: tenant-example-super-admin
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: tenant-example-use
+              apiGroup: rbac.authorization.k8s.io
+            - kind: ServiceAccount
+              name: tenant-root
+              namespace: tenant-root
+            - kind: Group
+              name: tenant-root-admin
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: tenant-root-super-admin
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: tenant-root-use
+              apiGroup: rbac.authorization.k8s.io
+
+  - it: includes the configuration in the existing resource map
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data.resources
+          pattern: "apiVersion: v1\n  kind: ConfigMap\n  name: foundationdb-example-config"
+
+  - it: renders only the existing map and the two access objects
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: renders only the access objects with monitoring disabled
+    set:
+      monitoring.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 2
