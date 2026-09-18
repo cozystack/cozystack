@@ -1,4 +1,10 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 3 -- see hack/bats-no-exit-trap.bats.
+# None of the three is debt: each trap sits inside an explicit subshell and
+# removes that test's own temp dir, so it does not displace the handler the
+# bats binary installs and a failure still prints its `not ok`. The count is
+# declared because the ratchet is exact in both directions: it fails if a
+# test-level trap is added here, and it fails if one of these is removed.
 
 _capk_fixture() {
   mkdir -p "$1/packages/system" "$1/hack" "$1/bin" "$1/oci"
