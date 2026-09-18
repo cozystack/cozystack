@@ -330,7 +330,7 @@ charts in your management cluster: tap only sources you trust.`,
 		for _, n := range names {
 			fmt.Fprintf(cmd.OutOrStdout(), "  PackageSource/%s\n", n)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "The repository's applications are registered automatically; browse them in the dashboard catalog and create instances there.\n")
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "The repository's applications register in the dashboard catalog automatically, except a variant needing privileged install (register that with 'cozypkg add --allow-privileged'). Check the source's events if an app does not appear.\n")
 		return nil
 	},
 }
@@ -378,8 +378,13 @@ func runUntap(ctx context.Context, k8sClient client.Client, name string, allowYe
 	// THIS source (label AND source annotation); a Package a later tap created
 	// under a reused name, or a foreign Package, is left in place and blocks the
 	// untap without --yes.
+	//
+	// The Package is handled BEFORE the PackageSource: a transient error here must
+	// abort the untap, not fall through to delete the PackageSource and OCIRepository
+	// and strand the Package where no later cleanup can find it.
 	pkg := &cozyv1alpha1.Package{}
-	if err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg); err == nil {
+	switch err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg); {
+	case err == nil:
 		if collision.Owns(pkg, srcName) {
 			if err := k8sClient.Delete(ctx, pkg); err != nil {
 				return fmt.Errorf("failed to delete registration Package %s: %w", name, err)
@@ -388,6 +393,10 @@ func runUntap(ctx context.Context, k8sClient client.Client, name string, allowYe
 		} else if !allowYes {
 			return fmt.Errorf("package %s is still installed from this source; delete it with 'cozypkg del %s' first, or pass --yes to untap anyway (the Package stays installed)", name, name)
 		}
+	case apierrors.IsNotFound(err):
+		// No registration Package; nothing to de-register.
+	default:
+		return fmt.Errorf("failed to check registration Package %s: %w", name, err)
 	}
 
 	if err := k8sClient.Delete(ctx, ps); err != nil {

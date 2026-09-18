@@ -32,6 +32,25 @@ func Owns(obj metav1.Object, sourceName string) bool {
 		obj.GetAnnotations()[tapconst.SourceAnnotation] == sourceName
 }
 
+// PrivilegedInstallComponents lists the names of the given variant's
+// install-marked components that request privileged access. Both the CLI
+// (cozypkg add) and the operator's tap materializer gate on it, so it lives here
+// as the single shared definition.
+func PrivilegedInstallComponents(ps *cozyv1alpha1.PackageSource, variant string) []string {
+	var out []string
+	for i := range ps.Spec.Variants {
+		if ps.Spec.Variants[i].Name != variant {
+			continue
+		}
+		for _, c := range ps.Spec.Variants[i].Components {
+			if c.Install != nil && c.Install.Privileged {
+				out = append(out, c.Name)
+			}
+		}
+	}
+	return out
+}
+
 // PackageSourceName returns an error if a PackageSource named name already
 // exists and is not the given tap source's own materialization.
 func PackageSourceName(ctx context.Context, cl client.Client, name, sourceName string) error {

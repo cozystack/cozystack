@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 )
 
@@ -278,11 +279,11 @@ func TestPrivilegedInstallComponents(t *testing.T) {
 			},
 		}},
 	}}
-	got := privilegedInstallComponents(ps, "default")
+	got := collision.PrivilegedInstallComponents(ps, "default")
 	if len(got) != 1 || got[0] != "op" {
 		t.Errorf("expected [op], got %v", got)
 	}
-	if len(privilegedInstallComponents(ps, "missing")) != 0 {
+	if len(collision.PrivilegedInstallComponents(ps, "missing")) != 0 {
 		t.Error("expected no components for a missing variant")
 	}
 }
@@ -407,6 +408,223 @@ func TestReconcileSkipsPrivilegedAutoRegister(t *testing.T) {
 		}
 	default:
 		t.Error("expected a Warning Event for the skipped privileged auto-register")
+	}
+}
+
+// samplePrivilegedHello is example.hello (same name as samplePS) but with a
+// privileged install component in its default variant — the "benign revision,
+// then privileged revision" flip.
+const samplePrivilegedHello = `apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: example.hello
+spec:
+  variants:
+    - name: default
+      components:
+        - name: hello
+          path: apps/hello
+          install:
+            namespace: cozy-system
+            privileged: true
+`
+
+// sampleNoDefaultHello is example.hello with no "default" variant.
+const sampleNoDefaultHello = `apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: example.hello
+spec:
+  variants:
+    - name: big
+      components:
+        - name: hello
+          path: apps/hello
+`
+
+// materializerFor builds a reconciler whose Fetch returns whatever *cur points
+// at, so a test can flip the artifact between reconciles.
+func materializerFor(scheme *runtime.Scheme, cl client.Client, rec record.EventRecorder, cur *[]byte) *TapMaterializerReconciler {
+	return &TapMaterializerReconciler{
+		Client:   cl,
+		Scheme:   scheme,
+		Recorder: rec,
+		Fetch:    func(context.Context, string) ([]byte, error) { return *cur, nil },
+	}
+}
+
+// setArtifact points the OCIRepository at a new artifact digest/revision so the
+// next reconcile re-materializes.
+func setArtifact(t *testing.T, cl client.Client, digest, rev string) {
+	t.Helper()
+	var live sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &live); err != nil {
+		t.Fatal(err)
+	}
+	live.Status.Artifact = &fluxmeta.Artifact{URL: "http://example.com/a.tar.gz", Digest: digest, Revision: rev}
+	if err := cl.Status().Update(context.Background(), &live); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReconcileDeregistersOnPrivilegedFlip is the security case: a repository
+// tapped with a benign default variant auto-registers, then ships a revision
+// whose default variant is privileged. The materializer must DE-REGISTER (delete
+// its own registration Package) so the unconfirmed privileged component is not
+// installed, and surface a durable, truthful reason — not leave the rev1 Package
+// standing while claiming it "did not auto-register".
+func TestReconcileDeregistersOnPrivilegedFlip(t *testing.T) {
+	scheme := tapScheme(t)
+	benign, d1 := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	priv, d2 := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePrivilegedHello})
+	cur := benign
+	rec := record.NewFakeRecorder(10)
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tapRepo(true)).WithStatusSubresource(&sourcev1.OCIRepository{}).Build()
+	r := materializerFor(scheme, cl, rec, &cur)
+
+	// rev1 (benign): registers.
+	setArtifact(t, cl, d1, "rev1")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile rev1: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &cozyv1alpha1.Package{}); err != nil {
+		t.Fatalf("rev1 must register the Package: %v", err)
+	}
+
+	// rev2 (privileged): must de-register.
+	cur = priv
+	setArtifact(t, cl, d2, "rev2")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile rev2: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &cozyv1alpha1.Package{}); !apierrors.IsNotFound(err) {
+		t.Errorf("privileged flip must DE-REGISTER the tap-owned Package, got err=%v", err)
+	}
+	var ps cozyv1alpha1.PackageSource
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &ps); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ps.GetAnnotations()[tapconst.RegistrationStateAnnotation], "de-registered") {
+		t.Errorf("expected a durable de-registered reason on the PackageSource, got %q", ps.GetAnnotations()[tapconst.RegistrationStateAnnotation])
+	}
+	drained := drainDeregisterEvent(rec)
+	if !drained {
+		t.Error("expected a Warning Event announcing the de-registration")
+	}
+}
+
+// drainDeregisterEvent reports whether any queued event mentions de-registration.
+func drainDeregisterEvent(rec *record.FakeRecorder) bool {
+	for {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, "de-registered") {
+				return true
+			}
+		default:
+			return false
+		}
+	}
+}
+
+// TestReconcileDeregistersWhenDefaultVariantDropped: a later revision that no
+// longer declares a "default" variant must also de-register the standing Package,
+// not leave stale HelmReleases behind a spec that no longer contains them.
+func TestReconcileDeregistersWhenDefaultVariantDropped(t *testing.T) {
+	scheme := tapScheme(t)
+	withDefault, d1 := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	noDefault, d2 := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": sampleNoDefaultHello})
+	cur := withDefault
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tapRepo(true)).WithStatusSubresource(&sourcev1.OCIRepository{}).Build()
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &cur)
+
+	setArtifact(t, cl, d1, "rev1")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile rev1: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &cozyv1alpha1.Package{}); err != nil {
+		t.Fatalf("rev1 must register: %v", err)
+	}
+	cur = noDefault
+	setArtifact(t, cl, d2, "rev2")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile rev2: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &cozyv1alpha1.Package{}); !apierrors.IsNotFound(err) {
+		t.Errorf("dropping the default variant must de-register the Package, got err=%v", err)
+	}
+}
+
+// TestReconcileLeavesUnmarkedPackage: an unmarked Package of the same name (a
+// user's `cozypkg add`, or one from before this version) means registration is
+// already satisfied. The reconcile must NOT error (which would hot-loop the whole
+// tap and re-pull the artifact every backoff), NOT adopt it, and NOT delete it;
+// the revision is stamped so the loop does not recur.
+func TestReconcileLeavesUnmarkedPackage(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	userPkg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Name: "example.hello"}}
+	cur := data
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tapRepo(true), userPkg).WithStatusSubresource(&sourcev1.OCIRepository{}).Build()
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &cur)
+
+	setArtifact(t, cl, digest, "rev1")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("an existing user Package must not fail the reconcile: %v", err)
+	}
+	var pkg cozyv1alpha1.Package
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &pkg); err != nil {
+		t.Fatalf("the user's Package must be left in place: %v", err)
+	}
+	if pkg.GetLabels()[tapconst.Label] == "true" {
+		t.Error("the user's Package must NOT be adopted (stamped with the tap label)")
+	}
+	// Revision stamped => no hot re-pull loop.
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Annotations[tapconst.MaterializedRevisionAnnotation] != "rev1" {
+		t.Errorf("revision must be stamped so the reconcile does not hot-loop, got %q", got.Annotations[tapconst.MaterializedRevisionAnnotation])
+	}
+}
+
+// TestReconcileLeavesForeignTapPackage: a Package carrying the tap label but a
+// DIFFERENT source annotation (a stale leftover) must be neither adopted nor
+// deleted, and the reason recorded durably.
+func TestReconcileLeavesForeignTapPackage(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	foreign := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{
+		Name:        "example.hello",
+		Labels:      map[string]string{tapconst.Label: "true"},
+		Annotations: map[string]string{tapconst.SourceAnnotation: "some-other-source"},
+	}}
+	cur := data
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tapRepo(true), foreign).WithStatusSubresource(&sourcev1.OCIRepository{}).Build()
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &cur)
+
+	setArtifact(t, cl, digest, "rev1")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("a foreign tap Package must not fail the reconcile: %v", err)
+	}
+	var pkg cozyv1alpha1.Package
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &pkg); err != nil {
+		t.Fatalf("a foreign tap Package must be left in place, got err=%v", err)
+	}
+	if pkg.GetAnnotations()[tapconst.SourceAnnotation] != "some-other-source" {
+		t.Error("a foreign tap Package must not be re-annotated (adopted)")
+	}
+	var ps cozyv1alpha1.PackageSource
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &ps); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ps.GetAnnotations()[tapconst.RegistrationStateAnnotation], "another tap") {
+		t.Errorf("expected a durable reason recording the foreign-tap conflict, got %q", ps.GetAnnotations()[tapconst.RegistrationStateAnnotation])
 	}
 }
 

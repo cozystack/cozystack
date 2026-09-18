@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -466,7 +467,7 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 
 		// A privileged component runs with elevated access; require an explicit
 		// confirmation (or --allow-privileged) before installing it.
-		if privileged := privilegedComponents(ps, variant); len(privileged) > 0 && !addCmdFlags.allowPrivileged {
+		if privileged := collision.PrivilegedInstallComponents(ps, variant); len(privileged) > 0 && !addCmdFlags.allowPrivileged {
 			ok, err := confirmPrivileged(pkgName, variant, privileged)
 			if err != nil {
 				return err
@@ -571,23 +572,6 @@ func selectVariantInteractive(ps *cozyv1alpha1.PackageSource) (string, error) {
 
 		return ps.Spec.Variants[choice-1].Name, nil
 	}
-}
-
-// privilegedComponents returns the names of components in the given variant
-// that declare install.privileged: true.
-func privilegedComponents(ps *cozyv1alpha1.PackageSource, variantName string) []string {
-	var names []string
-	for _, v := range ps.Spec.Variants {
-		if v.Name != variantName {
-			continue
-		}
-		for _, c := range v.Components {
-			if c.Install != nil && c.Install.Privileged {
-				names = append(names, c.Name)
-			}
-		}
-	}
-	return names
 }
 
 // confirmPrivileged prompts the operator to confirm installing privileged

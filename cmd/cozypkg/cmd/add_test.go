@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
 )
 
 func TestPrivilegedComponents(t *testing.T) {
@@ -41,13 +42,13 @@ func TestPrivilegedComponents(t *testing.T) {
 		},
 	}
 
-	if got := privilegedComponents(ps, "default"); len(got) != 1 || got[0] != "risky" {
+	if got := collision.PrivilegedInstallComponents(ps, "default"); len(got) != 1 || got[0] != "risky" {
 		t.Errorf("default variant privileged = %v, want [risky]", got)
 	}
-	if got := privilegedComponents(ps, "safe"); len(got) != 0 {
+	if got := collision.PrivilegedInstallComponents(ps, "safe"); len(got) != 0 {
 		t.Errorf("safe variant should have no privileged components, got %v", got)
 	}
-	if got := privilegedComponents(ps, "nonexistent"); len(got) != 0 {
+	if got := collision.PrivilegedInstallComponents(ps, "nonexistent"); len(got) != 0 {
 		t.Errorf("unknown variant should return none, got %v", got)
 	}
 }

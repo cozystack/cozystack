@@ -28,6 +28,13 @@ const (
 	// (e.g. a name collision with a core component), so the failure surfaces on
 	// the Tap resource and dashboard instead of only in the operator log.
 	MaterializeErrorAnnotation = "apps.cozystack.io/tap-error"
+	// RegistrationStateAnnotation records, on a materialized PackageSource, why
+	// its apps were not auto-registered on connect (no "default" variant, or a
+	// privileged default variant that needs a deliberate `cozypkg add
+	// --allow-privileged`). Unlike a Warning Event, which expires, this is a
+	// durable reason the dashboard and operator can read later. It is cleared
+	// once the apps are registered.
+	RegistrationStateAnnotation = "apps.cozystack.io/registration-state"
 	// Finalizer keeps the OCIRepository until its materialized PackageSources
 	// are cleaned up.
 	Finalizer = "apps.cozystack.io/tap-materializer"

@@ -324,15 +324,16 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 		}
 	}
 
-	if err := r.dyn.Resource(gvrPackageSources).Delete(ctx, name, metav1.DeleteOptions{DryRun: deleteDryRun(opts)}); err != nil {
-		return nil, false, apierrors.NewInternalError(fmt.Errorf("delete PackageSource %q: %w", name, err))
-	}
-
-	// Remove the tap-managed registration Package too, so the repository's apps
+	// Remove the tap-managed registration Package FIRST, so the repository's apps
 	// de-register from the catalog (deleting it garbage-collects the registration
 	// HelmReleases and their ApplicationDefinitions). It is deleted only when it
 	// belongs to THIS source (label AND source annotation): a Package a later tap
 	// created under a reused name, or a foreign Package, is left in place.
+	//
+	// Package before PackageSource is deliberate: if the Package delete fails, the
+	// PackageSource is still present, so a repeat disconnect re-enters this path
+	// and retries; deleting the PackageSource first would drop a repeat disconnect
+	// into deleteOrphanTapSource, which never revisits the Package, stranding it.
 	srcName := ""
 	if ps.Spec.SourceRef != nil {
 		srcName = ps.Spec.SourceRef.Name
@@ -340,11 +341,15 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	if pu, err := r.dyn.Resource(gvrPackages).Get(ctx, name, metav1.GetOptions{}); err == nil {
 		if collision.Owns(pu, srcName) {
 			if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, metav1.DeleteOptions{DryRun: deleteDryRun(opts)}); err != nil && !apierrors.IsNotFound(err) {
-				klog.ErrorS(err, "tap disconnected but its registration Package could not be deleted; apps may still show as registered", "package", name)
+				return nil, false, apierrors.NewInternalError(fmt.Errorf("delete registration Package %q: %w", name, err))
 			}
 		}
 	} else if !apierrors.IsNotFound(err) {
-		klog.ErrorS(err, "tap disconnect could not check the registration Package", "package", name)
+		return nil, false, apierrors.NewInternalError(fmt.Errorf("check registration Package %q: %w", name, err))
+	}
+
+	if err := r.dyn.Resource(gvrPackageSources).Delete(ctx, name, metav1.DeleteOptions{DryRun: deleteDryRun(opts)}); err != nil {
+		return nil, false, apierrors.NewInternalError(fmt.Errorf("delete PackageSource %q: %w", name, err))
 	}
 
 	// Remove the Flux source too, but only when no other PackageSource still
