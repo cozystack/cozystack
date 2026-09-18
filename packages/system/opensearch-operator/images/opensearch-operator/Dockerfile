@@ -25,9 +25,23 @@
 # upstream as opensearch-project/opensearch-k8s-operator#1585, fixed by #1586;
 # drop it on the first release carrying that.
 #
-# The patches are applied in the order the glob expands, which is alphabetical,
-# and skip-unusable-drain-exclusion builds on restart-on-permanently-yellow. A
-# rename that reorders them fails the build rather than producing a wrong binary.
+# patches/timeout-cluster-api-calls.diff bounds the calls the operator makes to
+# a cluster's HTTP API. Upstream builds its own http.Transport, which carries no
+# dial, handshake or response-header timeout; it passes context.Background() to
+# every call it makes on its own behalf; and it configures no http.Client, so
+# there is no timeout there either. A cluster that accepts a connection and then
+# says nothing therefore holds the call for as long as the process lives, and
+# with one worker per controller that one call stops every OpenSearchCluster
+# from being reconciled. The deletion that then waits out its whole termination
+# timeout is the visible end of it. Tracked as cozystack/cozystack#4337; it
+# belongs upstream, and there is no upstream issue for it yet.
+#
+# The patches are applied in the order the glob expands, which is alphabetical.
+# skip-unusable-drain-exclusion builds on restart-on-permanently-yellow, and
+# timeout-cluster-api-calls rewrites os_client.go call sites that
+# skip-unusable-drain-exclusion both adds and quotes as context, so it has to
+# come last. A rename that reorders them fails the build rather than producing a
+# wrong binary.
 FROM golang:1.26@sha256:079e59808d2d252516e27e3f3a9c003740dee7f75e55aa71528766d52bcfc16a AS builder
 
 # Keep in step with the chart version pulled by `make update`: the chart's
