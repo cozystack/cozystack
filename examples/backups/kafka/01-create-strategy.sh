@@ -63,15 +63,22 @@ spec:
             # internal plain listener).
             - name: BOOTSTRAP
               value: "kafka-{{ .Release.Name }}-kafka-bootstrap.{{ .Release.Namespace }}.svc:9092"
-            # S3 object key is scoped by the SOURCE app name so a to-copy
-            # restore reads what the source wrote. On backup the source is
-            # .Release.Name; on restore it is .Backup.ApplicationRef.Name
-            # (.Backup is only set on restore - the guard keeps backup mode
-            # from rendering "<no value>" into an unused var).
+            # S3 object key is scoped by the SOURCE namespace + app name so a
+            # to-copy restore reads what the source wrote and two same-named
+            # apps in different namespaces sharing one bucket do not collide on
+            # <app>/kafka-topics.tar. On backup the source is .Release.Name; on
+            # restore it is .Backup.ApplicationRef.Name (.Backup is only set on
+            # restore - the guard keeps backup mode from rendering "<no value>"
+            # into an unused var). The namespace is .Release.Namespace in both
+            # modes and always names the source: a to-copy target is a
+            # TypedLocalObjectReference, so it shares the RestoreJob's (source's)
+            # namespace, and an in-place restore targets the source itself.
             - name: SRC_BACKUP
               value: "{{ .Release.Name }}"
             - name: SRC_RESTORE
               value: "{{ if .Backup }}{{ .Backup.ApplicationRef.Name }}{{ end }}"
+            - name: SRC_NAMESPACE
+              value: "{{ .Release.Namespace }}"
             - name: MODE
               value: "{{ .Mode }}"
             # S3 coordinates from the tenant-provided <release>-backup-s3 Secret
@@ -142,7 +149,7 @@ spec:
               fi
 
               if [ "\${MODE}" = backup ]; then SRC="\${SRC_BACKUP}"; else SRC="\${SRC_RESTORE}"; fi
-              KEY="\${SRC}/kafka-topics.tar"
+              KEY="\${SRC_NAMESPACE}/\${SRC}/kafka-topics.tar"
               OBJ_URL="\${SCHEME}://\${HOST}/\${S3_BUCKET}/\${KEY}"
 
               # curl --aws-sigv4 signs the request (SigV4) so no separate S3
@@ -252,6 +259,41 @@ spec:
                   t=\${base%-*}
                   "\${BIN}"/kafka-console-producer.sh --bootstrap-server "\${BOOT}" \
                     --topic "\${t}" --property parse.key=true < "\${f}"
+                done
+                # Verify the replay landed. kafka-console-producer, like the
+                # consumer on backup, can exit 0 without every record being
+                # accepted (a broker-side reject prints but does not fail the
+                # process), so confirm each restored topic now holds exactly the
+                # record count the manifest recorded (sum of end-begin per
+                # partition). A shortfall means the replay dropped records; an
+                # overshoot means the target was not empty - this DATA restore
+                # appends, so it is supported only against an absent or empty
+                # topic. Either way, fail rather than report a lossy or
+                # duplicated restore as complete.
+                for t in \${SEEN}; do
+                  want=0
+                  while read -r mt mp mb me; do
+                    [ "\${mt}" = "\${t}" ] || continue
+                    want=\$((want + me - mb))
+                  done < "\${WORK}/manifest.txt"
+                  vends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\${t}" --time -1)
+                  vbegins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\${t}" --time -2)
+                  have=0
+                  for e in \${vends}; do
+                    p=\${e%:*}; p=\${p##*:}
+                    eo=\${e##*:}
+                    bo=0
+                    for b in \${vbegins}; do
+                      bp=\${b%:*}; bp=\${bp##*:}
+                      if [ "\${bp}" = "\${p}" ]; then bo=\${b##*:}; break; fi
+                    done
+                    have=\$((have + eo - bo))
+                  done
+                  if [ "\${have}" -ne "\${want}" ]; then
+                    echo "restore verification failed for \${t}: topic holds \${have} record(s), backup recorded \${want}; refusing to report a lossy or duplicated restore as complete" >&2
+                    exit 1
+                  fi
+                  echo "  \${t}: restored \${have} record(s)"
                 done
                 echo "restore complete"
               fi

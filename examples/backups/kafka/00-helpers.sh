@@ -42,7 +42,17 @@ resolve_kafka_image() {
     resolved=$(kubectl -n cozy-kafka-operator get deploy strimzi-cluster-operator \
         -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="STRIMZI_KAFKA_IMAGES")].value}' 2>/dev/null \
         | tr '[:space:]' '\n' | grep -E '=.*/kafka:' | sed 's/.*=//' | tail -n1)
-    echo "${resolved:-quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.8.0}"
+    if [ -n "$resolved" ]; then
+        echo "$resolved"
+        return
+    fi
+    # Do not fail open silently: warn on stderr (stdout is captured as the
+    # image) that the operator could not be read and a public quay.io literal
+    # is being assumed. On an air-gapped or operator-less cluster - the persona
+    # the README's override note is for - that literal is unreachable, so the
+    # run must set KAFKA_IMAGE to an image the nodes can actually pull.
+    echo "! could not read STRIMZI_KAFKA_IMAGES from deploy/strimzi-cluster-operator in cozy-kafka-operator; assuming quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.8.0. Set KAFKA_IMAGE explicitly if that image is wrong or unreachable (e.g. air-gapped)." >&2
+    echo "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.8.0"
 }
 export KAFKA_IMAGE="${KAFKA_IMAGE:-$(resolve_kafka_image)}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
