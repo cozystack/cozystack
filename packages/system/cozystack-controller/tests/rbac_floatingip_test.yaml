@@ -1,0 +1,23 @@
+suite: cozystack-controller ClusterRole grants FloatingIP writes
+templates:
+  - templates/rbac.yaml
+
+release:
+  name: cozystack-controller
+  namespace: cozy-system
+
+# The EndpointAttachment reconciler creates, re-points and withdraws the
+# cozyplane FloatingIPs it owns, which the read-only catch-all rule does not
+# allow.
+tests:
+  - it: grants the ClusterRole write access to cozyplane FloatingIPs
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["sdn.cozystack.io"]
+            resources: ["floatingips"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

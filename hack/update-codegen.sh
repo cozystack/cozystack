@@ -92,7 +92,7 @@ kube::codegen::gen_client \
     "${SCRIPT_ROOT}/pkg/apis"
 
 $CONTROLLER_GEN object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
-$CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/v1alpha1/..." paths="./api/backups/..." paths="./api/gateway/..." paths="./api/internalapi/..." paths="./api/migration/..." output:crd:artifacts:config=${TMPDIR}
+$CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/v1alpha1/..." paths="./api/backups/..." paths="./api/gateway/..." paths="./api/internalapi/..." paths="./api/localsdn/..." paths="./api/migration/..." output:crd:artifacts:config=${TMPDIR}
 
 mv ${TMPDIR}/cozystack.io_packages.yaml ${OPERATOR_CRDDIR}/cozystack.io_packages.yaml
 mv ${TMPDIR}/cozystack.io_packagesources.yaml ${OPERATOR_CRDDIR}/cozystack.io_packagesources.yaml

@@ -174,10 +174,30 @@
        platform-level key, so `telemetry.disabled: true` plus the installer
        flag silences both. Without this, an operator who followed the
        documented opt-out kept sending cozy_application_count. */ -}}
+{{- $controllerValues := dict -}}
 {{- if .Values.telemetry.disabled -}}
-{{- $controllerValues := dict "cozystackController" (dict "disableTelemetry" true) -}}
-{{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" $controllerValues) -}}
+{{- $_ := set $controllerValues "disableTelemetry" true -}}
 {{- end -}}
+{{- /* EndpointAttachment's method: WholeIP|PortList modes render the Service
+       contract cozy-proxy implements. A proxy skips a Service delegated to a
+       name it does not claim while the load balancer still attracts the
+       address, so the controller renders those modes only where the platform
+       declares an implementor deployed. This chart is what deploys cozy-proxy,
+       so the declaration is derived here rather than detected in the
+       controller: it renders the include cozystack.platform.system.common-packages
+       emits the cozy-proxy Package with, on the variants that call that helper,
+       so it cannot drift from the emission. Node ports follow cozy-lib's
+       convention: only Hetzner RobotLB forwards through them. */ -}}
+{{- $disabledPackages := default (list) .Values.bundles.disabledPackages -}}
+{{- $enabledPackages := default (list) .Values.bundles.enabledPackages -}}
+{{- $commonPackagesVariant := has .Values.bundles.system.variant (list "isp-full" "isp-slim" "isp-full-generic" "isp-slim-generic") -}}
+{{- $cozyProxyPackage := include "cozystack.platform.package.full.default" (list "cozystack.cozy-proxy" $) | trim -}}
+{{- $cozyProxyDeployed := and $commonPackagesVariant (ne $cozyProxyPackage "") -}}
+{{- $robotLBDeployed := and (has "cozystack.hetzner-robotlb" $enabledPackages) (not (has "cozystack.hetzner-robotlb" $disabledPackages)) -}}
+{{- $_ := set $controllerValues "endpointAttachments" (dict
+  "cozyProxyContractImplemented" $cozyProxyDeployed
+  "allocateLoadBalancerNodePorts" $robotLBDeployed) -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" (dict "cozystackController" $controllerValues)) -}}
 {{- $keycloakTruststores := .Values.authentication.oidc.keycloakTruststores -}}
 {{- $hasKeycloakTruststores := and (not (kindIs "invalid" $keycloakTruststores)) (or (not (kindIs "slice" $keycloakTruststores)) (not (empty $keycloakTruststores))) -}}
 {{- $keycloakComponents := dict -}}
