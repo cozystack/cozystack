@@ -386,7 +386,9 @@ func runUntap(ctx context.Context, k8sClient client.Client, name string, allowYe
 	switch err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg); {
 	case err == nil:
 		if collision.Owns(pkg, srcName) {
-			if err := k8sClient.Delete(ctx, pkg); err != nil {
+			// UID precondition: do not delete a Package the user replaced between
+			// this Get and the Delete.
+			if err := k8sClient.Delete(ctx, pkg, client.Preconditions{UID: &pkg.UID}); err != nil {
 				return fmt.Errorf("failed to delete registration Package %s: %w", name, err)
 			}
 			_, _ = fmt.Fprintf(out, "Removed Package/%s\n", name)

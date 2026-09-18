@@ -21,6 +21,8 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/collision"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestPrivilegedComponents(t *testing.T) {
@@ -50,5 +52,23 @@ func TestPrivilegedComponents(t *testing.T) {
 	}
 	if got := collision.PrivilegedInstallComponents(ps, "nonexistent"); len(got) != 0 {
 		t.Errorf("unknown variant should return none, got %v", got)
+	}
+}
+
+func TestIsTapAutoRegistration(t *testing.T) {
+	autoReg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{tapconst.Label: "true"}}}
+	if !isTapAutoRegistration(autoReg) {
+		t.Error("a tap-labelled empty-variant Package is an auto-registration")
+	}
+	userDefault := &cozyv1alpha1.Package{Spec: cozyv1alpha1.PackageSpec{Variant: "default"}}
+	if isTapAutoRegistration(userDefault) {
+		t.Error("a user's Package (no tap label) is not an auto-registration")
+	}
+	pinned := &cozyv1alpha1.Package{
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{tapconst.Label: "true"}},
+		Spec:       cozyv1alpha1.PackageSpec{Variant: "full"},
+	}
+	if isTapAutoRegistration(pinned) {
+		t.Error("a tap Package already pinned to a variant is not re-openable")
 	}
 }

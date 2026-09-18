@@ -27,6 +27,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/collision"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -438,8 +439,11 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 	packageVariants := make(map[string]string) // packageName -> variant
 
 	for _, pkgName := range installOrder {
-		// Check if already installed
-		if installed, exists := installedMap[pkgName]; exists {
+		// Check if already installed. A tap-managed registration Package
+		// (auto-created on connect, empty variant = default) is NOT a user choice
+		// yet, so `add` still offers variant selection and updates it below; a
+		// user's own Package, or one already pinned to a variant, is left as-is.
+		if installed, exists := installedMap[pkgName]; exists && !isTapAutoRegistration(installed) {
 			variant := installed.Spec.Variant
 			if variant == "" {
 				variant = "default"
@@ -482,12 +486,24 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 
 	// Now create all Package resources
 	for _, pkgName := range installOrder {
-		// Skip if already installed
-		if _, exists := installedMap[pkgName]; exists {
+		variant := packageVariants[pkgName]
+
+		// An already-installed Package that reached here is a tap-managed
+		// registration Package: apply the user's variant choice by updating it
+		// (a selection of "default" is a no-op, the empty variant already means
+		// default), rather than creating a duplicate.
+		if installed, exists := installedMap[pkgName]; exists {
+			if variant != "" && variant != "default" {
+				installed.Spec.Variant = variant
+				if err := k8sClient.Update(ctx, installed); err != nil {
+					return fmt.Errorf("failed to set variant %s on Package %s: %w", variant, pkgName, err)
+				}
+				fmt.Fprintf(os.Stderr, "✓ %s (variant set to %s)\n", pkgName, variant)
+			} else {
+				fmt.Fprintf(os.Stderr, "✓ %s (already registered, variant: default)\n", pkgName)
+			}
 			continue
 		}
-
-		variant := packageVariants[pkgName]
 
 		// Create Package
 		pkg := &cozyv1alpha1.Package{
@@ -504,7 +520,14 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 			return fmt.Errorf("failed to create Package %s: %w", pkgName, err)
 		}
 		if !created {
-			_, _ = fmt.Fprintf(os.Stderr, "Package %s is already registered\n", pkgName)
+			// The materializer auto-created the registration Package between the
+			// List above and this Create. If the user picked a non-default variant,
+			// their choice is not applied; tell them how to set it.
+			if variant != "" && variant != "default" {
+				_, _ = fmt.Fprintf(os.Stderr, "Package %s was just auto-registered at the default variant; re-run 'cozypkg add %s' to set variant %s\n", pkgName, pkgName, variant)
+			} else {
+				_, _ = fmt.Fprintf(os.Stderr, "Package %s is already registered\n", pkgName)
+			}
 			continue
 		}
 
@@ -512,6 +535,14 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 	}
 
 	return nil
+}
+
+// isTapAutoRegistration reports whether a Package is a tap materializer's
+// auto-created registration Package (tap label, variant not yet chosen), as
+// opposed to a user's own `cozypkg add` Package. Only the former is re-opened
+// for variant selection by `add`.
+func isTapAutoRegistration(pkg *cozyv1alpha1.Package) bool {
+	return pkg.GetLabels()[tapconst.Label] == "true" && pkg.Spec.Variant == ""
 }
 
 // createPackageIdempotent creates pkg and reports whether it created a new

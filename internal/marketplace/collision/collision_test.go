@@ -61,3 +61,25 @@ func TestPackageSourceName(t *testing.T) {
 		t.Errorf("no existing PackageSource must not collide, got %v", err)
 	}
 }
+
+func TestOwnsEmptySourceNeverMatchesLabelOnly(t *testing.T) {
+	// A PackageSource with no SourceRef yields sourceName "". A label-only object
+	// (no source annotation, which also reads as "") must NOT be reported as owned,
+	// or a delete/adopt keyed on Owns would hit an object this source never created.
+	labelOnly := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{
+		Name:   "x",
+		Labels: map[string]string{tapconst.Label: "true"},
+	}}
+	if Owns(labelOnly, "") {
+		t.Error("Owns(labelOnly, \"\") must be false")
+	}
+	// A properly annotated object with a real source is still owned.
+	owned := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{
+		Name:        "x",
+		Labels:      map[string]string{tapconst.Label: "true"},
+		Annotations: map[string]string{tapconst.SourceAnnotation: "tap-a"},
+	}}
+	if !Owns(owned, "tap-a") {
+		t.Error("Owns(owned, \"tap-a\") must be true")
+	}
+}

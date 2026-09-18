@@ -28,7 +28,11 @@ import (
 // name would otherwise adopt or delete an object it did not create. A foreign
 // object of the same name is never owned.
 func Owns(obj metav1.Object, sourceName string) bool {
-	return obj.GetLabels()[tapconst.Label] == "true" &&
+	// An empty sourceName (a PackageSource with no SourceRef) must never match a
+	// label-only object, whose absent annotation also reads as "": that would
+	// delete or adopt an object this source does not own.
+	return sourceName != "" &&
+		obj.GetLabels()[tapconst.Label] == "true" &&
 		obj.GetAnnotations()[tapconst.SourceAnnotation] == sourceName
 }
 

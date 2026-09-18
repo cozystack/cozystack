@@ -341,6 +341,44 @@ func TestReconcileRegistersApps(t *testing.T) {
 	if pkg.Spec.Variant != "" {
 		t.Errorf("registration Package must leave Variant empty, got %q", pkg.Spec.Variant)
 	}
+	// Owned by its PackageSource so a direct delete of the PackageSource GCs it.
+	if len(pkg.OwnerReferences) != 1 || pkg.OwnerReferences[0].Kind != "PackageSource" || pkg.OwnerReferences[0].Name != "example.hello" {
+		t.Errorf("registration Package must own-ref its PackageSource, got %+v", pkg.OwnerReferences)
+	}
+}
+
+// TestReconcileKeepsUserPackageOnPrivilegedFlip pins the safety of the pre-apply
+// de-register: a privileged default variant must de-register only a Package THIS
+// tap owns. A user's own (unmarked) Package of the same name — e.g. a deliberate
+// `cozypkg add --allow-privileged` — must be left in place.
+func TestReconcileKeepsUserPackageOnPrivilegedFlip(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePrivilegedHello})
+	userPkg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{
+		Name: "example.hello",
+		// No tap label: this is the user's own Package.
+	}}
+	cur := data
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tapRepo(true), userPkg).WithStatusSubresource(&sourcev1.OCIRepository{}).Build()
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &cur)
+
+	setArtifact(t, cl, digest, "rev1")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &cozyv1alpha1.Package{}); err != nil {
+		t.Errorf("a user's own Package must NOT be de-registered on a privileged flip, got err=%v", err)
+	}
+	// And the durable state must not lie: the apps ARE registered by the user's
+	// Package, so no "not auto-registered" reason is stamped.
+	var ps cozyv1alpha1.PackageSource
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &ps); err != nil {
+		t.Fatal(err)
+	}
+	if ps.GetAnnotations()[tapconst.RegistrationStateAnnotation] != "" {
+		t.Errorf("apps registered by the user's Package must not be reported as not-registered, got %q", ps.GetAnnotations()[tapconst.RegistrationStateAnnotation])
+	}
 }
 
 // samplePrivilegedPS declares a default variant whose install-marked component
@@ -505,11 +543,12 @@ func TestReconcileDeregistersOnPrivilegedFlip(t *testing.T) {
 	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &ps); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(ps.GetAnnotations()[tapconst.RegistrationStateAnnotation], "de-registered") {
-		t.Errorf("expected a durable de-registered reason on the PackageSource, got %q", ps.GetAnnotations()[tapconst.RegistrationStateAnnotation])
+	// The durable state describes the current condition (not registered, because
+	// privileged); the transition ("de-registered") is announced by the Event.
+	if !strings.Contains(ps.GetAnnotations()[tapconst.RegistrationStateAnnotation], "privileged") {
+		t.Errorf("expected a durable not-auto-registered reason naming privileged, got %q", ps.GetAnnotations()[tapconst.RegistrationStateAnnotation])
 	}
-	drained := drainDeregisterEvent(rec)
-	if !drained {
+	if !drainDeregisterEvent(rec) {
 		t.Error("expected a Warning Event announcing the de-registration")
 	}
 }

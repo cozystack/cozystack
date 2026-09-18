@@ -340,7 +340,11 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	}
 	if pu, err := r.dyn.Resource(gvrPackages).Get(ctx, name, metav1.GetOptions{}); err == nil {
 		if collision.Owns(pu, srcName) {
-			if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, metav1.DeleteOptions{DryRun: deleteDryRun(opts)}); err != nil && !apierrors.IsNotFound(err) {
+			// UID precondition: do not delete a Package the user replaced between
+			// this Get and the Delete.
+			uid := pu.GetUID()
+			delOpts := metav1.DeleteOptions{DryRun: deleteDryRun(opts), Preconditions: &metav1.Preconditions{UID: &uid}}
+			if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, delOpts); err != nil && !apierrors.IsNotFound(err) {
 				return nil, false, apierrors.NewInternalError(fmt.Errorf("delete registration Package %q: %w", name, err))
 			}
 		}
