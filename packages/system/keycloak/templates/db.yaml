@@ -51,8 +51,10 @@ spec:
   {{- if .Values.backup.retentionPolicy }}
   retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
   {{- end }}
-  # Size the barman-cloud sidecar off the tenant LimitRange default and pin its
-  # S3 request checksum (rationale in cozy-lib.barman.sidecarConfiguration).
+  # Give the barman-cloud sidecar explicit resources: cozy-keycloak has no
+  # LimitRange, so the plugin's default was no requests and no limit at all.
+  # The sizing and the S3 request checksum pin are explained in
+  # cozy-lib.barman.sidecarConfiguration.
   {{- include "cozy-lib.barman.sidecarConfiguration" . | nindent 2 }}
   configuration:
     destinationPath: {{ .Values.backup.destinationPath | quote }}

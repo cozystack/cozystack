@@ -1429,14 +1429,17 @@ func buildBarmanPlugin(objectStoreName, serverName string) cnpgtypes.PluginConfi
 // barmanSidecarConfiguration carries the two settings the barman-cloud sidecar
 // cannot get right on its own.
 //
-// Resources: tenant namespaces ship a LimitRange defaulting containers to 128Mi
-// (packages/apps/tenant/templates/quota.yaml). The plugin injects the sidecar
-// without resources, so it inherits that default and is OOMKilled mid-backup,
+// Resources: the plugin injects the sidecar with no resources. This ObjectStore
+// lands in the application's namespace, and a tenant with resourceQuotas set
+// carries a LimitRange (packages/apps/tenant/templates/quota.yaml) that defaults
+// every container to 128Mi; the sidecar is OOMKilled mid-backup under it,
 // leaving the ObjectStore healthy and the backup failed. Measured cgroup
-// high-water mark on a 38 MB database is 254 MiB, so 128Mi cannot hold it. No
-// CPU limit is set, matching the entityOperator precedent in
-// packages/apps/kafka: a throttled sidecar stalls WAL archiving instead of
-// failing it.
+// high-water mark on a 38 MB database is 254 MiB, so 128Mi cannot hold it. A
+// tenant that leaves resourceQuotas empty has no LimitRange, and there the
+// sidecar had no requests and no limit at all. 256Mi holds the measured working
+// set and 1Gi is four times the measurement. No CPU limit is set, matching the
+// entityOperator precedent in packages/apps/kafka: a throttled sidecar stalls
+// WAL archiving instead of failing it.
 //
 // Checksum: since botocore ~1.36 the default (when_supported) attaches a
 // flexible checksum to every PutObject, which non-AWS S3-compatible backends
