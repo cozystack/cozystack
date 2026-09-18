@@ -5,6 +5,58 @@ piraeusServer:
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
+<<<<<<< HEAD
+=======
+  gracefulShutdown:
+    # Release unused Secondary DRBD resources before satellite termination so
+    # ZFS can release their backing zvols during normal Talos shutdown.
+    # The hook also runs on satellite pod restarts. Enable only when satellite
+    # and node restarts are serialized: Piraeus has one DaemonSet per node, so
+    # a shared configuration change can otherwise stop several replicas at once.
+    enabled: false
+# Whether the node substrate can run DRBD at all.
+#
+# Disable on any substrate where the DRBD kernel module is unavailable or
+# unusable. The concrete case is Talos nodes running as containers: DRBD's
+# resource registry is global per kernel, so three containers sharing one kernel
+# cannot represent three DRBD nodes — the second `new-resource` for a given name
+# silently aliases the first instead of failing, which is worse than an error
+# because LINSTOR records a replica it does not have.
+#
+# What this flag does, and all it does: the `drbd-logger` sidecar is omitted from
+# Cozystack's sparse pod template and deleted explicitly from the effective
+# DaemonSet. Omission alone is not enough because piraeus strategically merges
+# satellite configurations. That sidecar tails DRBD state and exits immediately
+# when the module is absent, and because the whole satellite pod is then never
+# Ready, piraeus never registers the node: LINSTOR reports zero nodes,
+# `linstor-csi-node` hangs in Init polling for a node that does not exist, and
+# every PVC stays Pending. So this flag is the difference between working storage
+# and no storage at all on such a substrate, not a cosmetic reduction in logging.
+#
+# What it does NOT do: it does not touch a StorageClass. Cozystack does not own
+# them — an operator writes them by hand from the install guide — so a class
+# carrying `linstor.csi.linbit.com/layerList: "drbd storage"` still exists after
+# setting this false, and volumes on it will never provision. On such a substrate
+# create only storage-only, node-pinned classes (`layerList: "storage"`,
+# `allowRemoteVolumeAccess: "false"`); the install docs say so beside the
+# examples.
+#
+# What it REQUIRES: talos.enabled must stay true. Removing the sidecar is not the
+# whole job — the satellite DaemonSet also carries two DRBD-only initContainers
+# that piraeus-operator contributes unconditionally (drbd-module-loader, which
+# fails outright when the module is absent, and drbd-shutdown-guard), and the
+# only configuration that deletes them is the Talos one. On generic Linux the
+# satellite would therefore still never reach Ready, so the chart refuses the
+# combination at render time rather than shipping a DaemonSet that cannot come
+# up. A DRBD-less substrate has to be Talos today; making generic Linux work
+# means moving those two deletions out from under talos.enabled, tracked in
+# cozystack/cozystack#4092.
+#
+# Leaving it true on a DRBD-capable node is always correct; this only ever needs
+# disabling where DRBD genuinely cannot work.
+drbd:
+  enabled: true
+>>>>>>> ebacd2e (fix(linstor): add opt-in graceful satellite shutdown on Talos)
 linstor:
   autoDiskful:
     enabled: true
