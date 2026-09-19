@@ -28,13 +28,18 @@
 # patches/timeout-cluster-api-calls.diff bounds the calls the operator makes to
 # a cluster's HTTP API. Upstream builds its own http.Transport, which carries no
 # dial, handshake or response-header timeout; it passes context.Background() to
-# every call it makes on its own behalf; and it configures no http.Client, so
-# there is no timeout there either. A cluster that accepts a connection and then
-# says nothing therefore holds the call for as long as the process lives, and
-# with one worker per controller that one call stops every OpenSearchCluster
-# from being reconciled. The deletion that then waits out its whole termination
-# timeout is the visible end of it. Tracked as cozystack/cozystack#4337; it
-# belongs upstream, and there is no upstream issue for it yet.
+# every call it makes on its own behalf; the calls that take a context from the
+# caller are handed one with no deadline on it; and no http.Client is
+# configured, so there is no timeout there either. A cluster that accepts a
+# connection and then says nothing therefore holds the call for as long as the
+# process lives, and with one worker per controller that one call stops every
+# OpenSearchCluster from being reconciled. The deletion that then waits out its
+# whole termination timeout is the visible end of it. One wait is left, inside
+# opensearch-go: the product check on a client's first request carries a
+# context.Background() the call site cannot reach, and the transport's bounds
+# cover it as far as the response headers. Tracked as cozystack/cozystack#4337;
+# it belongs upstream, there is no upstream issue for it yet, and the patch goes
+# away with the first release that carries a fix.
 #
 # The patches are applied in the order the glob expands, which is alphabetical.
 # skip-unusable-drain-exclusion builds on restart-on-permanently-yellow, and
