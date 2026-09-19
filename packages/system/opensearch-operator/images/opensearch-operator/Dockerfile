@@ -28,7 +28,7 @@
 # The patches are applied in the order the glob expands, which is alphabetical,
 # and skip-unusable-drain-exclusion builds on restart-on-permanently-yellow. A
 # rename that reorders them fails the build rather than producing a wrong binary.
-FROM golang:1.26@sha256:079e59808d2d252516e27e3f3a9c003740dee7f75e55aa71528766d52bcfc16a AS builder
+FROM golang:1.26@sha256:6c2a5538f964f1c82f97ad14988bf05de100d922d159d0e398b54c7b0ca0c6c9 AS builder
 
 # Keep in step with the chart version pulled by `make update`: the chart's
 # appVersion is what picks the operator image upstream, so a mismatch here would
@@ -55,7 +55,7 @@ RUN go test ./opensearch-gateway/... ./pkg/reconcilers/...
 
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -a -o manager main.go
 
-FROM gcr.io/distroless/static:nonroot@sha256:d29e660cc75a5b6b1334e03c5c81ccf9bc0884a002c6000dbf0fb96034814478
+FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
 WORKDIR /
 COPY --from=builder /workspace/opensearch-operator/manager .
 USER 65532:65532
