@@ -29,6 +29,8 @@ import (
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -56,11 +58,25 @@ const (
 type TapMaterializerReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// APIReader is an uncached reader used for the registration-ownership decision,
+	// where a cache-backed read can be stale in both directions: it can still show
+	// a just-created Package as absent (skipping a needed de-register), or a
+	// just-pinned Package as the old empty-variant auto-registration (de-registering
+	// a user's install). Optional; falls back to the cached client when nil (tests).
+	APIReader client.Reader
 	// Recorder surfaces materialization failures (e.g. a name collision with a
 	// core component) as Events on the tap source. Optional; nil disables Events.
 	Recorder record.EventRecorder
 	// Fetch downloads a Flux artifact tarball. Defaults to HTTP; overridable in tests.
 	Fetch func(ctx context.Context, url string) ([]byte, error)
+}
+
+// liveReader returns the uncached reader when configured, else the cached client.
+func (r *TapMaterializerReconciler) liveReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -160,8 +176,27 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			ps.Annotations = map[string]string{}
 		}
 		ps.Annotations[tapconst.SourceAnnotation] = repo.Name
+		// Register the repository's apps on connect (not on a later `cozypkg
+		// add`) via a tap-managed Package whose install-marked components (the
+		// ApplicationDefinition registrations) deploy so the apps appear in the
+		// catalog, mirroring how the platform ships a Package per built-in app.
+		// The app components carry no install block and are instantiated per user
+		// resource. This is a two-phase converge: prepareRegistration reads and
+		// de-registers BEFORE the apply (so the PackageSource watch cannot drive
+		// the Package reconciler to install a now-privileged component in the
+		// apply-to-delete window), and finishRegistration creates and records
+		// state AFTER the apply (create needs the applied PackageSource's UID for
+		// the ownerReference).
+		skip := autoRegisterSkipReason(ps)
+		plan, err := r.prepareRegistration(ctx, ps, &repo, skip)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("prepare registration for %s: %w", ps.GetName(), err)
+		}
 		if err := r.Patch(ctx, ps, client.Apply, client.FieldOwner(tapFieldOwner), client.ForceOwnership); err != nil {
 			return ctrl.Result{}, fmt.Errorf("materialize PackageSource %s: %w", ps.GetName(), err)
+		}
+		if err := r.finishRegistration(ctx, ps, &repo, plan); err != nil {
+			return ctrl.Result{}, fmt.Errorf("register apps for %s: %w", ps.GetName(), err)
 		}
 		applied[ps.GetName()] = true
 		logger.Info("materialized PackageSource from tap", "name", ps.GetName(), "tap", repo.Name)
@@ -212,8 +247,223 @@ func (r *TapMaterializerReconciler) failMaterialize(ctx context.Context, repo *s
 	return ctrl.Result{}, nil
 }
 
-// deleteMaterialized removes every PackageSource materialized from the given
-// tap source. Installed Packages are intentionally left in place.
+// registrationPlan is the decision prepareRegistration reaches from a single
+// pre-apply read of the Package, and finishRegistration carries out after the
+// apply. Deciding pre-apply avoids a read-your-writes bug: the operator's Get is
+// cache-backed, so a Get issued right after the pre-apply delete could still
+// observe the deleted Package from the informer and misclassify.
+type registrationPlan struct {
+	create bool   // create the registration Package (should register, none exists)
+	reason string // durable registration-state to record ("" clears it)
+	event  string // Warning Event to emit ("" = none)
+}
+
+// deregResult is the outcome of deregisterManaged.
+type deregResult int
+
+const (
+	deregDeleted     deregResult = iota // we deleted our own managed registration
+	deregLeftForeign                    // a non-managed Package (a user's, or pinned) stands
+	deregAbsent                         // no Package of this name exists
+)
+
+// deregisterManaged deletes THIS source's managed registration Package (owned AND
+// still at the auto default variant), returning what it found. It is the one
+// de-register used by every operator path (prepare-before-apply, prune, finalizer
+// teardown), so they cannot diverge on read-freshness or precondition discipline.
+//
+// It reads LIVE (uncached): the decision must not act on a stale cache that shows
+// a just-created Package as absent or a just-pinned one as the old registration.
+// It deletes with a UID AND ResourceVersion precondition. On a conflict it does
+// NOT assume a user pin: a Package's resourceVersion churns on every status write
+// (the Package reconciler updates status on each HelmRelease transition), so it
+// re-reads live and re-classifies — a benign churn re-deletes with the fresh
+// version, a genuine pin (markers shed) reads as not-managed and is left. Only a
+// persistently contended object exhausts the retries and returns an error, which
+// its callers turn into a fail-closed requeue rather than a skipped de-register.
+func (r *TapMaterializerReconciler) deregisterManaged(ctx context.Context, name, sourceName string) (deregResult, error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		var pkg cozyv1alpha1.Package
+		gerr := r.liveReader().Get(ctx, types.NamespacedName{Name: name}, &pkg)
+		if apierrors.IsNotFound(gerr) {
+			return deregAbsent, nil
+		}
+		if gerr != nil {
+			return deregAbsent, gerr
+		}
+		if !collision.ManagedRegistration(&pkg, sourceName) {
+			return deregLeftForeign, nil
+		}
+		delErr := r.Delete(ctx, &pkg, client.Preconditions{UID: &pkg.UID, ResourceVersion: &pkg.ResourceVersion})
+		switch {
+		case delErr == nil:
+			return deregDeleted, nil
+		case apierrors.IsNotFound(delErr):
+			return deregAbsent, nil
+		case apierrors.IsConflict(delErr):
+			continue // resourceVersion moved; re-read and re-classify
+		default:
+			return deregAbsent, delErr
+		}
+	}
+	return deregAbsent, fmt.Errorf("could not de-register registration Package %q: it is being modified concurrently", name)
+}
+
+// prepareRegistration reads the Package once, BEFORE the PackageSource is
+// applied, and de-registers a managed registration Package for an unsafe
+// (privileged / no-default) revision so the PackageSource watch cannot drive the
+// Package reconciler to install the component in the apply-to-delete window. It
+// returns what finishRegistration must do after the apply.
+func (r *TapMaterializerReconciler) prepareRegistration(ctx context.Context, ps *cozyv1alpha1.PackageSource, repo *sourcev1.OCIRepository, skip string) (registrationPlan, error) {
+	name := ps.GetName()
+
+	if skip != "" {
+		// De-register only our own managed registration; the helper re-reads live
+		// and re-classifies on a conflict, so a benign status write (a Package's
+		// resourceVersion churns on every HelmRelease transition) is never mistaken
+		// for a user's pin. On an unresolvable conflict it returns an error so the
+		// reconcile requeues WITHOUT applying the unsafe spec (fail-closed).
+		switch res, derr := r.deregisterManaged(ctx, name, repo.Name); {
+		case derr != nil:
+			return registrationPlan{}, derr
+		case res == deregDeleted:
+			return registrationPlan{reason: "not auto-registered: " + skip, event: "de-registered because " + skip}, nil
+		case res == deregLeftForeign:
+			// A user's own (or pinned) Package still registers the apps: no problem.
+			return registrationPlan{}, nil
+		default: // deregAbsent
+			return registrationPlan{reason: "not auto-registered: " + skip, event: "not auto-registered because " + skip}, nil
+		}
+	}
+
+	// Should be registered. Read live (uncached): the ownership decision must not
+	// act on a stale cache that hides a just-created Package or a just-pinned one.
+	var existing cozyv1alpha1.Package
+	err := r.liveReader().Get(ctx, types.NamespacedName{Name: name}, &existing)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return registrationPlan{}, err
+	}
+	exists := err == nil
+	if !exists {
+		return registrationPlan{create: true}, nil
+	}
+	if collision.ManagedRegistration(&existing, repo.Name) {
+		return registrationPlan{}, nil // ours already stands
+	}
+	if existing.GetLabels()[tapconst.Label] == "true" && !collision.Owns(&existing, repo.Name) {
+		// Tap-labelled but a different source owns it: a stale leftover, since
+		// collision.PackageSourceName already blocks two live taps sharing a
+		// PackageSource name. Surface it durably; do not adopt.
+		reason := fmt.Sprintf("a Package named %q is owned by another tap", name)
+		return registrationPlan{reason: reason, event: reason}, nil
+	}
+	// A user's own manual `cozypkg add` (or a variant pinned from this tap, which
+	// sheds the markers): its Package already registers the apps, so leave it.
+	return registrationPlan{}, nil
+}
+
+// finishRegistration carries out the plan AFTER the PackageSource is applied
+// (create needs the applied PackageSource's UID for the ownerReference), records
+// the durable state, and emits the Event.
+func (r *TapMaterializerReconciler) finishRegistration(ctx context.Context, ps *cozyv1alpha1.PackageSource, repo *sourcev1.OCIRepository, plan registrationPlan) error {
+	if plan.create {
+		pkg := &cozyv1alpha1.Package{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        ps.GetName(),
+				Labels:      map[string]string{tapconst.Label: "true"},
+				Annotations: map[string]string{tapconst.SourceAnnotation: repo.Name},
+				// Own the Package to the PackageSource so a direct delete of the
+				// PackageSource (or a teardown path that misses the Package)
+				// garbage-collects it, rather than stranding it with live
+				// ApplicationDefinitions. Both are cluster-scoped: a legal pairing.
+				OwnerReferences: []metav1.OwnerReference{registrationOwnerRef(ps)},
+			},
+			// Spec.Variant left empty: the Package reconciler resolves it to "default".
+		}
+		if err := r.Create(ctx, pkg); err != nil && !apierrors.IsAlreadyExists(err) {
+			r.warnNotAutoRegistered(repo, ps, "registration Package could not be created: "+err.Error())
+			return err
+		}
+	}
+	if plan.event != "" {
+		r.warnNotAutoRegistered(repo, ps, plan.event)
+	}
+	return r.setRegistrationState(ctx, ps, plan.reason)
+}
+
+// registrationOwnerRef builds the ownerReference from a registration Package to
+// its PackageSource, so the Package is garbage-collected if the PackageSource is
+// deleted directly.
+func registrationOwnerRef(ps *cozyv1alpha1.PackageSource) metav1.OwnerReference {
+	return metav1.OwnerReference{
+		APIVersion: cozyv1alpha1.GroupVersion.String(),
+		Kind:       "PackageSource",
+		Name:       ps.GetName(),
+		UID:        ps.GetUID(),
+	}
+}
+
+// autoRegisterSkipReason returns why a PackageSource's apps must NOT be
+// auto-registered on connect, or "" when they may be. Auto-registration is
+// limited to a "default" variant with no privileged install components.
+func autoRegisterSkipReason(ps *cozyv1alpha1.PackageSource) string {
+	if !hasDefaultVariant(ps) {
+		return `it declares no "default" variant; register it manually with 'cozypkg add'`
+	}
+	if privileged := collision.PrivilegedInstallComponents(ps, "default"); len(privileged) > 0 {
+		return fmt.Sprintf("its default variant has privileged install component(s) %v; register it manually with 'cozypkg add --allow-privileged'", privileged)
+	}
+	return ""
+}
+
+// setRegistrationState records (or clears, on reason == "") the durable reason a
+// PackageSource's apps are not auto-registered, on the PackageSource itself, so
+// the dashboard and operator can read it after the Warning Event has expired. It
+// is a no-op when the annotation already holds the wanted value.
+func (r *TapMaterializerReconciler) setRegistrationState(ctx context.Context, ps *cozyv1alpha1.PackageSource, reason string) error {
+	current := ps.GetAnnotations()[tapconst.RegistrationStateAnnotation]
+	if current == reason {
+		return nil
+	}
+	base := ps.DeepCopy()
+	ann := ps.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	if reason == "" {
+		delete(ann, tapconst.RegistrationStateAnnotation)
+	} else {
+		ann[tapconst.RegistrationStateAnnotation] = reason
+	}
+	ps.SetAnnotations(ann)
+	return r.Patch(ctx, ps, client.MergeFrom(base))
+}
+
+// warnNotAutoRegistered records on the source, as a Warning Event, that a
+// materialized PackageSource's apps were not auto-registered (or were
+// de-registered), with the reason. The durable copy lives on the PackageSource
+// via setRegistrationState; this is the immediate, human-facing signal.
+func (r *TapMaterializerReconciler) warnNotAutoRegistered(repo *sourcev1.OCIRepository, ps *cozyv1alpha1.PackageSource, reason string) {
+	if r.Recorder != nil {
+		r.Recorder.Event(repo, corev1.EventTypeWarning, "AppsNotAutoRegistered",
+			fmt.Sprintf("PackageSource %s: %s", ps.GetName(), reason))
+	}
+}
+
+// hasDefaultVariant reports whether the PackageSource declares a variant named
+// "default".
+func hasDefaultVariant(ps *cozyv1alpha1.PackageSource) bool {
+	for i := range ps.Spec.Variants {
+		if ps.Spec.Variants[i].Name == "default" {
+			return true
+		}
+	}
+	return false
+}
+
+// deleteMaterialized removes every PackageSource materialized from the given tap
+// source, and each one's tap-managed registration Package. A user's own Package
+// (no tap label) is left in place.
 func (r *TapMaterializerReconciler) deleteMaterialized(ctx context.Context, sourceName string) error {
 	return r.pruneMaterialized(ctx, sourceName, nil)
 }
@@ -230,11 +480,31 @@ func (r *TapMaterializerReconciler) pruneMaterialized(ctx context.Context, sourc
 		if ps.Annotations[tapconst.SourceAnnotation] != sourceName || keep[ps.Name] {
 			continue
 		}
+		// Delete the registration Package BEFORE the PackageSource. If the
+		// Package delete fails transiently, the PackageSource is still present so
+		// the next reconcile lists it and retries; deleting the PackageSource
+		// first would leave a stranded Package no later pass can find.
+		if err := r.deleteRegistrationPackage(ctx, ps.Name, sourceName); err != nil {
+			return err
+		}
 		if err := r.Delete(ctx, ps); err != nil && client.IgnoreNotFound(err) != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// deleteRegistrationPackage removes the tap-managed registration Package for a
+// PackageSource, but only when it is a managed registration of the given source
+// (owned AND still at the auto default variant), so a Package a later tap created
+// under a reused name, or one a user pinned to a variant, is never deleted by an
+// earlier tap's teardown.
+func (r *TapMaterializerReconciler) deleteRegistrationPackage(ctx context.Context, name, sourceName string) error {
+	// Shares deregisterManaged with the prepare path, so the prune/finalizer
+	// teardown reads live and uses the same UID+ResourceVersion precondition
+	// rather than a stale cache read that could delete a user's just-pinned Package.
+	_, err := r.deregisterManaged(ctx, name, sourceName)
+	return err
 }
 
 // resolveArtifactURL rewrites a cluster-DNS artifact host (e.g.

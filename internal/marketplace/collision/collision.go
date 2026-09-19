@@ -14,19 +14,57 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 )
 
-// Owns reports whether an existing PackageSource is the given tap source's own
-// materialization, identified by the marketplace-tap label and the source
-// annotation. Such an object is safe to overwrite on an idempotent re-tap; a
-// foreign object of the same name is never owned.
-func Owns(ps *cozyv1alpha1.PackageSource, sourceName string) bool {
-	return ps.GetLabels()[tapconst.Label] == "true" &&
-		ps.GetAnnotations()[tapconst.SourceAnnotation] == sourceName
+// Owns reports whether an object (a PackageSource or the registration Package)
+// belongs to the given tap source, identified by BOTH the marketplace-tap label
+// and the source annotation. Keying on the label alone is not enough: a leftover
+// object from an earlier tap keeps the label, so a later tap that reuses the
+// name would otherwise adopt or delete an object it did not create. A foreign
+// object of the same name is never owned.
+func Owns(obj metav1.Object, sourceName string) bool {
+	// An empty sourceName (a PackageSource with no SourceRef) must never match a
+	// label-only object, whose absent annotation also reads as "": that would
+	// delete or adopt an object this source does not own.
+	return sourceName != "" &&
+		obj.GetLabels()[tapconst.Label] == "true" &&
+		obj.GetAnnotations()[tapconst.SourceAnnotation] == sourceName
+}
+
+// ManagedRegistration reports whether pkg is the given tap source's auto-created
+// registration Package that the operator still manages: owned by the source AND
+// still at the auto default (empty variant). A Package a user pinned to a variant
+// via `cozypkg add` sheds its tap markers, and the empty-variant clause is a
+// second line of defence. It is the single ownership predicate every path (the
+// materializer's de-register and prune, the CLI untap, the dashboard disconnect,
+// and `cozypkg add`'s re-open) shares, so they can never disagree on which
+// Package is the operator's to manage.
+func ManagedRegistration(pkg *cozyv1alpha1.Package, sourceName string) bool {
+	return Owns(pkg, sourceName) && pkg.Spec.Variant == ""
+}
+
+// PrivilegedInstallComponents lists the names of the given variant's
+// install-marked components that request privileged access. Both the CLI
+// (cozypkg add) and the operator's tap materializer gate on it, so it lives here
+// as the single shared definition.
+func PrivilegedInstallComponents(ps *cozyv1alpha1.PackageSource, variant string) []string {
+	var out []string
+	for i := range ps.Spec.Variants {
+		if ps.Spec.Variants[i].Name != variant {
+			continue
+		}
+		for _, c := range ps.Spec.Variants[i].Components {
+			if c.Install != nil && c.Install.Privileged {
+				out = append(out, c.Name)
+			}
+		}
+	}
+	return out
 }
 
 // PackageSourceName returns an error if a PackageSource named name already

@@ -45,16 +45,17 @@ tests:
             verbs: ["get", "watch", "list", "create", "update", "patch", "delete"]
 
   # The marketplace tap flow: disconnecting a tap deletes its cluster-scoped
-  # PackageSource, and the tap's Flux OCIRepository is read to report status.
-  # Both grants live on this ClusterRole because the tap handler runs with the
-  # cozystack-api ServiceAccount's client.
-  - it: grants delete on cozystack.io packagesources for tap disconnect
+  # PackageSource and the tap-managed registration Package that de-registers its
+  # apps, and the tap's Flux OCIRepository is read to report status. These grants
+  # live on this ClusterRole because the tap handler runs with the cozystack-api
+  # ServiceAccount's client.
+  - it: grants delete on cozystack.io packagesources and packages for tap disconnect
     asserts:
       - contains:
           path: rules
           content:
             apiGroups: ["cozystack.io"]
-            resources: ["packagesources"]
+            resources: ["packagesources", "packages"]
             verbs: ["delete"]
 
   - it: grants read on source.toolkit.fluxcd.io ocirepositories for tap status
@@ -75,7 +76,7 @@ tests:
             resources: ["bucketclasses"]
             verbs: ["get", "watch", "list"]
 
-  - it: ships exactly the eighteen rules this role is pinned to
+  - it: ships exactly the twenty rules this role is pinned to
     asserts:
       # Both directions. A dropped grant is the failure this suite is about:
       # the apiserver returns forbidden and List silently drops the dropdown.
