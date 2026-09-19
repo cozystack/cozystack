@@ -1,0 +1,672 @@
+diff --git a/opensearch-operator/opensearch-gateway/services/http_request.go b/opensearch-operator/opensearch-gateway/services/http_request.go
+index 724ccf8..5c09115 100644
+--- a/opensearch-operator/opensearch-gateway/services/http_request.go
++++ b/opensearch-operator/opensearch-gateway/services/http_request.go
+@@ -17,16 +17,7 @@ func doHTTPGet(ctx context.Context, client *opensearch.Client, path strings.Buil
+ 		return nil, err
+ 	}
+ 
+-	if ctx != nil {
+-		req = req.WithContext(ctx)
+-	}
+-
+-	res, err := client.Perform(req)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	return &opensearchapi.Response{StatusCode: res.StatusCode, Body: res.Body, Header: res.Header}, nil
++	return performRequest(ctx, client, req)
+ }
+ 
+ // doHTTPPost performs a HTTP POST request
+@@ -36,17 +27,9 @@ func doHTTPPost(ctx context.Context, client *opensearch.Client, path strings.Bui
+ 		return nil, err
+ 	}
+ 
+-	if ctx != nil {
+-		req = req.WithContext(ctx)
+-	}
+ 	req.Header.Add(headerContentType, jsonContentHeader)
+ 
+-	res, err := client.Perform(req)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	return &opensearchapi.Response{StatusCode: res.StatusCode, Body: res.Body, Header: res.Header}, nil
++	return performRequest(ctx, client, req)
+ }
+ 
+ // doHTTPHead performs a HTTP HEAD request
+@@ -56,16 +39,7 @@ func doHTTPHead(ctx context.Context, client *opensearch.Client, path strings.Bui
+ 		return nil, err
+ 	}
+ 
+-	if ctx != nil {
+-		req = req.WithContext(ctx)
+-	}
+-
+-	res, err := client.Perform(req)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	return &opensearchapi.Response{StatusCode: res.StatusCode, Body: res.Body, Header: res.Header}, nil
++	return performRequest(ctx, client, req)
+ }
+ 
+ // doHTTPPut performs a HTTP PUT request
+@@ -75,17 +49,9 @@ func doHTTPPut(ctx context.Context, client *opensearch.Client, path strings.Buil
+ 		return nil, err
+ 	}
+ 
+-	if ctx != nil {
+-		req = req.WithContext(ctx)
+-	}
+ 	req.Header.Add(headerContentType, jsonContentHeader)
+ 
+-	res, err := client.Perform(req)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	return &opensearchapi.Response{StatusCode: res.StatusCode, Body: res.Body, Header: res.Header}, nil
++	return performRequest(ctx, client, req)
+ }
+ 
+ // doHTTPDelete performs a HTTP DELETE request
+@@ -95,14 +61,50 @@ func doHTTPDelete(ctx context.Context, client *opensearch.Client, path strings.B
+ 		return nil, err
+ 	}
+ 
+-	if ctx != nil {
+-		req = req.WithContext(ctx)
++	return performRequest(ctx, client, req)
++}
++
++// performRequest sends req and bounds the whole exchange, the body read
++// included, with requestTimeout.
++//
++// The deadline has to outlive this function, because the response body goes
++// back to the caller still open and cancelling here would fail their read. It
++// therefore rides on the body and is released when the body is closed, which is
++// how http.Client applies its own Timeout. A caller that never closes the body
++// holds the timer until the deadline passes, and the deadline then closes the
++// connection on its behalf.
++//
++// Bounding it here rather than at each call site is what covers the read of a
++// body that has started arriving and then stops: the transport's
++// ResponseHeaderTimeout stops counting once the headers are in, so it is no
++// bound at all on a body that stalls halfway.
++func performRequest(ctx context.Context, client *opensearch.Client, req *http.Request) (*opensearchapi.Response, error) {
++	if ctx == nil {
++		ctx = context.Background()
+ 	}
++	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+ 
+-	res, err := client.Perform(req)
++	res, err := client.Perform(req.WithContext(ctx))
+ 	if err != nil {
++		cancel()
+ 		return nil, err
+ 	}
+ 
+-	return &opensearchapi.Response{StatusCode: res.StatusCode, Body: res.Body, Header: res.Header}, nil
++	return &opensearchapi.Response{
++		StatusCode: res.StatusCode,
++		Body:       &deadlineBody{ReadCloser: res.Body, cancel: cancel},
++		Header:     res.Header,
++	}, nil
++}
++
++// deadlineBody releases its request's deadline when the body is closed.
++type deadlineBody struct {
++	io.ReadCloser
++	cancel context.CancelFunc
++}
++
++func (b *deadlineBody) Close() error {
++	err := b.ReadCloser.Close()
++	b.cancel()
++	return err
+ }
+diff --git a/opensearch-operator/opensearch-gateway/services/os_client.go b/opensearch-operator/opensearch-gateway/services/os_client.go
+index 741ea4a..26928cc 100644
+--- a/opensearch-operator/opensearch-gateway/services/os_client.go
++++ b/opensearch-operator/opensearch-gateway/services/os_client.go
+@@ -8,6 +8,7 @@ import (
+ 	"github.com/Opster/opensearch-k8s-operator/opensearch-operator/pkg/helpers"
+ 	"io"
+ 	"k8s.io/utils/ptr"
++	"net"
+ 	"net/http"
+ 	"strconv"
+ 	"strings"
+@@ -42,6 +43,72 @@ var AdditionalSystemIndices = []string{
+ 	".replication-metadata-store",
+ }
+ 
++// A request to a cluster's HTTP API has no bound of its own: a fresh
++// http.Transport carries no dial, handshake or response-header timeout, the
++// client is built without an http.Client, and the Timeout field on a request
++// type is the server-side query parameter, which only helps once something
++// answers. The operator runs one worker per controller, so a single call that
++// never returns stops every OpenSearchCluster from being reconciled, and the
++// finalizer on the next deletion waits out its own termination timeout with
++// nothing in the log to say why.
++//
++// requestTimeout is applied in two places, because the calls come in two
++// shapes. The ones below make a request and decode the answer before they
++// return, so they carry the deadline themselves, through requestContext. The
++// ones that take a context from the caller and hand the still-open body back
++// get it in performRequest, where the deadline rides on the body. Nothing on
++// the reconcile path puts a deadline on the context it passes in, so without
++// that second half those calls would have only the transport's bounds, and
++// ResponseHeaderTimeout stops counting once the headers arrive.
++//
++// These are variables rather than constants so the tests can shorten them.
++var (
++	// requestTimeout bounds one call this client makes on its own behalf, from
++	// the dial to the last byte of the body. Every such call answers in well
++	// under a second on a healthy cluster, and the controllers requeue on the
++	// order of tens of seconds, so a call still running at this point is not
++	// going to produce an answer worth waiting for.
++	requestTimeout = 30 * time.Second
++
++	// connectTimeout bounds getting a connection up: the dial and the TLS
++	// handshake, each separately. Neither is covered by responseHeaderTimeout,
++	// which the transport only starts counting once the request is written.
++	connectTimeout = 10 * time.Second
++
++	// responseHeaderTimeout bounds the wait for response headers. It is
++	// deliberately looser than requestTimeout, because it is also the only
++	// bound on the requests opensearch-go makes for itself: the product check
++	// on a client's first request carries a context.Background() of its own,
++	// inside the library, which nothing here can reach.
++	responseHeaderTimeout = 60 * time.Second
++)
++
++// requestContext bounds a single request. The caller must cancel it only once
++// it is done with the response body, which for the calls that use it is when
++// the body has been decoded: cancelling earlier fails the read.
++//
++// It hangs off context.Background() rather than the caller's context, which the
++// methods below do not take: threading one through would change every signature
++// and every call site of a patch meant to be dropped. The cost is that an
++// operator shutting down waits out a call it could have abandoned.
++func requestContext() (context.Context, context.CancelFunc) {
++	return context.WithTimeout(context.Background(), requestTimeout)
++}
++
++// clusterTransport is the transport used when the caller supplies none.
++func clusterTransport() *http.Transport {
++	return &http.Transport{
++		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
++		// These options are needed as otherwise connections would be kept and leak memory
++		// Connection reuse is not really possible due to each reconcile run being independent
++		DisableKeepAlives:     true,
++		MaxIdleConns:          1,
++		DialContext:           (&net.Dialer{Timeout: connectTimeout}).DialContext,
++		TLSHandshakeTimeout:   connectTimeout,
++		ResponseHeaderTimeout: responseHeaderTimeout,
++	}
++}
++
+ type OsClusterClient struct {
+ 	OsClusterClientOptions
+ 	client   *opensearch.Client
+@@ -74,13 +141,7 @@ func NewOsClusterClient(clusterUrl string, username string, password string, opt
+ 			if options.transport != nil {
+ 				return options.transport
+ 			}
+-			return &http.Transport{
+-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+-				// These options are needed as otherwise connections would be kept and leak memory
+-				// Connection reuse is not really possible due to each reconcile run being independent
+-				DisableKeepAlives: true,
+-				MaxIdleConns:      1,
+-			}
++			return clusterTransport()
+ 		}(),
+ 		Addresses: []string{clusterUrl},
+ 		Username:  username,
+@@ -103,7 +164,9 @@ func NewOsClusterClientFromConfig(config opensearch.Config) (*OsClusterClient, e
+ 		service.client = client
+ 	}
+ 	pingReq := opensearchapi.PingRequest{}
+-	pingRes, err := pingReq.Do(context.Background(), client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	pingRes, err := pingReq.Do(ctx, client)
+ 	if err == nil && pingRes.StatusCode == 200 {
+ 		mainPageResponse, err := MainPage(client)
+ 		if err == nil {
+@@ -115,7 +178,9 @@ func NewOsClusterClientFromConfig(config opensearch.Config) (*OsClusterClient, e
+ 
+ func MainPage(client *opensearch.Client) (responses.MainResponse, error) {
+ 	req := opensearchapi.InfoRequest{}
+-	infoRes, err := req.Do(context.Background(), client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	infoRes, err := req.Do(ctx, client)
+ 	var response responses.MainResponse
+ 	if err == nil {
+ 		defer helpers.SafeClose(infoRes.Body)
+@@ -128,7 +193,9 @@ func (client *OsClusterClient) GetHealth() (responses.ClusterHealthResponse, err
+ 	req := opensearchapi.ClusterHealthRequest{
+ 		Level: "indices",
+ 	}
+-	catNodesRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	catNodesRes, err := req.Do(ctx, client.client)
+ 	var response responses.ClusterHealthResponse
+ 	if err == nil {
+ 		defer helpers.SafeClose(catNodesRes.Body)
+@@ -139,7 +206,9 @@ func (client *OsClusterClient) GetHealth() (responses.ClusterHealthResponse, err
+ 
+ func (client *OsClusterClient) CatNodes() ([]responses.CatNodesResponse, error) {
+ 	req := opensearchapi.CatNodesRequest{Format: "json"}
+-	catNodesRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	catNodesRes, err := req.Do(ctx, client.client)
+ 	var response []responses.CatNodesResponse
+ 	if err == nil {
+ 		defer helpers.SafeClose(catNodesRes.Body)
+@@ -150,7 +219,9 @@ func (client *OsClusterClient) CatNodes() ([]responses.CatNodesResponse, error)
+ 
+ func (client *OsClusterClient) NodesStats() (responses.NodesStatsResponse, error) {
+ 	req := opensearchapi.NodesStatsRequest{}
+-	catNodesRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	catNodesRes, err := req.Do(ctx, client.client)
+ 	var response responses.NodesStatsResponse
+ 	if err == nil {
+ 		defer helpers.SafeClose(catNodesRes.Body)
+@@ -161,7 +232,9 @@ func (client *OsClusterClient) NodesStats() (responses.NodesStatsResponse, error
+ 
+ func (client *OsClusterClient) CatIndices() ([]responses.CatIndicesResponse, error) {
+ 	req := opensearchapi.CatIndicesRequest{Format: "json"}
+-	indicesRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	indicesRes, err := req.Do(ctx, client.client)
+ 	var response []responses.CatIndicesResponse
+ 	if err != nil {
+ 		return response, err
+@@ -178,7 +251,9 @@ func (client *OsClusterClient) GetAllocationExplain(index string, shard int, pri
+ 		"primary": primary,
+ 	}
+ 	req := opensearchapi.ClusterAllocationExplainRequest{Body: opensearchutil.NewJSONReader(body)}
+-	explainRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	explainRes, err := req.Do(ctx, client.client)
+ 	var response responses.AllocationExplainResponse
+ 	if err != nil {
+ 		return response, err
+@@ -193,7 +268,9 @@ func (client *OsClusterClient) GetAllocationExplain(index string, shard int, pri
+ 
+ func (client *OsClusterClient) CatShards(headers []string) ([]responses.CatShardsResponse, error) {
+ 	req := opensearchapi.CatShardsRequest{Format: "json", H: headers}
+-	indicesRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	indicesRes, err := req.Do(ctx, client.client)
+ 	var response []responses.CatShardsResponse
+ 	if err != nil {
+ 		return response, err
+@@ -209,7 +286,9 @@ func (client *OsClusterClient) CatNamedIndicesShards(headers []string, indices [
+ 		Format: "json",
+ 		H:      headers,
+ 	}
+-	indicesRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	indicesRes, err := req.Do(ctx, client.client)
+ 	var response []responses.CatShardsResponse
+ 	if err != nil {
+ 		return response, err
+@@ -221,7 +300,9 @@ func (client *OsClusterClient) CatNamedIndicesShards(headers []string, indices [
+ 
+ func (client *OsClusterClient) GetClusterSettings() (responses.ClusterSettingsResponse, error) {
+ 	req := opensearchapi.ClusterGetSettingsRequest{Pretty: true}
+-	settingsRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	settingsRes, err := req.Do(ctx, client.client)
+ 	var response responses.ClusterSettingsResponse
+ 	if err != nil {
+ 		return response, err
+@@ -235,7 +316,9 @@ func (client *OsClusterClient) GetFlatClusterSettings() (responses.FlatClusterSe
+ 	req := opensearchapi.ClusterGetSettingsRequest{
+ 		FlatSettings: ptr.To(true),
+ 	}
+-	settingsRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	settingsRes, err := req.Do(ctx, client.client)
+ 	var response responses.FlatClusterSettingsResponse
+ 	if err != nil {
+ 		return response, err
+@@ -253,7 +336,9 @@ func (client *OsClusterClient) GetFlatClusterSettings() (responses.FlatClusterSe
+ func (client *OsClusterClient) PutClusterSettings(settings responses.ClusterSettingsResponse) (responses.ClusterSettingsResponse, error) {
+ 	body := opensearchutil.NewJSONReader(settings)
+ 	req := opensearchapi.ClusterPutSettingsRequest{Body: body}
+-	settingsRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	settingsRes, err := req.Do(ctx, client.client)
+ 	var response responses.ClusterSettingsResponse
+ 	if err != nil {
+ 		return response, err
+@@ -266,7 +351,9 @@ func (client *OsClusterClient) PutClusterSettings(settings responses.ClusterSett
+ func (client *OsClusterClient) ReRouteShard(rerouteJson string) (responses.ClusterRerouteResponse, error) {
+ 	body := strings.NewReader(rerouteJson)
+ 	req := opensearchapi.ClusterRerouteRequest{Body: body}
+-	settingsRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	settingsRes, err := req.Do(ctx, client.client)
+ 	var response responses.ClusterRerouteResponse
+ 	if err != nil {
+ 		return response, err
+@@ -282,7 +369,9 @@ func (client *OsClusterClient) GetClusterHealth() (responses.ClusterHealthRespon
+ 	}
+ 
+ 	health := responses.ClusterHealthResponse{}
+-	resp, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	resp, err := req.Do(ctx, client.client)
+ 	if err != nil {
+ 		return health, err
+ 	}
+@@ -303,7 +392,9 @@ func (client *OsClusterClient) IndexExists(indexName string) (bool, error) {
+ 			indexName,
+ 		},
+ 	}
+-	indicesRes, err := req.Do(context.Background(), client.client)
++	ctx, cancel := requestContext()
++	defer cancel()
++	indicesRes, err := req.Do(ctx, client.client)
+ 	if err != nil {
+ 		return false, err
+ 	}
+diff --git a/opensearch-operator/opensearch-gateway/services/os_client_timeout_test.go b/opensearch-operator/opensearch-gateway/services/os_client_timeout_test.go
+new file mode 100644
+index 0000000..211bc6c
+--- /dev/null
++++ b/opensearch-operator/opensearch-gateway/services/os_client_timeout_test.go
+@@ -0,0 +1,268 @@
++package services
++
++import (
++	"context"
++	"io"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"runtime"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/opensearch-project/opensearch-go"
++)
++
++// blockedTransport is a cluster that has stopped answering: the request goes
++// out and nothing comes back until whoever sent it gives up.
++//
++// It answers the root path, and only the root path, because opensearch-go
++// checks the product it is talking to on a client's first request and gives
++// that check a context.Background() of its own, inside the library, where a
++// deadline set here cannot reach it. That request is bounded by the transport
++// and by nothing else, which is what the transport test below covers.
++type blockedTransport struct{}
++
++func (blockedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
++	if req.URL.Path == "/" {
++		return &http.Response{
++			StatusCode: http.StatusOK,
++			Header:     http.Header{"Content-Type": []string{"application/json"}},
++			Body:       io.NopCloser(strings.NewReader(`{"version":{"number":"2.0.0","distribution":"opensearch"}}`)),
++			Request:    req,
++		}, nil
++	}
++	<-req.Context().Done()
++	return nil, req.Context().Err()
++}
++
++// callIsAnsweredOrAbandoned runs call in the background and fails the test if it
++// is still running after grace. Waiting in the test rather than in the call is
++// what turns an unbounded call into a failure instead of a test run that hangs
++// until the CI job is killed.
++func callIsAnsweredOrAbandoned(t *testing.T, grace time.Duration, what string, call func() error) {
++	t.Helper()
++	done := make(chan error, 1)
++	go func() { done <- call() }()
++	select {
++	case err := <-done:
++		if err == nil {
++			t.Fatalf("%s: expected the call to fail once its deadline passed", what)
++		}
++	case <-time.After(grace):
++		t.Fatalf("%s: still running after %s, so the call is unbounded", what, grace)
++	}
++}
++
++// silentListener accepts connections and answers nothing on them. The accepted
++// connections are returned rather than dropped because an unreachable net.Conn
++// is closed by the garbage collector: net.netFD carries a finalizer that closes
++// the descriptor, so a dropped connection turns this into a server that resets
++// the connection, and a request against it then fails for a reason that has
++// nothing to do with the timeout under test.
++func silentListener(t *testing.T) (net.Listener, *[]net.Conn) {
++	t.Helper()
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = ln.Close() })
++
++	var mu sync.Mutex
++	accepted := &[]net.Conn{}
++	go func() {
++		for {
++			conn, err := ln.Accept()
++			if err != nil {
++				return
++			}
++			mu.Lock()
++			*accepted = append(*accepted, conn)
++			mu.Unlock()
++		}
++	}()
++
++	// Collect throughout, so that a connection this listener stops holding is
++	// closed while the test is still waiting rather than after it.
++	stop := make(chan struct{})
++	t.Cleanup(func() { close(stop) })
++	go func() {
++		for {
++			select {
++			case <-stop:
++				return
++			default:
++				runtime.GC()
++				time.Sleep(10 * time.Millisecond)
++			}
++		}
++	}()
++
++	return ln, accepted
++}
++
++// keepReachable is the deferred read that keeps the accepted connections alive
++// to the end of the test, and the reason silentListener forces a collection on
++// every accept: with the connections dropped instead, that collection closes
++// them and the test passes with the bound it exists to pin removed.
++func keepReachable(conns *[]net.Conn) {
++	_ = len(*conns)
++}
++
++func TestCallToAClusterThatNeverAnswersGivesUp(t *testing.T) {
++	old := requestTimeout
++	requestTimeout = 200 * time.Millisecond
++	t.Cleanup(func() { requestTimeout = old })
++
++	raw, err := opensearch.NewClient(opensearch.Config{
++		Addresses: []string{"http://os.test:9200"},
++		Transport: blockedTransport{},
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	client := &OsClusterClient{client: raw}
++
++	callIsAnsweredOrAbandoned(t, 10*time.Second, "GetHealth", func() error {
++		_, err := client.GetHealth()
++		return err
++	})
++	callIsAnsweredOrAbandoned(t, 10*time.Second, "CatNodes", func() error {
++		_, err := client.CatNodes()
++		return err
++	})
++}
++
++func TestTransportGivesUpOnAServerThatAcceptsAndSaysNothing(t *testing.T) {
++	old := responseHeaderTimeout
++	responseHeaderTimeout = 200 * time.Millisecond
++	t.Cleanup(func() { responseHeaderTimeout = old })
++
++	ln, accepted := silentListener(t)
++	defer keepReachable(accepted)
++
++	req, err := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+"/", nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	transport := clusterTransport()
++	t.Cleanup(transport.CloseIdleConnections)
++
++	callIsAnsweredOrAbandoned(t, 10*time.Second, "GET through the operator's transport", func() error {
++		res, err := transport.RoundTrip(req)
++		if res != nil {
++			_ = res.Body.Close()
++		}
++		return err
++	})
++}
++
++// TestTransportCarriesConnectionTimeouts pins the bounds the test above cannot
++// reach. A dial that hangs needs an address that neither answers nor refuses,
++// and a TLS handshake that hangs needs a server that stops mid-handshake:
++// neither is something a test can arrange on loopback. The handshake bound is
++// therefore asserted by value, and the dial bound only by being set at all,
++// since a dialer is a function here and its timeout cannot be read back.
++func TestTransportCarriesConnectionTimeouts(t *testing.T) {
++	transport := clusterTransport()
++
++	if transport.DialContext == nil {
++		t.Error("DialContext is unset, so the transport dials with no timeout at all")
++	}
++	if transport.TLSHandshakeTimeout != connectTimeout {
++		t.Errorf("TLSHandshakeTimeout is %s, want %s", transport.TLSHandshakeTimeout, connectTimeout)
++	}
++	if transport.ResponseHeaderTimeout != responseHeaderTimeout {
++		t.Errorf("ResponseHeaderTimeout is %s, want %s", transport.ResponseHeaderTimeout, responseHeaderTimeout)
++	}
++}
++
++// answeringServer answers the two requests a new client makes before anything
++// else: the ping, and the product check opensearch-go runs on a client's first
++// request. Every other path is handed to serve.
++func answeringServer(t *testing.T, serve http.HandlerFunc) *httptest.Server {
++	t.Helper()
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/" {
++			_, _ = io.WriteString(w, `{"version":{"number":"2.0.0","distribution":"opensearch"}}`)
++			return
++		}
++		serve(w, r)
++	}))
++	t.Cleanup(srv.Close)
++	return srv
++}
++
++// TestBodyThatStopsHalfwayIsBounded covers the calls that take a context from
++// the caller: nothing on the reconcile path puts a deadline on that context,
++// and the transport's ResponseHeaderTimeout stops counting the moment the
++// headers arrive, so a body that starts and then stops is bounded by the
++// deadline the request carries or by nothing.
++func TestBodyThatStopsHalfwayIsBounded(t *testing.T) {
++	oldRequest := requestTimeout
++	requestTimeout = 200 * time.Millisecond
++	t.Cleanup(func() { requestTimeout = oldRequest })
++
++	stall := make(chan struct{})
++	srv := answeringServer(t, func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Length", "100")
++		w.WriteHeader(http.StatusOK)
++		w.(http.Flusher).Flush()
++		<-stall
++	})
++	t.Cleanup(func() { close(stall) })
++
++	client, err := NewOsClusterClient(srv.URL, "u", "p")
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	callIsAnsweredOrAbandoned(t, 10*time.Second, "reading a body that stopped halfway", func() error {
++		res, err := client.GetIndices(context.Background(), "test-*")
++		if err != nil {
++			return err
++		}
++		defer func() { _ = res.Body.Close() }()
++		_, err = io.ReadAll(res.Body)
++		return err
++	})
++}
++
++// TestBodyOutlivesTheCallThatFetchedIt is the other half: the deadline is
++// released by the body's Close and not by the call's return, because these
++// calls hand the body back still open and the caller reads it afterwards.
++func TestBodyOutlivesTheCallThatFetchedIt(t *testing.T) {
++	const chunk = 64 << 10
++	const chunks = 16
++
++	srv := answeringServer(t, func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "application/json")
++		w.WriteHeader(http.StatusOK)
++		for i := 0; i < chunks; i++ {
++			_, _ = w.Write([]byte(strings.Repeat("x", chunk)))
++			w.(http.Flusher).Flush()
++			time.Sleep(5 * time.Millisecond)
++		}
++	})
++
++	client, err := NewOsClusterClient(srv.URL, "u", "p")
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	res, err := client.GetIndices(context.Background(), "test-*")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = res.Body.Close() }()
++
++	body, err := io.ReadAll(res.Body)
++	if err != nil {
++		t.Fatalf("reading the body after the call returned: %v", err)
++	}
++	if len(body) != chunk*chunks {
++		t.Errorf("read %d bytes of the body, want %d", len(body), chunk*chunks)
++	}
++}
