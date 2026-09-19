@@ -38,6 +38,85 @@ tests:
           value: my-mongodb
         documentIndex: 0
 
+  #########################
+  # Backup storage gating #
+  #########################
+
+  # Legacy flow: the chart renders the static s3-storage from backup.* values.
+  - it: renders static s3-storage on the legacy backup flow
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        useSystemBucket: false
+        destinationPath: s3://my-bucket/mongodb-src/
+        endpointURL: https://s3.example.org
+    asserts:
+      - equal:
+          path: spec.backup.enabled
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.credentialsSecret
+          value: test-mongodb-s3-creds
+        documentIndex: 0
+
+  # useSystemBucket: enabled stays true (pbm agents run) but the chart omits
+  # spec.backup.storages entirely - the cozy-default BackupClass driver
+  # SSA-injects it at BackupJob time, so Helm must not own that subtree.
+  - it: omits spec.backup.storages on useSystemBucket
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        useSystemBucket: true
+    asserts:
+      - equal:
+          path: spec.backup.enabled
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.backup.storages
+        documentIndex: 0
+      - notExists:
+          path: spec.backup.tasks
+        documentIndex: 0
+      - notExists:
+          path: spec.backup.pitr
+        documentIndex: 0
+
+  - it: ignores retentionPolicy and schedule on useSystemBucket (renders, no tasks)
+    # On this flow retentionPolicy and schedule are inert (documented as ignored),
+    # handled the same way: a custom value renders cleanly without emitting the
+    # tasks block, never a hard render error.
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        useSystemBucket: true
+        retentionPolicy: 7d
+        schedule: "0 5 * * *"
+    asserts:
+      - equal:
+          path: spec.backup.enabled
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.backup.tasks
+        documentIndex: 0
+
   ##################
   # Finalizers     #
   ##################

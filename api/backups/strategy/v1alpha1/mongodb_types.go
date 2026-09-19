@@ -37,11 +37,14 @@ const (
 // carrying the S3 destination read back from the source backup, so the same
 // artifact restores in-place or into a differently-named instance.
 //
-// Unlike the MariaDB strategy, the storage config is NOT inlined here: psmdb
-// resolves spec.storageName against the source cluster's spec.backup.storages,
-// so the S3/credentials live on the PerconaServerMongoDB CR (the mongodb chart
-// declares them when backup.enabled=true) and the strategy only names the
-// storage to use.
+// The strategy always names the storage (spec.template.storageName) psmdb
+// resolves against the source cluster's spec.backup.storages. On the legacy
+// flow the S3/credentials for that storage live on the PerconaServerMongoDB CR
+// (the mongodb chart declares them when backup.enabled=true and
+// useSystemBucket=false). On the useSystemBucket flow the chart cannot know the
+// platform bucket at render time, so the strategy also carries the storage's S3
+// coordinates (spec.template.s3) and the driver SSA-injects them onto the
+// cluster at BackupJob time.
 type MongoDB struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -75,9 +78,11 @@ type MongoDBSpec struct {
 // MongoDBTemplate describes the templated PerconaServerMongoDBBackup shape the
 // driver renders per BackupJob.
 type MongoDBTemplate struct {
-	// StorageName names a storage entry declared in the source cluster's
-	// spec.backup.storages. The mongodb chart declares "s3-storage" when
-	// backup.enabled=true; leave empty to use that default. Templating is
+	// StorageName names a storage entry in the source cluster's
+	// spec.backup.storages. On the legacy flow the mongodb chart declares
+	// "s3-storage" when backup.enabled=true and useSystemBucket=false; on the
+	// useSystemBucket flow the driver injects an entry under this same name from
+	// the S3 coordinates below. Leave empty to use "s3-storage". Templating is
 	// supported.
 	// +optional
 	StorageName string `json:"storageName,omitempty"`
@@ -100,6 +105,45 @@ type MongoDBTemplate struct {
 	// Left unset the operator picks its default.
 	// +optional
 	CompressionLevel *int `json:"compressionLevel,omitempty"`
+
+	// S3 carries the system-bucket storage coordinates the driver SSA-patches
+	// onto the source PerconaServerMongoDB's spec.backup.storages[StorageName]
+	// on the useSystemBucket flow. PBM takes these as static CR fields (not
+	// secret refs), and the platform bucket name / endpoint are only known at
+	// BackupJob time, so the cozy-default strategy carries them (endpointUrl
+	// already scheme'd by the endpoint helper) and the driver injects them. Nil
+	// means the legacy flow: rely on the storage the app chart rendered
+	// statically, and patch nothing.
+	// +optional
+	S3 *MongoDBStorageS3 `json:"s3,omitempty"`
+}
+
+// MongoDBStorageS3 mirrors the psmdb spec.backup.storages[<name>].s3 block the
+// driver injects. String fields support templating (e.g. Prefix uses
+// {{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}).
+type MongoDBStorageS3 struct {
+	// Bucket is the S3 bucket name (the COSI-assigned system bucket).
+	// +optional
+	Bucket string `json:"bucket,omitempty"`
+	// EndpointURL is the full S3 endpoint URL including scheme.
+	// +optional
+	EndpointURL string `json:"endpointUrl,omitempty"`
+	// Region is the S3 region.
+	// +optional
+	Region string `json:"region,omitempty"`
+	// Prefix scopes this release's backups under the bucket.
+	// +optional
+	Prefix string `json:"prefix,omitempty"`
+	// CredentialsSecret names the Secret carrying AWS_ACCESS_KEY_ID /
+	// AWS_SECRET_ACCESS_KEY. Defaults to cozy-backups-creds when empty.
+	// +optional
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
+	// ForcePathStyle selects path-style S3 addressing.
+	// +optional
+	ForcePathStyle *bool `json:"forcePathStyle,omitempty"`
+	// InsecureSkipTLSVerify disables S3 endpoint certificate verification.
+	// +optional
+	InsecureSkipTLSVerify bool `json:"insecureSkipTLSVerify,omitempty"`
 }
 
 // MongoDBStatus reports observed state for the strategy CR. Driver controllers

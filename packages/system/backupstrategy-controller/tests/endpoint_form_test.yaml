@@ -19,6 +19,7 @@ templates:
   - templates/strategy-cnpg-default.yaml
   - templates/strategy-mariadb-default.yaml
   - templates/strategy-foundationdb-default.yaml
+  - templates/strategy-mongodb-default.yaml
   - templates/velero-bsl.yaml
 
 release:
@@ -62,6 +63,10 @@ tests:
           path: spec.template.blobStoreConfiguration.urlParameters
           content: secure_connection=1
         template: templates/strategy-foundationdb-default.yaml
+      - equal:
+          path: spec.template.s3.endpointUrl
+          value: https://s3.example.com:8333
+        template: templates/strategy-mongodb-default.yaml
 
   - it: "http endpoint: MariaDB TLS off, FDB secure_connection=0, Etcd keeps scheme"
     set:
@@ -79,6 +84,10 @@ tests:
           path: spec.template.blobStoreConfiguration.urlParameters
           content: secure_connection=0
         template: templates/strategy-foundationdb-default.yaml
+      - equal:
+          path: spec.template.s3.endpointUrl
+          value: http://s3.example.com:8333
+        template: templates/strategy-mongodb-default.yaml
 
   - it: "external S3 (provisionBucket:false): endpoint is used verbatim (no derivation)"
     set:

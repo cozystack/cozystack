@@ -155,17 +155,19 @@ databases: {}
 
 ## @typedef {struct} Backup - Backup configuration.
 ## @field {bool} enabled - Enable regular backups.
-## @field {string} [schedule] - Cron schedule for automated backups.
-## @field {string} [retentionPolicy] - Retention policy (e.g. "30d").
-## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/).
-## @field {string} [endpointURL] - S3 endpoint URL for uploads.
-## @field {bool} [insecureSkipTLSVerify] - Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs).
-## @field {string} [s3AccessKey] - Access key for S3 authentication.
-## @field {string} [s3SecretKey] - Secret key for S3 authentication.
+## @field {bool} [useSystemBucket] - Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `<namespace>/<application>`. Scheduling moves to a BackupClass Plan; `schedule`, `retentionPolicy` and PITR are ignored while this is on, and this flow has no retention yet (see docs/operations/backup-classes.md).
+## @field {string} [schedule] - Cron schedule for automated backups. Ignored when useSystemBucket is true (scheduling moves to the BackupClass Plan).
+## @field {string} [retentionPolicy] - Retention policy (e.g. "30d"). Ignored when useSystemBucket is true (no engine-side retention on that flow).
+## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/). Ignored when useSystemBucket is true (the driver injects the platform bucket).
+## @field {string} [endpointURL] - S3 endpoint URL for uploads. Ignored when useSystemBucket is true (the strategy supplies the platform endpoint).
+## @field {bool} [insecureSkipTLSVerify] - Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs). Ignored when useSystemBucket is true (the platform backupStorage knob applies instead).
+## @field {string} [s3AccessKey] - Access key for S3 authentication. Ignored when useSystemBucket is true (credentials come from the projected cozy-backups-creds).
+## @field {string} [s3SecretKey] - Secret key for S3 authentication. Ignored when useSystemBucket is true (credentials come from the projected cozy-backups-creds).
 
 ## @param {Backup} backup - Backup configuration.
 backup:
   enabled: false
+  useSystemBucket: false
   schedule: "0 2 * * *"
   retentionPolicy: 30d
   destinationPath: "s3://bucket/path/to/folder/"
