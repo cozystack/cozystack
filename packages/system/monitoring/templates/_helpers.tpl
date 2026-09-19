@@ -214,3 +214,50 @@
 {{-   fail "spec.oidc: `users` is not honoured under `customConfig.secretRef` — the operator's mounted auth.ini is authoritative and the chart cannot inject `skip_org_role_sync=true` / `oauth_allow_insecure_email_lookup=true`, so the users-Job's role assignments would be overwritten on the operator's next login. Either switch to `customConfig.config` (inline map, merged with the chart-forced settings) or unset `users` and manage authorization inside the ini fragment yourself." -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+  Validate the whole tracingStorages list once, before any VTCluster/VTSingle
+  or GrafanaDatasource renders. Each check guards a value that gets past the app
+  schema and the Kubernetes API server yet fails afterwards — a class the schema
+  alone cannot catch:
+
+    - name must be an RFC 1123 label. It is used verbatim as the metadata.name
+      of the VTCluster/VTSingle and of its GrafanaDatasource, so an invalid name
+      is a late admission error on the emitted object, not a config error the
+      operator surfaces.
+    - names must be unique. Each entry keys a CR and a datasource by name, so a
+      duplicate silently overwrites the first (last write wins in the range).
+    - retentionDiskUsageBytes must be a VictoriaMetrics BytesString. Upstream
+      types the field BytesString, whose UnmarshalJSON rejects anything outside
+      ^[0-9]+(kb|mb|gb|tb|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$ — notably NOT the `Gi`
+      grammar of the sibling `storage` field. The CRD carries no pattern for it
+      (unlike retentionPeriod), so an undecodable value is stored, the operator
+      never writes status.updateStatus, and the readiness gate holds the release
+      failing forever under remediation.retries: -1.
+
+  mode is validated here too (it was an inline guard in vtraces.yaml) so all
+  four checks share one pass over the list.
+*/ -}}
+{{- define "monitoring.tracingStorages.validate" -}}
+{{- $seen := dict -}}
+{{- range $i, $s := .Values.tracingStorages -}}
+{{-   $name := $s.name | default "" | toString -}}
+{{-   if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) -}}
+{{-     fail (printf "monitoring: tracingStorages[%d].name %q must be a valid RFC 1123 label (lowercase alphanumeric and '-', starting and ending alphanumeric) — it is used verbatim as the VTCluster/VTSingle and GrafanaDatasource name." $i $name) -}}
+{{-   end -}}
+{{-   if hasKey $seen $name -}}
+{{-     fail (printf "monitoring: tracingStorages[%d].name %q is duplicated — names must be unique across tracingStorages, since each keys a VTCluster/VTSingle and a GrafanaDatasource and a collision silently overwrites the first." $i $name) -}}
+{{-   end -}}
+{{-   $_ := set $seen $name true -}}
+{{-   $mode := $s.mode | default "cluster" -}}
+{{-   if and (ne $mode "cluster") (ne $mode "single") -}}
+{{-     fail (printf "monitoring: tracingStorages[%s].mode must be either \"cluster\" or \"single\"" $name) -}}
+{{-   end -}}
+{{-   with $s.retentionDiskUsageBytes -}}
+{{-     $bytes := . | toString -}}
+{{-     if not (regexMatch "^[0-9]+(kb|mb|gb|tb|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$" $bytes) -}}
+{{-       fail (printf "monitoring: tracingStorages[%s].retentionDiskUsageBytes %q is not a valid VictoriaMetrics BytesString (^[0-9]+(kb|mb|gb|tb|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$). Its units differ from the sibling `storage` field (a Kubernetes quantity like 10Gi): write 8GB or 8GiB, not 8Gi." $name $bytes) -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- end -}}
