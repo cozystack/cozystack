@@ -10,7 +10,7 @@
 # To bump the upstream version, update COMMIT below to the desired master
 # SHA and rerun `make image-talos-csr-signer` in packages/apps/kubernetes;
 # the regenerated images/talos-csr-signer.tag must be committed alongside.
-FROM golang:1.26@sha256:079e59808d2d252516e27e3f3a9c003740dee7f75e55aa71528766d52bcfc16a AS builder
+FROM golang:1.26@sha256:6c2a5538f964f1c82f97ad14988bf05de100d922d159d0e398b54c7b0ca0c6c9 AS builder
 
 # Upstream is at clastix/talos-csr-signer. Pin to a master SHA so rebuilds
 # are reproducible; the resulting image digest is what CI fingerprints
@@ -27,7 +27,7 @@ RUN curl -sSL "https://github.com/clastix/talos-csr-signer/archive/${COMMIT}.tar
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-w -s" -o talos-csr-signer .
 
-FROM gcr.io/distroless/static:nonroot@sha256:d29e660cc75a5b6b1334e03c5c81ccf9bc0884a002c6000dbf0fb96034814478
+FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
 WORKDIR /
 COPY --from=builder /workspace/talos-csr-signer /talos-csr-signer
 USER 65532:65532
