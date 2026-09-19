@@ -399,9 +399,9 @@ while IFS= read -r file || [ -n "$file" ]; do
       fi
       continue ;;
     examples/backups/*/*)
-      # The etcd, postgres, mariadb and clickhouse backup round-trip tests
-      # execute the example scripts under examples/backups/<app>/ as their
-      # harness, so an edit there must run that app's suite. This mapping is
+      # A backup round-trip Test executes the example scripts under
+      # examples/backups/<app>/ as its harness, so an edit there must run that
+      # app's suite. This mapping is
       # also why a round-trip Test belongs in its app's own suite dir: put it
       # in a dir whose name does not match examples/backups/<app>/ and an edit
       # to the harness selects a suite that cannot exercise it. A dir with no
