@@ -16,8 +16,13 @@ log_substep "Deleting topic '${TOPIC}' to simulate data loss..."
 # Delete and wait for the topic to actually disappear in the same Pod: topic
 # deletion is asynchronous, and the driver's --create would fail with "topic
 # marked for deletion" if the restore raced ahead of the tombstone.
+#
+# kafka-topics treats --topic as a Java regex, so an unquoted name deletes
+# every topic it happens to match ("audit.events" also matches "audit-events").
+# \Q...\E quotes the name back to a literal - the same fix the kafka-metadata
+# example carries. --create below takes a literal name and must NOT be quoted.
 kafka_run "$KAFKA_NAME" '
-    "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --delete --topic "$TOPIC" || true
+    "$BIN"/kafka-topics.sh --bootstrap-server "$BOOT" --delete --topic "\Q$TOPIC\E" || true
     for _ in $(seq 1 60); do
         # Capture --list on its own so a transient broker error does not read
         # as empty output and false-positive "deleted"; the pod snippet runs

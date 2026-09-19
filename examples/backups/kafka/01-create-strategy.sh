@@ -189,8 +189,8 @@ spec:
                   # (--time -1) ONCE here, and its begin offset (--time -2).
                   # Draining only up to the frozen end excludes anything
                   # produced while the backup runs.
-                  ends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\${t}" --time -1)
-                  begins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\${t}" --time -2)
+                  ends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -1)
+                  begins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2)
                   # The partition SET is not self-validating: kafka-get-offsets
                   # prints only the partitions whose lookup succeeded. GetOffsetShell
                   # logs a per-partition KafkaException to stderr, skips that
@@ -202,7 +202,12 @@ spec:
                   # (A short "begins" needs no separate check: its per-partition
                   # default of 0 can only overstate n, which the drain check then
                   # catches.)
-                  pc=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --describe --topic "\${t}" \
+                  #
+                  # --topic is a Java regex in kafka-topics and kafka-get-offsets,
+                  # so an unquoted name also matches its siblings ("audit.events"
+                  # matches "audit-events") and would mix another topic's
+                  # partitions into this count. \Q...\E pins it to a literal.
+                  pc=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --describe --topic "\Q\${t}\E" \
                     | sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' | head -1)
                   case "\${pc}" in
                     ''|*[!0-9]*) echo "could not read PartitionCount for \${t}" >&2; exit 1 ;;
@@ -271,6 +276,17 @@ spec:
                   done < "\${WORK}/manifest.txt"
                   "\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --create --if-not-exists \
                     --topic "\${t}" --partitions "\${parts}" --replication-factor "\${REPLICATION_FACTOR}"
+                  # --if-not-exists leaves a pre-existing topic's partition count
+                  # alone, and the post-replay check below compares only the
+                  # per-topic total, so replaying into a topic with a different
+                  # partition count would silently re-place every keyed record
+                  # and still add up. Confirm the shape matches the backup.
+                  have_parts=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --describe --topic "\Q\${t}\E" \
+                    | sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' | head -1)
+                  if [ "\${have_parts}" != "\${parts}" ]; then
+                    echo "topic \${t} has \${have_parts} partition(s), backup recorded \${parts}; refusing to restore into a differently shaped topic" >&2
+                    exit 1
+                  fi
                 done
                 # Replay every dumped partition file. parse.key restores the
                 # original key so the default partitioner reproduces the
@@ -298,8 +314,8 @@ spec:
                     [ "\${mt}" = "\${t}" ] || continue
                     want=\$((want + me - mb))
                   done < "\${WORK}/manifest.txt"
-                  vends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\${t}" --time -1)
-                  vbegins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\${t}" --time -2)
+                  vends=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -1)
+                  vbegins=\$("\${BIN}"/kafka-get-offsets.sh --bootstrap-server "\${BOOT}" --topic "\Q\${t}\E" --time -2)
                   have=0
                   for e in \${vends}; do
                     p=\${e%:*}; p=\${p##*:}

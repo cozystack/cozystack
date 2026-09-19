@@ -51,8 +51,8 @@ resolve_kafka_image() {
     # is being assumed. On an air-gapped or operator-less cluster - the persona
     # the README's override note is for - that literal is unreachable, so the
     # run must set KAFKA_IMAGE to an image the nodes can actually pull.
-    echo "! could not read STRIMZI_KAFKA_IMAGES from deploy/strimzi-cluster-operator in cozy-kafka-operator; assuming quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.8.0. Set KAFKA_IMAGE explicitly if that image is wrong or unreachable (e.g. air-gapped)." >&2
-    echo "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.8.0"
+    echo "! could not read STRIMZI_KAFKA_IMAGES from deploy/strimzi-cluster-operator in cozy-kafka-operator; assuming quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1. Set KAFKA_IMAGE explicitly if that image is wrong or unreachable (e.g. air-gapped)." >&2
+    echo "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1"
 }
 export KAFKA_IMAGE="${KAFKA_IMAGE:-$(resolve_kafka_image)}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
@@ -259,8 +259,8 @@ seed_topic() {
 topic_message_count() {
     local app="$1"
     kafka_run "$app" '
-        ends=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "$TOPIC" --time -1 2>/dev/null) || exit 0
-        begins=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "$TOPIC" --time -2 2>/dev/null) || exit 0
+        ends=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "\Q$TOPIC\E" --time -1 2>/dev/null) || exit 0
+        begins=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "\Q$TOPIC\E" --time -2 2>/dev/null) || exit 0
         [ -n "$ends" ] || exit 0
         total=0
         for e in $ends; do
@@ -271,7 +271,7 @@ topic_message_count() {
             done
         done
         echo "$total"
-    ' 2>/dev/null | tr -d '[:space:]'
+    ' | tr -d '[:space:]'
 }
 
 # Dump every record of the demo topic as "partition<TAB>key<TAB>value" lines,
@@ -284,7 +284,7 @@ topic_message_count() {
 topic_dump() {
     local app="$1"
     kafka_run "$app" '
-        ends=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "$TOPIC" --time -1 2>/dev/null) || exit 0
+        ends=$("$BIN"/kafka-get-offsets.sh --bootstrap-server "$BOOT" --topic "\Q$TOPIC\E" --time -1 2>/dev/null) || exit 0
         [ -n "$ends" ] || exit 0
         printf "%s\n" $ends | sort -t: -k2 -n | while IFS=: read -r t p end; do
             [ "${end:-0}" -gt 0 ] || continue
@@ -293,7 +293,7 @@ topic_dump() {
                 --property print.key=true --property print.timestamp=false \
                 | sed "s/^/$p\t/"
         done
-    ' 2>/dev/null
+    '
 }
 
 # Create the "<app>-backup-s3" Secret the Job strategy Pod consumes, from the
