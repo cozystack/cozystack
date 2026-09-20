@@ -2174,7 +2174,8 @@ func newPsmdbBackupDynamicClient(objs ...*unstructured.Unstructured) *dynamicfak
 func TestReconcileMongoDB_TimedOutCancelUsesLiveState(t *testing.T) {
 	setup := func(t *testing.T, live *dynamicfake.FakeDynamicClient) (*BackupJobReconciler, client.Client, *ResolvedBackupConfig, *backupsv1alpha1.BackupJob) {
 		job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
-		job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-2 * psmdbDefaultBackupDeadline)}
+		// Past the deadline but inside the live-read grace.
+		job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-psmdbDefaultBackupDeadline - psmdbLiveReadGrace/2)}
 		cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
 			"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups"}}`)},
 		}
@@ -2266,7 +2267,31 @@ func TestReconcileMongoDB_TimedOutCancelUsesLiveState(t *testing.T) {
 			t.Errorf("an unanswerable live read must defer, not delete blind")
 		}
 		if failed(t, c, job.Name) {
-			t.Errorf("an unanswerable live read must not fail the BackupJob")
+			t.Errorf("an unanswerable live read must not fail the BackupJob inside the grace")
+		}
+		p := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, p); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		if cond := apimeta.FindStatusCondition(p.Status.Conditions, "Ready"); cond == nil || cond.Reason != "PerconaServerMongoDBLiveStateUnknown" {
+			t.Errorf("the deferral must be named on the job (Ready=False PerconaServerMongoDBLiveStateUnknown), got %+v", cond)
+		}
+	})
+
+	// Deferring cannot be forever: once the grace past the deadline is spent the
+	// job fails, and the CR is still not deleted blind.
+	t.Run("live read still unanswerable past the grace → fail, CR left alone", func(t *testing.T) {
+		live := newPsmdbBackupDynamicClient()
+		r, c, resolved, job := setup(t, live)
+		job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-2*psmdbDefaultBackupDeadline - psmdbLiveReadGrace)}
+		if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+			t.Fatalf("reconcileMongoDB: %v", err)
+		}
+		if deleted(t, c) {
+			t.Errorf("an unconfirmed CR must never be deleted blind, even when the job finally fails")
+		}
+		if !failed(t, c, job.Name) {
+			t.Errorf("an unreadable CR must not pin the BackupJob Running forever; expected Failed past the grace")
 		}
 	})
 
@@ -2801,5 +2826,132 @@ func TestRequeueMongoDBBackupWaiting_WritesStatusOnlyOnChange(t *testing.T) {
 	}
 	if statusWrites != first {
 		t.Errorf("an unchanged running wait must not write status again: %d writes before, %d after", first, statusWrites)
+	}
+}
+
+// The flow a backup ran on is fixed at mint time by its CR's finalizer, and the
+// artifact must record that — not the app flag re-read on the completing
+// reconcile. Flip the flag to false while the system-bucket dump completes: the
+// snapshot must still say useSystemBucket, or the PITR refusal and the S3
+// backfill both switch off for an archive that lives in cozy-backups.
+func TestReconcileMongoDB_ArtifactRecordsTheCRsFlowNotTheFlag(t *testing.T) {
+	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+	app.Spec.Backup.UseSystemBucket = false // flipped after the mint
+	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
+	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+	}
+	ready := &psmdbtypes.PerconaServerMongoDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "op-ready",
+			Finalizers: []string{psmdbDeleteBackupFinalizer}, // minted on the system-bucket flow
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      job.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+			},
+		},
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			State:       psmdbtypes.StateReady,
+			Destination: "s3://cozy-backups/tenant/app1/2026-09-20",
+			S3:          &psmdbtypes.BackupStorageS3{Bucket: "cozy-backups", CredentialsSecret: psmdbDefaultCredentialsSecret},
+		},
+	}
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster, ready)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, persisted); err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if persisted.Status.BackupRef == nil {
+		t.Fatalf("expected a Backup artifact, got phase=%q conditions=%+v", persisted.Status.Phase, persisted.Status.Conditions)
+	}
+	artifact := &backupsv1alpha1.Backup{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: persisted.Status.BackupRef.Name}, artifact); err != nil {
+		t.Fatalf("get artifact: %v", err)
+	}
+	snap, err := unmarshalMongoDBBackupSnapshot(artifact.Status.UnderlyingResources)
+	if err != nil || snap == nil {
+		t.Fatalf("snapshot: %v (%+v)", err, snap)
+	}
+	if !snap.UseSystemBucket {
+		t.Errorf("the snapshot must record the flow the CR ran on (useSystemBucket), not the app flag re-read at completion")
+	}
+}
+
+// On useSystemBucket the chart refuses backup.enabled=false, so a missing storage
+// means the strategy carried nothing to inject; the wait must say that rather
+// than send the tenant to a value they already have set.
+func TestReconcileMongoDB_StrategyWithoutS3NamesTheCause(t *testing.T) {
+	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+	strategy.Spec.Template.S3 = nil
+	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, persisted); err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready")
+	if cond == nil || cond.Reason != "MongoDBStrategyHasNoS3" || !strings.Contains(cond.Message, "no s3 coordinates") {
+		t.Errorf("expected Ready=False MongoDBStrategyHasNoS3 naming the missing coordinates, got %+v", cond)
+	}
+}
+
+// The storage-race retry mints a fresh operator CR per attempt; it must stop
+// after the budget instead of churning CRs every poll for the whole deadline,
+// and the error then reaches the tenant.
+func TestReconcileMongoDB_StorageRaceRetryBudgetExhausted(t *testing.T) {
+	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
+	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+	}
+	mk := func(name string) *psmdbtypes.PerconaServerMongoDBBackup {
+		return &psmdbtypes.PerconaServerMongoDBBackup{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "tenant", Name: name, Finalizers: []string{psmdbDeleteBackupFinalizer},
+				Labels: map[string]string{
+					backupsv1alpha1.OwningJobNameLabel:      job.Name,
+					backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+				},
+			},
+			Status: psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateError, Error: `unable to get storage "s3-storage": not found`},
+		}
+	}
+	old1, old2, live := mk("op-try-1"), mk("op-try-2"), mk("op-try-3")
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster, old1, old2, live)
+	// Two earlier attempts already deleted (Terminating under the finalizer).
+	for _, o := range []*psmdbtypes.PerconaServerMongoDBBackup{old1, old2} {
+		if err := c.Delete(context.Background(), o); err != nil {
+			t.Fatalf("delete %s: %v", o.Name, err)
+		}
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, persisted); err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if persisted.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("with the retry budget spent the job must fail, got phase=%q", persisted.Status.Phase)
+	}
+	got := &psmdbtypes.PerconaServerMongoDBBackup{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-try-3"}, got); err != nil || !got.DeletionTimestamp.IsZero() {
+		t.Errorf("the terminal path must not delete the live errored CR, err=%v", err)
+	}
+	list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Items) != 3 {
+		t.Errorf("no further CR may be minted once the budget is spent, got %d", len(list.Items))
 	}
 }

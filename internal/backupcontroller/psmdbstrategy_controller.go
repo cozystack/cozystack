@@ -100,6 +100,19 @@ const (
 	// terminate. Tenants override via spec.options.restoreTimeoutSeconds.
 	psmdbDefaultRestoreDeadline = 30 * time.Minute
 
+	// psmdbLiveReadGrace bounds how long past the backup deadline the driver keeps
+	// deferring a cancel it cannot confirm: the live re-read of the operator CR
+	// keeps failing (throttle, revoked verb, removed CRD). After it the job fails
+	// and the CR is left in place rather than deleted blind.
+	psmdbLiveReadGrace = 30 * time.Minute
+
+	// psmdbStorageRaceRetryBudget caps how many operator CRs the storage-race
+	// retry may mint for one BackupJob. Each retry deletes the errored CR and
+	// mints a fresh one; the race clears after a poll or two on a healthy
+	// operator, so a job still hitting it after this many attempts has a
+	// standing problem the tenant must see rather than a churn of CRs.
+	psmdbStorageRaceRetryBudget = 3
+
 	// psmdbBackupSnapshotKind is the Kind stamped onto the snapshot persisted
 	// in Backup.status.underlyingResources. It carries the S3 storage
 	// descriptor (by reference — bucket/endpoint/credentialsSecret NAME, never
@@ -320,12 +333,20 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 	}
 	if msg := psmdbBackupPrecondition(cluster, storageName); msg != "" {
+		// On useSystemBucket the chart refuses backup.enabled=false at render, so
+		// a missing storage there means the strategy carried no s3 coordinates to
+		// inject — name that, not a remedy the tenant already has in place.
+		reason, hint := "PerconaServerMongoDBBackupsDisabled", "set backup.enabled=true on the MongoDB application"
+		if useSystemBucket && rendered.S3 == nil {
+			reason, hint = "MongoDBStrategyHasNoS3", "the MongoDB strategy carries no s3 coordinates to inject; set spec.template.s3 on it"
+			msg = fmt.Sprintf("%s (%s)", msg, hint)
+		}
 		if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-				"psmdb.percona.com/PerconaServerMongoDB %s/%s not ready for backups within %s: %s (set backup.enabled=true on the MongoDB application)",
-				j.Namespace, psmdbName, psmdbDefaultBackupDeadline, msg))
+				"psmdb.percona.com/PerconaServerMongoDB %s/%s not ready for backups within %s: %s (%s)",
+				j.Namespace, psmdbName, psmdbDefaultBackupDeadline, msg, hint))
 		}
-		return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBBackupsDisabled", msg)
+		return r.requeueMongoDBBackupWaiting(ctx, j, reason, msg)
 	}
 
 	// Opting out (useSystemBucket true→false) stops the injection but leaves the
@@ -382,7 +403,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		artifact, err := r.createMongoDBBackupArtifact(ctx, j, resolved, mdbBackup, rendered, storageName, useSystemBucket)
+		artifact, err := r.createMongoDBBackupArtifact(ctx, j, resolved, mdbBackup, rendered, storageName, flowSystemBucket)
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
 		}
@@ -410,13 +431,23 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		// deadline) — delete the errored CR so a fresh one resolves against a
 		// caught-up cache — rather than failing the BackupJob terminally.
 		if flowSystemBucket && psmdbErrorIsUnresolvedStorage(message, storageName) && !psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
-			if mdbBackup.DeletionTimestamp.IsZero() {
-				if derr := r.Delete(ctx, mdbBackup); derr != nil && !apierrors.IsNotFound(derr) {
-					return ctrl.Result{}, derr
-				}
+			// Every retry leaves the previous CR Terminating and mints another, so
+			// count all of this job's CRs (not just the live one) against the budget;
+			// once it is spent the error is the tenant's to see, below.
+			minted, err := r.countMongoDBBackupsForJob(ctx, j)
+			if err != nil {
+				return ctrl.Result{}, err
 			}
-			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageRace",
-				fmt.Sprintf("operator has not observed the injected storage %q yet; retrying the backup", storageName))
+			if minted < psmdbStorageRaceRetryBudget {
+				if mdbBackup.DeletionTimestamp.IsZero() {
+					if derr := r.Delete(ctx, mdbBackup); derr != nil && !apierrors.IsNotFound(derr) {
+						return ctrl.Result{}, derr
+					}
+				}
+				return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageRace",
+					fmt.Sprintf("operator has not observed the injected storage %q yet; retrying the backup (attempt %d of %d)", storageName, minted, psmdbStorageRaceRetryBudget))
+			}
+			message = fmt.Sprintf("%s (the operator still could not resolve the injected storage after %d attempts)", message, psmdbStorageRaceRetryBudget)
 		}
 		// Terminal failure. The operator sets state=error/rejected once the pbm
 		// backup fails or is refused, so fail the BackupJob immediately rather
@@ -482,9 +513,16 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		// error) defers rather than deletes blind.
 		liveState, lerr := r.psmdbBackupLiveState(ctx, mdbBackup.Namespace, mdbBackup.Name)
 		if lerr != nil {
-			getLogger(ctx).Debug("could not re-read live backup state before cancelling; deferring rather than deleting blind",
-				"backupjob", j.Name, "sourceBackup", mdbBackup.Name, "error", lerr)
-			return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
+			// Deferring is the safe default, but not forever: past the grace the
+			// job fails with the CR left in place (never deleted blind), so an
+			// unreadable CR cannot pin the job Running with nothing to act on.
+			if j.Status.StartedAt != nil && time.Since(j.Status.StartedAt.Time) > psmdbDefaultBackupDeadline+psmdbLiveReadGrace {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+					"psmdb.percona.com PerconaServerMongoDBBackup %s did not start within %s and its live state could not be confirmed for a further %s (%v); the operator backup is left in place",
+					mdbBackup.Name, psmdbDefaultBackupDeadline, psmdbLiveReadGrace, lerr))
+			}
+			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBLiveStateUnknown",
+				fmt.Sprintf("backup %s passed the start deadline but its live state could not be read (%v); not cancelling blind", mdbBackup.Name, lerr))
 		}
 		switch liveState {
 		case "", psmdbtypes.StateWaiting:
@@ -848,6 +886,23 @@ func (r *BackupJobReconciler) ensureMongoDBBackup(ctx context.Context, j *backup
 		return nil, err
 	}
 	return obj, nil
+}
+
+// countMongoDBBackupsForJob counts every PerconaServerMongoDBBackup carrying
+// the BackupJob's OwningJob labels, Terminating ones included — the retry
+// budget is about how many CRs a job has minted, not how many are still live.
+func (r *BackupJobReconciler) countMongoDBBackupsForJob(ctx context.Context, j *backupsv1alpha1.BackupJob) (int, error) {
+	list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+	if err := r.List(ctx, list,
+		client.InNamespace(j.Namespace),
+		client.MatchingLabels{
+			backupsv1alpha1.OwningJobNameLabel:      j.Name,
+			backupsv1alpha1.OwningJobNamespaceLabel: j.Namespace,
+		},
+	); err != nil {
+		return 0, err
+	}
+	return len(list.Items), nil
 }
 
 // findMongoDBBackupForJob returns the PerconaServerMongoDBBackup labelled with
@@ -1317,7 +1372,7 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 						return ctrl.Result{}, err
 					}
 					msg := fmt.Sprintf(
-						"credentialsSecret %q for bucket %q does not exist in namespace %s (the chart prunes it when the application opts into useSystemBucket); re-create a Secret by that name holding credentials for that bucket, or restore into a target whose storage declares that bucket",
+						"credentialsSecret %q for bucket %q does not exist in namespace %s (a release's <release>-s3-creds goes away with the release, or when it opts into useSystemBucket); re-create a Secret by that name holding credentials for that bucket, or restore into a target whose storage declares that bucket",
 						source.S3.CredentialsSecret, source.S3.Bucket, target.Namespace)
 					deadline := options.effectiveRestoreDeadline()
 					if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
