@@ -2955,3 +2955,161 @@ func TestReconcileMongoDB_StorageRaceRetryBudgetExhausted(t *testing.T) {
 		t.Errorf("no further CR may be minted once the budget is spent, got %d", len(list.Items))
 	}
 }
+
+// The archive exists once the operator CR is ready; the Backup object is the
+// only thing that can ever reach it. A transient Create failure must retry (the
+// job stays Running) rather than fail terminally with no artifact, and when the
+// window is spent the failure names the CR that still holds the archive.
+func TestReconcileMongoDB_ArtifactCreateFailureRetriesThenNamesTheCR(t *testing.T) {
+	build := func(t *testing.T, completed time.Time) (*BackupJobReconciler, client.Client, *record.FakeRecorder, *ResolvedBackupConfig, *backupsv1alpha1.BackupJob) {
+		job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+		job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-10 * time.Minute)}
+		cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+			"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+		}
+		ready := &psmdbtypes.PerconaServerMongoDBBackup{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "tenant", Name: "op-ready", Finalizers: []string{psmdbDeleteBackupFinalizer},
+				Labels: map[string]string{
+					backupsv1alpha1.OwningJobNameLabel:      job.Name,
+					backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+				},
+			},
+			Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+				State: psmdbtypes.StateReady, Completed: &metav1.Time{Time: completed},
+				Destination: "s3://cozy-backups/tenant/app1/2026-09-20",
+				S3:          &psmdbtypes.BackupStorageS3{Bucket: "cozy-backups", CredentialsSecret: psmdbDefaultCredentialsSecret},
+			},
+		}
+		sch := runtime.NewScheme()
+		_ = scheme.AddToScheme(sch)
+		_ = backupsv1alpha1.AddToScheme(sch)
+		_ = strategyv1alpha1.AddToScheme(sch)
+		_ = psmdbtypes.AddToScheme(sch)
+		_ = mongodbapp.AddToScheme(sch)
+		c := clientfake.NewClientBuilder().WithScheme(sch).WithObjects(job, strategy, app, cluster, ready).
+			WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.Backup{}).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*backupsv1alpha1.Backup); ok {
+						return apierrors.NewServiceUnavailable("etcd timeout")
+					}
+					return cl.Create(ctx, obj, opts...)
+				},
+			}).Build()
+		rec := record.NewFakeRecorder(10)
+		return &BackupJobReconciler{Client: c, Scheme: sch, Recorder: rec}, c, rec, resolved, job
+	}
+	getJob := func(t *testing.T, c client.Client, name string) *backupsv1alpha1.BackupJob {
+		p := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: name}, p); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		return p
+	}
+
+	t.Run("inside the window: retried, not failed", func(t *testing.T) {
+		r, c, _, resolved, job := build(t, time.Now())
+		if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err == nil {
+			t.Fatalf("a transient artifact Create failure must be returned for backoff, got nil")
+		}
+		if p := getJob(t, c, job.Name); p.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Errorf("a transient artifact Create failure must not fail the job while the window is open")
+		}
+	})
+
+	t.Run("window spent: fails and names the CR holding the archive", func(t *testing.T) {
+		r, c, rec, resolved, job := build(t, time.Now().Add(-2*psmdbLiveReadGrace))
+		if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+			t.Fatalf("reconcileMongoDB: %v", err)
+		}
+		p := getJob(t, c, job.Name)
+		if p.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("expected Failed once the artifact window is spent, got phase=%q", p.Status.Phase)
+		}
+		if cond := apimeta.FindStatusCondition(p.Status.Conditions, "Ready"); cond == nil || !strings.Contains(cond.Message, "op-ready") {
+			t.Errorf("the terminal message must name the CR that still holds the archive, got %+v", cond)
+		}
+		select {
+		case ev := <-rec.Events:
+			if !strings.Contains(ev, "BackupArtifactNotCreated") || !strings.Contains(ev, "op-ready") {
+				t.Errorf("expected a BackupArtifactNotCreated Warning naming the CR, got %q", ev)
+			}
+		default:
+			t.Errorf("expected a Warning naming the orphaned archive's CR, got none")
+		}
+	})
+}
+
+// A legacy Backup owns nothing on the shared bucket; before this driver its
+// cleanup was an unconditional no-op. With the flow recorded on the snapshot,
+// cleanup must release a legacy Backup without any apiserver read, so a throttle
+// or revoked verb on a CR the driver does not own cannot hold it Terminating.
+func TestCleanupMongoDBBackup_LegacySnapshotSkipsTheRead(t *testing.T) {
+	legacySnap := &psmdbtypes.PerconaServerMongoDBBackup{Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+		Destination: "s3://tenant-own/x", S3: &psmdbtypes.BackupStorageS3{Bucket: "tenant-own", CredentialsSecret: "mongodb-app1-s3-creds"},
+	}}
+	raw, err := marshalMongoDBBackupSnapshot(legacySnap, &strategyv1alpha1.MongoDBTemplate{Type: "logical"}, "s3-storage", nil, false)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = psmdbtypes.AddToScheme(s)
+	reads := 0
+	c := clientfake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*psmdbtypes.PerconaServerMongoDBBackup); ok {
+				reads++
+				return apierrors.NewTooManyRequests("apiserver throttled", 1)
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "legacy-bk"},
+		Spec:       backupsv1alpha1.BackupSpec{DriverMetadata: map[string]string{psmdbBackupNameKey: "op-legacy"}},
+		Status:     backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+	}
+	res, err := r.cleanupMongoDBBackup(context.Background(), backup)
+	if err != nil || res.RequeueAfter != 0 {
+		t.Fatalf("a legacy Backup must release without depending on the operator CR read, got res=%+v err=%v", res, err)
+	}
+	if reads != 0 {
+		t.Errorf("a legacy Backup must not read the operator CR at all, got %d reads", reads)
+	}
+}
+
+// After a tenant opts out, the platform may drop or rename the strategy's s3
+// block; the lingering injected entry still carries the platform default Secret
+// and must still be refused, or a legacy CR is minted onto the platform bucket.
+func TestReconcileMongoDB_OptOutRefusalSurvivesStrategyWithoutS3(t *testing.T) {
+	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+	app.Spec.Backup.UseSystemBucket = false
+	strategy.Spec.Template.S3 = nil // platform dropped the coordinates after the opt-out
+	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
+	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+	}
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+	list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("the lingering injected entry must still be refused when the strategy carries no s3, got %d CRs minted", len(list.Items))
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, persisted); err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready"); cond == nil || cond.Reason != "PerconaServerMongoDBStorageStale" {
+		t.Errorf("expected Ready=False PerconaServerMongoDBStorageStale, got %+v", cond)
+	}
+}

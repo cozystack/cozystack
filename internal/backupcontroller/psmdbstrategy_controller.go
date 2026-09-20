@@ -366,8 +366,8 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if existing == nil && !useSystemBucket && rendered.S3 != nil {
-		if _, cred := psmdbStorageS3(cluster.Spec.Backup.Storages[storageName]); cred != "" && cred == psmdbInjectedCredentialsSecret(rendered.S3) {
+	if existing == nil && !useSystemBucket {
+		if _, cred := psmdbStorageS3(cluster.Spec.Backup.Storages[storageName]); cred != "" && psmdbCredentialsSecretIsInjected(cred, rendered) {
 			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
 					"psmdb.percona.com/PerconaServerMongoDB %s/%s storage %q is still the entry injected for the system bucket (credentialsSecret %q) while backup.useSystemBucket=false, %s after the job started; delete that storage entry from the PerconaServerMongoDB by hand or set backup.useSystemBucket=true again (see docs/operations/backup-classes.md)",
@@ -405,7 +405,21 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 		artifact, err := r.createMongoDBBackupArtifact(ctx, j, resolved, mdbBackup, rendered, storageName, flowSystemBucket)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			// The archive is already written; the Backup object is the only thing
+			// that can ever reach it again. A transient Create failure (etcd
+			// timeout, quota, webhook hiccup) must not turn that into a terminal
+			// Failed with no artifact, so retry with backoff for a window after
+			// the dump completed — the SSA-apply error above gets the same
+			// treatment — and only then give up, naming the CR that still holds
+			// the archive so it can be reclaimed by hand.
+			if !psmdbArtifactWindowExceeded(mdbBackup, j.Status.StartedAt) {
+				return ctrl.Result{}, err
+			}
+			if r.Recorder != nil && flowSystemBucket {
+				r.Recorder.Eventf(j, corev1.EventTypeWarning, "BackupArtifactNotCreated",
+					"the dump completed but no Backup object could be created (%v); the archive is reachable only through PerconaServerMongoDBBackup %s, which is left in place", err, mdbBackup.Name)
+			}
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact for %s after retrying for %s: %v", mdbBackup.Name, psmdbLiveReadGrace, err))
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -702,6 +716,19 @@ func psmdbInjectedCredentialsSecret(s3 *strategyv1alpha1.MongoDBStorageS3) strin
 	return psmdbDefaultCredentialsSecret
 }
 
+// psmdbCredentialsSecretIsInjected reports whether a live storage entry's
+// credentialsSecret is one the driver would have written: the strategy's
+// current name, or the platform default. Checking the default as well keeps a
+// lingering injected entry recognisable after the strategy drops or renames
+// its s3 block — otherwise the opt-out refusal would stop seeing the entry it
+// exists to refuse, and a legacy CR would be minted onto the platform bucket.
+func psmdbCredentialsSecretIsInjected(cred string, rendered *strategyv1alpha1.MongoDBTemplate) bool {
+	if cred == psmdbDefaultCredentialsSecret {
+		return true
+	}
+	return rendered.S3 != nil && cred == psmdbInjectedCredentialsSecret(rendered.S3)
+}
+
 // shouldInjectMongoDBSystemStorage reports whether the driver must SSA-inject
 // the system-bucket storage onto the live cluster: only when the app opted in
 // via backup.useSystemBucket AND the strategy actually carries S3 coordinates
@@ -801,6 +828,17 @@ func psmdbBackupTimedOut(state string, startedAt *metav1.Time, useSystemBucket b
 		return false
 	}
 	return psmdbBackupDeadlineExceeded(startedAt)
+}
+
+// psmdbArtifactWindowExceeded bounds how long the driver keeps retrying to
+// materialise the Backup object for a completed dump: psmdbLiveReadGrace after
+// the operator marked the CR complete, or after the backup deadline when the
+// operator did not record a completion time.
+func psmdbArtifactWindowExceeded(b *psmdbtypes.PerconaServerMongoDBBackup, startedAt *metav1.Time) bool {
+	if b.Status.Completed != nil {
+		return time.Since(b.Status.Completed.Time) > psmdbLiveReadGrace
+	}
+	return startedAt != nil && time.Since(startedAt.Time) > psmdbDefaultBackupDeadline+psmdbLiveReadGrace
 }
 
 // psmdbErrorIsUnresolvedStorage reports whether a PerconaServerMongoDBBackup
@@ -1060,6 +1098,17 @@ func (r *BackupReconciler) cleanupMongoDBBackup(ctx context.Context, backup *bac
 		// No object in hand (this runs before any read); releaseMongoDBCleanup
 		// does the best-effort fetch.
 		return r.releaseMongoDBCleanup(ctx, backup, sourceBackupName, nil, "skip-artifact-cleanup annotation set")
+	}
+
+	// A legacy Backup owns nothing on the shared bucket, and before this driver
+	// its cleanup was an unconditional no-op that no apiserver error could hold
+	// up. The snapshot records the flow, so decide from it first: when it is our
+	// kind and says legacy, release without reading the operator CR at all, so a
+	// throttle or a revoked verb on a CR the driver does not own cannot pin the
+	// Backup (or a namespace being torn down) in Terminating. A missing or
+	// undecodable snapshot falls through to the read below, never the other way.
+	if snap, serr := unmarshalMongoDBBackupSnapshot(backup.Status.UnderlyingResources); serr == nil && snap != nil && snap.Kind == psmdbBackupSnapshotKind && !snap.UseSystemBucket {
+		return ctrl.Result{}, nil
 	}
 
 	live := &psmdbtypes.PerconaServerMongoDBBackup{}
