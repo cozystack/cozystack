@@ -409,7 +409,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		// driver's own race, not the tenant's failure, so retry it (bounded by the
 		// deadline) — delete the errored CR so a fresh one resolves against a
 		// caught-up cache — rather than failing the BackupJob terminally.
-		if useSystemBucket && psmdbErrorIsUnresolvedStorage(message, storageName) && !psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+		if flowSystemBucket && psmdbErrorIsUnresolvedStorage(message, storageName) && !psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 			if mdbBackup.DeletionTimestamp.IsZero() {
 				if derr := r.Delete(ctx, mdbBackup); derr != nil && !apierrors.IsNotFound(derr) {
 					return ctrl.Result{}, derr
@@ -770,7 +770,10 @@ func psmdbBackupTimedOut(state string, startedAt *metav1.Time, useSystemBucket b
 // v1.22.0 backup reconciler sets ("unable to get storage '<name>'") when it
 // reads a cluster cache that has not yet observed the driver's storage
 // injection. That is the residual half of the injection race, retryable rather
-// than a tenant failure.
+// than a tenant failure. The match is against upstream's wording at the
+// operator version the chart pins (packages/apps/mongodb/templates/mongodb.yaml,
+// spec.crVersion): a bump that rewords this error silently turns the retry
+// off, so re-check pkg/controller/perconaservermongodbbackup/backup.go there.
 func psmdbErrorIsUnresolvedStorage(errMsg, storageName string) bool {
 	return strings.Contains(errMsg, "unable to get storage") && strings.Contains(errMsg, storageName)
 }

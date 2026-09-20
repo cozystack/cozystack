@@ -917,3 +917,20 @@ tests:
           value: mongod
         documentIndex: 1
 
+  # useSystemBucket without backup.enabled renders a cluster that can never
+  # service a BackupJob (the pbm agents run on enabled alone), so the chart
+  # refuses it at render time instead of letting the tenant find out at the
+  # first BackupJob's deadline.
+  - it: refuses useSystemBucket without backup.enabled
+    release:
+      name: mongo-usb-off
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: false
+        useSystemBucket: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "mongodb: backup.useSystemBucket=true requires backup.enabled=true: the percona-backup-mongodb agents only run when backups are enabled, so this combination renders a cluster that can never service a BackupJob. Set backup.enabled=true (or drop useSystemBucket). See docs/operations/backup-classes.md."

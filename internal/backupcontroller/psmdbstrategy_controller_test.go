@@ -2043,6 +2043,46 @@ func TestReconcileMongoDB_StorageRaceErrorRetried(t *testing.T) {
 	}
 }
 
+// The storage-race retry is a system-bucket repair: it deletes the errored CR
+// and re-mints. On the legacy flow the same operator error is the tenant's own
+// storage problem and the CR is the tenant's — it must be left alone and the
+// job failed terminally, never deleted and retried.
+func TestReconcileMongoDB_StorageRaceErrorIsTerminalOnLegacy(t *testing.T) {
+	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+	app.Spec.Backup.UseSystemBucket = false
+	strategy.Spec.Template.S3 = nil
+	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
+	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"tenant-own","credentialsSecret":"mongodb-app1-s3-creds"}}`)},
+	}
+	errored := &psmdbtypes.PerconaServerMongoDBBackup{ // no delete-backup finalizer: legacy
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "op-legacy-errored",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      job.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+			},
+		},
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateError, Error: `unable to get storage "s3-storage": not found`},
+	}
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster, errored)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+	got := &psmdbtypes.PerconaServerMongoDBBackup{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-legacy-errored"}, got); err != nil || !got.DeletionTimestamp.IsZero() {
+		t.Errorf("a legacy operator CR must never be deleted by the storage-race retry, err=%v", err)
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, persisted); err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if persisted.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("a legacy storage error is terminal, got phase=%q", persisted.Status.Phase)
+	}
+}
+
 // The retry deletes the errored CR, but its release-lock finalizer keeps it
 // briefly Terminating. The lookup must skip a Terminating CR so a fresh one is
 // minted (against a caught-up cache) rather than re-observing the same error on
