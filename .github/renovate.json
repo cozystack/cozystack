@@ -32,6 +32,23 @@
       "matchStrings": ["clastix/kubectl:(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)@(?<currentDigest>sha256:[a-f0-9]+)"],
       "datasourceTemplate": "docker",
       "depNameTemplate": "docker.io/clastix/kubectl"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the vyos-build container the VyOS router appliance is built in. It is pinned by digest behind the floating `current` tag in a Makefile variable, so neither the dockerfile manager (it is not a FROM line) nor gomod can see it, and the package's `make update` is a deliberate no-op because there is no chart to pull. Without this manager the build-tooling pin — the reproducibility lever for an image that ships as a tenant-facing gateway OS — would silently age.",
+      "managerFilePatterns": ["/^packages/system/vyos-router-image/Makefile$/"],
+      "matchStrings": ["VYOS_BUILD_IMAGE\\s*=\\s*vyos/vyos-build:(?<currentValue>\\S+)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "docker.io/vyos/vyos-build"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the vyos-build git ref the VyOS router appliance flavor is built from. It is a bare commit SHA in a Makefile variable with no package manifest behind it, so only a regex manager can see it. Pinned to a commit rather than a branch on purpose — the appliance and the site-router cloud-init contract advance atomically — so this raises a PR when the upstream `current` branch moves and the bump stays a reviewed decision.",
+      "managerFilePatterns": ["/^packages/system/vyos-router-image/Makefile$/"],
+      "matchStrings": ["VYOS_BUILD_REF\\s*=\\s*(?<currentDigest>[0-9a-f]{40})"],
+      "datasourceTemplate": "git-refs",
+      "depNameTemplate": "https://github.com/vyos/vyos-build",
+      "currentValueTemplate": "rolling"
     }
   ],
   "packageRules": [

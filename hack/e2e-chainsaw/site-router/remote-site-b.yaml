@@ -1,0 +1,164 @@
+# Remote-site B — a second VyOS VM standing in for the external site. It is a
+# PLAIN VM (NOT a site-router): the product forbids remoteCIDRs that overlap the
+# cluster networks (deny-set), but B must route the cluster-side backend address
+# into the tunnel toward A, so B cannot be a managed SiteRouter. A plain VM
+# carries a free-form static config instead.
+#
+# B's role in the topology:
+#   - IPsec INITIATOR: dials in to A's tunnel LB VIP on UDP 500 / NAT-T 4500 with
+#     the shared PSK, forced UDP encapsulation.
+#   - Source of the remote site: dummy dum0 in 192.0.2.0/24 (one of A's
+#     remoteCIDRs) is the declared client source; dum1 in 198.51.100.0/24 is the
+#     UNDECLARED source for negative case 1 (source outside remoteCIDRs — rejected
+#     at A's IPsec SA traffic-selector, never decrypted).
+#   - Probe host: the reachability/MSS/negative-security scripts SSH into B
+#     (vyos / ${REMOTE_B_PASS:-e2edrive}) via the probe-driver pod and drive
+#     ping/curl/nc sourced from the dummies.
+#
+# DELIVERY — validated live (T13): B boots the same VyOS golden image as A and is
+# seeded by cloud-init `write_files` of a complete /opt/vyatta/etc/config/config.boot
+# (owner root:vyattacfg, mode 0660) — the same mechanism the site-router chart
+# uses for A (the VyOS cloud-init fork runs no scripts-user/runcmd; only
+# write_files/cloud_config modules are enabled, so a full config.boot is the one
+# reliable seed). The config.boot below is > the 2048-byte inline cloudInit limit,
+# so it is delivered via a Secret (secretRef) on a raw KubeVirt VirtualMachine —
+# the cozystack VMInstance/instanceProfile path did not reliably apply a
+# config-of-this-size on first boot in validation, and the raw VM (mirroring
+# packages/apps/site-router/templates/vm.yaml) boots the golden image cleanly.
+#
+# The trailing `vyos-config-version` line MUST match the golden image's schema
+# revision (copied verbatim from the chart-rendered A config.boot); an empty or
+# stale version triggers a boot-time config-migration pass that can drop nodes.
+#
+# B's base config.boot (this manifest) sets: eth0 dhcp; both dummy sources
+# (dum0/dum1); the HTTPS mgmt API (service https api rest + key, listen 0.0.0.0)
+# so the establish-tunnel step can push IPsec over the API; ssh + a break-glass
+# vyos password (${REMOTE_B_PASS:-e2edrive}) for the probe SSH. The IKEv2/ESP peer
+# config is NOT baked — it needs A's runtime VIP + peer id, so establish-tunnel
+# pushes it live over B's mgmt API (below).
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: remote-site-b-cloudinit
+stringData:
+  userdata: |
+    #cloud-config
+    write_files:
+      - path: /opt/vyatta/etc/config/config.boot
+        owner: root:vyattacfg
+        permissions: '0660'
+        content: |
+          interfaces {
+              ethernet eth0 {
+                  address "dhcp"
+              }
+              dummy dum0 {
+                  address "192.0.2.1/24"
+              }
+              dummy dum1 {
+                  address "198.51.100.7/24"
+              }
+              loopback lo {
+              }
+          }
+          service {
+              https {
+                  api {
+                      keys {
+                          id remote-b {
+                              key "REMOTEB0000000000000000000000000000000B"
+                          }
+                      }
+                      rest {
+                      }
+                  }
+                  listen-address "0.0.0.0"
+              }
+              ssh {
+                  port "22"
+              }
+          }
+          system {
+              config-management {
+                  commit-revisions "100"
+              }
+              console {
+                  device ttyS0 {
+                      speed "115200"
+                  }
+              }
+              host-name "remote-site-b"
+              login {
+                  user vyos {
+                      authentication {
+                          plaintext-password "e2edrive"
+                      }
+                  }
+              }
+          }
+
+          // Warning: Do not remove the following line.
+          // vyos-config-version: "bgp@8:broadcast-relay@1:cluster@2:config-management@1:conntrack@6:conntrack-sync@2:container@3:dhcp-relay@2:dhcp-server@11:dhcpv6-server@6:dns-dynamic@4:dns-forwarding@4:firewall@20:flow-accounting@3:https@7:ids@2:interfaces@34:ipoe-server@4:ipsec@14:isis@3:l2tp@9:lldp@3:mdns@1:monitoring@2:nat@8:nat66@3:nhrp@1:ntp@3:openconnect@3:openvpn@5:ospf@2:pim@1:pki@1:policy@9:pppoe-server@12:pptp@5:qos@3:quagga@12:reverse-proxy@3:rip@1:rpki@2:snmp@3:ssh@3:sstp@6:system@33:vpp@6:vrf@4:vrrp@4:vyos-accel-ppp@2:wanloadbalance@4:webproxy@2"
+          // Release version: 1.5-rolling-20260802
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: remote-site-b
+spec:
+  # 'running' is deprecated upstream but matches the suite's other VMs; the
+  # engine/site-router VM template uses the same shape.
+  running: true
+  dataVolumeTemplates:
+    - metadata:
+        name: remote-site-b-boot
+      spec:
+        storage:
+          resources:
+            requests:
+              storage: 12Gi
+          storageClassName: replicated
+        source:
+          registry:
+            # The same digest-pinned appliance containerDisk the site-router boot
+            # disk imports. B is a plain KubeVirt VM, not a HelmRelease projection,
+            # so it cannot read the chart's images/vyos-router-disk.tag itself: the
+            # bring-up step substitutes __VYOS_DISK_REF__ from that same file before
+            # applying, so B and A can never boot different appliances. Do not
+            # hardcode a digest here — CI restamps the .tag on every image build.
+            url: docker://__VYOS_DISK_REF__
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: remote-site-b
+        # Not lineage-labelled: B is deliberately NOT a managed SiteRouter, so the
+        # controller must not reconcile it.
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        memory:
+          guest: 1Gi
+        devices:
+          disks:
+            - name: boot
+              disk:
+                bus: virtio
+            - name: cloudinit
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              bridge: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: boot
+          dataVolume:
+            name: remote-site-b-boot
+        - name: cloudinit
+          cloudInitNoCloud:
+            secretRef:
+              name: remote-site-b-cloudinit

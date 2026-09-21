@@ -1,0 +1,149 @@
+suite: site-router-controller deployment
+
+release:
+  name: site-router-controller
+  namespace: cozy-site-router
+
+# The management-CIDR flag is the controller's fail-closed guard: it is the
+# source range the VyOS management firewall admits, and the controller re-stamps
+# that rule over the VyOS API from this value. An empty value is only safe
+# together with allowOpenManagement, so the two are tested as a pair rather than
+# separately.
+
+tests:
+  - it: runs as the controller SA with leader election and both probe ports
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: site-router-controller
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].name
+          value: metrics
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8080
+      - equal:
+          path: spec.template.spec.containers[0].ports[1].name
+          value: health
+      - equal:
+          path: spec.template.spec.containers[0].ports[1].containerPort
+          value: 8081
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: health
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: health
+
+  - it: hardens the pod and container security context
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: passes the configured management CIDR through and stays closed by default
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --management-cidr=10.244.0.0/16
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --allow-open-management
+
+  - it: renders a non-default management CIDR rather than the baked-in default
+    set:
+      siteRouterController.managementCidr: "10.96.0.0/12"
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --management-cidr=10.96.0.0/12
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --management-cidr=10.244.0.0/16
+
+  - it: emits --allow-open-management only when it is explicitly enabled
+    set:
+      siteRouterController.allowOpenManagement: true
+      siteRouterController.managementCidr: ""
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allow-open-management
+
+  - it: serves metrics over plain HTTP on the scraped port
+    templates:
+      - templates/deployment.yaml
+    # The platform vmagent scrapes this endpoint directly; there is no
+    # kube-rbac-proxy sidecar, matching the other in-house controllers.
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:8080
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-secure=false
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+
+  - it: logs at info by default and at debug on request
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --zap-log-level=info
+
+  - it: switches the log level to debug
+    set:
+      siteRouterController.debug: true
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --zap-log-level=debug
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --zap-log-level=info
+
+  - it: scrapes the controller through a VMPodScrape whose port matches the container
+    templates:
+      - templates/podscrape.yaml
+    # Cozystack's vmagent runs selectAllByDefault and discovers VMPodScrape
+    # objects; a Prometheus PodMonitor would not be scraped at all. The port is
+    # matched by NAME, so it has to agree with the deployment's metrics port.
+    asserts:
+      - isKind:
+          of: VMPodScrape
+      - equal:
+          path: spec.podMetricsEndpoints[0].port
+          value: metrics
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: site-router-controller

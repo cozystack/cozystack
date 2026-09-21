@@ -1,0 +1,33 @@
+{{- /*
+  Tunnel endpoint: native Service type LoadBalancer. This is the IPsec responder
+  entry point — the remote peer dials in on IKE (UDP 500) and NAT-T (UDP 4500).
+  spec.loadBalancerClass is driven by the engine-injected
+  _cluster."load-balancer-class" (native model, PR #3218); omitted when unset so
+  the cluster default LoadBalancer implementation handles it. externalTrafficPolicy
+  Local preserves the remote peer's source address. The selector targets the
+  gateway virt-launcher pod via the KubeVirt-managed vm.kubevirt.io/name label.
+*/ -}}
+{{- $loadBalancerClass := (index (.Values._cluster | default dict) "load-balancer-class") | default "" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-tunnel
+  labels:
+    {{- include "site-router.labels" . | nindent 4 }}
+spec:
+  type: LoadBalancer
+  {{- with $loadBalancerClass }}
+  loadBalancerClass: {{ . }}
+  {{- end }}
+  externalTrafficPolicy: Local
+  ports:
+  - name: isakmp
+    protocol: UDP
+    port: 500
+    targetPort: 500
+  - name: ipsec-nat-t
+    protocol: UDP
+    port: 4500
+    targetPort: 4500
+  selector:
+    vm.kubevirt.io/name: {{ .Release.Name }}
