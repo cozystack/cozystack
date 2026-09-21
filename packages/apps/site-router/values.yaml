@@ -92,16 +92,40 @@ storageClass: replicated
 ## @section Low-level materialization
 ##
 
-## @param {string} managementCIDR - Source CIDR allowed to reach the VyOS management API (HTTPS 443) through the first-boot firewall. This value and the controller's --management-cidr flag (T05/T06) must agree: both default to the cluster pod CIDR (10.244.0.0/16, the kube-ovn default) and must be kept consistent. On a cluster with a non-default `networking.podCIDR`, set this (and the controller's managementCidr) to that pod CIDR, or the firewall will reject the real controller source. An empty value requires `allowOpenManagement=true` (fail-closed). Constrained to a strict IPv4 CIDR (or empty) so a tenant value cannot inject arbitrary text into the VyOS first-boot config.
-## The pattern validates octet RANGE and prefix length, not merely digit shape: a
-## loose `[0-9]{1,3}` accepted `999.999.999.999/99`, which contradicts the strict-CIDR
-## contract this field documents and reaches the VyOS first-boot config as a firewall
-## source that can never match. Empty stays permitted for allowOpenManagement.
-## @pattern ^(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/(3[0-2]|[12]?[0-9]))?$
-managementCIDR: 10.244.0.0/16
-
-## @param {bool} allowOpenManagement - Permit an empty `managementCIDR`, leaving the VyOS management API unrestricted (no first-boot firewall). Fail-closed by default: an empty `managementCIDR` with this false aborts rendering.
-allowOpenManagement: false
+## Management-API exposure: `_managementCIDR` and `_allowOpenManagement`.
+##
+## DELIBERATELY NOT @params, and deliberately underscore-prefixed, for the same
+## reason as `_logSerialConsole` below. These decide which sources reach the VyOS
+## management API (HTTPS 443) through the first-boot firewall, and
+## `_allowOpenManagement: true` with an empty `_managementCIDR` boots the gateway
+## with NO firewall at all — no local-input default drop, no Boundary-A guard, no
+## forward default-deny — until the controller's first push installs one. The
+## security model calls that a test-only escape hatch. It said so while both keys
+## sat in the tenant schema, which made the sentence documentation rather than a
+## control; a tenant could flip it on their own instance.
+##
+## They are also not a knob a tenant could set correctly even in good faith:
+## `_managementCIDR` must agree with the controller's own --management-cidr flag,
+## and a value excluding the real controller source locks the controller out of
+## the router permanently, with nothing but an opaque ConfigureFailed to show for
+## it. Both default to the cluster pod CIDR (10.244.0.0/16, the kube-ovn
+## default). On a cluster with a non-default `networking.podCIDR`, an OPERATOR
+## sets this and the controller flag together.
+##
+## The `_` prefix is what enforces it: pkg/registry/apps/application/rest.go
+## rejects every top-level values key beginning with `_` on Create and Update, so
+## the key cannot arrive from a tenant at all. The strict-IPv4-CIDR check in
+## site-router.assertSafeVyOSInputs stays regardless, because a platform value is
+## still interpolated into the VyOS config and a command-injection guard should
+## not depend on who supplied the string.
+## Neither key is SET here on purpose. cozyvalues-gen validates values.yaml
+## against the schema it generates from the @param annotations, so a key with no
+## @param fails the README step — which is the same reason `_logSerialConsole`
+## below is documented without being set. The default therefore lives in
+## site-router.managementCIDR, which also keeps "unset" distinguishable from
+## "explicitly empty": unset means the pod CIDR, empty means the operator asked
+## for the open-management escape hatch and must say so with
+## `_allowOpenManagement: true`.
 
 ## @param {string} [cloudInitSeed] - Opaque seed mixed into the VM firmware UUID. Change it to force the first-boot seed to be applied again; clear it to preserve an existing VM's UUID across re-renders.
 cloudInitSeed: ""

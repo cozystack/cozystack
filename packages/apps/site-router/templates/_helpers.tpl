@@ -73,6 +73,29 @@ Ported from the vm-instance chart's virtual-machine.stableUuid idiom.
 {{- end }}
 
 {{/*
+Resolve the management CIDR: the source allowed to reach the VyOS HTTPS API
+through the first-boot firewall.
+
+The default lives here rather than in values.yaml because `_`-prefixed keys are
+not @params and cozyvalues-gen rejects a values key it has no schema for. That
+turns out to be the better place for it anyway, because it is the only place
+that can tell UNSET from EXPLICITLY EMPTY — and the difference is the whole
+fail-closed contract. Unset means "use the cluster pod CIDR". Empty means the
+operator is asking for the open-management escape hatch, which secret-cloudinit
+then refuses unless `_allowOpenManagement` says so out loud.
+
+`| default` would collapse the two and quietly make the escape hatch
+unreachable, so this uses hasKey instead.
+*/}}
+{{- define "site-router.managementCIDR" -}}
+{{- if hasKey .Values "_managementCIDR" -}}
+{{- .Values._managementCIDR | toString -}}
+{{- else -}}
+10.244.0.0/16
+{{- end -}}
+{{- end -}}
+
+{{/*
 Resolve the VyOS HTTPS-API token. Reuses the token from the existing api-key
 Secret when present (reconcile stability), otherwise generates a fresh one.
 Callers MUST resolve the token exactly once per render and reuse the value, so
@@ -209,7 +232,7 @@ peer-not-yet-configured state live elsewhere); this guard only rejects a
 present-but-malformed value.
 */}}
 {{- define "site-router.assertSafeVyOSInputs" -}}
-{{- $mgmt := .Values.managementCIDR | toString -}}
+{{- $mgmt := include "site-router.managementCIDR" . -}}
 {{- if $mgmt -}}
 {{-   if not (regexMatch `^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$` $mgmt) -}}
 {{-     fail (printf "managementCIDR %q is not a strict IPv4 CIDR (a.b.c.d/prefix); refusing to interpolate it into the VyOS config (command-injection guard)" $mgmt) -}}
@@ -362,7 +385,7 @@ with internal/vyos/render and the assertions in tests/secret_cloudinit_test.yaml
 {{- $token := .token -}}
 {{- $tls := .tls -}}
 {{- include "site-router.assertSafeVyOSInputs" $ctx -}}
-{{- if $ctx.Values.managementCIDR }}
+{{- if include "site-router.managementCIDR" $ctx }}
 firewall {
     ipv4 {
         forward {
@@ -406,7 +429,7 @@ firewall {
                     }
                     protocol "tcp"
                     source {
-                        address "{{ $ctx.Values.managementCIDR }}"
+                        address "{{ include "site-router.managementCIDR" $ctx }}"
                     }
                 }
             }

@@ -39,7 +39,7 @@ release:
 
 set:
   _cluster: {}
-  managementCIDR: 10.244.0.0/16
+  _managementCIDR: 10.244.0.0/16
   peer:
     address: 203.0.113.10
 
