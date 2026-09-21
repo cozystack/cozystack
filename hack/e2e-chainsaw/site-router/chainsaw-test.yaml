@@ -702,11 +702,12 @@ spec:
                 -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
               API_CLUSTERIP=$(kubectl -n default get svc kubernetes -o jsonpath='{.spec.clusterIP}')
               # A POD-NETWORK pod outside tenant-test (another tenant / a system
-              # namespace). Must be pod-network (podIP != hostIP): a host-network
-              # pod's IP is a node address, which the guest TUNNEL-INGRESS drops
-              # before Cilium — this case must exercise the Cilium pod-identity
-              # policy, so filter those out and take the first pod-network pod in
-              # any other namespace.
+              # namespace). Still filtered to podIP != hostIP, but no longer to
+              # steer the drop to Cilium — the guest drops every foreign address
+              # now (see case 2). The filter stays so the probe target is a real
+              # cross-tenant pod address rather than a node address, which case 3
+              # already covers separately and which would make this case a
+              # duplicate rather than the cross-tenant one it is meant to be.
               OTHER_POD_IP=$(kubectl get pods -A \
                 -o jsonpath='{range .items[*]}{.status.podIP}{" "}{.status.hostIP}{" "}{.metadata.namespace}{"\n"}{end}' \
                 | awk -v ns="$NAMESPACE" '$1!="" && $1!=$2 && $3!=ns {print $1; exit}')
@@ -743,11 +744,23 @@ spec:
                   "guest_counter_flat TUNNEL-INGRESS default-action" \
                   tcp "$BACKEND_IP" 8080
 
-              # 2. Another tenant's pod → Cilium tenant isolation (POLICY_DENIED):
-              #    dest is in the pod CIDR so the guest dest-constraint admits it;
-              #    the pod-layer identity policy is what drops it.
+              # 2. Another tenant's pod → guest TUNNEL-INGRESS dest-constraint.
+              #    This asserted a Cilium POLICY_DENIED record until the
+              #    destination set was narrowed: the guest admits one /32 per Pod
+              #    IP and Service ClusterIP owned by THIS namespace, not the whole
+              #    pod CIDR, so a foreign pod IP matches no accept and dies at the
+              #    guest default-action. It never reaches the pod veth, Hubble
+              #    never records it, and the old assertion failed precisely
+              #    BECAUSE the isolation is stronger than it assumed.
+              #
+              #    What that costs: the tunnel can no longer exercise Cilium's
+              #    pod-identity policy as a second layer, because nothing survives
+              #    the guest to reach it. Cross-tenant isolation is asserted here
+              #    at the layer that actually enforces it. The Cilium layer needs
+              #    its own probe from inside the pod network, which is not this
+              #    suite.
               assert_dropped "another tenant's pod" \
-                "hubble_dropped $OTHER_POD_IP POLICY_DENIED" \
+                "guest_counter_incremented TUNNEL-INGRESS default-action" \
                 tcp "$OTHER_POD_IP" 8080
 
               # 3. Node address → guest TUNNEL-INGRESS dest-constraint (node/join
@@ -756,15 +769,14 @@ spec:
                 "guest_counter_incremented TUNNEL-INGRESS default-action" \
                 tcp "$NODE_IP" 10250
 
-              # 4. Kubernetes API ClusterIP → Cilium (reserved:kube-apiserver
-              #    identity denies the routed source). TUNNEL-INGRESS rule 20 admits
-              #    the service CIDR, so the guest forwards it; Cilium then denies it
-              #    at the kube-apiserver identity. The ClusterIP is DNAT'd to the
-              #    apiserver endpoint BEFORE the policy check, so the drop record
-              #    carries the "kube-apiserver" identity, not the ClusterIP — match
-              #    on that identity rather than $API_CLUSTERIP.
+              # 4. Kubernetes API ClusterIP → guest TUNNEL-INGRESS dest-constraint,
+              #    for the same reason as case 2. The old comment described a rule
+              #    admitting the whole service CIDR; the implementation admits only
+              #    ClusterIPs owned by this namespace, and the kubernetes Service
+              #    lives in `default`. So the packet is dropped at the guest and
+              #    produces no Cilium record to match on.
               assert_dropped "kubernetes API" \
-                "hubble_dropped kube-apiserver POLICY_DENIED" \
+                "guest_counter_incremented TUNNEL-INGRESS default-action" \
                 tcp "$API_CLUSTERIP" 443
 
               # 5. 169.254.0.0/16 incl. metadata → guest TUNNEL-INGRESS

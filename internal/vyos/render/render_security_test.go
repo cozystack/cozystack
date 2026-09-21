@@ -451,3 +451,41 @@ func TestRenderManagementAPIDrop_IndependentOfManagementCIDR(t *testing.T) {
 		t.Errorf("expected the Boundary A IPsec-decrypted management-API drop even with empty ManagementCIDR, ops: %+v", ops)
 	}
 }
+
+// TestRenderTunnelIngress_EmptyDestinationSetEmitsNoAccept is the fail-open
+// regression. An empty TenantNetworkCIDRs used to degrade every remoteCIDR to a
+// source-only accept, guarded by nothing but a comment claiming the controller
+// could not produce one on a pushing path. A jumped-chain accept in VyOS is a
+// terminal verdict, so a source-only accept forwards a valid-source packet to
+// ANY destination, including the internet, which is precisely the boundary the
+// destination constraint exists to be.
+//
+// Failing closed is the only safe reading: the rule set keeps its
+// established/related accept and its default drop, so return traffic still flows
+// and new flows are refused until the next push resolves a real destination set.
+func TestRenderTunnelIngress_EmptyDestinationSetEmitsNoAccept(t *testing.T) {
+	t.Parallel()
+
+	in := baseInputs()
+	in.TunnelDevice = "eth0"
+	in.RemoteCIDRs = []string{"172.31.0.0/16", "10.10.0.0/16"}
+	in.TenantNetworkCIDRs = nil // the state this test is about
+	in.Tunnels = []render.IPSecTunnel{routedTunnel()}
+
+	ops := render.Render(in)
+
+	rs := "firewall/ipv4/name/" + render.TunnelIngressRuleSet
+
+	sources, _, _ := tunnelIngressAccepts(ops, render.TunnelIngressRuleSet)
+	if len(sources) != 0 {
+		t.Fatalf("with no resolved destinations the rule set must accept nothing new, "+
+			"but it admits %v unconditionally — a source-only accept is a terminal "+
+			"verdict and forwards to any destination", sources)
+	}
+
+	// The rule set still has to exist and still has to drop by default, or the
+	// forward-chain jump lands somewhere undefined.
+	if !containsSet(ops, rs+"/default-action", "drop") {
+		t.Errorf("the rule set must keep its default drop, ops: %+v", ops)
+	}
+}

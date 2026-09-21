@@ -135,6 +135,16 @@ transfer_from_b() {
 }
 
 # hubble_dropped <dst> <reason-substring>
+#
+# NO CURRENT CALLER, deliberately kept. The two cases that used it (a foreign
+# tenant pod, the kubernetes API ClusterIP) now assert the guest counter instead:
+# TUNNEL-INGRESS admits one /32 per Pod IP and Service ClusterIP owned by the
+# tenant namespace rather than the whole pod/service CIDRs, so both packets die
+# at the guest and never reach the pod veth where Cilium enforces. Asserting a
+# POLICY_DENIED record there failed BECAUSE the isolation is stronger than the
+# assertion assumed. Exercising the Cilium layer needs a probe originating inside
+# the pod network, which this suite does not have; this helper is what that probe
+# would use.
 #   Assert a Cilium DROPPED flow toward <dst> matching <reason> from the
 #   cilium-monitor capture taken over the probe window (POLICY_DENIED maps to
 #   cilium-monitor's "Policy denied"). Hubble need not be enabled.
