@@ -642,11 +642,21 @@ spec:
               [ -n "$BACKEND_IP" ] || { echo "no backend pod IP"; exit 1; }
               # curl http://$BACKEND_IP:8080/clientip from B, sourced 192.0.2.1,
               # and confirm the returned client IP is in B's site range.
-              observed=$(probe_from_b_stdout http "$BACKEND_IP" 8080 "/clientip")
+              # The probe runs with errexit OFF and its status captured, because
+              # the previous revision recorded AFTER it and therefore recorded
+              # nothing: under `set -e` a failing command substitution kills the
+              # script before the next line, and a probe that cannot reach the
+              # backend at all is exactly the case whose output is worth having.
+              # stderr is folded in for the same reason.
+              set +e
+              observed=$(probe_from_b_stdout http "$BACKEND_IP" 8080 "/clientip" 2>&1)
+              probe_rc=$?
+              set -e
               # record, not echo: a failing chainsaw script reports only its
               # wrapper error, so the observed address has to be written where
               # the report collector picks it up or the failure says nothing.
-              record inbound-source "backend=$BACKEND_IP observed='$observed'"
+              record inbound-source "backend=$BACKEND_IP rc=$probe_rc observed='$observed'"
+              [ "$probe_rc" -eq 0 ] || { echo "FAIL: probe itself failed rc=$probe_rc: $observed"; exit 1; }
               case "$observed" in
                 192.0.2.*) echo "source preserved: backend saw $observed" ;;
                 *) echo "FAIL: backend saw '$observed', expected a 192.0.2.x source (NAT / not routed)"; exit 1 ;;
