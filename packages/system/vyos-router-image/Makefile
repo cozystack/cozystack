@@ -49,9 +49,19 @@ VYOS_BUILD_REF   = d2525d97a11de9f4799dbb6d425c5c9c51edf179
 # Debian bookworm packages — the same base the appliance is built on — pinned by
 # version and digest because they are fetched at build time. They are NOT on any
 # VyOS repository; qemu-guest-agent never was.
+#
+# Unlike the Stream ISO these DO rot: a `+deb12uN` package is a security-update
+# stream, and when it is superseded the old file leaves the pool. The SHA256
+# check turns that into a loud build failure rather than a silent substitution,
+# but a loud failure whose first sighting is a red release build is still a
+# deadline nobody was told about — so both are covered by a Renovate deb-datasource
+# manager (.github/renovate.json). That is also why the `+` in the version is
+# written literally rather than percent-encoded: the pool serves both forms
+# (verified), and only the literal one is a Debian version string a datasource
+# can compare.
 VYOS_DEB_URLS = \
   http://deb.debian.org/debian/pool/main/libu/liburing/liburing2_2.3-3_amd64.deb \
-  http://deb.debian.org/debian/pool/main/q/qemu/qemu-guest-agent_7.2%2bdfsg-7%2bdeb12u18%2bb3_amd64.deb
+  http://deb.debian.org/debian/pool/main/q/qemu/qemu-guest-agent_7.2+dfsg-7+deb12u18+b3_amd64.deb
 VYOS_DEB_SHA256 = \
   c23077e3640e6cb4b819c134b3f41d5cf21b3edac099654b1b4142c3069a39a3 \
   ffdc7852decec129a903acf1b9ac083859cabee60e7b24477b652f36e228e808
@@ -61,6 +71,25 @@ VYOS_DEB_SHA256 = \
 VYOS_VERSION     = stream-$(VYOS_STREAM_RELEASE)
 VYOS_ARCH        = amd64
 
+# ── Why this package stays in the root Makefile `build:` list ────────────────
+# It is a heavy privileged build behind two external fetches, and the PR lane
+# deliberately keeps it out of the per-package build matrix for exactly that
+# reason (a dedicated, path-scoped build-vyos job). The release lanes have no
+# such scoping, so it runs on every merge to a maintained line — which looks
+# like an asymmetry worth closing by dropping it from `build:`.
+#
+# It is not. docs/agents/image-refs.md makes it an invariant: "A package that
+# stamps a reference is in the root Makefile build: list… a package outside it
+# is never rebuilt by any path and its pin freezes permanently." This package
+# stamps packages/apps/site-router/images/vyos-router-disk.tag, so removing it
+# would put the appliance in the same class as the live violations that doc
+# names. The PR lane can scope it out precisely because the release lanes do not.
+#
+# The availability argument the PR-lane scoping rests on also no longer
+# describes this build. It was written against the rolling apt repository, whose
+# index moved under a running build and whose kernel retention gave a pin a
+# shelf life. Every input is now a fixed artifact: an archived Stream ISO, a
+# digest-pinned container, a git ref and two Debian pool files.
 include ../../../hack/common-envs.mk
 
 QCOW2 = ../../../_out/assets/vyos-router-$(VYOS_ARCH).qcow2
