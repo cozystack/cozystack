@@ -215,4 +215,9 @@ spec:
               name: remote-site-b-cloudinit
         - name: cozydiag
           secret:
+            # volumeLabel, not the volume name: KubeVirt reads the iso9660 label
+            # off Secret.VolumeLabel (pkg/config/secret.go getLabel), so without
+            # this the seed's `blkid -L cozydiag` finds nothing and installs no
+            # diagnostics, silently. Same fix as A's vm.yaml.
             secretName: remote-site-b-diag
+            volumeLabel: cozydiag

@@ -134,6 +134,26 @@ transfer_from_b() {
   [ "${sent:-0}" -ge "$bytes" ] 2>/dev/null
 }
 
+# record <label> <value...>
+#
+# Writes one observation into the cozyreport snapshot for this test, and echoes
+# it as well. The echo is the part that does NOT survive: a chainsaw `script`
+# whose command fails reports only the wrapper, "($error == null): Invalid
+# value: false", and the message the script printed to say WHAT it saw is
+# nowhere in the job log. Measured on the run that first got a tunnel up: the
+# source-preservation probe failed and the observed client address, which is the
+# entire content of that failure, could not be recovered from the log at all.
+#
+# The snapshot directory is the same one .chainsaw.yaml's catch collects into,
+# so anything written here lands in cozyreport.tgz whatever the log verbosity.
+record() {
+  _rlabel="$1"; shift
+  _rsnap="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${TEST_NAME:-site-router}"
+  mkdir -p "$_rsnap" 2>/dev/null || true
+  printf '%s: %s\n' "$_rlabel" "$*" >> "$_rsnap/probe-observations.txt" 2>/dev/null || true
+  echo "$_rlabel: $*"
+}
+
 # hubble_dropped <dst> <reason-substring>
 #
 # NO CURRENT CALLER, deliberately kept. The two cases that used it (a foreign
