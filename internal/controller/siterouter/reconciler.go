@@ -205,10 +205,6 @@ type instance struct {
 	// values is the decoded HelmRelease spec.values — the authoritative tenant
 	// input (D7).
 	values map[string]interface{}
-	// clusterNetworks is the deny-set snapshot resolved during validation. The
-	// config push reuses it so one reconcile cannot validate against one cluster
-	// view and render its source filter from another.
-	clusterNetworks denyset.ClusterNetworks
 	// gatewayPod is the gateway VM's virt-launcher pod, or nil if it has not been
 	// scheduled yet (a normal transient state early in an instance's life).
 	gatewayPod *corev1.Pod
@@ -238,7 +234,8 @@ type instance struct {
 // chart-authored role in packages/system/site-router-controller/templates/rbac.yaml
 // — there is no config/rbac generated from them. Only HelmReleases and Pods carry
 // list/watch: they are the two kinds in CacheByObject, and Pods are additionally
-// listed directly (surfacePendingRoutePods). Everything else is read one object at
+// listed directly per namespace (surfacePendingRoutePods and
+// tenantNetworkCIDRs). Everything else is read one object at
 // a time through the uncached reader, so granting list there would add no
 // capability the controller uses while widening what a compromise could read — on
 // Secrets a cluster-wide list returns contents.
@@ -439,7 +436,6 @@ func (r *SiteRouterReconciler) validateRemoteCIDRs(ctx context.Context, inst *in
 	if err != nil {
 		return err
 	}
-	inst.clusterNetworks = clusters
 	rejections := denyset.Validate(cidrs, clusters)
 	if len(rejections) == 0 {
 		return nil
