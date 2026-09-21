@@ -8,12 +8,15 @@
 # Making it a suite-applied Pod (rather than a hand-created one) is what lets a
 # fresh run reproduce the proof self-contained.
 #
-# netshoot ships ssh/curl/nc/python3 but NOT sshpass, so the container adds it at
-# start; the readinessProbe gates "Ready" on sshpass+curl+python3 being present,
-# so the create-probe-driver step's readiness assert guarantees the tools are
-# there before the first probe. sshpass is fetched from the Alpine repo at start
-# — the empirical validation runs on an internet-connected sandbox; an air-gapped
-# run would need the tool baked into a pinned image instead.
+# netshoot ships ssh/curl/nc but NOT sshpass, so the container adds it at start;
+# the readinessProbe gates "Ready" on sshpass+curl being present, so the
+# create-probe-driver step's readiness assert guarantees the tools are there
+# before the first probe. Those two are the whole in-pod toolchain: the pod runs
+# the SSH and the curl, and the JSON the curl returns is parsed back in the
+# Chainsaw script shell, which is why nothing here needs an interpreter.
+# sshpass is fetched from the Alpine repo at start — the empirical validation
+# runs on an internet-connected sandbox; an air-gapped run would need the tool
+# baked into a pinned image instead.
 # TODO(T13): pin the image by digest and add it to hack/e2e-prepull-images.sh so
 # the pod does not race an image pull (mirrors backend.yaml's agnhost TODO).
 apiVersion: v1
@@ -35,6 +38,6 @@ spec:
           command:
             - sh
             - -c
-            - "command -v sshpass && command -v curl && command -v python3"
+            - "command -v sshpass && command -v curl"
         periodSeconds: 3
         failureThreshold: 60
