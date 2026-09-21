@@ -1956,10 +1956,11 @@ type removedField struct {
 	path string
 	// replacement says what happens instead, in the second half of the warning.
 	replacement string
-	// emptyDefault marks a key whose schema defaulted it to an empty string or
-	// to a map of them. The read path fills those defaults in and a client that
-	// writes back what it read stores them, so for such a key only a value
-	// counts as set, not its presence.
+	// emptyDefault marks a key that is set only when it carries a value. The
+	// image overrides defaulted to empty strings, the read path fills defaults
+	// in, and a client that writes back what it read stores them, so their
+	// presence says nothing. FoundationDB's cluster.version defaulted to a
+	// version instead, so there the flag only drops an explicit empty string.
 	emptyDefault bool
 }
 
@@ -1968,10 +1969,10 @@ var removedFieldsByKind = map[string][]removedField{
 		{path: "nodeGroups", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
 		{path: "nodeHealthCheck", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
 		{path: "maxNodeProvisionTime", replacement: "worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart)"},
-		{path: "images", replacement: "the images come from the chart, and an air-gapped install moves them with the platform-wide registry", emptyDefault: true},
+		{path: "images", replacement: "the images come from the chart, and an air-gapped install serves them through the registry mirrors configured on its nodes", emptyDefault: true},
 	},
 	"KubernetesNodes": {
-		{path: "images", replacement: "the images come from the chart, and an air-gapped install moves them with the platform-wide registry", emptyDefault: true},
+		{path: "images", replacement: "the images come from the chart, and an air-gapped install serves them through the registry mirrors configured on its nodes", emptyDefault: true},
 	},
 	"OpenSearch": {
 		{path: "images", replacement: "the image follows spec.version", emptyDefault: true},
