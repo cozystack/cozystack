@@ -63,11 +63,17 @@ rules:
   resources: ["virtualmachineinstances"]
   verbs: ["get"]
 # Read the cozy-system/cozystack ConfigMap for the cluster network CIDRs used by
-# the remote-CIDR deny-set validation. `get` only — a single uncached read of one
-# well-known object; see the Secret/Service rule above for why the unused
-# list/watch is not granted.
+# the remote-CIDR deny-set validation and by the management-CIDR resolution.
+# `get` only — a single uncached read of one well-known object; see the
+# Secret/Service rule above for why the unused list/watch is not granted. Named,
+# because that one object is the only ConfigMap the controller ever reads, and an
+# unnamed grant here is read-any-ConfigMap-in-the-cluster. resourceNames in a
+# ClusterRole scopes by NAME and not by namespace, so this still permits a
+# ConfigMap called `cozystack` in any namespace; it is narrower than the grant it
+# replaces, not a namespace restriction.
 - apiGroups: [""]
   resources: ["configmaps"]
+  resourceNames: ["cozystack"]
   verbs: ["get"]
 # Leader election (--leader-elect).
 - apiGroups: ["coordination.k8s.io"]

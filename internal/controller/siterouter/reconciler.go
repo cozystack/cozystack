@@ -248,17 +248,24 @@ type instance struct {
 
 // These markers are documentation that must be kept in sync BY HAND with the
 // chart-authored role in packages/system/site-router-controller/templates/rbac.yaml
-// — there is no config/rbac generated from them. Only HelmReleases and Pods carry
-// list/watch: they are the two kinds in CacheByObject, and Pods are additionally
-// listed per namespace by surfacePendingRoutePods and tenantNetworkCIDRs.
-// Everything else is read one object at a time through the uncached reader, so
-// granting list there would add no capability the controller uses while widening
-// what a compromise could read — on Secrets a cluster-wide list returns contents.
+// — there is no config/rbac generated from them, and hack/site-router-rbac.bats
+// is what keeps the two from drifting apart unnoticed.
+//
+// Only HelmReleases and Pods carry watch: they are the two kinds in
+// CacheByObject. list is granted exactly where something enumerates — Pods per
+// namespace (surfacePendingRoutePods, tenantNetworkCIDRs) and Services and Nodes
+// cluster-wide for the deny set (denyset.DiscoverClusterNetworks). Everything
+// else is read one object at a time through the uncached reader, so granting
+// list there would add no capability the controller uses while widening what a
+// compromise could read — on Secrets a cluster-wide list returns contents.
 //
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;patch
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;patch
-// +kubebuilder:rbac:groups="",resources=services;secrets;configmaps,verbs=get
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get,resourceNames=cozystack
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=list
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachineinstances,verbs=get
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch

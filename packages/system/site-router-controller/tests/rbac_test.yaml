@@ -84,11 +84,22 @@ tests:
           path: rules[0].verbs
           value: ["get", "list", "watch", "patch"]
 
-  - it: grants the ConfigMap read the deny-set validation depends on
+  # Named, because cozy-system/cozystack is the only ConfigMap the controller
+  # ever reads and an unnamed grant here reads any ConfigMap in the cluster. The
+  # unnamed form is asserted absent so widening it back is a test failure rather
+  # than a silent change: `contains` on the named rule alone would still pass.
+  - it: grants the ConfigMap read the deny-set validation depends on, scoped to that one name
     templates:
       - templates/rbac.yaml
     asserts:
       - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            resourceNames: ["cozystack"]
+            verbs: ["get"]
+      - notContains:
           path: rules
           content:
             apiGroups: [""]
