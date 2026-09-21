@@ -39,14 +39,19 @@
 #     x-kubernetes-preserve-unknown-fields, so a direct edit of the HelmRelease
 #     can put a number or a list there);
 #   - a whole spec.values that is not an object, for the same reason;
-#   - a carried cluster.version whose patch differs from the tag the chart ships
-#     for its line: the release is carried over and still moves to that tag,
-#     which can be a step down;
+#   - a cluster.version whose patch differs from the tag the release will render:
+#     it is carried over and still moves to that tag, which can be a step down.
+#     This is worked out from the values rather than from the patch, so a run
+#     retried after an aborted one, which finds version already written, still
+#     records it;
 #   - an OpenSearch, Kubernetes or KubernetesNodes release that still sets one of
 #     the images.* overrides, which those charts have stopped reading. There is
 #     nothing to carry over there, since an image does not map to a version, so
-#     the list is the point: those releases roll onto the chart's images, or the
-#     platform-wide images-registry, on the first reconcile.
+#     the list is the point: those releases roll onto the chart's images on the
+#     first reconcile. An air-gapped install serves those through the registry
+#     mirrors configured on its nodes, like every other platform image;
+#   - an OpenSearch release storing version: null, which the old chart rendered
+#     as its v2 default and the new one refuses.
 #
 # FOUNDATIONDB_TAGS repeats packages/apps/foundationdb/files/versions.yaml,
 # because the migrations image carries no charts. The migration always runs
@@ -101,7 +106,12 @@ plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output
     then
       if ($raw | type) != "object" then
         $id + {action: "malformed", detail: ($raw | tostring)}
-      elif (($v.version | type) == "string" and $v.version != "") then empty
+      elif (($v.version | type) == "string" and $v.version != "") then
+        ($v.cluster | if type == "object" then .version else null end) as $cv
+        | $fdbtags[$v.version] as $tag
+        | if ($cv | type) == "string" and $tag != null and $cv != $tag
+          then $id + {action: "drift", version: $v.version, tag: $tag, detail: $cv}
+          else empty end
       elif (($v.cluster | type) != "object") or ($v.cluster.version == null) then empty
       elif ($v.cluster.version | type) != "string" then
         $id + {action: "unmapped", detail: ($v.cluster.version | tostring)}
@@ -123,9 +133,12 @@ plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output
        then "Kubernetes"
        else null end) as $app
       | ($v | image_overrides) as $overrides
-      | if $app != null and ($overrides | length) > 0
-        then $id + {action: "image", app: $app, detail: ($overrides | join(";"))}
-        else empty end
+      | (if $app != null and ($overrides | length) > 0
+         then $id + {action: "image", app: $app, detail: ($overrides | join(";"))}
+         else empty end),
+        (if $app == "OpenSearch" and ($v | has("version")) and $v.version == null
+         then $id + {action: "nullversion", app: $app}
+         else empty end)
     end')
 
 CARRIED=0
@@ -164,6 +177,14 @@ while IFS= read -r row; do
         echo "WARN: FoundationDB $ns/$name runs $detail, and $version renders $tag after the upgrade" >&2
         record_leftover "${ns}/${name}=cluster.version:${detail}->${tag}"
       fi
+      ;;
+    drift)
+      echo "WARN: FoundationDB $ns/$name runs $detail, and $version renders $tag after the upgrade" >&2
+      record_leftover "${ns}/${name}=cluster.version:${detail}->${tag}"
+      ;;
+    nullversion)
+      echo "WARN: $app $ns/$name stores version: null, which the new chart refuses to render; set a version" >&2
+      record_leftover "${ns}/${name}=version:null"
       ;;
     unmapped)
       echo "WARN: FoundationDB $ns/$name has cluster.version $detail, which is not on a supported line (7.1, 7.3, 7.4); it will render the v7.3 default after the upgrade" >&2

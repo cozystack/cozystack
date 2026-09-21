@@ -19,6 +19,9 @@
 #     moves, and an OpenSearch, Kubernetes or KubernetesNodes release still
 #     setting an image override are recorded and do not block the stamp;
 #   - a failed scan or patch aborts before the stamp;
+#   - a run retried after an aborted one, which finds version already written,
+#     still records the patch the release moves to;
+#   - an OpenSearch release storing version: null is recorded;
 #   - the tag map the migration carries matches the chart's.
 #
 # cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
@@ -71,6 +74,8 @@ prep() {
    "spec":{"values":{"images":{"kubectl":"","talosCsrSigner":"mirror.example.test/talos-csr-signer:1","waitForKubeconfig":"mirror.example.test/busybox:1"}}}},
   {"metadata":{"namespace":"tenant-f","name":"kubernetes-plain","labels":{"apps.cozystack.io/application.kind":"Kubernetes"}},
    "spec":{"values":{"images":{"kubectl":"","talosCsrSigner":"","waitForKubeconfig":""}}}},
+  {"metadata":{"namespace":"tenant-e","name":"opensearch-null","labels":{"apps.cozystack.io/application.kind":"OpenSearch"}},
+   "spec":{"values":{"version":null}}},
   {"metadata":{"namespace":"tenant-f","name":"kubernetes-nodes-mirrored-md0"},
    "spec":{"chartRef":{"kind":"ExternalArtifact","name":"cozystack-kubernetes-nodes-application-kubevirt-kubernetes-nodes"},
            "values":{"images":{"kubectl":"mirror.example.test/kubectl:1"}}}}
@@ -112,7 +117,8 @@ JSON
   echo "$annotation" | grep -q 'tenant-c/foundationdb-unlabelled=cluster.version:7.1.0->7.1.67'
   echo "$annotation" | grep -q 'tenant-f/kubernetes-mirrored=images.talosCsrSigner:mirror.example.test/talos-csr-signer:1;images.waitForKubeconfig:mirror.example.test/busybox:1'
   echo "$annotation" | grep -q 'tenant-f/kubernetes-nodes-mirrored-md0=images.kubectl:mirror.example.test/kubectl:1'
-  for quiet in opensearch-plain kubernetes-plain foundationdb-old71 foundationdb-pinned73; do
+  echo "$annotation" | grep -q 'tenant-e/opensearch-null=version:null'
+  for quiet in opensearch-plain kubernetes-plain foundationdb-old71 foundationdb-pinned73 foundationdb-migrated; do
     if echo "$annotation" | grep -q "/$quiet="; then echo "recorded $quiet, which needs no attention"; exit 1; fi
   done
   [ "$(tail -n1 "$FAKE_CMDLOG")" = "STAMP 60" ]
@@ -163,4 +169,29 @@ JSON
   echo "chart:     $chart"
   [ -n "$migration" ]
   [ "$migration" = "$chart" ]
+}
+
+@test "a retry after an aborted pass still records the patch a carried release moves to" {
+  prep
+  # The state an aborted pass leaves behind: version is already written, so the
+  # retry has nothing to carry, but the release still moves from 7.4.3 to 7.4.1.
+  cat > "$FAKE_HR_LIST" <<'JSON'
+{"items":[
+  {"metadata":{"namespace":"tenant-a","name":"foundationdb-new74","labels":{"apps.cozystack.io/application.kind":"FoundationDB"}},
+   "spec":{"values":{"version":"v7.4","cluster":{"version":"7.4.3"}}}},
+  {"metadata":{"namespace":"tenant-a","name":"foundationdb-old71","labels":{"apps.cozystack.io/application.kind":"FoundationDB"}},
+   "spec":{"values":{"version":"v7.1","cluster":{"version":"7.1.67"}}}}
+]}
+JSON
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  if grep -q '^PATCH' "$FAKE_CMDLOG"; then echo "patched a release that already has version"; exit 1; fi
+  annotation=$(grep '^ANNOTATE ' "$FAKE_CMDLOG")
+  echo "$annotation" | grep -q 'tenant-a/foundationdb-new74=cluster.version:7.4.3->7.4.1'
+  if echo "$annotation" | grep -q 'foundationdb-old71'; then echo "recorded a release that stays on its tag"; exit 1; fi
+  [ "$(tail -n1 "$FAKE_CMDLOG")" = "STAMP 60" ]
+  rm -rf "$WORK"
 }
