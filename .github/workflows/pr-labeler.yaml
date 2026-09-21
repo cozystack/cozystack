@@ -105,6 +105,7 @@ jobs:
               'securitygroups':      'area/networking',
               'cozy-proxy':          'area/networking',
               'site-router':         'area/networking',
+              'vyos-router-image':   'area/networking',
 
               // area/cilium
               'cilium':              'area/cilium',
