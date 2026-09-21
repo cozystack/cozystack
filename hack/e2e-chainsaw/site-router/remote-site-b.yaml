@@ -155,6 +155,15 @@ spec:
           interfaces:
             - name: default
               bridge: {}
+          # Guest-side diagnostics, matching A (site-router-a.yaml). B's HTTPS
+          # management API is what establish-tunnel pushes the initiator IPsec
+          # config through, so a B that boots but never serves 443 fails the step
+          # with nothing to attribute it to. KubeVirt puts the guest console in a
+          # guest-console-log container beside virt-launcher, whose log
+          # crust-gather already collects. Overrides the platform's cluster-wide
+          # disableSerialConsoleLog, which is why it is opt-in rather than the
+          # default.
+          logSerialConsole: true
       networks:
         - name: default
           pod: {}

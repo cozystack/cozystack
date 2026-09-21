@@ -53,6 +53,16 @@ spec:
           interfaces:
           - name: default
             bridge: {}
+          {{- /* Opt-in, and rendered only when true: this key overrides the
+                platform's cluster-wide disableSerialConsoleLog, which exists
+                because the guest-console-log container has held virt-launcher in
+                PodInitializing (kubevirt/kubevirt#15989). An explicit false
+                therefore renders the same nothing as an absent field rather than
+                KubeVirt's tri-state false, so a gateway that did not ask for the
+                console keeps the platform default. */}}
+          {{- if .Values.logSerialConsole }}
+          logSerialConsole: true
+          {{- end }}
         machine:
           type: ""
       terminationGracePeriodSeconds: 30
