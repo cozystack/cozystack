@@ -1,54 +1,64 @@
 NAME=vyos-router-image
 NAMESPACE=cozy-system
 
-# ── Pinned VyOS build inputs (reproducibility levers) ────────────────────────
-# The build TOOLING is pinned by digest/commit; the upstream rolling apt mirror
-# (packages.vyos.net/repositories/rolling) floats, so this is pinned-inputs /
-# best-effort reproducible, not bit-identical. Bump these deliberately: the image
-# and the site-router cloud-init contract advance atomically (see
-# packages/apps/site-router/docs/image-lifecycle.md).
+# ── Pinned appliance inputs (reproducibility levers) ─────────────────────────
+# The appliance is no longer built from source against an apt repository. It is
+# derived from a PUBLISHED VyOS Stream image, and every input below is a fixed
+# artifact that upstream keeps: Stream releases are archived, so a pin here does
+# not rot the way a rolling one does.
 #
-# VYOS_BUILD_REF CANNOT be left to age. It selects the kernel the live-build asks
-# for (data/defaults.toml `kernel_version`), and the rolling mirror carries only
-# the current one — so a ref that has fallen behind fails with
-# `E: Unable to locate package linux-image-<old>-vyos` rather than building
-# something stale. That is not a flake to retry: the pin has to move.
+# That is the whole reason for the change. The rolling repository retains only
+# the current kernel, and vyos-build raises `kernel_version` before the matching
+# kernel is published, so a pin was unbuildable both when it aged and, briefly,
+# when it was fresh. The retention clock ran on upstream's schedule, and on
+# 2026-09-08 it took the pinned kernel away mid-flight: `E: Unable to locate
+# package linux-image-6.18.48-vyos`, hours after that same package had built.
+# The VyOS LTS and per-release package repositories are not open to the public,
+# so there was no repository to move to — only a way to stop needing one.
 #
-# What actually watches these, stated precisely, because the previous wording
-# here claimed a guard that does not stop this break and the build broke anyway:
+# What Stream costs, stated plainly: the image is whatever upstream cut, so no
+# VyOS package can be added to it. Anything the appliance needs on top must come
+# from Debian, which the image is built on, or be a file. hack/inject-appliance.sh
+# is where that happens and what it does is the appliance's real recipe now.
 #
-#   - .github/renovate.json carries two custom regex managers, one for
-#     VYOS_BUILD_IMAGE (docker datasource) and one for VYOS_BUILD_REF (git-refs
-#     against the upstream `rolling` branch). Nothing else can see a pin held in
-#     a Makefile variable, so without them there is no watcher at all.
-#   - They only see this file once it is on the DEFAULT branch. Renovate does not
-#     evaluate an unmerged branch's config, so for as long as this package lives
-#     on a feature branch both pins are unwatched by construction. That is how
-#     VYOS_BUILD_REF fell behind far enough to break the build before it ever
-#     landed.
-#   - Even once merged they raise a PR; they do not hold the build up. The break
-#     is on the MIRROR's kernel-retention clock, not on Renovate's PR clock, so a
-#     bump PR left unmerged past the point the old kernel is dropped fails
-#     exactly the same way. Treat an open vyos-build ref PR as time-bounded work,
-#     not as a routine dependency bump.
+# VYOS_STREAM_RELEASE is a MANUAL bump and has no Renovate manager: VyOS publishes
+# Stream releases as a page rather than a feed, and a manager pointed at a
+# datasource that does not exist is worse than an honest manual pin. It is also
+# the one bump that is never urgent — Stream releases are archived, so this pin
+# stays buildable indefinitely, which is the whole reason for using it.
 #
-# VYOS_VERSION is a label with no upstream release feed and stays a manual bump.
-# Keep it as `1.5-rolling-<ref commit date, YYYYMMDD>` so it is a function of
-# VYOS_BUILD_REF rather than of the day someone rebuilt: bump the ref, set this
-# to that commit's date. It names the snapshot in the artifact and the image tag
-# and is otherwise inert — build-qcow2.sh globs for the qcow2 rather than
-# reconstructing the name from it.
-#
-# Verify a bump before trusting it by comparing the ref's kernel_version against
-# what the mirror actually serves — the two must be equal. Quote the gh URL: the
-# `?` is a glob character and zsh will refuse the command unquoted.
-#   gh api "repos/vyos/vyos-build/contents/data/defaults.toml?ref=<ref>" \
-#     --jq .content | base64 -d | grep kernel_version
-#   curl -fsSL https://packages.vyos.net/repositories/rolling/dists/rolling/main/binary-amd64/Packages.gz \
-#     | gunzip | grep -oE '^Package: linux-image-[0-9.]+-vyos$' | sort -u
+# Bumping is coupled, though: the image and the site-router configuration contract
+# advance together, and the config.boot footer carries the release's own component
+# versions, so a bump needs that footer re-captured. See
+# packages/apps/site-router/docs/image-lifecycle.md. Releases are listed at
+# https://vyos.net/get/stream/ and the checksum is over the ISO as downloaded —
+# take it from the download, not from the page.
+VYOS_STREAM_RELEASE = 2026.03
+VYOS_ISO_URL    = https://community-downloads.vyos.dev/stream/$(VYOS_STREAM_RELEASE)/vyos-$(VYOS_STREAM_RELEASE)-generic-amd64.iso
+VYOS_ISO_SHA256 = 56151a536e4a70c1a3f9202d8e6e59e7dd308cc84e2c50b633884a1376a39010
+
+# vyos-build is still used, but only for scripts/image-build/raw_image.py, which
+# installs a published ISO onto a disk image. `--reuse-iso` short-circuits
+# live-build entirely, so VYOS_BUILD_REF no longer selects a kernel and cannot
+# age out against a mirror — the container and the ref are pinned for the sake of
+# the conversion behaving the same way twice, nothing more.
 VYOS_BUILD_IMAGE = vyos/vyos-build:current@sha256:77b88166bb9dfb2fdef4f870064e579a1e33247a52c03a12c1703bf9b854a4c5
 VYOS_BUILD_REF   = d2525d97a11de9f4799dbb6d425c5c9c51edf179
-VYOS_VERSION     = 1.5-rolling-20260904
+
+# The guest agent, and the one dependency the Stream image lacks. Both are plain
+# Debian bookworm packages — the same base the appliance is built on — pinned by
+# version and digest because they are fetched at build time. They are NOT on any
+# VyOS repository; qemu-guest-agent never was.
+VYOS_DEB_URLS = \
+  http://deb.debian.org/debian/pool/main/libu/liburing/liburing2_2.3-3_amd64.deb \
+  http://deb.debian.org/debian/pool/main/q/qemu/qemu-guest-agent_7.2%2bdfsg-7%2bdeb12u18%2bb3_amd64.deb
+VYOS_DEB_SHA256 = \
+  c23077e3640e6cb4b819c134b3f41d5cf21b3edac099654b1b4142c3069a39a3 \
+  ffdc7852decec129a903acf1b9ac083859cabee60e7b24477b652f36e228e808
+
+# Names the snapshot in the artifact and the image tag, and is otherwise inert.
+# Keep it a function of VYOS_STREAM_RELEASE so it cannot drift from what shipped.
+VYOS_VERSION     = stream-$(VYOS_STREAM_RELEASE)
 VYOS_ARCH        = amd64
 
 include ../../../hack/common-envs.mk
@@ -80,6 +90,10 @@ qcow2:
 		VYOS_BUILD_REF="$(VYOS_BUILD_REF)" \
 		VYOS_VERSION="$(VYOS_VERSION)" \
 		VYOS_ARCH="$(VYOS_ARCH)" \
+		VYOS_ISO_URL="$(VYOS_ISO_URL)" \
+		VYOS_ISO_SHA256="$(VYOS_ISO_SHA256)" \
+		VYOS_DEB_URLS="$(VYOS_DEB_URLS)" \
+		VYOS_DEB_SHA256="$(VYOS_DEB_SHA256)" \
 		hack/build-qcow2.sh
 
 # No vendored upstream chart to pull, and the build-input pins above are

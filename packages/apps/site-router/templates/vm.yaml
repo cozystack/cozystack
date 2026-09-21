@@ -50,6 +50,10 @@ spec:
             bootOrder: 1
           - name: cloudinitdisk
             disk: {}
+{{- if .Values._logSerialConsole }}
+          - name: cozydiag
+            disk: {}
+{{- end }}
           interfaces:
           - name: default
             bridge: {}
@@ -83,6 +87,18 @@ spec:
         cloudInitNoCloud:
           secretRef:
             name: {{ .Release.Name }}-cloud-init
+{{- if .Values._logSerialConsole }}
+      {{- /*
+        A plain Secret volume, which KubeVirt renders as an iso9660 disk whose
+        label is the volume name, so the appliance seed finds it with
+        `blkid -L cozydiag`. Separate from the NoCloud disk on purpose: the
+        configuration seed and the diagnostics must not be able to break each
+        other (see site-router.diagFiles).
+      */}}
+      - name: cozydiag
+        secret:
+          secretName: {{ .Release.Name }}-diag
+{{- end }}
       networks:
       - name: default
         pod: {}

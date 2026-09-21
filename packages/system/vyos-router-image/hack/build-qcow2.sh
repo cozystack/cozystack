@@ -1,81 +1,119 @@
 #!/usr/bin/env bash
-# Build the conformant VyOS 1.5-rolling "site-router" appliance qcow2 via the
-# pinned vyos-build tooling, and drop it at _out/assets/vyos-router-amd64.qcow2.
+# Build the cozystack site-router appliance qcow2 from a published VyOS Stream
+# image, and drop it at _out/assets/vyos-router-<arch>.qcow2.
 #
-# Mirrors the Talos disk build shape (a privileged `docker run` of an upstream
-# imager into _out/assets), but VyOS builds a full live-build image rather than
-# assembling from prebuilt layers, so it is heavier (debootstrap + apt + squashfs)
-# and needs its scratch on a real local filesystem with several GiB free.
+# Two steps, and neither touches a VyOS package repository:
 #
-# Reproducibility levers (see the Makefile for the pinned values, exported here):
-#   VYOS_BUILD_IMAGE  the vyos-build container, digest-pinned (the build TOOLING)
-#   VYOS_BUILD_REF    the vyos-build git ref, commit-pinned (build-vyos-image +
-#                     flavors + live-build-config)
-#   VYOS_VERSION      the snapshot version label stamped into the artifact name
-# The upstream rolling apt mirror (packages.vyos.net/repositories/rolling) floats,
-# so this is pinned-inputs / best-effort reproducible, not bit-identical.
+#   1. vyos-build's raw_image.py installs the published ISO onto a disk image.
+#      `--reuse-iso` short-circuits live-build, so the flavor contributes only
+#      image_format, disk_size and boot_settings — everything else it used to
+#      declare is inert and has been removed from it.
+#   2. hack/inject-appliance.sh adds what the stock image lacks: the guest agent
+#      (from Debian, which the image is built on), the seed unit that installs
+#      the per-instance configuration, the baked default configuration, and the
+#      nginx log directory.
+#
+# This replaced a full live-build against packages.vyos.net/repositories/rolling.
+# That repository keeps only the current kernel and republishes without warning,
+# which made the build fail on upstream's schedule rather than on any change of
+# ours; the per-release repositories that would have fixed it are not public.
+# Stream images are archived, so the pin in the Makefile stays buildable.
 set -euo pipefail
 
 : "${VYOS_BUILD_IMAGE:?set by the Makefile}"
 : "${VYOS_BUILD_REF:?set by the Makefile}"
 : "${VYOS_VERSION:?set by the Makefile}"
+: "${VYOS_ISO_URL:?set by the Makefile}"
+: "${VYOS_ISO_SHA256:?set by the Makefile}"
+: "${VYOS_DEB_URLS:?set by the Makefile}"
+: "${VYOS_DEB_SHA256:?set by the Makefile}"
 VYOS_ARCH="${VYOS_ARCH:-amd64}"
 
-# Resolve repo-root-relative paths regardless of the caller's cwd.
 PKG_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_ROOT="$(cd "${PKG_DIR}/../../.." && pwd)"
 FLAVOR_FILE="${PKG_DIR}/flavors/vyos-router.toml"
+OVERLAY_DIR="${PKG_DIR}/overlay"
 OUT_DIR="${REPO_ROOT}/_out/assets"
 WORK_DIR="${REPO_ROOT}/_out/vyos-build"
+CACHE_DIR="${REPO_ROOT}/_out/vyos-cache"
 DEST="${OUT_DIR}/vyos-router-${VYOS_ARCH}.qcow2"
 
-mkdir -p "${OUT_DIR}"
+mkdir -p "${OUT_DIR}" "${CACHE_DIR}"
 
-# Fetch the pinned vyos-build checkout (shallow; the tooling, flavors and
-# live-build-config live here — vyos-1x is cloned by build-vyos-image itself).
+# Fetch and verify every downloaded input up front, so a bad or truncated
+# download fails here rather than halfway through a privileged build.
+fetch() {
+    local url="$1" sum="$2" dest="$3"
+    if [ ! -f "$dest" ] || ! echo "${sum}  ${dest}" | sha256sum -c - >/dev/null 2>&1; then
+        echo "I: fetching $(basename "$dest")"
+        curl -fL --retry 3 -o "$dest" "$url"
+    fi
+    echo "${sum}  ${dest}" | sha256sum -c -
+}
+
+ISO="${CACHE_DIR}/vyos-${VYOS_VERSION}-${VYOS_ARCH}.iso"
+fetch "${VYOS_ISO_URL}" "${VYOS_ISO_SHA256}" "${ISO}"
+
+DEB_DIR="${CACHE_DIR}/debs"
+mkdir -p "${DEB_DIR}"
+# Positionally paired lists: the Makefile keeps each URL beside its digest.
+read -r -a _urls <<< "${VYOS_DEB_URLS}"
+read -r -a _sums <<< "${VYOS_DEB_SHA256}"
+if [ "${#_urls[@]}" -ne "${#_sums[@]}" ]; then
+    echo "E: VYOS_DEB_URLS and VYOS_DEB_SHA256 have different lengths" >&2
+    exit 1
+fi
+for i in "${!_urls[@]}"; do
+    fetch "${_urls[$i]}" "${_sums[$i]}" "${DEB_DIR}/$(basename "${_urls[$i]%%\?*}")"
+done
+
+# The vyos-build checkout supplies raw_image.py and the flavor directory.
 if [ ! -d "${WORK_DIR}/.git" ]; then
   rm -rf "${WORK_DIR}"
   git clone --filter=blob:none https://github.com/vyos/vyos-build.git "${WORK_DIR}"
 fi
 git -C "${WORK_DIR}" fetch --depth 1 origin "${VYOS_BUILD_REF}"
 git -C "${WORK_DIR}" checkout --detach "${VYOS_BUILD_REF}"
-git -C "${WORK_DIR}" clean -xdf
+# A previous run leaves root-owned build artifacts behind, which `git clean`
+# cannot remove as the invoking user.
+sudo rm -rf "${WORK_DIR}/build"
+git -C "${WORK_DIR}" clean -xdf -e build
 
-# Register our flavor so the `vyos-router` positional argument resolves.
 cp "${FLAVOR_FILE}" "${WORK_DIR}/data/build-flavors/vyos-router.toml"
+cp "${ISO}" "${WORK_DIR}/appliance.iso"
+mkdir -p "${WORK_DIR}/cozy-overlay" "${WORK_DIR}/cozy-debs"
+cp "${OVERLAY_DIR}"/* "${WORK_DIR}/cozy-overlay/"
+cp "${DEB_DIR}"/*.deb "${WORK_DIR}/cozy-debs/"
+cp "${PKG_DIR}/hack/inject-appliance.sh" "${WORK_DIR}/cozy-inject.sh"
 
-# Build. --privileged is required for the loop/kpartx disk operations; -v /dev is
-# passed for the same reason the Talos imager needs it. The checkout is bind-
-# mounted at /vyos (per the vyos-build docs) so its build/ scratch lands on the
-# host filesystem under _out/vyos-build.
+# --privileged and -v /dev are required for the loop and overlay operations in
+# both the conversion and the injection. build-vyos-image itself must run under
+# sudo (its losetup/kpartx steps assume root and it does not sudo them), so its
+# outputs are root-owned; the trailing chown hands the tree back to the invoking
+# user so the mv below and any later clean can touch them.
 #
-# The container entrypoint gosu-drops to a build user whose UID it maps from the
-# bind-mount owner; build-vyos-image itself must run under `sudo` (its live-build
-# / losetup / kpartx steps assume root and it does not sudo them internally), so
-# every artifact it writes is root-owned. The trailing chown hands the tree back
-# to that mapped UID (== the invoking host/CI user) so the host-side mv below —
-# and any later `git clean` — can touch the outputs without root.
-#
-# build-vyos-image unconditionally generates an SBOM with `syft` at the end of
-# the build (no skip flag), and the pinned vyos-build container does not ship
-# syft, so fetch a version-pinned syft release tarball, verify it against a
-# repo-embedded SHA256 (no `curl | sh` remote-code-execution — integrity is
-# enforced at build time), and extract the binary onto root's PATH (the build
-# runs under sudo). We do not consume the SBOM — we only take the qcow2 below —
-# but the upstream script hard-fails without syft.
+# build-vyos-image unconditionally generates an SBOM with syft and the pinned
+# container does not ship it, so fetch a version-pinned release and verify it
+# against a repo-embedded digest rather than piping a remote script into a shell.
 docker run --rm -i \
   --privileged \
   -v /dev:/dev \
   -v "${WORK_DIR}:/vyos" \
   -w /vyos \
   "${VYOS_BUILD_IMAGE}" \
-  bash -c 'set -e; curl -fsSL -o /tmp/syft.tgz https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_linux_amd64.tar.gz; echo "7aa2f03ee92739cf643279ba3990548b9925d4e22cae13f46831ee62821147fe  /tmp/syft.tgz" | sha256sum -c -; sudo tar -xzf /tmp/syft.tgz -C /usr/local/bin syft; sudo ./build-vyos-image --architecture "$1" --version "$2" vyos-router; sudo chown -R "$(id -u):$(id -g)" .' \
+  bash -c 'set -e
+    curl -fsSL -o /tmp/syft.tgz https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_linux_amd64.tar.gz
+    echo "7aa2f03ee92739cf643279ba3990548b9925d4e22cae13f46831ee62821147fe  /tmp/syft.tgz" | sha256sum -c -
+    sudo tar -xzf /tmp/syft.tgz -C /usr/local/bin syft
+    sudo ./build-vyos-image --architecture "$1" --version "$2" --reuse-iso /vyos/appliance.iso vyos-router
+    RAW=$(find /vyos/build -maxdepth 1 -name "*.raw" -print -quit)
+    [ -n "$RAW" ] || { echo "E: no raw image produced" >&2; exit 1; }
+    sudo /vyos/cozy-inject.sh "$RAW" /vyos/cozy-overlay /vyos/cozy-debs
+    sudo qemu-img convert -f raw -O qcow2 "$RAW" "${RAW%.raw}.qcow2"
+    sudo chown -R "$(id -u):$(id -g)" .' \
   -- "${VYOS_ARCH}" "${VYOS_VERSION}"
 
-# build-vyos-image names the artifact vyos-<version>-vyos-router-<arch>.qcow2;
-# glob for it rather than reconstructing the exact name (the version string can be
-# normalised by the tooling).
-QCOW2_SRC="$(find "${WORK_DIR}" -maxdepth 2 -name 'vyos-*-vyos-router-*.qcow2' -print -quit)"
+QCOW2_SRC="$(find "${WORK_DIR}/build" -maxdepth 1 -name '*.qcow2' -print -quit)"
 if [ -z "${QCOW2_SRC}" ]; then
   echo "E: no qcow2 produced under ${WORK_DIR}" >&2
   exit 1

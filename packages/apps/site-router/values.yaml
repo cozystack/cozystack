@@ -103,7 +103,7 @@ managementCIDR: 10.244.0.0/16
 ## @param {bool} allowOpenManagement - Permit an empty `managementCIDR`, leaving the VyOS management API unrestricted (no first-boot firewall). Fail-closed by default: an empty `managementCIDR` with this false aborts rendering.
 allowOpenManagement: false
 
-## @param {string} [cloudInitSeed] - Opaque seed mixed into the VM firmware UUID. Change it to force a first-boot cloud-init re-run; clear it to preserve an existing VM's UUID across re-renders.
+## @param {string} [cloudInitSeed] - Opaque seed mixed into the VM firmware UUID. Change it to force the first-boot seed to be applied again; clear it to preserve an existing VM's UUID across re-renders.
 cloudInitSeed: ""
 
 ## Guest serial console and bring-up diagnostics: `_logSerialConsole`.
@@ -150,6 +150,6 @@ cloudInitSeed: ""
 ## because that container has been seen holding virt-launcher in PodInitializing
 ## (kubevirt/kubevirt#15989); it is part of the VM's device list, so flipping it
 ## on a live gateway restarts the VM and drops the tunnel; and the emitter half
-## rides the cloud-init seed, which re-runs only when the firmware UUID changes,
+## rides the boot seed, which is applied again only when the firmware UUID changes,
 ## so on an already-booted gateway it takes effect at the next first boot (change
 ## cloudInitSeed to force one).

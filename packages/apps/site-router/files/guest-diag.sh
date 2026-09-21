@@ -13,24 +13,23 @@
 # not a registered console the whole feature would capture nothing, kernel boot
 # messages included, so writing here is safe to rely on rather than probe for.
 #
-# WHY CRON DRIVES IT. cloud-init on this image runs `write_files` and nothing
-# executable: cloud_final_modules is empty, so runcmd/bootcmd/scripts-per-boot
-# never run. Of the ways to get a script started after write_files without a
-# maintainer-run appliance rebuild, only cron works:
+# WHY CRON DRIVES IT. The appliance seed drops this script and its cron entry
+# late in boot, from the diagnostics disk, and of the ways to get a script
+# started at that point only cron works:
 #   - /etc/rc.local is decided by systemd-rc-local-generator, which runs in early
-#     boot BEFORE cloud-init writes anything, so a file dropped later is ignored
+#     boot BEFORE the seed writes anything, so a file dropped later is ignored
 #     for this boot.
 #   - a unit plus an /etc/systemd/system/*.wants entry needs `daemon-reload` and
 #     a target restart, because the multi-user.target transaction is already
-#     computed by the time write_files runs.
+#     computed by the time the seed runs.
 #   - VyOS `system task-scheduler` lives in config.boot, so it only exists once
 #     the config COMMITS — which is one of the things being diagnosed. Scheduling
 #     the diagnostic through the mechanism under investigation is self-defeating.
 #   - cron rescans /etc/cron.d every minute regardless of when a file appears,
 #     needs no reload, and is running by construction (VyOS's own task-scheduler
 #     is built on it).
-# Nothing here touches config.boot, so a mistake in this script cannot stop the
-# guest configuring itself.
+# The diagnostics travel on their own disk and nothing here touches config.boot,
+# so a mistake in this script cannot stop the guest configuring itself.
 #
 # Every command is wrapped in `timeout`: a diagnostic that hangs is worse than no
 # diagnostic, and the box this runs on is suspected of being wedged.
@@ -107,9 +106,11 @@ emit_field() {
 sample() {
   emit "---- sample begin ----"
 
-  # 1. Did cloud-init finish, and how. Without this, everything below is being
-  #    read against an unknown configuration state.
-  emit_field cloud-init 3 8 cloud-init status --long
+  # 1. Did the appliance seed finish, and how. Without this, everything below is
+  #    being read against an unknown configuration state. This appliance carries
+  #    no cloud-init: the seed unit baked into the image installs config.boot
+  #    from the NoCloud disk before vyos-router reads it.
+  emit_field appliance-seed 3 8 systemctl show -p ActiveState -p Result vyos-appliance-seed.service
 
   # 2. Whole-system health, without naming units. `is-system-running` plus the
   #    failed list catches the config activation, nginx and strongSwan failing
@@ -120,7 +121,7 @@ sample() {
 
   # 3. Did the seeded config actually commit. The seed is a file; the ACTIVE
   #    config is a directory tree, so the presence of the service/https node in
-  #    it is direct evidence that cloud-init's config.boot was loaded rather than
+  #    it is direct evidence that the seeded config.boot was loaded rather than
   #    merely written. Reported as raw existence, because a missing tree means
   #    "this probe does not apply on this image" and must not be read as "the
   #    config did not commit".

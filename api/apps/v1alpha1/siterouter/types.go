@@ -48,7 +48,7 @@ type ConfigSpec struct {
 	// Permit an empty `managementCIDR`, leaving the VyOS management API unrestricted (no first-boot firewall). Fail-closed by default: an empty `managementCIDR` with this false aborts rendering.
 	// +kubebuilder:default:=false
 	AllowOpenManagement bool `json:"allowOpenManagement"`
-	// Opaque seed mixed into the VM firmware UUID. Change it to force a first-boot cloud-init re-run; clear it to preserve an existing VM's UUID across re-renders.
+	// Opaque seed mixed into the VM firmware UUID. Change it to force the first-boot seed to be applied again; clear it to preserve an existing VM's UUID across re-renders.
 	// +kubebuilder:default:=""
 	CloudInitSeed string `json:"cloudInitSeed,omitempty"`
 }

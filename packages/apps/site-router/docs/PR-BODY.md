@@ -13,7 +13,7 @@ This is a port + productization of the reference implementation's VyOS router in
 
 ## What's included
 
-- App chart `packages/apps/site-router` — gateway `VirtualMachine` (512/4096 blockSize for DRBD), boot DataVolume, tunnel `Service type: LoadBalancer` (UDP 500/4500, native `loadBalancerClass`), PSK + RBAC-isolated api-key Secrets, first-boot cloud-init, WorkloadMonitor, and two net-new Cilium policies (gateway `egressDeny` + gateway ingress).
+- App chart `packages/apps/site-router` — gateway `VirtualMachine` (512/4096 blockSize for DRBD), boot DataVolume, tunnel `Service type: LoadBalancer` (UDP 500/4500, native `loadBalancerClass`), PSK + RBAC-isolated api-key Secrets, the first-boot configuration seed, WorkloadMonitor, and two net-new Cilium policies (gateway `egressDeny` + gateway ingress).
 - `site-router-controller` (`internal/controller/siterouter`, `cmd/site-router-controller`) wired into the platform — watches SiteRouter HelmReleases + gateway pods, runs the ordered mediation pipeline, finalizer-restores state on delete.
 - VyOS core library `internal/vyos` (client/parse/observation) + routed render `internal/vyos/render` (interfaces, management firewall, IPsec forced-UDP, static routes, BGP, MSS clamp, tunnel-ingress source filter, forward default-deny, Boundary-A drop).
 - Shared pure `internal/siterouter/denyset` validator + a SiteRouter-scoped admission check (`pkg/registry/apps/application`) that reject a cluster-overlapping `remoteCIDR` identically at apply time and reconcile time.
@@ -50,7 +50,7 @@ Full detail in `packages/apps/site-router/docs/followups.md`. Consolidated list:
 - Tunnel byte / rekey counter metrics (guest-command + parser change).
 - `_cluster.pod-cidr` derivation for `managementCIDR` (custom-pod-CIDR clusters without manual config).
 - IPsec local-address / LB tunnel-address wiring.
-- Portal / dashboard image + cloud-init lock-step (external-repo hand-off).
+- Portal / dashboard image + configuration lock-step (external-repo hand-off).
 - Phase 2 `site-gateway` (NAT) / Phase 3 WireGuard backend / Phase 4 HA + per-tenant egress IP + initiator model.
 
 ## Repo hygiene (pre-merge)
