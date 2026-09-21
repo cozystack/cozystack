@@ -161,8 +161,18 @@ mode of drift here is a TLS error nobody expects.
 {{- if and $existing (hasKey $existing "data") (hasKey $existing.data "tls.crt") (hasKey $existing.data "tls.key") -}}
 {{- dict "cert" (index $existing.data "tls.crt" | b64dec) "key" (index $existing.data "tls.key" | b64dec) "serverName" $serverName | toYaml -}}
 {{- else -}}
-{{- $gen := genSelfSignedCert $serverName nil (list $serverName) 3650 -}}
-{{- dict "cert" $gen.Cert "key" $gen.Key "serverName" $serverName | toYaml -}}
+{{- /* EC, and not by preference. VyOS stores a private key as bare base64 and
+       rebuilds the PEM itself on read (vyos/pki.py load_private_key), trying
+       exactly two armours: PKCS#8 `PRIVATE KEY` and SEC1 `EC PRIVATE KEY`.
+       sprig's genSelfSignedCert is RSA and emits PKCS#1 `RSA PRIVATE KEY`, which
+       neither wrap parses, so the commit dies at src/conf_mode/pki.py with
+       "Invalid private key on certificate" and the gateway boots with no
+       configuration at all. Measured on a real appliance boot, not deduced.
+       genPrivateKey "ecdsa" emits SEC1, which is the second armour VyOS tries,
+       and genSelfSignedCertWithKey issues a matching certificate for it. */ -}}
+{{- $key := genPrivateKey "ecdsa" -}}
+{{- $gen := genSelfSignedCertWithKey $serverName nil (list $serverName) 3650 $key -}}
+{{- dict "cert" $gen.Cert "key" $key "serverName" $serverName | toYaml -}}
 {{- end -}}
 {{- end -}}
 
