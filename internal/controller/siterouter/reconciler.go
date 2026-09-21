@@ -21,6 +21,8 @@
 // webhook stamps on managed-app resources
 // (apps.cozystack.io/application.{group,kind,name},
 // internal.cozystack.io/managed-by-cozystack), scoped to the instance namespace.
+// Pod discovery additionally requires KubeVirt's vm.kubevirt.io/name, because the
+// lineage labels identify the instance and not the VM — see discoverGatewayPod.
 package siterouter
 
 import (
@@ -660,14 +662,29 @@ func (r *SiteRouterReconciler) rememberRouteGatewayIP(ctx context.Context, inst 
 // --- Discovery helpers ----------------------------------------------------
 
 // discoverGatewayPod finds the gateway VM's virt-launcher pod in the instance
-// namespace via the lineage labels. It returns nil (not an error) when no pod is
-// found yet. When several pods match — e.g. during a live migration — it prefers
-// a Running one, falling back to the first, so callers see a stable target.
+// namespace via the lineage labels AND the KubeVirt VM-name label. It returns nil
+// (not an error) when no pod is found yet. When several pods match — e.g. during a
+// live migration, where source and target virt-launcher pods both carry the VM
+// name — it prefers a Running one, falling back to the first, so callers see a
+// stable target.
+//
+// The vmNameLabel term is not redundant: the lineage labels identify the
+// application instance, not the gateway VM, and the lineage webhook stamps them on
+// every pod whose ownership graph reaches this instance's HelmRelease — the CDI
+// importer pod for the boot DataVolume among them (helm-controller's origin-label
+// post-renderer puts helm.toolkit.fluxcd.io/name on the DataVolume, which is the
+// hop the webhook's owner walk resolves). Selecting on lineage alone therefore
+// matches non-gateway pods, and the caller treats whatever it gets as the gateway:
+// programNamespaceRoutes installs its pod IP as the tenant's kube-ovn next hop and
+// pushVyOSConfig POSTs the rendered router config with the management-API token in
+// the form body to https://<that pod IP>/configure over a connection that does not
+// verify the peer certificate. Requiring the VM name keeps both aimed at the VM.
 func (r *SiteRouterReconciler) discoverGatewayPod(ctx context.Context, inst *instance) (*corev1.Pod, error) {
 	pods := &corev1.PodList{}
 	sel := client.MatchingLabels{
 		appKindLabelKey: siteRouterKind,
 		appNameLabelKey: inst.name,
+		vmNameLabel:     releasePrefix + inst.name,
 	}
 	if err := r.List(ctx, pods, client.InNamespace(inst.namespace), sel); err != nil {
 		return nil, fmt.Errorf("list gateway pods for %s/%s: %w", inst.namespace, inst.name, err)
