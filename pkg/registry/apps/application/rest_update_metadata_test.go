@@ -2,13 +2,17 @@ package application
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 )
@@ -142,5 +146,67 @@ func TestCreate_DoesNotMutateSharedConfigLabels(t *testing.T) {
 
 	if len(configLabels) != 1 || configLabels["cozystack.io/ui"] != "true" {
 		t.Errorf("expected shared config labels to be untouched, got %v", configLabels)
+	}
+}
+
+// TestUpdate_ReappliesForeignMetadataAfterConflict covers the metadata
+// carry-over on the conflict-retry path. A 409 on the PUT means the live
+// HelmRelease changed after the read the carry-over was built from, and
+// the writer behind it is normally helm-controller — which is exactly
+// the controller whose finalizer the carry-over exists to protect, and
+// which re-adds it on the reconcile following a metadata-only update.
+// Retrying with the metadata read before the conflict writes the stale
+// copy back and drops the finalizer that write had just restored.
+func TestUpdate_ReappliesForeignMetadataAfterConflict(t *testing.T) {
+	var updates int
+	r := newOptionsTestREST(t, interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			updates++
+			if updates > 1 {
+				return c.Update(ctx, obj, opts...)
+			}
+			live := &helmv2.HelmRelease{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: optionsTestNamespace, Name: "postgresql-example"}, live); err != nil {
+				return err
+			}
+			live.Finalizers = append(live.Finalizers, "finalizers.fluxcd.io")
+			live.Labels["kustomize.toolkit.fluxcd.io/name"] = "core"
+			if err := c.Update(ctx, live); err != nil {
+				return err
+			}
+			return apierrors.NewConflict(
+				schema.GroupResource{Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases"},
+				"postgresql-example", errors.New("object was modified"))
+		},
+	}, optionsTestHelmRelease())
+
+	ctx := request.WithNamespace(context.Background(), optionsTestNamespace)
+	if _, _, err := r.Update(
+		ctx,
+		"example",
+		newDefaultUpdatedObjectInfo(optionsTestApplication()),
+		nil,
+		nil,
+		false,
+		&metav1.UpdateOptions{},
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updates < 2 {
+		t.Fatalf("expected the conflict to be retried, got %d update calls", updates)
+	}
+
+	got := &helmv2.HelmRelease{}
+	if err := r.c.Get(ctx, client.ObjectKey{Namespace: optionsTestNamespace, Name: "postgresql-example"}, got); err != nil {
+		t.Fatalf("failed to fetch updated HelmRelease: %v", err)
+	}
+	if len(got.Finalizers) != 1 || got.Finalizers[0] != "finalizers.fluxcd.io" {
+		t.Errorf("expected the finalizer added during the conflict to survive, got %v", got.Finalizers)
+	}
+	if got.Labels["kustomize.toolkit.fluxcd.io/name"] != "core" {
+		t.Errorf("expected the foreign label added during the conflict to survive, got labels %v", got.Labels)
+	}
+	if got.Labels[ApplicationNameLabel] != "example" {
+		t.Errorf("expected application metadata labels to remain, got labels %v", got.Labels)
 	}
 }

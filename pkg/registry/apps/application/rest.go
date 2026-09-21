@@ -560,19 +560,11 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// The conversion above rebuilds the HelmRelease from the Application
-	// alone, but parts of the HelmRelease metadata are owned by other
-	// controllers and must survive the update. Fetch the current object
-	// and carry them over before issuing the full-replace PUT:
-	//   - finalizers: helm-controller's finalizers.fluxcd.io guarantees
-	//     `helm uninstall` runs on deletion. Stripping it here lets a
-	//     subsequent delete remove the HelmRelease instantly, orphaning
-	//     every resource of the release.
-	//   - ownerReferences: garbage collection and lineage.
-	//   - labels/annotations outside the apps.cozystack.io- prefix: set
-	//     directly on the HelmRelease by Flux or other controllers.
-	// Keys under the prefix are owned by this API: stale ones are dropped
-	// so deleting a label or annotation on the Application propagates.
+	// Keep the conversion output pristine: the metadata assembly below reads the
+	// live object, so a conflict retry has to redo it from this copy rather than
+	// re-apply it on top of its own previous result.
+	converted := helmRelease.DeepCopy()
+
 	cur := &helmv2.HelmRelease{}
 	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
 		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
@@ -580,32 +572,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
-	helmRelease.Finalizers = cur.Finalizers
-	helmRelease.OwnerReferences = cur.OwnerReferences
-	helmRelease.Labels = mergeMaps(omitPrefixedMap(cur.Labels, LabelPrefix), helmRelease.Labels)
-	helmRelease.Annotations = mergeMaps(omitPrefixedMap(cur.Annotations, AnnotationPrefix), helmRelease.Annotations)
-
-	// Merge system labels (from config) directly
-	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
-	// Merge user labels with prefix
-	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
-	// Add application metadata labels
-	if helmRelease.Labels == nil {
-		helmRelease.Labels = make(map[string]string)
-	}
-	helmRelease.Labels[ApplicationKindLabel] = r.kindName
-	helmRelease.Labels[ApplicationGroupLabel] = r.gvk.Group
-	helmRelease.Labels[ApplicationNameLabel] = app.Name
-	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
-
-	// The flux-shard-operator assigns each tenant HelmRelease to a
-	// helm-controller shard by rewriting this label at runtime. Rebuilding
-	// the object from the Application reverts it to the ApplicationDefinition
-	// default, which would bounce the HelmRelease off its shard on every
-	// update, so the live value wins.
-	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
-		helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
-	}
+	r.applyLiveMetadata(helmRelease, cur, app)
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
@@ -619,6 +586,13 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// the caller just applied, so a stale-resourceVersion conflict is never a
 	// real spec conflict here: refresh the resourceVersion from the live object
 	// and retry.
+	//
+	// The carried-over metadata is not derived from the Application, though, and
+	// the writer that caused the conflict is usually the controller that owns it
+	// — helm-controller re-adding finalizers.fluxcd.io is the case this whole
+	// carry-over exists for. Keeping the copy read before the conflict would put
+	// the stale metadata back and undo that write, so rebuild from the
+	// conversion output against the object just read.
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
 		if apierrors.IsConflict(updateErr) {
@@ -626,6 +600,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
 				return getErr
 			}
+			helmRelease = converted.DeepCopy()
+			r.applyLiveMetadata(helmRelease, cur, app)
 			helmRelease.SetResourceVersion(cur.GetResourceVersion())
 		}
 		return updateErr
@@ -1219,6 +1195,49 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 		}
 	}
 	return processed
+}
+
+// applyLiveMetadata assembles the metadata of a HelmRelease rebuilt from an
+// Application, given the live object it is about to replace. The PUT is a full
+// replace, so anything not restated here is dropped:
+//   - finalizers: helm-controller's finalizers.fluxcd.io guarantees
+//     `helm uninstall` runs on deletion. Stripping it lets a subsequent delete
+//     remove the HelmRelease instantly, orphaning every resource of the release.
+//   - ownerReferences: garbage collection and lineage.
+//   - labels/annotations outside the apps.cozystack.io- prefix: set directly on
+//     the HelmRelease by Flux or other controllers. Keys under the prefix are
+//     owned by this API and recomputed from the Application, so stale ones are
+//     dropped and a deletion on the Application propagates.
+//
+// hr must be a fresh conversion output: the function overlays the live metadata
+// and is not idempotent against its own result.
+func (r *REST) applyLiveMetadata(hr, cur *helmv2.HelmRelease, app *appsv1alpha1.Application) {
+	hr.Finalizers = cur.Finalizers
+	hr.OwnerReferences = cur.OwnerReferences
+	hr.Labels = mergeMaps(omitPrefixedMap(cur.Labels, LabelPrefix), hr.Labels)
+	hr.Annotations = mergeMaps(omitPrefixedMap(cur.Annotations, AnnotationPrefix), hr.Annotations)
+
+	// Merge system labels (from config) directly
+	hr.Labels = mergeMaps(r.releaseConfig.Labels, hr.Labels)
+	// Merge user labels with prefix
+	hr.Labels = mergeMaps(hr.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if hr.Labels == nil {
+		hr.Labels = make(map[string]string)
+	}
+	hr.Labels[ApplicationKindLabel] = r.kindName
+	hr.Labels[ApplicationGroupLabel] = r.gvk.Group
+	hr.Labels[ApplicationNameLabel] = app.Name
+	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
+
+	// The flux-shard-operator assigns each tenant HelmRelease to a
+	// helm-controller shard by rewriting this label at runtime. Rebuilding
+	// the object from the Application reverts it to the ApplicationDefinition
+	// default, which would bounce the HelmRelease off its shard on every
+	// update, so the live value wins.
+	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
+		hr.Labels[fluxshard.ShardKeyLabel] = shard
+	}
 }
 
 // omitPrefixedMap returns the entries of a map whose keys do NOT carry the
