@@ -103,7 +103,7 @@ stringData:
           // Release version: 1.5-rolling-20260802
       # Bring-up diagnostics, the same emitter A gets from the chart
       # (packages/apps/site-router/templates/_helpers.tpl gates it on
-      # values.logSerialConsole). B is a raw manifest with no templating, so the
+      # values._logSerialConsole). B is a raw manifest with no templating, so the
       # script body is injected by the bring-up step from the ONE copy in the
       # tree, packages/apps/site-router/files/guest-diag.sh — B and A must report
       # in the same format or the symmetry that made the last diagnosis credible

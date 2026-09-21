@@ -259,10 +259,11 @@ write_files:
     permissions: '0660'
     content: |
 {{ $cfg | indent 6 }}
-{{- if $ctx.Values.logSerialConsole }}
+{{- if $ctx.Values._logSerialConsole }}
 {{- /*
-  Bring-up diagnostics, installed only when the operator asked for the serial
-  console — the emitter is useless without something capturing what it prints,
+  Bring-up diagnostics, installed only when the platform or the e2e suite asked
+  for the serial console (`_logSerialConsole`, which the aggregated API refuses
+  from a tenant; see the block in values.yaml) — the emitter is useless without something capturing what it prints,
   and the capture is much weaker without it, so the two share one switch.
 
   Two more write_files entries and NOTHING ELSE: deliberately no addition to
@@ -288,7 +289,7 @@ write_files:
   site-router.applianceDiskUrl and the managementCIDR fail-closed above.
 */}}
 {{- if not $diag }}
-{{- fail "files/guest-diag.sh is empty or missing from the packaged chart, so logSerialConsole would install a cron job with no script; check .helmignore" }}
+{{- fail "files/guest-diag.sh is empty or missing from the packaged chart, so _logSerialConsole would install a cron job with no script; check .helmignore" }}
 {{- end }}
   - path: /config/scripts/cozy-guest-diag.sh
     owner: root:root
@@ -299,7 +300,7 @@ write_files:
     owner: root:root
     permissions: '0644'
     content: |
-      # Managed by the cozystack site-router chart (values.logSerialConsole).
+      # Managed by the cozystack site-router chart (values._logSerialConsole).
       #
       # The filename carries no dot ON PURPOSE: Debian cron silently ignores
       # /etc/cron.d entries whose names contain anything other than letters,

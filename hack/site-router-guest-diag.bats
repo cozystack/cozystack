@@ -66,14 +66,16 @@ strip_trailing_blanks() {
 }
 
 # Render the chart's cloud-init Secret into $TMP/ud.yaml (the inner cloud-config
-# document), with logSerialConsole set to $1. Chart copied rather than edited in
-# place so a failed run cannot leave a fixture reference in the tree; `cp -RL`
-# dereferences charts/cozy-lib, a symlink that would dangle once copied.
+# document), passing $1 straight to --set so a caller can supply either the
+# platform key (_logSerialConsole) or the un-prefixed name a tenant would reach
+# for. Chart copied rather than edited in place so a failed run cannot leave a
+# fixture reference in the tree; `cp -RL` dereferences charts/cozy-lib, a symlink
+# that would dangle once copied.
 render_userdata() {
   cp -RL "$CHART_SRC" "$TMP/chart"
   printf '%s\n' "$FIX_REF" > "$TMP/chart/images/vyos-router-disk.tag"
   helm template site-router-test "$TMP/chart" -n tenant-test \
-    --set "logSerialConsole=$1" -s templates/secret-cloudinit.yaml \
+    --set "$1" -s templates/secret-cloudinit.yaml \
     > "$TMP/rendered.yaml" 2> "$TMP/helm.err" || echo fail > "$TMP/helm.failed"
   yq e 'select(.metadata.name == "site-router-test-cloud-init") | .stringData.userdata' \
     "$TMP/rendered.yaml" > "$TMP/ud.yaml" 2>/dev/null || true
@@ -180,7 +182,7 @@ STUB
 
 @test "the chart ships the emitter into the guest, uncorrupted, with cron pointed at it" {
   TMP=$(mktemp -d)
-  render_userdata true
+  render_userdata _logSerialConsole=true
   [ ! -f "$TMP/helm.failed" ] || { cat "$TMP/helm.err" >&2; rm -rf "$TMP"; exit 1; }
   yq e '.write_files[] | select(.path == "/config/scripts/cozy-guest-diag.sh") | .content' \
     "$TMP/ud.yaml" > "$TMP/shipped"
@@ -245,7 +247,7 @@ STUB
   # whole change exists to end, and it would arrive with every render green.
   : > "$TMP/chart/files/guest-diag.sh"
   helm template site-router-test "$TMP/chart" -n tenant-test \
-    --set logSerialConsole=true -s templates/secret-cloudinit.yaml \
+    --set _logSerialConsole=true -s templates/secret-cloudinit.yaml \
     > "$TMP/rendered.yaml" 2> "$TMP/helm.err" && echo ok > "$TMP/rendered.ok"
   [ ! -f "$TMP/rendered.ok" ] || {
     echo "an empty emitter file rendered cleanly; the guest would run an empty diagnostic" >&2
@@ -260,9 +262,9 @@ STUB
 
 @test "a gateway that did not ask for the console gets no cron job and no script" {
   TMP=$(mktemp -d)
-  render_userdata false
+  render_userdata _logSerialConsole=false
   [ ! -f "$TMP/helm.failed" ] || { cat "$TMP/helm.err" >&2; rm -rf "$TMP"; exit 1; }
-  # Off by default is what makes it safe to couple this to logSerialConsole: a
+  # Off by default is what makes it safe to couple this to the console switch: a
   # production gateway that never asked for the console must not acquire a cron
   # job that writes to it.
   paths=$(yq e '.write_files[].path' "$TMP/ud.yaml")
@@ -272,6 +274,30 @@ STUB
   }
   printf '%s\n' "$paths" | grep -q 'cozy-guest-diag' && {
     echo "diagnostics installed on a gateway that did not enable the console:" >&2
+    printf '%s\n' "$paths" >&2
+    rm -rf "$TMP"; exit 1
+  }
+  rm -rf "$TMP"
+}
+
+@test "a tenant-supplied logSerialConsole ships no emitter into the guest" {
+  TMP=$(mktemp -d)
+  # THE BOUNDARY, from the tenant's side. `_logSerialConsole` cannot be submitted
+  # through the aggregated API at all: validateNoInternalKeys in
+  # pkg/registry/apps/application/rest.go rejects every top-level `_` key with a
+  # 400 on Create and Update, which pkg/registry/apps/application/internal_keys_test.go
+  # pins. So the only thing a tenant can actually get into spec.values is the
+  # un-prefixed name, and it has to do nothing. Supplied here exactly as a tenant
+  # would supply it.
+  render_userdata logSerialConsole=true
+  [ ! -f "$TMP/helm.failed" ] || { cat "$TMP/helm.err" >&2; rm -rf "$TMP"; exit 1; }
+  paths=$(yq e '.write_files[].path' "$TMP/ud.yaml")
+  printf '%s\n' "$paths" | grep -q '^/opt/vyatta/etc/config/config.boot$' || {
+    echo "the config seed disappeared, which is not what this test is about" >&2
+    rm -rf "$TMP"; exit 1
+  }
+  printf '%s\n' "$paths" | grep -q 'cozy-guest-diag' && {
+    echo "a TENANT-SUPPLIED logSerialConsole installed the guest emitter; the switch is tenant-reachable again:" >&2
     printf '%s\n' "$paths" >&2
     rm -rf "$TMP"; exit 1
   }

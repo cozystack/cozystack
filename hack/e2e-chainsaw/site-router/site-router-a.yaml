@@ -79,4 +79,10 @@ spec:
     # default in the chart because it overrides the platform's cluster-wide
     # disableSerialConsoleLog (see the value's own doc); on here because a failed
     # e2e run that cannot say what the guest was doing costs a whole run.
-    logSerialConsole: true
+    #
+    # Underscore-prefixed because this switch is not tenant-reachable: the
+    # aggregated API reserves top-level `_` keys and rejects them from a tenant.
+    # The suite writes the HelmRelease directly, which is an admin write to a
+    # resource tenants have no RBAC for, so setting it here is legitimate and a
+    # tenant doing the same through apps.cozystack.io is a 400.
+    _logSerialConsole: true
