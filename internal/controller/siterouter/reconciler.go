@@ -959,6 +959,47 @@ func (r *SiteRouterReconciler) clusterNetworks(ctx context.Context) (denyset.Clu
 	})
 }
 
+// resolveManagementCIDR returns the source CIDR the gateway's management API
+// (HTTPS 443) accepts, which the render re-stamps on every push.
+//
+// It must equal what the chart seeded into the guest's first-boot firewall, or
+// the controller locks itself out of the router it manages. The chart resolves
+// that value from the ipv4-pod-cidr key of the cozy-system/cozystack ConfigMap
+// and falls back to the platform default (site-router.managementCIDR in
+// _helpers.tpl); resolving it here from the same key with the same fallback is
+// what keeps the two in step. A hard-coded default on this side instead meant
+// the two agreed only on a cluster whose pod CIDR happened to be the default
+// one, and disagreed silently everywhere else -- and silently is the whole
+// problem, because the symptom is a gateway that reconciles once at install and
+// is then unreachable.
+//
+// --management-cidr still wins when set: it is the operator's explicit override
+// for a cluster where the controller reaches the gateway from somewhere other
+// than the pod network. --allow-open-management still means no management
+// firewall at all, so it short-circuits discovery rather than being overridden
+// by it.
+func (r *SiteRouterReconciler) resolveManagementCIDR(ctx context.Context) string {
+	if r.ManagementCIDR != "" {
+		return r.ManagementCIDR
+	}
+	if r.AllowOpenManagement {
+		return ""
+	}
+
+	cm := &corev1.ConfigMap{}
+	key := types.NamespacedName{Namespace: cozystackConfigNamespace, Name: cozystackConfigName}
+	if err := r.reader().Get(ctx, key, cm); err != nil && !apierrors.IsNotFound(err) {
+		// Fall through to the platform default rather than failing the push: the
+		// deny-set discovery reads the same ConfigMap and reports its own errors,
+		// and a transient read failure must not rewrite the management ACL to
+		// something narrower or wider than the chart seeded.
+		log.FromContext(ctx).Info("could not read the cozystack ConfigMap for the management CIDR; using the platform default",
+			"configMap", key.String(), "default", denyset.DefaultPodCIDR, "error", err.Error())
+		return denyset.DefaultPodCIDR
+	}
+	return denyset.ClusterNetworksFromConfigMap(cm.Data).PodCIDR
+}
+
 // stringSlice coerces a decoded spec.values field (a []interface{} of strings
 // from JSON) into []string, dropping any non-string element. A nil or non-slice
 // value yields nil.
@@ -1051,18 +1092,18 @@ func (r *SiteRouterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// ValidateManagementCIDR enforces the fail-closed management-CIDR policy shared
-// by the controller flags. An empty CIDR is rejected unless open management is
-// explicitly allowed; a non-empty CIDR must parse. Factored out of main so the
-// policy is unit-testable without triggering os.Exit.
+// ValidateManagementCIDR enforces the management-CIDR policy shared by the
+// controller flags: a value that is set must be usable. An empty value is not a
+// configuration error, because it is the normal production setting — the
+// controller then resolves the cluster pod CIDR from the cozystack ConfigMap
+// (resolveManagementCIDR), which is still fail-closed: that path always yields
+// a CIDR, the platform default when the ConfigMap is silent. Only
+// --allow-open-management removes the management firewall, and it has to be
+// passed explicitly to do so. Factored out of main so the policy is
+// unit-testable without triggering os.Exit.
 func ValidateManagementCIDR(managementCIDR string, allowOpenManagement bool) error {
 	if managementCIDR == "" {
-		if allowOpenManagement {
-			return nil
-		}
-		return errors.New("--management-cidr is required: the VyOS management API (HTTPS 443) " +
-			"is otherwise reachable from anything that can route to the gateway VM; " +
-			"pass --allow-open-management to opt out in a test environment")
+		return nil
 	}
 	ip, _, err := net.ParseCIDR(managementCIDR)
 	if err != nil {

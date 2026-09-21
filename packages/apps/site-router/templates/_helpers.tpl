@@ -103,8 +103,10 @@ controller footgun rather than moving who can trip it.
 
 The literal stays as the last fallback, for an offline render (helm template,
 helm-unittest) where lookup returns nothing, and for a cluster whose ConfigMap
-omits the key. The controller's own --management-cidr flag is still set
-separately and must still agree; see followups.md.
+omits the key. The controller resolves its own management rule from the same
+ConfigMap key with the same fallback (siterouter.resolveManagementCIDR), so the
+seeded rule and the re-stamped one derive from one source rather than from two
+defaults that agreed only on a default-pod-CIDR cluster.
 */}}
 {{- define "site-router.managementCIDR" -}}
 {{- if hasKey .Values "_managementCIDR" -}}

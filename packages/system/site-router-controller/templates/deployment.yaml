@@ -39,10 +39,13 @@ spec:
         # and counters (no secrets); it is reachable cluster-internally only.
         - --metrics-bind-address=:8080
         - --metrics-secure=false
-        # The controller's management CIDR MUST match the site-router chart's
-        # managementCIDR (which seeds the VyOS first-boot firewall). Keep the two
-        # in lockstep; a mismatch locks the controller out of the router.
-        - --management-cidr={{ .Values.siteRouterController.managementCidr }}
+        # Passed only when an operator set one. Unset is the normal case: the
+        # controller then resolves the same cluster pod CIDR the site-router
+        # chart seeds the VyOS first-boot firewall from, so the two cannot drift
+        # apart and lock the controller out of the router it manages.
+        {{- with .Values.siteRouterController.managementCidr }}
+        - --management-cidr={{ . }}
+        {{- end }}
         {{- if .Values.siteRouterController.allowOpenManagement }}
         - --allow-open-management
         {{- end }}

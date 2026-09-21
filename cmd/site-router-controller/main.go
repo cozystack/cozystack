@@ -64,10 +64,11 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics server")
 	flag.StringVar(&managementCIDR, "management-cidr", "",
-		"IPv4 CIDR allowed to reach the VyOS management API (HTTPS 443). REQUIRED in production. "+
-			"MUST match the site-router chart's managementCIDR value (both default to the cluster pod CIDR "+
-			"10.244.0.0/16): the chart seeds the first-boot firewall from it and the controller re-stamps the same "+
-			"rule over the VyOS API. Pass --allow-open-management to explicitly opt out (test environments only).")
+		"IPv4 CIDR allowed to reach the VyOS management API (HTTPS 443). Leave unset on a normal cluster: the "+
+			"controller then resolves the cluster pod CIDR from the cozy-system/cozystack ConfigMap, which is the "+
+			"same source the site-router chart seeds the guest's first-boot firewall from, so the two cannot drift. "+
+			"Set it only to override that (the controller reaches the gateway from somewhere other than the pod "+
+			"network). Pass --allow-open-management for no management firewall at all (test environments only).")
 	flag.BoolVar(&allowOpenManagement, "allow-open-management", false,
 		"Skip the fail-closed check on --management-cidr. ONLY for test environments where the cluster has no "+
 			"real-world reachability to the gateway VMs; production deployments must set --management-cidr.")
@@ -78,15 +79,16 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// Fail closed: an empty --management-cidr with no explicit opt-out is a
-	// configuration error, not a warning. Exit before the manager starts so the
-	// pod crashloops with a clear message rather than silently exposing the
-	// gateway management API.
+	// A --management-cidr that is set but unusable is a configuration error, not
+	// a warning: exit before the manager starts so the pod crashloops with a
+	// clear message rather than stamping a rule that can never match the
+	// controller's own source. An unset one is the normal case and resolves from
+	// the cozystack ConfigMap per instance.
 	if err := siterouter.ValidateManagementCIDR(managementCIDR, allowOpenManagement); err != nil {
 		setupLog.Error(err, "invalid management-cidr configuration")
 		os.Exit(1)
 	}
-	if managementCIDR == "" {
+	if allowOpenManagement && managementCIDR == "" {
 		setupLog.Info("WARNING: --allow-open-management is set; the VyOS management API will accept HTTPS " +
 			"from any source. DO NOT use this configuration in production.")
 	}

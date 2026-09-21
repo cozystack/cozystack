@@ -36,10 +36,14 @@ func TestValidateManagementCIDR(t *testing.T) {
 		wantErr        bool
 	}{
 		{
-			name:           "empty without allow-open fails closed",
+			// Empty is the normal production setting: the CIDR is then resolved
+			// per instance from the cozystack ConfigMap, which still always yields
+			// one. Fail-closed lives there and in the explicitness of
+			// --allow-open-management, not in rejecting an unset flag.
+			name:           "empty is permitted (resolved from the cozystack ConfigMap)",
 			managementCIDR: "",
 			allowOpen:      false,
-			wantErr:        true,
+			wantErr:        false,
 		},
 		{
 			name:           "empty with allow-open is permitted",
@@ -102,6 +106,63 @@ func TestValidateManagementCIDR(t *testing.T) {
 			}
 			if !tt.wantErr && err != nil {
 				t.Fatalf("ValidateManagementCIDR(%q, %v) = %v, want nil", tt.managementCIDR, tt.allowOpen, err)
+			}
+		})
+	}
+}
+
+// TestResolveManagementCIDR covers the rule that keeps the controller's
+// management ACL equal to the one the chart seeded into the guest: both read the
+// cluster pod CIDR from the same ConfigMap key with the same fallback, so the
+// non-default-pod-CIDR case below is the one a hard-coded default got wrong.
+func TestResolveManagementCIDR(t *testing.T) {
+	cozystackCM := func(data map[string]string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Namespace: cozystackConfigNamespace, Name: cozystackConfigName},
+			Data:       data,
+		}
+	}
+	tests := []struct {
+		name      string
+		flag      string
+		allowOpen bool
+		objs      []client.Object
+		want      string
+	}{
+		{
+			name: "a non-default pod CIDR is discovered rather than defaulted",
+			objs: []client.Object{cozystackCM(map[string]string{denyset.ConfigMapKeyPodCIDR: "10.112.0.0/12"})},
+			want: "10.112.0.0/12",
+		},
+		{
+			name: "an explicit flag overrides discovery",
+			flag: "192.168.0.0/24",
+			objs: []client.Object{cozystackCM(map[string]string{denyset.ConfigMapKeyPodCIDR: "10.112.0.0/12"})},
+			want: "192.168.0.0/24",
+		},
+		{
+			name:      "allow-open short-circuits discovery (no management firewall at all)",
+			allowOpen: true,
+			objs:      []client.Object{cozystackCM(map[string]string{denyset.ConfigMapKeyPodCIDR: "10.112.0.0/12"})},
+			want:      "",
+		},
+		{
+			name: "a missing ConfigMap falls back to the platform default",
+			want: denyset.DefaultPodCIDR,
+		},
+		{
+			name: "a ConfigMap without the pod-CIDR key falls back to the platform default",
+			objs: []client.Object{cozystackCM(map[string]string{denyset.ConfigMapKeyServiceCIDR: "10.96.0.0/16"})},
+			want: denyset.DefaultPodCIDR,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newTestReconciler(t, tt.objs...)
+			r.ManagementCIDR = tt.flag
+			r.AllowOpenManagement = tt.allowOpen
+			if got := r.resolveManagementCIDR(context.Background()); got != tt.want {
+				t.Fatalf("resolveManagementCIDR() = %q, want %q", got, tt.want)
 			}
 		})
 	}

@@ -579,8 +579,9 @@ func (r *SiteRouterReconciler) pollRuntimeState(ctx context.Context, inst *insta
 // leaves Inputs.Interfaces empty: the gateway VM's NIC addressing is owned by the
 // chart / cloud-init / DHCP, not the controller (see render.deleteManagedSubtrees,
 // which never deletes `interfaces ethernet`). The management firewall is re-fed
-// from r.ManagementCIDR on every call, so it is part of every rendered config
-// (re-stamped whenever a push happens). OverlayMTU is left 0 so the render applies
+// from resolveManagementCIDR on every call, so it is part of every rendered
+// config (re-stamped whenever a push happens) and tracks the same cluster pod
+// CIDR the chart seeded into the guest rather than a separately configured one. OverlayMTU is left 0 so the render applies
 // its design default (1320 → clamp 1280); ExternalIP is left empty so VyOS
 // auto-detects the IPsec local-address (Phase-1 responder model — the LB tunnel
 // address wiring is a documented follow-up).
@@ -613,7 +614,7 @@ func (r *SiteRouterReconciler) resolveInputs(ctx context.Context, inst *instance
 	}
 
 	in := render.Inputs{
-		ManagementCIDR:     r.ManagementCIDR,
+		ManagementCIDR:     r.resolveManagementCIDR(ctx),
 		TunnelDevice:       tunnelDevice,
 		RemoteCIDRs:        remoteCIDRs,
 		TenantNetworkCIDRs: tenantCIDRs,

@@ -60,13 +60,22 @@ tests:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           content: ALL
 
-  - it: passes the configured management CIDR through and stays closed by default
+  # By default the controller is given no management CIDR at all, so it resolves
+  # the cluster pod CIDR from the same ConfigMap key the app chart seeds the
+  # guest firewall from. Passing a baked-in 10.244.0.0/16 here instead is the
+  # regression this guards: it agreed with the guest only on a cluster whose pod
+  # CIDR was the default one. An empty-valued flag is the other wrong rendering,
+  # since that reads as "no source may reach the management API".
+  - it: passes no management CIDR by default and stays closed
     templates:
       - templates/deployment.yaml
     asserts:
-      - contains:
+      - notContains:
           path: spec.template.spec.containers[0].args
           content: --management-cidr=10.244.0.0/16
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --management-cidr=
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --allow-open-management
