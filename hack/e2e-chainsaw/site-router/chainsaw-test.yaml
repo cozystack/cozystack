@@ -68,6 +68,64 @@ spec:
         namespace: cozy-site-router
         selector: app=site-router-controller
         tail: 200
+    # The guest serial console is the ONE channel into either VyOS box that does
+    # not run through the HTTPS management API — which is exactly what fails here
+    # — so it is the only place an answer to "would the API ever have answered?"
+    # can come from. logSerialConsole puts it in a guest-console-log container
+    # beside virt-launcher, and packages/apps/site-router/files/guest-diag.sh
+    # prints a [cozy-diag] block into it through bring-up, carrying cloud-init
+    # status, failed units, whether the seeded config committed, whether nginx
+    # (the :443 listener) is up, the IPsec state and the load.
+    #
+    # Dumped explicitly rather than left to crust-gather: that collector runs
+    # under a 180s --duration and has been observed truncating a cluster this
+    # size, and this is the one artifact the next diagnosis cannot proceed
+    # without. The full log goes into COZY_REPORT_DIR — the tree
+    # hack/cozyreport.sh folds into the uploaded cozyreport.tgz — and the
+    # [cozy-diag] timeline is additionally echoed into the job log, where it is
+    # readable without downloading anything.
+    - description: guest serial consoles on failure
+      script:
+        # 2 VMs x (20s pod lookup + 60s log read) = 160s of inner budget; 5m
+        # clears it, per the rule in hack/e2e-chainsaw/.chainsaw.yaml that an op
+        # timeout must sit above the sum of the budgets it contains, so an inner
+        # timeout fires rather than Chainsaw SIGKILLing the whole script.
+        timeout: 5m
+        env:
+          - name: TEST_NAME
+            value: ($test.metadata.name)
+        content: |
+          set -u
+          snap="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${TEST_NAME:-site-router}"
+          mkdir -p "$snap/guest-consoles" 2>/dev/null || true
+          for vm in site-router-a remote-site-b; do
+            # Found by the KubeVirt VM-name label rather than by pod name, which
+            # carries a random suffix.
+            pod="$(timeout 20 kubectl -n tenant-test get pod -l vm.kubevirt.io/name="$vm" \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            if [ -z "$pod" ]; then
+              echo "== guest console $vm: no virt-launcher pod found =="
+              continue
+            fi
+            out="$snap/guest-consoles/$vm.log"
+            if ! timeout 60 kubectl -n tenant-test logs "$pod" -c guest-console-log \
+                 > "$out" 2> "$out.err"; then
+              # The container only exists when logSerialConsole is on, so this
+              # branch means the console was never being captured -- say that
+              # rather than reporting an empty console.
+              echo "== guest console $vm ($pod): UNAVAILABLE (no guest-console-log container?) =="
+              sed -n '1,5p' "$out.err" 2>/dev/null || true
+              continue
+            fi
+            echo "== guest console $vm ($pod): $(wc -l < "$out") lines, full copy at $out =="
+            echo "-- [cozy-diag] bring-up timeline --"
+            grep '\[cozy-diag\]' "$out" | tail -n 120 \
+              || echo "   NO [cozy-diag] lines: the guest never ran the emitter (cloud-init did not apply it, or cron never fired)"
+            echo "-- raw console tail --"
+            tail -n 40 "$out"
+          done
+          # Diagnostics must never turn a failed assertion into a failed catch.
+          exit 0
     - script:
         content: |
           kubectl -n tenant-test get siterouter,helmrelease,datavolume,pvc,vmi,vm,svc,pods -o wide || true
@@ -112,8 +170,36 @@ spec:
               esac
               ref="${repo}@${digest}"
               echo "remote-site-b booting appliance $ref (stamped $stamp)"
-              sed "s|__VYOS_DISK_REF__|${ref}|" remote-site-b.yaml \
-                | kubectl apply -n "$NAMESPACE" -f -
+              # Inject the guest bring-up diagnostics from the one copy in the
+              # tree, so B reports in the same format A does (the chart embeds the
+              # same file via .Files.Get). awk rather than sed: the script contains
+              # `2>&1` and `>>`, and sed would read the `&` in a replacement as
+              # "the whole match" and silently corrupt the line. awk's print does
+              # no such interpretation, and taking the indent from the placeholder
+              # line keeps the YAML block scalar valid.
+              diag=../../../packages/apps/site-router/files/guest-diag.sh
+              [ -f "$diag" ] || { echo "$diag is missing: B would boot with no guest diagnostics, and the console would only carry kernel output"; exit 1; }
+              rendered="$(mktemp)"
+              awk -v f="$diag" '
+                /__GUEST_DIAG_SCRIPT__/ {
+                  match($0, /^ */); pad = substr($0, 1, RLENGTH)
+                  while ((getline line < f) > 0) print pad line
+                  close(f); next
+                }
+                { print }
+              ' remote-site-b.yaml \
+                | sed "s|__VYOS_DISK_REF__|${ref}|" > "$rendered"
+              # A placeholder that survives substitution is the failure mode that
+              # loses the diagnostics without losing the run: B boots, the cron job
+              # exists, and the script it runs is the literal placeholder. Fail
+              # here instead, where the message names the cause.
+              if grep -q -e '__GUEST_DIAG_SCRIPT__' -e '__VYOS_DISK_REF__' "$rendered"; then
+                echo "substitution failed: a placeholder survived into B's manifest"
+                rm -f "$rendered"
+                exit 1
+              fi
+              kubectl apply -n "$NAMESPACE" -f "$rendered"
+              rm -f "$rendered"
         - assert:
             # 8m: golden-image clone (CDI) + nested VM cold boot. B is a raw
             # KubeVirt VirtualMachine (not a cozystack HelmRelease projection), so

@@ -101,6 +101,30 @@ stringData:
           // Warning: Do not remove the following line.
           // vyos-config-version: "bgp@8:broadcast-relay@1:cluster@2:config-management@1:conntrack@6:conntrack-sync@2:container@3:dhcp-relay@2:dhcp-server@11:dhcpv6-server@6:dns-dynamic@4:dns-forwarding@4:firewall@20:flow-accounting@3:https@7:ids@2:interfaces@34:ipoe-server@4:ipsec@14:isis@3:l2tp@9:lldp@3:mdns@1:monitoring@2:nat@8:nat66@3:nhrp@1:ntp@3:openconnect@3:openvpn@5:ospf@2:pim@1:pki@1:policy@9:pppoe-server@12:pptp@5:qos@3:quagga@12:reverse-proxy@3:rip@1:rpki@2:snmp@3:ssh@3:sstp@6:system@33:vpp@6:vrf@4:vrrp@4:vyos-accel-ppp@2:wanloadbalance@4:webproxy@2"
           // Release version: 1.5-rolling-20260802
+      # Bring-up diagnostics, the same emitter A gets from the chart
+      # (packages/apps/site-router/templates/_helpers.tpl gates it on
+      # values.logSerialConsole). B is a raw manifest with no templating, so the
+      # script body is injected by the bring-up step from the ONE copy in the
+      # tree, packages/apps/site-router/files/guest-diag.sh — B and A must report
+      # in the same format or the symmetry that made the last diagnosis credible
+      # is gone, and two hand-maintained copies would drift.
+      #
+      # B matters more than A here, not less: the loop that actually times out
+      # ("timeout committing B IPsec") is talking to B's management API.
+      - path: /config/scripts/cozy-guest-diag.sh
+        owner: root:root
+        permissions: '0755'
+        content: |
+          __GUEST_DIAG_SCRIPT__
+      # Kept byte-identical to the chart's cron entry; see it for why the
+      # filename has no dot and why PATH is set explicitly.
+      - path: /etc/cron.d/cozy-guest-diag
+        owner: root:root
+        permissions: '0644'
+        content: |
+          SHELL=/bin/sh
+          PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          * * * * * root /config/scripts/cozy-guest-diag.sh
 ---
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
