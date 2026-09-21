@@ -1,0 +1,20 @@
+# Maps Kind=Kafka to this demo's Kafka strategy (kafka-strategy-default, derived
+# at run time from the shipped cozy-default-kafka by run-all.sh). BackupClass is
+# cluster-scoped, so a single instance covers every namespace. Named
+# kafka-metadata so it does not collide with the platform cozy-default class,
+# which routes Kafka to the shipped cozy-default-kafka strategy against the
+# system bucket's external endpoint.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupClass
+metadata:
+  name: kafka-metadata
+spec:
+  strategies:
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Kafka
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Kafka
+        name: kafka-strategy-default

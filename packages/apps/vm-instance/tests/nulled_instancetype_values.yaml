@@ -1,0 +1,7 @@
+# Fixture, not a suite: helm-unittest only collects tests/*_test.yaml.
+#
+# An explicit null is the one way a user can take instanceType away, and it
+# cannot be expressed through a suite's `set` block, where a null value and an
+# omitted key are indistinguishable. A values file keeps the null intact
+# through the merge, which is the state that used to render as <no value>.
+instanceType: null

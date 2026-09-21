@@ -26,16 +26,51 @@ seaweedfs:
   # The guard also refuses to render at all if this pin is ever lifted.
   fullnameOverride: seaweedfs
   master:
-    # 30 GB per volume × 10 GiB PVC = 0 → rounded to 1 maxVolume per
-    # volume server. With defaultReplication=001 (one replica on a
-    # different node) two volume servers can host exactly one logical
-    # volume between them. The platform now ships a default
-    # bucket-cozy-backups Bucket that grabs that single slot, so any
-    # second collection (the bucket E2E, a tenant app bucket, etc.)
-    # blocks on `assign volume: No writable volumes` until the test
-    # times out. Smaller volumes = more parallel collections on a
-    # 10 GiB E2E sandbox PVC. The upstream chart default is 1000.
+    # At the shipped replicationFactor of 2 the size limit and
+    # extraEnvironmentVars.WEED_MASTER_VOLUME_GROWTH_COPY_2 below are one
+    # budget. A volume server runs with -max 0 and derives its slot count from
+    # free space divided by the limit, replication 001 spends a slot on each of
+    # two servers, and a collection claims COPY_2 volumes each time it grows,
+    # so the bucket ceiling is set by their product and moving either moves it.
+    # At 1 or 3 copies the master reads COPY_1 or COPY_3 instead, and COPY_2
+    # governs nothing. The sources are MaybeAdjustVolumeMax
+    # (weed/storage/store.go) and findVolumeCount
+    # (weed/topology/volume_growth.go) at the 4.31 the vendored chart pins;
+    # read them again once `make update` moves the tag.
+    #
+    # The pair installs run is 400 and 3, a budget of 1200 MB per collection
+    # against upstream's 1000 and 6, which is 6000; on the shipped 10Gi volume
+    # that takes an instance from two collections to about eight, and two is
+    # what the platform's own backup bucket and one tenant bucket already use.
+    # Both numbers come down rather than the limit alone because open
+    # descriptors, two per volume, follow stored bytes divided by the limit, so
+    # taking the whole reduction out of the limit would multiply them.
+    #
+    # The limit installs run with is set in packages/extra/seaweedfs/values.yaml
+    # and sent on every release. The value here is only the fallback for a
+    # render without it and stays at upstream's 1000: a platform upgrade can
+    # re-render this release before its parent sends anything, and a lower
+    # fallback would then drop the limit ahead of the parent's value. COPY_2 is
+    # sent by nothing, so the value below is the live one.
+    #
+    # The minFreeSpacePercent reserve only matters on a server whose writable
+    # volumes have all passed the limit, since nothing there is charged
+    # headroom. Where five percent of the filesystem is at least the limit, from
+    # 8000 MiB of filesystem at 400, such a server refuses a grow only with its
+    # disk down to the reserve; with a smaller reserve it can refuse one with up
+    # to a limit still free. Elsewhere the headroom charged to the volumes
+    # decides, whatever the reserve, and neither makes an instance safe. What
+    # lowering the limit costs an instance that holds data, and the check to run
+    # first, are in docs/operations/seaweedfs-lowering-the-volume-size-limit.md.
+    #
+    # Deriving the limit from volume.size was rejected: pools and zones carry
+    # their own PVC sizes while this setting is master-wide.
     volumeSizeLimitMB: 1000
+    # The other half of the budget above. The subchart already declares all
+    # four COPY_* growth counts at their upstream defaults; Helm merges this
+    # key over that map and leaves the rest standing.
+    extraEnvironmentVars:
+      WEED_MASTER_VOLUME_GROWTH_COPY_2: "3"
     replicas: 3
     #  replication type is XYZ:
     # X number of replica in other data centers

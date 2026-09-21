@@ -14,8 +14,10 @@ Tenants reference `cozy-default` from `BackupJob`, `Plan`, and `RestoreJob` reso
 | `apps.cozystack.io/MariaDB`      | mariadb-operator dump                | `strategy.backups.cozystack.io/MariaDB` `cozy-default-mariadb`             |
 | `apps.cozystack.io/ClickHouse`   | Altinity `clickhouse-backup` sidecar | `strategy.backups.cozystack.io/Altinity` `cozy-default-altinity`           |
 | `apps.cozystack.io/MongoDB`      | Percona psmdb operator (pbm) dump    | `strategy.backups.cozystack.io/MongoDB` `cozy-default-mongodb`             |
+| `apps.cozystack.io/Kafka`        | Kafka Admin API (topic metadata)     | `strategy.backups.cozystack.io/Kafka` `cozy-default-kafka`                 |
 | `apps.cozystack.io/Etcd`         | etcd-operator snapshot               | `strategy.backups.cozystack.io/Etcd` `cozy-default-etcd`                   |
 | `apps.cozystack.io/RabbitMQ`     | RabbitMQ definitions (management API) | `strategy.backups.cozystack.io/Rabbitmq` `cozy-default-rabbitmq`          |
+| `apps.cozystack.io/Redis`        | RDB dump Job (sentinel-discovered master) | `strategy.backups.cozystack.io/Redis` `cozy-default-redis`            |
 | `apps.cozystack.io/VMInstance`   | Velero + kubevirt-velero-plugin      | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vminstance`    |
 | `apps.cozystack.io/VMDisk`       | Velero                               | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vmdisk`        |
 
@@ -40,6 +42,8 @@ Different operators expect different endpoint shapes; the strategy templates ren
 | FoundationDB    | `blobStoreConfiguration.accountName` + `urlParameters.secure_connection` | bare host:port + derived secure flag |
 | Velero          | `BackupStorageLocation.spec.config.s3Url` | full URL (scheme preserved) |
 | ClickHouse sidecar | `S3_ENDPOINT` env | bare host:port (from projected Secret) |
+| Redis (dump Job)   | `S3_ENDPOINT` env | bare host:port (from projected Secret); `https://` prepended when unscheme'd |
+| Kafka           | `S3_ENDPOINT` env on the strategy Job | full URL (scheme preserved); the Job's `curl --aws-sigv4` prepends `https://` if the endpoint carries no scheme, honours `backupStorage.forcePathStyle`, and (for the image's curl 7.76.1) signs a portless URL with `--connect-to` to the real port so a ported endpoint still verifies |
 
 The projected `cozy-backups-creds.endpoint` key is **stripped of scheme** so chart-emitted sidecars (ClickHouse) consume it directly. Drivers that need the full URL receive the resolved endpoint described above — derived from the COSI system Secret (forced `https://`) for a provisioned bucket, or the `backupStorage.endpoint` fallback for external S3.
 
@@ -120,10 +124,14 @@ The bucket lives in `tenant-root` and is provisioned through the `apps.cozystack
 
 | Key                                           | Consumer                                  |
 |-----------------------------------------------|-------------------------------------------|
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | CNPG, MariaDB, Etcd, RabbitMQ             |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | CNPG, MariaDB, Etcd, RabbitMQ, Redis      |
 | `accessKey` / `secretKey` (plus `bucketName`, `endpoint`, `region`) | ClickHouse sidecar  |
 | `cloud`                                       | Velero (AWS credentials file format)      |
 | `blob_credentials.json`                       | FoundationDB backup_agent                 |
+
+The Redis dump Job additionally reads the `endpoint`, `bucketName`, and `region` keys (alongside the `AWS_*` pair) via `secretKeyRef`, the same set the ClickHouse sidecar consumes.
+
+The dump Job also speaks to the Redis app's own Sentinel and master, which is a separate TLS axis from the S3 endpoint above. When the `Redis` app has `tls.enabled`, the operator moves both to a TLS-only listener and publishes the CA at `redis-<app>.ca-cert`; the Job mounts that Secret optionally and connects with `--tls --cacert` exactly when its `ca.crt` is present, so a plaintext (non-TLS) app is unaffected. This covers the default `tls.authClients: no`. Mutual TLS (`authClients: yes`) is not supported for backup — it requires a client certificate signed by the release CA, which the platform does not issue.
 
 ### Bootstrap window
 
@@ -197,7 +205,7 @@ The default-objects gate emits three more:
 
 ## Admin overrides for `cozy-default`
 
-`cozy-default` is rendered by the `backupstrategy-controller` chart and owned by Flux's helm-controller. **Direct `kubectl edit backupclass cozy-default` is overwritten on the next helm reconcile** — the same applies to its companion `strategy.backups.cozystack.io/*` CRs (`cozy-default-cnpg`, `cozy-default-etcd`, `cozy-default-mariadb`, `cozy-default-altinity`, `cozy-default-mongodb`, `cozy-default-foundationdb`, `cozy-default-rabbitmq`, the two `cozy-default-velero-*`). The supported override path is the `backupStorage` block on the **`platform` component** of the `cozystack.cozystack-platform` Package CR:
+`cozy-default` is rendered by the `backupstrategy-controller` chart and owned by Flux's helm-controller. **Direct `kubectl edit backupclass cozy-default` is overwritten on the next helm reconcile** — the same applies to its companion `strategy.backups.cozystack.io/*` CRs (`cozy-default-cnpg`, `cozy-default-etcd`, `cozy-default-mariadb`, `cozy-default-altinity`, `cozy-default-mongodb`, `cozy-default-foundationdb`, `cozy-default-rabbitmq`, `cozy-default-redis`, the two `cozy-default-velero-*`). The supported override path is the `backupStorage` block on the **`platform` component** of the `cozystack.cozystack-platform` Package CR:
 
 ```yaml
 apiVersion: cozystack.io/v1alpha1
@@ -221,13 +229,29 @@ spec:
 
 The platform chart forwards this block into the child `Package cozystack.backupstrategy-controller` as `components.backupstrategy-controller.values.backupStorage` (`packages/core/platform/templates/bundles/system.yaml`), from where the cozystack operator merges it into the `backupstrategy-controller` HelmRelease over the chart defaults. Two paths that look plausible do **not** work: `spec.components.backupstrategy-controller` on the `cozystack.cozystack-platform` Package is silently ignored (the only component under that PackageSource is `platform`), and patching the child `Package cozystack.backupstrategy-controller` directly is reverted whenever the platform helm-reconcile re-renders it.
 
+A sibling `backupStrategyController` block on the same `platform` component is forwarded the same way, for the controller's own knobs rather than the bucket. The one an operator reaches for is `redisBackupResources`, which sizes the Redis strategy Pod — restore loads the whole dataset into a throwaway loader, so a large Redis needs more memory / ephemeral-storage than the defaults (the loader-not-ready log line points here):
+
+```yaml
+spec:
+  components:
+    platform:
+      values:
+        backupStrategyController:
+          redisBackupResources:
+            limits:
+              memory: 8Gi
+              ephemeral-storage: 32Gi
+```
+
 | Knob | Effect |
 |---|---|
 | `provisionBucket` | Toggle creation of the in-cluster `apps.cozystack.io/Bucket` CR. Set `false` for external S3 (see [Disabling the platform-managed bucket](#disabling-the-platform-managed-bucket)). |
 | `bucketName` | Two modes. With `provisionBucket: true` (default): K8s name of the Bucket CR + lookup key for the COSI BucketClaim — the actual S3 bucket name is the COSI-assigned UUID, surfaced through `BucketClaim.status.bucketName`. With `provisionBucket: false`: taken **verbatim as the real S3 bucket name** and baked into every strategy CR + the Velero BSL. |
 | `namespace` | Namespace the Bucket CR (and its system-credentials Secret) lives in — `tenant-root` by default. Must be a tenant namespace (`tenant-*`): the Bucket chart's RBAC helper fails the Helm render for any other prefix. |
 | `bucketNameOverride` | Escape hatch for offline `helm template` renders — bypasses the live-cluster BucketClaim lookup. Leave empty in production. |
-| `endpoint` | **Fallback** S3 endpoint. For a provisioned bucket the strategy CRs + Velero BSL derive the endpoint from the COSI system Secret (external ACME ingress, forced `https://`) instead; this value is used only for external S3 (`provisionBucket: false`) and offline renders. For external S3, switching it to `https://` enables TLS in the MariaDB/FoundationDB strategies — ensure the CA bundle is reachable to the relevant operator/driver Pods first. |
+| `endpoint` | **Fallback** S3 endpoint. For a provisioned bucket the strategy CRs + Velero BSL derive the endpoint from the COSI system Secret (external ACME ingress, forced `https://`) instead; this value is used only for external S3 (`provisionBucket: false`) and offline renders. For external S3, switching it to `https://` enables TLS in the MariaDB/FoundationDB strategies, which derive TLS from the scheme. The Redis dump Job is not scheme-driven: the projector delivers a bare host and the script prepends `https://` unconditionally, so the Job always connects over TLS — point `endpointCASecretName` (below) at the private CA rather than relying on the scheme, and ensure that CA is reachable to the relevant Pods. |
+| `endpointCASecretName` | Optional Secret (key `ca.crt`) in the app namespace the Redis Job trusts for a self-signed S3 endpoint. Empty by default: the projected endpoint is always `https://` and the platform bucket's ACME cert verifies against the image's system CA store unaided. Set it only for a private CA. The Job mounts it optionally (nothing projects this Secret automatically), so a name typo does not wedge the Pod on `FailedMount`: a missing `ca.crt` falls through to the system CA store and the Job fails fast at the TLS handshake with a legible error — it does not skip verification, which still needs the explicit `insecureSkipTLSVerify` opt-in. |
+| `insecureSkipTLSVerify` | Disables S3 certificate verification for the Redis Job (`curl -k`). `false` by default and an explicit opt-in, never a fallback — an untrusted-cert endpoint fails closed unless this is set. Prefer `endpointCASecretName`. |
 | `region` | Re-projected into `cozy-backups-creds` on the next reconcile. Pod-restart required for chart-emitted clients consuming the region via env (ClickHouse sidecar today). |
 | `forcePathStyle` | Path-style addressing; SeaweedFS S3 requires it, AWS S3 typically doesn't. |
 | `systemSecretName` | Name of the human-friendly Secret produced by the Bucket app (or pre-created manually for external S3). The projector also accepts the raw COSI Secret format. |
@@ -350,3 +374,13 @@ The upper bound — the latest archived WAL — is whatever the source has shipp
 ### Idempotency under GitOps
 
 An in-progress restore is safe to reconcile. The driver purges the target `Cluster` + PVCs exactly once per RestoreJob (guarded by the `TargetPurged` condition and a freshly-recovered check), suspends the target's HelmRelease across the purge so Flux cannot race the bootstrap swap, and resumes it once the recovery cluster is rendered. A Flux reconcile (or a controller restart) mid-restore therefore re-attaches to the recovering cluster rather than deleting it and starting over.
+
+## Kafka: topic metadata only
+
+The `cozy-default-kafka` strategy backs up **topic metadata**, not message data. Its Job talks to the Kafka Admin API (`kafka-topics --describe` on backup, `kafka-topics --create` + `kafka-configs --alter` on restore) and stores one small object per run at `s3://<bucket>/<namespace>/<application>/<backup-name>/kafka-metadata.txt`. It captures every non-internal topic's partition count, replication factor and non-default configs; message payloads, consumer-group offsets, ACLs, quotas and `KafkaUser`s are out of scope, and there is no point-in-time recovery. The driver gates each run on the Strimzi `Kafka` cluster reporting `Ready` and never mutates it.
+
+This is the "reconstruct a cluster's topic topology" flow: an in-place restore recreates dropped topics into the source, and a to-copy restore applies the source's topics onto a freshly-bootstrapped empty `Kafka` (partitions and configs preserved). Restore is additive at the topic-set level — it never deletes topics that exist live but not in the backup — but it does not silently accept a divergent existing topic: it grows the partition count when the backup asks for more, and fails loudly (naming the topic and both values) when the backup asks for fewer partitions or a different replication factor, since Kafka cannot shrink partitions or change RF in place and a restore that cannot reach the recorded state must not report `Succeeded`. Restored topics are created directly through the Admin API, so on the target they are **unmanaged** (no `KafkaTopic` CR); that is the accepted tradeoff of an Admin-API-only driver. Restoring a topic whose replication factor exceeds the target cluster's broker count fails at `--create`. Topic configs are restored **additively** (`kafka-configs --add-config`): a config the backup recorded is re-applied, but a config added to a live topic after the backup is not removed, so an in-place restore does not return a topic's config set to its exact backup-time state (partition count and replication factor are the only shape the restore reconciles or fails loudly on).
+
+One consequence of the Admin-API approach: if a topic is declared in the Kafka app's `spec.topics`, the Strimzi Topic Operator owns it and reconciles its config from the `KafkaTopic` CR, reverting any dynamic config an in-place restore sets that the CR does not list. So this strategy is durable for **out-of-band** topics (created directly, no CR); for CR-declared topics the `KafkaTopic` CR / GitOps is the source of truth. A to-copy restore onto a fresh empty cluster is unaffected. For message-data durability, use a volume-snapshot strategy instead. See `examples/backups/kafka-metadata/` for the end-to-end flow.
+
+Restore is not transactional: it applies topics one at a time as it reads the object, so a failure part-way through (an RF mismatch, an unreachable broker) leaves the topics already created behind — re-running the restore is safe (existing topics are reconciled, not recreated). Like the Rabbitmq driver, this one owns its object outright and deletes it from the bucket when its `Backup` is deleted — via a one-shot Job the Backup's removal waits on — so a retention-pruned `Plan` does not accumulate objects; the delete is **best-effort** with the same give-up conditions and `backups.cozystack.io/skip-artifact-cleanup` escape hatch documented for Rabbitmq above. One caveat specific to this driver: its image ships an older `curl` (7.76.1) whose `--aws-sigv4` omits a non-default port from the SigV4 canonical host, which every S3 backend then rejects with `403 SignatureDoesNotMatch` on a ported endpoint (fixed in curl 7.86.0). The strategy script works around it with `--connect-to` — it signs and sends a portless URL and redirects the connection to the real port — so a ported endpoint (the `backupStorage.endpoint` fallback `…:8333`, `provisionBucket: false`, or SeaweedFS with `s3.ingress.enabled: false`) works too; the sibling drivers run curl 8.x and need no such workaround. Export time scales with topic count — the backup spends two Kafka CLI invocations (each a fresh JVM, ~1.5–3s) per topic — so a cluster with many hundreds of topics takes tens of minutes; the run is bounded at the Job layer by `activeDeadlineSeconds` (default 30 minutes, from the same wait the readiness precondition uses), so a wedged or unschedulable run is failed by Kubernetes as `DeadlineExceeded` — the pod is killed before the script's final upload, so no object is left orphaned — rather than requeuing forever. A cluster whose export legitimately runs longer raises the bound with the `backupTimeout` BackupClass parameter (a Go duration, e.g. `2h`), which round-trips through the `Backup` so a restore is bounded by the same value.

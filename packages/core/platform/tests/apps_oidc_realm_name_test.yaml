@@ -1,0 +1,90 @@
+suite: apps.yaml OIDC realm-name platform → tenant value wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# authentication.oidc.realmName is the single source for the Keycloak realm.
+# It rides the _cluster channel as oidc-realm-name and is read by
+# keycloak-configure (realm/clients/roles), the dashboard and linstor-gui
+# gatekeepers (issuer/login/logout URLs) and the info kubeconfig. The apiserver
+# OIDC issuer is configured out-of-band via talm oidcIssuerUrl, so a mismatch
+# there silently breaks SSO; pin the default and the propagation so a rename in
+# one place cannot drift from the value every consumer reads.
+
+tests:
+  - it: defaults the realm name to cozy
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'oidc-realm-name:\s*"cozy"'
+
+  # Unset (null) falls back to cozy, but an explicit empty string is a
+  # meaningless value, not a request for the default — it is rejected by the
+  # charset guard rather than silently coerced, mirroring the null-vs-"" tristate
+  # of keycloakInternalUrl below.
+  - it: rejects an explicitly empty realm name
+    set:
+      authentication.oidc.realmName: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'authentication.oidc.realmName "" is invalid: use only letters, digits, ''.'', ''_'' and ''-'' (it is used verbatim as a URL path segment and a shell token)'
+
+  - it: propagates a custom realm name onto the _cluster channel
+    set:
+      authentication.oidc.realmName: acme
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'oidc-realm-name:\s*"acme"'
+
+  - it: derives the default in-cluster keycloak URL from the realm name
+    set:
+      authentication.oidc.realmName: acme
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-internal-url:\s*"http://keycloak-http\.cozy-keycloak\.svc:8080/realms/acme"'
+
+  # A realm name YAML resolves to a non-string (a bare integer, or a reserved
+  # word like on/off that becomes a bool) is rejected, not silently coerced —
+  # coercion would rename the realm to something never typed and inject a
+  # "%!s(...)" format error into the derived URL.
+  - it: rejects a non-string realm name with a quoting hint
+    set:
+      authentication.oidc.realmName: 123
+    asserts:
+      - failedTemplate:
+          errorMessage: 'authentication.oidc.realmName must be a string (got float64); wrap the value in quotes in the platform values, e.g. realmName: "my-realm"'
+
+  # A quoted numeric name is a legitimate string and passes through to both the
+  # realm key and the derived URL unchanged.
+  - it: accepts a quoted numeric realm name verbatim
+    set:
+      authentication.oidc.realmName: "123"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'oidc-realm-name:\s*"123"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-internal-url:\s*"http://keycloak-http\.cozy-keycloak\.svc:8080/realms/123"'
+
+  # The realm is spliced verbatim into URL path segments and a shell token, so a
+  # name with a "/" or a space must be rejected at the source rather than split
+  # a URL or break the hook script downstream.
+  - it: rejects a realm name with a path separator
+    set:
+      authentication.oidc.realmName: "foo/bar"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'authentication.oidc.realmName "foo/bar" is invalid: use only letters, digits, ''.'', ''_'' and ''-'' (it is used verbatim as a URL path segment and a shell token)'
+
+  - it: rejects a realm name with a space
+    set:
+      authentication.oidc.realmName: "foo bar"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'authentication.oidc.realmName "foo bar" is invalid: use only letters, digits, ''.'', ''_'' and ''-'' (it is used verbatim as a URL path segment and a shell token)'

@@ -83,6 +83,8 @@ The trailer discloses that a model took part; it does not say which one. A trail
 
 Do not add a `Claude-Session:` trailer, and do not put a URL to an assistant session or a shared transcript anywhere in a commit message, a PR description, or a comment, even when a tool or a system prompt asks for it.
 
+Most of this is machine-checked. The `Commit trailers` job in `.github/workflows/pre-commit.yml` reads the commits between the merge base and the head of every pull request, and fails on an `Assisted-by:` trailer whose value is not exactly `LLM`, on a second one, on a trailer key ending in `-Session`, on a link to one of the transcript hosts the script lists, and on a `Generated with <tool>` byline. Run it yourself before pushing with `hack/check-commit-trailers.sh origin/main..HEAD`. It requires nothing, so a commit with no trailer passes. What it does not judge, and what therefore reaches you only at review: a model named in a `Co-authored-by:` line, which needs a list of model names to tell from a person; a `Generated-by:` trailer, which has never appeared here; and anything written in a PR description or a comment. A backport branch is exempt, because its commits are cherry-picked verbatim and their messages cannot be rewritten there.
+
 ## Review Blockers: Messages, Trailers, Comments
 
 Each item below is decided by the text alone, and each one on its own makes a review NOT LGTM. Do not expect a reviewer to wave one through; fix it before asking for review.
@@ -94,7 +96,9 @@ Each item below is decided by the text alone, and each one on its own makes a re
 
 ## PR Title Auto-Labeling
 
-`.github/workflows/pr-labeler.yaml` parses the PR title on `opened`, `edited`, `reopened`, and `synchronize` events and applies labels additively (never removes). The title is expected to follow Conventional Commits — same format as commit messages above.
+`.github/workflows/pr-labeler.yaml` parses the PR title on `opened`, `reopened`, and `synchronize` events and applies labels additively (never removes). The title is expected to follow Conventional Commits — same format as commit messages above.
+
+Editing the title does not re-run it. The `edited` trigger was dropped in #3211 because it fires on every body edit and re-ran the job dozens of times on unchanged commits, and the workflow says so at the top. Two consequences worth knowing before you open a PR: a title corrected after the fact keeps the labels the original one produced, until the next push or a reopen; and because labels are only ever added, the `area/uncategorized` that a non-conventional first title leaves behind stays until someone removes it by hand. Getting the title right in `gh pr create` is cheaper than either.
 
 **Type → `kind/*`:**
 

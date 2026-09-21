@@ -32,7 +32,7 @@ type ConfigSpec struct {
 	// Requested running state of the VirtualMachineInstance
 	// +kubebuilder:default:="Always"
 	RunStrategy RunStrategy `json:"runStrategy"`
-	// Virtual Machine instance type.
+	// Virtual Machine instance type. Ignored when `resources` sizes the VM, which needs whole-number cpu and sockets plus memory; the whole type is dropped then, so any dedicated CPU placement, hugepages, NUMA or realtime settings it carries go with it. While this field is set, a `resources` block that sizes only part of the VM is rejected outright instead of ignored, so complete it or clear it.
 	// +kubebuilder:default:="u1.medium"
 	InstanceType string `json:"instanceType"`
 	// Virtual Machine preferences profile.
@@ -56,7 +56,7 @@ type ConfigSpec struct {
 	// Firmware and boot configuration (UEFI/BIOS selection, Secure Boot, persistent EFI NVRAM).
 	// +kubebuilder:default:={}
 	Firmware Firmware `json:"firmware,omitempty"`
-	// Resource configuration for the virtual machine.
+	// Resource configuration for the virtual machine. Set whole-number cpu and sockets together with memory to size the VM directly, which overrides `instanceType`. Alongside an `instanceType`, a block that sizes only part of the VM is rejected; cpu or sockets on its own sizes nothing and is ignored.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// List of SSH public keys for authentication.

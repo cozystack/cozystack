@@ -1,0 +1,2 @@
+# Unified diff context has a marker before Go tabs and blank lines.
+packages/system/capi-providers-infraprovider/images/cluster-api-provider-kubevirt/patches/*.diff -whitespace

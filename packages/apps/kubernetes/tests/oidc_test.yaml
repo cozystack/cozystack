@@ -570,3 +570,33 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "spec.oidc.customConfig: set exactly one of `config` (inline) or `secretRef.name` — they are mutually exclusive."
+
+  # The managed cluster's apiserver trusts the platform Keycloak realm, whose
+  # name is driven by _cluster.oidc-realm-name (authentication.oidc.realmName in
+  # the platform). A renamed realm must reach the AuthenticationConfiguration
+  # issuer, or the guest apiserver rejects every token the platform mints.
+  - it: System mode threads a custom realm name into the issuer
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-authn-config.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      _cluster.oidc-realm-name: acme
+      oidc.mode: System
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "url: https://keycloak.example.org/realms/acme"
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: "/realms/cozy"
+      # The claimValidationRules denial message names the realm; on a renamed
+      # realm it must not keep telling the user to look in "cozy".
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "group in the acme realm"
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: "group in the cozy realm"

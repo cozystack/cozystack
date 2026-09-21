@@ -286,9 +286,16 @@
   components block is only rendered when the admin set something, so an unset
   backupStorage keeps the emitted Package identical to the historical render.
 */ -}}
-{{- $backupStrategyComponents := dict -}}
+{{- $backupStrategyValues := dict -}}
 {{- if .Values.backupStorage -}}
-{{- $_ := set $backupStrategyComponents "backupstrategy-controller" (dict "values" (dict "backupStorage" .Values.backupStorage)) -}}
+{{- $_ := set $backupStrategyValues "backupStorage" .Values.backupStorage -}}
+{{- end -}}
+{{- if .Values.backupStrategyController -}}
+{{- $_ := set $backupStrategyValues "backupStrategyController" .Values.backupStrategyController -}}
+{{- end -}}
+{{- $backupStrategyComponents := dict -}}
+{{- if $backupStrategyValues -}}
+{{- $_ := set $backupStrategyComponents "backupstrategy-controller" (dict "values" $backupStrategyValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.backupstrategy-controller" "default" $ $backupStrategyComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
@@ -325,6 +332,7 @@ cozystack-platform HelmRelease never becomes Ready. */}}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns-application" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.kuberture" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.keda" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $) }}
 {{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}

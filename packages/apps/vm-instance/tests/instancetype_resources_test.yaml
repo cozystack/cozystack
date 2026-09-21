@@ -1,0 +1,525 @@
+suite: vm-instance instance type versus explicit resources
+
+# KubeVirt rejects a VirtualMachine that carries an instancetype matcher and
+# explicit domain sizing at once, so the chart has to pick one. These cases pin
+# which one it picks for every combination of instanceType and resources, plus
+# the update hook that has to strip a matcher left on an existing VM.
+#
+# The chart validates instanceType and instanceProfile against the cluster, and
+# reads the platform-injected _cluster for the Windows node affinity, so every
+# case mocks both.
+
+release:
+  name: test-vm
+  namespace: tenant-test
+
+set:
+  fullnameOverride: test-vm
+  _cluster: {}
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr:
+        group: instancetype.kubevirt.io
+        version: v1beta1
+        resource: virtualmachineclusterinstancetypes
+      namespaced: false
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterPreference":
+      gvr:
+        group: instancetype.kubevirt.io
+        version: v1beta1
+        resource: virtualmachineclusterpreferences
+      namespaced: false
+    "kubevirt.io/v1/VirtualMachine":
+      gvr:
+        group: kubevirt.io
+        version: v1
+        resource: virtualmachines
+      namespaced: true
+    "kubeovn.io/v1/IP":
+      gvr:
+        group: kubeovn.io
+        version: v1
+        resource: ips
+      namespaced: false
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata:
+        name: u1.medium
+    - kind: VirtualMachineClusterPreference
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata:
+        name: ubuntu
+
+tests:
+  - it: sizes the VM by the instance type alone when no resources are given
+    templates:
+      - templates/vm.yaml
+    asserts:
+      - equal:
+          path: spec.instancetype.name
+          value: u1.medium
+      - equal:
+          path: spec.instancetype.kind
+          value: VirtualMachineClusterInstancetype
+      - notExists:
+          path: spec.template.spec.domain.cpu
+      - notExists:
+          path: spec.template.spec.domain.resources
+
+  - it: sizes the VM by resources alone when the instance type is cleared
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: ""
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - notExists:
+          path: spec.instancetype
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 4
+      - equal:
+          path: spec.template.spec.domain.cpu.sockets
+          value: 1
+      - equal:
+          path: spec.template.spec.domain.resources.requests.memory
+          value: 8Gi
+
+  # The regression this suite exists for: the dashboard cannot clear
+  # instanceType, so a user who fills cpu/sockets/memory keeps the chart default
+  # alongside them. Complete resources win and the matcher is dropped.
+  - it: drops the matcher when complete resources are set next to an instance type
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - notExists:
+          path: spec.instancetype
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 4
+      - equal:
+          path: spec.template.spec.domain.cpu.sockets
+          value: 1
+      - equal:
+          path: spec.template.spec.domain.resources.requests.memory
+          value: 8Gi
+
+  - it: refuses an instance type next to a resources block missing cpu and sockets
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      resources:
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'instanceType "u1.medium" cannot be combined with a resources block that sizes the VM only in part. Sizing came from resources.memory, but not from resources.cpu, resources.sockets. resources.cpu and resources.sockets size the VM only when both are set to whole numbers. KubeVirt rejects a VirtualMachine that carries an instancetype matcher together with explicit domain cpu or memory, so either give resources.cpu, resources.sockets and resources.memory values that all size the VM, or clear resources.memory and let the instance type size it.'
+
+  - it: refuses an instance type next to a resources block missing only memory
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 4
+        sockets: 1
+    asserts:
+      - failedTemplate:
+          errorMessage: 'instanceType "u1.medium" cannot be combined with a resources block that sizes the VM only in part. Sizing came from resources.cpu, resources.sockets, but not from resources.memory. resources.cpu and resources.sockets size the VM only when both are set to whole numbers. KubeVirt rejects a VirtualMachine that carries an instancetype matcher together with explicit domain cpu or memory, so either give resources.cpu, resources.sockets and resources.memory values that all size the VM, or clear resources.cpu, resources.sockets and let the instance type size it.'
+
+  # The shape the ticket's own workaround section warns about, since sockets is
+  # easy to miss. cpu is set here and is a whole number, so the message must not
+  # imply the value was rejected: it names cpu as unsized and states the pair
+  # rule that explains it, without asserting anything about this input.
+  - it: refuses an instance type next to cpu and memory with no sockets
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 4
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'instanceType "u1.medium" cannot be combined with a resources block that sizes the VM only in part. Sizing came from resources.memory, but not from resources.cpu, resources.sockets. resources.cpu and resources.sockets size the VM only when both are set to whole numbers. KubeVirt rejects a VirtualMachine that carries an instancetype matcher together with explicit domain cpu or memory, so either give resources.cpu, resources.sockets and resources.memory values that all size the VM, or clear resources.memory and let the instance type size it.'
+
+  # values.schema.json accepts the full Kubernetes quantity grammar for
+  # resources.cpu, but domainResources puts it through int64, which yields 0 for
+  # anything that is not a whole number. A cores of 0 sizes nothing while
+  # looking set, so it counts as unsized rather than dropping the matcher and
+  # letting KubeVirt boot the VM on its own default core count.
+  - it: refuses an instance type next to a cpu quantity that resolves to no cores
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 500m
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'instanceType "u1.medium" cannot be combined with a resources block that sizes the VM only in part. Sizing came from resources.sockets, resources.memory, but not from resources.cpu. resources.cpu and resources.sockets size the VM only when both are set to whole numbers. KubeVirt rejects a VirtualMachine that carries an instancetype matcher together with explicit domain cpu or memory, so either give resources.cpu, resources.sockets and resources.memory values that all size the VM, or clear resources.sockets, resources.memory and let the instance type size it.'
+
+  # domainResources writes domain.cpu only when cpu and sockets arrive together,
+  # so these two shapes emit no override at all and KubeVirt has nothing to
+  # reject. They render today; failing them would stop an existing release from
+  # reconciling over a field that was already being ignored.
+  - it: keeps rendering an instance type beside resources.cpu on its own
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 4
+    asserts:
+      - equal:
+          path: spec.instancetype.name
+          value: u1.medium
+      - notExists:
+          path: spec.template.spec.domain.cpu
+      - notExists:
+          path: spec.template.spec.domain.resources
+
+  - it: keeps rendering an instance type beside resources.sockets on its own
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      resources:
+        sockets: 1
+    asserts:
+      - equal:
+          path: spec.instancetype.name
+          value: u1.medium
+      - notExists:
+          path: spec.template.spec.domain.cpu
+      - notExists:
+          path: spec.template.spec.domain.resources
+
+  # An explicitly nulled resources block is the shape that separates the two
+  # readings from the other side: .Values.resources is nil, so a raw
+  # .Values.resources.memory read is a nil pointer at render time, while the
+  # emitted object it is read from instead is merely empty.
+  - it: renders an instance type beside an explicitly nulled resources block
+    templates:
+      - templates/vm.yaml
+    values:
+      - ./nulled_resources_values.yaml
+    asserts:
+      - equal:
+          path: spec.instancetype.name
+          value: u1.medium
+      - notExists:
+          path: spec.template.spec.domain.cpu
+      - notExists:
+          path: spec.template.spec.domain.resources
+
+  # KubeVirt's validateCPU guards on cores != 0 and sockets != 0, so a domain
+  # cpu where both truncate to zero is not a conflict and the matcher may stay.
+  # Failing here instead would stop a release that renders and is admitted
+  # today. The instance type ends up sizing the VM and the quantities are
+  # dropped, which is the pre-existing truncation, not something this decides.
+  - it: keeps the matcher when cpu and sockets both truncate to zero
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 500m
+        sockets: 500m
+    asserts:
+      - equal:
+          path: spec.instancetype.name
+          value: u1.medium
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 0
+      - equal:
+          path: spec.template.spec.domain.cpu.sockets
+          value: 0
+      - notExists:
+          path: spec.template.spec.domain.resources
+
+  # cpuModel is the one domain field allowed to sit beside a matcher: KubeVirt
+  # flags domain.cpu.model only when the instance type declares a model too.
+  # No instance type shipped in packages/system/kubevirt-instancetypes declares
+  # one, so the chart does not guard the pair.
+  - it: leaves cpuModel beside an instance type alone
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      cpuModel: host-passthrough
+    asserts:
+      - equal:
+          path: spec.instancetype.name
+          value: u1.medium
+      - equal:
+          path: spec.template.spec.domain.cpu.model
+          value: host-passthrough
+      - notExists:
+          path: spec.template.spec.domain.cpu.cores
+      - notExists:
+          path: spec.template.spec.domain.resources
+
+  # The one shape where the emitted domain.cpu carries a key the sizing check
+  # deliberately ignores. cpuModel must not count towards sizing, and must not
+  # stop complete resources from dropping the matcher either.
+  - it: keeps cpuModel while complete resources drop the matcher
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      cpuModel: host-passthrough
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - notExists:
+          path: spec.instancetype
+      - equal:
+          path: spec.template.spec.domain.cpu.model
+          value: host-passthrough
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 4
+      - equal:
+          path: spec.template.spec.domain.resources.requests.memory
+          value: 8Gi
+
+  # Same class of confusing error as the one this suite fixes: a name the
+  # rendered VM never references must not fail the render.
+  - it: ignores an instance type absent from the cluster once resources size the VM
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.deleted
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - notExists:
+          path: spec.instancetype
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 4
+
+  - it: still refuses an instance type absent from the cluster when it sizes the VM
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.deleted
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Specified instanceType does not exist in the cluster: u1.deleted'
+
+  # An explicit instanceType: null survives the values merge as a nil, and Go
+  # renders a nil as the literal string "<no value>", which is truthy. Left
+  # unguarded that reaches the existence check as a type name no lookup can
+  # match, and the operator is told to go fix an instance type they never
+  # named. A null has to read as "no instance type" on both paths below.
+  - it: treats a nulled instance type as unset rather than as a name
+    templates:
+      - templates/vm.yaml
+    values:
+      - ./nulled_instancetype_values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Either instanceType or resources (cpu, sockets, memory) must be specified'
+
+  # The other way in: partial sizing takes the branch that returns the raw value,
+  # so this is the shape that surfaced the placeholder. It renders a cores of 0
+  # because there is no matcher to conflict with, which is the pre-existing
+  # int64 truncation on the empty-instanceType path, not something decided here.
+  - it: sizes a nulled instance type by resources without leaking a placeholder name
+    templates:
+      - templates/vm.yaml
+    values:
+      - ./nulled_instancetype_values.yaml
+    set:
+      resources:
+        cpu: 500m
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - notExists:
+          path: spec.instancetype
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 0
+      - equal:
+          path: spec.template.spec.domain.resources.requests.memory
+          value: 8Gi
+
+  - it: still refuses a partial resources block with no instance type to fall back on
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: ""
+      resources:
+        cpu: 4
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Either instanceType or resources (cpu, sockets, memory) must be specified'
+
+  # The hook is what removes an instancetype already stamped on a live VM.
+  # It has to read the same effective value vm.yaml renders, otherwise the
+  # leftover spec.instancetype survives the upgrade and KubeVirt goes on
+  # applying it against the domain resources Helm just wrote.
+  - it: patches the instancetype off a live VM that moved to complete resources
+    templates:
+      - templates/vm-update-hook.yaml
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 8Gi
+    kubernetesProvider:
+      objects:
+        - kind: VirtualMachine
+          apiVersion: kubevirt.io/v1
+          metadata:
+            name: test-vm
+            namespace: tenant-test
+          spec:
+            instancetype:
+              kind: VirtualMachineClusterInstancetype
+              name: u1.medium
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '"instancetype":null'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '"cores":4'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '"memory":"8Gi"'
+
+  # The third branch of the hook's selector, and the upgrade path for any VM
+  # created under the workaround this fixes (explicit instanceType "" plus
+  # resources): the moment a dashboard edit drops the empty string, the chart
+  # default is back. The hook used to wipe the domain sizing and stamp the
+  # matcher on, and Helm's three-way merge keeps the live spec.instancetype
+  # because it is in neither the old nor the new manifest, so the VM would end
+  # up conflicted again.
+  #
+  # The mocked object body carries no integers on purpose: apimachinery's
+  # DeepCopyJSONValue accepts only string, int64, bool, float64 and nil, YAML
+  # integers decode to Go int, and the resulting "cannot deep copy int" is
+  # reported against whichever lookup runs next rather than against the mock.
+  - it: leaves a resource-sized VM alone instead of stamping the instance type back on
+    templates:
+      - templates/vm-update-hook.yaml
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 8Gi
+    kubernetesProvider:
+      objects:
+        - kind: VirtualMachine
+          apiVersion: kubevirt.io/v1
+          metadata:
+            name: test-vm
+            namespace: tenant-test
+          spec:
+            runStrategy: Always
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The same hook branch in the other direction: a resource-sized VM going back
+  # to instancetype sizing still has to have its domain cpu and resources
+  # nulled, or KubeVirt sees the matcher and the old explicit sizing together.
+  - it: strips the domain sizing off a live VM that moved back to an instance type
+    templates:
+      - templates/vm-update-hook.yaml
+    set:
+      instanceType: u1.medium
+    kubernetesProvider:
+      objects:
+        - kind: VirtualMachine
+          apiVersion: kubevirt.io/v1
+          metadata:
+            name: test-vm
+            namespace: tenant-test
+          spec:
+            runStrategy: Always
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '"instancetype":\{"name":"u1.medium"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '"cpu":null,"resources":null'
+
+  - it: renames the instance type on a live VM that already carries a different one
+    templates:
+      - templates/vm-update-hook.yaml
+    set:
+      instanceType: u1.medium
+    kubernetesProvider:
+      objects:
+        - kind: VirtualMachine
+          apiVersion: kubevirt.io/v1
+          metadata:
+            name: test-vm
+            namespace: tenant-test
+          spec:
+            instancetype:
+              kind: VirtualMachineClusterInstancetype
+              name: u1.small
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'Patching VirtualMachine for instancetype update'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '"name": "u1.medium", "revisionName": null'
+
+  - it: leaves a live VM alone when its instance type still sizes it
+    templates:
+      - templates/vm-update-hook.yaml
+    set:
+      instanceType: u1.medium
+    kubernetesProvider:
+      objects:
+        - kind: VirtualMachine
+          apiVersion: kubevirt.io/v1
+          metadata:
+            name: test-vm
+            namespace: tenant-test
+          spec:
+            instancetype:
+              kind: VirtualMachineClusterInstancetype
+              name: u1.medium
+    asserts:
+      - hasDocuments:
+          count: 0

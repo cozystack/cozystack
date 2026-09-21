@@ -1,9 +1,21 @@
-{{- if and .Values.instanceType (not (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" .Values.instanceType)) }}
-{{-   fail (printf "Specified instanceType does not exist in the cluster: %s" .Values.instanceType) }}
+{{- /* The effective type, not the raw value: once complete resources size the
+       VM the matcher is gone, and a stale or misspelled instanceType that the
+       dashboard gives no way to clear must not fail a render that never
+       references it. */}}
+{{- $instanceType := include "virtual-machine.effectiveInstanceType" . }}
+{{- if and $instanceType (not (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $instanceType)) }}
+{{-   fail (printf "Specified instanceType does not exist in the cluster: %s" $instanceType) }}
 {{- end }}
 {{- if and .Values.instanceProfile (not (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterPreference" "" .Values.instanceProfile)) }}
 {{-   fail (printf "Specified instanceProfile does not exist in the cluster: %s" .Values.instanceProfile) }}
 {{- end }}
+{{- /* Raw values here, deliberately. This gate asks whether the user supplied
+       a sizing source at all, which is a question about their input; every
+       other read asks what gets rendered, which is a question about the
+       output. The raw instanceType and the effective one cannot disagree on
+       this gate's outcome -- a truthy raw value with an empty effective one
+       means the resources are complete, so the VM is sized either way -- but
+       swapping this one to $instanceType would quietly change what it means. */}}
 {{- if and (not .Values.instanceType) (not (and .Values.resources .Values.resources.cpu .Values.resources.sockets .Values.resources.memory)) }}
 {{-   fail "Either instanceType or resources (cpu, sockets, memory) must be specified" }}
 {{- end }}
@@ -21,7 +33,7 @@ spec:
   {{- else }}
   runStrategy: {{ ternary "Always" "Halted" (.Values.running | default true) }}
   {{- end }}
-  {{- with .Values.instanceType }}
+  {{- with $instanceType }}
   instancetype:
     kind: VirtualMachineClusterInstancetype
     name: {{ . }}
@@ -35,11 +47,13 @@ spec:
     metadata:
       annotations:
         kubevirt.io/allow-pod-bridge-network-live-migration: "true"
+        {{- if .Capabilities.APIVersions.Has "kubeovn.io/v1/IP" }}
         {{- $ovnIPName := printf "%s.%s" (include "virtual-machine.fullname" .) .Release.Namespace }}
         {{- $ovnIP := lookup "kubeovn.io/v1" "IP" "" $ovnIPName }}
         {{- if $ovnIP }}
         ovn.kubernetes.io/mac_address: {{ $ovnIP.spec.macAddress | quote }}
         ovn.kubernetes.io/ip_address: {{ $ovnIP.spec.ipAddress | quote }}
+        {{- end }}
         {{- end }}
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}

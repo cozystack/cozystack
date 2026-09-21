@@ -19,13 +19,17 @@ package tenantgateway
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 )
@@ -81,4 +85,135 @@ func (r *Reconciler) mapRouteToTenantGateways(ctx context.Context, obj client.Ob
 		})
 	}
 	return out
+}
+
+// backendToTenantGateways returns an EventHandler that maps a Service
+// or ReferenceGrant change back to the TenantGateways whose withdrawal
+// decision it can flip.
+//
+// A TLSRoute takes a hostname over from the terminate listener only
+// once it forwards somewhere, so the withdrawal waits on an object the
+// route does not own: the Service arriving, or the grant that admits a
+// cross-namespace reference. Neither is watched by the route mapper,
+// and without this the terminate listener stands until something else
+// happens to requeue the Gateway.
+func (r *Reconciler) backendToTenantGateways() handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(r.mapBackendToTenantGateways)
+}
+
+// serviceExistenceChanged filters the Service watch down to the events
+// that can change a withdrawal decision.
+//
+// The handler behind that watch is the expensive one in this package: it
+// lists every TLSRoute and every TenantGateway in the cluster for each
+// event it accepts, and Services are the most numerous type it watches.
+// The only thing tlsRouteForwards reads off a backend Service is whether
+// it is there, so an update to one cannot flip the answer, while a
+// relist after a dropped watch and every periodic resync arrive as
+// updates for every Service in the cluster. Creates and deletes are the
+// existence transitions and both are kept; a create or delete that
+// happens while the watch is down still arrives as itself after the
+// relist, so nothing is lost by dropping the updates around them.
+//
+// This filters events for this controller alone, not the shared
+// informer: the cluster-wide typed Service cache is established by the
+// WorkloadMonitor reconciler listing Services through the manager's
+// client, and it stays whatever this watch does. Asking for
+// PartialObjectMetadata instead would not shrink that cache either — a
+// metadata request routes to a separate informer map, so it would add a
+// second cluster-wide Service watch beside the typed one rather than
+// replacing it.
+func serviceExistenceChanged() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(event.UpdateEvent) bool { return false },
+	}
+}
+
+// mapBackendToTenantGateways is the underlying MapFunc, exposed as a
+// method for the same reason mapRouteToTenantGateways is.
+//
+// Only TLSRoutes are walked, because no decision here reads an
+// HTTPRoute's backends. The Service leg matches on name and namespace;
+// the grant leg on the referenced namespace alone, since deciding
+// whether this particular grant admits this particular reference would
+// duplicate the resolution rules to save a reconcile that resolves
+// them anyway.
+func (r *Reconciler) mapBackendToTenantGateways(ctx context.Context, obj client.Object) []reconcile.Request {
+	var affects func(routeNamespace string, ref gatewayv1.BackendObjectReference) bool
+	switch o := obj.(type) {
+	case *corev1.Service:
+		affects = func(routeNamespace string, ref gatewayv1.BackendObjectReference) bool {
+			return backendRefIsService(ref) &&
+				string(ref.Name) == o.Name &&
+				backendRefNamespace(ref, routeNamespace) == o.Namespace
+		}
+	case *gatewayv1beta1.ReferenceGrant:
+		affects = func(routeNamespace string, ref gatewayv1.BackendObjectReference) bool {
+			ns := backendRefNamespace(ref, routeNamespace)
+			return ns != routeNamespace && ns == o.Namespace
+		}
+	default:
+		return nil
+	}
+
+	routes := &gatewayv1alpha2.TLSRouteList{}
+	if err := r.List(ctx, routes); err != nil {
+		log.FromContext(ctx).Error(err, "list TLSRoutes for backend mapper")
+		return nil
+	}
+	if len(routes.Items) == 0 {
+		return nil
+	}
+
+	// The TenantGateway list is deferred until a route actually names the
+	// object: this handler fires once per accepted Service event, which a
+	// store replay turns into once per Service in the cluster, and most
+	// events match no route at all.
+	var gateways *gatewayv1alpha1.TenantGatewayList
+
+	// Deduplicated across routes: several TLSRoutes on one Gateway can
+	// name the same Service, and one requeue reconciles all of them.
+	seen := map[types.NamespacedName]struct{}{}
+	var out []reconcile.Request
+	for i := range routes.Items {
+		route := &routes.Items[i]
+		if !tlsRouteNamesBackend(route, affects) {
+			continue
+		}
+		if gateways == nil {
+			gateways = &gatewayv1alpha1.TenantGatewayList{}
+			if err := r.List(ctx, gateways); err != nil {
+				log.FromContext(ctx).Error(err, "list TenantGateways for backend mapper")
+				return nil
+			}
+		}
+		for j := range gateways.Items {
+			tgw := &gateways.Items[j]
+			if _, ok := pickAttachingParentRef(route.Spec.ParentRefs, route.Namespace, tgw); !ok {
+				continue
+			}
+			key := types.NamespacedName{Namespace: tgw.Namespace, Name: tgw.Name}
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, reconcile.Request{NamespacedName: key})
+		}
+	}
+	return out
+}
+
+// tlsRouteNamesBackend reports whether any backendRef on route matches,
+// over every rule: one rule resolving is enough to put the route's
+// hostname on the passthrough listener, so one rule matching is enough
+// to make the event worth a reconcile.
+func tlsRouteNamesBackend(route *gatewayv1alpha2.TLSRoute, affects func(string, gatewayv1.BackendObjectReference) bool) bool {
+	for _, rule := range route.Spec.Rules {
+		for _, be := range rule.BackendRefs {
+			if affects(route.Namespace, be.BackendObjectReference) {
+				return true
+			}
+		}
+	}
+	return false
 }

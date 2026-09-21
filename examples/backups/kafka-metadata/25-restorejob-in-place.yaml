@@ -1,0 +1,11 @@
+# In-place restore: re-apply the backed-up topic metadata into the SAME source
+# application. Additive — recreates topics that are absent and (re)sets their
+# configs; it does not delete topics that exist live but not in the backup.
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: kafka-meta-src-inplace
+  namespace: tenant-root
+spec:
+  backupRef:
+    name: kafka-meta-src-adhoc

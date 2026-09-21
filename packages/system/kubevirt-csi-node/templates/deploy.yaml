@@ -208,7 +208,7 @@ spec:
             limits:
               memory: 512Mi
         - name: csi-node-driver-registrar
-          image: quay.io/openshift/origin-csi-node-driver-registrar:latest
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.17.0
           args:
             - "--csi-address=$(ADDRESS)"
             - "--kubelet-registration-path=$(DRIVER_REG_SOCK_PATH)"
@@ -234,7 +234,7 @@ spec:
             limits:
               memory: 128Mi
         - name: csi-liveness-probe
-          image: quay.io/openshift/origin-csi-livenessprobe:latest
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.17.0
           args:
             - "--csi-address=/csi/csi.sock"
             - "--probe-timeout=3s"

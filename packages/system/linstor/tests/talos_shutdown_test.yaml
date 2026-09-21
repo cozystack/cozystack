@@ -1,0 +1,80 @@
+suite: Talos satellite graceful shutdown
+templates:
+  - templates/satellites-talos.yaml
+
+tests:
+  - it: preserves the existing satellite lifecycle by default
+    asserts:
+      - isKind:
+          of: LinstorSatelliteConfiguration
+      - equal:
+          path: metadata.name
+          value: cozystack-talos
+      - notExists:
+          path: spec.podTemplate
+
+  - it: runs the bounded hook only inside the satellite container
+    set:
+      talos.gracefulShutdown.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cozystack-talos
+      - equal:
+          path: spec.podTemplate.spec.terminationGracePeriodSeconds
+          value: 90
+      - lengthEqual:
+          path: spec.podTemplate.spec.containers
+          count: 1
+      - equal:
+          path: spec.podTemplate.spec.containers[0].name
+          value: linstor-satellite
+      - equal:
+          path: spec.podTemplate.spec.containers[0].lifecycle.preStop.exec.command[0]
+          value: /usr/bin/python3
+      - equal:
+          path: spec.podTemplate.spec.containers[0].lifecycle.preStop.exec.command[1]
+          value: -c
+      - matchRegex:
+          path: spec.podTemplate.spec.containers[0].lifecycle.preStop.exec.command[2]
+          pattern: 'def main\(\):'
+      - equal:
+          path: spec.podTemplate.spec.containers[0].lifecycle.preStop.exec.command[3]
+          value: --execute
+
+  - it: does not turn a quoted false into an enabled shutdown hook
+    set:
+      talos.gracefulShutdown.enabled: "false"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: talos.gracefulShutdown.enabled must be a boolean'
+
+  - it: clearing the opt-in value restores the default
+    set:
+      talos.gracefulShutdown.enabled: null
+    asserts:
+      - isKind:
+          of: LinstorSatelliteConfiguration
+      - notExists:
+          path: spec.podTemplate
+
+  - it: leaves the systemd shutdown guard to Piraeus on generic Linux
+    set:
+      talos.enabled: false
+      talos.gracefulShutdown.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: omits the hook on Talos substrates without DRBD
+    set:
+      drbd.enabled: false
+      talos.gracefulShutdown.enabled: true
+    asserts:
+      - isKind:
+          of: LinstorSatelliteConfiguration
+      - notExists:
+          path: spec.podTemplate
+      - matchRegex:
+          path: spec.patches[0].patch
+          pattern: 'name: drbd-shutdown-guard'

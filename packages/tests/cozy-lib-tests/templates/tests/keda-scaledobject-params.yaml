@@ -1,0 +1,10 @@
+{{- if .Values.useParams -}}
+{{ include "cozy-lib.keda.scaledObject" (dict
+     "name" .Release.Name
+     "minReplicaCount" 3
+     "maxReplicaCount" 6
+     "serverAddress" "http://vmselect.example.svc:8481/select/0/prometheus"
+     "query" "sum(x) + 150"
+     "threshold" "150"
+) }}
+{{- end -}}

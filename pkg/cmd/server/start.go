@@ -249,86 +249,110 @@ func (o *CozyServerOptions) Complete() error {
 	// Convert to ResourceConfig
 	o.ResourceConfig = &config.ResourceConfig{}
 	for _, crd := range crdList.Items {
-		release := config.ReleaseConfig{
-			Prefix: crd.Spec.Release.Prefix,
-			Labels: crd.Spec.Release.Labels,
-			ChartRef: config.ChartRefConfig{
-				Kind:      crd.Spec.Release.ChartRef.Kind,
-				Name:      crd.Spec.Release.ChartRef.Name,
-				Namespace: crd.Spec.Release.ChartRef.Namespace,
-			},
-			// Per-Application HelmRelease generation defaults from server
-			// flags. The same five values are applied to every Resource,
-			// matching cozystack-operator's PackageReconciler. The
-			// per-Application HelmInstallTimeout annotation populated below
-			// still wins over HelmReleaseInstallTimeout/UpgradeTimeout.
-			HelmReleaseInterval:       hrFlags.interval,
-			HelmReleaseRetryInterval:  hrFlags.retryInterval,
-			HelmReleaseInstallTimeout: hrFlags.installTimeout,
-			HelmReleaseUpgradeTimeout: hrFlags.upgradeTimeout,
-			HelmReleaseMaxHistory:     hrFlags.maxHistory,
-			// kstatus readiness (issue #2642): typed spec.release fields, read
-			// directly (no annotation parsing). WaitStrategy/HealthCheckExprs
-			// are threaded into the generated HelmRelease by the REST storage
-			// layer; see config.ResolveWaitStrategy for the poller default.
-			WaitStrategy:     crd.Spec.Release.WaitStrategy,
-			HealthCheckExprs: crd.Spec.Release.HealthCheckExprs,
-		}
-		// Per-Application HelmRelease Install/Upgrade timeout. Applications
-		// whose parent chart contains asynchronously-provisioned resources
-		// the chart itself depends on (for example, the Kamaji-provisioned
-		// admin-kubeconfig Secret for Kubernetes tenants) need a longer
-		// wait budget than the Flux default. Consumed by the REST storage
-		// layer when building the HelmRelease Spec. The parser rejects
-		// units Flux would reject at webhook time, so a bad annotation
-		// surfaces as a loud startup failure instead of a silent drop to
-		// defaults. helm-install-timeout covers both install and upgrade;
-		// helm-upgrade-timeout overrides only the upgrade side for kinds
-		// that need an asymmetric budget.
-		installTimeout, err := config.ParseHelmTimeoutAnnotation(
-			crd.Annotations[config.HelmInstallTimeoutAnnotation],
-		)
+		resource, err := buildResourceFromCRD(crd, hrFlags)
 		if err != nil {
-			return fmt.Errorf(
-				"ApplicationDefinition %q has invalid %s annotation: %w",
-				crd.Name, config.HelmInstallTimeoutAnnotation, err,
-			)
-		}
-		release.HelmInstallTimeout = installTimeout
-		upgradeTimeout, err := config.ParseHelmTimeoutAnnotation(
-			crd.Annotations[config.HelmUpgradeTimeoutAnnotation],
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"ApplicationDefinition %q has invalid %s annotation: %w",
-				crd.Name, config.HelmUpgradeTimeoutAnnotation, err,
-			)
-		}
-		release.HelmUpgradeTimeout = upgradeTimeout
-		disableWait, err := config.ParseHelmInstallDisableWaitAnnotation(
-			crd.Annotations[config.HelmInstallDisableWaitAnnotation],
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"ApplicationDefinition %q has invalid %s annotation: %w",
-				crd.Name, config.HelmInstallDisableWaitAnnotation, err,
-			)
-		}
-		release.HelmInstallDisableWait = disableWait
-		resource := config.Resource{
-			Application: config.ApplicationConfig{
-				Kind:          crd.Spec.Application.Kind,
-				Singular:      crd.Spec.Application.Singular,
-				Plural:        crd.Spec.Application.Plural,
-				ShortNames:    []string{}, // TODO: implement shortnames
-				OpenAPISchema: crd.Spec.Application.OpenAPISchema,
-			},
-			Release: release,
+			return err
 		}
 		o.ResourceConfig.Resources = append(o.ResourceConfig.Resources, resource)
 	}
 
 	return nil
+}
+
+// buildResourceFromCRD assembles the config.Resource (typed release fields plus
+// the four parsed release.cozystack.io/* annotations) for one ApplicationDefinition.
+// Extracted from Complete's loop so the annotation-to-config wiring is unit-testable
+// without a live discovery client: a mutation that drops any of the four assignments
+// below (e.g. release.HelmServerSideApply = serverSideApply) turns TestBuildResourceFromCRD
+// red instead of shipping a silent nil that reverts the field's effect on every release.
+func buildResourceFromCRD(crd v1alpha1.ApplicationDefinition, hrFlags helmReleaseFlagValues) (config.Resource, error) {
+	release := config.ReleaseConfig{
+		Prefix: crd.Spec.Release.Prefix,
+		Labels: crd.Spec.Release.Labels,
+		ChartRef: config.ChartRefConfig{
+			Kind:      crd.Spec.Release.ChartRef.Kind,
+			Name:      crd.Spec.Release.ChartRef.Name,
+			Namespace: crd.Spec.Release.ChartRef.Namespace,
+		},
+		// Per-Application HelmRelease generation defaults from server
+		// flags. The same five values are applied to every Resource,
+		// matching cozystack-operator's PackageReconciler. The
+		// per-Application HelmInstallTimeout annotation populated below
+		// still wins over HelmReleaseInstallTimeout/UpgradeTimeout.
+		HelmReleaseInterval:       hrFlags.interval,
+		HelmReleaseRetryInterval:  hrFlags.retryInterval,
+		HelmReleaseInstallTimeout: hrFlags.installTimeout,
+		HelmReleaseUpgradeTimeout: hrFlags.upgradeTimeout,
+		HelmReleaseMaxHistory:     hrFlags.maxHistory,
+		// kstatus readiness (issue #2642): typed spec.release fields, read
+		// directly (no annotation parsing). WaitStrategy/HealthCheckExprs
+		// are threaded into the generated HelmRelease by the REST storage
+		// layer; see config.ResolveWaitStrategy for the poller default.
+		WaitStrategy:     crd.Spec.Release.WaitStrategy,
+		HealthCheckExprs: crd.Spec.Release.HealthCheckExprs,
+	}
+	// Per-Application HelmRelease Install/Upgrade timeout. Applications
+	// whose parent chart contains asynchronously-provisioned resources
+	// the chart itself depends on (for example, the Kamaji-provisioned
+	// admin-kubeconfig Secret for Kubernetes tenants) need a longer
+	// wait budget than the Flux default. Consumed by the REST storage
+	// layer when building the HelmRelease Spec. The parser rejects
+	// units Flux would reject at webhook time, so a bad annotation
+	// surfaces as a loud startup failure instead of a silent drop to
+	// defaults. helm-install-timeout covers both install and upgrade;
+	// helm-upgrade-timeout overrides only the upgrade side for kinds
+	// that need an asymmetric budget.
+	installTimeout, err := config.ParseHelmTimeoutAnnotation(
+		crd.Annotations[config.HelmInstallTimeoutAnnotation],
+	)
+	if err != nil {
+		return config.Resource{}, fmt.Errorf(
+			"ApplicationDefinition %q has invalid %s annotation: %w",
+			crd.Name, config.HelmInstallTimeoutAnnotation, err,
+		)
+	}
+	release.HelmInstallTimeout = installTimeout
+	upgradeTimeout, err := config.ParseHelmTimeoutAnnotation(
+		crd.Annotations[config.HelmUpgradeTimeoutAnnotation],
+	)
+	if err != nil {
+		return config.Resource{}, fmt.Errorf(
+			"ApplicationDefinition %q has invalid %s annotation: %w",
+			crd.Name, config.HelmUpgradeTimeoutAnnotation, err,
+		)
+	}
+	release.HelmUpgradeTimeout = upgradeTimeout
+	disableWait, err := config.ParseHelmInstallDisableWaitAnnotation(
+		crd.Annotations[config.HelmInstallDisableWaitAnnotation],
+	)
+	if err != nil {
+		return config.Resource{}, fmt.Errorf(
+			"ApplicationDefinition %q has invalid %s annotation: %w",
+			crd.Name, config.HelmInstallDisableWaitAnnotation, err,
+		)
+	}
+	release.HelmInstallDisableWait = disableWait
+
+	serverSideApply, err := config.ParseHelmServerSideApplyAnnotation(
+		crd.Annotations[config.HelmServerSideApplyAnnotation],
+	)
+	if err != nil {
+		return config.Resource{}, fmt.Errorf(
+			"ApplicationDefinition %q has invalid %s annotation: %w",
+			crd.Name, config.HelmServerSideApplyAnnotation, err,
+		)
+	}
+	release.HelmServerSideApply = serverSideApply
+	return config.Resource{
+		Application: config.ApplicationConfig{
+			Kind:          crd.Spec.Application.Kind,
+			Singular:      crd.Spec.Application.Singular,
+			Plural:        crd.Spec.Application.Plural,
+			ShortNames:    []string{}, // TODO: implement shortnames
+			OpenAPISchema: crd.Spec.Application.OpenAPISchema,
+		},
+		Release: release,
+	}, nil
 }
 
 // Validate checks the correctness of the options

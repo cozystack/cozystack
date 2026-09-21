@@ -1,0 +1,33 @@
+suite: apps.yaml networking.clusterDomain reaches the opensearch-operator DNS base
+
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# The operator builds every in-cluster name it needs from DNS_BASE, which the
+# vendored subchart reads from manager.dnsBase and defaults to cluster.local.
+# The platform carries the authoritative domain to it under the subchart key in
+# the shared values Secret. Every pattern here anchors dnsBase to its
+# opensearch-operator and manager parents, so a sibling block carrying the same
+# domain cannot satisfy the assertion on its own.
+
+tests:
+  - it: carries the cozy.local default under the subchart key
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^opensearch-operator:\n  manager:\n    dnsBase: "cozy\.local"$'
+
+  - it: tracks a non-default networking.clusterDomain
+    set:
+      networking.clusterDomain: example.test
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^opensearch-operator:\n  manager:\n    dnsBase: "example\.test"$'
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^opensearch-operator:\n  manager:\n    dnsBase: "cozy\.local"$'

@@ -9,6 +9,7 @@ LINSTOR_CSI_VERSION ?= v1.11.2
 
 test:
 	helm unittest .
+	python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 image: image-piraeus-server image-linstor-csi
 

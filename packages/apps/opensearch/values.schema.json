@@ -146,6 +146,21 @@
         "v1"
       ]
     },
+    "tls": {
+      "description": "HTTP-layer TLS configuration. Selects who issues the HTTP server certificate; TLS itself is always served.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "issuer": {
+          "description": "Who issues the HTTP server certificate: `operator` uses the CA the opster operator manages itself, `cert-manager` gives the release its own CA, covers the external hostname and publishes a trust anchor the tenant can verify against. Unset follows external: `cert-manager` when it is true, `operator` when it is false. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off.",
+          "type": "string",
+          "enum": [
+            "operator",
+            "cert-manager"
+          ]
+        }
+      }
+    },
     "images": {
       "description": "Container images used by the operator.",
       "type": "object",
@@ -226,7 +241,7 @@
       ],
       "properties": {
         "enabled": {
-          "description": "Enable OpenSearch Dashboards deployment.",
+          "description": "Enable OpenSearch Dashboards deployment. The application name is then limited to 41 characters, and to 32 when external access is also on, because the Dashboards Service the operator creates would otherwise exceed the 63-character DNS label limit, and the operator stops upgrading and restarting the release for as long as that Service is refused.",
           "type": "boolean",
           "default": false
         },

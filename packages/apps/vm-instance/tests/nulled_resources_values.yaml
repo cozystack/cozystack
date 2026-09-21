@@ -1,0 +1,10 @@
+# Fixture, not a suite: helm-unittest only collects tests/*_test.yaml.
+#
+# Helm coalescing drops a key the user nulls outright, so .Values.resources is
+# nil here rather than the chart's {} default, and a suite's `set` block cannot
+# express that. Every read of the block has to survive the nil: the ones in
+# domainResources and in the "Either instanceType or resources" check guard it
+# with an `and`, and the completeness read digs into emitted JSON that is empty
+# rather than absent.
+instanceType: u1.medium
+resources: null

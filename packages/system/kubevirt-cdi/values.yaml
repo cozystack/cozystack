@@ -5,7 +5,8 @@ _cluster: {}
 uploadProxyURL: ""
 
 ## @param cloneStrategyOverride Strategy CDI uses to clone DataVolumes (golden image -> VM disk).
-## One of: csi-clone, snapshot, copy. Defaults to csi-clone (unchanged behavior).
+## One of: csi-clone, snapshot, copy, or empty. Defaults to csi-clone (unchanged behavior).
+## Empty omits the field, leaving CDI to pick a strategy per StorageProfile.
 cloneStrategyOverride: csi-clone
 
 ## @param importerResources Resources for CDI's importer/uploader/cloner worker pods.

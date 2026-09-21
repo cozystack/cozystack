@@ -35,6 +35,48 @@ tests:
           path: spec.configuration.permittedHostDevices
       - notExists:
           path: spec.configuration.mediatedDevicesConfiguration
+      - notExists:
+          path: spec.configuration.migrations
+
+  - it: omits migrations when explicitly empty
+    set:
+      migrations: {}
+    asserts:
+      - notExists:
+          path: spec.configuration.migrations
+
+  - it: omits migrations when explicitly null
+    set:
+      migrations: null
+    asserts:
+      - notExists:
+          path: spec.configuration.migrations
+
+  - it: renders migration limits without changing their values
+    set:
+      migrations:
+        bandwidthPerMigration: 625M
+        parallelMigrationsPerCluster: 2
+        parallelOutboundMigrationsPerNode: 1
+    asserts:
+      - equal:
+          path: spec.configuration.migrations
+          value:
+            bandwidthPerMigration: 625M
+            parallelMigrationsPerCluster: 2
+            parallelOutboundMigrationsPerNode: 1
+
+  - it: preserves false and zero migration values
+    set:
+      migrations:
+        allowAutoConverge: false
+        completionTimeoutPerGiB: 0
+    asserts:
+      - equal:
+          path: spec.configuration.migrations
+          value:
+            allowAutoConverge: false
+            completionTimeoutPerGiB: 0
 
   - it: emits cpuAllocationRatio under developerConfiguration when set
     set:

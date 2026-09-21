@@ -63,6 +63,34 @@ tests:
             resources: ["securitygroups"]
             verbs: ["get", "list", "watch"]
 
+  # A tenant must be able to READ the ScaledObject + keda-hpa-<release> HPA that
+  # govern autoscaling of their own database, or the FailedGetExternalMetric /
+  # TriggerError that keeps a misconfigured autoscaler from actuating is invisible
+  # to them (it otherwise surfaces only in a root-scoped alert). Read verbs only.
+  - it: cozy:tenant:view:base grants read on keda.sh scaledobjects
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:view:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["keda.sh"]
+            resources: ["scaledobjects"]
+            verbs: ["get", "list", "watch"]
+
+  - it: cozy:tenant:view:base grants read on autoscaling horizontalpodautoscalers
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:view:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["autoscaling"]
+            resources: ["horizontalpodautoscalers"]
+            verbs: ["get", "list", "watch"]
+
   # cozy:tenant:base aggregates only into the tenant ServiceAccount role, so the
   # human admin/super-admin tiers need their own securitygroups write grant —
   # mirroring how apps.cozystack.io is granted at admin:base — or a tenant admin

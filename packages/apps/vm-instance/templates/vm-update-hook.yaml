@@ -4,7 +4,13 @@
 {{- $existingVM := lookup "kubevirt.io/v1" "VirtualMachine" $namespace $vmName -}}
 {{- $existingService := lookup "v1" "Service" $namespace $vmName -}}
 
-{{- $instanceType := .Values.instanceType | default "" -}}
+{{- /* The effective type, not the raw value: a VM switched from an instance
+       type to a complete resources block renders no matcher any more, and the
+       hook has to strip the one already on the object. Reading .Values
+       directly here would see the leftover instanceType, skip the patch, and
+       leave spec.instancetype.revisionName in place for KubeVirt to keep
+       applying against the domain resources Helm just wrote. */}}
+{{- $instanceType := include "virtual-machine.effectiveInstanceType" . -}}
 {{- $instanceProfile := .Values.instanceProfile | default "" -}}
 {{- $desiredServiceType := ternary "LoadBalancer" "ClusterIP" .Values.external -}}
 

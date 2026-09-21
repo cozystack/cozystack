@@ -65,6 +65,26 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'grep "\^persistentvolumeclaim/qdrant-storage-qdrant-test-"'
 
+  - it: "bounds the cleanup Job so a claim that will not go cannot hang the uninstall"
+    templates:
+      - templates/hooks/cleanup-pvc.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 270
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 10
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'xargs kubectl delete -n tenant-test --ignore-not-found --wait=true --timeout=120s'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '--request-timeout='
+
   - it: "creates qdrant-scoped RBAC for the cleanup hook"
     templates:
       - templates/hooks/cleanup-pvc.yaml
@@ -80,4 +100,4 @@ tests:
           content:
             apiGroups: [""]
             resources: ["persistentvolumeclaims"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]

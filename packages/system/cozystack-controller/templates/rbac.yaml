@@ -14,6 +14,14 @@ rules:
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["gateways/status", "httproutes/status", "tlsroutes/status"]
   verbs: ["get", "update", "patch"]
+# Read-only, to answer whether a TLSRoute forwards anywhere before a
+# hostname is taken from an HTTPS-terminate listener.
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["referencegrants"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch"]
 # TenantGatewayReconciler renders the per-tenant Issuer and the
 # wildcard / per-listener Certificates the Gateway listeners reference.
 - apiGroups: ["cert-manager.io"]

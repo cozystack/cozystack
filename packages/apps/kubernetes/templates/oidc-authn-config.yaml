@@ -31,6 +31,7 @@
 {{-   $issuer := include "kubernetes.oidc.systemIssuerURL" . | trim }}
 {{-   $audience := include "kubernetes.oidc.clientId" . | trim }}
 {{-   $groupsExpr := include "kubernetes.oidc.groupsClaimValidationExpr" . | trim }}
+{{-   $realm := dig "oidc-realm-name" "cozy" (.Values._cluster | default dict) | toString }}
 {{- /*
 User identity claim: `email`, not `preferred_username`.
 
@@ -59,7 +60,7 @@ chart) to be present in the token's `groups` claim. Symmetric with the
 Grafana-side `allowed_groups` gate in the Monitoring chart — see
 docs/oidc-tenant.md and docs/oidc-grafana.md.
 */ -}}
-{{-   $authnConfig := printf "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: %s\n    audiences:\n    - %s\n  claimValidationRules:\n  - expression: '%s'\n    message: \"user is not a member of any %s-{view,use,admin,super-admin} group in the cozy realm — this tenant's apiserver only trusts identities the tenant chart has admitted\"\n  claimMappings:\n    username:\n      claim: email\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n" $issuer $audience $groupsExpr .Release.Namespace }}
+{{-   $authnConfig := printf "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: %s\n    audiences:\n    - %s\n  claimValidationRules:\n  - expression: '%s'\n    message: \"user is not a member of any %s-{view,use,admin,super-admin} group in the %s realm — this tenant's apiserver only trusts identities the tenant chart has admitted\"\n  claimMappings:\n    username:\n      claim: email\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n" $issuer $audience $groupsExpr .Release.Namespace $realm }}
 ---
 apiVersion: v1
 kind: Secret

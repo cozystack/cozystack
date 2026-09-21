@@ -42,6 +42,9 @@ type ConfigSpec struct {
 	// OpenSearch major version to deploy.
 	// +kubebuilder:default:="v2"
 	Version Version `json:"version"`
+	// HTTP-layer TLS configuration. Selects who issues the HTTP server certificate; TLS itself is always served.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls"`
 	// Container images used by the operator.
 	// +kubebuilder:default:={}
 	Images Images `json:"images"`
@@ -57,7 +60,7 @@ type ConfigSpec struct {
 }
 
 type Dashboards struct {
-	// Enable OpenSearch Dashboards deployment.
+	// Enable OpenSearch Dashboards deployment. The application name is then limited to 41 characters, and to 32 when external access is also on, because the Dashboards Service the operator creates would otherwise exceed the 63-character DNS label limit, and the operator stops upgrading and restarting the release for as long as that Service is refused.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
 	// Number of Dashboards replicas.
@@ -99,6 +102,11 @@ type Resources struct {
 	Memory resource.Quantity `json:"memory,omitempty"`
 }
 
+type TLS struct {
+	// Who issues the HTTP server certificate: `operator` uses the CA the opster operator manages itself, `cert-manager` gives the release its own CA, covers the external hostname and publishes a trust anchor the tenant can verify against. Unset follows external: `cert-manager` when it is true, `operator` when it is false. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off.
+	Issuer TLSIssuer `json:"issuer,omitempty"`
+}
+
 type User struct {
 	// Password for the user (auto-generated if omitted).
 	Password string `json:"password,omitempty"`
@@ -108,6 +116,9 @@ type User struct {
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
+
+// +kubebuilder:validation:Enum="operator";"cert-manager"
+type TLSIssuer string
 
 // +kubebuilder:validation:Enum="soft";"hard"
 type TopologySpreadPolicy string

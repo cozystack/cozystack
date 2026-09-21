@@ -478,3 +478,128 @@ func TestBackupReconcile_ReleasesInTerminatingNamespace(t *testing.T) {
 		t.Error("expected a Warning Event naming the object left behind")
 	}
 }
+
+// redisCleanupBackup is a Redis Backup carrying the object key on its
+// DriverMetadata - the object cleanupRedisBackup must delete.
+func redisCleanupBackup(name, objectKey string) *backupsv1alpha1.Backup {
+	return &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+				Kind:     "Redis",
+				Name:     "cache",
+			},
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				Kind:     strategyv1alpha1.RedisStrategyKind,
+				Name:     "cozy-default-redis",
+			},
+			TakenAt:        metav1.Now(),
+			DriverMetadata: map[string]string{redisObjectMetaKey: objectKey},
+		},
+	}
+}
+
+// newRedisCleanupStrategy renders in cleanup mode: its template references only
+// .Mode and .ObjectKey (never .Application), which cleanup passes as nil.
+func newRedisCleanupStrategy(name string) *strategyv1alpha1.Redis {
+	return &strategyv1alpha1.Redis{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: strategyv1alpha1.RedisSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{{
+						Name:  "cleanup",
+						Image: "redis-backup:test",
+						Args:  []string{"--mode={{ .Mode }}", "--key={{ .ObjectKey }}"},
+					}},
+				},
+			},
+		},
+	}
+}
+
+// TestBackupReconcile_HoldsFinalizerWhileRedisCleanupRuns pins that a deleted
+// Redis Backup deletes its object (the Redis driver owns it) instead of falling
+// through to the Velero no-op: Reconcile spawns a cleanup Job, holds the
+// finalizer while it runs, and removes the Backup once the Job completes.
+// Dropping the Redis case in cleanupOnDelete turns this red (no Job, Backup
+// removed immediately with its object orphaned).
+func TestBackupReconcile_HoldsFinalizerWhileRedisCleanupRuns(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+	backup := redisCleanupBackup("redis-src", "tenant-test/cache/redis-src.rdb")
+	backup.Finalizers = []string{backupFinalizer}
+	strategy := newRedisCleanupStrategy("cozy-default-redis")
+	c, s := newRabbitmqBackupReconcilerClient(ns, backup, strategy)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+
+	if err := c.Delete(ctx, backup); err != nil {
+		t.Fatalf("delete backup: %v", err)
+	}
+	key := client.ObjectKeyFromObject(backup)
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("expected Reconcile to requeue while the delete Job runs")
+	}
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatalf("Backup must still exist while cleanup runs: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(got, backupFinalizer) {
+		t.Error("expected the finalizer to be retained while the delete Job runs")
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected the cleanup Job, got %d", len(jobs.Items))
+	}
+	if got := jobs.Items[0].Labels[redisLabelMode]; got != redisModeCleanup {
+		t.Errorf("expected the Job labelled mode=%q, got %q", redisModeCleanup, got)
+	}
+
+	// Complete the Job; the next reconcile removes the finalizer -> Backup gone.
+	job := jobs.Items[0]
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		t.Fatalf("update job status: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile() second call error = %v", err)
+	}
+	if err := c.Get(ctx, key, got); !apierrors.IsNotFound(err) {
+		t.Errorf("expected the Backup removed after the delete Job completed, got err=%v", err)
+	}
+}
+
+// TestBackupCleanup_Redis_NoObjectKeyIsNoOp pins that a legacy Redis Backup
+// with no recorded object key releases without spawning a Job (nothing to
+// delete), rather than wedging.
+func TestBackupCleanup_Redis_NoObjectKeyIsNoOp(t *testing.T) {
+	backup := redisCleanupBackup("redis-legacy", "")
+	backup.Spec.DriverMetadata = nil
+	c, s := newRabbitmqBackupReconcilerClient(backup)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Error("expected no requeue when there is no object to delete")
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(context.Background(), jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("expected no cleanup Job for a keyless Backup, got %d", len(jobs.Items))
+	}
+}

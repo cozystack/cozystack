@@ -17,6 +17,8 @@ templates:
   - templates/strategy-altinity-default.yaml
   - templates/strategy-mongodb-default.yaml
   - templates/strategy-rabbitmq-default.yaml
+  - templates/strategy-redis-default.yaml
+  - templates/strategy-kafka-default.yaml
   - templates/strategy-foundationdb-default.yaml
   - templates/strategy-velero-vminstance-default.yaml
   - templates/strategy-velero-vmdisk-default.yaml
@@ -70,6 +72,14 @@ tests:
       - hasDocuments:
           count: 0
         template: templates/strategy-rabbitmq-default.yaml
+      # Kafka metadata Job strategy carries bucket coordinates too, so it stays
+      # off the first render for the same ordering reason as its siblings.
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-kafka-default.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-redis-default.yaml
       - hasDocuments:
           count: 0
         template: templates/strategy-foundationdb-default.yaml
@@ -83,7 +93,7 @@ tests:
           count: 0
         template: templates/velero-bsl.yaml
 
-  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all eight routes (FoundationDB intentionally unbound)"
+  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all ten routes (FoundationDB intentionally unbound)"
     asserts:
       - hasDocuments:
           count: 1
@@ -94,7 +104,7 @@ tests:
         template: templates/backupclass-default.yaml
       - lengthEqual:
           path: spec.strategies
-          count: 8
+          count: 10
         template: templates/backupclass-default.yaml
       - contains:
           path: spec.strategies
@@ -107,8 +117,34 @@ tests:
               kind: Rabbitmq
               name: cozy-default-rabbitmq
         template: templates/backupclass-default.yaml
+      - contains:
+          path: spec.strategies
+          content:
+            application:
+              apiGroup: apps.cozystack.io
+              kind: Redis
+            strategyRef:
+              apiGroup: strategy.backups.cozystack.io
+              kind: Redis
+              name: cozy-default-redis
+        template: templates/backupclass-default.yaml
+      - contains:
+          path: spec.strategies
+          content:
+            application:
+              apiGroup: apps.cozystack.io
+              kind: Kafka
+            strategyRef:
+              apiGroup: strategy.backups.cozystack.io
+              kind: Kafka
+              name: cozy-default-kafka
+        template: templates/backupclass-default.yaml
 
   - it: "all Strategy CRs and the Velero BSL render once a bucket name resolves"
+    # bucketNameOverride marks an offline render, and the MongoDB count below is
+    # what pins that the CRD gate honours it: without that short-circuit no
+    # `helm template` or CI diff could ever produce this Strategy, since neither
+    # has an apiserver to ask about the CRD.
     set:
       backupStorage.bucketNameOverride: test-bucket
     asserts:
@@ -130,6 +166,29 @@ tests:
       - hasDocuments:
           count: 1
         template: templates/strategy-rabbitmq-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-redis-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-kafka-default.yaml
+      - isKind:
+          of: Kafka
+        template: templates/strategy-kafka-default.yaml
+      - equal:
+          path: metadata.name
+          value: cozy-default-kafka
+        template: templates/strategy-kafka-default.yaml
+      - equal:
+          path: spec.artifactURITemplate
+          value: "s3://test-bucket/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-metadata.txt"
+        template: templates/strategy-kafka-default.yaml
+      # The chart pins no client image: the controller fills the placeholder with
+      # the target broker's own image at reconcile time.
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "{{ .ClientImage }}"
+        template: templates/strategy-kafka-default.yaml
       - hasDocuments:
           count: 1
         template: templates/strategy-foundationdb-default.yaml
@@ -171,6 +230,30 @@ tests:
           path: spec.template.storage.s3.bucket
           value: ext-bucket
         template: templates/strategy-mariadb-default.yaml
+
+  - it: "MongoDB Strategy gates on its CRD too, so shipping the kind to an installed chart cannot wedge the release"
+    # provisionBucket=false is what makes this case load-bearing: it resolves
+    # $bucketName WITHOUT the offline bucketNameOverride, which is the shape of a
+    # cluster that has been running for releases — bucket gate open, and only the
+    # CRD gate still able to hold the CR back. helm-unittest renders with no
+    # apiserver, so the CRD lookup answers "absent", which is the same answer a
+    # real cluster gives on the upgrade that first ships that CRD. Rendering the
+    # CR there fails Build() for the WHOLE release ("no matches for kind
+    # MongoDB") and applies zero objects, including the CRD that would have
+    # fixed it, so a count of 1 here is that wedge, green.
+    set:
+      backupStorage.provisionBucket: false
+      backupStorage.bucketName: ext-bucket
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-mongodb-default.yaml
+      # A sibling whose CRD shipped in an earlier release keeps rendering, which
+      # is what makes the count above an assertion about the MongoDB gate rather
+      # than about a chart-wide render failure.
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-cnpg-default.yaml
 
   - it: "velero.bslEnabled=false: Velero strategies and BSL drop out while other strategies keep rendering"
     set:

@@ -87,17 +87,75 @@ tests:
   # General           #
   #####################
 
-  - it: sets drainDataNodes to true
+  - it: drains data nodes when another node can take the shards
     release:
       name: test-os
       namespace: tenant-test
     set:
       _cluster:
         cluster-domain: cozy.local
+      replicas: 3
     asserts:
       - equal:
           path: spec.general.drainDataNodes
           value: true
+        documentIndex: 0
+
+  # The operator's drain waits for the node to hold no shards before it deletes
+  # the pod. A single data node cannot get there, so a release with one replica
+  # would never roll, not for a version bump and not for a certificate move.
+  - it: does not drain the only data node
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 1
+    asserts:
+      - equal:
+          path: spec.general.drainDataNodes
+          value: false
+        documentIndex: 0
+
+  # Two is the boundary the operator gives up on: it warns that some shards may
+  # not drain and then waits only for system index primaries, which the other
+  # node cannot take while it holds their replicas. The case decides the
+  # threshold, so it is pinned rather than left to the pair either side of it.
+  - it: does not drain when the second data node has nowhere to put the shards
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 2
+    asserts:
+      - equal:
+          path: spec.general.drainDataNodes
+          value: false
+        documentIndex: 0
+
+  # The operator counts data nodes by summing replicas over pools carrying the
+  # data role. This chart renders one pool, so with the role off the count is
+  # zero however many replicas are asked for.
+  - it: does not drain a release that runs no data nodes
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 5
+      nodeRoles:
+        master: true
+        data: false
+        ingest: true
+        ml: false
+    asserts:
+      - equal:
+          path: spec.general.drainDataNodes
+          value: false
         documentIndex: 0
 
   - it: sets httpPort to 9200
@@ -111,6 +169,25 @@ tests:
       - equal:
           path: spec.general.httpPort
           value: 9200
+        documentIndex: 0
+
+  # The operator's init container for vm.max_map_count is privileged, and the
+  # PodSecurity level tenant namespaces run at refuses it before any pod exists.
+  # The sysctl comes from the DaemonSet in the opensearch-operator package
+  # instead, so this flag stays off. It is pinned as an explicit false rather
+  # than as absent, so an omitted key reads as a regression and not as a
+  # default nobody chose.
+  - it: does not ask the operator for the privileged sysctl init container
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.general.setVMMaxMapCount
+          value: false
         documentIndex: 0
 
   #####################
@@ -542,3 +619,50 @@ tests:
           path: spec.selector["opster.io/opensearch-cluster"]
           value: mydb
         documentIndex: 1
+
+  ###################################
+  # securityconfig update job       #
+  ###################################
+
+  - it: gives the securityconfig update job its own resources
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.security.config.updateJob.resources.requests.memory
+          value: 256Mi
+        documentIndex: 0
+      - equal:
+          path: spec.security.config.updateJob.resources.limits.memory
+          value: 512Mi
+        documentIndex: 0
+      - equal:
+          path: spec.security.config.updateJob.resources.requests.cpu
+          value: 100m
+        documentIndex: 0
+      - equal:
+          path: spec.security.config.updateJob.resources.limits.cpu
+          value: "1"
+        documentIndex: 0
+
+  # securityadmin configures the cluster once and exits, so what it needs does
+  # not grow with the cluster. Tying it to the preset would hand it 128Mi again
+  # on the smallest one, which is the amount it is OOMKilled at.
+  - it: keeps the update job resources off the node sizing preset
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      resourcesPreset: "nano"
+      resources: {}
+    asserts:
+      - equal:
+          path: spec.security.config.updateJob.resources.limits.memory
+          value: 512Mi
+        documentIndex: 0

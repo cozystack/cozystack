@@ -51,9 +51,11 @@ spec:
   {{- if .Values.backup.retentionPolicy }}
   retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
   {{- end }}
-  # Pin the barman-cloud sidecar's S3 request checksum to when_required
-  # (rationale in cozy-lib.barman.checksumSidecarConfiguration).
-  {{- include "cozy-lib.barman.checksumSidecarConfiguration" . | nindent 2 }}
+  # Give the barman-cloud sidecar explicit resources: cozy-keycloak has no
+  # LimitRange, so the plugin's default was no requests and no limit at all.
+  # The sizing and the S3 request checksum pin are explained in
+  # cozy-lib.barman.sidecarConfiguration.
+  {{- include "cozy-lib.barman.sidecarConfiguration" . | nindent 2 }}
   configuration:
     destinationPath: {{ .Values.backup.destinationPath | quote }}
     {{- with .Values.backup.endpointURL }}

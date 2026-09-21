@@ -44,7 +44,7 @@
       ]
     },
     "instanceType": {
-      "description": "Virtual Machine instance type.",
+      "description": "Virtual Machine instance type. Ignored when `resources` sizes the VM, which needs whole-number cpu and sockets plus memory; the whole type is dropped then, so any dedicated CPU placement, hugepages, NUMA or realtime settings it carries go with it. While this field is set, a `resources` block that sizes only part of the VM is rejected outright instead of ignored, so complete it or clear it.",
       "type": "string",
       "default": "u1.medium",
       "x-cozystack-options": {
@@ -162,7 +162,7 @@
       }
     },
     "resources": {
-      "description": "Resource configuration for the virtual machine.",
+      "description": "Resource configuration for the virtual machine. Set whole-number cpu and sockets together with memory to size the VM directly, which overrides `instanceType`. Alongside an `instanceType`, a block that sizes only part of the VM is rejected; cpu or sockets on its own sizes nothing and is ignored.",
       "type": "object",
       "default": {},
       "properties": {

@@ -1,0 +1,131 @@
+#!/bin/sh
+# Migration 57 --> 58
+# Keep every existing SeaweedFS instance at the master volume size limit it has
+# been running with, 1000, unless it already names one or its master is not an
+# object, which no v1 chart renders.
+#
+# The seaweedfs app chart now sends master.volumeSizeLimitMB and defaults it to
+# 400. An instance that has been running at 1000 would take that default on its
+# next reconcile, and every volume between 400 MB and 1000 MB would leave the
+# master's writable set at once, stranding any bucket whose volumes had all
+# crossed the line. So the value is written as 1000 on each instance that has
+# not chosen one, apart from that unrenderable shape, and on a variant that runs
+# platform migrations the new default reaches only instances created after this
+# release. Lowering an existing instance is left to its operator, with the check
+# in docs/operations/seaweedfs-lowering-the-volume-size-limit.md.
+#
+# Where the value goes. An instance is a HelmRelease labelled with its
+# application kind and group, the selector cozystack-api lists SeaweedFS with,
+# and its spec.values is the application spec. That holds for an instance
+# created through the API and for one the tenant module renders, including the
+# platform's own in tenant-root, so one patch serves both. The tenant module
+# renders that HelmRelease without spec.values, which
+# packages/apps/tenant/tests/seaweedfs_values_left_to_the_instance_test.yaml
+# pins, and a Helm upgrade leaves a key alone when neither the previous nor the
+# new manifest carries it: measured with Helm 4.3.0 on client-side apply,
+# server-side apply and a forced server-side upgrade, and read in
+# pkg/kube/client.go createPatch at v4.1.1, the Helm that helm-controller v1.5.0
+# runs. If the tenant chart ever renders master.volumeSizeLimitMB into that
+# release, its value replaces this one on every reconcile. The <name>-system
+# child is not the place either: its parent renders it on every reconcile.
+#
+# "Chosen" is a whole number from 1 to 30000, the range the new chart accepts,
+# and such a value is left as it is. Unless it is 1000 it is also named in the
+# Job log, because the previous chart ignored it and the new one applies it;
+# 1000 changes nothing, and a Job retried after a partial run finds its own pins
+# there. Anything else counts as not chosen and is replaced with 1000: an absent
+# key, a null, a string, a fraction or a number out of range. The previous chart
+# ignored all of those, so 1000 is what the instance has been running with in
+# their place, and the new chart refuses them, so keeping one would stop that
+# release from reconciling. A master holding a scalar or a list is not patched,
+# since patching it would replace whatever it holds, and every v1 schema types
+# master as an object, so that release does not render today either. The Job
+# log names it, because whoever repairs master later has to set the limit in
+# the same edit or the instance comes up at 400. A null master is patched like
+# an absent one. A spec.values that is not an object is different:
+# helm-controller discards values it cannot read as a map
+# (HelmRelease.GetValues at v1.5.0) and renders the chart's defaults, so that
+# instance runs at 1000 today and would take 400. It counts as not chosen, and
+# the same merge patch replaces it with the pin, measured with
+# gopkg.in/evanphx/json-patch.v4 v4.13.0, the merge-patch implementation
+# k8s.io/apiserver v0.35.0 calls. That drops nothing that applies, and the Job
+# log keeps what it held.
+#
+# helm-controller merges spec.values over valuesFrom (ChartValuesFromReferences
+# in fluxcd/pkg/chartutil v1.22.0). A limit a valuesFrom entry sets without
+# targetPath is therefore overridden by the pin, and one set through targetPath
+# wins or loses depending on the entries before it. The apps API and the tenant
+# module both set valuesFrom to the cozystack-values Secret alone, so any other
+# entry is named in the Job log, and the pin is written regardless.
+#
+# Order. On a variant that runs platform migrations, this runs as a pre-upgrade
+# hook of the platform release, and the cozystack-packages source every
+# application chart is built from is itself a manifest of that release
+# (templates/repository.yaml), applied only after the hooks finish. There, no
+# instance can reach the new chart before this has run, and a failure here stops
+# the platform upgrade before that source moves, so no instance reaches it
+# unpatched either. Everything therefore fails closed. That order holds while
+# the platform source is pinned by digest, as it is out of the box. A source
+# that follows a tag, a semver range or a branch lets source-controller move
+# cozystack-packages on its own schedule, and an instance there can run at 400,
+# with the stranding that brings, until this has run.
+#
+# Until cozystack-packages moves, each patched release still runs its old chart,
+# which ignores the key: no v1 release of the chart reads it, and none closes
+# the master object in its values schema. The patch costs at most an upgrade
+# that renders nothing new.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+selector='apps.cozystack.io/application.kind=SeaweedFS,apps.cozystack.io/application.group=apps.cozystack.io'
+
+# The HelmRelease CRD is always present here, so an empty list is a cluster with
+# no instance, and a failed list aborts under set -e rather than reading as one.
+plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces -l "$selector" -o json \
+  | jq -r '.items[]
+      | "\(.metadata.namespace) \(.metadata.name)" as $id
+      | .spec.values as $s
+      | [(.spec.valuesFrom // [])[] | select(. != {kind: "Secret", name: "cozystack-values"})] as $extra
+      | (if $extra != [] then "valuesfrom \($id) \($extra | tojson)" else empty end),
+        (if $s != null and ($s | type) != "object"
+         then "unreadable \($id) \($s | tojson)", "pin \($id)"
+         elif $s.master != null and ($s.master | type) != "object"
+         then "unrenderable \($id) \($s.master | tojson)"
+         else
+           $s.master.volumeSizeLimitMB as $v
+           | if ($v | type) != "number" or $v != ($v | floor) or $v < 1 or $v > 30000
+             then "pin \($id)"
+             elif $v == 1000 then empty
+             else "keep \($id) \($v)" end
+         end)')
+
+if [ -n "$plan" ]; then
+  while read -r action ns name detail; do
+    case "$action" in
+      pin)
+        echo "Pinning SeaweedFS ${ns}/${name} at master.volumeSizeLimitMB=1000"
+        kubectl -n "$ns" patch helmreleases.helm.toolkit.fluxcd.io "$name" \
+          --type=merge -p '{"spec":{"values":{"master":{"volumeSizeLimitMB":1000}}}}'
+        ;;
+      keep)
+        echo "Keeping SeaweedFS ${ns}/${name} at master.volumeSizeLimitMB=${detail}: the previous chart ignored it and the new one applies it (docs/operations/seaweedfs-lowering-the-volume-size-limit.md)"
+        ;;
+      unreadable)
+        echo "WARNING: SeaweedFS ${ns}/${name} has a spec.values that is not an object, which helm-controller ignores; the pin replaces it. It held: ${detail}" >&2
+        ;;
+      unrenderable)
+        echo "WARNING: SeaweedFS ${ns}/${name} is not pinned: its master is not an object, so no v1 chart renders it. Set master.volumeSizeLimitMB in the edit that repairs master, or the instance comes up at 400. master holds: ${detail}" >&2
+        ;;
+      valuesfrom)
+        echo "WARNING: SeaweedFS ${ns}/${name} also takes values from ${detail}. spec.values is merged over them, so a master.volumeSizeLimitMB set there without targetPath does not apply, and one set through targetPath can, depending on the entries before it" >&2
+        ;;
+    esac
+  done <<EOF
+$plan
+EOF
+fi
+
+stamp_cozystack_version 58

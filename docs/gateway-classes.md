@@ -52,7 +52,9 @@ The set a tenant may name is `gateway.tenantSelectableClasses` plus the current 
 | the resolved class is in `gateway.edgeTerminatedClasses` | `edge` | nothing |
 | `publishing.certificates.wildcardSecretName` is set | `existingSecret` | nothing; the operator's Secret is referenced |
 | `publishing.certificates.solver: dns01` | `dns01` | one wildcard `Certificate` per tenant |
-| otherwise | `http01` | one `Certificate` per published hostname |
+| otherwise | `http01` | one `Certificate` per published hostname, except the passthrough names below |
+
+Under `http01` a hostname held by a TLS-passthrough listener is the exception to the per-hostname rule. Once a `TLSRoute` is served on that listener and forwards to a backend, the hostname earns neither an HTTPS-terminate listener nor a `Certificate`, because the backend presents its own certificate and the Gateway never holds a key for the name. The shipped `tlsPassthroughServices` defaults put `api`, `vm-exportproxy` and `cdi-uploadproxy` in that position on the publishing tenant, and the `Certificate` objects that covered them are collected on upgrade; `packages/extra/gateway/README.md` carries what that changes and the ways forward.
 
 Edge therefore wins over an operator-supplied wildcard Secret, which wins over the solver. In edge mode the solver, DNS-01 provider and issuer-name inputs are not read at all, so an unsupported value in any of them does not fail the tenant's release. `existingSecret` skips the same validations; only `http01` and `dns01` reject a bad solver, provider or issuer name.
 
@@ -79,7 +81,7 @@ Onto an edge-terminated class, on the next reconcile:
 | the TLS Secrets those `Certificate`s issued | left in the namespace, unreferenced |
 | the http-to-https redirect `HTTPRoute` | deleted |
 | the replica of `publishing.certificates.wildcardSecretName` | deleted from that tenant's namespace |
-| route status conditions the controller wrote earlier | every attached `TLSRoute` is flipped to `Accepted=False`, reason `NoMatchingParent` |
+| route status conditions the controller wrote earlier | an attached `TLSRoute` that declares hostnames is flipped to `Accepted=False`, reason `NoMatchingParent`; on a hostname-less `TLSRoute`, and on every attached `HTTPRoute`, the controller's own entry is removed instead |
 
 Every deletion is guarded by ownership: an object of the same name that the controller did not create is left in place.
 

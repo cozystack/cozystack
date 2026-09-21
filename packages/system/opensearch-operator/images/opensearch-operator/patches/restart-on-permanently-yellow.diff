@@ -1,0 +1,368 @@
+diff --git a/opensearch-operator/opensearch-gateway/responses/ClusterHealthResponse.go b/opensearch-operator/opensearch-gateway/responses/ClusterHealthResponse.go
+--- a/opensearch-operator/opensearch-gateway/responses/ClusterHealthResponse.go
++++ b/opensearch-operator/opensearch-gateway/responses/ClusterHealthResponse.go
+@@ -2,10 +2,13 @@
+ 
+ type ClusterHealthResponse struct {
+ 	Status             string                 `json:"status,omitempty"`
++	NumberOfDataNodes  int                    `json:"number_of_data_nodes,omitempty"`
+ 	ActiveShards       int                    `json:"active_shards,omitempty"`
+ 	RelocatingShards   int                    `json:"relocating_shards,omitempty"`
+ 	InitializingShards int                    `json:"initializing_shards,omitempty"`
+ 	UnassignedShards   int                    `json:"unassigned_shards,omitempty"`
++	DelayedUnassigned  int                    `json:"delayed_unassigned_shards,omitempty"`
++	InFlightFetch      int                    `json:"number_of_in_flight_fetch,omitempty"`
+ 	PercentActive      float32                `json:"active_shards_percent_as_number,omitempty"`
+ 	Indices            map[string]IndexHealth `json:"indices,omitempty"`
+ }
+diff --git a/opensearch-operator/opensearch-gateway/services/os_data_service.go b/opensearch-operator/opensearch-gateway/services/os_data_service.go
+--- a/opensearch-operator/opensearch-gateway/services/os_data_service.go
++++ b/opensearch-operator/opensearch-gateway/services/os_data_service.go
+@@ -54,6 +54,26 @@
+ 	return false, err
+ }
+ 
++// extractNodeName returns the source node of a _cat/shards node column, which
++// for a relocating shard reads "source -> ip id target".
++func extractNodeName(fullNodeName string) string {
++	fields := strings.Fields(fullNodeName)
++	if len(fields) == 0 {
++		return ""
++	}
++	return fields[0]
++}
++
++func shardsOnNodeFromResponse(response []responses.CatShardsResponse, nodeName string) []responses.CatShardsResponse {
++	var matched []responses.CatShardsResponse
++	for _, shard := range response {
++		if extractNodeName(shard.NodeName) == nodeName {
++			matched = append(matched, shard)
++		}
++	}
++	return matched
++}
++
+ func HasIndexPrimariesOnNode(service *OsClusterClient, nodeName string, indices []string) (bool, error) {
+ 	var headers []string
+ 	response, err := service.CatNamedIndicesShards(headers, indices)
+@@ -153,7 +173,7 @@
+ 	}}
+ }
+ 
+-func CheckClusterStatusForRestart(service *OsClusterClient, drainNodes bool) (bool, string, error) {
++func CheckClusterStatusForRestart(service *OsClusterClient, drainNodes bool, dataNodes int32) (bool, string, error) {
+ 	health, err := service.GetHealth()
+ 	if err != nil {
+ 		return false, "failed to fetch health", err
+@@ -163,7 +183,33 @@
+ 		return true, "", nil
+ 	}
+ 
+-	if continueRestartWithYellowHealth(health) {
++	if health.Status == "yellow" {
++		// Yellow means every primary is active. Lift our own allocation throttle
++		// (PreparePodForDelete sets "primaries") so it can't masquerade as a
++		// permanently unassignable replica.
++		flatSettings, err := service.GetFlatClusterSettings()
++		if err != nil {
++			return false, "could not fetch cluster settings", err
++		}
++		if flatSettings.Transient.ClusterRoutingAllocationEnable != string(ClusterSettingsAllocationAll) {
++			if err := SetClusterShardAllocation(service, ClusterSettingsAllocationAll); err != nil {
++				return false, "failed to set shard allocation", err
++			}
++			return false, "enabled shard allocation", nil
++		}
++		// A data node that hasn't (re)joined yet leaves no trace in the shard
++		// activity counters once its delayed allocation expires, and a pod can be
++		// Ready before it joins. Wait until every data node is part of the cluster.
++		if health.NumberOfDataNodes < int(dataNodes) {
++			return false, "waiting for all data nodes to join the cluster", nil
++		}
++		// With all data nodes present, allocation enabled and no shard activity,
++		// the allocator has already decided the remaining replicas cannot be placed
++		// (same_shard, awareness, filters, disk watermarks): waiting never turns it
++		// green. The candidate itself is vetted in PreparePodForDelete.
++		if hasShardActivity(health) {
++			return false, "waiting for shard recovery to finish", nil
++		}
+ 		return true, "", nil
+ 	}
+ 
+@@ -222,19 +268,40 @@
+ 			if err != nil {
+ 				return false, err
+ 			}
+-			lg.Info(fmt.Sprintf("Waiting to drain primary replicas for system indices from node %s before deleting", podName))
+-			return !systemPrimaries, nil
++			if systemPrimaries {
++				lg.Info(fmt.Sprintf("Waiting to drain primary replicas for system indices from node %s before deleting", podName))
++				return false, nil
++			}
++		} else {
++			// Check if there are any shards on the node
++			nodeNotEmpty, err := HasShardsOnNode(service, podName)
++			if err != nil {
++				return false, err
++			}
++			if nodeNotEmpty {
++				// If the node isn't empty requeue to wait for shards to drain
++				lg.Info(fmt.Sprintf("Waiting for node %s to drain before deleting", podName))
++				return false, nil
++			}
+ 		}
+-
+-		// Check if there are any shards on the node
+-		nodeNotEmpty, err := HasShardsOnNode(service, podName)
++	}
++	// Whatever is still on the node goes offline with it. Never take down the
++	// only active copy of a shard that is supposed to have others (red window,
++	// permanent loss on emptyDir). A lone data node is exempt: there is nowhere
++	// else a copy could live, same as a green cluster with number_of_replicas: 0.
++	if nodeCount > 1 {
++		shards, err := service.CatShards([]string{"index", "shard", "prirep", "state", "node"})
+ 		if err != nil {
+ 			return false, err
+ 		}
+-		// If the node isn't empty requeue to wait for shards to drain
+-		lg.Info(fmt.Sprintf("Waiting for node %s to drain before deleting", podName))
+-		return !nodeNotEmpty, nil
++		if shard, ok := soleActiveCopyOnNode(shards, podName); ok {
++			lg.Info(fmt.Sprintf("Not restarting %s: it holds the only active copy of %s[%s]", podName, shard.Index, shard.Shard))
++			return false, nil
++		}
+ 	}
++	if drainNode {
++		return true, nil
++	}
+ 	// Update cluster routing before deleting appropriate ordinal pod
+ 	if err := SetClusterShardAllocation(service, ClusterSettingsAllocationPrimaries); err != nil {
+ 		return false, err
+@@ -263,24 +330,37 @@
+ 	return existing, nil
+ }
+ 
+-// continueRestartWithYellowHealth allows upgrades and rolling restarts to continue when the cluster is yellow
+-// if the yellow status is caused by the .opensearch-observability index.  This is a new index that is created
+-// on upgrade and will be yellow until at least 2 data nodes are upgraded.
+-func continueRestartWithYellowHealth(health responses.ClusterHealthResponse) bool {
+-	if health.Status != "yellow" {
+-		return false
+-	}
++// hasShardActivity reports whether the allocator is still making progress:
++// shards moving, initializing, waiting on delayed allocation or on shard fetches.
++func hasShardActivity(h responses.ClusterHealthResponse) bool {
++	return h.RelocatingShards > 0 || h.InitializingShards > 0 || h.DelayedUnassigned > 0 || h.InFlightFetch > 0
++}
+ 
+-	if health.RelocatingShards > 0 || health.InitializingShards > 0 || health.UnassignedShards > 1 {
+-		return false
++// soleActiveCopyOnNode returns a shard whose only active copy is on nodeName
++// while other copies of it exist but are not active. Shards with no other
++// copies (number_of_replicas: 0) are ignored, as they are on a green cluster.
++// Search replicas can't be promoted to primary, so they are not counted.
++func soleActiveCopyOnNode(shards []responses.CatShardsResponse, nodeName string) (responses.CatShardsResponse, bool) {
++	type key struct{ index, shard string }
++	copies := map[key]int{}
++	activeElsewhere := map[key]int{}
++	for _, s := range shards {
++		if s.PrimaryOrReplica == "s" {
++			continue
++		}
++		k := key{s.Index, s.Shard}
++		copies[k]++
++		if extractNodeName(s.NodeName) != nodeName && (s.State == "STARTED" || s.State == "RELOCATING") {
++			activeElsewhere[k]++
++		}
+ 	}
+-
+-	observabilityIndex, ok := health.Indices[".opensearch-observability"]
+-	if !ok {
+-		return false
++	for _, s := range shardsOnNodeFromResponse(shards, nodeName) {
++		k := key{s.Index, s.Shard}
++		if copies[k] > 1 && activeElsewhere[k] == 0 {
++			return s, true
++		}
+ 	}
+-
+-	return observabilityIndex.Status == "yellow"
++	return responses.CatShardsResponse{}, false
+ }
+ 
+ // IndexTemplatePath returns a strings.Builder pointing to /_index_template/<templateName>
+diff --git a/opensearch-operator/opensearch-gateway/services/restart_gate_test.go b/opensearch-operator/opensearch-gateway/services/restart_gate_test.go
+new file mode 100644
+--- /dev/null
++++ b/opensearch-operator/opensearch-gateway/services/restart_gate_test.go
+@@ -0,0 +1,146 @@
++package services
++
++import (
++	"net/http"
++	"testing"
++
++	"github.com/Opster/opensearch-k8s-operator/opensearch-operator/opensearch-gateway/responses"
++	"github.com/go-logr/logr"
++	"github.com/jarcoal/httpmock"
++)
++
++func TestSoleActiveCopyOnNode(t *testing.T) {
++	sh := func(idx, s, pr, state, node string) responses.CatShardsResponse {
++		return responses.CatShardsResponse{Index: idx, Shard: s, PrimaryOrReplica: pr, State: state, NodeName: node}
++	}
++	tests := []struct {
++		name   string
++		shards []responses.CatShardsResponse
++		node   string
++		want   bool
++	}{
++		{"primary with unassigned replica", []responses.CatShardsResponse{sh("a", "0", "p", "STARTED", "n0"), sh("a", "0", "r", "UNASSIGNED", "")}, "n0", true},
++		{"replica started elsewhere", []responses.CatShardsResponse{sh("a", "0", "p", "STARTED", "n0"), sh("a", "0", "r", "STARTED", "n1")}, "n0", false},
++		{"zero replicas behaves like green", []responses.CatShardsResponse{sh("a", "0", "p", "STARTED", "n0")}, "n0", false},
++		{"replica on candidate, primary elsewhere, extra replica unassigned", []responses.CatShardsResponse{sh("a", "0", "p", "STARTED", "n1"), sh("a", "0", "r", "STARTED", "n0"), sh("a", "0", "r", "UNASSIGNED", "")}, "n0", false},
++		{"candidate holds only an initializing copy", []responses.CatShardsResponse{sh("a", "0", "p", "STARTED", "n1"), sh("a", "0", "r", "INITIALIZING", "n0")}, "n0", false},
++		{"relocating source elsewhere counts as active", []responses.CatShardsResponse{sh("a", "0", "p", "RELOCATING", "n1 -> 10.0.0.2 id n2"), sh("a", "0", "r", "STARTED", "n0")}, "n0", false},
++		{"candidate is relocating source of a sole copy", []responses.CatShardsResponse{sh("a", "0", "p", "RELOCATING", "n0 -> 10.0.0.2 id n2"), sh("a", "0", "r", "UNASSIGNED", "")}, "n0", true},
++		{"master-only candidate holds nothing", []responses.CatShardsResponse{sh("a", "0", "p", "STARTED", "n0"), sh("a", "0", "r", "UNASSIGNED", "")}, "master-0", false},
++		{"search replica elsewhere is not a copy", []responses.CatShardsResponse{sh("a", "0", "p", "STARTED", "n0"), sh("a", "0", "s", "STARTED", "n1"), sh("a", "0", "r", "UNASSIGNED", "")}, "n0", true},
++		{"search replica with zero replicas behaves like green", []responses.CatShardsResponse{sh("a", "0", "p", "STARTED", "n0"), sh("a", "0", "s", "STARTED", "n1")}, "n0", false},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if _, got := soleActiveCopyOnNode(tt.shards, tt.node); got != tt.want {
++				t.Errorf("got %v, want %v", got, tt.want)
++			}
++		})
++	}
++}
++
++func mockClient(t *testing.T, health, transientEnable, catShards string) (*OsClusterClient, *httpmock.MockTransport, *string) {
++	tr := httpmock.NewMockTransport()
++	for _, m := range []string{http.MethodGet, http.MethodHead} {
++		tr.RegisterResponder(m, `=~^http://os.test:9200/?$`, httpmock.NewStringResponder(200, `{"version":{"number":"2.0.0"}}`))
++	}
++	tr.RegisterResponder(http.MethodGet, `=~/_cluster/health`, httpmock.NewStringResponder(200, health))
++	tr.RegisterResponder(http.MethodGet, `=~/_cluster/settings`, httpmock.NewStringResponder(200, `{"transient":{"cluster.routing.allocation.enable":"`+transientEnable+`"},"persistent":{}}`))
++	put := new(string)
++	tr.RegisterResponder(http.MethodPut, `=~/_cluster/settings`, func(r *http.Request) (*http.Response, error) {
++		*put = "called"
++		return httpmock.NewStringResponse(200, `{}`), nil
++	})
++	tr.RegisterResponder(http.MethodGet, `=~/_cat/shards`, httpmock.NewStringResponder(200, catShards))
++	c, err := NewOsClusterClient("http://os.test:9200", "u", "p", WithTransport(tr))
++	if err != nil {
++		t.Fatal(err)
++	}
++	return c, tr, put
++}
++
++func TestCheckClusterStatusForRestartYellow(t *testing.T) {
++	quiet := `{"status":"yellow","unassigned_shards":3,"number_of_data_nodes":3}`
++	tests := []struct {
++		name, health, enable string
++		drain, want          bool
++		wantPut              bool
++	}{
++		{"quiet yellow proceeds", quiet, "all", false, true, false},
++		{"quiet yellow proceeds with drain", quiet, "all", true, true, false},
++		{"own primaries throttle is lifted first", quiet, "primaries", false, false, true},
++		{"throttle lifted with drain too", quiet, "none", true, false, true},
++		{"missing data node waits", `{"status":"yellow","number_of_data_nodes":2}`, "all", false, false, false},
++		{"initializing waits", `{"status":"yellow","number_of_data_nodes":3,"initializing_shards":1}`, "all", false, false, false},
++		{"delayed allocation waits", `{"status":"yellow","number_of_data_nodes":3,"delayed_unassigned_shards":2}`, "all", false, false, false},
++		{"in-flight fetch waits", `{"status":"yellow","number_of_data_nodes":3,"number_of_in_flight_fetch":1}`, "all", false, false, false},
++		{"red never proceeds", `{"status":"red"}`, "all", true, false, false},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			c, tr, put := mockClient(t, tt.health, tt.enable, `[]`)
++			got, msg, err := CheckClusterStatusForRestart(c, tt.drain, 3)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if got != tt.want || (*put != "") != tt.wantPut {
++				t.Errorf("got %v (%q) put=%q, want %v put=%v", got, msg, *put, tt.want, tt.wantPut)
++			}
++			if n := tr.GetCallCountInfo()["GET =~/_cat/shards"]; n != 0 {
++				t.Errorf("health gate must not list shards, got %d calls", n)
++			}
++		})
++	}
++}
++
++func TestPreparePodForDeleteSoleCopy(t *testing.T) {
++	sole := `[{"index":"a","shard":"0","prirep":"p","state":"STARTED","node":"n0"},{"index":"a","shard":"0","prirep":"r","state":"UNASSIGNED","node":null}]`
++	tests := []struct {
++		name      string
++		nodeCount int32
++		want      bool
++	}{
++		{"multi-node blocks sole copy", 3, false},
++		{"single data node is exempt", 1, true},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			c, _, put := mockClient(t, `{}`, "all", sole)
++			got, err := PreparePodForDelete(c, logr.Discard(), "n0", false, tt.nodeCount)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if got != tt.want || (*put != "") != tt.want {
++				t.Errorf("got %v put=%q, want %v", got, *put, tt.want)
++			}
++		})
++	}
++}
++
++// With drain and 2 data nodes only system-index primaries are drained, so the
++// sole-copy check must still guard the rest.
++func TestPreparePodForDeleteDrainTwoNodes(t *testing.T) {
++	system := `[{"index":".opendistro_security","shard":"0","prirep":"p","state":"STARTED","node":"n1"}]`
++	tests := []struct {
++		name, shards string
++		want         bool
++	}{
++		{"sole copy blocks", `[{"index":"a","shard":"0","prirep":"p","state":"STARTED","node":"n0"},{"index":"a","shard":"0","prirep":"r","state":"UNASSIGNED","node":null}]`, false},
++		{"replica elsewhere proceeds", `[{"index":"a","shard":"0","prirep":"p","state":"STARTED","node":"n0"},{"index":"a","shard":"0","prirep":"r","state":"STARTED","node":"n1"}]`, true},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			c, tr, _ := mockClient(t, `{}`, "all", tt.shards)
++			tr.RegisterResponder(http.MethodGet, `=~/_cat/indices/`, httpmock.NewStringResponder(404, `{}`))
++			tr.RegisterResponder(http.MethodGet, `http://os.test:9200/_cat/indices/.opendistro_security`, httpmock.NewStringResponder(200, `[{"index":".opendistro_security"}]`))
++			tr.RegisterResponder(http.MethodGet, `http://os.test:9200/_cat/shards/.opendistro_security`, httpmock.NewStringResponder(200, system))
++			got, err := PreparePodForDelete(c, logr.Discard(), "n0", true, 2)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if got != tt.want {
++				t.Errorf("got %v, want %v", got, tt.want)
++			}
++		})
++	}
++}
+diff --git a/opensearch-operator/pkg/reconcilers/rollingRestart.go b/opensearch-operator/pkg/reconcilers/rollingRestart.go
+--- a/opensearch-operator/pkg/reconcilers/rollingRestart.go
++++ b/opensearch-operator/pkg/reconcilers/rollingRestart.go
+@@ -174,7 +174,7 @@
+ 		lg.Info("Only 2 data nodes and drain is set, some shards may not drain")
+ 	}
+ 
+-	ready, message, err := services.CheckClusterStatusForRestart(r.osClient, r.instance.Spec.General.DrainDataNodes)
++	ready, message, err := services.CheckClusterStatusForRestart(r.osClient, r.instance.Spec.General.DrainDataNodes, dataCount)
+ 	if err != nil {
+ 		return ctrl.Result{}, err
+ 	}
+diff --git a/opensearch-operator/pkg/reconcilers/upgrade.go b/opensearch-operator/pkg/reconcilers/upgrade.go
+--- a/opensearch-operator/pkg/reconcilers/upgrade.go
++++ b/opensearch-operator/pkg/reconcilers/upgrade.go
+@@ -303,7 +303,7 @@
+ 		return nil
+ 	}
+ 
+-	ready, condition, err := services.CheckClusterStatusForRestart(r.osClient, r.instance.Spec.General.DrainDataNodes)
++	ready, condition, err := services.CheckClusterStatusForRestart(r.osClient, r.instance.Spec.General.DrainDataNodes, dataCount)
+ 	if err != nil {
+ 		r.logger.Error(err, "Could not check opensearch cluster status")
+ 		conditions = append(conditions, "Could not check opensearch cluster status")

@@ -126,6 +126,10 @@
   color: 'fbca04'
   description: Indicates an issue needs more information in order to work on it
 
+- name: triage/needs-proposal
+  color: 'fbca04'
+  description: Indicates an issue needs a design proposal in cozystack/community before work starts here
+
 - name: triage/not-reproducible
   color: 'fbca04'
   description: Indicates an issue can not be reproduced as described

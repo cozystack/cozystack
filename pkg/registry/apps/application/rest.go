@@ -250,10 +250,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
 
 	// Create HelmRelease in Kubernetes
-	err = r.c.Create(ctx, helmRelease, &client.CreateOptions{Raw: options})
+	err = r.c.Create(ctx, helmRelease, registry.ClientCreateOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
-		return nil, fmt.Errorf("failed to create HelmRelease: %v", err)
+		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err, r.gvr.GroupResource(), app.Name)
 	}
 
 	// Convert the created HelmRelease back to Application
@@ -507,7 +507,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 				klog.Errorf("Failed to get updated object: %v", err)
 				return nil, false, err
 			}
-			createdObj, err := r.Create(ctx, obj, createValidation, &metav1.CreateOptions{})
+			createdObj, err := r.Create(ctx, obj, createValidation, registry.CreateOptionsFromUpdate(options))
 			if err != nil {
 				klog.Errorf("Failed to create new Application: %v", err)
 				return nil, false, err
@@ -579,7 +579,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// over from it below.
 	cur := &helmv2.HelmRelease{}
 	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
-		return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
+		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
 	}
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
@@ -652,7 +652,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// drop whatever they had just added — the exact loss the carry-over was added
 	// to stop, reappearing on the one path where it is most likely.
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		updateErr := r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
 		if apierrors.IsConflict(updateErr) {
 			latest := &helmv2.HelmRelease{}
 			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, latest, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
@@ -668,7 +668,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	})
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
-		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
+		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
 	}
 
 	// Convert the updated HelmRelease back to Application
@@ -738,10 +738,10 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	klog.V(6).Infof("Deleting HelmRelease %s in namespace %s", helmReleaseName, namespace)
 
 	// Delete the HelmRelease corresponding to the Application
-	err = r.c.Delete(ctx, helmRelease, &client.DeleteOptions{Raw: options})
+	err = r.c.Delete(ctx, helmRelease, registry.ClientDeleteOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
-		return nil, false, fmt.Errorf("failed to delete HelmRelease: %v", err)
+		return nil, false, registry.WrapPreservingStatus("failed to delete HelmRelease", err, r.gvr.GroupResource(), name)
 	}
 
 	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)
@@ -1746,6 +1746,28 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	if r.releaseConfig.HelmInstallDisableWait {
 		helmRelease.Spec.Install.DisableWait = true
 		helmRelease.Spec.Upgrade.DisableWait = true
+	}
+
+	// Helm apply-strategy override (release.cozystack.io/helm-server-side-apply).
+	// helm-controller v1.5.0 defaults to server-side apply, which force-owns every
+	// field the chart renders and reverts a value a runtime co-writer later sets. A
+	// kind that has such a co-writer — the postgres read-replica autoscaler, where
+	// KEDA's HPA writes the CNPG Cluster's /scale subresource (spec.instances) while
+	// the chart renders a constant seed — sets this false to get client-side apply,
+	// under which helm-controller patches the Cluster (a CRD) from the previous-vs-new
+	// rendered manifest and does not consult live state, so the unchanged constant
+	// render yields no patch and KEDA's live value survives. Left unset, the
+	// helm-controller default applies.
+	if r.releaseConfig.HelmServerSideApply != nil {
+		// Copy into a fresh local rather than aliasing the shared ReleaseConfig pointer
+		// across every emitted HelmRelease (defense-in-depth; matches the maxHistory pattern).
+		ssa := *r.releaseConfig.HelmServerSideApply
+		helmRelease.Spec.Install.ServerSideApply = &ssa
+		if ssa {
+			helmRelease.Spec.Upgrade.ServerSideApply = helmv2.ServerSideApplyEnabled
+		} else {
+			helmRelease.Spec.Upgrade.ServerSideApply = helmv2.ServerSideApplyDisabled
+		}
 	}
 
 	// kstatus readiness (issue #2642): set the wait strategy + CEL health

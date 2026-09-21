@@ -204,6 +204,18 @@ func TestBuildHelmReleaseSpecZeroMaxHistory(t *testing.T) {
 	}
 }
 
+// NOTE: a TestBuildHelmReleaseSpecNoForceOrDriftDetection once lived here, claiming to
+// guard the postgres autoscaler's apply invariant. It was removed as misattributed:
+// buildHelmReleaseSpec below builds PLATFORM Package HelmReleases, whereas the tenant
+// Postgres Application HelmRelease is built in pkg/registry/apps/application/rest.go. The
+// autoscaler's real invariant is that the tenant HelmRelease applies CLIENT-SIDE (so
+// helm-controller patches the CNPG Cluster from the previous-vs-new rendered manifest
+// without consulting live state, the constant spec.instances seed yields no patch, and
+// KEDA's /scale value survives) —
+// server-side apply IS a HelmRelease knob (Install/Upgrade.ServerSideApply, set from the
+// release.cozystack.io/helm-server-side-apply annotation), and it is guarded by
+// pkg/registry/apps/application/rest_serversideapply_test.go, not here.
+
 // TestPackageSourceCRDHasUpgradeCRDsEnum guards the generated CRD schema: the
 // invalid-value case from the spec is enforced at the API server via a
 // kubebuilder enum marker, not in the reconciler. If someone drops the marker

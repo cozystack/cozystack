@@ -42,8 +42,8 @@
 # decision some rule reached, never a path nothing looked at.
 #
 # Every branch that escalates names its cause on stderr, and that is a contract
-# rather than a courtesy: the answer "run everything" is the same 21 suite names
-# whichever rule produced it, so without a reason line the only way to learn why
+# rather than a courtesy: the answer "run everything" is the same list of every
+# suite whichever rule produced it, so without a reason line the only way to learn why
 # a pull request ran the whole suite is to re-derive the selection by hand. Four
 # of them were silent before this rule, full_suite_pattern — the commonest cause
 # by a wide margin — among them, which made the usual answer the one the log
@@ -242,6 +242,10 @@ src_to_suites() {
     ingress-application|ingress-nginx) echo gateway ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous" ;;
     securitygroup-controller) echo securitygroup ;;
+    # The kafka app source covers both the app suite and the metadata-backup
+    # roundtrip, so an edit to packages/apps/kafka (or kafka-operator, which
+    # reaches this source) selects both.
+    kafka-application) echo "kafka kafka-metadata" ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
   esac

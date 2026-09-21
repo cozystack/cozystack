@@ -130,6 +130,113 @@
     fi
     grep -q 'granted but did not pass S3 PUT/GET/DELETE within 0s' "$out"
     grep -q 's3-preflight: AccessDenied' "$out"
+    grep -q 's3-preflight: attempt 1 failed at PUT' "$out"
+}
+
+@test "preflight timeout reports the port-forward and how every attempt ended" {
+    . hack/e2e-chainsaw/_lib/backup-access-preflight.sh
+    out=$(mktemp)
+    now=$(mktemp)
+    pf_ready=$(mktemp)
+    attempts=$(mktemp)
+    uploaded_source=$(mktemp)
+    printf '100\n' > "$now"
+    printf '0\n' > "$attempts"
+
+    kubectl() {
+        case "$*" in
+            *" get secret bucket-demo-backup "*)
+                printf '%s' '{"spec":{"secretS3":{"accessKeyID":"access","accessSecretKey":"secret"},"bucketName":"bucket-real"}}' | base64 | tr -d '\n'
+                ;;
+            *" port-forward "*)
+                echo 'Forwarding from 127.0.0.1:18333 -> 8333'
+                printf 'ready\n' > "$pf_ready"
+                while :; do command sleep 1; done
+                ;;
+            *) return 1 ;;
+        esac
+    }
+    # A stubbed clock keeps the retry budget independent of how fast the
+    # stubs run: only a completed PUT advances it, so the loop ends after a
+    # known number of attempts.
+    date() {
+        if [ "${1:-}" = +%s ]; then sed -n '1p' "$now"; else command date "$@"; fi
+    }
+    timeout() {
+        shift
+        if [ "$1" = sh ]; then
+            waited=0
+            while [ ! -s "$pf_ready" ] && [ "$waited" -lt 100 ]; do
+                waited=$(( waited + 1 ))
+                command sleep 0.1
+            done
+            return 0
+        fi
+        "$@"
+    }
+    sleep() { :; }
+    # The first three attempts break at a later stage than the one before, so
+    # the stages that follow a completed upload are told apart rather than
+    # merged.
+    mc() {
+        case "$1" in
+            alias) return 0 ;;
+            cp)
+                case "$3" in
+                    backup-preflight/*)
+                        case "$(sed -n '1p' "$attempts")" in
+                            1)
+                                echo 'mc: <ERROR> Unable to download: connection reset by peer' >&2
+                                return 1
+                                ;;
+                            2) printf 'truncated\n' > "$4" ;;
+                            *) command cp "$(sed -n '1p' "$uploaded_source")" "$4" ;;
+                        esac
+                        ;;
+                    *)
+                        printf '%s\n' "$3" > "$uploaded_source"
+                        count=$(sed -n '1p' "$attempts")
+                        printf '%s\n' "$(( count + 1 ))" > "$attempts"
+                        stamp=$(sed -n '1p' "$now")
+                        printf '%s\n' "$(( stamp + 10 ))" > "$now"
+                        # Do not tidy this arm away into a clean ascending
+                        # ladder. A ladder where every attempt fails later than
+                        # the last can never catch a missing per-iteration
+                        # stage reset, because the stale value is overwritten
+                        # before anything reads it.
+                        if [ "$count" -eq 3 ]; then
+                            echo 'mc: <ERROR> Unable to upload: connection reset by peer' >&2
+                            return 1
+                        fi
+                        echo 'source -> backup-preflight/bucket-real/object'
+                        ;;
+                esac
+                ;;
+            rm) return 1 ;;
+            *) return 0 ;;
+        esac
+    }
+
+    if cozy_backup_access_preflight tenant-test bucket-demo-backup 35 >"$out" 2>&1; then
+        echo "an S3 round trip that never completed passed the preflight" >&2
+        exit 1
+    fi
+    grep -q 'port-forward: Forwarding from 127.0.0.1:18333' "$out" || {
+        echo "timeout path dropped the port-forward log" >&2
+        cat "$out" >&2
+        exit 1
+    }
+    for expected in \
+        'attempt 1 failed at GET' \
+        'attempt 2 failed at compare' \
+        'attempt 3 failed at DELETE' \
+        'attempt 4 failed at PUT'; do
+        grep -q "s3-preflight: $expected" "$out" || {
+            echo "timeout path lost '$expected'" >&2
+            cat "$out" >&2
+            exit 1
+        }
+    done
 }
 
 @test "all active database backup flows gate immediately after accessGranted" {

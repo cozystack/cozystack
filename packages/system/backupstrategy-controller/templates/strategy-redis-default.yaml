@@ -1,0 +1,356 @@
+{{/*
+  Strategy template rendering uses two layers of Go templates:
+   1. Helm renders this file at chart install time. Anything inside
+      `{{ ... }}` is interpreted by Helm.
+   2. The strategy controller renders the resulting Strategy CR
+      per-BackupJob, expanding `{{ .Application | .Release | .Mode |
+      .Backup }}` against the live application object.
+  To emit a literal "{{ .Foo }}" that survives Helm, we pass it as the
+  string argument of `printf` — Helm does not interpret inner template
+  delimiters inside printf's quoted strings. Do NOT inline the literal
+  directly or Helm will try to evaluate the inner expression at chart
+  install time and fail.
+
+  Gate on a resolved $bucketName: an ungated Strategy CR has no RESTMapping
+  on a fresh install, Helm Build() fails "no matches for kind", and the
+  release applies zero objects (including the CRDs). See
+  strategy-mongodb-default.yaml for the full rationale.
+*/}}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Redis
+metadata:
+  name: cozy-default-redis
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      {{- /*
+      Bound a wedged run (e.g. redis-cli --rdb blocking on a stalled master) so
+      it becomes a Failed Job the driver reports, instead of a Pod the cron Plan
+      keeps stacking behind; the job-in-progress path has no other deadline. int
+      so a large values-file override (parsed as float64) renders as an integer,
+      not exponent form (1e+06), which would fail schema validation. Full
+      rationale: docs/operations/backup-classes.md.
+      */}}
+      activeDeadlineSeconds: {{ int .Values.backupStrategyController.redisBackupActiveDeadlineSeconds }}
+      volumes:
+        {{- /*
+        The Redis app's own CA. The chart moves Redis and Sentinel to a TLS-only
+        listener when the app has tls.enabled and publishes the CA at
+        redis-<app>.ca-cert; mounting it optionally means ca.crt is present
+        exactly when the app is TLS, and a non-TLS app leaves /etc/redis-ca empty
+        so the script keeps its plaintext path (see the RTLS block).
+        */}}
+        - name: redis-ca
+          secret:
+            secretName: {{ printf "redis-{{ .Release.Name }}.ca-cert" | quote }}
+            optional: true
+        {{- if .Values.backupStorage.endpointCASecretName }}
+        {{- /*
+        Verify the S3 endpoint against this private CA when the admin points
+        endpointCASecretName at a Secret carrying ca.crt (self-signed SeaweedFS).
+        Optional, because nothing projects this Secret into the app namespace: a
+        required mount would wedge the Pod on FailedMount for the whole
+        activeDeadlineSeconds (never a Failed Job) when the admin has not created
+        it. A missing ca.crt does NOT skip verification: the script falls through
+        to the image's system CA store and curl fails the handshake fast;
+        skip-verify still needs its explicit opt-in. See backup-classes.md.
+        */}}
+        - name: s3-ca
+          secret:
+            secretName: {{ .Values.backupStorage.endpointCASecretName | quote }}
+            optional: true
+        {{- end }}
+      containers:
+        - name: redis-backup
+          image: "{{ .Values.backupStrategyController.redisBackupClientImage }}"
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: redis-ca
+              mountPath: /etc/redis-ca
+              readOnly: true
+            {{- if .Values.backupStorage.endpointCASecretName }}
+            - name: s3-ca
+              mountPath: /etc/s3-ca
+              readOnly: true
+            {{- end }}
+          env:
+            {{- /*
+            Redis password, when the app has authEnabled (the default). The chart
+            emits the Secret redis-<app>-auth; mount it optionally so a no-auth
+            app still schedules.
+            */}}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "redis-{{ .Release.Name }}-auth" | quote }}
+                  key: password
+                  optional: true
+            {{- /*
+            S3 coordinates come from cozy-backups-creds, projected into the app
+            namespace by the backupstrategy-controller before every
+            BackupJob/RestoreJob. endpoint is a BARE host (no scheme) by design;
+            the script prepends https:// when unscheme'd. These refs are optional
+            so a missing/empty key lets the Pod start and the script fail loudly
+            (a required ref would wedge the Pod in CreateContainerConfigError,
+            which never becomes a Failed Job).
+            */}}
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: endpoint
+                  optional: true
+            - name: S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: bucketName
+                  optional: true
+            - name: S3_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: region
+                  optional: true
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true
+            {{- /*
+            Skip-verify is an explicit opt-in, never a silent fallback. Off by
+            default: the platform bucket carries a publicly trusted ACME cert the
+            image's ca-certificates verifies unaided.
+            */}}
+            - name: S3_INSECURE_SKIP_VERIFY
+              value: {{ .Values.backupStorage.insecureSkipTLSVerify | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+
+              {{- /*
+              The S3 refs are optional secretKeyRefs (see the container env), so
+              a missing/empty key fails here with a clear cause rather than
+              wedging the Pod in CreateContainerConfigError — which never becomes
+              a Failed Job and leaves the BackupJob stuck at Running.
+              */}}
+              : "${S3_ENDPOINT:?missing endpoint in cozy-backups-creds}"
+              : "${S3_BUCKET:?missing bucketName in cozy-backups-creds}"
+              : "${S3_REGION:?missing region in cozy-backups-creds}"
+              : "${AWS_ACCESS_KEY_ID:?missing AWS_ACCESS_KEY_ID in cozy-backups-creds}"
+              : "${AWS_SECRET_ACCESS_KEY:?missing AWS_SECRET_ACCESS_KEY in cozy-backups-creds}"
+
+              MODE="{{ printf "{{ .Mode }}" }}"
+              {{- /*
+              The object name is minted by the controller per BackupJob and
+              recorded on the Backup, so each backup is a distinct object and a
+              restore reads back the exact one its Backup points at. Computing it
+              in-script would collapse a Plan's history onto one object. On
+              cleanup it names the object a deleted Backup must remove.
+              */}}
+              KEY="{{ printf "{{ .ObjectKey }}" }}"
+
+              # S3 transport, needed by every mode (backup, restore, cleanup).
+              case "${S3_ENDPOINT}" in
+                http://*|https://*) BASE="${S3_ENDPOINT}" ;;
+                *)                  BASE="https://${S3_ENDPOINT}" ;;
+              esac
+              TLS=""
+              case "${BASE}" in
+                https://*)
+                  {{- /*
+                  Default: verify against the image's system CA store — the
+                  platform bucket's ACME cert needs nothing more. A mounted
+                  private CA (self-signed SeaweedFS) is honoured when present.
+                  Skip-verify is reached only by explicit opt-in, never as a
+                  fallback, so an insecure transport is always a choice.
+                  */}}
+                  if [ -f /etc/s3-ca/ca.crt ]; then TLS="--cacert /etc/s3-ca/ca.crt";
+                  elif [ -f /etc/s3-ca/tls.crt ]; then TLS="--cacert /etc/s3-ca/tls.crt";
+                  elif [ "${S3_INSECURE_SKIP_VERIFY:-false}" = "true" ]; then TLS="-k";
+                  fi
+                  ;;
+              esac
+              s3() {
+                curl -fsS ${TLS} \
+                  --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"
+              }
+              OBJ="${BASE}/${S3_BUCKET}/${KEY}"
+
+              {{- /*
+              Cleanup runs when a Backup is deleted: it removes just that
+              Backup's object and never contacts Redis, so it works even after
+              the source app is gone. Idempotent — a 404 (already gone) is
+              success; -f is dropped so the 404 does not abort before the case.
+              */}}
+              if [ "${MODE}" = "cleanup" ]; then
+                echo "deleting s3://${S3_BUCKET}/${KEY}"
+                code=$(curl -sS -o /dev/null -w '%{http_code}' ${TLS} \
+                  --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+                  -X DELETE "${OBJ}")
+                case "${code}" in
+                  2??|404) echo "deleted (HTTP ${code})"; exit 0 ;;
+                  *)       echo "delete failed: HTTP ${code}" >&2; exit 1 ;;
+                esac
+              fi
+
+              {{- /*
+              Redis server-side TLS. The chart moves Redis and Sentinel to a
+              TLS-only listener when the app has tls.enabled and publishes the
+              trust anchor at redis-<app>.ca-cert; that Secret is mounted
+              optionally, so ca.crt exists here iff the app is TLS. Verify both
+              the Sentinel and the master connection against it. authClients: yes
+              (mutual TLS) is out of scope — the platform issues no client
+              certificate — but is off by default.
+              */}}
+              RTLS=""
+              if [ -f /etc/redis-ca/ca.crt ]; then
+                RTLS="--tls --cacert /etc/redis-ca/ca.crt"
+              fi
+
+              {{- /*
+              The sentinel Service always belongs to the app we operate on: the
+              source on backup, the restore TARGET on restore (both are
+              .Release.Name at driver-render time). The cozystack redis chart
+              names its RedisFailover redis-<app>, so the operator's sentinel
+              Service is rfs-redis-<app>; mymaster is its master name.
+              */}}
+              SENTINEL="rfs-redis-{{ printf "{{ .Release.Name }}" }}"
+
+              # Discover the current master via any sentinel — the RedisFailover
+              # master moves on failover, so a fixed host would break after one.
+              addr=$(redis-cli ${RTLS} -h "${SENTINEL}" -p 26379 sentinel get-master-addr-by-name mymaster)
+              MHOST=$(echo "${addr}" | sed -n '1p')
+              MPORT=$(echo "${addr}" | sed -n '2p')
+              if [ -z "${MHOST}" ] || [ -z "${MPORT}" ]; then
+                echo "could not resolve redis master from sentinel ${SENTINEL}" >&2
+                exit 1
+              fi
+
+              {{- /*
+              tgt runs redis-cli against the app master. The password reaches
+              redis-cli through REDISCLI_AUTH, never argv (ps-visible in the
+              pod); it is set only when the app has auth, because an empty value
+              makes redis-cli send AUTH to an unauthenticated server and fail.
+              The throwaway loader below is local and unauthenticated, so it must
+              NOT inherit this — hence a per-call wrapper, not an export.
+              */}}
+              tgt() {
+                if [ -n "${REDIS_PASSWORD:-}" ]; then
+                  REDISCLI_AUTH="${REDIS_PASSWORD}" redis-cli ${RTLS} -h "${MHOST}" -p "${MPORT}" "$@"
+                else
+                  redis-cli ${RTLS} -h "${MHOST}" -p "${MPORT}" "$@"
+                fi
+              }
+
+              # Explicit modes only — an unrecognised MODE must NOT fall into the
+              # destructive restore branch (FLUSHALL + replay into the master).
+              if [ "${MODE}" = "backup" ]; then
+                echo "dumping RDB from master ${MHOST}:${MPORT}"
+                tgt --rdb /tmp/dump.rdb
+                echo "uploading s3://${S3_BUCKET}/${KEY}"
+                s3 -X PUT --upload-file /tmp/dump.rdb "${OBJ}"
+              elif [ "${MODE}" = "restore" ]; then
+                echo "downloading s3://${S3_BUCKET}/${KEY}"
+                s3 -o /tmp/dump.rdb "${OBJ}"
+                {{- /*
+                Replay by loading the RDB into a throwaway local redis and
+                letting a real engine emit the replay stream. A standalone
+                RDB->RESP converter (hdt3213/rdb) drops the database boundary
+                (every SELECT gone, so db1+ merge into db0) and stream consumer
+                groups; a real redis preserves both. It must be at least as new
+                as the source engine or it cannot read the RDB version.
+                */}}
+                mkdir -p /tmp/restore
+                cp /tmp/dump.rdb /tmp/restore/dump.rdb
+                redis-server --dir /tmp/restore --dbfilename dump.rdb \
+                  --port 6399 --bind 127.0.0.1 --save "" --appendonly no &
+                for _ in $(seq 1 300); do
+                  redis-cli -p 6399 PING >/dev/null 2>&1 && break
+                  sleep 1
+                done
+                if ! redis-cli -p 6399 PING >/dev/null 2>&1; then
+                  {{- /*
+                  The loader is memory-bounded by the Pod's limit; the most
+                  common cause here is a dataset larger than that limit (the
+                  cgroup OOM-kills redis-server while sh survives), then an RDB
+                  version newer than the image. Raise
+                  backupStrategyController.redisBackupResources.limits.memory /
+                  ephemeral-storage, or check the image version.
+                  */}}
+                  echo "throwaway redis did not become ready: dataset likely exceeds the restore memory limit, or the RDB version is newer than the image" >&2
+                  exit 1
+                fi
+                # A RESP base AOF (no RDB preamble) is the faithful, replayable
+                # form: one SELECT per source database, streams with XSETID and
+                # XGROUP. CONFIG SET appendonly yes triggers the initial rewrite.
+                redis-cli -p 6399 CONFIG SET aof-use-rdb-preamble no >/dev/null
+                redis-cli -p 6399 CONFIG SET appendonly yes >/dev/null
+                {{- /*
+                Wait for the rewrite to actually FINISH, not merely for
+                in_progress to read 0 — right after `appendonly yes` the rewrite
+                is only scheduled, so a bare in_progress:0 check can fall through
+                before it starts and read an absent or half-written base AOF. The
+                completion condition is all three: no rewrite in flight, the last
+                one succeeded, and the base AOF is on disk (find, not `ls`, so a
+                no-match returns 0 under pipefail). REPLAY is set each iteration
+                so it survives the loop.
+                */}}
+                REPLAY=""
+                for _ in $(seq 1 300); do
+                  persistence=$(redis-cli -p 6399 INFO persistence | tr -d '\r')
+                  inprog=$(echo "${persistence}" | awk -F: '/aof_rewrite_in_progress:/{print $2}')
+                  status=$(echo "${persistence}" | awk -F: '/aof_last_bgrewrite_status:/{print $2}')
+                  REPLAY=$(find /tmp/restore/appendonlydir -name '*.base.aof' 2>/dev/null | head -n1 || true)
+                  if [ "${inprog}" = "0" ] && [ "${status}" = "ok" ] && [ -n "${REPLAY}" ]; then
+                    break
+                  fi
+                  sleep 1
+                done
+                if [ -z "${REPLAY}" ]; then
+                  echo "throwaway redis produced no base AOF to replay (rewrite did not finish)" >&2
+                  exit 1
+                fi
+                # FLUSHALL first so an in-place restore is a replacement, not a
+                # merge onto stale keys; the SELECTs in the stream then land each
+                # source database back on its own index.
+                tgt FLUSHALL
+                tgt --pipe < "${REPLAY}"
+                redis-cli -p 6399 SHUTDOWN NOSAVE >/dev/null 2>&1 || true
+                echo "restore complete into ${MHOST}:${MPORT}"
+              else
+                echo "unknown mode: ${MODE}" >&2
+                exit 1
+              fi
+          {{- /*
+          On restore the throwaway loader holds the whole dataset in memory and
+          materialises the RDB plus its AOF rewrite on disk, so memory and
+          ephemeral-storage must scale with the Redis it restores — the restore
+          ceiling, not the backup one, sets these. The shipped Strategy CR is
+          cluster-scoped and Helm-managed, so an admin raises the ceiling once
+          via backupStrategyController.redisBackupResources in chart values (an
+          in-place edit of the CR reverts on upgrade). Defaults suit
+          small-to-medium instances. See backup-classes.md.
+          */}}
+          resources:
+            {{- toYaml .Values.backupStrategyController.redisBackupResources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+{{- end -}}

@@ -92,12 +92,34 @@ db:
 ## @field {int} [replicas] - Number of master replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @field {int} [volumeSizeLimitMB] - Size in MB at which a volume stops taking writes, and the divisor that sets how many buckets a volume server can serve. Lower it to fit more buckets on the same disk, at the cost of more volume files for the same stored data; on a large volume it is worth raising instead. Changing it on an instance that already holds data costs something either way: lowering it stops writes to every bucket whose volumes all reach the new value until that bucket can grow, and raising it takes the room new buckets grow into, so run the check in docs/operations/seaweedfs-lowering-the-volume-size-limit.md first. Must be between 1 and 30000. A value close to or above `volume.size` leaves each volume server a single slot rather than failing, since the server floors its slot count at one.
+## @minimum 1
+## @maximum 30000
 
 ## @param {Master} [master] - Master service configuration.
 master:
   replicas: 3
   resources: {}
   resourcesPreset: "t1.small"
+  # The size limit a new instance starts with; on a variant that runs platform
+  # migrations, migration 57 keeps every instance that predates it at 1000
+  # unless its limit was already set or its master is not an object. The
+  # template sends it on every release, so it wins over the data-plane chart's
+  # value, which is only a fallback and stays at upstream's 1000 for the reason
+  # given beside it. Why the number is 400, and the growth count it multiplies
+  # against, are in packages/system/seaweedfs/values.yaml; the pin in this
+  # chart's suite moves with this value and nothing moves that reasoning with
+  # it, so change both or neither. What changing it costs an instance that
+  # already holds data is in
+  # docs/operations/seaweedfs-lowering-the-volume-size-limit.md.
+  #
+  # The bounds on the field are where the instance stops working rather than
+  # a preference. Zero is not a small limit but an off switch: the volume
+  # server leaves its slot calculation untouched, reports no capacity, and
+  # nothing is grown. Above 30000 the master exits at start; that ceiling is
+  # VolumeSizeLimitGB in the standard SeaweedFS build the image carries, and a
+  # large-disk build raises it, so read that constant there before widening.
+  volumeSizeLimitMB: 400
 
 ## @typedef {struct} Filer - Filer service configuration.
 ## @field {int} [replicas] - Number of filer replicas.

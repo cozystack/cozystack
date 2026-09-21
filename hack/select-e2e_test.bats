@@ -17,8 +17,8 @@
 # These asserts used to read `[ "$(echo "$output" | wc -w)" -gt 5 ]`, which is
 # satisfied by any selection of six or more suites. The regression worth
 # catching on every escalation path is partial escalation — a selector bug that
-# picks most suites but not all — and a threshold cannot see it: with 21 suites
-# in the tree, dropping fifteen of them still passes. Equality can.
+# picks most suites but not all — and a threshold cannot see it: at the tree's
+# suite count, dropping most of them still passes. Equality can.
 #
 # The expected set is derived the way the script's full-suite branch derives it
 # rather than pinned as a literal, so adding or disabling a Chainsaw suite does
@@ -26,7 +26,7 @@
 #
 # A helper rather than an inline one-liner because cozytest.sh runs each @test
 # under `set -x`: a bare failing `[ ... ]` prints the two values already
-# expanded, but not which side is which, and reading a 21-item diff off a trace
+# expanded, but not which side is which, and reading a whole-tree diff off a trace
 # line is exactly the moment a test stops being worth having.
 full_suite_list() {
     find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml \

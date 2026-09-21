@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 57
+  targetVersion: 59
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -456,6 +456,20 @@ authentication:
     enabled: false
     insecureSkipVerify: false
     keycloakExtraRedirectUri: ""
+    # Technical name of the Keycloak realm that owns the cozystack clients and
+    # the cozystack-cluster-admin roles. keycloak-configure creates the realm
+    # under this name, and every SSO consumer (dashboard, linstor-gui, the
+    # generated kubeconfig, and the derived keycloakInternalUrl below) points at
+    # /realms/<realmName>. The apiserver OIDC issuer is set out-of-band via talm
+    # oidcIssuerUrl and must carry the same realm, or the tokens minted here are
+    # rejected. Rename it in one place; keep it in step with talm.
+    #
+    # Set this at install time. Changing it on a running cluster does not rename
+    # the realm: the keycloak-operator provisions a fresh, empty realm under the
+    # new name and abandons the old one, so every account, session and client
+    # living in the previous realm is orphaned. Treat a rename on a live cluster
+    # as a from-scratch re-provision of identities, not an in-place migration.
+    realmName: "cozy"
     # In-cluster URL of the KeyCloak realm, used for backend-to-backend requests. oauth2-proxy runs
     # with --skip-oidc-discovery and sends every backend call (token, jwks, userinfo, logout) to this
     # URL, while browser-facing redirects keep pointing at the external host.
@@ -470,7 +484,13 @@ authentication:
     #
     # Override only for a KeyCloak that does not live at the standard in-cluster address. Setting it
     # to an empty string restores full OIDC discovery against the external issuer.
-    keycloakInternalUrl: "http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy"
+    #
+    # Left unset (null), it is derived from realmName as
+    # http://keycloak-http.cozy-keycloak.svc:8080/realms/<realmName>, so a realm rename reaches these
+    # backend calls automatically. The tri-state is: null -> derive from realmName; "" -> external
+    # OIDC discovery; any other value -> used verbatim. An explicit value is not rewritten, so a
+    # custom realm paired with an explicit URL must name the same realm.
+    keycloakInternalUrl: null
 # Gateway API configuration
 gateway:
   # Enable Gateway API support across the platform. When true:
@@ -478,12 +498,19 @@ gateway:
   #     that attaches to the root tenant's Gateway, so Certificate issuance
   #     works for tenants whose ingress is via Gateway API rather than
   #     ingress-nginx.
-  #   - Exposed services (dashboard, keycloak, harbor, bucket, grafana,
-  #     cozystack-api, vm-exportproxy, cdi-uploadproxy) render an
-  #     HTTPRoute attached to the tenant's Gateway.
+  #   - Exposed services whose TLS the Gateway terminates (dashboard,
+  #     keycloak, harbor, bucket, grafana) render an HTTPRoute attached to
+  #     the tenant's Gateway.
+  #   - The three that present a certificate of their own (api,
+  #     vm-exportproxy, cdi-uploadproxy) render a TLSRoute instead, pinned
+  #     by sectionName to the tls-<name> TLS-passthrough listener the
+  #     per-tenant gateway chart declares for it. The cozystack-api,
+  #     kubevirt and kubevirt-cdi packages ship one each, cluster-wide,
+  #     attached to the Gateway in the namespace publishing.ingressName
+  #     selects.
   # Per-tenant opt-in is still governed by tenant.spec.gateway=true, which
   # materialises the Gateway itself. This flag only controls platform-wide
-  # Gateway API integration (cert-manager solver + per-service HTTPRoutes).
+  # Gateway API integration (cert-manager solver + the per-service routes).
   enabled: false
   # Default GatewayClass for tenant Gateways. A tenant picks another one
   # with `gatewayClass` on its Tenant resource; this is the value used when
@@ -555,10 +582,19 @@ gateway:
   http2: true
   # Namespaces that are allowed to attach HTTPRoute or TLSRoute to a tenant
   # Gateway. The publishing tenant namespace is always included implicitly.
-  # Additional entries must be the exact namespace name (matched on the
-  # built-in kubernetes.io/metadata.name label). Tenants not on this list
-  # cannot attach a route to somebody else's Gateway, which prevents
-  # hostname hijacking across tenants.
+  # Additional entries must be the exact namespace name. The controller
+  # grants the access by stamping the namespace.cozystack.io/gateway label
+  # on each listed namespace; writing that label needs patch on Namespace,
+  # which no tenant role holds. The label reaches the HTTPS-terminate and
+  # the port-443 passthrough listeners. The port-80 listener and the
+  # native-port listeners from tlsPassthroughListeners select on the
+  # built-in kubernetes.io/metadata.name label instead: the native-port
+  # ones name the publishing tenant alone, so listing a namespace here
+  # does not let it attach to a database port, while the port-80 listener
+  # names the tenant plus cozy-cert-manager, where the ACME challenge
+  # route lands. Tenants not on this list cannot attach a route to
+  # somebody else's Gateway, which prevents hostname hijacking across
+  # tenants.
   #
   # The `default` namespace is included because the Kubernetes API's
   # TLSRoute (shipped by the cozystack-api package) has to live next to
@@ -604,6 +640,16 @@ monitoring:
 # cozystack.cozystack-platform Package — see docs/operations/backup-classes.md.
 # Empty (the default) forwards nothing and keeps the child chart defaults.
 backupStorage: {}
+
+# backupStrategyController overrides for the platform-managed strategy CRs,
+# forwarded verbatim into the same Package as
+# components.backupstrategy-controller.values.backupStrategyController. The
+# knob that needs this is redisBackupResources: the shipped cozy-default-redis
+# Strategy CR is Helm-managed (a direct edit reverts on upgrade), so a tenant
+# with a large Redis raises the restore Pod's memory / ephemeral-storage here,
+# via spec.components.platform.values.backupStrategyController.redisBackupResources
+# on the cozystack.cozystack-platform Package. Empty forwards nothing.
+backupStrategyController: {}
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""
@@ -687,6 +733,9 @@ kubevirt:
   # render and names the gate rather than ship a CR the cluster would reject
   # on update and misread on install.
   disabledFeatureGates: []
+  # Passed to spec.configuration.migrations on the KubeVirt CR.
+  # Empty keeps KubeVirt's defaults. bandwidthPerMigration is bytes/second.
+  migrations: {}
 # GPU host-device wiring for VirtualMachine workloads. Merged into the KubeVirt
 # CR's permittedHostDevices when bundles.enabledPackages contains
 # cozystack.gpu-operator and bundles.iaas.gpuOperatorVariant is one of the two

@@ -72,3 +72,64 @@ jobs:
           else
             echo "No YAML or Markdown files to lint"
           fi
+
+  # Commit-message lint for the attribution rules in docs/agents/contributing.md
+  # that a reviewer would otherwise have to read `git log` to catch. It lives
+  # here rather than in the unit-test job of pull-requests.yaml, which is gated
+  # on the diff touching code and so skips a docs-only PR entirely; a trailer is
+  # wrong or right regardless of which files the commit changed.
+  commit-trailers:
+    name: Commit trailers
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    # A backport PR is the one shape whose author cannot fix a finding: the
+    # backport action cherry-picks merged commits verbatim, so their messages
+    # are history, and roughly a quarter of the commits on main predate the
+    # rule. Matched on the branch name the action generates,
+    # backport-<pr>-to-<branch>, rather than on the prefix alone; the label that
+    # asks for a backport sits on the original PR, not on the generated one, so
+    # a branch name is the only signal a pull_request event carries. That makes
+    # the exemption a convention rather than something enforced: anyone can name
+    # a branch this way. Every other PR, fork included, is checked.
+    if: ${{ !(startsWith(github.head_ref, 'backport-') && contains(github.head_ref, '-to-')) }}
+    steps:
+      - name: Checkout head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check commit trailers
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # The merge base, not the base branch tip: commits landing on the base
+          # branch while the PR is open are not this PR's to answer for. It is
+          # recomputed every run, so a rebased or force-pushed branch is read as
+          # it now is rather than as some earlier walk back from HEAD.
+          # origin/$BASE_REF is already here: fetch-depth 0 makes the checkout
+          # fetch +refs/heads/*:refs/remotes/origin/*.
+          base="$(git merge-base "$HEAD_SHA" "origin/$BASE_REF")"
+
+          # The checker is read from the base branch, never from the checked-out
+          # PR tree. A pull_request event takes the workflow definition from the
+          # merge of base and head, so the moment this job exists on the base
+          # branch it runs on every open PR — including the ones whose head
+          # predates the script, where reading it from the head would be exit
+          # 127 and a red check saying nothing about trailers. It also puts the
+          # checker out of reach of the PR being measured — the job around it
+          # is not, since the workflow definition comes from that same merge.
+          # Before the script exists on the base branch there is nothing to read
+          # there, so that one window runs the copy under review.
+          checker="$RUNNER_TEMP/check-commit-trailers.sh"
+          if git cat-file -e "origin/$BASE_REF:hack/check-commit-trailers.sh" 2>/dev/null; then
+            git show "origin/$BASE_REF:hack/check-commit-trailers.sh" > "$checker"
+          else
+            echo "::notice::checker absent from $BASE_REF; running the copy from this pull request"
+            cp hack/check-commit-trailers.sh "$checker"
+          fi
+          bash "$checker" "$base..$HEAD_SHA"

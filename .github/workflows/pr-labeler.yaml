@@ -71,6 +71,10 @@ jobs:
               'kafka':               'area/database',
               'clickhouse':          'area/database',
               'mongodb':             'area/database',
+              'rabbitmq':            'area/database',
+              'nats':                'area/database',
+              'qdrant':              'area/database',
+              'foundationdb':        'area/database',
 
               // area/extra
               'extra':               'area/extra',
@@ -84,6 +88,7 @@ jobs:
               // area/kubernetes
               'kubernetes':          'area/kubernetes',
               'apps/kubernetes':     'area/kubernetes',
+              'kubernetes-nodes':    'area/kubernetes',
 
               // area/monitoring
               'monitoring':          'area/monitoring',
@@ -98,6 +103,7 @@ jobs:
               'ingress-nginx':       'area/networking',
               'gateway':             'area/networking',
               'vpn':                 'area/networking',
+              'vpc':                 'area/networking',
               'metallb':             'area/networking',
               'kube-ovn':            'area/networking',
               'kubeovn-webhook':     'area/networking',
@@ -152,6 +158,8 @@ jobs:
               'vmi':                 'area/virtualization',
               'vm-import':           'area/virtualization',
               'migration':           'area/virtualization',
+              'vm-instance':         'area/virtualization',
+              'vm-disk':             'area/virtualization',
               'virtual-machine':     'area/virtualization',
               'hami':                'area/virtualization',
               'gpu-operator':        'area/virtualization',

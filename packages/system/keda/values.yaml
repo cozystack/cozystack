@@ -1,0 +1,121 @@
+# cozystack-owned autoscaling observability, rendered by this umbrella chart's
+# own templates (templates/alerts.yaml) — NOT passed to the vendored KEDA subchart.
+# The Grafana dashboard is NOT shipped from here: cozystack provisions dashboards
+# via grafana-operator from the grafana-dashboards image, so it lives at
+# dashboards/db/database-autoscaling.json and is registered in
+# packages/system/monitoring/dashboards.list like every other db/* dashboard.
+databaseAutoscaling:
+  alerts:
+    enabled: true
+
+keda:
+  # Keep the KEDA CRDs on package uninstall. They render as ordinary templates (not
+  # under Helm's protected crds/ dir), so without this an admin who removes the keda
+  # package would delete the ScaledObject CRD and cascade-delete EVERY tenant's
+  # ScaledObject, wedging every autoscaled database at its next reconcile. resource-policy
+  # keep orphans the CRDs instead; a deliberate CRD cleanup is then a manual step.
+  # TEARDOWN ORDER: `keep` covers the CRDs, not the finalizer. KEDA stamps
+  # finalizer.keda.sh on every ScaledObject and only the running operator removes it, so if
+  # the package is removed while ScaledObjects still exist, a tenant deleting their Postgres
+  # app gets a ScaledObject stuck Terminating and a HelmRelease uninstall that hangs on it,
+  # recoverable only by an admin finalizer patch. Before removing the keda package, set
+  # autoscaling.enabled: false on every tenant Postgres (which deletes the ScaledObjects
+  # while the operator is still up to clear their finalizers).
+  crds:
+    additionalAnnotations:
+      helm.sh/resource-policy: keep
+  # Least-privilege the cluster-wide operator RBAC. Upstream defaults grant the
+  # operator get/list/patch/update/watch on `*/scale` across ALL apiGroups (from the
+  # default scaledRefKinds [{apiGroup: "*", kind: "*"}]) plus cluster-wide
+  # secrets:[list,watch]. cozystack's only ScaledObject target is the CNPG Cluster and
+  # no cozystack ScaledObject uses a TriggerAuthentication, so narrow both:
+  #   - scaledRefKinds -> only clusters.postgresql.cnpg.io/scale (enabledCustomScaledRefKinds
+  #     is already true upstream). Add engines here as MariaDB/Redis/Mongo autoscaling lands.
+  #   - restrict.secret -> operator can read Secrets only in its own namespace, dropping the
+  #     cluster-wide secrets:[list,watch] that could stream every tenant's DB creds/TLS keys.
+  rbac:
+    scaledRefKinds:
+      - apiGroup: postgresql.cnpg.io
+        kind: clusters
+  permissions:
+    operator:
+      restrict:
+        secret: true
+  # Restrict the cluster-privileged operator's egress (design proposal §Security — SSRF
+  # hardening for autoscaling.serverAddress). The operator fetches each ScaledObject's
+  # serverAddress every polling interval; the postgres chart already refuses a non-in-cluster
+  # serverAddress at render, and this is the defense-in-depth second half. flavor "cilium"
+  # (cozystack's CNI) renders a CiliumNetworkPolicy whose egress is toEntities
+  # [kube-apiserver, cluster] only: the apiserver and in-cluster endpoints (CoreDNS, vmselect,
+  # CNPG pods) stay reachable, while `world` (off-cluster hosts) is denied — so the operator
+  # cannot be turned into an SSRF relay to a metadata endpoint or an external address. The
+  # kube-apiserver entity covers the control plane however it is addressed, so unlike a raw
+  # CIDR egress policy this does not risk starving the operator's apiserver access.
+  # SCOPE, two caveats (why the render-time namespace-pin in scaledobject.yaml is the primary
+  # control, not this policy):
+  #   1. `cluster` permits ALL in-cluster egress, any namespace — it does NOT stop the
+  #      operator being pointed at another tenant's or a system namespace's `.svc`. Blocking
+  #      that is the postgres chart's serverAddress namespace-pin, not this netpol.
+  #   2. off-cluster denial assumes the CNI actually enforces CiliumNetworkPolicy (flavor is
+  #      hardcoded cilium) AND that Cilium classifies the target as `world`. Link-local
+  #      (169.254.0.0/16, e.g. the 169.254.169.254 cloud-metadata IMDS) classification is
+  #      config-dependent and not guaranteed to be `world`. The CiliumNetworkPolicy objects
+  #      are gated on the cilium.io/v2 API being served (patches/ciliumnetworkpolicy-
+  #      capability-gate.patch) so the package still INSTALLS on a variant that ships no
+  #      Cilium — but there the egress backstop is simply ABSENT, so the chart's serverAddress
+  #      namespace-pin is the only control. Re-verify off-cluster + IMDS denial live on
+  #      cozystack-pr-test (design proposal §Testing) before treating this as a hard control.
+  networkPolicy:
+    enabled: true
+    flavor: cilium
+  # Digest-pin the three KEDA images (supply-chain: match every other cozystack
+  # system image, which pins by @sha256). The vendored chart renders each image as
+  # `{{ registry }}/{{ repository }}:{{ tag | default appVersion }}`, and
+  # `2.20.2@sha256:<digest>` is a valid OCI reference where the digest wins at
+  # resolution — so the pin goes in the tag field of these shim values with no
+  # subchart patch. Digests are the multi-arch image-index digests for the 2.20.2
+  # tag on ghcr.io (amd64/arm64/s390x); bump them in lockstep with
+  # KEDA_CHART_VERSION in the Makefile whenever the chart is re-vendored.
+  image:
+    keda:
+      tag: "2.20.2@sha256:fe74c7b8849586a67ad2201bcb89e7f5ac221ff90399ecaa8fd28427f1ef11e6"
+    metricsApiServer:
+      tag: "2.20.2@sha256:27286536a8a775aeeee37a7e343f8ecebb27ebf680ee1181a4f99e82eefb253b"
+    webhooks:
+      tag: "2.20.2@sha256:41f74102aba7959c6e8d08b433ab8a5fd6cae7c5646c78f7fe3de40a52df3439"
+  # Cozystack's cluster domain, not the upstream chart default "cluster.local".
+  # KEDA's metrics-apiserver dials the operator's metrics gRPC service at
+  # keda-operator.<ns>.svc.<clusterDomain>:9666 and the operator mints that
+  # service's serving-cert SANs from the same domain; a wrong domain makes the
+  # external-metrics path NXDOMAIN and every HPA reports FailedGetExternalMetric.
+  # This literal is only the fallback default: on a real platform install
+  # core/platform injects the authoritative networking.clusterDomain into this key
+  # via the shared cozystack-values Secret (see apps.yaml), so a cluster with a
+  # non-default domain works without editing this file. cozy.local matches the
+  # platform default, so a standalone `helm template`/unittest still renders correctly.
+  clusterDomain: cozy.local
+  # Raise the operator's client-go throttle above the upstream 20 QPS / 30 burst.
+  # The operator polls every ScaledObject's /scale subresource on the scale loop;
+  # at the default QPS those polls queue in the client rate limiter ahead of the
+  # leader-election lease renewal, which then misses its deadline and the manager
+  # exits with "leader election lost" (observed crash-looping the single-replica
+  # operator on dev9). A higher ceiling keeps the renewal call from starving.
+  extraArgs:
+    keda:
+      kube-api-qps: 50
+      kube-api-burst: 100
+  # Cozystack ships a Prometheus (VictoriaMetrics) stack by default, so surface
+  # KEDA's operator, metrics-server and webhook metrics through ServiceMonitors.
+  prometheus:
+    operator:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+    metricServer:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+    webhooks:
+      enabled: true
+      serviceMonitor:
+        enabled: true

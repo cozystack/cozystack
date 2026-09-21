@@ -20,6 +20,7 @@ cozy_backup_access_preflight() (
   bucket=''
   deadline=''
   attempt=''
+  stage=''
   object=''
 
   case "${timeout_seconds}:${local_port}" in
@@ -102,23 +103,32 @@ cozy_backup_access_preflight() (
   attempt=0
   while :; do
     attempt=$(( attempt + 1 ))
-    : > "${workdir}/mc.log"
+    stage=PUT
     if timeout 15 mc cp --insecure "${workdir}/source" \
-        "backup-preflight/${bucket}/${object}" >"${workdir}/mc.log" 2>&1; then
+        "backup-preflight/${bucket}/${object}" >>"${workdir}/mc.log" 2>&1; then
       uploaded=true
+      stage=GET
       if timeout 15 mc cp --insecure "backup-preflight/${bucket}/${object}" \
-          "${workdir}/download" >>"${workdir}/mc.log" 2>&1 \
-        && cmp "${workdir}/source" "${workdir}/download" \
-        && timeout 15 mc rm --insecure "backup-preflight/${bucket}/${object}" \
-          >>"${workdir}/mc.log" 2>&1; then
-        uploaded=false
-        echo "BucketAccess ${namespace}/${access_name} passed PUT, GET, compare, and DELETE on attempt ${attempt}."
-        return 0
+          "${workdir}/download" >>"${workdir}/mc.log" 2>&1; then
+        stage=compare
+        if cmp "${workdir}/source" "${workdir}/download" >>"${workdir}/mc.log" 2>&1; then
+          stage=DELETE
+          if timeout 15 mc rm --insecure "backup-preflight/${bucket}/${object}" \
+              >>"${workdir}/mc.log" 2>&1; then
+            uploaded=false
+            echo "BucketAccess ${namespace}/${access_name} passed PUT, GET, compare, and DELETE on attempt ${attempt}."
+            return 0
+          fi
+        fi
       fi
     fi
+    # One log carries every attempt, so this line is all that tells a failed
+    # upload from a failed download.
+    printf 'attempt %s failed at %s\n' "${attempt}" "${stage}" >>"${workdir}/mc.log"
 
     if [ "$(date +%s)" -ge "${deadline}" ]; then
       echo "BucketAccess ${namespace}/${access_name} was granted but did not pass S3 PUT/GET/DELETE within ${timeout_seconds}s" >&2
+      sed 's/^/  port-forward: /' "${workdir}/port-forward.log" >&2
       sed 's/^/  s3-preflight: /' "${workdir}/mc.log" >&2
       return 1
     fi

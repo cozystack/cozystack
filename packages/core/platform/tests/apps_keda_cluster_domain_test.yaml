@@ -1,0 +1,34 @@
+suite: apps.yaml networking.clusterDomain → keda.clusterDomain wiring
+
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# KEDA's clusterDomain is a vendored-subchart value a chart template cannot derive
+# from _cluster, so core/platform injects the authoritative networking.clusterDomain
+# into the shared cozystack-values Secret under the keda subchart key. Without it a
+# cluster whose domain is not the cozy.local default would leave KEDA dialing the
+# operator's metrics gRPC service at an NXDOMAIN address and every database HPA would
+# report FailedGetExternalMetric. These assertions pin that the value lands in the
+# Secret and tracks networking.clusterDomain rather than a literal.
+
+tests:
+  - it: injects keda.clusterDomain from the cozy.local default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*keda:\s*$'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*clusterDomain:\s*"cozy.local"'
+
+  - it: tracks a non-default networking.clusterDomain
+    set:
+      networking.clusterDomain: cluster.local
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*clusterDomain:\s*"cluster.local"'

@@ -36,7 +36,11 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
   missing=()
   for want in "${EXPECTED[@]}"; do
     # -F: literal match so the `.` in t1.nano does not match any character.
-    if ! printf '%s\n' "$enums" | grep -Fqx -- "$want"; then
+    # here-string, not a pipe: a `printf ... | grep -q` pipeline SIGPIPEs the
+    # printf when grep matches early and exits, and under `set -o pipefail` that
+    # 141 makes the whole pipeline read as failure — a false "missing" for a
+    # preset that is present (hit on the larger enums, e.g. kubernetes-rd).
+    if ! grep -Fqx -- "$want" <<<"$enums"; then
       missing+=("$want")
     fi
   done

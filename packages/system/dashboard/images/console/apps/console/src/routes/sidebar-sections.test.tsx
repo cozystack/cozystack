@@ -12,6 +12,7 @@ import {
   useAdminSidebarSections,
   useCanSeeAdmin,
   useConsoleSidebarSections,
+  useMarketplaceSidebarSections,
 } from "./sidebar-sections.tsx"
 
 const emptyAppDefList: K8sList<unknown> = {
@@ -108,6 +109,17 @@ describe("useConsoleSidebarSections — admin areas moved out", () => {
   })
 })
 
+describe("useMarketplaceSidebarSections", () => {
+  it("leaves Repositories to the Admin portal", () => {
+    const client = makeClient({})
+    const { result } = renderHook(() => useMarketplaceSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    expect(findItem(result.current, "Marketplace")?.to).toBe("/marketplace")
+    expect(findItem(result.current, "Repositories")).toBeUndefined()
+  })
+})
+
 describe("useAdminSidebarSections", () => {
   it("always shows Administration, even with no operator permissions", async () => {
     const client = makeClient({ nodes: false, backupclasses: false })
@@ -120,6 +132,7 @@ describe("useAdminSidebarSections", () => {
     // Per-tenant Info moved into the Tenants tree rows — no sidebar entry.
     expect(findItem(result.current, "Info")).toBeUndefined()
     expect(findItem(result.current, "External IPs")?.to).toBe("/admin/external-ips")
+    expect(findItem(result.current, "Repositories")?.to).toBe("/admin/taps")
     // No operator area leaks in while the gates deny.
     await waitFor(() => expect(client.create).toHaveBeenCalled())
     expect(findItem(result.current, "Cluster")).toBeUndefined()

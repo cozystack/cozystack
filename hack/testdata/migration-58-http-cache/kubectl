@@ -1,0 +1,169 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-58-http-cache-freeze.bats, modelled on
+# hack/testdata/migration-55-fluxcd/kubectl. It serves only the calls migration
+# 58 and lib/cozystack-version.sh make, and logs each one to $FAKE_CMDLOG.
+#
+# Both the frozen OCIRepository and the version stamp arrive as
+# `apply --filename -`, so this fake reads stdin and branches on the manifest's
+# kind rather than on the argument vector.
+#
+#   FAKE_CMDLOG          file to append a one-line record of each call to
+#   FAKE_HRS             newline list of "<ns> <name> <chartRef.name> [<kind>]"
+#                        for the fleet scan; <kind> is the application.kind
+#                        label, "-" or absent for none
+#   FAKE_LIST_FAIL       non-empty => the fleet scan exits 1 with this stderr
+#   FAKE_OCIREPO_REF     shape of the live source's ref: "digest" (default) is
+#                        a spec.ref.digest pin, "tag" is a tag ref resolved in
+#                        status.artifact.revision, "unresolved" is a tag ref
+#                        with no artifact yet
+#   FAKE_OCIREPO_READ_FAIL non-empty => reading the source OCIRepository exits 1
+#   FAKE_PATCH_FAIL      non-empty => every patch exits 1 with this stderr
+#   FAKE_DELETE_FAIL     non-empty => every delete exits 1 with this stderr
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
+
+case "$args" in
+  *"apply --filename -"*)
+    manifest=$(cat)
+    case "$manifest" in
+      *"kind: ConfigMap"*|*'"kind": "ConfigMap"'*)
+        v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+        log "STAMP ${v:-unknown}"
+        ;;
+      *OCIRepository*)
+        # Record the fields the migration must carry over or set, so a copy that
+        # silently drops the pull secret or forgets the digest is caught.
+        name=$(printf '%s' "$manifest" | jq -r '.metadata.name')
+        digest=$(printf '%s' "$manifest" | jq -r '.spec.ref.digest // "none"')
+        url=$(printf '%s' "$manifest" | jq -r '.spec.url // "none"')
+        secret=$(printf '%s' "$manifest" | jq -r '.spec.secretRef.name // "none"')
+        interval=$(printf '%s' "$manifest" | jq -r '.spec.interval // "none"')
+        owners=$(printf '%s' "$manifest" | jq -r '(.metadata.ownerReferences // []) | length')
+        nodelete=$(printf '%s' "$manifest" | jq -r 'if .metadata.labels["platform.cozystack.io/no-delete"] == "true" then 1 else 0 end')
+        verify=$(printf '%s' "$manifest" | jq -r '.spec.verify.provider // "none"')
+        log "APPLY-OCIREPO $name $digest $url $secret $interval verify=$verify owners=$owners nodelete=$nodelete"
+        ;;
+      *"kind: ClusterRole"*)
+        name=$(printf '%s\n' "$manifest" | sed -n 's/^  name: //p' | head -1)
+        agg=$(printf '%s\n' "$manifest" | grep -c 'rbac.cozystack.io/aggregate-to-tenant-admin: "true"')
+        nodelete=$(printf '%s\n' "$manifest" | grep -c 'platform.cozystack.io/no-delete: "true"')
+        res=$(printf '%s\n' "$manifest" | sed -n 's/^  resources: \[\(.*\)\]$/\1/p' | tr -d '" ')
+        verbs=$(printf '%s\n' "$manifest" | sed -n 's/^  verbs: \[\(.*\)\]$/\1/p' | tr -d '" ')
+        log "APPLY-CLUSTERROLE $name aggregate=$agg nodelete=$nodelete resources=$res verbs=$verbs"
+        ;;
+      *)
+        log "APPLY-UNKNOWN"
+        printf 'fake kubectl: unmodelled apply\n' >&2
+        exit 1
+        ;;
+    esac
+    exit 0
+    ;;
+
+  *"get ocirepositories.source.toolkit.fluxcd.io"*)
+    if [ -n "${FAKE_OCIREPO_READ_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_OCIREPO_READ_FAIL" >&2
+      exit 1
+    fi
+    case "${FAKE_OCIREPO_REF:-digest}" in
+      digest)     ref='{"digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}'
+                  status=',"status":{"artifact":{"revision":"v1.7.0@sha256:2222222222222222222222222222222222222222222222222222222222222222","digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}}' ;;
+      tag)        ref='{"tag":"v1.7.0"}'
+                  status=',"status":{"artifact":{"revision":"v1.7.0@sha256:2222222222222222222222222222222222222222222222222222222222222222","digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}}' ;;
+      unresolved) ref='{"tag":"v1.7.0"}'
+                  status='' ;;
+      *) printf 'fake kubectl: unknown FAKE_OCIREPO_REF %s\n' "$FAKE_OCIREPO_REF" >&2; exit 1 ;;
+    esac
+    # A Helm-owned, labelled, owner-referenced original: the copy must keep the
+    # spec, drop the ownership, and set its own labels.
+    cat <<JSON
+{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"OCIRepository",
+ "metadata":{"name":"cozystack-packages","namespace":"cozy-system",
+   "labels":{"app.kubernetes.io/managed-by":"Helm","platform.cozystack.io/no-delete":"true"},
+   "annotations":{"meta.helm.sh/release-name":"cozy-platform"},
+   "ownerReferences":[{"apiVersion":"cozystack.io/v1alpha1","kind":"Package","name":"x","uid":"1","controller":true}]},
+ "spec":{"url":"oci://registry.example.org/cozystack/cozystack-packages","interval":"5m",
+   "secretRef":{"name":"registry-creds"},
+   "verify":{"provider":"cosign","secretRef":{"name":"cosign-pub"}},"ref":${ref}}${status}}
+JSON
+    exit 0
+    ;;
+
+  *"get helmreleases.helm.toolkit.fluxcd.io"*)
+    if [ -n "${FAKE_LIST_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_LIST_FAIL" >&2
+      exit 1
+    fi
+    printf '{"items":['
+    printf '%s\n' "${FAKE_HRS:-}" | {
+      sep=""
+      while read -r ns name chart kind; do
+        [ -n "$ns" ] || continue
+        if [ -n "${kind:-}" ] && [ "$kind" != "-" ]; then
+          labels=$(printf '{"apps.cozystack.io/application.kind":"%s"}' "$kind")
+        else
+          labels=null
+        fi
+        printf '%s{"metadata":{"namespace":"%s","name":"%s","labels":%s},"spec":{"chartRef":{"name":"%s"}}}' \
+          "$sep" "$ns" "$name" "$labels" "$chart"
+        sep=","
+      done
+    }
+    printf ']}\n'
+    exit 0
+    ;;
+
+  *"patch packagesources.cozystack.io"*)
+    if [ -n "${FAKE_PATCH_FAIL:-}" ]; then printf '%s\n' "$FAKE_PATCH_FAIL" >&2; exit 1; fi
+    body=$(printf '%s' "$args" | sed 's/.*-p //')
+    keep=$(printf '%s' "$body" | grep -c 'resource-policy')
+    src=$(printf '%s' "$body" | grep -c 'cozystack-packages-http-cache')
+    disown=$(printf '%s' "$body" | grep -c '"meta.helm.sh/release-name":null')
+    managed=$(printf '%s' "$body" | grep -c '"app.kubernetes.io/managed-by":null')
+    log "PATCH-PACKAGESOURCE keep=$keep source=$src disown=$disown managed=$managed"
+    exit 0
+    ;;
+
+  *"patch packages.cozystack.io"*)
+    if [ -n "${FAKE_PATCH_FAIL:-}" ]; then printf '%s\n' "$FAKE_PATCH_FAIL" >&2; exit 1; fi
+    log "PATCH-PACKAGE"
+    exit 0
+    ;;
+
+  *"delete packages.cozystack.io"*)
+    if [ -n "${FAKE_DELETE_FAIL:-}" ]; then printf '%s\n' "$FAKE_DELETE_FAIL" >&2; exit 1; fi
+    case "$args" in
+      *--wait=false*) _w=0 ;;
+      *)              _w=1 ;;
+    esac
+    log "DELETE-PACKAGE $(arg_after packages.cozystack.io "$@") wait=$_w"
+    exit 0
+    ;;
+
+  *"delete helmreleases.helm.toolkit.fluxcd.io"*)
+    if [ -n "${FAKE_DELETE_FAIL:-}" ]; then printf '%s\n' "$FAKE_DELETE_FAIL" >&2; exit 1; fi
+    log "DELETE-HR $(arg_after -n "$@") $(arg_after helmreleases.helm.toolkit.fluxcd.io "$@")"
+    exit 0
+    ;;
+
+  *"delete applicationdefinitions.cozystack.io"*)
+    if [ -n "${FAKE_DELETE_FAIL:-}" ]; then printf '%s\n' "$FAKE_DELETE_FAIL" >&2; exit 1; fi
+    log "DELETE-APPDEF $(arg_after applicationdefinitions.cozystack.io "$@")"
+    exit 0
+    ;;
+
+  *"delete secret"*)
+    if [ -n "${FAKE_DELETE_FAIL:-}" ]; then printf '%s\n' "$FAKE_DELETE_FAIL" >&2; exit 1; fi
+    log "DELETE-SECRETS $(arg_after -n "$@") $(arg_after -l "$@")"
+    exit 0
+    ;;
+esac
+
+log "UNHANDLED $args"
+printf 'fake kubectl: unmodelled call: %s\n' "$args" >&2
+exit 1

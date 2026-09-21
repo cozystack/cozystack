@@ -3,6 +3,9 @@
 {{- if eq $topologyMode "hard" }}
 {{- $whenUnsatisfiable = "DoNotSchedule" }}
 {{- end }}
+{{- $certManagerIssued := (include "opensearch.tls.certManagerIssued" .) | eq "true" -}}
+{{- /* Renders unconditionally, so the guard is evaluated on the paths where neither certmanager.yaml nor external-svc.yaml renders anything. No reachable bound is unique to those paths today; this invocation is what keeps the check unconditional if one is added. */ -}}
+{{- include "opensearch.validateReleaseName" . -}}
 ---
 apiVersion: opensearch.opster.io/v1
 kind: OpenSearchCluster
@@ -13,8 +16,31 @@ spec:
     serviceName: {{ .Release.Name }}
     version: {{ include "opensearch.versionMap" $ }}
     httpPort: 9200
-    setVMMaxMapCount: true
-    drainDataNodes: true
+    {{- /*
+    The operator's own way to raise vm.max_map_count is a privileged init
+    container in every OpenSearch pod, and the PodSecurity level tenant
+    namespaces run at refuses that before any pod exists. The sysctl comes from
+    the DaemonSet in the opensearch-operator package instead, which raises it on
+    every node from a namespace the platform labels privileged. The node
+    contract is where the value belongs in the long run.
+    */}}
+    setVMMaxMapCount: false
+    {{- /*
+    Draining needs a data node with room for the shards, and below three there is
+    none. With one the operator excludes the node, finds its shards still there
+    and never deletes the pod. With two it stops trying for a full drain itself:
+    opensearch-k8s-operator v2.8.0 warns "some shards may not drain" in
+    pkg/reconcilers/rollingRestart.go restartStatefulSetPod, and
+    PreparePodForDelete in opensearch-gateway/services/os_data_service.go then
+    waits for system index primaries alone, which the surviving node cannot take
+    while it holds their replicas. Not draining pauses replica allocation for the
+    restart instead and re-enables it afterwards.
+
+    Gated on the data role as well: the operator's DataNodesCount adds up the live
+    StatefulSets of pools carrying that role, so with the role off it finds no data
+    nodes to drain whatever the replica count.
+    */}}
+    drainDataNodes: {{ and .Values.nodeRoles.data (gt (int .Values.replicas) 2) }}
     {{- if gt (len .Values.images.opensearch) 0 }}
     image: {{ .Values.images.opensearch }}
     {{- end }}
@@ -26,12 +52,57 @@ spec:
         generate: true
         perNode: true
       http:
+        {{- if $certManagerIssued }}
+        secret:
+          name: {{ .Release.Name }}-http-server
+        {{- /*
+        Feed the cert-manager HTTP CA to the operator so it (a) signs the admin
+        certificate with this CA and (b) sets the HTTP listener trust anchor to it.
+        That puts one CA under both the server cert securityadmin validates and the
+        admin cert it presents, which is what lets users and roles apply at all.
+
+        The dot before http-ca is load-bearing: hyphenated, this is also the name the
+        operator composes for its own transport CA on the sibling release one -http
+        longer. templates/certmanager.yaml carries the mechanism.
+        */}}
+        caSecret:
+          name: {{ .Release.Name }}.http-ca
+        {{- else }}
         generate: true
+        {{- end }}
     config:
       securityConfigSecret:
         name: {{ .Release.Name }}-security-config
       adminCredentialsSecret:
         name: {{ .Release.Name }}-admin-credentials
+      {{- /*
+      securityadmin.sh runs java with no -Xmx of its own, so the JVM sizes its
+      heap from whatever the container is allowed. With nothing set here the
+      tenant LimitRange supplies the namespace default instead, and the operator
+      builds this Job with backoffLimit 0, so the single OOM kill that follows is
+      final: the security index is never written and every node sits behind
+      "Not yet initialized (you may need to run securityadmin)" until the release
+      is deleted.
+
+      Measured against opensearchproject/opensearch:2.11.1 on linux/amd64,
+      applying a security config to a fresh single-node cluster: OOMKilled
+      mid-apply at 128Mi and at 192Mi, completes from 256Mi up. Having no -Xmx it
+      grows into what it is given, peaking at 208Mi under a 256Mi limit and at
+      253Mi under the 512Mi one below, so the headroom here is the point rather
+      than the peak.
+
+      Constants rather than the preset: the tool configures the cluster once and
+      exits, so what it needs does not grow with the nodes it configures, and the
+      smallest preset would hand it back the 128Mi it dies at.
+      */}}
+      updateJob:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 512Mi
   {{- if .Values.dashboards.enabled }}
   dashboards:
     enable: true
@@ -39,7 +110,16 @@ spec:
     replicas: {{ .Values.dashboards.replicas | default 1 }}
     tls:
       enable: true
+      {{- if $certManagerIssued }}
+      {{- /*
+      Dashboards gets its own certificate, not the API one: sharing a key would let
+      a compromised Dashboards impersonate the OpenSearch API endpoint.
+      */}}
+      secret:
+        name: {{ .Release.Name }}-dashboards-server
+      {{- else }}
       generate: true
+      {{- end }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list (.Values.dashboards.resourcesPreset | default "c1.small") .Values.dashboards.resources $) | nindent 6 }}
   {{- end }}
   nodePools:

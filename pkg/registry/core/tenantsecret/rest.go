@@ -250,7 +250,7 @@ func buildTenantSelector(opts *metainternal.ListOptions) (labels.Selector, bool)
 func (r *REST) Create(
 	ctx context.Context,
 	obj runtime.Object,
-	_ rest.ValidateObjectFunc,
+	createValidation rest.ValidateObjectFunc,
 	opts *metav1.CreateOptions,
 ) (runtime.Object, error) {
 	in, ok := obj.(*corev1alpha1.TenantSecret)
@@ -258,8 +258,14 @@ func (r *REST) Create(
 		return nil, fmt.Errorf("expected TenantSecret, got %T", obj)
 	}
 
+	if createValidation != nil {
+		if err := createValidation(ctx, obj); err != nil {
+			return nil, err
+		}
+	}
+
 	sec := tenantToSecret(in, nil)
-	err := r.c.Create(ctx, sec, &client.CreateOptions{Raw: opts})
+	err := r.c.Create(ctx, sec, registry.ClientCreateOptions(opts))
 	if err != nil {
 		return nil, err
 	}
@@ -366,8 +372,8 @@ func (r *REST) Update(
 	ctx context.Context,
 	name string,
 	objInfo rest.UpdatedObjectInfo,
-	_ rest.ValidateObjectFunc,
-	_ rest.ValidateObjectUpdateFunc,
+	createValidation rest.ValidateObjectFunc,
+	updateValidation rest.ValidateObjectUpdateFunc,
 	forceCreate bool,
 	opts *metav1.UpdateOptions,
 ) (runtime.Object, bool, error) {
@@ -401,19 +407,30 @@ func (r *REST) Update(
 		if !forceCreate {
 			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 		}
-		err := r.c.Create(ctx, newSec, &client.CreateOptions{Raw: &metav1.CreateOptions{}})
+		if createValidation != nil {
+			if err := createValidation(ctx, newObj); err != nil {
+				return nil, false, err
+			}
+		}
+		err := r.c.Create(ctx, newSec, registry.ClientCreateOptionsFromUpdate(opts))
 		return secretToTenant(newSec), true, err
 	}
 
+	if updateValidation != nil {
+		if err := updateValidation(ctx, newObj, secretToTenant(cur)); err != nil {
+			return nil, false, err
+		}
+	}
+
 	newSec.ResourceVersion = cur.ResourceVersion
-	err = r.c.Update(ctx, newSec, &client.UpdateOptions{Raw: opts})
+	err = r.c.Update(ctx, newSec, registry.ClientUpdateOptions(opts))
 	return secretToTenant(newSec), false, err
 }
 
 func (r *REST) Delete(
 	ctx context.Context,
 	name string,
-	_ rest.ValidateObjectFunc,
+	deleteValidation rest.ValidateObjectFunc,
 	opts *metav1.DeleteOptions,
 ) (runtime.Object, bool, error) {
 	ns, err := nsFrom(ctx)
@@ -427,7 +444,13 @@ func (r *REST) Delete(
 	if current.Labels == nil || current.Labels[tsLabelKey] != tsLabelValue {
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
-	err = r.c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts})
+	if deleteValidation != nil {
+		if err := deleteValidation(ctx, secretToTenant(current)); err != nil {
+			return nil, false, err
+		}
+	}
+
+	err = r.c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, registry.ClientDeleteOptions(opts))
 	return nil, err == nil, err
 }
 

@@ -115,6 +115,12 @@ Verification runs one way only. The server presents a certificate that a client 
 
 Disabling TLS on a release that had it needs one manual step. Helm removes the `TenantProjection` sentinel along with the `Certificate` objects, and Kubernetes garbage-collects `rabbitmq-<name>.tenant-ca` with it, so the trust anchor stops being projected as soon as TLS goes off — no stale anchor is left for an endpoint that has gone back to plaintext. What Helm cannot clean up is the raw CA material: cert-manager does not delete the Secrets it produced (`enableCertificateOwnerRef` is off), so `rabbitmq-<name>-ca` and `rabbitmq-<name>-tls` stick around, unused, holding private keys nobody references any more. Delete them by hand after disabling TLS.
 
+Deleting the application leaves the same two Secrets behind. The chart renders the `Certificate` and `Issuer` objects and never the Secrets, and cert-manager does not own what it issued, so a Helm uninstall removes neither `rabbitmq-<name>-ca`, which holds the CA private key, nor `rabbitmq-<name>-tls`. After removing a RabbitMQ that had TLS on, delete both from the tenant namespace by hand:
+
+```bash
+kubectl delete secret rabbitmq-<name>-ca rabbitmq-<name>-tls --namespace <tenant-namespace>
+```
+
 > **Warning:** the CA is issued with a 5-year duration and cert-manager renews the certificate as it approaches expiry, so a bundle copied once will eventually stop verifying. Re-read `<release>.tenant-ca` on a schedule, or mount it and let the kubelet refresh it, instead of baking `ca.crt` into a client image or a truststore built at release time.
 
 ## Parameter examples and reference

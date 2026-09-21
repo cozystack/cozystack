@@ -205,3 +205,28 @@ tests:
           path: stringData.dashboards-uri
           pattern: "^https://admin:[a-zA-Z0-9]{32}@test-os-dashboards\\.tenant-test\\.svc\\.cozy\\.local:5601$"
         documentIndex: 2
+
+  ###########################################
+  # Rendering without the platform's _cluster #
+  ###########################################
+
+  # Every case above injects _cluster, which is what the platform does, so none of
+  # them exercises the read itself. `index` on an absent map is a hard render error
+  # rather than a miss returning nil, so it takes the whole template down and the
+  # `| default` that follows never runs. certmanager.yaml has the same read and its
+  # own suite for this in tls_test.yaml; this is the other half.
+  #
+  # No _cluster in `set` on purpose: injecting it is the one thing this case must
+  # not do. The host assertion is what makes it more than a render check — it says
+  # the fallback value actually reached the output.
+  - it: falls back to the default cluster domain when _cluster is absent
+    release:
+      name: test-os
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 3
+      - equal:
+          path: stringData.host
+          value: test-os.tenant-test.svc.cozy.local
+        documentIndex: 2

@@ -55,7 +55,6 @@ and is not listed there individually.
 * **Users:** Members that engage with the Cozystack community via any medium, including Slack, Telegram, GitHub, and mailing lists.
 * **Contributors:** Members contributing to the projects by contributing and reviewing code, writing documentation,
   responding to issues, participating in proposal discussions, and so on.
-* **Directors:** Non-technical project leaders.
 * **Maintainers**: Technical project leaders.
 
 ## Contributors
@@ -70,15 +69,6 @@ All contributions to Cozystack code, documentation, or other components in the
 Cozystack GitHub organisation must follow the 
 [contributing guidelines](https://github.com/cozystack/cozystack/blob/main/CONTRIBUTING.md).
 Whether these contributions are merged into the project is the prerogative of the maintainers.
-
-## Directors
-
-Directors are responsible for non-technical leadership functions within the project.
-This includes representing Cozystack and its maintainers to the community, to the press, 
-and to the outside world; interfacing with CNCF and other governance entities;
-and participating in project decision-making processes when appropriate.
-
-Directors are elected by a majority vote of the maintainers.
 
 ## Maintainers
 
@@ -115,6 +105,6 @@ After several months of working together, maintainers will decide whether to gra
 
 ## Project Decision-making Process
 
-Ideally, all project decisions are resolved by consensus of maintainers and directors.
+Ideally, all project decisions are resolved by consensus of the maintainers.
 If this is not possible, a vote will be called.
-The voting process is a simple majority in which each maintainer and director receives one vote.
+The voting process is a simple majority in which each maintainer receives one vote.

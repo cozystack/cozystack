@@ -59,7 +59,25 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'exit "\$\{cleanup_failed\}"'
 
-  - it: "cleanup Role grants get/list/delete on persistentvolumeclaims"
+  - it: "bounds the cleanup Job so a claim that will not go cannot hang the uninstall"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 270
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 10
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-test -l app\.kubernetes\.io/instance=mariadb-test --ignore-not-found --wait=true --timeout=120s'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '--request-timeout='
+
+  - it: "cleanup Role grants get/list/watch/delete on persistentvolumeclaims"
     documentSelector:
       path: kind
       value: Role
@@ -69,7 +87,7 @@ tests:
           content:
             apiGroups: [""]
             resources: ["persistentvolumeclaims"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
 
   - it: "cleanup Role scopes secret access to the named secrets only (least privilege)"
     documentSelector:

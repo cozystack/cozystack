@@ -26,6 +26,7 @@ import (
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmetav1 "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -95,8 +96,11 @@ func httpRedirectRouteName(tgw *gatewayv1alpha1.TenantGateway) string {
 // on its own account, so this entry is belt and braces.
 const acmeChallengeNamespace = "cozy-cert-manager"
 
-// buildAllowedRoutes computes the AllowedRoutes block applied to
-// HTTPS / TLS-passthrough listeners: a label selector matching
+// buildAllowedRoutes computes the AllowedRoutes block the
+// HTTPS-terminate and port-443 passthrough listeners carry. The
+// native-port listeners from tlsPassthroughListeners do not: they take
+// a narrower one from allowedRoutesFromValues, naming the publishing
+// tenant's namespace alone. It is a label selector matching
 // namespace.cozystack.io/gateway = <tgw.Namespace>. Every namespace
 // carrying that label attaches to this Gateway. The label has two
 // writers:
@@ -147,12 +151,38 @@ func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRo
 // own namespace stays open, because the redirect and the ACME solver
 // route both live there, and so does acmeChallengeNamespace.
 func buildHTTPListenerAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRoutes {
+	return allowedRoutesFromValues(httpListenerNamespaces(tgw))
+}
+
+// httpListenerNamespaces is the attach set of the port-80 listener. The
+// claims pass reads it to tell a route that selects that listener and
+// is admitted by it from one that selects it and is not, and the render
+// reads it to write the selector, so the two cannot disagree.
+func httpListenerNamespaces(tgw *gatewayv1alpha1.TenantGateway) []string {
 	values := []string{tgw.Namespace}
 	if acmeChallengeNamespace != tgw.Namespace {
 		values = append(values, acmeChallengeNamespace)
 	}
-	return allowedRoutesFromValues(values)
+	return values
 }
+
+// The ports the Gateway's own HTTP listeners are published on. The
+// port-80 listener carries the ACME challenge route and the redirect,
+// and the HTTP-01 terminate listener rendered for each claimed hostname
+// sits on 443. A route that pins a parentRef port is attached to the
+// listeners on that port alone, so these are what such a pin is judged
+// against.
+const (
+	httpListenerName  = "http"
+	httpListenerPort  = 80
+	httpsListenerPort = 443
+)
+
+// wildcardLabel stands in for a leading "*" in the names derived from a
+// hostname. Gateway API admits "*." as the first label of a listener or
+// route hostname and refuses "*" in a listener name, and a Certificate
+// object name is a DNS-1123 subdomain that refuses it too.
+const wildcardLabel = "wildcard"
 
 func allowedRoutesFromValues(values []string) *gatewayv1.AllowedRoutes {
 	from := gatewayv1.NamespacesFromSelector
@@ -173,7 +203,8 @@ func allowedRoutesFromValues(values []string) *gatewayv1.AllowedRoutes {
 }
 
 // hostnameFirstLabel returns the first DNS label of a hostname (the
-// part before the first '.'), normalised to lowercase. The lowercase
+// part before the first '.'), normalised to lowercase, with a wildcard
+// label rewritten to wildcardLabel. The lowercase
 // pass is defensive: Gateway listener names and Certificate object
 // names both must satisfy RFC 1123 (lowercase), so an upper-case
 // input hostname like `HARBOR.foo.example.com` would otherwise
@@ -181,12 +212,22 @@ func allowedRoutesFromValues(values []string) *gatewayv1.AllowedRoutes {
 // Gateway API admission webhook normalises hostnames already, but
 // running ToLower here matches what hostnameSuffix does and keeps
 // the contract local.
+//
+// The wildcard rewrite is the same contract on the other character the
+// hostname rule admits and the name rules do not. A name built from
+// "*" is refused by the apiserver, and refused for the whole Gateway
+// rather than for the one listener, so every other listener on it
+// stops converging. The rewrite reaches no name that was admissible
+// before it: "*" is the one label it touches, and the suffix hashes
+// the whole hostname, asterisk included, so a hostname whose first
+// label is the word itself still gets a name of its own.
 func hostnameFirstLabel(hostname string) string {
 	hostname = strings.ToLower(hostname)
-	if i := strings.Index(hostname, "."); i >= 0 {
-		return hostname[:i]
+	label, _, _ := strings.Cut(hostname, ".")
+	if label == "*" {
+		return wildcardLabel
 	}
-	return hostname
+	return label
 }
 
 // hostnameSuffix returns a short stable suffix derived from the full
@@ -198,6 +239,493 @@ func hostnameFirstLabel(hostname string) string {
 func hostnameSuffix(hostname string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(hostname)))
 	return hex.EncodeToString(sum[:4])
+}
+
+// passthroughListenerPrefix is the "tls-" prefix both passthrough
+// render loops (TLSPassthroughServices and TLSPassthroughListeners) put
+// in front of their identifier to form the Gateway listener name.
+// Hoisted to a const so the collision check below and the two render
+// sites can never drift apart.
+const passthroughListenerPrefix = "tls-"
+
+// isReservedGatewayPort reports whether port is one renderGateway always
+// occupies with its own listeners: 80 (the http listener carrying the
+// ACME challenge and the http->https redirect) and 443 (the
+// HTTPS-terminate listeners and the port-443 TLSPassthroughServices
+// listeners). A native-port passthrough listener must avoid both: a TLS
+// listener on port 80 alongside the HTTP listener, or on 443 alongside a
+// terminate listener for the same hostname, is a protocol conflict.
+// Gateway API admits either — its listener uniqueness rule keys on
+// (port, protocol, hostname), so differing protocols are distinct — and
+// calls for the conflict to surface as Conflicted on both listeners,
+// which then serve nothing. That is the specification rather than the
+// pinned behaviour: v1.19.5 sets no Conflicted condition anywhere, and
+// v1.19.6 adds one in samePortCrossProtocolConflictedListeners, keyed on
+// the listener specs alone. Rejecting the entry up front turns either
+// into a per-field error on TenantGateway status instead.
+//
+// A function rather than a package-level set: the ports are a property
+// of what renderGateway emits, so nothing should be able to write to
+// them from another file.
+func isReservedGatewayPort(port int32) bool {
+	return port == httpListenerPort || port == httpsListenerPort
+}
+
+// maxGatewayListeners mirrors the MaxItems Gateway API declares on
+// Gateway.spec.listeners. Exceeding it fails admission on the whole
+// Gateway, so renderGateway checks the assembled total against it.
+const maxGatewayListeners = 64
+
+// maxGatewayNameLength is the bound Gateway API puts on both a listener
+// name (SectionName) and a listener hostname. Named once because the
+// rendered values this package builds have to fit it, and the fields
+// they are built from are bounded separately from their sum.
+const maxGatewayNameLength = 253
+
+// validatePassthroughListenerCertMode refuses passthrough listeners in
+// every certificate mode but http01.
+//
+// It judges the field against a sibling field rather than against
+// itself, which is why it is separate from
+// validateTLSPassthroughListeners. http01 publishes one terminate
+// listener per attached hostname, so a passthrough hostname is simply a
+// name no terminate listener answers. dns01 and existingSecret serve the
+// tenant from one terminate listener for "*.<apex>" on port 443 instead,
+// and a passthrough hostname has to sit inside the apex, so that
+// wildcard SNI-intersects every entry this field can hold. Suppression
+// cannot answer it either: those modes render no per-hostname listener
+// to withdraw, and the wildcard covers the whole apex. edge is refused
+// for the opposite reason — it ends TLS at the class provider and
+// renders no TLS listener at all, so the entry has nothing to bind to.
+//
+// The intersection matters because the Cilium this repo pins does not
+// keep the two apart. v1.19.5 collapses the Gateway into a single Envoy
+// listener, and toFilterChainMatch in
+// operator/pkg/model/translation/envoy_listener.go matches on
+// transport_protocol and server_names only, so the terminate chain for
+// "*.<apex>" and the passthrough chain for a name under it end up in one
+// listener with an exact match winning over the wildcard. Upstream
+// states the consequence above NeedsCrossProtocolSplit in
+// operator/pkg/model/model.go as of v1.19.6: a combined Envoy listener
+// "would otherwise erase the original Gateway listener port boundary and
+// route traffic for one listener to another". A TLS connection arriving
+// on 443 for that name reaches the database backend.
+//
+// v1.19.6 splits the Envoy listeners per port and this stops being
+// true, though not unconditionally: NeedsPerPortListeners requires
+// more than one HTTPS port, or more than one routed passthrough port,
+// or a cross-port SNI overlap. The passthrough side of every term is
+// counted from attached routes, so a listener with no TLSRoute behind
+// it contributes no port and no filter chain to any of the three, and
+// the listener is all this field creates: the split arrives with the
+// route rather than with the bump. The HTTPS side is not route-gated,
+// but this field adds nothing there.
+// Lifting the refusal for one of the wildcard modes means editing two
+// copies of it, this one and the matching CEL rule in the CRD, which is
+// a schema change even though no field or type moves. The pin is the
+// thing to watch: packages/system/cilium/images/cilium/Dockerfile.
+func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthroughListener, mode gatewayv1alpha1.CertMode) error {
+	if len(listeners) == 0 {
+		return nil
+	}
+	if rendersPassthroughListeners(mode) {
+		return nil
+	}
+	return fmt.Errorf("tlsPassthroughListeners: unsupported with certMode %q; only http01 renders the per-hostname terminate listeners a passthrough hostname can sit beside. dns01 and existingSecret serve the whole apex from one wildcard terminate listener, and the pinned Cilium routes both by SNI alone in one Envoy listener, so a connection would reach the passthrough backend; edge terminates TLS at the class provider and renders no TLS listener at all", mode)
+}
+
+// rendersPassthroughListeners reports whether a certificate mode renders
+// the listeners a tlsPassthroughListeners entry can sit beside.
+//
+// Stated as the set that can rather than the set that cannot, so a mode
+// added to the CertMode enum is refused until someone rules on it. The
+// empty value is http01: the field is optional and an object written
+// before certMode existed carries none, and the render path reads that
+// same absence as http01.
+func rendersPassthroughListeners(mode gatewayv1alpha1.CertMode) bool {
+	switch mode {
+	case gatewayv1alpha1.CertModeHTTP01, "":
+		return true
+	}
+	return false
+}
+
+// passthroughListener is one listener the spec renders on its own,
+// before a single route is collected: "<svc>.<apex>" for each
+// TLSPassthroughServices entry and the declared Hostname of each
+// TLSPassthroughListeners entry. Both come from the spec with no route
+// involved, so the set is known before any claim is collected.
+//
+// A hostname one of these answers is reserved: none of them may also
+// get an HTTPS-terminate listener, and the reason differs by field
+// only in which layer refuses.
+//
+// A TLSPassthroughServices entry shares port 443 with the terminate
+// listeners, so a hostname claimed by both produces two listeners on one
+// port under one name. Gateway API admits the pair and then requires
+// both to report Conflicted, after which neither serves. What the pinned
+// Cilium does with it is a different question, and the two answers are
+// one patch release apart: v1.19.5 has no Conflicted condition at all —
+// setListenerStatus in operator/pkg/gateway-api/gateway_reconcile.go
+// writes Accepted, Programmed and ResolvedRefs and nothing else — so the
+// pair reaches Envoy as two filter chains whose FilterChainMatch carries
+// one transport protocol and one server name. v1.19.6 adds
+// samePortCrossProtocolConflictedListeners, which finds the pair from
+// the listener specs alone and marks both Conflicted and not Accepted.
+// So on the pin the collision is invisible on the objects, and on the
+// next patch release the declaration alone is enough to kill both.
+//
+// A TLSPassthroughListeners entry sits on its own port, and that is not
+// the protection it looks like on the Cilium this repo pins. v1.19.5
+// (packages/system/cilium/images/cilium/Dockerfile) translates the whole
+// Gateway into a single Envoy listener and hangs the ports off
+// AdditionalAddresses; toFilterChainMatch in
+// operator/pkg/model/translation/envoy_listener.go matches on
+// transport_protocol and server_names and nothing else, so the Gateway
+// listener's port never reaches the match. Two chains carrying one SNI
+// from two Gateway ports become two chains with identical criteria in one
+// Envoy listener. Upstream says what that costs, in
+// operator/pkg/model/model.go on v1.19.6, above NeedsCrossProtocolSplit:
+// a combined Envoy listener "would otherwise erase the original Gateway
+// listener port boundary and route traffic for one listener to another".
+// v1.19.6 answers it by splitting the Envoy listeners per port when
+// NeedsPerPortListeners holds, which needs a TLSRoute behind the
+// native-port listener before that listener counts at all; v1.19.5
+// has neither the split nor the diagnostic, so the answer here is to
+// keep the pair from being rendered. Revisit when the pin moves.
+//
+// The cost is that an HTTPRoute claiming a hostname declared here gets
+// no listener wherever a TLSRoute is servable on the overlapping entry.
+// Nothing hostile is needed to reach that: tlsPassthroughServices is a
+// chart value shipped defaulted to api, vm-exportproxy and
+// cdi-uploadproxy, so a tenant app named after one of them collides with
+// a platform default. Suppression is not what breaks that hostname —
+// the same collision already rendered a terminate listener and a
+// passthrough listener under one SNI, and with a route on the
+// passthrough side which of them answered was not something the objects
+// said. The declaration on its own is a different case, which is why the
+// reconciler keys the withdrawal on the routes rather than on the spec:
+// a listener nothing attaches to puts no chain on the name, so the
+// terminate listener answers it and keeps it.
+//
+// What the withdrawal takes away is the record of the collision on the
+// Gateway, which on the pin is nothing and on v1.19.6 would be the
+// Conflicted condition. updateRouteStatuses puts it on the route
+// instead, as Accepted=False with NoMatchingListenerHostname naming the
+// passthrough hostname that answers the claim.
+//
+// The caller matches a claimed hostname against these by SNI overlap
+// rather than by equality, because a "*.db.<apex>" entry answers
+// "pg.db.<apex>" on the pinned Cilium exactly as an explicit entry would:
+// the filter chain match carries ServerNames and no port. Comparing by
+// equality leaves that pair rendered and exposed to the translation this
+// filter exists to avoid. What the overlap settles is which entry
+// answers a claim, not on its own whether the claim is withdrawn: a name
+// beneath a wildcard entry loses its terminate listener once a TLSRoute
+// claiming that same name can be served on the entry, which is the pair
+// whose two chains carry one server name. A TLSRoute on the wildcard
+// itself is a different chain, and Envoy separates a wildcard from an
+// exact server name by specificity rather than by refusing the pair.
+type passthroughListener struct {
+	// section is the rendered Gateway listener name, which is also the
+	// sectionName a route pins itself to.
+	section string
+	// hostname is the SNI the listener answers.
+	hostname string
+	// port is the Gateway port the listener is published on: 443 for a
+	// TLSPassthroughServices entry, the declared native port otherwise.
+	// A route may pin itself to a listener by port as well as by name,
+	// so the eligibility check needs it.
+	port int32
+	// tenantOnly reports whether the listener admits the publishing
+	// tenant's namespace alone. The native-port listeners do; the
+	// port-443 ones select on the gateway label, which every attached
+	// namespace carries.
+	tenantOnly bool
+}
+
+// passthroughListeners enumerates them: one per rendered
+// TLSPassthroughServices entry on port 443, then one per
+// TLSPassthroughListeners entry on its native port, in the order
+// renderGateway emits them.
+//
+// Rendered, not declared: the port-443 entries are the ones the mode
+// actually turns into listeners, which is none under edge. Reading the
+// spec field instead would name a tls-<svc> hostname on a Gateway that
+// carries no listener answering it, withdrawing the hostname from the
+// terminate listener that would have.
+//
+// One walk of the two spec fields rather than one per question. The
+// reconciler needs the reserved hostnames, the section a route attaches
+// by, and the attach set, and deriving each by its own walk is how a
+// third passthrough source gets added to one and missed by the others,
+// with nothing to catch the divergence.
+func passthroughListeners(tgw *gatewayv1alpha1.TenantGateway) []passthroughListener {
+	services := renderedPassthroughServices(tgw)
+	out := make([]passthroughListener, 0, len(services)+len(tgw.Spec.TLSPassthroughListeners))
+	for _, svc := range services {
+		out = append(out, passthroughListener{
+			section:  passthroughListenerPrefix + svc,
+			hostname: svc + "." + tgw.Spec.Apex,
+			port:     443,
+		})
+	}
+	for _, pl := range tgw.Spec.TLSPassthroughListeners {
+		out = append(out, passthroughListener{
+			section:    passthroughListenerPrefix + pl.Name,
+			hostname:   pl.Hostname,
+			port:       pl.Port,
+			tenantOnly: true,
+		})
+	}
+	return out
+}
+
+// validateTLSPassthroughListeners enforces the cross-field invariants on
+// spec.tlsPassthroughListeners that the CRD schema cannot express on its
+// own: DNS-1123 label names unique across the list AND not colliding
+// with a name that spec.tlsPassthroughServices already renders as a
+// tls-<svc> listener; ports in 1..65535, unique across the list, and
+// never one of the reserved Gateway ports (80/443); and hostnames that
+// are a syntactically valid exact RFC 1123 domain or left-most-label
+// wildcard AND fall within the tenant apex. It returns a descriptive
+// error on the first violation so the reconcile fails loudly — markFailed
+// surfaces it on the TenantGateway status — rather than emitting a
+// Gateway with a duplicate, clashing, or out-of-apex listener that the
+// Gateway API (or the cozystack-gateway-hostname-policy VAP) would then
+// reject wholesale, taking every other listener (including every app's
+// HTTP/HTTPS listener) down with it.
+//
+// passthroughServices is tgw.Spec.TLSPassthroughServices: the port-443
+// passthrough list whose rendered tls-<svc> names share the listener
+// namespace with this list. Both loops use passthroughListenerPrefix, so
+// a raw name == svc comparison is exactly a rendered-name collision.
+// apex is tgw.Spec.Apex, the hostname suffix every listener on the tenant
+// Gateway must fall under.
+func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughListener, passthroughServices []string, apex string) error {
+	serviceNames := make(map[string]struct{}, len(passthroughServices))
+	for _, svc := range passthroughServices {
+		// A repeated entry renders the same tls-<svc> listener name
+		// twice, and Gateway API rejects the object for duplicate
+		// listener names — the same wholesale failure this function
+		// exists to convert into a status error. The schema does not
+		// catch it: the field is a plain array, not a set.
+		if _, dup := serviceNames[svc]; dup {
+			return fmt.Errorf("tlsPassthroughServices: duplicate entry %q; it would render the %s%s Gateway listener twice", svc, passthroughListenerPrefix, svc)
+		}
+		serviceNames[svc] = struct{}{}
+	}
+	// Judged only once an entry exists to be judged by it, and named
+	// for the value that is wrong. A hostname has to be a lowercase DNS
+	// name and has to fall within the apex, so an apex that is not
+	// itself one leaves every entry unsatisfiable, and the containment
+	// error names the hostname, which is not the value the tenant can
+	// change: the apex reaches this CR verbatim from a namespace label
+	// that may carry upper case. On a cluster whose CRD carries the
+	// containment CEL rule that error is admission's, since the rule
+	// compares bytes as well and refuses the write, failing the gateway
+	// HelmRelease. This check is reached where the CRD lags the
+	// controller, and there it costs the one Gateway and names the
+	// apex. Guarded on the count so a tenant that never declares a
+	// listener is unaffected: the entries above are validated in this
+	// same function.
+	if len(listeners) > 0 {
+		if errs := validation.IsDNS1123Subdomain(apex); len(errs) > 0 {
+			return fmt.Errorf("tlsPassthroughListeners: tenant apex %q is not a lowercase DNS name (%s), so no listener hostname can sit within it", apex, strings.Join(errs, "; "))
+		}
+	}
+
+	seenNames := make(map[string]struct{}, len(listeners))
+	seenPorts := make(map[int32]struct{}, len(listeners))
+	// Seeded with the hostnames the port-443 service listeners already
+	// occupy (<svc>.<apex>, matching renderGateway) so the check below
+	// spans both lists: a listener entry can collide with a service
+	// hostname while their names differ, which the name checks miss.
+	// source names the claimant the way the user wrote it, not the way
+	// it renders: an error that says tls-api sends the reader looking
+	// through the Gateway for a name they never typed, while the entry
+	// they have to edit sits in the TenantGateway spec.
+	type claimedHostname struct{ hostname, source string }
+	seenHostnames := make([]claimedHostname, 0, len(listeners)+len(passthroughServices))
+	for _, svc := range passthroughServices {
+		// Checked here as well as by the field's pattern, and by the
+		// same rule: an entry becomes a sectionName, so the bound is
+		// Gateway API's SectionName rather than a single DNS label.
+		// Without this the two layers disagree about this field and the
+		// parity test cannot see it, since a malformed entry reaching
+		// the renderer produces a listener name the apiserver refuses
+		// and takes the whole Gateway with it.
+		if errs := validation.IsDNS1123Subdomain(svc); len(errs) > 0 {
+			return fmt.Errorf("tlsPassthroughServices: invalid entry %q: %s", svc, strings.Join(errs, "; "))
+		}
+		// Checked on the composed values rather than on the entry,
+		// because neither component's own bound constrains the sum: an
+		// entry inside SectionName's 253 still overflows it once the
+		// tls- prefix is added, and an entry inside its own bound still
+		// overflows the hostname once the apex is appended. Both
+		// overflows render an object the apiserver refuses whole, so
+		// the Gateway loses every listener rather than this one.
+		if n := passthroughListenerPrefix + svc; len(n) > maxGatewayNameLength {
+			return fmt.Errorf("tlsPassthroughServices: entry %q renders listener name %q, %d characters over the %d Gateway API allows", svc, n, len(n)-maxGatewayNameLength, maxGatewayNameLength)
+		}
+		if h := svc + "." + apex; len(h) > maxGatewayNameLength {
+			return fmt.Errorf("tlsPassthroughServices: entry %q renders hostname %q, %d characters over the %d Gateway API allows", svc, h, len(h)-maxGatewayNameLength, maxGatewayNameLength)
+		}
+		seenHostnames = append(seenHostnames, claimedHostname{svc + "." + apex, fmt.Sprintf("tlsPassthroughServices entry %q", svc)})
+	}
+	for _, l := range listeners {
+		if errs := validation.IsDNS1123Label(l.Name); len(errs) > 0 {
+			return fmt.Errorf("tlsPassthroughListeners: invalid name %q: %s", l.Name, strings.Join(errs, "; "))
+		}
+		if _, dup := seenNames[l.Name]; dup {
+			return fmt.Errorf("tlsPassthroughListeners: duplicate name %q", l.Name)
+		}
+		if _, clash := serviceNames[l.Name]; clash {
+			return fmt.Errorf("tlsPassthroughListeners: name %q collides with tlsPassthroughServices entry %q; both render a %s%s Gateway listener", l.Name, l.Name, passthroughListenerPrefix, l.Name)
+		}
+		seenNames[l.Name] = struct{}{}
+
+		if l.Port < 1 || l.Port > 65535 {
+			return fmt.Errorf("tlsPassthroughListeners: listener %q port %d out of range 1..65535", l.Name, l.Port)
+		}
+		if isReservedGatewayPort(l.Port) {
+			return fmt.Errorf("tlsPassthroughListeners: listener %q port %d is reserved for the Gateway's http (80) and terminate (443) listeners; use the engine's native port", l.Name, l.Port)
+		}
+		// One listener per port is a phase-1 narrowing, not a Gateway
+		// API requirement: TLS listeners are distinct by the (port,
+		// protocol, hostname) triple, so several passthrough listeners
+		// could share a port and be selected by SNI — the port-443
+		// tls-<svc> listeners above already do exactly that. It is
+		// narrowed here because the field's purpose is the engine's
+		// native port, where a second listener means two engines
+		// answering on one port and the SNI deciding which, and
+		// nothing downstream (routing, certificates) exists yet to
+		// make that configuration testable. Lifting it means removing
+		// this check and the matching CEL rule in the CRD, which is a
+		// schema change with no field or type change, so the shape stays
+		// available once the later phases land.
+		if _, dup := seenPorts[l.Port]; dup {
+			return fmt.Errorf("tlsPassthroughListeners: duplicate port %d (listener %q)", l.Port, l.Name)
+		}
+		seenPorts[l.Port] = struct{}{}
+
+		if errs := validatePassthroughHostname(l.Hostname); len(errs) > 0 {
+			return fmt.Errorf("tlsPassthroughListeners: listener %q invalid hostname %q: %s", l.Name, l.Hostname, strings.Join(errs, "; "))
+		}
+		if !hostnameWithinApex(l.Hostname, apex) {
+			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q is outside the tenant apex %q; it must equal the apex or be a subdomain of it (the cozystack-gateway-hostname-policy VAP rejects out-of-apex listener hostnames, failing the whole Gateway)", l.Name, l.Hostname, apex)
+		}
+
+		// Two listeners sharing a hostname on different ports are
+		// distinct to Gateway API — listeners are keyed by (port,
+		// protocol, hostname) — and the object is accepted. Cilium
+		// routes passthrough by SNI without distinguishing the port
+		// (cilium#42898, fixed upstream by cilium#44889 and
+		// backported via cilium#46826 into 1.19.6 — cozystack pins
+		// 1.19.5 in packages/system/cilium/images/cilium/Dockerfile,
+		// so revisit this restriction when that pin moves), so only
+		// one of them works and which one depends on route ordering.
+		// On a native database port that is a raw stream forwarded to
+		// the wrong backend, with Accepted and Programmed both true
+		// and nothing on the status to show for it. Reject the shape
+		// instead.
+		//
+		// Checked after the apex test on purpose: an out-of-apex
+		// hostname that also happens to overlap should report the apex
+		// violation, which names the actual mistake.
+		for _, claimed := range seenHostnames {
+			if !hostnamesOverlap(l.Hostname, claimed.hostname) {
+				continue
+			}
+			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q overlaps %s hostname %q; Cilium routes TLS passthrough by SNI alone and cannot distinguish two listeners whose hostnames match the same ClientHello, even on different ports", l.Name, l.Hostname, claimed.source, claimed.hostname)
+		}
+		seenHostnames = append(seenHostnames, claimedHostname{l.Hostname, fmt.Sprintf("listener %q", l.Name)})
+	}
+	return nil
+}
+
+// hostnamesOverlap reports whether two listener hostnames can match the
+// same ClientHello SNI. Exact-string equality is not enough: a wildcard
+// matches any number of labels to its left, per Gateway API's Hostname
+// contract, so "*.foo.example.com" covers both "api.foo.example.com"
+// and "a.b.foo.example.com" — and covers "*.db.foo.example.com" too.
+// A wildcard does NOT match the bare suffix itself ("*.foo.example.com"
+// does not match "foo.example.com"), which is why the exact leg tests
+// for the leading dot.
+//
+// This matters because the caller rejects overlapping hostnames on the
+// premise that Cilium routes passthrough by SNI alone. An exact-match
+// check would let a single "*.<apex>" entry silently shadow the
+// tls-<svc> listeners the chart ships by default (api, vm-exportproxy,
+// cdi-uploadproxy all render <svc>.<apex>), which is the exact failure
+// the check exists to prevent, reachable from stock values.
+func hostnamesOverlap(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return hostnameCovers(a, b) || hostnameCovers(b, a)
+}
+
+// isWildcardHostname reports whether h is a left-most-label wildcard,
+// the one shape of wildcard the Gateway API hostname rule admits.
+func isWildcardHostname(h string) bool {
+	return strings.HasPrefix(h, "*.")
+}
+
+// hostnameCovers reports whether wildcard hostname w matches hostname x.
+// Returns false when w is not a wildcard; the equality case is handled
+// by the caller.
+func hostnameCovers(w, x string) bool {
+	suffix, ok := strings.CutPrefix(w, "*.")
+	if !ok {
+		return false
+	}
+	// One suffix test answers x whether or not x is itself a wildcard:
+	// "*.<inner>" ends with ".<suffix>" exactly when <inner> equals or
+	// sits under <suffix>, the "*." prefix being inert to the test. A
+	// separate wildcard branch computed the same answer twice.
+	return strings.HasSuffix(x, "."+suffix)
+}
+
+// validatePassthroughHostname accepts an exact RFC 1123 hostname or a
+// left-most-label wildcard ("*.example.com"), matching the shape the
+// Gateway API allows for a listener hostname.
+func validatePassthroughHostname(hostname string) []string {
+	if strings.HasPrefix(hostname, "*.") {
+		return validation.IsWildcardDNS1123Subdomain(hostname)
+	}
+	return validation.IsDNS1123Subdomain(hostname)
+}
+
+// hostnameWithinApex reports whether an exact or wildcard listener
+// hostname falls within the tenant apex: it must equal the apex or be a
+// subdomain of it. This mirrors the cozystack-gateway-hostname-policy
+// ValidatingAdmissionPolicy (packages/system/cozystack-basics), whose
+// CEL allows a listener hostname iff it equals the namespace host label
+// or ends with "." + that label, with both operands lowercased first and
+// with an absent or empty label allowing everything. Neither leg is
+// modelled here: this comparison is byte-exact, and an apex no listener
+// hostname can sit within is refused by validateTLSPassthroughListeners
+// before anything reaches this test. A wildcard such as "*.db.<apex>"
+// satisfies the suffix test and is accepted, exactly as the VAP accepts
+// it. Rejecting an out-of-apex hostname here converts a wholesale Gateway
+// rejection (the VAP denies the whole object on the first reconcile,
+// taking every listener down) into a clear per-field error on the
+// TenantGateway status. The leading "." in the suffix prevents a
+// sibling-domain false match ("evilfoo.example.com" is not under
+// "foo.example.com").
+//
+// It mirrors the VAP's shape, not its input: the VAP reads the
+// namespace's namespace.cozystack.io/host label, this reads
+// tgw.Spec.Apex. They are expected to be the same value — the tenant
+// chart writes both from the same computed host, and layers 4 and 5 of
+// the security model (packages/extra/gateway/README.md) restrict who
+// may change either — but nothing in this function enforces it. If they
+// ever diverge, this pre-check passes and the VAP still denies the
+// whole Gateway, which is the outcome the pre-check exists to convert
+// into a clean per-field status error.
+func hostnameWithinApex(hostname, apex string) bool {
+	return hostname == apex || strings.HasSuffix(hostname, "."+apex)
 }
 
 // perListenerName produces the Gateway listener name for a per-app

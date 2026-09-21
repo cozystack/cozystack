@@ -33,11 +33,7 @@ import (
 // state of the rendered Gateway (Gateway.Status.Listeners +
 // Gateway.Status.Conditions). Operators reading `kubectl get tgw`
 // see real readiness, not a fictional always-True flag.
-func (r *Reconciler) reconcileStatus(
-	ctx context.Context,
-	tgw *gatewayv1alpha1.TenantGateway,
-	dynHostnames []string,
-) error {
+func (r *Reconciler) reconcileStatus(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
 	gw := &gatewayv1.Gateway{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: tgw.Name}, gw); err != nil {
 		return fmt.Errorf("get Gateway for status: %w", err)

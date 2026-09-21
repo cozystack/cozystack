@@ -1,0 +1,11 @@
+{{- if .Values.useBounds -}}
+{{ include "cozy-lib.keda.scaledObject" (dict
+     "name" .Release.Name
+     "scaleTargetRef" (dict "apiVersion" "postgresql.cnpg.io/v1" "kind" "Cluster" "name" .Release.Name)
+     "minReplicaCount" 6
+     "maxReplicaCount" 3
+     "serverAddress" "http://vmselect.example.svc:8481/select/0/prometheus"
+     "query" "sum(x) + 150"
+     "threshold" "150"
+) }}
+{{- end -}}

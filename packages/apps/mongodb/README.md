@@ -106,8 +106,9 @@ When `external: true` is enabled:
 
 ### Credentials
 
-On first install, the credentials secret will be empty until the Percona operator initializes the cluster.
-Run `helm upgrade` after MongoDB is ready to populate the credentials secret with the actual password.
+The chart generates the operator's system-user passwords and writes them to `<release>-percona-server-mongodb-users` before the operator starts, so `<release>-credentials` carries a working `password` and `uri` from the first install onwards. An upgrade reuses what the secret already holds and never rotates a live password.
+
+A database created before this behaviour landed keeps the secret the operator generated for it, and its `<release>-credentials` is filled on the next upgrade of the release with the password the operator had already assigned.
 
 ### Data lifecycle
 
@@ -155,13 +156,13 @@ If you need to retain data, take a backup before deletion. Refer to the [Percona
 
 ### Upgrading from earlier versions
 
-Earlier versions of this chart referenced a namespace-shared system users secret (`percona-server-mongodb-users`). Upgrading to a release that scopes this secret per CR (`<release>-percona-server-mongodb-users`) triggers a password rotation for the operator-managed system users. The rotation is performed in place by the Percona operator via `db.changeUserPassword()` against the running mongod (operator log: `Secret data changed. Updating users...`); pods are not restarted and the cluster stays available.
+Earlier versions of this chart referenced a namespace-shared system users secret (`percona-server-mongodb-users`). A release that scopes this secret per CR (`<release>-percona-server-mongodb-users`) renders the new secret on the next upgrade without rotating anything: while the per-release secret does not exist yet, the chart reads the current system-user passwords back from the operator's own copy, `internal-<release>-users`, and writes those same values into the new users secret and into `<release>-credentials`. The Percona operator sees unchanged values and leaves the running users alone; pods are not restarted and the cluster stays available.
 
-**Rotated automatically on upgrade:**
+**Carried over on upgrade:**
 
-- The five operator-managed system accounts: `databaseAdmin`, `userAdmin`, `backup`, `clusterAdmin`, `clusterMonitor`.
-- Secret `<release>-percona-server-mongodb-users` (newly created, per-CR) and `internal-<release>-users` receive the new values.
-- Secret `<release>-credentials` is regenerated; its `password` and `uri` keys reflect the new `databaseAdmin` password.
+- The five operator-managed system accounts: `databaseAdmin`, `userAdmin`, `backup`, `clusterAdmin`, `clusterMonitor` keep their passwords.
+- Secret `<release>-percona-server-mongodb-users` is created per CR with the values already held by `internal-<release>-users`.
+- Secret `<release>-credentials` is filled with the existing `databaseAdmin` password and the matching `uri`. Installs where these keys were empty get them on the next upgrade, because Helm re-renders only when the spec changes.
 
 **Not affected:**
 
@@ -170,7 +171,7 @@ Earlier versions of this chart referenced a namespace-shared system users secret
 
 **Action required after upgrade:**
 
-Workloads that mount `<release>-credentials` keep using the cached old password until they re-read the secret. Restart those pods, or run a controller such as [Reloader](https://github.com/stakater/Reloader) to roll them automatically. Without this, application connections fail with authentication errors once their existing sessions expire.
+Workloads that mounted `<release>-credentials` while its `password` and `uri` were empty see the filled values only after they re-read the secret. Restart those pods, or run a controller such as [Reloader](https://github.com/stakater/Reloader) to roll them automatically.
 
 **Orphaned legacy secret:**
 

@@ -226,7 +226,7 @@ type OIDC struct {
 	// Tenant-supplied AuthenticationConfiguration; consumed only when `mode: CustomConfig`.
 	// +kubebuilder:default:={}
 	CustomConfig OIDCCustomConfig `json:"customConfig,omitempty"`
-	// Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform `cozy` realm via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
+	// Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform Keycloak realm (`cozy` by default) via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
 	// +kubebuilder:default:="None"
 	Mode OIDCMode `json:"mode"`
 	// Users granted access to the tenant cluster; each entry produces one ClusterRoleBinding inside the tenant cluster. Works for both `System` and `CustomConfig` modes.

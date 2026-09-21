@@ -1,0 +1,143 @@
+suite: Kafka pre-delete cleanup
+
+templates:
+  - templates/hooks/delete.yaml
+
+release:
+  name: kafka-test
+  namespace: tenant-test
+
+tests:
+  - it: deletes release-scoped KafkaTopics before removing the topic-operator
+    asserts:
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: Job
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: kafka-test-pre-delete
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+        documentIndex: 0
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 270
+        documentIndex: 0
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+        documentIndex: 0
+      # The hook exits 0 on the degraded path as well as the clean one, so
+      # hook-succeeded would delete the Job holding the only account of a
+      # finalizer that outlived the wait. Pinned here because the difference is
+      # invisible until someone is debugging a namespace that will not finalize.
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+        documentIndex: 0
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 3600
+        documentIndex: 0
+      # Both quotes are part of the pattern. Unanchored, this matches a selector
+      # widened to the sibling release kafka-test2 or to kafka-test-topics, so
+      # it would pin nothing about scoping.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "-l 'strimzi\\.io/cluster=kafka-test'"
+        documentIndex: 0
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "--wait=true"
+        documentIndex: 0
+      # A non-zero --request-timeout makes kubectl ignore its in-cluster
+      # credentials: client-go consults them only while the assembled config
+      # still equals the default, and the flag lands in that config. The call
+      # then goes to localhost:8080, is refused, and the hook exits 1, which
+      # wedges every uninstall of the release (#4276). Nothing in the rendered
+      # manifest looks wrong, so this assertion is the only thing standing
+      # between that flag and another cluster-only failure. The pattern needs
+      # the "=": the script's own comment names the flag, and matching the bare
+      # name would fail on the explanation rather than on a real use.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "--request-timeout="
+        documentIndex: 0
+      # Pinned by shape, not by literal: Renovate rewrites both the tag and the
+      # digest under packages/.+/templates/hooks/.+\.yaml and nothing rewrites
+      # tests/, so a literal of either turns the next bump red for no defect.
+      # What matters is that the ref stays pinned by digest at all. Same shape
+      # as harbor's cleanup_hook_test.yaml and mariadb's
+      # cleanup_pvc_hook_test.yaml. The leading ^ also covers the empty
+      # images-registry case, where a bare leading slash would be an unpullable
+      # ref that only surfaces at uninstall time.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+        documentIndex: 0
+      - isKind:
+          of: ServiceAccount
+        documentIndex: 1
+      # Pinned as an asymmetry, not as a value: the Job above carries no
+      # hook-succeeded because the script exits 0 on the degraded path too and
+      # its log is the only record that a finalizer outlived the wait, while
+      # these three have no ttlSecondsAfterFinished and without a terminal
+      # policy would sit in the tenant namespace for the life of the cluster,
+      # still granting delete over every KafkaTopic in it. Reaping them cannot
+      # strand a running pod: helm reaps on hook-succeeded only once the Job is
+      # terminal, and activeDeadlineSeconds 270 ends it inside the uninstall
+      # hook timeout, HelmReleaseSpec.Timeout, 5m by default. hook-failed adds
+      # nothing, since a failing hook already reaps the earlier successful ones
+      # under hook-succeeded.
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+        documentIndex: 1
+      - isKind:
+          of: Role
+        documentIndex: 2
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+        documentIndex: 2
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kafka.strimzi.io"]
+            resources: ["kafkatopics"]
+            verbs: ["get", "list", "watch", "delete"]
+        documentIndex: 2
+      - isKind:
+          of: RoleBinding
+        documentIndex: 3
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+        documentIndex: 3
+      - equal:
+          path: roleRef.name
+          value: kafka-test-pre-delete
+        documentIndex: 3
+      - equal:
+          path: subjects[0].name
+          value: kafka-test-pre-delete
+        documentIndex: 3
+
+  - it: prefixes the hook image with the cluster images registry when set
+    set:
+      _cluster:
+        images-registry: registry.example.com
+    asserts:
+      # A mirrored or air-gapped install resolves the image from the internal
+      # registry, and the digest pin survives the prefixing. Unasserted until
+      # now, so nothing would have caught the hook being the one image in this
+      # chart that ignored the override: at uninstall time a pull failure here
+      # means the topics keep their finalizer and the namespace does not go.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^registry\.example\.com/clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+        documentIndex: 0

@@ -1,0 +1,143 @@
+{{- if .Values.autoscaling.enabled }}
+{{- /*
+Fail closed when KEDA is not installed. KEDA is an optional platform package and
+is NOT enabled by default, but autoscaling.enabled is a tenant-facing knob, so a
+tenant can turn it on against a cluster where the admin never enabled `keda`.
+Without this guard the ScaledObject renders against an unknown kind and the whole
+database HelmRelease fails with an opaque `no matches for kind "ScaledObject"`.
+We must NOT instead silently skip rendering: db.yaml seeds `.spec.instances` at a
+static `max(replicas, effectiveMin)` under active autoscaling, so a skipped
+ScaledObject would leave the tenant with a fixed-size cluster and no HPA — the
+autoscaling they asked for silently absent, with nothing to signal it. Stop with an
+actionable message instead.
+*/ -}}
+{{- if not (.Capabilities.APIVersions.Has "keda.sh/v1alpha1") }}
+{{- fail "postgres: autoscaling.enabled is set, but the KEDA platform package is not installed (keda.sh/v1alpha1 is unknown to the cluster). Ask your platform admin to enable the 'keda' package before enabling database autoscaling." }}
+{{- end }}
+{{- /* The HPA divides read load by target; 0 is undefined and negatives invert scaling. */ -}}
+{{- if lt (int .Values.autoscaling.target) 1 }}
+{{- fail "postgres: autoscaling.target must be a positive integer (the desired-replica formula divides the read load by it)." }}
+{{- end }}
+{{- /* Reject a contradictory range rather than silently resolving it. The effective
+       lower bound folds in the quorum floor (maxSyncReplicas+1) and the read floor (2),
+       so if it exceeds maxReplicas the cost ceiling sits below the count the chart is
+       forced to run; effectiveMax would then silently raise the ceiling to that floor —
+       a possibly large, unbounded instance count — with no signal. Fail closed and tell
+       the operator to raise maxReplicas. This covers both minReplicas > maxReplicas and
+       a quorum floor above maxReplicas. */ -}}
+{{- $emin := int (include "postgres.autoscaling.effectiveMin" .) }}
+{{- if gt $emin (int .Values.autoscaling.maxReplicas) }}
+{{- fail (printf "postgres: the effective minimum instance count (%d = max(minReplicas %d, maxSyncReplicas+1 %d, 2)) exceeds autoscaling.maxReplicas (%d); raise maxReplicas to at least the quorum floor." $emin (int .Values.autoscaling.minReplicas) (add (int .Values.quorum.maxSyncReplicas) 1) (int .Values.autoscaling.maxReplicas)) }}
+{{- end }}
+{{- /* Reject a resting/seed count above the ceiling. `replicas` is the seed the chart
+       renders under autoscaling (max(replicas, effectiveMin)) and the count restored on
+       disable; if it exceeds maxReplicas the stock HPA's `currentReplicas > maxReplicaCount`
+       branch writes /scale = maxReplicaCount UNCONDITIONALLY on the first reconcile — even
+       under the both-direction pause of dryRun/transition, which that branch never consults —
+       cutting the live count straight to maxReplicas in one step and shedding the surplus
+       standbys and their PVCs past the one-per-period scaleDown pacing (the above-max branch
+       never reaches the rendered policies). Fail closed, mirroring the effectiveMin>maxReplicas
+       guard above (design proposal §Upgrade names this the remaining render-guard gap). */ -}}
+{{- if gt (int .Values.replicas) (int .Values.autoscaling.maxReplicas) }}
+{{- fail (printf "postgres: replicas (%d) exceeds autoscaling.maxReplicas (%d); enabling autoscaling (or dry-run/transition) would make KEDA's HPA cut the live count straight to maxReplicas in one step, shedding the surplus standbys and their PVCs past the scale-down pacing. Raise autoscaling.maxReplicas to at least replicas, or lower replicas deliberately first." (int .Values.replicas) (int .Values.autoscaling.maxReplicas)) }}
+{{- end }}
+{{- /* Symmetric LOW-side of the replicas>maxReplicas guard above. Under dry-run/transition
+       the chart renders the STATIC instances=replicas, but the ScaledObject still carries
+       minReplicaCount=effectiveMin with both scale directions paused. The pause disables the
+       HPA's scaling POLICIES, not its min-replica clamp — so when replicas<effectiveMin the
+       HPA raises the live count to the floor on its first reconcile, actuating a scale-up in
+       a mode documented as "actuates neither way", and because the rendered instances value
+       does not change the client-side two-way patch never pulls it back (permanent extra
+       standbys + PVCs). Active mode seeds max(replicas,effectiveMin) so it is unaffected;
+       disabled renders no ScaledObject, so no HPA min-clamp exists. Fail closed and tell the
+       operator to stage replicas to the floor first. */ -}}
+{{- if and (eq (include "postgres.autoscaling.paused" .) "true") (lt (int .Values.replicas) $emin) }}
+{{- fail (printf "postgres: replicas (%d) is below the effective floor (%d = max(minReplicas %d, maxSyncReplicas+1 %d, 2)); under dry-run/transition the ScaledObject is paused but its minReplicaCount clamp still raises the live count to the floor on the first reconcile (a scale-up in a mode meant to only observe), and client-side apply never pulls it back. Stage replicas to at least the floor before dry-run/transition." (int .Values.replicas) $emin (int .Values.autoscaling.minReplicas) (add (int .Values.quorum.maxSyncReplicas) 1)) }}
+{{- end }}
+{{- /* Absolute ceiling on the tenant-facing maxReplicas. The schema/CRD carry no
+       `maximum` (cozyvalues-gen emits no numeric bound) and the aggregated apiserver does
+       not range-validate the Application CR, so this render guard is the only bound; the
+       guards above reject only a floor ABOVE maxReplicas, nothing caps maxReplicas itself.
+       Without this a tenant could set autoscaling.maxReplicas: 100000 and, under load,
+       drive KEDA to scale CNPG toward that many instances — a resource-exhaustion / cost
+       bomb bounded only by a ResourceQuota that may not exist. Fail closed above a sane
+       read-replica ceiling; a deployment that genuinely needs more is a platform-policy
+       decision, not a per-tenant knob. */ -}}
+{{- $maxReplicasCeiling := 100 }}
+{{- if gt (int .Values.autoscaling.maxReplicas) $maxReplicasCeiling }}
+{{- fail (printf "postgres: autoscaling.maxReplicas (%d) exceeds the maximum of %d read replicas; a higher ceiling is a platform-policy decision, not a per-tenant setting." (int .Values.autoscaling.maxReplicas) $maxReplicasCeiling) }}
+{{- end }}
+{{- /* The trigger query is served from vmselect in the tenant's monitoring namespace.
+       If it is unset the serverAddress would render as the malformed
+       `vmselect-shortterm..svc:8481`, which surfaces late as a KEDA scaler error
+       rather than a clear failure. The platform always injects it; fail closed here
+       (mirroring the guards above) for a hand-rendered / misconfigured tenant. */ -}}
+{{- if not (include "cozy-lib.ns-monitoring" .) }}
+{{- fail "postgres: autoscaling requires a monitoring namespace to reach vmselect, but none is set (_namespace.monitoring is empty). The platform normally injects it; ensure the tenant has monitoring enabled." }}
+{{- end }}
+{{- /* SSRF guard on the trigger destination (design proposal §Security). The
+       cluster-privileged KEDA operator fetches serverAddress every polling interval, so a
+       tenant-set value is attacker-controlled. This guard enforces two things and NOT more —
+       do not read it as "refuses everything unsafe":
+         1. the host is an in-cluster Service DNS name (<svc>.<ns>.svc[.<clusterDomain>]),
+            with the optional suffix anchored to THIS cluster's domain (not an arbitrary
+            dotted tail — an unanchored `(\.[a-zA-Z0-9.-]+)?` would accept x.svc.attacker.com);
+         2. the <ns> segment is within the tenant's own subtree (its namespace + parents +
+            root, via cozy-lib.rbac.allParentTenantsAndThis) — the only namespaces whose
+            vmselect the tenant is entitled to read. Without (2) a tenant could point the
+            operator at a sibling tenant's or a system namespace's `.svc` (a blind in-cluster
+            SSRF relay); the egress CiliumNetworkPolicy does NOT stop that (its `cluster`
+            entity permits all in-cluster egress) — it only denies off-cluster, which is the
+            defense-in-depth backstop for (1).
+       The host is parsed as a URL authority (strip scheme, path/query/fragment, userinfo up
+       to the last `@`, then the port) — NOT by truncating at the first `:`/`/`, which a
+       `http://vmselect.<ns>.svc:1@evil.example.com/` userinfo payload defeats (the truncated
+       text passes the .svc check while net/url dials the host after the `@`).
+       cluster-domain rides _cluster (platform apps.yaml, from networking.clusterDomain). */ -}}
+{{- $serverAddress := include "postgres.autoscaling.serverAddress" . }}
+{{- $saNoScheme := regexReplaceAll "^[a-zA-Z][a-zA-Z0-9+.-]*://" $serverAddress "" }}
+{{- $saAuthority := regexReplaceAll "[/?#].*$" $saNoScheme "" }}
+{{- $saAfterUser := regexReplaceAll "^.*@" $saAuthority "" }}
+{{- $saHost := regexReplaceAll ":[0-9]*$" $saAfterUser "" }}
+{{- $clusterDomain := index (.Values._cluster | default dict) "cluster-domain" }}
+{{- $domainSuffix := "" }}
+{{- if $clusterDomain }}
+{{- $domainSuffix = printf "(\\.%s)?" ($clusterDomain | replace "." "\\.") }}
+{{- end }}
+{{- /* Require the full <service>.<namespace>.svc shape: two DNS labels (no embedded
+       dots) before .svc, so a single-label host like `foo.svc` is rejected HERE with the
+       host message rather than slipping through to the namespace-pin below, where the
+       ns-extraction regex leaves it unchanged and it fails for the wrong reason. Anchoring
+       the two labels also drops the old class's stray `.`, which let a dotted tail masquerade
+       as one label. */ -}}
+{{- $dnsLabel := "[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?" }}
+{{- $hostRe := printf "^%s\\.%s\\.svc%s$" $dnsLabel $dnsLabel $domainSuffix }}
+{{- if not (regexMatch $hostRe $saHost) }}
+{{- fail (printf "postgres: autoscaling.serverAddress host %q is not an in-cluster Service DNS name (must be <service>.<namespace>.svc or ...svc.%s). An external host or IP is refused so the cluster-privileged KEDA operator cannot be used as an SSRF relay to a metadata endpoint or another tenant's address." $saHost (default "<cluster-domain>" $clusterDomain)) }}
+{{- end }}
+{{- /* Namespace-pin: the <ns> label of the host must be one the tenant may read from
+       (own namespace, parents, or tenant-root). This narrows what a tenant may set in
+       autoscaling.serverAddress; the constraint and its residual surface (tenant-root is
+       always allowed, so a blind in-cluster probe to a root Service stays possible) are
+       documented on the serverAddress field in values.yaml. */ -}}
+{{- $svcNs := regexReplaceAll "^.*\\.([^.]+)\\.svc(\\..*)?$" $saHost "${1}" }}
+{{- $allowedNs := include "cozy-lib.rbac.allParentTenantsAndThis" .Release.Namespace | fromYamlArray }}
+{{- if not (has $svcNs $allowedNs) }}
+{{- fail (printf "postgres: autoscaling.serverAddress namespace %q is outside this tenant's subtree %v; the cluster-privileged KEDA operator may only be pointed at a vmselect in the tenant's own, parent, or root namespace, not a sibling tenant's or a system namespace's Service." $svcNs $allowedNs) }}
+{{- end }}
+{{- include "cozy-lib.keda.scaledObject" (dict
+     "name" .Release.Name
+     "namespace" .Release.Namespace
+     "scaleTargetRef" (dict "apiVersion" "postgresql.cnpg.io/v1" "kind" "Cluster" "name" .Release.Name)
+     "minReplicaCount" (int (include "postgres.autoscaling.effectiveMin" .))
+     "maxReplicaCount" (int (include "postgres.autoscaling.effectiveMax" .))
+     "serverAddress" (include "postgres.autoscaling.serverAddress" .)
+     "query" (include "postgres.autoscaling.query" .)
+     "threshold" (.Values.autoscaling.target | toString)
+     "behavior" (dict
+       "scaleUp" (dict "stabilizationWindowSeconds" 300)
+       "scaleDown" (dict "stabilizationWindowSeconds" 1800 "policies" (list (dict "type" "Pods" "value" 1 "periodSeconds" 600))))
+     "paused" ((include "postgres.autoscaling.paused" .) | eq "true")
+     "labels" (dict "app.kubernetes.io/name" "postgres.apps.cozystack.io" "app.kubernetes.io/instance" .Release.Name)
+) }}
+{{- end }}
