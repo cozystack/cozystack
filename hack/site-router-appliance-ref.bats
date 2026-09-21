@@ -54,13 +54,22 @@ FIX_DIGEST="sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadb
 # The chart is copied rather than edited in place so a failed run cannot leave a
 # fixture reference in the working tree. `cp -RL` dereferences charts/cozy-lib,
 # which is a symlink to packages/library and would dangle once copied.
+# $2, when given, is one `--set` expression. Note that `--set k=` and `--set
+# k=null` are NOT interchangeable here: the first sets the empty string, the
+# second deletes the key and lets the chart default apply, so the empty-value
+# case below has to use the former or it would silently assert the default.
 render_dv() {
   rm -rf "$TMP/chart"
   cp -RL "$CHART_SRC" "$TMP/chart"
   printf '%s\n' "$1" > "$TMP/chart/images/vyos-router-disk.tag"
   rc=0
-  helm template site-router-test "$TMP/chart" -n tenant-test -s templates/dv.yaml \
-    > "$TMP/rendered.yaml" 2> "$TMP/err" || rc=$?
+  if [ -n "${2:-}" ]; then
+    helm template site-router-test "$TMP/chart" -n tenant-test -s templates/dv.yaml \
+      --set "$2" > "$TMP/rendered.yaml" 2> "$TMP/err" || rc=$?
+  else
+    helm template site-router-test "$TMP/chart" -n tenant-test -s templates/dv.yaml \
+      > "$TMP/rendered.yaml" 2> "$TMP/err" || rc=$?
+  fi
   printf '%s\n' "$rc" > "$TMP/rc"
 }
 
@@ -107,8 +116,9 @@ render_dv() {
 # because that is the only state in which the chart renders. R1: the request is
 # 12Gi, not the 10Gi virtual size of the VyOS qcow2 — CDI's filesystem-import
 # scratch (decompressed image + ~5.5% fs overhead) overflows a request equal to
-# the virtual size and fails the import live on VyOS 1.5-rolling. storageClass is
-# pinned to `replicated` (DRBD/LINSTOR) so the boot disk stays live-migratable.
+# the virtual size and fails the import live on VyOS 1.5-rolling. storageClass
+# defaults to `replicated` (DRBD/LINSTOR), the only class the boot disk is
+# live-migratable on.
 @test "the boot DataVolume keeps its live-validated shape" {
   TMP=$(mktemp -d)
   render_dv "$FIX_REPO:v1.6.0@$FIX_DIGEST"
@@ -122,5 +132,33 @@ render_dv() {
   # and not a clone of a shared golden (populated only at creation, so advancing
   # the appliance could never replace it).
   ! grep -qE '^ +(http|pvc):' "$TMP/rendered.yaml"
+  rm -rf "$TMP"
+}
+
+# storageClass became a parameter because the e2e container lane has no DRBD and
+# therefore no `replicated` class at all: the hard pin made the boot disk's PVC
+# unsatisfiable there, and CDI reported it as `ErrClaimNotValid` with an empty
+# DataVolume status rather than as a missing class. These two cases pin the
+# parameter's ends — the override reaching the PVC, and empty meaning "cluster
+# default" rather than "no dynamic provisioning".
+@test "an overridden storageClass reaches the boot PVC" {
+  TMP=$(mktemp -d)
+  render_dv "$FIX_REPO:v1.6.0@$FIX_DIGEST" "storageClass=local"
+  [ "$(cat "$TMP/rc")" = 0 ] || { cat "$TMP/err" >&2; rm -rf "$TMP"; exit 1; }
+  grep -q '^    storageClassName: local$' "$TMP/rendered.yaml"
+  ! grep -q 'storageClassName: replicated' "$TMP/rendered.yaml"
+  rm -rf "$TMP"
+}
+
+@test "an empty storageClass omits the field instead of emitting an empty one" {
+  TMP=$(mktemp -d)
+  render_dv "$FIX_REPO:v1.6.0@$FIX_DIGEST" "storageClass="
+  [ "$(cat "$TMP/rc")" = 0 ] || { cat "$TMP/err" >&2; rm -rf "$TMP"; exit 1; }
+  # `storageClassName: ""` is not "use the default" to Kubernetes — it means
+  # "bind only a pre-provisioned PV", which disables dynamic provisioning and
+  # leaves the DataVolume Pending forever. Absence is what selects the default.
+  ! grep -q 'storageClassName' "$TMP/rendered.yaml"
+  # Still a DataVolume, so the assertion above cannot pass by rendering nothing.
+  grep -q '^kind: DataVolume$' "$TMP/rendered.yaml"
   rm -rf "$TMP"
 }
