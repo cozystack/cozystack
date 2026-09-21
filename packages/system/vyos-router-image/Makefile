@@ -47,8 +47,8 @@ NAMESPACE=cozy-system
 #   curl -fsSL https://packages.vyos.net/repositories/rolling/dists/rolling/main/binary-amd64/Packages.gz \
 #     | gunzip | grep -oE '^Package: linux-image-[0-9.]+-vyos$' | sort -u
 VYOS_BUILD_IMAGE = vyos/vyos-build:current@sha256:77b88166bb9dfb2fdef4f870064e579a1e33247a52c03a12c1703bf9b854a4c5
-VYOS_BUILD_REF   = e14a4895cd5add37240fca9da195832b8a8683e3
-VYOS_VERSION     = 1.5-rolling-20260811
+VYOS_BUILD_REF   = d2525d97a11de9f4799dbb6d425c5c9c51edf179
+VYOS_VERSION     = 1.5-rolling-20260904
 VYOS_ARCH        = amd64
 
 include ../../../hack/common-envs.mk
