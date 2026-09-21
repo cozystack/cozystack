@@ -161,16 +161,28 @@ mode of drift here is a TLS error nobody expects.
 {{- if and $existing (hasKey $existing "data") (hasKey $existing.data "tls.crt") (hasKey $existing.data "tls.key") -}}
 {{- dict "cert" (index $existing.data "tls.crt" | b64dec) "key" (index $existing.data "tls.key" | b64dec) "serverName" $serverName | toYaml -}}
 {{- else -}}
-{{- /* EC, and not by preference. VyOS stores a private key as bare base64 and
-       rebuilds the PEM itself on read (vyos/pki.py load_private_key), trying
-       exactly two armours: PKCS#8 `PRIVATE KEY` and SEC1 `EC PRIVATE KEY`.
-       sprig's genSelfSignedCert is RSA and emits PKCS#1 `RSA PRIVATE KEY`, which
-       neither wrap parses, so the commit dies at src/conf_mode/pki.py with
-       "Invalid private key on certificate" and the gateway boots with no
-       configuration at all. Measured on a real appliance boot, not deduced.
-       genPrivateKey "ecdsa" emits SEC1, which is the second armour VyOS tries,
-       and genSelfSignedCertWithKey issues a matching certificate for it. */ -}}
-{{- $key := genPrivateKey "ecdsa" -}}
+{{- /* Ed25519, and the reason is the format rather than the curve. VyOS stores
+       a private key as bare base64 and rebuilds the PEM itself on read
+       (vyos/pki.py wrap_private_key), and on the SHIPPED 2026.03 image that
+       function has exactly one armour: PKCS#8 `-----BEGIN PRIVATE KEY-----`.
+       Anything else fails load_private_key, conf_mode/pki.py raises "Invalid
+       private key on certificate", and the gateway boots with no configuration
+       at all.
+
+       sprig gives one generator that emits PKCS#8, and this is it. genPrivateKey
+       "rsa" emits PKCS#1 and genPrivateKey "ecdsa" emits SEC1; both are rejected,
+       and both have been shipped here and failed a real boot.
+
+       Two earlier revisions of this comment cited a two-armour PKCS#8-or-SEC1
+       loop as measured fact. That loop is real but lives on vyos-1x `rolling`,
+       which is six months ahead of this image — and it was read from a URL
+       naming a branch that does not exist (`.../vyos-1x/current/...`), which
+       GitHub silently serves from the default branch. Check upstream behaviour
+       against a ref that resolves, or against the image itself.
+
+       PKCS#8 is also the first armour tried on `rolling`, so this choice holds
+       whichever version the appliance ends up carrying. */ -}}
+{{- $key := genPrivateKey "ed25519" -}}
 {{- $gen := genSelfSignedCertWithKey $serverName nil (list $serverName) 3650 $key -}}
 {{- dict "cert" $gen.Cert "key" $key "serverName" $serverName | toYaml -}}
 {{- end -}}
@@ -325,6 +337,17 @@ lockstep with the pinned image. This is the strongest form of the
 "image and cloud-init advance atomically" invariant (docs/image-lifecycle.md):
 the whole config.boot, not just a seed, now lives beside the image. When the
 image bumps, re-capture config.boot from the new image's `save`.
+
+KNOWN DRIFT, do not read the footer as authoritative: it is missing at least
+three components the 2026.03 image declares, so the version map here and the
+image's own do not match and `migration_needed()` is true on every boot. The
+practical effect is small, because VyOS prunes footer entries the system does
+not know and the seed rewrites config.boot from the NoCloud disk each boot
+anyway — but "captured verbatim" above is a claim this file no longer fully
+supports, and the fix is a re-capture from a `save` on the image rather than
+hand-editing entries in. Adding an entry by hand is specifically what NOT to
+do: a component named at a version the image does not carry is how a migration
+gets triggered rather than avoided.
 
 WHY cloud-init at all (and not controller-only over the API): the controller's
 channel is the HTTPS REST API, which can only answer once the gateway already
@@ -533,11 +556,6 @@ system {
     }
     host-name "{{ $ctx.Release.Name }}"
     login {
-        operator-group default {
-            command-policy {
-                allow "*"
-            }
-        }
         user vyos {
             authentication {
                 encrypted-password "*"
