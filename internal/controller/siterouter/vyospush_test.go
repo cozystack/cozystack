@@ -1109,3 +1109,41 @@ func TestTenantNetworkCIDRs_NeverEmptyAtPushTime(t *testing.T) {
 		t.Errorf("the tunnel LoadBalancer Service ClusterIP must be a permitted destination, got %v", got)
 	}
 }
+
+// TestReconcile_NoPeerAddress_SaysSo is the tunnel twin of
+// TestReconcile_BGPEnabledWithoutValidASN_SkipsBGP, and it exists for the same
+// reason. peer.address is `required` in the schema, but required only means the
+// key is present and its default is "", so an instance created without a peer is
+// admitted. It then gets a VM, a VIP, a generated PSK and a Ready HelmRelease
+// with no tunnel at all, and before this Event nothing anywhere said why: the
+// LB-address wait is gated on the same non-empty check, so not even a
+// TunnelAddressPending was recorded.
+//
+// The empty peer is deliberately NOT rejected at admission. The remote side dials
+// in to this instance's LoadBalancer VIP, and that VIP does not exist until the
+// instance does, so creating the router first and filling in the peer once its
+// address is known is the documented order.
+func TestReconcile_NoPeerAddress_SaysSo(t *testing.T) {
+	values := routedValues()
+	values["peer"] = map[string]interface{}{"address": ""}
+
+	fakeV := &fakeVyOS{
+		retrieveResult:  json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`),
+		ethObservations: []vyos.EthernetObservation{{Device: "eth0", MAC: "52:54:00:00:00:01"}},
+	}
+	r, rec := newVyOSReconciler(t, fakeV, readyObjects(t, "demo", values, "10.244.0.5")...)
+
+	reconcileInstance(t, r, "demo")
+
+	ops := fakeV.lastOps()
+	if len(ops) == 0 {
+		t.Fatalf("expected the rest of the config to be pushed, got no Configure ops")
+	}
+	if opsHave(ops, "vpn/ipsec/site-to-site/peer", "") {
+		t.Errorf("no ipsec peer should be rendered when peer.address is empty, ops: %+v", ops)
+	}
+	if !hasEventReason(rec, reasonTunnelNotConfigured) {
+		t.Errorf("expected a %q Warning event; a router with no tunnel and no signal is the no-op this test exists to prevent, events: %+v",
+			reasonTunnelNotConfigured, recordedEvents(rec))
+	}
+}

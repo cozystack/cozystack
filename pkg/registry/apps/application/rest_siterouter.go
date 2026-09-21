@@ -56,20 +56,25 @@ const (
 	siteRouterConfigName      = "cozystack"
 )
 
-// validateSiteRouterRemoteCIDRs rejects a SiteRouter instance whose declared
-// remoteCIDRs are malformed or overlap a cluster-owned network. It returns nil
-// for any other kind (the check is SiteRouter-specific) and for a SiteRouter with
-// no remoteCIDRs. On a violation it returns a Forbidden status error whose message
-// names every offender and its colliding network. The cluster CIDRs come from the
+// validateSiteRouterDeclaredNetworks rejects a SiteRouter instance whose declared
+// declared networks are malformed or overlap a cluster-owned network. It judges
+// remoteCIDRs, staticRoutes[].destination and bgp.neighbors[].address — every
+// field that programs a route or opens a firewall rule on the gateway. It returns
+// nil for any other kind (the check is SiteRouter-specific) and for a SiteRouter
+// that declares none of them. On a violation it returns a Forbidden status error
+// whose message names every offender, its field and its colliding network. The cluster CIDRs come from the
 // cozy-system/cozystack ConfigMap, read through the uncached watch client when one
 // is wired (production) and the cached client otherwise (unit tests), falling back
 // to the platform-values defaults when the ConfigMap is absent.
-func (r *REST) validateSiteRouterRemoteCIDRs(ctx context.Context, app *appsv1alpha1.Application) error {
+func (r *REST) validateSiteRouterDeclaredNetworks(ctx context.Context, app *appsv1alpha1.Application) error {
 	if r.kindName != validation.SiteRouterKind {
 		return nil
 	}
-	cidrs := siteRouterRemoteCIDRs(app)
-	if len(cidrs) == 0 {
+	declared, err := siteRouterDenysetInputs(app)
+	if err != nil {
+		return apierrors.NewBadRequest("spec.values does not decode: " + err.Error())
+	}
+	if len(declared.RemoteCIDRs) == 0 && len(declared.StaticRouteDestinations) == 0 && len(declared.BGPNeighborAddresses) == 0 {
 		return nil
 	}
 
@@ -78,7 +83,13 @@ func (r *REST) validateSiteRouterRemoteCIDRs(ctx context.Context, app *appsv1alp
 		return err
 	}
 
-	rejections := denyset.Validate(cidrs, nets)
+	rejections, err := denyset.Validate(declared, nets)
+	if err != nil {
+		// A malformed cluster network is an operator-supplied value. Surface it as
+		// a server-side error rather than a Forbidden aimed at the tenant, who has
+		// no way to act on it.
+		return apierrors.NewInternalError(err)
+	}
 	if len(rejections) == 0 {
 		return nil
 	}
@@ -111,18 +122,50 @@ func (r *REST) clusterReader() client.Reader {
 	return r.c
 }
 
-// siteRouterRemoteCIDRs extracts the remoteCIDRs list from an Application's
-// spec.values. A nil/empty/unparseable spec yields no CIDRs (nothing to validate);
-// malformed CIDR strings are preserved so denyset.Validate can reject them.
-func siteRouterRemoteCIDRs(app *appsv1alpha1.Application) []string {
+// siteRouterDenysetInputs extracts every declared field the deny set judges from
+// an Application's spec.values. A nil/empty spec yields nothing to validate.
+// Malformed address strings are preserved so denyset.Validate can reject them
+// with a legible message; it is only a spec whose SHAPE is wrong that errors
+// here.
+//
+// The error return is the point. spec.values is not schema-checked before this
+// runs, so `remoteCIDRs: ["10.244.0.0/16", 42]` fails the []string decode — and
+// swallowing that, as this used to, skipped validation entirely and admitted the
+// object. The controller's own extraction is more permissive and keeps the string
+// elements, so the tenant got a 201 and a broken tunnel where the whole point of
+// this file (see the parity note above) is a synchronous rejection.
+//
+// This is the controller-side twin of denysetInputs; the two must enumerate the
+// same fields.
+func siteRouterDenysetInputs(app *appsv1alpha1.Application) (denyset.Inputs, error) {
 	if app.Spec == nil || len(app.Spec.Raw) == 0 {
-		return nil
+		return denyset.Inputs{}, nil
 	}
 	var values struct {
-		RemoteCIDRs []string `json:"remoteCIDRs"`
+		RemoteCIDRs  []string `json:"remoteCIDRs"`
+		StaticRoutes []struct {
+			Destination string `json:"destination"`
+		} `json:"staticRoutes"`
+		BGP struct {
+			Neighbors []struct {
+				Address string `json:"address"`
+			} `json:"neighbors"`
+		} `json:"bgp"`
 	}
 	if err := json.Unmarshal(app.Spec.Raw, &values); err != nil {
-		return nil
+		return denyset.Inputs{}, err
 	}
-	return values.RemoteCIDRs
+
+	in := denyset.Inputs{RemoteCIDRs: values.RemoteCIDRs}
+	for _, rt := range values.StaticRoutes {
+		if rt.Destination != "" {
+			in.StaticRouteDestinations = append(in.StaticRouteDestinations, rt.Destination)
+		}
+	}
+	for _, n := range values.BGP.Neighbors {
+		if n.Address != "" {
+			in.BGPNeighborAddresses = append(in.BGPNeighborAddresses, n.Address)
+		}
+	}
+	return in, nil
 }

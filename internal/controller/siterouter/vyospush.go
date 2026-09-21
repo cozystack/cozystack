@@ -93,6 +93,13 @@ const (
 	// indistinguishable from "BGP was never requested" — the instance stays Ready
 	// with a feature the tenant enabled quietly absent.
 	reasonBGPLocalASNInvalid = "BGPLocalASNInvalid"
+
+	// reasonTunnelNotConfigured marks an instance that carries no usable tunnel
+	// because peer.address or the PSK resolved empty. The schema requires
+	// peer.address, but `required` only means the key is present and its default
+	// is "", so an instance created without a peer is admitted and would
+	// otherwise come up Ready with a VM, a VIP and no tunnel at all.
+	reasonTunnelNotConfigured = "TunnelNotConfigured"
 )
 
 // Secret key/name conventions the chart writes (T04/D6).
@@ -569,6 +576,36 @@ func (r *SiteRouterReconciler) resolveInputs(ctx context.Context, inst *instance
 			LocalSubnets:  locals,
 			RemoteSubnets: remoteCIDRs,
 		}}
+	} else {
+		// Same treatment as the BGP branch below, for the same reason: an
+		// instance that reaches here has a running VM, a VIP and a generated PSK,
+		// and without a word from the controller the only symptom is a tunnel
+		// that never comes up.
+		//
+		// Deliberately an Event and not a schema rejection. peer.address defaults
+		// to "" and the pattern quantifier admits it, which looks like a hole
+		// until you follow the responder model: the remote peer dials in to this
+		// side's LoadBalancer VIP, and that VIP does not exist until the instance
+		// does. Creating the router, reading its address off the status and only
+		// then filling in the peer is the documented order, so an empty peer is a
+		// legitimate intermediate state rather than a malformed one. Tightening
+		// the pattern to `+` was measured: it fails the chart's own default render
+		// at schema validation, which would make that first step impossible.
+		// What was actually missing is this line.
+		// In practice this is always the empty-peer case: an absent or empty PSK
+		// Secret requeues earlier with reasonPSKPending and never reaches here.
+		// The second arm is kept because that ordering is not this function's to
+		// guarantee, and a wrong message is worse than a general one.
+		missing := "peer.address is empty"
+		if peerAddr != "" {
+			missing = "the pre-shared key resolved empty"
+		}
+		log.FromContext(ctx).Info("skipping IPsec tunnel: "+missing,
+			"instance", inst.name, "namespace", inst.namespace)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(inst.hr, corev1.EventTypeWarning, reasonTunnelNotConfigured,
+				"No IPsec tunnel is configured for this instance because %s, so no tunnel is pushed to the gateway. Set peer.address to the remote peer and supply peer.auth.psk or peer.auth.existingSecret.", missing)
+		}
 	}
 
 	for _, e := range sliceOf(vals["staticRoutes"]) {

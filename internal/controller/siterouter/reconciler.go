@@ -108,6 +108,15 @@ const (
 	// the same destination with different gateways.
 	reasonRouteConflict = "RouteConflict"
 
+	// reasonReconcileFailed is the catch-all classify records for a step error
+	// that carries no reason of its own, so no failure mode is silent by default.
+	reasonReconcileFailed = "ReconcileFailed"
+
+	// reasonCleanupFailed is its teardown twin. reconcileDelete returns straight
+	// to the manager without passing classify, so a cleanup that cannot finish
+	// held the HelmRelease in Terminating with nothing written anywhere.
+	reasonCleanupFailed = "CleanupFailed"
+
 	// routeGatewayIPAnnotation persists the gateway IP that owns this instance's
 	// namespace-route entries. The gateway pod may be gone before finalization;
 	// retaining the owner on the HelmRelease avoids unsafe dst-based guessing.
@@ -262,13 +271,21 @@ func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	hr := &helmv2.HelmRelease{}
 	if err := r.Get(ctx, req.NamespacedName, hr); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	// Defence in depth: the watch predicate and cache selector already scope us
-	// to SiteRouter instances, but a label flip could still deliver a foreign HR.
-	if hr.Labels[appKindLabelKey] != siteRouterKind {
-		return ctrl.Result{}, nil
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		// The HelmRelease cache is label-scoped (CacheByObject), so an object that
+		// loses the kind label is evicted from the informer rather than deleted,
+		// and the cached Get answers NotFound for something that still exists. If
+		// we have already put a finalizer on it, answering "gone" here strands it:
+		// the finalizer is never released and the namespace behind it never
+		// terminates. Re-read uncached before believing NotFound.
+		if r.APIReader == nil {
+			return ctrl.Result{}, nil
+		}
+		if err := r.APIReader.Get(ctx, req.NamespacedName, hr); err != nil {
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
 	}
 
 	inst := &instance{
@@ -277,12 +294,28 @@ func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		namespace: hr.Namespace,
 	}
 
-	// Deletion: run the ordered kube-ovn teardown (T07) before releasing the
-	// finalizer. Cleanup errors are returned, never swallowed — masking them with
-	// "|| true" would drop the finalizer while the gateway pod is still relaxed
-	// and the namespace still carries stale routes.
+	// Deletion comes BEFORE the kind-label guard, deliberately. Teardown is the
+	// one path that must run for an object this controller has already claimed,
+	// and the guard is the one thing that can stop it: an instance that loses the
+	// label after taking the finalizer would return here and sit in Terminating
+	// forever, with no Event and no condition. Acquisition stays under the guard,
+	// so this is an ordering fix and not a widening — nothing that was never
+	// claimed gets torn down, because reconcileDelete is a no-op without the
+	// finalizer.
+	//
+	// Cleanup errors are returned, never swallowed — masking them with "|| true"
+	// would drop the finalizer while the gateway pod is still relaxed and the
+	// namespace still carries stale routes.
 	if !hr.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, inst)
+	}
+
+	// Defence in depth: the watch predicate and cache selector already scope us
+	// to SiteRouter instances, but a label flip could still deliver a foreign HR.
+	// Past this point every step is acquisition or mediation, neither of which
+	// should touch an object that is not ours.
+	if hr.Labels[appKindLabelKey] != siteRouterKind {
+		return ctrl.Result{}, nil
 	}
 
 	if err := r.ensureFinalizer(ctx, hr); err != nil {
@@ -323,7 +356,7 @@ func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// accepts the chart-baked port-security relaxation as operational. classify
 	// turns a soft wait/Degraded (deny-set stays a hard error) into a paced
 	// requeue.
-	if err := r.validateRemoteCIDRs(ctx, inst); err != nil { // T07: deny-set validation
+	if err := r.validateDeclaredNetworks(ctx, inst); err != nil { // T07: deny-set validation
 		return r.classify(ctx, inst, err)
 	}
 	if err := r.programNamespaceRoutes(ctx, inst); err != nil { // T07: kube-ovn return routes
@@ -387,14 +420,14 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 	// exists; a missing pod is fine (the VM may already be gone).
 	pod, err := r.discoverGatewayPod(ctx, inst)
 	if err != nil {
-		return ctrl.Result{}, err
+		return r.cleanupFailed(ctx, inst, err)
 	}
 	inst.gatewayPod = pod
 
 	// T07: best-effort revert of the port_security relax (vestigial; see func doc).
 	r.restorePortSecurity(ctx, inst)
 	if err := r.removeNamespaceRoutes(ctx, inst); err != nil { // T07: withdraw kube-ovn routes
-		return ctrl.Result{}, err
+		return r.cleanupFailed(ctx, inst, err)
 	}
 
 	// Drop the cached config hash so a later instance reusing this key re-applies,
@@ -403,11 +436,25 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 	r.forgetMetrics(inst)
 
 	if err := r.removeFinalizer(ctx, inst.hr); err != nil {
-		return ctrl.Result{}, err
+		return r.cleanupFailed(ctx, inst, err)
 	}
 	log.FromContext(ctx).Info("released SiteRouter mediation",
 		"instance", inst.name, "namespace", inst.namespace)
 	return ctrl.Result{}, nil
+}
+
+// cleanupFailed is reconcileDelete's counterpart to classify: it records why the
+// teardown stopped before returning the error to the manager. Without it the only
+// symptom of a cleanup that cannot finish is a HelmRelease stuck in Terminating
+// and a namespace stuck behind it, with nothing on the object saying why.
+func (r *SiteRouterReconciler) cleanupFailed(ctx context.Context, inst *instance, err error) (ctrl.Result, error) {
+	log.FromContext(ctx).Error(err, "SiteRouter teardown failed; the finalizer is held until it succeeds",
+		"instance", inst.name, "namespace", inst.namespace)
+	if r.Recorder != nil {
+		r.Recorder.Event(inst.hr, corev1.EventTypeWarning, reasonCleanupFailed,
+			"teardown did not complete, so the finalizer is still held: "+truncMsg(err.Error()))
+	}
+	return ctrl.Result{}, err
 }
 
 // --- Reconcile steps ------------------------------------------------------
@@ -417,12 +464,37 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 // goes on the instance struct rather than into the signature, so adding one does
 // not reshape the pipeline.
 
-// validateRemoteCIDRs rejects an instance whose tunnel remoteCIDRs overlap the
-// cluster pod/service/join/node/link-local/LB-pool networks (the deny-set). The
-// deny-set check is a pure helper shared with the admission plugin (D9/D10).
+// denysetInputs collects every declared field the deny set judges off the
+// resolved values. It is the controller-side twin of siteRouterDenysetInputs on
+// the admission path, and the two must enumerate the same fields or the D10
+// parity the two checks claim is only true for whichever field both happen to
+// read.
+func denysetInputs(values map[string]any) denyset.Inputs {
+	in := denyset.Inputs{RemoteCIDRs: stringSlice(values[remoteCIDRsValueKey])}
+	for _, e := range sliceOf(values["staticRoutes"]) {
+		if dest := stringField(e, "destination"); dest != "" {
+			in.StaticRouteDestinations = append(in.StaticRouteDestinations, dest)
+		}
+	}
+	// Judged whatever bgp.enabled says. The render path skips a disabled block,
+	// but a neighbour that would be rejected should be rejected when it is
+	// declared, not when someone later flips the toggle.
+	for _, n := range sliceOf(mapGet(values["bgp"], "neighbors")) {
+		if addr := stringField(n, "address"); addr != "" {
+			in.BGPNeighborAddresses = append(in.BGPNeighborAddresses, addr)
+		}
+	}
+	return in
+}
+
+// validateDeclaredNetworks rejects an instance whose declared networks overlap
+// the cluster pod/service/join/node/link-local/LB-pool networks (the deny-set).
+// It judges every field that programs a route or opens a firewall rule —
+// remoteCIDRs, staticRoutes[].destination and bgp.neighbors[].address — through
+// the pure helper shared with the admission plugin (D9/D10).
 //
-// A violation records a Warning Event naming every offender and its colliding
-// network, then returns a reconcileError carrying reason
+// A violation records a Warning Event naming every offender, the field it came
+// from and its colliding network, then returns a reconcileError carrying reason
 // denyset.ReasonInvalidRemoteCIDR, so the route is never programmed (this runs
 // before programNamespaceRoutes in the pipeline).
 //
@@ -431,16 +503,22 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 // primary tenant path is synchronous fail-closed admission, which rejects the
 // value at apply time. A CIDR that becomes invalid later reaches this path; the
 // controller withdraws the previously programmed route and records the Event.
-func (r *SiteRouterReconciler) validateRemoteCIDRs(ctx context.Context, inst *instance) error {
-	cidrs := stringSlice(inst.values[remoteCIDRsValueKey])
-	if len(cidrs) == 0 {
+func (r *SiteRouterReconciler) validateDeclaredNetworks(ctx context.Context, inst *instance) error {
+	declared := denysetInputs(inst.values)
+	if len(declared.RemoteCIDRs) == 0 && len(declared.StaticRouteDestinations) == 0 && len(declared.BGPNeighborAddresses) == 0 {
 		return nil
 	}
 	clusters, err := r.clusterNetworks(ctx)
 	if err != nil {
 		return err
 	}
-	rejections := denyset.Validate(cidrs, clusters)
+	rejections, err := denyset.Validate(declared, clusters)
+	if err != nil {
+		// A cluster network that does not parse is an operator-supplied value, not
+		// a tenant one. Fail the step rather than judge against a deny set that is
+		// missing whichever network the typo landed in.
+		return fmt.Errorf("resolve the deny-set cluster networks: %w", err)
+	}
 	if len(rejections) == 0 {
 		return nil
 	}
@@ -457,7 +535,7 @@ func (r *SiteRouterReconciler) validateRemoteCIDRs(ctx context.Context, inst *in
 	msg := strings.Join(msgs, "; ")
 	if r.Recorder != nil {
 		r.Recorder.Event(inst.hr, corev1.EventTypeWarning, denyset.ReasonInvalidRemoteCIDR,
-			"remote CIDRs rejected; no route is programmed for this instance: "+truncMsg(msg))
+			"declared networks rejected; no route is programmed for this instance: "+truncMsg(msg))
 	}
 	return &reconcileError{reason: denyset.ReasonInvalidRemoteCIDR, message: msg}
 }
@@ -738,6 +816,16 @@ func (e *reconcileError) Error() string { return e.reason + ": " + e.message }
 // Reason exposes the machine-readable reason for T09/status.
 func (e *reconcileError) Reason() string { return e.reason }
 
+// recordedAtSource names the reasons whose own step records an Event before it
+// returns. classify skips these so one failure does not produce two Events; every
+// other reason, and every error with no reason at all, is recorded there. Adding
+// a Recorder call inside a step means adding its reason here.
+var recordedAtSource = map[string]bool{
+	reasonConfigureFailed:           true,
+	reasonRouteConflict:             true,
+	denyset.ReasonInvalidRemoteCIDR: true,
+}
+
 // classify turns a step error into the reconcile result. A reconcileError with a
 // positive requeueAfter is a soft wait/Degraded: requeue on that cadence with no
 // hard error. Previously silent typed waits are surfaced here as Warning Events.
@@ -748,12 +836,22 @@ func (r *SiteRouterReconciler) classify(ctx context.Context, inst *instance, err
 	// the monotonic config-apply error counter is deliberately retained.
 	r.forgetRuntimeMetrics(inst)
 
+	// Record, unless the step that produced this already did. The rule used to be
+	// an allow-list of six reasons, which meant every other way a reconcile can
+	// fail — a denied nodes list during deny-set discovery, a rejected namespace
+	// annotation patch, a step error that is not a reconcileError at all — passed
+	// through here as a bare return. With no status condition to read (D9), the
+	// Event is the only channel a tenant has, so silence on the generic path is
+	// silence altogether. Inverting the list is what makes a NEW failure mode
+	// visible by default instead of invisible until someone remembers to enumerate it.
 	var re *reconcileError
-	if errors.As(err, &re) && r.Recorder != nil {
-		switch re.reason {
-		case reasonGatewayPending, reasonPSKPending, reasonAPIKeyPending,
-			reasonTunnelAddressPending, reasonSourceFilterPending, reasonPortSecurityPending:
-			r.Recorder.Event(inst.hr, corev1.EventTypeWarning, re.reason, truncMsg(re.message))
+	if r.Recorder != nil {
+		if errors.As(err, &re) {
+			if !recordedAtSource[re.reason] {
+				r.Recorder.Event(inst.hr, corev1.EventTypeWarning, re.reason, truncMsg(re.message))
+			}
+		} else {
+			r.Recorder.Event(inst.hr, corev1.EventTypeWarning, reasonReconcileFailed, truncMsg(err.Error()))
 		}
 	}
 	if errors.As(err, &re) && re.requeueAfter > 0 {

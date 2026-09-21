@@ -206,7 +206,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	// cluster-owned network (synchronous Forbidden naming the offending CIDR and
 	// colliding network). A no-op for every other kind — generic app-instance
 	// admission is unchanged (D9/D10).
-	if err := r.validateSiteRouterRemoteCIDRs(ctx, app); err != nil {
+	if err := r.validateSiteRouterDeclaredNetworks(ctx, app); err != nil {
 		return nil, err
 	}
 
@@ -560,7 +560,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	// SiteRouter deny-set admission on edit too: adding a cluster-overlapping
 	// remoteCIDR is rejected synchronously the same way a create is (D9/D10).
-	if err := r.validateSiteRouterRemoteCIDRs(ctx, app); err != nil {
+	if err := r.validateSiteRouterDeclaredNetworks(ctx, app); err != nil {
 		return nil, false, err
 	}
 

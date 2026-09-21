@@ -30,7 +30,7 @@ package application
 // cozy-system/cozystack ConfigMap and shapes the rejection.
 //
 // Phase B wires (a) a SiteRouter-scoped REST method
-// r.validateSiteRouterRemoteCIDRs(ctx, app) that returns nil for a non-SiteRouter
+// r.validateSiteRouterDeclaredNetworks(ctx, app) that returns nil for a non-SiteRouter
 // kind / disjoint CIDRs and a Forbidden otherwise, and (b) its call sites in
 // Create and Update ahead of conversion. Until then these tests are red.
 
@@ -149,7 +149,7 @@ func TestSiteRouterAdmission_RejectsClusterOverlap(t *testing.T) {
 	r := newSiteRouterREST(t, siteRouterKindName, cozystackCM(defaultClusterCIDRs()))
 	app := siteRouterApp(t, siteRouterKindName, "gw", "10.244.7.0/24") // inside pod 10.244.0.0/16
 
-	err := r.validateSiteRouterRemoteCIDRs(context.Background(), app)
+	err := r.validateSiteRouterDeclaredNetworks(context.Background(), app)
 	if err == nil {
 		t.Fatalf("expected a cluster-overlapping remoteCIDR to be rejected, got nil")
 	}
@@ -171,7 +171,7 @@ func TestSiteRouterAdmission_RejectsMalformed(t *testing.T) {
 	r := newSiteRouterREST(t, siteRouterKindName, cozystackCM(defaultClusterCIDRs()))
 	app := siteRouterApp(t, siteRouterKindName, "gw", "not-a-cidr")
 
-	err := r.validateSiteRouterRemoteCIDRs(context.Background(), app)
+	err := r.validateSiteRouterDeclaredNetworks(context.Background(), app)
 	if err == nil {
 		t.Fatalf("expected a malformed remoteCIDR to be rejected, got nil")
 	}
@@ -190,7 +190,7 @@ func TestSiteRouterAdmission_AcceptsDisjoint(t *testing.T) {
 	r := newSiteRouterREST(t, siteRouterKindName, cozystackCM(defaultClusterCIDRs()))
 	app := siteRouterApp(t, siteRouterKindName, "gw", "172.31.0.0/16", "10.10.0.0/16")
 
-	if err := r.validateSiteRouterRemoteCIDRs(context.Background(), app); err != nil {
+	if err := r.validateSiteRouterDeclaredNetworks(context.Background(), app); err != nil {
 		t.Fatalf("expected cluster-disjoint remoteCIDRs to be accepted, got %v", err)
 	}
 }
@@ -203,7 +203,7 @@ func TestSiteRouterAdmission_NonSiteRouterKindSkipped(t *testing.T) {
 	r := newSiteRouterREST(t, "MySQL", cozystackCM(defaultClusterCIDRs()))
 	app := siteRouterApp(t, "MySQL", "db", "10.244.7.0/24") // would overlap if this were a SiteRouter
 
-	if err := r.validateSiteRouterRemoteCIDRs(context.Background(), app); err != nil {
+	if err := r.validateSiteRouterDeclaredNetworks(context.Background(), app); err != nil {
 		t.Fatalf("deny-set check must not fire for a non-SiteRouter kind, got %v", err)
 	}
 }
@@ -217,7 +217,7 @@ func TestSiteRouterAdmission_MissingConfigMapUsesDefaults(t *testing.T) {
 	r := newSiteRouterREST(t, siteRouterKindName) // no ConfigMap loaded
 	app := siteRouterApp(t, siteRouterKindName, "gw", "10.244.7.0/24")
 
-	err := r.validateSiteRouterRemoteCIDRs(context.Background(), app)
+	err := r.validateSiteRouterDeclaredNetworks(context.Background(), app)
 	if err == nil {
 		t.Fatalf("expected default cluster CIDRs to be enforced when the ConfigMap is absent, got nil")
 	}
@@ -239,7 +239,7 @@ func TestSiteRouterAdmission_ConfigMapOverridesDefaults(t *testing.T) {
 	r := newSiteRouterREST(t, siteRouterKindName, cozystackCM(custom))
 	app := siteRouterApp(t, siteRouterKindName, "gw", "192.168.5.0/24") // overlaps the CM pod CIDR only
 
-	err := r.validateSiteRouterRemoteCIDRs(context.Background(), app)
+	err := r.validateSiteRouterDeclaredNetworks(context.Background(), app)
 	if err == nil {
 		t.Fatalf("expected a value overlapping the ConfigMap pod CIDR to be rejected, got nil")
 	}
@@ -258,7 +258,7 @@ func TestSiteRouterAdmission_RejectsSubnetContainingLiveNodeAddress(t *testing.T
 	r := newSiteRouterREST(t, siteRouterKindName, cozystackCM(defaultClusterCIDRs()), node)
 	app := siteRouterApp(t, siteRouterKindName, "gw", "192.168.100.0/24")
 
-	err := r.validateSiteRouterRemoteCIDRs(context.Background(), app)
+	err := r.validateSiteRouterDeclaredNetworks(context.Background(), app)
 	if err == nil || !apierrors.IsForbidden(err) {
 		t.Fatalf("expected live node overlap to be Forbidden, got %v", err)
 	}
@@ -278,7 +278,7 @@ func TestSiteRouterAdmission_RejectsSubnetContainingAllocatedLoadBalancerIP(t *t
 	r := newSiteRouterREST(t, siteRouterKindName, cozystackCM(defaultClusterCIDRs()), svc)
 	app := siteRouterApp(t, siteRouterKindName, "gw", "198.51.100.0/24")
 
-	err := r.validateSiteRouterRemoteCIDRs(context.Background(), app)
+	err := r.validateSiteRouterDeclaredNetworks(context.Background(), app)
 	if err == nil || !apierrors.IsForbidden(err) {
 		t.Fatalf("expected allocated LoadBalancer overlap to be Forbidden, got %v", err)
 	}
@@ -397,5 +397,98 @@ func TestUpdate_SiteRouter_RejectsOverlapViaAdmission(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "10.244.7.0/24") {
 		t.Errorf("Update rejection %q should name the offending CIDR", err.Error())
+	}
+}
+
+// TestSiteRouterAdmission_RejectsStaticRouteAndBGPNeighbor closes the gap where
+// the deny set guarded one of the three fields that program routes. A /0 static
+// route and a neighbour on a live node address are both admissible shapes as far
+// as the schema is concerned, and the neighbour additionally writes an
+// input-filter accept for TCP 179 — so an unguarded one opens the management
+// chain for an address the same value would have been refused in remoteCIDRs.
+func TestSiteRouterAdmission_RejectsStaticRouteAndBGPNeighbor(t *testing.T) {
+	tests := []struct {
+		name      string
+		values    map[string]interface{}
+		wantNames []string
+	}{
+		{
+			name: "default-route static route",
+			values: map[string]interface{}{
+				"staticRoutes": []interface{}{
+					map[string]interface{}{"destination": "0.0.0.0/0", "nextHop": "198.51.100.1"},
+				},
+			},
+			wantNames: []string{"0.0.0.0/0", "staticRoutes"},
+		},
+		{
+			name: "static route over the pod CIDR",
+			values: map[string]interface{}{
+				"staticRoutes": []interface{}{
+					map[string]interface{}{"destination": "10.244.7.0/24", "nextHop": "198.51.100.1"},
+				},
+			},
+			wantNames: []string{"10.244.7.0/24", "10.244.0.0/16"},
+		},
+		{
+			name: "BGP neighbour on the service CIDR",
+			values: map[string]interface{}{
+				"bgp": map[string]interface{}{
+					"enabled":  true,
+					"localASN": 65001,
+					"neighbors": []interface{}{
+						map[string]interface{}{"address": "10.96.0.1", "remoteASN": 65002},
+					},
+				},
+			},
+			wantNames: []string{"10.96.0.1", "bgp.neighbors"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newSiteRouterREST(t, siteRouterKindName, cozystackCM(defaultClusterCIDRs()))
+			app := &appsv1alpha1.Application{
+				TypeMeta:   metav1.TypeMeta{APIVersion: "apps.cozystack.io/v1alpha1", Kind: siteRouterKindName},
+				ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "tenant-test"},
+				Spec:       jsonSpec(t, tt.values),
+			}
+
+			err := r.validateSiteRouterDeclaredNetworks(context.Background(), app)
+			if err == nil {
+				t.Fatalf("expected a rejection, got nil")
+			}
+			if !apierrors.IsForbidden(err) {
+				t.Errorf("expected a Forbidden status error, got %T: %v", err, err)
+			}
+			for _, want := range tt.wantNames {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("rejection %q should name %q", err.Error(), want)
+				}
+			}
+		})
+	}
+}
+
+// TestSiteRouterAdmission_RejectsUndecodableValues drives the branch that used to
+// return nil. spec.values is not schema-checked before this runs, so a
+// type-mismatched element made the []string decode fail, which skipped validation
+// and admitted the object — the tenant got a 201 and a broken tunnel where the
+// parity note at the top of rest_siterouter.go promises a synchronous rejection.
+func TestSiteRouterAdmission_RejectsUndecodableValues(t *testing.T) {
+	r := newSiteRouterREST(t, siteRouterKindName, cozystackCM(defaultClusterCIDRs()))
+	app := &appsv1alpha1.Application{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps.cozystack.io/v1alpha1", Kind: siteRouterKindName},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "tenant-test"},
+		// The mixed-type element the controller's own extraction tolerates.
+		Spec: jsonSpec(t, map[string]interface{}{"remoteCIDRs": []interface{}{"10.244.0.0/16", 42}}),
+	}
+
+	err := r.validateSiteRouterDeclaredNetworks(context.Background(), app)
+	if err == nil {
+		t.Fatal("a spec.values that does not decode must be rejected, not silently skipped")
+	}
+	if !apierrors.IsBadRequest(err) {
+		t.Errorf("expected a BadRequest status error, got %T: %v", err, err)
 	}
 }
