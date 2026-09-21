@@ -30,12 +30,16 @@ spec:
   contentType: kubevirt
   source:
     {{- /*
-      `required` on the trimmed contents: an unstamped or empty .tag fails the
-      render with a legible message instead of importing a reference that cannot
-      resolve and leaving the gateway on a Pending PVC forever.
+      The URL is built by site-router.applianceDiskUrl, NOT by interpolating the
+      .tag directly: CDI's docker:// transport cannot parse a reference carrying
+      both a tag and a digest, and the committed stamp carries both. The helper
+      drops the tag, keeps the digest, and fails the render on a reference that
+      is empty or not digest-pinned — read its comment before changing either
+      end. An unstamped .tag is rejected there rather than importing a reference
+      that cannot resolve and leaving the gateway on a Pending PVC forever.
     */}}
     registry:
-      url: {{ printf "docker://%s" (required "empty images/vyos-router-disk.tag: the VyOS appliance containerDisk has not been stamped by a build — install a Cozystack build whose CI stamped it" (.Files.Get "images/vyos-router-disk.tag" | trim)) | quote }}
+      url: {{ include "site-router.applianceDiskUrl" (.Files.Get "images/vyos-router-disk.tag") | quote }}
   storage:
     resources:
       requests:

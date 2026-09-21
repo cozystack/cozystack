@@ -127,6 +127,10 @@ spec:
             # bring-up step substitutes __VYOS_DISK_REF__ from that same file before
             # applying, so B and A can never boot different appliances. Do not
             # hardcode a digest here — CI restamps the .tag on every image build.
+            # What lands here is <repo>@sha256:<digest>, NOT the committed
+            # <repo>:<tag>@sha256:<digest> stamp: the bring-up step drops the tag
+            # because CDI's docker:// transport refuses a reference carrying both,
+            # exactly as the chart does for A (site-router.applianceDiskUrl).
             url: docker://__VYOS_DISK_REF__
   template:
     metadata:
