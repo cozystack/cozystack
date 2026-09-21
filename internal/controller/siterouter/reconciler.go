@@ -737,10 +737,12 @@ func (r *SiteRouterReconciler) removeNamespaceRoutes(ctx context.Context, inst *
 	return nil
 }
 
-// rememberRouteGatewayIP persists route ownership before the namespace route is
-// programmed. If the process stops between these writes, cleanup may find an
-// owner with no route, which is safe; a route can never be created without its
-// ownership record already existing.
+// rememberRouteGatewayIP persists route ownership AFTER the namespace route is
+// programmed; the caller's ordering comment says why, and reversing it strands
+// the previous gateway's entries permanently. Stopping between the two writes
+// leaves a route whose ownership record still names the previous gateway IP,
+// which is the recoverable direction: the next reconcile migrates the same
+// entries again and converges.
 func (r *SiteRouterReconciler) rememberRouteGatewayIP(ctx context.Context, inst *instance, gatewayIP string) error {
 	if inst.hr.Annotations[routeGatewayIPAnnotation] == gatewayIP {
 		return nil

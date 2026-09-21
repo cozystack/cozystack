@@ -785,13 +785,17 @@ func validASN(n int64) bool { return n >= 1 && n <= 4294967295 }
 // SiteRouter gateway pods (CacheByObject), so a cached List would return none of
 // the tenant's workloads and the tunnel would silently reach nothing.
 //
-// On any path that reaches a push the set is non-empty: the chart's tunnel
-// Service is a LoadBalancer, so the apiserver always allocates it a ClusterIP,
-// and pushVyOSConfig renders no tunnel until that Service carries an ingress IP.
-// That invariant is load-bearing — render.renderTunnelIngressFilter degrades an
-// EMPTY destination set to a source-only accept, which is the world-egress hole
-// the destination constraint exists to close, so a future filter here must not
-// be able to empty the set (TestTenantNetworkCIDRs_NeverEmptyAtPushTime).
+// The set is expected to be non-empty on any path that reaches a push: the
+// chart's tunnel Service is a LoadBalancer, so the apiserver always allocates it
+// a ClusterIP in this namespace. It is no longer load-bearing that it is.
+// renderTunnelIngressFilter used to degrade an empty set to a source-only
+// accept — the world-egress hole the destination constraint exists to close —
+// and this comment used to be the only thing standing between a future filter
+// here and that hole. The renderer now emits no new-flow accept at all without
+// destinations, and resolveInputs records a Warning when it resolves none, so
+// emptying the set costs a tunnel that carries return traffic only rather than
+// one that forwards anywhere. TestTenantNetworkCIDRs_NeverEmptyAtPushTime still
+// pins the expectation; it is no longer the whole defence.
 func (r *SiteRouterReconciler) tenantNetworkCIDRs(ctx context.Context, inst *instance) ([]string, error) {
 	set := map[string]struct{}{}
 	pods := &corev1.PodList{}
