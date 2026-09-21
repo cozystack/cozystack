@@ -3,8 +3,9 @@ suite: images of the management-cluster helpers
 # Every image below runs in the management cluster, in the tenant's namespace:
 # the csr signer beside the tenant apiserver with the Talos CA mounted, and the
 # OIDC Jobs under a service account that can patch the KamajiControlPlane. They
-# come from the bundled tag files, and values cannot replace them. An air-gapped
-# install moves them with the platform-wide registry instead.
+# come from the bundled tag files, and values cannot replace them. They follow
+# _cluster.images-registry through cozy-lib.image, like the harbor, kafka and
+# mariadb hook images.
 
 values:
   - values/common.yaml
@@ -28,7 +29,7 @@ tests:
           path: spec.deployment.extraContainers[0].image
           pattern: '^ghcr\.io/cozystack/cozystack/talos-csr-signer:[^@]+@sha256:[0-9a-f]{64}$'
 
-  - it: moves the talos-csr-signer image to the platform registry
+  - it: routes the talos-csr-signer image through _cluster.images-registry
     template: templates/cluster.yaml
     documentSelector:
       path: kind
@@ -59,7 +60,7 @@ tests:
           pattern: '^docker\.io/alpine/k8s:[^@]+@sha256:[0-9a-f]{64}$'
         documentIndex: 4
 
-  - it: moves the OIDC Jobs' kubectl image to the platform registry
+  - it: routes the OIDC Jobs' kubectl image through _cluster.images-registry
     template: templates/oidc-rbac-job.yaml
     set:
       _cluster:

@@ -50,7 +50,7 @@ tests:
           path: spec.template.spec.containers[0].image
           pattern: '^docker\.io/alpine/k8s:[^@]+@sha256:[0-9a-f]{64}$'
 
-  - it: moves the talos-reconcile Job's kubectl image to the platform registry
+  - it: routes the talos-reconcile Job's kubectl image through _cluster.images-registry
     template: templates/talos-reconcile-job.yaml
     documentSelector:
       path: kind
@@ -63,7 +63,7 @@ tests:
           path: spec.template.spec.containers[0].image
           pattern: '^registry\.airgap\.example\.test/docker\.io/alpine/k8s:'
 
-  - it: moves the pre-delete unpin Job's kubectl image to the platform registry
+  - it: routes the pre-delete unpin Job's kubectl image through _cluster.images-registry
     template: templates/pre-delete-unpin.yaml
     documentSelector:
       path: kind
