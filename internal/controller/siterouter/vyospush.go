@@ -150,7 +150,7 @@ type VyOSClient interface {
 // token. The reconciler calls it once per reconcile. Nil selects
 // DefaultVyOSClientFactory; tests override SiteRouterReconciler.VyOSClientFactory
 // to inject a fake.
-type VyOSClientFactory func(ep VyOSEndpoint) VyOSClient
+type VyOSClientFactory func(ep VyOSEndpoint) (VyOSClient, error)
 
 // VyOSEndpoint is everything needed to reach one gateway's management API: where
 // it is, the token that authenticates the controller TO it, and the certificate
@@ -170,14 +170,26 @@ type VyOSEndpoint struct {
 	ServerName string
 }
 
-// DefaultVyOSClientFactory wraps vyos.NewClient with the production options: the
-// gateway ships a self-signed certificate, so TLS verification is skipped and the
-// in-band API token authenticates the channel (D6).
-func DefaultVyOSClientFactory(ep VyOSEndpoint) VyOSClient {
-	if len(ep.CAPEM) > 0 && ep.ServerName != "" {
-		return vyos.NewClient(ep.URL, ep.Token, vyos.WithPinnedCA(ep.CAPEM, ep.ServerName))
+// DefaultVyOSClientFactory wraps vyos.NewClient with the production options. The
+// gateway ships a self-signed certificate that the chart mints per instance and
+// seeds under `pki certificate`, and the controller pins it by name rather than
+// by the pod IP it dials.
+//
+// There is deliberately no unverified fallback. One used to stand here for an
+// appliance whose api-key Secret predates the seeded certificate, which is an
+// empty set: site-router has never been released, so no such instance exists
+// anywhere. The in-band token does not make an unverified channel safe either,
+// since whoever can intercept the connection collects the token with it. An
+// endpoint that reaches this without a CA is a chart that failed to seed one,
+// and failing the push names that; falling back would hide it for the life of
+// the instance.
+func DefaultVyOSClientFactory(ep VyOSEndpoint) (VyOSClient, error) {
+	if len(ep.CAPEM) == 0 || ep.ServerName == "" {
+		return nil, fmt.Errorf("no CA certificate for the gateway management API (CAPEM %d bytes, serverName %q): "+
+			"the api-key Secret carries no `ca.crt`/`serverName`, so the chart did not seed the appliance certificate",
+			len(ep.CAPEM), ep.ServerName)
 	}
-	return vyos.NewClient(ep.URL, ep.Token, vyos.WithInsecureSkipVerify())
+	return vyos.NewClient(ep.URL, ep.Token, vyos.WithPinnedCA(ep.CAPEM, ep.ServerName)), nil
 }
 
 // vyosFactory returns the configured factory or the production default.
@@ -320,15 +332,19 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 	}
 	if !pinned && r.Recorder != nil {
 		r.Recorder.Event(inst.hr, corev1.EventTypeWarning, reasonAPITLSUnverified,
-			"the gateway's API certificate is not pinned (no tls.crt in the api-key Secret), so the management channel is not verified; re-render the release to seed one")
+			"the gateway's API certificate is not pinned (no tls.crt in the api-key Secret), so the management channel cannot be verified and no configuration will be pushed; re-render the release to seed one")
 	}
 
-	inst.vc = r.vyosFactory()(VyOSEndpoint{
+	vc, err := r.vyosFactory()(VyOSEndpoint{
 		URL:        "https://" + inst.gatewayPod.Status.PodIP,
 		Token:      token,
 		CAPEM:      caPEM,
 		ServerName: serverName,
 	})
+	if err != nil {
+		return err
+	}
+	inst.vc = vc
 
 	device := r.discoverInterfaceDevices(ctx, inst)
 	if device == "" {
@@ -908,6 +924,46 @@ func (r *SiteRouterReconciler) discoverInterfaceDevices(ctx context.Context, ins
 	for _, mac := range macs {
 		if dev, ok := macToDevice[strings.ToLower(mac)]; ok {
 			return dev
+		}
+	}
+	return ""
+}
+
+// activeGatewayPodUID returns the UID of the virt-launcher pod KubeVirt itself
+// considers the VM's own right now, or "" when the VMI cannot be read or does
+// not say.
+//
+// `status.activePods` maps pod UID to the node that pod sits on, and
+// `status.nodeName` is the node the guest is actually running on. Normally the
+// map holds one entry; during a live migration it holds both launchers and
+// `nodeName` stays on the source until handoff, so the intersection of the two
+// is the single pod that is the VM at this moment. Callers need that pod and not
+// merely a deterministic one: its IP becomes the tenant's kube-ovn next hop and
+// the address the rendered router config is POSTed to, and virt-launcher names
+// carry a random suffix, so picking by list order separates source from target
+// by chance.
+//
+// A failed read is not an error here. The caller falls back to its own
+// selection, which is what every non-migrating instance gets anyway, and a VMI
+// that has not appeared yet is an ordinary state during first boot.
+func (r *SiteRouterReconciler) activeGatewayPodUID(ctx context.Context, inst *instance) types.UID {
+	vmi := &unstructured.Unstructured{}
+	vmi.SetGroupVersionKind(vmiGVK)
+	key := types.NamespacedName{Namespace: inst.namespace, Name: releasePrefix + inst.name}
+	if err := r.reader().Get(ctx, key, vmi); err != nil {
+		return ""
+	}
+	node, _, err := unstructured.NestedString(vmi.Object, "status", "nodeName")
+	if err != nil || node == "" {
+		return ""
+	}
+	active, found, err := unstructured.NestedStringMap(vmi.Object, "status", "activePods")
+	if err != nil || !found {
+		return ""
+	}
+	for uid, on := range active {
+		if on == node {
+			return types.UID(uid)
 		}
 	}
 	return ""

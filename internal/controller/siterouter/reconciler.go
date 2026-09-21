@@ -851,6 +851,16 @@ func (r *SiteRouterReconciler) discoverGatewayPod(ctx context.Context, inst *ins
 	if len(pods.Items) == 0 {
 		return nil, nil
 	}
+	// KubeVirt's own answer first, when it has one: see activeGatewayPodUID for
+	// why list order is not a tie-break. Falling back to the first Running pod
+	// keeps the behaviour every non-migrating instance already had.
+	if activeUID := r.activeGatewayPodUID(ctx, inst); activeUID != "" {
+		for i := range pods.Items {
+			if pods.Items[i].UID == activeUID {
+				return &pods.Items[i], nil
+			}
+		}
+	}
 	chosen := &pods.Items[0]
 	for i := range pods.Items {
 		if pods.Items[i].Status.Phase == corev1.PodRunning {
