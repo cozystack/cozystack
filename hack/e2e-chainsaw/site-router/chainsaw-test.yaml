@@ -732,13 +732,16 @@ spec:
               fi
 
               # ── DROP cases: <desc> <guard-check> <proto> <dst> [port] ─────────
-              # 1. Source OUTSIDE remoteCIDRs → rejected at A's IPsec SA traffic
-              #    selector. A's negotiated remote TS is remoteCIDRs (192.0.2.0/24),
-              #    so a 198.51.100.x source is never carried in a child SA and
-              #    never decrypted. PRIMARY assertion is NON-DELIVERY; the
+              # 1. Source OUTSIDE remoteCIDRs → never reaches A at all. The
+              #    attribution here is weaker than the others and worth stating
+              #    exactly: with B's IKEv2 traffic selector narrowed to
+              #    192.0.2.0/24, a 198.51.100.x packet is not carried in any child
+              #    SA, so B forwards it in the clear and B's own OVN port_security
+              #    drops it — B is a plain VM with anti-spoof on. Either way it
+              #    never arrives. PRIMARY assertion is NON-DELIVERY; the
               #    attribution is that the TUNNEL-INGRESS default-action counter
-              #    stays FLAT — the packet never reached that chain, proving the
-              #    drop was upstream at the SA, not at the guest source filter.
+              #    stays FLAT, which proves only that A's guest filter was not
+              #    what dropped it.
               PROBE_SRC=198.51.100.7 \
                 assert_dropped "source outside remoteCIDRs" \
                   "guest_counter_flat TUNNEL-INGRESS default-action" \

@@ -219,6 +219,11 @@ type instance struct {
 	// gatewayPod is the gateway VM's virt-launcher pod, or nil if it has not been
 	// scheduled yet (a normal transient state early in an instance's life).
 	gatewayPod *corev1.Pod
+	// tunnelPushed records whether the configuration this reconcile pushed to the
+	// guest actually carried an IPsec tunnel. programNamespaceRoutes reads it, and
+	// it is only meaningful after pushVyOSConfig has returned successfully — which
+	// is why that step now runs first.
+	tunnelPushed bool
 
 	// vc is the VyOS management client built by pushVyOSConfig once the gateway
 	// pod IP and API token are known; the confirm and runtime-poll steps reuse it
@@ -359,10 +364,28 @@ func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.validateDeclaredNetworks(ctx, inst); err != nil { // T07: deny-set validation
 		return r.classify(ctx, inst, err)
 	}
-	if err := r.programNamespaceRoutes(ctx, inst); err != nil { // T07: kube-ovn return routes
+	// Conflict detection stays BEFORE the guest is configured, and the write moves
+	// after it. Those two pull in opposite directions — a route must not be
+	// written before the tunnel it depends on exists, and a route that collides
+	// with a co-tenant's must stop the reconcile before anything is pushed to the
+	// guest — and splitting the read from the write is what satisfies both
+	// instead of trading one for the other.
+	if err := r.checkNamespaceRouteConflict(ctx, inst); err != nil { // T07: read-only collision check
 		return r.classify(ctx, inst, err)
 	}
+	// The push comes BEFORE the route write, and the order is a guard rather than a
+	// preference. A return route sends tenant traffic for a remote network to the
+	// gateway, and the guest forward chain accepts locally-originated non-IPsec
+	// traffic on purpose, so a route that exists before the guest has an IPsec
+	// policy means that traffic leaves in the clear over the default route.
+	// Gating on "the tenant typed a peer" was not enough: a peer naming a PSK
+	// Secret that does not exist yet, or an unassigned tunnel VIP, or a push that
+	// fails, all leave the intent declared and the policy absent. Routing only
+	// what the guest has actually been told to encrypt closes that.
 	if err := r.pushVyOSConfig(ctx, inst); err != nil { // T06: VyOS HTTPS API push
+		return r.classify(ctx, inst, err)
+	}
+	if err := r.programNamespaceRoutes(ctx, inst); err != nil { // T07: kube-ovn return routes
 		return r.classify(ctx, inst, err)
 	}
 	if err := r.confirmSourceFilterActive(ctx, inst); err != nil { // T08/T06: guest source guard up
@@ -552,22 +575,68 @@ func (r *SiteRouterReconciler) validateDeclaredNetworks(ctx context.Context, ins
 // no-op until the gateway pod has a routable IP (the pod watch re-triggers the
 // reconcile when the IP appears).
 //
-// No tunnel means no routes. A return route sends tenant traffic for a remote
-// network to the gateway, and the guest forward chain accepts locally-originated
-// non-IPsec traffic on purpose, so before a tunnel is configured that traffic
-// leaves the gateway in the clear over the default route. strongSwan only traps
-// it once a policy exists. The documented setup order makes that window a normal
-// state rather than an odd one: the remote side dials in to this instance's
-// LoadBalancer VIP, so a tenant creates the router, reads the address off the
-// status, and fills in the peer afterwards.
+// No tunnel means no routes, and "tunnel" means one the guest has actually been
+// given — inst.tunnelPushed, set by the push that runs immediately before this.
+// A return route sends tenant traffic for a remote network to the gateway, and
+// the guest forward chain accepts locally-originated non-IPsec traffic on
+// purpose, so a route without an IPsec policy behind it means that traffic
+// leaves in the clear over the default route. strongSwan only traps it once the
+// policy exists.
+//
+// Reading the tenant's declared peer instead would have been the obvious gate
+// and is not sufficient: a peer naming a PSK Secret that does not exist yet, an
+// unassigned tunnel VIP, and a push that fails all leave the intent declared
+// while the guest has nothing. The documented setup order also makes the
+// no-tunnel state routine rather than exceptional, since the remote side dials
+// in to this instance's LoadBalancer VIP and the tenant fills in the peer after
+// reading it off the status.
 //
 // This withdraws rather than skips, and the difference matters. Returning early
 // would strand the entries of an instance whose peer was REMOVED, exactly as an
 // early return on empty remoteCIDRs would; treating the desired set as empty
 // runs the same pruning path that case already relies on.
+// checkNamespaceRouteConflict is the read-only half of programNamespaceRoutes,
+// run before the guest is configured. It judges the DECLARED remoteCIDRs rather
+// than the pushed ones: a tenant declaring a network a co-tenant's gateway
+// already owns is a conflict whether or not a tunnel exists yet, and catching it
+// here keeps the older invariant that a collision stops the reconcile without
+// the guest being touched.
+//
+// It writes nothing. The write is programNamespaceRoutes, after the push.
+func (r *SiteRouterReconciler) checkNamespaceRouteConflict(ctx context.Context, inst *instance) error {
+	cidrs := stringSlice(inst.values[remoteCIDRsValueKey])
+	if len(cidrs) == 0 || inst.gatewayPod == nil || inst.gatewayPod.Status.PodIP == "" {
+		return nil
+	}
+	ns := &corev1.Namespace{}
+	if err := r.reader().Get(ctx, types.NamespacedName{Name: inst.namespace}, ns); err != nil {
+		return fmt.Errorf("get namespace %s: %w", inst.namespace, err)
+	}
+	_, err := mergeRoutes(ns.Annotations[routesAnnotation], inst.gatewayPod.Status.PodIP,
+		inst.hr.Annotations[routeGatewayIPAnnotation], cidrs)
+	return r.asRouteConflict(inst, err)
+}
+
+// asRouteConflict turns a mergeRoutes error into the reconcile surface both
+// route steps share: a Warning Event plus a hard reconcileError for a genuine
+// collision, and a plain wrapped error for anything else.
+func (r *SiteRouterReconciler) asRouteConflict(inst *instance, err error) error {
+	if err == nil {
+		return nil
+	}
+	var conflict *routeConflictError
+	if errors.As(err, &conflict) {
+		if r.Recorder != nil {
+			r.Recorder.Event(inst.hr, corev1.EventTypeWarning, reasonRouteConflict, truncMsg(conflict.Error()))
+		}
+		return &reconcileError{reason: reasonRouteConflict, message: conflict.Error()}
+	}
+	return fmt.Errorf("merge routes for namespace %s: %w", inst.namespace, err)
+}
+
 func (r *SiteRouterReconciler) programNamespaceRoutes(ctx context.Context, inst *instance) error {
 	cidrs := stringSlice(inst.values[remoteCIDRsValueKey])
-	if stringField(inst.values["peer"], "address") == "" {
+	if !inst.tunnelPushed {
 		cidrs = nil
 	}
 	// An empty cidrs is deliberately NOT an early return: mergeRoutes supports an
@@ -588,14 +657,7 @@ func (r *SiteRouterReconciler) programNamespaceRoutes(ctx context.Context, inst 
 	}
 	merged, err := mergeRoutes(ns.Annotations[routesAnnotation], gatewayIP, previousGatewayIP, cidrs)
 	if err != nil {
-		var conflict *routeConflictError
-		if errors.As(err, &conflict) {
-			if r.Recorder != nil {
-				r.Recorder.Event(inst.hr, corev1.EventTypeWarning, reasonRouteConflict, truncMsg(conflict.Error()))
-			}
-			return &reconcileError{reason: reasonRouteConflict, message: conflict.Error()}
-		}
-		return fmt.Errorf("merge routes for namespace %s: %w", inst.namespace, err)
+		return r.asRouteConflict(inst, err)
 	}
 	if ns.Annotations[routesAnnotation] != merged {
 		apply := &corev1.Namespace{

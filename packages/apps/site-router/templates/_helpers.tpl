@@ -59,7 +59,11 @@ Ported from the vm-instance chart's virtual-machine.stableUuid idiom.
 {{- $source := printf "%s-%s-%s" .Release.Namespace (include "site-router.fullname" .) .Values.cloudInitSeed }}
 {{- $hash := sha256sum $source }}
 {{- $uuid := printf "%s-%s-4%s-9%s-%s" (substr 0 8 $hash) (substr 8 12 $hash) (substr 13 16 $hash) (substr 17 20 $hash) (substr 20 32 $hash) }}
-{{- if eq .Values.cloudInitSeed "" }}
+{{- /* Not `eq .Values.cloudInitSeed ""`: a user-supplied `cloudInitSeed: null`
+       is deleted by Helm's coalesce along with the chart default, and eq on the
+       resulting nil fails the render rather than reading as the empty seed it
+       plainly is. */}}
+{{- if not (.Values.cloudInitSeed | default "") }}
   {{- /* Preserve the previous UUID so clearing the seed does not re-run cloud-init. */}}
   {{- $vmResource := lookup "kubevirt.io/v1" "VirtualMachine" .Release.Namespace (include "site-router.fullname" .) -}}
   {{- if $vmResource }}
@@ -86,12 +90,32 @@ then refuses unless `_allowOpenManagement` says so out loud.
 
 `| default` would collapse the two and quietly make the escape hatch
 unreachable, so this uses hasKey instead.
+
+Unset does NOT mean the literal kube-ovn default. It means "ask the cluster":
+the same cozy-system/cozystack ConfigMap key the deny-set already reads
+(denyset.ConfigMapKeyPodCIDR). Taking the platform value off the tenant surface
+otherwise left nobody able to set it — the cozystack-values Secrets carry only
+_cluster and _namespace, and _cluster has no pod-CIDR key — so on a cluster with
+a non-default networking.podCIDR the seeded management rule would have excluded
+the controller's real pod IP and locked it out of the router permanently. Reading
+it is better than restoring the knob anyway: it removes the drift-locks-out-the-
+controller footgun rather than moving who can trip it.
+
+The literal stays as the last fallback, for an offline render (helm template,
+helm-unittest) where lookup returns nothing, and for a cluster whose ConfigMap
+omits the key. The controller's own --management-cidr flag is still set
+separately and must still agree; see followups.md.
 */}}
 {{- define "site-router.managementCIDR" -}}
 {{- if hasKey .Values "_managementCIDR" -}}
 {{- .Values._managementCIDR | toString -}}
 {{- else -}}
-10.244.0.0/16
+{{- $cm := lookup "v1" "ConfigMap" "cozy-system" "cozystack" -}}
+{{- $discovered := "" -}}
+{{- if and $cm $cm.data -}}
+{{- $discovered = (index $cm.data "ipv4-pod-cidr") | default "" -}}
+{{- end -}}
+{{- $discovered | default "10.244.0.0/16" -}}
 {{- end -}}
 {{- end -}}
 

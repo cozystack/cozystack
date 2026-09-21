@@ -629,18 +629,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// so an unprefixed annotation on the live object was written by something
 	// else and is not this caller's to remove. A tenant cannot set one through
 	// this API in the first place, so preserving them takes nothing away.
-	helmRelease.Finalizers = cur.Finalizers
-	for k, v := range cur.Annotations {
-		if strings.HasPrefix(k, AnnotationPrefix) {
-			continue
-		}
-		if helmRelease.Annotations == nil {
-			helmRelease.Annotations = make(map[string]string)
-		}
-		if _, set := helmRelease.Annotations[k]; !set {
-			helmRelease.Annotations[k] = v
-		}
-	}
+	carryOverRuntimeMetadata(helmRelease, cur)
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
@@ -650,18 +639,30 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// HelmRelease's status, which shares the object's resourceVersion. When a
 	// caller updates an app CR while a prior reconcile is still in flight, the
 	// resourceVersion read above goes stale and the Update is rejected with a
-	// 409 Conflict. The HelmRelease spec is fully derived from the Application
+	// 409 Conflict. The HelmRelease SPEC is fully derived from the Application
 	// the caller just applied, so a stale-resourceVersion conflict is never a
-	// real spec conflict here: refresh the resourceVersion from the live object
-	// and retry.
+	// real spec conflict here.
+	//
+	// The METADATA is a different matter, and this is the window where it moves.
+	// A conflict means somebody wrote the object between the read above and this
+	// Update, and the writers are the controllers whose finalizers and
+	// annotations the carry-over exists to preserve: Flux adding its finalizer,
+	// site-router adding its own or recording a route owner. Refreshing only the
+	// resourceVersion and re-sending the object built from the stale read would
+	// drop whatever they had just added — the exact loss the carry-over was added
+	// to stop, reappearing on the one path where it is most likely.
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		updateErr := r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
 		if apierrors.IsConflict(updateErr) {
-			cur := &helmv2.HelmRelease{}
-			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
+			latest := &helmv2.HelmRelease{}
+			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, latest, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
 				return getErr
 			}
-			helmRelease.SetResourceVersion(cur.GetResourceVersion())
+			helmRelease.SetResourceVersion(latest.GetResourceVersion())
+			carryOverRuntimeMetadata(helmRelease, latest)
+			if shard, ok := latest.Labels[fluxshard.ShardKeyLabel]; ok {
+				helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
+			}
 		}
 		return updateErr
 	})
@@ -1289,6 +1290,34 @@ func (r *REST) ConvertHelmReleaseToApplicationWithMonitor(ctx context.Context, h
 // ConvertApplicationToHelmRelease converts an Application to a HelmRelease
 func (r *REST) ConvertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
 	return r.convertApplicationToHelmRelease(app)
+}
+
+// carryOverRuntimeMetadata copies onto the rebuilt HelmRelease the metadata that
+// belongs to controllers rather than to the Application: finalizers wholesale,
+// and every annotation the conversion does not own.
+//
+// The conversion owns exactly the AnnotationPrefix ones, because they mirror the
+// Application's own — so a prefixed annotation the Application no longer carries
+// must still disappear, or a tenant could never remove one. Everything else was
+// written by something other than this caller and is not theirs to remove; a
+// tenant cannot set an unprefixed annotation through this API at all.
+//
+// Called once against the pre-Update read and again on every conflict retry,
+// because a conflict means a controller wrote the object in between and the
+// retry would otherwise re-send metadata from the stale read.
+func carryOverRuntimeMetadata(dst, live *helmv2.HelmRelease) {
+	dst.Finalizers = live.Finalizers
+	for k, v := range live.Annotations {
+		if strings.HasPrefix(k, AnnotationPrefix) {
+			continue
+		}
+		if dst.Annotations == nil {
+			dst.Annotations = make(map[string]string)
+		}
+		if _, set := dst.Annotations[k]; !set {
+			dst.Annotations[k] = v
+		}
+	}
 }
 
 // filterInternalKeys removes keys starting with "_" from the JSON values

@@ -18,6 +18,9 @@ package application
 
 import (
 	"context"
+	"errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -148,5 +151,109 @@ func TestUpdate_PreservesControllerFinalizersAndAnnotations(t *testing.T) {
 	// tenant-removed annotation unremovable.
 	if _, still := got.Annotations[AnnotationPrefix+"stale"]; still {
 		t.Errorf("a prefixed annotation the Application no longer carries must not be resurrected, got %v", got.Annotations)
+	}
+}
+
+// TestUpdate_PreservesMetadataAcrossConflictRetry is the same contract on the
+// path where it is most likely to matter. A 409 means somebody wrote the object
+// between this handler's read and its PUT, and the writers are exactly the
+// controllers whose metadata the carry-over exists to preserve. Refreshing only
+// the resourceVersion and re-sending the object built from the stale read drops
+// whatever they had just added.
+func TestUpdate_PreservesMetadataAcrossConflictRetry(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := helmv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("register helmv2 scheme: %v", err)
+	}
+	resourceCfg := &config.ResourceConfig{
+		Resources: []config.Resource{
+			{Application: config.ApplicationConfig{Kind: "MySQL"}},
+		},
+	}
+	if err := appsv1alpha1.RegisterDynamicTypes(scheme, resourceCfg); err != nil {
+		t.Fatalf("register dynamic types: %v", err)
+	}
+
+	existing := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "mysql-good-name",
+			Namespace: "tenant-foo",
+			Labels: map[string]string{
+				ApplicationKindLabel:  "MySQL",
+				ApplicationGroupLabel: appsv1alpha1.GroupName,
+				ApplicationNameLabel:  "good-name",
+			},
+		},
+	}
+
+	var built client.WithWatch
+	firstUpdate := true
+	built = fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if !firstUpdate {
+					return c.Update(ctx, obj, opts...)
+				}
+				firstUpdate = false
+				// The controller wins the race: it adds its finalizer and its
+				// ownership annotation to the live object, which is what makes
+				// this handler's write conflict.
+				live := &helmv2.HelmRelease{}
+				if err := c.Get(ctx, client.ObjectKey{Namespace: "tenant-foo", Name: "mysql-good-name"}, live); err != nil {
+					return err
+				}
+				live.Finalizers = append(live.Finalizers, "apps.cozystack.io/site-router-mediation")
+				if live.Annotations == nil {
+					live.Annotations = map[string]string{}
+				}
+				live.Annotations["apps.cozystack.io/site-router-route-gateway-ip"] = "10.244.0.5"
+				if err := c.Update(ctx, live); err != nil {
+					return err
+				}
+				return apierrors.NewConflict(
+					schema.GroupResource{Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases"},
+					"mysql-good-name", errors.New("object has been modified"))
+			},
+		}).Build()
+
+	r := &REST{
+		c: built,
+		gvr: schema.GroupVersionResource{
+			Group: appsv1alpha1.GroupName, Version: "v1alpha1", Resource: "mysqls",
+		},
+		gvk: schema.GroupVersionKind{
+			Group: appsv1alpha1.GroupName, Version: "v1alpha1", Kind: "MySQL",
+		},
+		kindName:      "MySQL",
+		releaseConfig: config.ReleaseConfig{Prefix: "mysql-"},
+	}
+
+	app := &appsv1alpha1.Application{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps.cozystack.io/v1alpha1", Kind: "MySQL"},
+		ObjectMeta: metav1.ObjectMeta{Name: "good-name", Namespace: "tenant-foo"},
+	}
+
+	ctx := request.WithNamespace(context.Background(), "tenant-foo")
+	if _, _, err := r.Update(ctx, "good-name", newDefaultUpdatedObjectInfo(app),
+		nil, nil, false, &metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	got := &helmv2.HelmRelease{}
+	if err := built.Get(ctx, client.ObjectKey{Namespace: "tenant-foo", Name: "mysql-good-name"}, got); err != nil {
+		t.Fatalf("fetch updated HelmRelease: %v", err)
+	}
+
+	var found bool
+	for _, f := range got.Finalizers {
+		if f == "apps.cozystack.io/site-router-mediation" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a finalizer added during the conflict window must survive the retry, got %v", got.Finalizers)
+	}
+	if v := got.Annotations["apps.cozystack.io/site-router-route-gateway-ip"]; v != "10.244.0.5" {
+		t.Errorf("an annotation written during the conflict window must survive the retry, got %q", v)
 	}
 }

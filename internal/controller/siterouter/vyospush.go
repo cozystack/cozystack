@@ -715,6 +715,8 @@ func (r *SiteRouterReconciler) resolveInputs(ctx context.Context, inst *instance
 		}
 	}
 
+	inst.tunnelPushed = len(in.Tunnels) > 0
+
 	return in, nil
 }
 

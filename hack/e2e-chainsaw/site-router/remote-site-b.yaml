@@ -15,16 +15,25 @@
 #     (vyos / ${REMOTE_B_PASS:-e2edrive}) via the probe-driver pod and drive
 #     ping/curl/nc sourced from the dummies.
 #
-# DELIVERY — validated live (T13): B boots the same VyOS golden image as A and is
-# seeded by cloud-init `write_files` of a complete /opt/vyatta/etc/config/config.boot
-# (owner root:vyattacfg, mode 0660) — the same mechanism the site-router chart
-# uses for A (the VyOS cloud-init fork runs no scripts-user/runcmd; only
-# write_files/cloud_config modules are enabled, so a full config.boot is the one
-# reliable seed). The config.boot below is > the 2048-byte inline cloudInit limit,
-# so it is delivered via a Secret (secretRef) on a raw KubeVirt VirtualMachine —
-# the cozystack VMInstance/instanceProfile path did not reliably apply a
-# config-of-this-size on first boot in validation, and the raw VM (mirroring
-# packages/apps/site-router/templates/vm.yaml) boots the golden image cleanly.
+# DELIVERY: B boots the same appliance image as A, and that image has no
+# cloud-init at all. The Stream-derived appliance replaced it with
+# packages/system/vyos-router-image/overlay/vyos-appliance-seed.sh, a systemd unit
+# that copies `user-data` off the NoCloud disk VERBATIM to
+# /opt/vyatta/etc/config/config.boot. So `userdata` below is a raw config.boot,
+# exactly as the chart renders A's — a `#cloud-config` document here would be
+# installed as the configuration itself and rejected on commit, and B would come
+# up with no management API for establish-tunnel to talk to.
+#
+# The diagnostics ride a SECOND Secret volume named `cozydiag`, because the seed
+# looks for them by volume label rather than in the configuration. A's chart does
+# the same thing in templates/vm.yaml; keeping the two identical is the point,
+# since B exists to be the far end of A.
+#
+# The config.boot is > the 2048-byte inline cloudInit limit, so it goes through a
+# Secret (secretRef) on a raw KubeVirt VirtualMachine — the cozystack
+# VMInstance/instanceProfile path did not reliably apply a config of this size on
+# first boot in validation, and the raw VM (mirroring
+# packages/apps/site-router/templates/vm.yaml) boots the image cleanly.
 #
 # The trailing `vyos-config-version` line MUST match the golden image's schema
 # revision (copied verbatim from the chart-rendered A config.boot); an empty or
@@ -43,88 +52,80 @@ metadata:
   name: remote-site-b-cloudinit
 stringData:
   userdata: |
-    #cloud-config
-    write_files:
-      - path: /opt/vyatta/etc/config/config.boot
-        owner: root:vyattacfg
-        permissions: '0660'
-        content: |
-          interfaces {
-              ethernet eth0 {
-                  address "dhcp"
-              }
-              dummy dum0 {
-                  address "192.0.2.1/24"
-              }
-              dummy dum1 {
-                  address "198.51.100.7/24"
-              }
-              loopback lo {
-              }
-          }
-          service {
-              https {
-                  api {
-                      keys {
-                          id remote-b {
-                              key "REMOTEB0000000000000000000000000000000B"
-                          }
-                      }
-                      rest {
-                      }
-                  }
-                  listen-address "0.0.0.0"
-              }
-              ssh {
-                  port "22"
-              }
-          }
-          system {
-              config-management {
-                  commit-revisions "100"
-              }
-              console {
-                  device ttyS0 {
-                      speed "115200"
-                  }
-              }
-              host-name "remote-site-b"
-              login {
-                  user vyos {
-                      authentication {
-                          plaintext-password "e2edrive"
-                      }
-                  }
-              }
-          }
+    interfaces {
+        ethernet eth0 {
+            address "dhcp"
+        }
+        dummy dum0 {
+            address "192.0.2.1/24"
+        }
+        dummy dum1 {
+            address "198.51.100.7/24"
+        }
+        loopback lo {
+        }
+    }
+    service {
+        https {
+            api {
+                keys {
+                    id remote-b {
+                        key "REMOTEB0000000000000000000000000000000B"
+                    }
+                }
+                rest {
+                }
+            }
+            listen-address "0.0.0.0"
+        }
+        ssh {
+            port "22"
+        }
+    }
+    system {
+        config-management {
+            commit-revisions "100"
+        }
+        console {
+            device ttyS0 {
+                speed "115200"
+            }
+        }
+        host-name "remote-site-b"
+        login {
+            user vyos {
+                authentication {
+                    plaintext-password "e2edrive"
+                }
+            }
+        }
+    }
 
-          // Warning: Do not remove the following line.
-          // vyos-config-version: "bgp@6:cluster@2:config-management@1:conntrack@6:conntrack-sync@2:container@3:dhcp-relay@2:dhcp-server@11:dhcpv6-server@6:dns-dynamic@4:dns-forwarding@4:firewall@20:flow-accounting@3:https@7:ids@2:interfaces@34:ipoe-server@4:ipsec@14:isis@3:l2tp@9:lldp@3:monitoring@2:nat@8:nat66@3:nhrp@1:ntp@3:openconnect@3:openvpn@5:ospf@2:pim@1:policy@8:pppoe-server@12:pptp@5:qos@2:quagga@12:reverse-proxy@3:rip@1:rpki@2:salt@1:snmp@3:ssh@3:sstp@6:system@31:vpp@6:vrf@4:vrrp@4:wanloadbalance@4:webproxy@2"
-          // Release version: 2026.03
-      # Bring-up diagnostics, the same emitter A gets from the chart
-      # (packages/apps/site-router/templates/_helpers.tpl gates it on
-      # values._logSerialConsole). B is a raw manifest with no templating, so the
-      # script body is injected by the bring-up step from the ONE copy in the
-      # tree, packages/apps/site-router/files/guest-diag.sh — B and A must report
-      # in the same format or the symmetry that made the last diagnosis credible
-      # is gone, and two hand-maintained copies would drift.
-      #
-      # B matters more than A here, not less: the loop that actually times out
-      # ("timeout committing B IPsec") is talking to B's management API.
-      - path: /config/scripts/cozy-guest-diag.sh
-        owner: root:root
-        permissions: '0755'
-        content: |
-          __GUEST_DIAG_SCRIPT__
-      # Kept byte-identical to the chart's cron entry; see it for why the
-      # filename has no dot and why PATH is set explicitly.
-      - path: /etc/cron.d/cozy-guest-diag
-        owner: root:root
-        permissions: '0644'
-        content: |
-          SHELL=/bin/sh
-          PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-          * * * * * root /config/scripts/cozy-guest-diag.sh
+    // Warning: Do not remove the following line.
+    // vyos-config-version: "bgp@6:cluster@2:config-management@1:conntrack@6:conntrack-sync@2:container@3:dhcp-relay@2:dhcp-server@11:dhcpv6-server@6:dns-dynamic@4:dns-forwarding@4:firewall@20:flow-accounting@3:https@7:ids@2:interfaces@34:ipoe-server@4:ipsec@14:isis@3:l2tp@9:lldp@3:monitoring@2:nat@8:nat66@3:nhrp@1:ntp@3:openconnect@3:openvpn@5:ospf@2:pim@1:policy@8:pppoe-server@12:pptp@5:qos@2:quagga@12:reverse-proxy@3:rip@1:rpki@2:salt@1:snmp@3:ssh@3:sstp@6:system@31:vpp@6:vrf@4:vrrp@4:wanloadbalance@4:webproxy@2"
+    // Release version: 2026.03
+          # Bring-up diagnostics, the same emitter A gets from the chart
+          # (packages/apps/site-router/templates/_helpers.tpl gates it on
+          # values._logSerialConsole). B is a raw manifest with no templating, so the
+          # script body is injected by the bring-up step from the ONE copy in the
+          # tree, packages/apps/site-router/files/guest-diag.sh — B and A must report
+          # in the same format or the symmetry that made the last diagnosis credible
+          # is gone, and two hand-maintained copies would drift.
+          #
+          # B matters more than A here, not less: the loop that actually times out
+          # ("timeout committing B IPsec") is talking to B's management API.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: remote-site-b-diag
+stringData:
+  guest-diag.sh: |
+    __GUEST_DIAG_SCRIPT__
+  guest-diag.cron: |
+    SHELL=/bin/sh
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    * * * * * root /config/scripts/cozy-guest-diag.sh
 ---
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
@@ -182,6 +183,11 @@ spec:
             - name: cloudinit
               disk:
                 bus: virtio
+            # The appliance seed finds this by volume label (`blkid -L cozydiag`),
+            # and KubeVirt labels a Secret-backed iso9660 with the VOLUME NAME, so
+            # the name below is load-bearing. Same shape as A's, in vm.yaml.
+            - name: cozydiag
+              disk: {}
           interfaces:
             - name: default
               bridge: {}
@@ -205,3 +211,6 @@ spec:
           cloudInitNoCloud:
             secretRef:
               name: remote-site-b-cloudinit
+        - name: cozydiag
+          secret:
+            secretName: remote-site-b-diag

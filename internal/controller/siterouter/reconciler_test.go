@@ -802,10 +802,6 @@ func TestProgramNamespaceRoutes_GatewayIPChange(t *testing.T) {
 		t.Helper()
 		hr := siteRouterHRWithValues(t, "demo", map[string]interface{}{
 			"remoteCIDRs": []interface{}{"172.31.0.0/16"},
-			// A peer is required for routes to be programmed at all: without a
-			// tunnel the return route would forward tenant traffic to the remote
-			// network in the clear (see programNamespaceRoutes).
-			"peer": map[string]interface{}{"address": "203.0.113.10"},
 		})
 		hr.Annotations = map[string]string{routeGatewayIPAnnotation: "10.244.0.5"}
 		ns := &corev1.Namespace{
@@ -845,7 +841,10 @@ func TestProgramNamespaceRoutes_GatewayIPChange(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decode values: %v", err)
 		}
-		return r, &instance{hr: live, name: "demo", namespace: "tenant-test", values: values, gatewayPod: gateway}
+		// tunnelPushed is what programNamespaceRoutes gates on, and it is set by
+		// the push this test does not run. These subtests are about the ownership
+		// write ordering, so they stand in for a reconcile that pushed a tunnel.
+		return r, &instance{hr: live, name: "demo", namespace: "tenant-test", values: values, gatewayPod: gateway, tunnelPushed: true}
 	}
 
 	t.Run("a failed namespace write leaves the previous owner recorded", func(t *testing.T) {
@@ -925,8 +924,13 @@ func TestProgramNamespaceRoutes_GatewayIPChange(t *testing.T) {
 // the gateway, and the guest forward chain accepts locally-originated non-IPsec
 // traffic deliberately, so it leaves in the clear over the default route.
 // strongSwan only traps it once a policy exists.
+//
+// The gate is inst.tunnelPushed, not the tenant's declared peer, and that
+// distinction is the point: a peer naming a PSK Secret that does not exist, an
+// unassigned tunnel VIP, and a failed push all leave the intent declared while
+// the guest has nothing. Only the push knows which of those happened.
 func TestProgramNamespaceRoutes_NoTunnelNoRoutes(t *testing.T) {
-	t.Run("declared remoteCIDRs with no peer program nothing", func(t *testing.T) {
+	t.Run("declared remoteCIDRs with no pushed tunnel program nothing", func(t *testing.T) {
 		hr := siteRouterHRWithValues(t, "demo", map[string]interface{}{
 			"remoteCIDRs": []interface{}{"172.31.0.0/16"},
 		})
@@ -951,6 +955,37 @@ func TestProgramNamespaceRoutes_NoTunnelNoRoutes(t *testing.T) {
 		if ann := got.Annotations[routesAnnotation]; strings.Contains(ann, "172.31.0.0/16") {
 			t.Errorf("a route to the remote network must not exist before a tunnel does; "+
 				"tenant traffic for it would leave the gateway unencrypted, got %s=%q", routesAnnotation, ann)
+		}
+	})
+
+	t.Run("a declared peer whose PSK Secret is missing programs nothing", func(t *testing.T) {
+		// The case the old peer.address gate admitted. The tenant declared a peer,
+		// so intent is there; the push cannot build a tunnel without the PSK, so
+		// the guest has no policy and a route would leak.
+		values := routedValues()
+		objs := []client.Object{
+			siteRouterHRWithValues(t, "demo", values),
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}},
+			cozystackConfigMap(),
+			gwPod("virt-launcher-"+releasePrefix+"demo-abcde", "demo", "10.244.0.5"),
+			apiKeySecret("demo", "api-token-xyz"),
+			tunnelService("demo", "198.51.100.200"),
+			// No PSK Secret.
+		}
+		fakeV := &fakeVyOS{retrieveResult: json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`)}
+		r, _ := newVyOSReconciler(t, fakeV, objs...)
+
+		_, _ = r.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Namespace: "tenant-test", Name: releasePrefix + "demo"},
+		})
+
+		got := &corev1.Namespace{}
+		if err := r.Get(context.Background(), types.NamespacedName{Name: "tenant-test"}, got); err != nil {
+			t.Fatalf("get namespace: %v", err)
+		}
+		if ann := got.Annotations[routesAnnotation]; strings.Contains(ann, "172.31.0.0/16") {
+			t.Errorf("a declared peer is not a tunnel; no route may exist until the guest has the policy, got %s=%q",
+				routesAnnotation, ann)
 		}
 	})
 
