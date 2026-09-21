@@ -1,8 +1,18 @@
 import { useEffect, useRef, useState } from "react"
-import { Monitor, Maximize2, Minimize2, Power, RotateCcw, Terminal } from "lucide-react"
+import {
+  Monitor,
+  Maximize2,
+  Minimize2,
+  ClipboardPaste,
+  Power,
+  RotateCcw,
+  Terminal,
+} from "lucide-react"
 import { useK8sList, type K8sResource } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { releasePrefix } from "../../lib/app-definitions.ts"
+import { VncClipboardPanel } from "./VncClipboardPanel.tsx"
+import type { KeySender } from "../../lib/vnc-typing.ts"
 
 interface VncTabProps {
   ad: ApplicationDefinition
@@ -49,6 +59,9 @@ export function VncTab({ ad, instance }: VncTabProps) {
   const [fullscreen, setFullscreen] = useState(false)
   const [connectionKey, setConnectionKey] = useState(0)
   const [desktopSize, setDesktopSize] = useState<{ width: number; height: number } | null>(null)
+  const [showClipboard, setShowClipboard] = useState(false)
+  const [sender, setSender] = useState<KeySender | null>(null)
+  const [guestClipboard, setGuestClipboard] = useState<string | null>(null)
 
   useEffect(() => {
     if (!containerRef.current || appKind !== "VMInstance" || !isRunning) return
@@ -59,6 +72,8 @@ export function VncTab({ ad, instance }: VncTabProps) {
     setLoading(true)
     setError(null)
     setConnected(false)
+    setSender(null)
+    setGuestClipboard(null)
 
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:"
     const wsUrl = `${wsProtocol}//${window.location.host}/k8s/apis/subresources.kubevirt.io/v1/namespaces/${ns}/virtualmachineinstances/${vmName}/vnc`
@@ -82,6 +97,10 @@ export function VncTab({ ad, instance }: VncTabProps) {
             setLoading(false)
             setConnected(true)
             setError(null)
+            setSender({
+              sendKey: (keysym: number, code: string, down: boolean) =>
+                rfb.sendKey(keysym, code, down),
+            })
             requestAnimationFrame(() => {
               const canvas = el.querySelector("canvas")
               if (canvas) setDesktopSize({ width: canvas.width, height: canvas.height })
@@ -93,7 +112,17 @@ export function VncTab({ ad, instance }: VncTabProps) {
             if (rfbRef.current !== rfb) return
             setConnected(false)
             setLoading(false)
+            setSender(null)
             if (!e.detail?.clean) setError(`Connection lost: ${e.detail?.reason ?? "unknown"}`)
+          })
+
+          // Only fires when a clipboard-capable agent sits behind the console.
+          // KubeVirt attaches none today, so this stays quiet on a stock cluster.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          rfb.addEventListener("clipboard", (e: any) => {
+            if (rfbRef.current !== rfb) return
+            const text = e.detail?.text
+            if (typeof text === "string") setGuestClipboard(text)
           })
 
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -101,6 +130,7 @@ export function VncTab({ ad, instance }: VncTabProps) {
             if (rfbRef.current !== rfb) return
             setConnected(false)
             setLoading(false)
+            setSender(null)
             setError(`Security failure: ${e.detail?.status ?? "authentication failed"}`)
           })
 
@@ -236,6 +266,14 @@ export function VncTab({ ad, instance }: VncTabProps) {
               </ToolbarButton>
             )}
 
+            <ToolbarButton
+              onClick={() => setShowClipboard((open) => !open)}
+              title={showClipboard ? "Hide clipboard" : "Clipboard"}
+              active={showClipboard}
+            >
+              <ClipboardPaste className="h-3.5 w-3.5" />
+            </ToolbarButton>
+
             <div className="mx-1 h-3.5 w-px bg-slate-700" />
 
             <ToolbarButton
@@ -308,6 +346,15 @@ export function VncTab({ ad, instance }: VncTabProps) {
 
           <div ref={containerRef} className="absolute inset-0" />
         </div>
+
+        {showClipboard && (
+          <VncClipboardPanel
+            sender={sender}
+            guestClipboard={guestClipboard}
+            onClose={() => setShowClipboard(false)}
+            onTypingFinished={() => rfbRef.current?.focus()}
+          />
+        )}
       </div>
     </div>
   )
@@ -318,12 +365,14 @@ function ToolbarButton({
   title,
   disabled,
   label,
+  active,
   children,
 }: {
   onClick: () => void
   title: string
   disabled?: boolean
   label?: string
+  active?: boolean
   children: React.ReactNode
 }) {
   return (
@@ -332,7 +381,10 @@ function ToolbarButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-slate-500 transition-colors hover:bg-slate-700/60 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-30"
+      aria-pressed={active}
+      className={`flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 transition-colors hover:bg-slate-700/60 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-30 ${
+        active ? "bg-slate-700/60 text-slate-200" : "text-slate-500"
+      }`}
     >
       {children}
       {label && <span className="text-[10px] font-medium">{label}</span>}
