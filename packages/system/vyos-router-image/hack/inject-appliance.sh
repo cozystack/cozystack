@@ -78,6 +78,16 @@ install -d "${MERGED}/etc/systemd/system/vyos.target.wants"
 ln -sf /etc/systemd/system/vyos-appliance-seed.service \
     "${MERGED}/etc/systemd/system/vyos.target.wants/vyos-appliance-seed.service"
 
+# The other half of the seed: say what vyos-router made of the configuration.
+# A rejected config.boot reaches the console as the single line "Configuration
+# error" and the reason stays in a log inside a guest with no SSH, a locked login
+# and a password-protected bootloader. The bring-up emitter cannot cover it
+# either, because cron installs it from the configuration that just failed.
+install -m 0755 "${OVERLAY_DIR}/vyos-appliance-config-report.sh" "${MERGED}/usr/local/sbin/vyos-appliance-config-report.sh"
+install -m 0644 "${OVERLAY_DIR}/vyos-appliance-config-report.service" "${MERGED}/etc/systemd/system/vyos-appliance-config-report.service"
+ln -sf /etc/systemd/system/vyos-appliance-config-report.service \
+    "${MERGED}/etc/systemd/system/vyos.target.wants/vyos-appliance-config-report.service"
+
 install -d "${MERGED}/usr/share/vyos"
 install -m 0644 "${OVERLAY_DIR}/config.boot.default" "${MERGED}/usr/share/vyos/config.boot.default"
 
