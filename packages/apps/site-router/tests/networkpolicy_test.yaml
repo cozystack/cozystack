@@ -17,7 +17,7 @@ suite: site-router Cilium security policies (T08)
 #      selector), NOT endpointSelector {} (which would hit every tenant pod), so
 #      it never denies unrelated tenant workloads their metadata/mgmt egress.
 #      It denies 169.254.0.0/16 (incl. metadata 169.254.169.254) plus operator-
-#      supplied management/node ranges (security.egressDenyCIDRs) that do not
+#      supplied management/node ranges (_egressDenyCIDRs) that do not
 #      overlap tenant workloads. Cilium's identity model already blocks direct
 #      access to unrelated tenants / nodes / the API; this adds the explicit
 #      link-local + management deny that identity does not cover.
@@ -82,10 +82,9 @@ tests:
 
   - it: adds operator-supplied management/node ranges to the egressDeny
     set:
-      security:
-        egressDenyCIDRs:
-          - 10.96.0.0/16
-          - 192.0.2.0/24
+      _egressDenyCIDRs:
+        - 10.96.0.0/16
+        - 192.0.2.0/24
     documentSelector:
       path: metadata.name
       value: site-router-test-gateway-egress-deny

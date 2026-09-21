@@ -30,7 +30,17 @@ peer:
 ## @section Routing configuration
 ##
 
-## @param {[]string} remoteCIDRs - Remote networks reachable over the tunnel. Must be disjoint from cluster pod/service/join networks, live node addresses, and allocated LoadBalancer/external service addresses (validated at admission and by the controller).
+## @param {[]string} remoteCIDRs - Remote networks reachable over the tunnel. Must be disjoint from cluster pod/service/join networks, live node addresses, and allocated LoadBalancer/external service addresses (validated at admission and by the controller). At most 16.
+## @maxItems 16
+##
+## The cap bounds a product, not this list. The guest's tunnel-ingress filter
+## emits one accept per (remoteCIDR x tenant destination) pair, and the
+## destination side is every live Pod IP and Service ClusterIP in the namespace,
+## so without a bound here a tenant sets the multiplier on a rule set that is
+## pushed to the router in full on every config change. 16 is well past what a
+## site-to-site peering declares in practice and still keeps the product
+## legible. Bounding the other side needs a policy for what happens when a
+## namespace outgrows it, which is a deferred item in docs/followups.md.
 remoteCIDRs: []
 
 ## @typedef {struct} StaticRoute - Static route programmed on the router.
@@ -59,17 +69,6 @@ staticRoutes: []
 ## @param {BGP} bgp - Optional BGP peering over the tunnel. Disabled by default.
 bgp:
   enabled: false
-
-##
-## @section Security
-##
-
-## @typedef {struct} Security - Platform-owned network security guards for the gateway VM.
-## @field {[]string} [egressDenyCIDRs] - Extra destination CIDRs the gateway is denied egress to, on top of the built-in link-local `169.254.0.0/16` deny (which always applies and covers the cloud metadata endpoint `169.254.169.254`). Use for management or node ranges that do not overlap tenant workloads; do NOT list the cluster pod/service/join ranges (the gateway must reach tenant workloads). Empty by default.
-
-## @param {Security} security - Platform-owned network security guards for the gateway VM.
-security:
-  egressDenyCIDRs: []
 
 ##
 ## @section Common parameters
@@ -126,6 +125,22 @@ storageClass: replicated
 ## "explicitly empty": unset means the pod CIDR, empty means the operator asked
 ## for the open-management escape hatch and must say so with
 ## `_allowOpenManagement: true`.
+
+## Extra gateway egress denies: `_egressDenyCIDRs`.
+##
+## Same reasoning as the two keys above, and it used to sit in the tenant schema
+## as `security.egressDenyCIDRs` while its own description called it
+## platform-owned. Nothing enforced that, so the field was tenant-writable and a
+## tenant could not be shown it as read-only without the schema lying. The
+## exposure was small, because templates/networkpolicy.yaml emits the built-in
+## `169.254.0.0/16` deny unconditionally and only appends these, so the list can
+## add denies and never remove one. Small is not the same as owned: the ranges
+## worth listing here are management and node networks an operator knows and a
+## tenant does not, and getting one wrong denies the gateway a path it needs.
+##
+## Not set here for the same mechanical reason as `_managementCIDR`: a key with
+## no @param fails the README step. The template reads it with a `default list`,
+## so unset renders exactly the built-in deny.
 
 ## @param {string} [cloudInitSeed] - Opaque seed mixed into the VM firmware UUID. Change it to force the first-boot seed to be applied again; clear it to preserve an existing VM's UUID across re-renders.
 cloudInitSeed: ""

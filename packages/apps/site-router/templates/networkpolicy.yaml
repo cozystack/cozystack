@@ -46,7 +46,7 @@ spec:
   egressDeny:
   - toCIDR:
     - "169.254.0.0/16"
-    {{- range (.Values.security | default dict).egressDenyCIDRs }}
+    {{- range (.Values._egressDenyCIDRs | default list) }}
     - {{ . | quote }}
     {{- end }}
 ---
