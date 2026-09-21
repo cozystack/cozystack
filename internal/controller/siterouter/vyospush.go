@@ -94,6 +94,10 @@ const (
 	// with a feature the tenant enabled quietly absent.
 	reasonBGPLocalASNInvalid = "BGPLocalASNInvalid"
 
+	// reasonAPITLSUnverified marks an instance whose api-key Secret carries no
+	// certificate to pin, so the channel that carries the token is not verified.
+	reasonAPITLSUnverified = "APITLSUnverified"
+
 	// reasonTunnelNotConfigured marks an instance that carries no usable tunnel
 	// because peer.address or the PSK resolved empty. The schema requires
 	// peer.address, but `required` only means the key is present and its default
@@ -106,6 +110,8 @@ const (
 const (
 	pskSecretKey       = "psk"
 	apiTokenSecretKey  = "token"
+	apiCertSecretKey   = "tls.crt"
+	apiServerNameKey   = "tls.servername"
 	pskSecretSuffix    = "-psk"
 	apiKeySecretSuffix = "-api-key"
 )
@@ -140,13 +146,34 @@ type VyOSClient interface {
 // token. The reconciler calls it once per reconcile. Nil selects
 // DefaultVyOSClientFactory; tests override SiteRouterReconciler.VyOSClientFactory
 // to inject a fake.
-type VyOSClientFactory func(endpoint, token string) VyOSClient
+type VyOSClientFactory func(ep VyOSEndpoint) VyOSClient
+
+// VyOSEndpoint is everything needed to reach one gateway's management API: where
+// it is, the token that authenticates the controller TO it, and the certificate
+// that authenticates it BACK. The last two travel together deliberately — a
+// bearer token says nothing about who answered, and this endpoint is a pod IP on
+// the one port class in the cluster whose anti-spoof is off. See
+// vyos.WithPinnedCA.
+type VyOSEndpoint struct {
+	URL   string
+	Token string
+
+	// CAPEM and ServerName come from the chart-generated api-key Secret. Both
+	// empty means an instance whose appliance predates the seeded certificate;
+	// the factory falls back to an unverified connection and the caller records
+	// that it had to.
+	CAPEM      []byte
+	ServerName string
+}
 
 // DefaultVyOSClientFactory wraps vyos.NewClient with the production options: the
 // gateway ships a self-signed certificate, so TLS verification is skipped and the
 // in-band API token authenticates the channel (D6).
-func DefaultVyOSClientFactory(endpoint, token string) VyOSClient {
-	return vyos.NewClient(endpoint, token, vyos.WithInsecureSkipVerify())
+func DefaultVyOSClientFactory(ep VyOSEndpoint) VyOSClient {
+	if len(ep.CAPEM) > 0 && ep.ServerName != "" {
+		return vyos.NewClient(ep.URL, ep.Token, vyos.WithPinnedCA(ep.CAPEM, ep.ServerName))
+	}
+	return vyos.NewClient(ep.URL, ep.Token, vyos.WithInsecureSkipVerify())
 }
 
 // vyosFactory returns the configured factory or the production default.
@@ -278,7 +305,26 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 		}
 	}
 
-	inst.vc = r.vyosFactory()("https://"+inst.gatewayPod.Status.PodIP, token)
+	// The certificate the gateway presents, and the name it was issued for, live
+	// beside the token in the same controller-only Secret. Absent means an
+	// instance created before the chart seeded one: still usable, but the channel
+	// carrying the token is then unverified, so say so rather than let it pass for
+	// the same thing.
+	caPEM, serverName, pinned, err := r.readAPITLS(ctx, inst)
+	if err != nil {
+		return err
+	}
+	if !pinned && r.Recorder != nil {
+		r.Recorder.Event(inst.hr, corev1.EventTypeWarning, reasonAPITLSUnverified,
+			"the gateway's API certificate is not pinned (no tls.crt in the api-key Secret), so the management channel is not verified; re-render the release to seed one")
+	}
+
+	inst.vc = r.vyosFactory()(VyOSEndpoint{
+		URL:        "https://" + inst.gatewayPod.Status.PodIP,
+		Token:      token,
+		CAPEM:      caPEM,
+		ServerName: serverName,
+	})
 
 	device := r.discoverInterfaceDevices(ctx, inst)
 	if device == "" {
@@ -901,6 +947,32 @@ func (r *SiteRouterReconciler) readPSK(ctx context.Context, inst *instance) (str
 func (r *SiteRouterReconciler) readAPIToken(ctx context.Context, inst *instance) (string, bool, error) {
 	name := releasePrefix + inst.name + apiKeySecretSuffix
 	return r.readSecretKey(ctx, inst.namespace, name, apiTokenSecretKey)
+}
+
+// readAPITLS reads the gateway's API certificate and the name it was issued for
+// from the same Secret as the token. ok=false means the pair is absent or
+// incomplete, which is an instance whose release predates the seeded
+// certificate — not an error, but not a verified channel either, so the caller
+// says so out loud rather than silently connecting unverified.
+//
+// Both halves or neither: a certificate with no name to check it against cannot
+// be verified (the controller dials a pod IP no certificate can carry), and a
+// name with no certificate has nothing to check.
+func (r *SiteRouterReconciler) readAPITLS(ctx context.Context, inst *instance) ([]byte, string, bool, error) {
+	name := releasePrefix + inst.name + apiKeySecretSuffix
+
+	cert, certOK, err := r.readSecretKey(ctx, inst.namespace, name, apiCertSecretKey)
+	if err != nil {
+		return nil, "", false, err
+	}
+	serverName, nameOK, err := r.readSecretKey(ctx, inst.namespace, name, apiServerNameKey)
+	if err != nil {
+		return nil, "", false, err
+	}
+	if !certOK || !nameOK || cert == "" || serverName == "" {
+		return nil, "", false, nil
+	}
+	return []byte(cert), serverName, true, nil
 }
 
 // readTunnelLBAddress reads the assigned LoadBalancer ingress IP of the instance's

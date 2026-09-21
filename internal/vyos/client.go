@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -72,6 +73,12 @@ type Client struct {
 	baseURL string
 	apiKey  string
 	http    *http.Client
+
+	// optErr holds a construction error an Option could not return, so a
+	// misconfigured client fails on its first call rather than falling back to
+	// an unverified connection. An Option that cannot do its job must set this;
+	// silently doing nothing is how a TLS setting becomes optional in practice.
+	optErr error
 }
 
 // Option mutates a Client during construction.
@@ -85,10 +92,56 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	}
 }
 
-// WithInsecureSkipVerify disables TLS hostname/CA verification. VyOS
-// installations typically ship with a self-signed certificate; the
-// controller compensates by trusting only the in-band API token.
-// Production deployments that pin a CA should pass WithHTTPClient instead.
+// WithPinnedCA verifies the gateway's certificate against caPEM and requires it
+// to have been issued for serverName. It is what the production factory uses;
+// WithInsecureSkipVerify below is the fallback for an appliance that predates
+// the seeded certificate.
+//
+// Why a bearer token is not enough on its own: a token authenticates the CLIENT
+// to the server and says nothing about who answered. Without this the controller
+// POSTs a router-configuring credential to whatever holds the gateway pod IP at
+// that moment — and the gateway is the one port class in the cluster whose
+// anti-spoof is deliberately off, which makes claiming a neighbour's pod IP
+// cheaper here than anywhere else. There is a duller variant that needs no
+// attacker at all: kube-ovn recycles pod IPs, so a briefly stale cached Pod
+// object is enough to point the POST at whoever now holds the address.
+//
+// serverName rather than the dialled address, because the controller dials by
+// pod IP and no certificate can name that ahead of time. The chart puts a fixed
+// name in the appliance certificate's SAN and the controller asks for exactly
+// that name, so the address stays dynamic while the identity does not.
+func WithPinnedCA(caPEM []byte, serverName string) Option {
+	return func(c *Client) {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			c.optErr = errors.New("vyos: pinned CA is not a valid PEM certificate")
+			return
+		}
+		if serverName == "" {
+			c.optErr = errors.New("vyos: pinned CA given with no server name to verify against")
+			return
+		}
+
+		tlsCfg := &tls.Config{
+			RootCAs:    pool,
+			ServerName: serverName,
+			MinVersion: tls.VersionTLS12,
+		}
+		if base, ok := http.DefaultTransport.(*http.Transport); ok {
+			clone := base.Clone()
+			clone.TLSClientConfig = tlsCfg
+			c.http.Transport = clone
+
+			return
+		}
+		c.http.Transport = &http.Transport{TLSClientConfig: tlsCfg}
+	}
+}
+
+// WithInsecureSkipVerify disables TLS hostname/CA verification. It remains only
+// for an appliance built before the chart seeded a certificate, where there is
+// nothing to pin to; WithPinnedCA is what production uses. Nothing about it is
+// safe on its own — see the reasoning there.
 //
 // The transport is cloned from http.DefaultTransport so cluster-wide
 // proxy settings (HTTPS_PROXY, NO_PROXY) and the rest of the default
@@ -235,6 +288,14 @@ func (c *Client) Retrieve(ctx context.Context, path []string) (json.RawMessage, 
 // JSON-marshalled into the form-encoded `data` field, the API key is
 // sent in `key`, and the JSON envelope is unmarshalled into err/data.
 func (c *Client) post(ctx context.Context, path string, payload any) (json.RawMessage, error) {
+	// An Option that could not apply fails the call rather than the construction,
+	// because Option returns nothing. Checking it here and not per-method is what
+	// makes it impossible to reach the wire on a client whose TLS setup did not
+	// take: the alternative is a pinned client that quietly is not one.
+	if c.optErr != nil {
+		return nil, c.optErr
+	}
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal payload: %w", err)

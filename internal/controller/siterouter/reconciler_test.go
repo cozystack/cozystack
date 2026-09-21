@@ -608,8 +608,8 @@ func TestReconcile_DoesNotAimMediationAtALineageLabelledNonGatewayPod(t *testing
 	// Record what endpoint the config push was actually built against; the shared
 	// fixture's factory discards its arguments.
 	var gotBaseURL, gotToken string
-	r.VyOSClientFactory = func(baseURL, token string) VyOSClient {
-		gotBaseURL, gotToken = baseURL, token
+	r.VyOSClientFactory = func(ep VyOSEndpoint) VyOSClient {
+		gotBaseURL, gotToken = ep.URL, ep.Token
 		return fakeV
 	}
 

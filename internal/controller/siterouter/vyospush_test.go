@@ -176,7 +176,7 @@ func newVyOSReconciler(t *testing.T, v VyOSClient, objs ...client.Object) (*Site
 		Scheme:            scheme,
 		Recorder:          rec,
 		ManagementCIDR:    "10.244.0.0/16",
-		VyOSClientFactory: func(_, _ string) VyOSClient { return v },
+		VyOSClientFactory: func(VyOSEndpoint) VyOSClient { return v },
 	}
 	return r, rec
 }
