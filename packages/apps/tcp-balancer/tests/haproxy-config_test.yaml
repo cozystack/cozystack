@@ -57,16 +57,10 @@ tests:
     asserts:
       - matchRegex:
           path: data["haproxy.cfg"]
-          pattern: '(?m)^frontend http$\n(?:.*\n){0,5}?\s+acl whitelist src 10\.0\.0\.0/8 192\.168\.1\.1$'
+          pattern: '(?m)^frontend http$\n(?:[ \t]+.*\n)*?[ \t]+acl whitelist src 10\.0\.0\.0/8 192\.168\.1\.1\n[ \t]+acl all src 0\.0\.0\.0\n[ \t]+tcp-request content accept if whitelist\n[ \t]+tcp-request content reject$'
       - matchRegex:
           path: data["haproxy.cfg"]
-          pattern: '(?m)^frontend https$\n(?:.*\n){0,8}?\s+acl whitelist src 10\.0\.0\.0/8 192\.168\.1\.1$'
-      - matchRegex:
-          path: data["haproxy.cfg"]
-          pattern: '(?m)^\s+tcp-request content accept if whitelist$'
-      - matchRegex:
-          path: data["haproxy.cfg"]
-          pattern: '(?m)^\s+tcp-request content reject$'
+          pattern: '(?m)^frontend https$\n(?:[ \t]+.*\n)*?[ \t]+acl whitelist src 10\.0\.0\.0/8 192\.168\.1\.1\n[ \t]+acl all src 0\.0\.0\.0\n[ \t]+tcp-request content accept if whitelist\n[ \t]+tcp-request content reject$'
 
   - it: renames kubernetes and talos backends
     set:
@@ -132,13 +126,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["haproxy.cfg"]
-          pattern: '(?m)^frontend kubernetes$\n(?:.*\n){0,3}?\s+acl whitelist src 10\.0\.0\.0/8$'
+          pattern: '(?m)^frontend kubernetes$\n(?:[ \t]+.*\n)*?[ \t]+acl whitelist src 10\.0\.0\.0/8\n[ \t]+acl all src 0\.0\.0\.0\n[ \t]+tcp-request content accept if whitelist\n[ \t]+tcp-request content reject$'
       - matchRegex:
           path: data["haproxy.cfg"]
-          pattern: '(?m)^frontend talos$\n(?:.*\n){0,3}?\s+acl whitelist src 10\.0\.0\.0/8$'
-      - matchRegex:
-          path: data["haproxy.cfg"]
-          pattern: '(?m)^\s+tcp-request content accept if whitelist$'
-      - matchRegex:
-          path: data["haproxy.cfg"]
-          pattern: '(?m)^\s+tcp-request content reject$'
+          pattern: '(?m)^frontend talos$\n(?:[ \t]+.*\n)*?[ \t]+acl whitelist src 10\.0\.0\.0/8\n[ \t]+acl all src 0\.0\.0\.0\n[ \t]+tcp-request content accept if whitelist\n[ \t]+tcp-request content reject$'
