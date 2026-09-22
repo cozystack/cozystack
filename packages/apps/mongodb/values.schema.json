@@ -313,11 +313,17 @@
           "default": "0 2 * * *"
         },
         "useSystemBucket": {
-          "description": "Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `\u003cnamespace\u003e/\u003capplication\u003e`. Scheduling moves to a BackupClass Plan; `schedule`, `retentionPolicy` and PITR are ignored while this is on, and this flow has no retention yet (see docs/operations/backup-classes.md). Requires `backup.enabled: true` (the pbm agents run on that flag); the chart refuses the combination with `enabled: false` at render time.",
+          "description": "Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `\u003cnamespace\u003e/\u003capplication\u003e`. Scheduling moves to a BackupClass Plan; `schedule`, `retentionPolicy` and PITR are ignored while this is on, and this flow has no retention yet (see docs/operations/backup-classes.md). Requires `backup.enabled: true` (the pbm agents run on that flag); the schema rejects the combination with `enabled: false` and the chart refuses it at render time. A release that has not yet rendered this flag (its cluster still carries the chart's scheduled tasks and PITR) holds a BackupJob until it does, so the tenant's own storage is never injected over.",
           "type": "boolean",
           "default": false
         }
-      }
+      },
+      "x-kubernetes-validations": [
+        {
+          "message": "backup.useSystemBucket requires backup.enabled: the percona-backup-mongodb agents only run when backups are enabled",
+          "rule": "!(has(self.useSystemBucket) \u0026\u0026 self.useSystemBucket) || (has(self.enabled) \u0026\u0026 self.enabled)"
+        }
+      ]
     },
     "bootstrap": {
       "description": "Bootstrap configuration.",

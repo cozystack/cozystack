@@ -89,6 +89,16 @@ func (in *PerconaServerMongoDBBackupConfig) DeepCopyInto(out *PerconaServerMongo
 			out.Storages[k] = *v.DeepCopy()
 		}
 	}
+	if in.Tasks != nil {
+		out.Tasks = make([]runtime.RawExtension, len(in.Tasks))
+		for i := range in.Tasks {
+			in.Tasks[i].DeepCopyInto(&out.Tasks[i])
+		}
+	}
+	if in.PITR != nil {
+		out.PITR = new(PerconaServerMongoDBPITR)
+		*out.PITR = *in.PITR
+	}
 }
 
 func (in *PerconaServerMongoDBBackupConfig) DeepCopy() *PerconaServerMongoDBBackupConfig {

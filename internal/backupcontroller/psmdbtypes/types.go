@@ -97,12 +97,24 @@ type PerconaServerMongoDBSpec struct {
 	Backup PerconaServerMongoDBBackupConfig `json:"backup,omitempty"`
 }
 
-// PerconaServerMongoDBBackupConfig mirrors psmdb .spec.backup for the two
-// fields the driver inspects. Storages is a name→config map; the driver only
-// needs the key set (which storage names exist), so the value is opaque.
+// PerconaServerMongoDBBackupConfig mirrors the psmdb .spec.backup fields the
+// driver inspects. Storages is a name→config map whose values the driver decodes
+// only as far as .s3.bucket/.s3.credentialsSecret. Tasks and PITR are read for
+// presence alone: the mongodb chart renders them only without useSystemBucket,
+// so a cluster still carrying them was last rendered on the legacy flow whatever
+// the app CR's desired values say. Both stay opaque and omitempty so the
+// driver's server-side apply never touches them.
 type PerconaServerMongoDBBackupConfig struct {
 	Enabled  bool                            `json:"enabled,omitempty"`
 	Storages map[string]runtime.RawExtension `json:"storages,omitempty"`
+	Tasks    []runtime.RawExtension          `json:"tasks,omitempty"`
+	PITR     *PerconaServerMongoDBPITR       `json:"pitr,omitempty"`
+}
+
+// PerconaServerMongoDBPITR mirrors psmdb .spec.backup.pitr down to the enabled
+// flag.
+type PerconaServerMongoDBPITR struct {
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 type PerconaServerMongoDBStatus struct {

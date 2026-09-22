@@ -155,7 +155,7 @@ databases: {}
 
 ## @typedef {struct} Backup - Backup configuration.
 ## @field {bool} enabled - Enable regular backups.
-## @field {bool} [useSystemBucket] - Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `<namespace>/<application>`. Scheduling moves to a BackupClass Plan; `schedule`, `retentionPolicy` and PITR are ignored while this is on, and this flow has no retention yet (see docs/operations/backup-classes.md). Requires `backup.enabled: true` (the pbm agents run on that flag); the chart refuses the combination with `enabled: false` at render time.
+## @field {bool} [useSystemBucket] - Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `<namespace>/<application>`. Scheduling moves to a BackupClass Plan; `schedule`, `retentionPolicy` and PITR are ignored while this is on, and this flow has no retention yet (see docs/operations/backup-classes.md). Requires `backup.enabled: true` (the pbm agents run on that flag); the schema rejects the combination with `enabled: false` and the chart refuses it at render time. A release that has not yet rendered this flag (its cluster still carries the chart's scheduled tasks and PITR) holds a BackupJob until it does, so the tenant's own storage is never injected over.
 ## @field {string} [schedule] - Cron schedule for automated backups. Ignored when useSystemBucket is true (scheduling moves to the BackupClass Plan).
 ## @field {string} [retentionPolicy] - Retention policy (e.g. "30d"). Ignored when useSystemBucket is true (no engine-side retention on that flow).
 ## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/). Ignored when useSystemBucket is true (the driver injects the platform bucket).
@@ -165,6 +165,7 @@ databases: {}
 ## @field {string} [s3SecretKey] - Secret key for S3 authentication. Ignored when useSystemBucket is true (credentials come from the projected cozy-backups-creds).
 
 ## @param {Backup} backup - Backup configuration.
+## @x-kubernetes-validations [{rule: "!(has(self.useSystemBucket) && self.useSystemBucket) || (has(self.enabled) && self.enabled)", message: "backup.useSystemBucket requires backup.enabled: the percona-backup-mongodb agents only run when backups are enabled"}]
 backup:
   enabled: false
   useSystemBucket: false
