@@ -10,19 +10,27 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -66,6 +74,186 @@ type WorkloadMonitorReconciler struct {
 	// namespace.cozystack.io/monitoring label. Used when SeaweedFS and the
 	// stack that scrapes it run outside this cluster.
 	SeaweedfsMetricsEndpoint string
+	// DataVolumeReader reads CDI DataVolumes. Nil until the DataVolume kind is
+	// served, and until then DataVolumes do not count towards Operational.
+	DataVolumeReader client.Reader
+	dataVolumeMu     sync.RWMutex
+	// reconciled is closed by the first Reconcile. controller-runtime starts the
+	// workers only after the controller has started its sources
+	// (pkg/internal/controller/controller.go, Controller.Start), so from then on
+	// Watch starts a new source itself instead of queueing it for Start.
+	reconciled     chan struct{}
+	reconciledOnce sync.Once
+}
+
+const (
+	// dataVolumeAPIPollInterval is how often the controller looks for the
+	// DataVolume kind until CDI is installed.
+	dataVolumeAPIPollInterval = 30 * time.Second
+	// dataVolumeSyncTimeout bounds the wait for the DataVolume informer to sync.
+	// A reconcile context has no deadline, so a reader installed on an informer
+	// that never syncs would park every WorkloadMonitor reconcile for good.
+	dataVolumeSyncTimeout = time.Minute
+)
+
+func (r *WorkloadMonitorReconciler) dataVolumeReader() client.Reader {
+	r.dataVolumeMu.RLock()
+	defer r.dataVolumeMu.RUnlock()
+	return r.DataVolumeReader
+}
+
+func (r *WorkloadMonitorReconciler) reconciledCh() chan struct{} {
+	r.dataVolumeMu.Lock()
+	defer r.dataVolumeMu.Unlock()
+	if r.reconciled == nil {
+		r.reconciled = make(chan struct{})
+	}
+	return r.reconciled
+}
+
+var dataVolumeGVK = schema.GroupVersionKind{Group: "cdi.kubevirt.io", Version: "v1beta1", Kind: "DataVolume"}
+
+// dataVolumeInFlightPhases are the DataVolumePhase values in which CDI still has
+// work to do on the disk (containerized-data-importer-api pkg/apis/core/v1beta1).
+// A phase outside this set counts as settled, so a CDI release that adds or
+// renames a phase cannot turn working disks non-operational; the price is that
+// a renamed in-flight phase reads as settled until this list follows it.
+// PendingPopulation and WaitForFirstConsumer are where a disk on a
+// WaitForFirstConsumer class rests until a VM consumes it, so neither is in
+// flight. UploadReady is in flight although it lasts until someone uploads:
+// CDI holds it from the moment the upload server is ready until the transfer
+// succeeds (pkg/controller/datavolume/upload-controller.go), so it covers an
+// empty disk and a half-uploaded one alike.
+// Paused is where a multi-stage (checkpoint) import waits for its next
+// checkpoint, which only an outside actor supplies; the
+// vm-disk chart renders no checkpoint source, so no disk of it gets there.
+var dataVolumeInFlightPhases = map[string]bool{
+	"Pending":                           true,
+	"PVCBound":                          true,
+	"ImportScheduled":                   true,
+	"ImportInProgress":                  true,
+	"CloneScheduled":                    true,
+	"CloneInProgress":                   true,
+	"SnapshotForSmartCloneInProgress":   true,
+	"CloneFromSnapshotSourceInProgress": true,
+	"SmartClonePVCInProgress":           true,
+	"CSICloneInProgress":                true,
+	"PrepClaimInProgress":               true,
+	"RebindInProgress":                  true,
+	"ExpansionInProgress":               true,
+	"NamespaceTransferInProgress":       true,
+	"UploadScheduled":                   true,
+	"UploadReady":                       true,
+}
+
+// isDataVolumeReady reports whether CDI is done with the disk. Failed and
+// Unknown are not ready, and neither is a DataVolume without a phase: CDI
+// leaves one there when it could not render the PVC spec.
+func isDataVolumeReady(dv *unstructured.Unstructured) bool {
+	phase, _, _ := unstructured.NestedString(dv.Object, "status", "phase")
+	switch phase {
+	case "", "Failed", "Unknown":
+		return false
+	}
+	return !dataVolumeInFlightPhases[phase]
+}
+
+// dataVolumeAPIServed treats a NoMatch as not served and returns any other
+// discovery error, so the caller retries instead of concluding CDI is absent.
+func dataVolumeAPIServed(mapper meta.RESTMapper) (bool, error) {
+	_, err := mapper.RESTMapping(dataVolumeGVK.GroupKind(), dataVolumeGVK.Version)
+	if meta.IsNoMatchError(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+type sourceWatcher interface {
+	Watch(src source.Source) error
+}
+
+// tryStartDataVolumeWatch registers the DataVolume watch and reader once the
+// kind is served, and reports whether it did. The reader is set only after the
+// source has synced: the cache blocks a List on an unsynced informer until the
+// caller's context ends. A source that does not sync in time is cancelled by
+// WaitForSync, and the next call starts a fresh one.
+func (r *WorkloadMonitorReconciler) tryStartDataVolumeWatch(ctx context.Context, mapper meta.RESTMapper, c sourceWatcher, informers cache.Cache, syncTimeout time.Duration) (bool, error) {
+	served, err := dataVolumeAPIServed(mapper)
+	if err != nil || !served {
+		return false, err
+	}
+	dv := &unstructured.Unstructured{}
+	dv.SetGroupVersionKind(dataVolumeGVK)
+	src := source.Kind[client.Object](informers, dv,
+		handler.EnqueueRequestsFromMapFunc(mapObjectToMonitor(client.Object(dv), r.Client)))
+	if err := c.Watch(src); err != nil {
+		return false, fmt.Errorf("watching DataVolumes: %w", err)
+	}
+	syncCtx, cancel := context.WithTimeout(ctx, syncTimeout)
+	defer cancel()
+	if err := src.WaitForSync(syncCtx); err != nil {
+		return false, fmt.Errorf("waiting for the DataVolume informer to sync: %w", err)
+	}
+	// WaitForSync returns nil when ctx itself is cancelled.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	r.dataVolumeMu.Lock()
+	defer r.dataVolumeMu.Unlock()
+	// The manager's client reads unstructured objects straight from the API
+	// server; the cache shares the informer the watch above starts.
+	r.DataVolumeReader = informers
+	return true, nil
+}
+
+// watchDataVolumes adds the DataVolume watch once the first reconcile has run
+// and the kind is served, checking discovery again every interval until it is.
+// Starting on the first reconcile rather than on the next tick keeps a disk
+// created right after a controller restart from reading populated until then.
+func (r *WorkloadMonitorReconciler) watchDataVolumes(ctx context.Context, mapper meta.RESTMapper, c sourceWatcher, informers cache.Cache, interval time.Duration) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-r.reconciledCh():
+	}
+	logger := log.FromContext(ctx)
+	// The condition never returns an error, so the poll ends only when the
+	// watch is added or the manager stops.
+	_ = wait.PollUntilContextCancel(ctx, interval, true, func(ctx context.Context) (bool, error) {
+		done, err := r.tryStartDataVolumeWatch(ctx, mapper, c, informers, dataVolumeSyncTimeout)
+		if err != nil {
+			logger.Error(err, "Unable to start the DataVolume watch, retrying")
+		}
+		return done, nil
+	})
+}
+
+// dataVolumesReady reports whether every DataVolume the monitor selects is
+// ready. A NoMatch from the reader counts as no DataVolumes.
+func (r *WorkloadMonitorReconciler) dataVolumesReady(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor) (bool, error) {
+	reader := r.dataVolumeReader()
+	if reader == nil {
+		return true, nil
+	}
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(dataVolumeGVK.GroupVersion().WithKind(dataVolumeGVK.Kind + "List"))
+	if err := reader.List(
+		ctx,
+		list,
+		client.InNamespace(monitor.Namespace),
+		client.MatchingLabels(monitor.Spec.Selector),
+	); err != nil {
+		if meta.IsNoMatchError(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	for i := range list.Items {
+		if !isDataVolumeReady(&list.Items[i]) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=workloadmonitors,verbs=get;list;watch;create;update;patch;delete
@@ -77,6 +265,7 @@ type WorkloadMonitorReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=objectstorage.k8s.io,resources=bucketclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cdi.kubevirt.io,resources=datavolumes,verbs=get;list;watch
 
 // isBucketClaimReady checks if the BucketClaim has been provisioned.
 func (r *WorkloadMonitorReconciler) isBucketClaimReady(bc *cosiv1alpha1.BucketClaim) bool {
@@ -585,6 +774,7 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 // 1. It reconciles WorkloadMonitor objects themselves (create/update/delete).
 // 2. It also reconciles Pod events mapped to WorkloadMonitor via label selector.
 func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.reconciledOnce.Do(func() { close(r.reconciledCh()) })
 	logger := log.FromContext(ctx)
 
 	// Fetch the WorkloadMonitor object if it exists
@@ -708,6 +898,12 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	dataVolumesReady, err := r.dataVolumesReady(ctx, monitor)
+	if err != nil {
+		logger.Error(err, "Unable to list DataVolumes for WorkloadMonitor", "monitor", monitor.Name)
+		return ctrl.Result{}, err
+	}
+
 	// Update WorkloadMonitor status based on observed pods
 	monitor.Status.ObservedReplicas = observedReplicas
 	monitor.Status.AvailableReplicas = availableReplicas
@@ -726,6 +922,9 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// when the spec was updated between the initial read and this retry.
 		fresh.Status.Operational = pointer.Bool(true)
 		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
+			fresh.Status.Operational = pointer.Bool(false)
+		}
+		if !dataVolumesReady {
 			fresh.Status.Operational = pointer.Bool(false)
 		}
 		return r.Status().Update(ctx, fresh)
@@ -753,7 +952,7 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *WorkloadMonitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		// Watch WorkloadMonitor objects
 		For(&cozyv1alpha1.WorkloadMonitor{}).
 		// Also watch Pod objects and map them back to WorkloadMonitor if labels match
@@ -772,8 +971,20 @@ func (r *WorkloadMonitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(mapObjectToMonitor(&cosiv1alpha1.BucketClaim{}, r.Client)),
 		).
 		// Watch for changes to Workload objects we create (owned by WorkloadMonitor)
-		Owns(&cozyv1alpha1.Workload{}).
-		Complete(r)
+		Owns(&cozyv1alpha1.Workload{})
+	c, err := builder.Build(r)
+	if err != nil {
+		return err
+	}
+
+	// A watch on a kind whose CRD is absent never syncs, and controller-runtime
+	// does not start a controller with unsynced caches. CDI ships with the IaaS
+	// bundle only and can be installed while this controller is running, so
+	// the DataVolume watch is added once the kind appears rather than at setup.
+	return mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		r.watchDataVolumes(ctx, mgr.GetRESTMapper(), c, mgr.GetCache(), dataVolumeAPIPollInterval)
+		return nil
+	}))
 }
 
 func mapObjectToMonitor[T client.Object](_ T, c client.Client) func(ctx context.Context, obj client.Object) []reconcile.Request {

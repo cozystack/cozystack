@@ -2,21 +2,34 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/workqueue"
+	"k8s.io/utils/ptr"
 	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
+	"sigs.k8s.io/controller-runtime/pkg/cache/informertest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllertest"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 func TestReconcile_OperationalStatusPersisted(t *testing.T) {
@@ -1164,5 +1177,359 @@ func TestReconcileRetainsLastKnownSizesWhenBucketMissingFromResult(t *testing.T)
 	q, ok := updated.Status.Resources["s3-storage-bytes"]
 	if !ok || q.Value() != 4096 {
 		t.Errorf("expected last known s3-storage-bytes=4096 retained when series is absent, got %v (present=%v)", q.Value(), ok)
+	}
+}
+
+func newDataVolume(name string, labels map[string]string, phase *string) *unstructured.Unstructured {
+	dv := &unstructured.Unstructured{}
+	dv.SetGroupVersionKind(dataVolumeGVK)
+	dv.SetName(name)
+	dv.SetNamespace("default")
+	dv.SetLabels(labels)
+	if phase != nil {
+		dv.Object["status"] = map[string]interface{}{"phase": *phase}
+	}
+	return dv
+}
+
+func reconcileDataVolumeMonitor(t *testing.T, withReader bool, listErr error, dvs ...client.Object) *cozyv1alpha1.WorkloadMonitor {
+	t.Helper()
+	s := newTestScheme()
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-test", Namespace: "default"},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Selector:    map[string]string{"app.kubernetes.io/instance": "vm-disk-test"},
+			MinReplicas: ptr.To[int32](0),
+		},
+	}
+	builder := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(append([]client.Object{monitor}, dvs...)...).
+		WithStatusSubresource(monitor)
+	if listErr != nil {
+		builder = builder.WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if u, ok := list.(*unstructured.UnstructuredList); ok && u.GroupVersionKind().Group == dataVolumeGVK.Group {
+					return listErr
+				}
+				return c.List(ctx, list, opts...)
+			},
+		})
+	}
+	fakeClient := builder.Build()
+
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	if withReader {
+		reconciler.DataVolumeReader = fakeClient
+	}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: monitor.Name, Namespace: monitor.Namespace}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	updated := &cozyv1alpha1.WorkloadMonitor{}
+	if err := fakeClient.Get(context.TODO(), req.NamespacedName, updated); err != nil {
+		t.Fatalf("Failed to get updated WorkloadMonitor: %v", err)
+	}
+	if updated.Status.Operational == nil {
+		t.Fatal("Expected Operational to be set, got nil")
+	}
+	return updated
+}
+
+func TestReconcile_DataVolumePhaseDecidesOperational(t *testing.T) {
+	selected := map[string]string{"app.kubernetes.io/instance": "vm-disk-test"}
+	phase := func(p string) *string { return &p }
+
+	cases := []struct {
+		name        string
+		phase       *string
+		operational bool
+	}{
+		{"Pending", phase("Pending"), false},
+		{"PVCBound", phase("PVCBound"), false},
+		{"ImportScheduled", phase("ImportScheduled"), false},
+		{"ImportInProgress", phase("ImportInProgress"), false},
+		{"CloneScheduled", phase("CloneScheduled"), false},
+		{"CloneInProgress", phase("CloneInProgress"), false},
+		{"SnapshotForSmartCloneInProgress", phase("SnapshotForSmartCloneInProgress"), false},
+		{"CloneFromSnapshotSourceInProgress", phase("CloneFromSnapshotSourceInProgress"), false},
+		{"SmartClonePVCInProgress", phase("SmartClonePVCInProgress"), false},
+		{"CSICloneInProgress", phase("CSICloneInProgress"), false},
+		{"PrepClaimInProgress", phase("PrepClaimInProgress"), false},
+		{"RebindInProgress", phase("RebindInProgress"), false},
+		{"ExpansionInProgress", phase("ExpansionInProgress"), false},
+		{"NamespaceTransferInProgress", phase("NamespaceTransferInProgress"), false},
+		{"UploadScheduled", phase("UploadScheduled"), false},
+		{"UploadReady", phase("UploadReady"), false},
+		{"failed", phase("Failed"), false},
+		{"unknown", phase("Unknown"), false},
+		{"status without phase", phase(""), false},
+		{"no status at all", nil, false},
+		{"succeeded", phase("Succeeded"), true},
+		{"waiting for the consuming VM", phase("PendingPopulation"), true},
+		{"wait for first consumer", phase("WaitForFirstConsumer"), true},
+		{"paused multi-stage import", phase("Paused"), true},
+		{"phase this controller does not know", phase("SomeFutureCDIPhase"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dv := newDataVolume("vm-disk-test", selected, tc.phase)
+			got := reconcileDataVolumeMonitor(t, true, nil, dv)
+			if *got.Status.Operational != tc.operational {
+				t.Errorf("Operational = %v, want %v", *got.Status.Operational, tc.operational)
+			}
+		})
+	}
+}
+
+func TestReconcile_OneDataVolumeInFlightOutweighsSettledOnes(t *testing.T) {
+	selected := map[string]string{"app.kubernetes.io/instance": "vm-disk-test"}
+	done, busy := "Succeeded", "ImportInProgress"
+	got := reconcileDataVolumeMonitor(t, true, nil,
+		newDataVolume("a", selected, &done),
+		newDataVolume("b", selected, &busy),
+	)
+	if *got.Status.Operational {
+		t.Error("Operational = true with one DataVolume still importing, want false")
+	}
+}
+
+func TestReconcile_DataVolumeOutsideSelectorIgnored(t *testing.T) {
+	busy := "ImportInProgress"
+	got := reconcileDataVolumeMonitor(t, true, nil,
+		newDataVolume("other", map[string]string{"app.kubernetes.io/instance": "other"}, &busy),
+	)
+	if !*got.Status.Operational {
+		t.Error("Operational = false from a DataVolume the selector does not match, want true")
+	}
+}
+
+func TestReconcile_NoDataVolumesKeepsOperational(t *testing.T) {
+	got := reconcileDataVolumeMonitor(t, true, nil)
+	if !*got.Status.Operational {
+		t.Error("Operational = false with no DataVolumes and minReplicas 0, want true")
+	}
+}
+
+func TestReconcile_DataVolumeKindNotServedIsNoDataVolumes(t *testing.T) {
+	noMatch := &meta.NoKindMatchError{GroupKind: dataVolumeGVK.GroupKind(), SearchedVersions: []string{dataVolumeGVK.Version}}
+	got := reconcileDataVolumeMonitor(t, true, noMatch)
+	if !*got.Status.Operational {
+		t.Error("Operational = false when the DataVolume kind is not served, want true")
+	}
+}
+
+func TestReconcile_DataVolumeListErrorFailsReconcile(t *testing.T) {
+	s := newTestScheme()
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"},
+		Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: map[string]string{"a": "b"}},
+	}
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(monitor).
+		WithStatusSubresource(monitor).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*unstructured.UnstructuredList); ok {
+					return fmt.Errorf("apiserver unavailable")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s, DataVolumeReader: fakeClient}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "m", Namespace: "default"}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err == nil {
+		t.Fatal("Reconcile returned nil on a DataVolume list failure, want the error")
+	}
+}
+
+func TestReconcile_NoDataVolumeReaderSkipsDataVolumes(t *testing.T) {
+	busy := "ImportInProgress"
+	got := reconcileDataVolumeMonitor(t, false, nil,
+		newDataVolume("vm-disk-test", map[string]string{"app.kubernetes.io/instance": "vm-disk-test"}, &busy),
+	)
+	if !*got.Status.Operational {
+		t.Error("Operational = false without a DataVolume reader, want true")
+	}
+}
+
+func TestDataVolumeAPIServed(t *testing.T) {
+	empty := meta.NewDefaultRESTMapper(nil)
+	served, err := dataVolumeAPIServed(empty)
+	if err != nil || served {
+		t.Errorf("empty mapper: served=%v err=%v, want false, nil", served, err)
+	}
+
+	withCDI := meta.NewDefaultRESTMapper(nil)
+	withCDI.Add(dataVolumeGVK, meta.RESTScopeNamespace)
+	served, err = dataVolumeAPIServed(withCDI)
+	if err != nil || !served {
+		t.Errorf("mapper with DataVolume: served=%v err=%v, want true, nil", served, err)
+	}
+}
+
+type failingRESTMapper struct{ meta.RESTMapper }
+
+func (failingRESTMapper) RESTMapping(schema.GroupKind, ...string) (*meta.RESTMapping, error) {
+	return nil, fmt.Errorf("discovery unavailable")
+}
+
+func TestDataVolumeAPIServed_DiscoveryErrorIsReturned(t *testing.T) {
+	served, err := dataVolumeAPIServed(failingRESTMapper{meta.NewDefaultRESTMapper(nil)})
+	if err == nil || served {
+		t.Errorf("served=%v err=%v, want false and the discovery error", served, err)
+	}
+}
+
+// startingWatcher starts every source it is given, as a controller that has
+// already started its sources does.
+type startingWatcher struct {
+	sources []source.Source
+	err     error
+}
+
+func (w *startingWatcher) Watch(src source.Source) error {
+	if w.err != nil {
+		return w.err
+	}
+	w.sources = append(w.sources, src)
+	queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]())
+	return src.Start(context.Background(), queue)
+}
+
+func servedMapper() meta.RESTMapper {
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(dataVolumeGVK, meta.RESTScopeNamespace)
+	return mapper
+}
+
+func fakeDataVolumeInformer(t *testing.T, informers *informertest.FakeInformers) *controllertest.FakeInformer {
+	t.Helper()
+	dv := &unstructured.Unstructured{}
+	dv.SetGroupVersionKind(dataVolumeGVK)
+	fi, err := informers.FakeInformerFor(context.Background(), dv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi
+}
+
+func TestTryStartDataVolumeWatch_WaitsUntilTheKindIsServed(t *testing.T) {
+	r := &WorkloadMonitorReconciler{}
+	w := &startingWatcher{}
+	mapper := meta.NewDefaultRESTMapper(nil)
+	informers := &informertest.FakeInformers{}
+
+	done, err := r.tryStartDataVolumeWatch(context.Background(), mapper, w, informers, time.Second)
+	if err != nil || done {
+		t.Fatalf("before CDI: done=%v err=%v, want false, nil", done, err)
+	}
+	if len(w.sources) != 0 || r.dataVolumeReader() != nil {
+		t.Fatalf("before CDI: %d watches, reader %v; want none", len(w.sources), r.dataVolumeReader())
+	}
+
+	mapper.Add(dataVolumeGVK, meta.RESTScopeNamespace)
+	done, err = r.tryStartDataVolumeWatch(context.Background(), mapper, w, informers, time.Second)
+	if err != nil || !done {
+		t.Fatalf("after CDI: done=%v err=%v, want true, nil", done, err)
+	}
+	if len(w.sources) != 1 || r.dataVolumeReader() == nil {
+		t.Fatalf("after CDI: %d watches, reader %v; want one watch and a reader", len(w.sources), r.dataVolumeReader())
+	}
+}
+
+// Before the controller has started its sources, Watch only queues a source,
+// and WaitForSync on a source nobody started cannot report anything, so the
+// watch waits for the first reconcile. It starts right after it rather than on
+// the next discovery poll, so a disk created just after a restart is not read
+// as populated for a whole poll interval.
+func TestWatchDataVolumes_StartsOnTheFirstReconcile(t *testing.T) {
+	s := newTestScheme()
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"},
+		Spec:       cozyv1alpha1.WorkloadMonitorSpec{MinReplicas: ptr.To[int32](0)},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(monitor).WithStatusSubresource(monitor).Build()
+	r := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	informers := &informertest.FakeInformers{}
+	fakeDataVolumeInformer(t, informers)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.watchDataVolumes(ctx, servedMapper(), &startingWatcher{}, informers, time.Hour)
+
+	time.Sleep(100 * time.Millisecond)
+	if r.dataVolumeReader() != nil {
+		t.Fatal("the DataVolume reader was installed before the first reconcile")
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: "m", Namespace: "default"}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
+		return r.dataVolumeReader() != nil, nil
+	})
+	if err != nil {
+		t.Fatal("the DataVolume reader was not installed after the first reconcile, within a fraction of the poll interval")
+	}
+}
+
+func TestTryStartDataVolumeWatch_UnsyncedSourceLeavesNoReaderAndRetries(t *testing.T) {
+	r := &WorkloadMonitorReconciler{}
+	w := &startingWatcher{}
+	informers := &informertest.FakeInformers{}
+	fi := fakeDataVolumeInformer(t, informers)
+	fi.Synced = false
+
+	done, err := r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, 50*time.Millisecond)
+	if err == nil || done || r.dataVolumeReader() != nil {
+		t.Fatalf("informer never synced: done=%v err=%v reader=%v, want an error, not done, no reader", done, err, r.dataVolumeReader())
+	}
+
+	fi.SyncedLock.Lock()
+	fi.Synced = true
+	fi.SyncedLock.Unlock()
+
+	done, err = r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, time.Second)
+	if err != nil || !done || r.dataVolumeReader() == nil {
+		t.Fatalf("retry after sync: done=%v err=%v reader=%v, want done and a reader", done, err, r.dataVolumeReader())
+	}
+	if len(w.sources) != 2 {
+		t.Fatalf("got %d watches, want a fresh source on the retry", len(w.sources))
+	}
+}
+
+// WaitForSync returns nil once the caller's own context is cancelled, which
+// says nothing about the informer.
+func TestTryStartDataVolumeWatch_StoppingManagerLeavesNoReader(t *testing.T) {
+	r := &WorkloadMonitorReconciler{}
+	informers := &informertest.FakeInformers{}
+	fakeDataVolumeInformer(t, informers).Synced = false
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done, err := r.tryStartDataVolumeWatch(ctx, servedMapper(), &startingWatcher{}, informers, time.Second)
+	if done || r.dataVolumeReader() != nil {
+		t.Fatalf("done=%v reader=%v, want no reader when the manager is stopping", done, r.dataVolumeReader())
+	}
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "%!") {
+		t.Errorf("err = %q, want context.Canceled and nothing formatted from a nil error", err)
+	}
+}
+
+func TestTryStartDataVolumeWatch_DiscoveryErrorRetries(t *testing.T) {
+	r := &WorkloadMonitorReconciler{}
+	w := &startingWatcher{}
+	done, err := r.tryStartDataVolumeWatch(context.Background(), failingRESTMapper{meta.NewDefaultRESTMapper(nil)}, w, &informertest.FakeInformers{}, time.Second)
+	if err == nil || done || len(w.sources) != 0 || r.dataVolumeReader() != nil {
+		t.Fatalf("done=%v err=%v watches=%d reader=%v, want an error and nothing registered", done, err, len(w.sources), r.dataVolumeReader())
+	}
+}
+
+func TestTryStartDataVolumeWatch_FailedWatchLeavesNoReader(t *testing.T) {
+	r := &WorkloadMonitorReconciler{}
+	w := &startingWatcher{err: fmt.Errorf("watch failed")}
+	done, err := r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, &informertest.FakeInformers{}, time.Second)
+	if err == nil || done || r.dataVolumeReader() != nil {
+		t.Fatalf("done=%v err=%v reader=%v, want an error, not done, no reader", done, err, r.dataVolumeReader())
 	}
 }
