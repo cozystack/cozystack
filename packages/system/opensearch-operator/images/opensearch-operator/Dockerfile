@@ -2,6 +2,18 @@
 # applied. The patch keeps a single-replica cluster electable when the operator
 # retires its bootstrap pod; see patches/bootstrap-voting-exclusion.diff and
 # https://github.com/opensearch-project/opensearch-k8s-operator/issues/1448.
+#
+# patches/trace-stalled-component-reconcilers.diff names the component a
+# reconcile is stuck in. The cluster controller runs nine component reconcilers
+# in sequence and none of them logs unconditionally when it is entered, so a
+# call that never returns leaves the operator log ending on whatever ran before
+# it, and an object that is silently no longer reconciled. Twice in e2e the
+# operator went quiet at the moment the chart rewrote the CR and reconciled
+# nothing for the rest of the test, with no line saying where it was:
+# https://github.com/cozystack/cozystack/issues/4332. The watchdog writes
+# nothing while a component behaves, so it costs nothing on a healthy cluster.
+# It reports rather than repairs: drop it once the stall itself is understood
+# and fixed.
 FROM golang:1.26@sha256:079e59808d2d252516e27e3f3a9c003740dee7f75e55aa71528766d52bcfc16a AS builder
 
 # Keep in step with the chart version pulled by `make update`: the chart's
