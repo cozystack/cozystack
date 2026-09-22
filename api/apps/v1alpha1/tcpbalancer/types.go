@@ -32,7 +32,7 @@ type ConfigSpec struct {
 	// HTTP and HTTPS configuration.
 	// +kubebuilder:default:={}
 	HttpAndHttps HttpAndHttps `json:"httpAndHttps"`
-	// Secure HTTP by whitelisting client networks (default: false).
+	// Secure HTTP and HTTPS by whitelisting client networks. Requires a non-empty `whitelist` (default: false).
 	// +kubebuilder:default:=false
 	WhitelistHTTP bool `json:"whitelistHTTP"`
 	// List of allowed client networks.
