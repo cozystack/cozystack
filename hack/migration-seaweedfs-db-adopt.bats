@@ -217,7 +217,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "STAMP 54" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -231,7 +231,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "carries no meta.helm.sh/release-name" "$WORK/out"
   rm -rf "$WORK"
 }
@@ -243,7 +243,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "owned by unrelated release" "$WORK/out"
   rm -rf "$WORK"
 }
@@ -258,7 +258,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "no instance name" "$WORK/out"
   rm -rf "$WORK"
 }
@@ -275,7 +275,7 @@ tenant-named foo-db keep"
   # Must propagate: the Job retries rather than advancing the version.
   [ "$rc" -ne 0 ]
   grep -qF -- "refusing to stamp past an unverified fleet" "$WORK/out"
-  ! grep -q 'STAMP' "$FAKE_CMDLOG"
+  if grep -q 'STAMP' "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -288,7 +288,7 @@ tenant-named foo-db keep"
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -ne 0 ]
   grep -qF -- "cannot read the Helm owner" "$WORK/out"
-  ! grep -q 'STAMP' "$FAKE_CMDLOG"
+  if grep -q 'STAMP' "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -300,7 +300,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -ne 0 ]
-  ! grep -q 'STAMP' "$FAKE_CMDLOG"
+  if grep -q 'STAMP' "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -315,7 +315,7 @@ tenant-named foo-db keep"
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
   grep -qF -- "resource type is not served" "$WORK/out"
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "STAMP 54" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -327,7 +327,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "STAMP 54" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }

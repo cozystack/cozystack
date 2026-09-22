@@ -17,9 +17,10 @@
 
 @test "talos and installer are excluded from the parallel matrix" {
   out=$(hack/build-matrix.sh)
-  # `! cmd` would be vacuous: cozytest.sh runs each @test under `set -e`, which
-  # is suppressed for a `!`-negated pipeline, so a regression that wrongly
-  # included these paths would not fail the test. Assert via `if cmd; then ...`.
+  # `! cmd` would be vacuous: cozytest.sh runs each @test under `set -e`,
+  # which is suppressed for any command whose status is inverted with `!`, so
+  # a regression that wrongly included these paths would not fail the test.
+  # Assert via `if cmd; then ...`.
   if echo "$out" | grep -q '"packages/core/talos"'; then echo "FAIL: packages/core/talos must be excluded from the parallel matrix"; false; fi
   if echo "$out" | grep -q '"packages/core/installer"'; then echo "FAIL: packages/core/installer must be excluded from the parallel matrix"; false; fi
 }

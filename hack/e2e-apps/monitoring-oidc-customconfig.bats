@@ -120,8 +120,27 @@ EOF
   # exists. Chart-owned KeycloakRealmGroups were removed entirely (see
   # design note in docs/oidc-grafana.md) so no group assertions here.
   sleep 5
-  ! kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${CID}" 2>/dev/null
-  ! kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "${CID}-audience" 2>/dev/null
+  # `kubectl get` exits 1 for a NotFound and 1 for a connection, auth or
+  # discovery failure, so deciding on the status alone reads an api-server the
+  # test cannot reach as proof the object is gone. `--ignore-not-found`
+  # collapses the NotFound alone into success with empty output, which leaves
+  # the status to mean what it says. stdout only: kubectl writes deprecation
+  # and throttling notices to stderr on a successful call, and folding those
+  # into the value under test would report an object that is not there.
+  if ! found=$(kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${CID}" \
+      --ignore-not-found -o name); then
+    echo "FAIL: reading KeycloakClient ${CID} did not answer"; false
+  fi
+  if [ -n "$found" ]; then
+    echo "FAIL: no KeycloakClient must exist in the cozy realm"; false
+  fi
+  if ! found=$(kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "${CID}-audience" \
+      --ignore-not-found -o name); then
+    echo "FAIL: reading KeycloakClientScope ${CID}-audience did not answer"; false
+  fi
+  if [ -n "$found" ]; then
+    echo "FAIL: no KeycloakClientScope must exist in the cozy realm"; false
+  fi
 }
 
 @test "secretRef variant mounts operator Secret under /etc/grafana/oidc" {
