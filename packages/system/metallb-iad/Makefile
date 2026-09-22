@@ -7,6 +7,9 @@ include ../../../hack/package.mk
 METALLB_IAD_REPO ?= https://github.com/lllamnyp/metallb-iad.git
 METALLB_IAD_REF ?= e27c972b7a52946190d6a94e93f0e22deaab5119
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts tmp-repo
 	git clone --filter=tree:0 --no-checkout $(METALLB_IAD_REPO) tmp-repo
