@@ -1,0 +1,47 @@
+---
+# The chart is consumed straight from the upstream git repo: the PackageSource
+# references this GitRepository instead of embedding the cozystack-packages
+# OCIRepository, so nothing is vendored into this tree and a chart bump is a
+# ref change here, not a package sync.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: metallb-iad
+  namespace: cozy-system
+spec:
+  interval: 5m
+  url: https://github.com/lllamnyp/metallb-iad
+  ref:
+    branch: main
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.metallb-iad
+spec:
+  sourceRef:
+    kind: GitRepository
+    name: metallb-iad
+    namespace: cozy-system
+    path: chart
+  variants:
+  # The MetalLB IP Allocation Driver — the per-class driver implementing the
+  # cozystack.address-controller contract for addresses announced by MetalLB.
+  # It holds reservations as placeholder Services in its own namespace
+  # (cozy-metallb-iad, which tenants must have no write access to) and needs
+  # both the core CRDs/controller and MetalLB itself in place.
+  - name: default
+    dependsOn:
+    - cozystack.address-controller
+    - cozystack.metallb
+    components:
+    - name: metallb-iad
+      path: metallb-iad
+      valuesFiles:
+      - values.yaml
+      # Points the driver at cozy-metallb (Cozystack's MetalLB namespace,
+      # not the upstream default metallb-system).
+      - values-cozystack.yaml
+      install:
+        namespace: cozy-metallb-iad
+        releaseName: metallb-iad
