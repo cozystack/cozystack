@@ -119,8 +119,16 @@ spec:
             fi
             echo "== guest console $vm ($pod): $(wc -l < "$out") lines, full copy at $out =="
             echo "-- [cozy-diag] bring-up timeline --"
-            grep '\[cozy-diag\]' "$out" | tail -n 120 \
-              || echo "   NO [cozy-diag] lines: the guest never ran the emitter (cloud-init did not apply it, or cron never fired)"
+            # grep's status, not the pipeline's: `grep | tail` exits with tail's
+            # 0 whether or not grep matched, so the `|| echo` this replaces was
+            # unreachable and every run with no emitter output printed the
+            # heading followed by nothing — the one case the line exists for.
+            if ! grep -q '\[cozy-diag\]' "$out"; then
+              echo "   NO [cozy-diag] lines: the guest never ran the emitter. The appliance"
+              echo "   config report earlier in this console says whether the seed installed it."
+            else
+              grep '\[cozy-diag\]' "$out" | tail -n 120
+            fi
             echo "-- raw console tail --"
             tail -n 40 "$out"
           done
@@ -133,7 +141,13 @@ spec:
           kubectl get namespace tenant-test -o jsonpath='{.metadata.annotations.ovn\.kubernetes\.io/routes}' || true
           echo
           echo "── gateway Cilium policies ──"
-          kubectl -n tenant-test get ciliumnetworkpolicy -l apps.cozystack.io/application.name=a || true
+          # By the chart's own instance label. apps.cozystack.io/application.name
+          # is stamped by the platform onto the workload, not onto the objects
+          # the chart renders, so selecting on it printed "No resources found"
+          # for a gateway whose two policies were present and admitted — which
+          # reads as the policies having failed to render.
+          kubectl -n tenant-test get ciliumnetworkpolicy \
+            -l app.kubernetes.io/instance=site-router-a -o wide || true
   steps:
     # ── 1. Remote-site B ─────────────────────────────────────────────────────
     - name: bring-up-remote-site-b
