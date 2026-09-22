@@ -3,6 +3,148 @@
 
 {{ $vpcId := print "vpc-" (print .Release.Namespace "/" .Release.Name | sha256sum | trunc 6) }}
 
+{{- /*
+Network backend selection.
+
+Kube-OVN keeps priority: whenever the cluster serves kubeovn.io/v1 Vpc, the
+historical rendering is used unchanged, also on a hybrid cluster that serves
+both APIs. Cozyplane is used only when Kube-OVN is absent AND the cluster serves
+sdn.cozystack.io/v1alpha1 VPC. A cluster serving neither keeps the historical
+rendering, so offline `helm template` output is unchanged.
+
+Detection goes through .Capabilities (API discovery), never through `lookup`:
+a lookup against an API the cluster does not serve fails the whole render.
+*/}}
+{{- $hasKubeOVN := .Capabilities.APIVersions.Has "kubeovn.io/v1/Vpc" }}
+{{- $hasCozyplane := .Capabilities.APIVersions.Has "sdn.cozystack.io/v1alpha1/VPC" }}
+{{- $useCozyplane := and (not $hasKubeOVN) $hasCozyplane }}
+
+{{- if $useCozyplane }}
+{{- /*
+Cozyplane rendering.
+
+A Cozyplane VPC allocates addresses from its first CIDR only, so each subnet
+becomes a VPC of its own carrying that single CIDR. The VPC is named after the
+subnet ID, so the NetworkAttachmentDefinition keeps the historical name: that
+name is the contract vm-instance and the <release>-subnets ConfigMap rely on.
+
+Attachment is default-deny in Cozyplane: a VPCBinding in the tenant namespace
+authorizes it. The NetworkAttachmentDefinition is rendered here with the same
+content Cozyplane's controller writes for a binding, so both agree on one
+object, and rendering it keeps the cozystack.io/* labels consumers select on.
+
+Subnets of one VPC are routed to each other under Kube-OVN. Cozyplane connects
+two VPCs through a symmetric VPCPeering, one half per side, so every ordered
+pair of subnets gets a half here. Cross-tenant peers follow the same rule: the
+remote tenant's subnet VPCs are discovered by their cozystack.io/vpcId label
+and one half is rendered per (local subnet, remote subnet); the remote side
+renders its own halves from its own peers declaration, as with Kube-OVN.
+Static routes have no Cozyplane equivalent and are refused explicitly rather
+than dropped.
+*/}}
+{{- if .Values.routes }}
+{{- fail "virtualprivatecloud: static routes are not supported on the Cozyplane network backend" }}
+{{- end }}
+{{- range .Values.subnets }}
+{{- $subnetId := print "subnet-" (print $.Release.Namespace "/" $vpcId "/" .name | sha256sum | trunc 8) }}
+---
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: VPC
+metadata:
+  name: {{ $subnetId }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    cozystack.io/subnetName: {{ .name | quote }}
+    cozystack.io/vpcId: {{ $vpcId }}
+    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+spec:
+  cidrs:
+    - {{ .cidr | quote }}
+---
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: VPCBinding
+metadata:
+  name: {{ $subnetId }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    cozystack.io/subnetName: {{ .name | quote }}
+    cozystack.io/vpcId: {{ $vpcId }}
+    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+spec:
+  vpcRef:
+    namespace: {{ $.Release.Namespace }}
+    name: {{ $subnetId }}
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ $subnetId }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    cozystack.io/subnetName: {{ .name | quote }}
+    cozystack.io/vpcId: {{ $vpcId }}
+    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+spec:
+  config: '{"cniVersion":"1.0.0","name":"{{ $subnetId }}","type":"cozyplane","vpc":"{{ $.Release.Namespace }}/{{ $subnetId }}"}'
+{{- end }}
+{{- range $i, $local := .Values.subnets }}
+{{- $localId := print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $local.name | sha256sum | trunc 8) }}
+{{- range $j, $other := $.Values.subnets }}
+{{- if ne $i $j }}
+{{- $otherId := print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $other.name | sha256sum | trunc 8) }}
+---
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: VPCPeering
+metadata:
+  name: {{ $localId }}-{{ $otherId }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    cozystack.io/vpcId: {{ $vpcId }}
+    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+spec:
+  vpcRef:
+    name: {{ $localId }}
+  peerRef:
+    namespace: {{ $.Release.Namespace }}
+    name: {{ $otherId }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range .Values.peers }}
+{{- $remoteNamespace := .tenantNamespace }}
+{{- $remoteRelease := printf "virtualprivatecloud-%s" .vpcName }}
+{{- $remoteVpcId := printf "vpc-%s" (printf "%s/%s" $remoteNamespace $remoteRelease | sha256sum | trunc 6) }}
+{{- $remoteVPCs := lookup "sdn.cozystack.io/v1alpha1" "VPC" $remoteNamespace "" }}
+{{- range $local := $.Values.subnets }}
+{{- $localId := print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $local.name | sha256sum | trunc 8) }}
+{{- range $remote := $remoteVPCs.items }}
+{{- if eq (dig "metadata" "labels" "cozystack.io/vpcId" "" $remote) $remoteVpcId }}
+---
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: VPCPeering
+metadata:
+  name: {{ $localId }}-{{ $remote.metadata.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    cozystack.io/vpcId: {{ $vpcId }}
+    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+    cozystack.io/peerVpcId: {{ $remoteVpcId }}
+spec:
+  vpcRef:
+    name: {{ $localId }}
+  peerRef:
+    namespace: {{ $remoteNamespace }}
+    name: {{ $remote.metadata.name }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- else }}
 ---
 apiVersion: kubeovn.io/v1
 kind: Vpc
@@ -81,6 +223,7 @@ spec:
   protocol: IPv4
   enableLb: false
   private: true
+{{- end }}
 {{- end }}
 ---
 apiVersion: v1
