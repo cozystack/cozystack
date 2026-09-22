@@ -75,11 +75,6 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-// boolPtr returns a pointer to a bool value.
-func boolPtr(b bool) *bool {
-	return &b
-}
-
 // boolDefault returns the value of a *bool pointer, or the given default if nil.
 func boolDefault(p *bool, def bool) bool {
 	if p != nil {
