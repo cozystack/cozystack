@@ -149,12 +149,11 @@ spec:
   # cozyplane eBPF CNI + cozyplane-kpr (kube-proxy replacement) for Talos
   # clusters — NO Cilium and NO kube-proxy. cozyplane owns the datapath and the
   # CNI conflist; cozyplane-kpr provides in-cluster Services via socket-LB
-  # (importing Cilium's LB control plane, no Cilium agent). One IPAM authority
-  # (cozyplane) over the podCIDR — the coexistence hazard that Cilium's
-  # standalone IPAM created is gone. See docs/kube-proxy-replacement.md.
+  # (importing Cilium's LB control plane, no Cilium agent). See
+  # docs/kube-proxy-replacement.md.
   # NOTE: host-firewall and default-network NetworkPolicy that Cilium provided
-  # are not yet replaced (follow-ups); external NodePort + VM-guest ClusterIP
-  # need the increment-3 per-packet fallback.
+  # are not yet replaced, and external NodePort + VM-guest ClusterIP do not
+  # work yet (follow-ups).
   - name: cozyplane
     dependsOn:
     - cozystack.gateway-api-crds

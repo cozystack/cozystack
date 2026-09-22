@@ -176,9 +176,8 @@
 {{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" $controllerValues) -}}
 {{- end -}}
 {{- /* cozyplane owns the sdn.cozystack.io group — served ONLY by the
-       cozyplane-apiserver aggregated server; it has no CRDs (a group served by
-       both a CRD and an APIService makes the kube-apiserver's OpenAPI merge
-       collide on duplicated paths, and the group's schema then never serves).
+       cozyplane-apiserver aggregated server, with no CRDs (why one group must
+       never have two servers: the header of cozyplane's templates/crds.yaml).
        So cozystack-api must not aggregate it: a second APIService for the group
        would hijack it and every non-SecurityGroup kind (VPC, Port, …) 404s. */ -}}
 {{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" -}}

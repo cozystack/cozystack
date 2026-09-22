@@ -24,10 +24,8 @@ spec:
     dependsOn:
     - cozystack.cert-manager
     - cozystack.etcd-operator
-    # Its etcd is PVC-backed now (the aggregated API's objects are cluster
-    # state; a memory-backed etcd loses every VPC, Port and policy on a
-    # full-cluster restart — which is what a node reboot is), so the storage
-    # layer must exist first. No cycle: linstor depends on the CNI, not on this.
+    # Its etcd is PVC-backed, so the storage layer must exist first. No cycle:
+    # linstor depends on the CNI, not on this.
     - cozystack.linstor
     components:
     - name: cozyplane-apiserver

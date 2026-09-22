@@ -126,9 +126,8 @@ cozystack-scheduler (emitted with its own variant in both branches)
        - securitygroup-controller: projects sdn.cozystack.io SecurityGroups onto
          CiliumNetworkPolicy (no such CRD here → crash), AND collides with
          cozyplane, which owns the whole sdn.cozystack.io group.
-       Multus is coupled the same way (delegates to the Cilium primary conflist
-       05-cilium.conflist, which cozyplane never writes → CrashLoopBackOff), but
-       it is emitted per-bundle in system.yaml, so its gate lives there. */ -}}
+       Multus is coupled the same way; it is emitted per-bundle in system.yaml
+       and gated there. */ -}}
 {{- if ne $networkingVariant "cozyplane" }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-webhook" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-plunger" $root) }}
