@@ -1,0 +1,144 @@
+suite: haproxy config
+
+templates:
+  - templates/configmap.yaml
+
+tests:
+  - it: names backends so they never collide with frontends
+    asserts:
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^frontend http$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^backend http_backend$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^\s+default_backend http_backend$'
+      - notMatchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^backend http$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^frontend https$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^backend https_backend$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^\s+default_backend https_backend$'
+      - notMatchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^backend https$'
+
+  - it: renders http frontends without whitelist rules by default
+    asserts:
+      - notMatchRegex:
+          path: data["haproxy.cfg"]
+          pattern: 'acl whitelist'
+      - notMatchRegex:
+          path: data["haproxy.cfg"]
+          pattern: 'tcp-request content accept if whitelist'
+
+  - it: fails when whitelistHTTP is enabled with an empty whitelist
+    set:
+      whitelistHTTP: true
+      whitelist: []
+    asserts:
+      - failedTemplate:
+          errorPattern: 'whitelistHTTP is enabled but whitelist is empty'
+
+  - it: filters http and https when whitelistHTTP is enabled with a whitelist
+    set:
+      whitelistHTTP: true
+      whitelist:
+        - 10.0.0.0/8
+        - 192.168.1.1
+    asserts:
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^frontend http$\n(?:.*\n){0,5}?\s+acl whitelist src 10\.0\.0\.0/8 192\.168\.1\.1$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^frontend https$\n(?:.*\n){0,8}?\s+acl whitelist src 10\.0\.0\.0/8 192\.168\.1\.1$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^\s+tcp-request content accept if whitelist$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^\s+tcp-request content reject$'
+
+  - it: renames kubernetes and talos backends
+    set:
+      kubernetesAndTalos:
+        endpoints:
+          - 10.1.1.1
+          - 10.1.1.2
+    asserts:
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^frontend kubernetes$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^\s+default_backend kubernetes_backend$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^backend kubernetes_backend$'
+      - notMatchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^backend kubernetes$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^frontend talos$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^\s+default_backend talos_backend$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^backend talos_backend$'
+      - notMatchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^backend talos$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^\s+server srv0 10\.1\.1\.1:6443 check\s*$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^\s+server srv1 10\.1\.1\.2:50000 check\s*$'
+
+  - it: renders kubernetes and talos without whitelist rules when the whitelist is empty
+    set:
+      kubernetesAndTalos:
+        endpoints:
+          - 10.1.1.1
+    asserts:
+      - notMatchRegex:
+          path: data["haproxy.cfg"]
+          pattern: 'acl whitelist'
+      - notMatchRegex:
+          path: data["haproxy.cfg"]
+          pattern: 'tcp-request content accept if whitelist'
+      - notMatchRegex:
+          path: data["haproxy.cfg"]
+          pattern: 'tcp-request content reject'
+
+  - it: filters kubernetes and talos when a whitelist is set
+    set:
+      kubernetesAndTalos:
+        endpoints:
+          - 10.1.1.1
+      whitelist:
+        - 10.0.0.0/8
+    asserts:
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^frontend kubernetes$\n(?:.*\n){0,3}?\s+acl whitelist src 10\.0\.0\.0/8$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^frontend talos$\n(?:.*\n){0,3}?\s+acl whitelist src 10\.0\.0\.0/8$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^\s+tcp-request content accept if whitelist$'
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^\s+tcp-request content reject$'
