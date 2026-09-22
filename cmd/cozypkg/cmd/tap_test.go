@@ -19,6 +19,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
@@ -180,5 +181,127 @@ func TestRewritePackageSourceForTap(t *testing.T) {
 	rewritePackageSourceForTap(ps2, "src", "")
 	if ps2.Spec.SourceRef.Path != "/" {
 		t.Errorf("empty path should default to /, got %q", ps2.Spec.SourceRef.Path)
+	}
+}
+
+func untapScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := cozyv1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourcev1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func labeledPS(name, src string) *cozyv1alpha1.PackageSource {
+	return &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{tapconst.Label: "true"}},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Kind: "OCIRepository", Name: src, Namespace: "cozy-system"},
+		},
+	}
+}
+
+func ownedPkg(name, src string) *cozyv1alpha1.Package {
+	return &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{
+		Name:        name,
+		Labels:      map[string]string{tapconst.Label: "true"},
+		Annotations: map[string]string{tapconst.SourceAnnotation: src},
+	}}
+}
+
+func TestRunUntapRemovesRegistrationPackageAndSource(t *testing.T) {
+	s := untapScheme(t)
+	oci := &sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{
+		Name: "tap-acme-hello", Namespace: "cozy-system", Labels: map[string]string{tapconst.Label: "true"},
+	}}
+	cl := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(labeledPS("acme.hello", "tap-acme-hello"), ownedPkg("acme.hello", "tap-acme-hello"), oci).Build()
+
+	if err := runUntap(context.Background(), cl, "acme.hello", false, io.Discard, io.Discard); err != nil {
+		t.Fatalf("runUntap: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "acme.hello"}, &cozyv1alpha1.Package{}); !apierrors.IsNotFound(err) {
+		t.Errorf("registration Package must be removed, got %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "acme.hello"}, &cozyv1alpha1.PackageSource{}); !apierrors.IsNotFound(err) {
+		t.Errorf("PackageSource must be removed, got %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "tap-acme-hello", Namespace: "cozy-system"}, &sourcev1.OCIRepository{}); !apierrors.IsNotFound(err) {
+		t.Errorf("OCIRepository must be removed, got %v", err)
+	}
+}
+
+func TestRunUntapRefusesOfficial(t *testing.T) {
+	s := untapScheme(t)
+	official := &cozyv1alpha1.PackageSource{ObjectMeta: metav1.ObjectMeta{Name: "official"}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(official).Build()
+	if err := runUntap(context.Background(), cl, "official", false, io.Discard, io.Discard); err == nil {
+		t.Error("expected refusal to untap an unlabeled (official) source")
+	}
+}
+
+func TestRunUntapKeepsForeignPackage(t *testing.T) {
+	s := untapScheme(t)
+	// A Package owned by a DIFFERENT source: untap must not delete it, and
+	// without --yes it blocks.
+	cl := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(labeledPS("acme.hello", "tap-acme-hello"), ownedPkg("acme.hello", "tap-other")).Build()
+
+	if err := runUntap(context.Background(), cl, "acme.hello", false, io.Discard, io.Discard); err == nil {
+		t.Error("a foreign Package must block untap without --yes")
+	}
+	if err := runUntap(context.Background(), cl, "acme.hello", true, io.Discard, io.Discard); err != nil {
+		t.Fatalf("with --yes untap should proceed: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "acme.hello"}, &cozyv1alpha1.Package{}); err != nil {
+		t.Errorf("the foreign Package must be left in place, got %v", err)
+	}
+}
+
+func TestCreatePackageIdempotent(t *testing.T) {
+	s := untapScheme(t)
+	cl := fake.NewClientBuilder().WithScheme(s).Build()
+
+	created, err := createPackageIdempotent(context.Background(), cl, &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
+	if err != nil || !created {
+		t.Fatalf("first create: created=%v err=%v", created, err)
+	}
+	created, err = createPackageIdempotent(context.Background(), cl, &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
+	if err != nil || created {
+		t.Fatalf("second create must be a no-op: created=%v err=%v", created, err)
+	}
+}
+
+func TestClearMaterializedRevision(t *testing.T) {
+	s := untapScheme(t)
+	oci := &sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{
+		Name: "tap-acme-hello", Namespace: "cozy-system",
+		Annotations: map[string]string{tapconst.MaterializedRevisionAnnotation: "rev-1", "keep": "me"},
+	}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(oci).Build()
+
+	if err := clearMaterializedRevision(context.Background(), cl, "tap-acme-hello"); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "tap-acme-hello", Namespace: "cozy-system"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Annotations[tapconst.MaterializedRevisionAnnotation]; ok {
+		t.Error("materialized-revision annotation must be cleared to force re-materialization")
+	}
+	if got.Annotations["keep"] != "me" {
+		t.Error("unrelated annotations must be preserved")
+	}
+	// Absent source: no error.
+	if err := clearMaterializedRevision(context.Background(), cl, "missing"); err != nil {
+		t.Errorf("a missing source must not error, got %v", err)
 	}
 }

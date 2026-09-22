@@ -26,7 +26,10 @@ import (
 	"strings"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -435,9 +438,17 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 	fmt.Fprintf(os.Stderr, "Installing %s and its dependencies...\n\n", packageSourceName)
 	packageVariants := make(map[string]string) // packageName -> variant
 
+	// reopen holds the names whose installed Package is THIS source's managed
+	// auto-registration, which `add` re-opens for a variant choice and then hands
+	// over to the user (below). Every other installed Package is left as is.
+	reopen := make(map[string]bool)
 	for _, pkgName := range installOrder {
-		// Check if already installed
-		if installed, exists := installedMap[pkgName]; exists {
+		installed, isInstalled := installedMap[pkgName]
+		ps, psExists := packageSourceMap[pkgName]
+		// A user's own Package, or a foreign leftover, is left untouched; only the
+		// managed auto-registration of THIS source (owned + empty variant, the same
+		// predicate the operator uses) is re-opened for a variant choice.
+		if isInstalled && !collision.ManagedRegistration(installed, tapSourceName(ps), installed.Spec.Variant) {
 			variant := installed.Spec.Variant
 			if variant == "" {
 				variant = "default"
@@ -447,9 +458,7 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 			continue
 		}
 
-		// Get PackageSource for this dependency
-		ps, exists := packageSourceMap[pkgName]
-		if !exists {
+		if !psExists {
 			requester := dependencyRequesters[pkgName]
 			if requester != "" {
 				return fmt.Errorf("PackageSource %s not found (required by %s)", pkgName, requester)
@@ -465,7 +474,7 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 
 		// A privileged component runs with elevated access; require an explicit
 		// confirmation (or --allow-privileged) before installing it.
-		if privileged := privilegedComponents(ps, variant); len(privileged) > 0 && !addCmdFlags.allowPrivileged {
+		if privileged := collision.PrivilegedInstallComponents(ps, variant); len(privileged) > 0 && !addCmdFlags.allowPrivileged {
 			ok, err := confirmPrivileged(pkgName, variant, privileged)
 			if err != nil {
 				return err
@@ -476,16 +485,34 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 		}
 
 		packageVariants[pkgName] = variant
+		if isInstalled {
+			reopen[pkgName] = true
+		}
 	}
 
 	// Now create all Package resources
 	for _, pkgName := range installOrder {
-		// Skip if already installed
-		if _, exists := installedMap[pkgName]; exists {
+		variant := packageVariants[pkgName]
+
+		if reopen[pkgName] {
+			// Running `add` is an explicit ownership handover: convert the managed
+			// auto-registration into a plain user Package pinned to the chosen
+			// variant (shedding the tap markers and the PackageSource ownerRef), so
+			// the materializer no longer manages or de-registers it. Otherwise a
+			// later revision that turns the DEFAULT variant privileged would undo
+			// the user's deliberate choice, including a confirmed privileged one.
+			installed := installedMap[pkgName]
+			if err := handoverManagedRegistration(ctx, k8sClient, installed, variant); err != nil {
+				return fmt.Errorf("failed to set variant %s on Package %s: %w", variant, pkgName, err)
+			}
+			fmt.Fprintf(os.Stderr, "✓ %s (variant set to %s)\n", pkgName, variant)
 			continue
 		}
-
-		variant := packageVariants[pkgName]
+		// A non-reopened already-installed Package (a user's own, or a foreign
+		// leftover) was reported in phase 1 and needs nothing here.
+		if _, isInstalled := installedMap[pkgName]; isInstalled {
+			continue
+		}
 
 		// Create Package
 		pkg := &cozyv1alpha1.Package{
@@ -497,14 +524,76 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 			},
 		}
 
-		if err := k8sClient.Create(ctx, pkg); err != nil {
+		created, err := createPackageIdempotent(ctx, k8sClient, pkg)
+		if err != nil {
 			return fmt.Errorf("failed to create Package %s: %w", pkgName, err)
+		}
+		if !created {
+			// The materializer auto-created the registration Package between the
+			// List above and this Create, so this run did not take ownership of it
+			// (its markers are not shed). Re-run so the reopen path pins it -- for a
+			// non-default variant to apply the choice, and for the default variant so
+			// a later privileged flip does not de-register this deliberate install.
+			_, _ = fmt.Fprintf(os.Stderr, "Package %s was just auto-registered; re-run 'cozypkg add %s' to install variant %q as your own\n", pkgName, pkgName, variant)
+			continue
 		}
 
 		fmt.Fprintf(os.Stderr, "✓ Added Package %s\n", pkgName)
 	}
 
 	return nil
+}
+
+// tapSourceName returns the PackageSource's tap source (its OCIRepository name),
+// or "" when it is not a tapped source; it is the name collision.ManagedRegistration
+// matches a registration Package's tap-source annotation against.
+func tapSourceName(ps *cozyv1alpha1.PackageSource) string {
+	if ps != nil && ps.Spec.SourceRef != nil {
+		return ps.Spec.SourceRef.Name
+	}
+	return ""
+}
+
+// handoverManagedRegistration converts a tap-managed auto-registration Package
+// into a plain user Package pinned to variant and persists it. Running `cozypkg
+// add` is the operator's explicit ownership handover: pinRegistrationToUser sheds
+// the tap markers and the PackageSource ownerRef so the materializer no longer
+// manages or de-registers the Package, and so a later revision that turns the
+// variant privileged cannot silently reinstall over the user's deliberate choice.
+func handoverManagedRegistration(ctx context.Context, k8sClient client.Client, installed *cozyv1alpha1.Package, variant string) error {
+	pinRegistrationToUser(installed, variant)
+	return k8sClient.Update(ctx, installed)
+}
+
+// pinRegistrationToUser turns a tap auto-registration Package into a plain
+// user-owned Package pinned to variant: it sets the variant and sheds the tap
+// markers (label, source annotation) and the PackageSource ownerReference, so the
+// tap materializer no longer manages or de-registers it and untap treats it as
+// the user's.
+func pinRegistrationToUser(pkg *cozyv1alpha1.Package, variant string) {
+	pkg.Spec.Variant = variant
+	delete(pkg.Labels, tapconst.Label)
+	delete(pkg.Annotations, tapconst.SourceAnnotation)
+	kept := pkg.OwnerReferences[:0]
+	for _, ref := range pkg.OwnerReferences {
+		if ref.Kind != "PackageSource" {
+			kept = append(kept, ref)
+		}
+	}
+	pkg.OwnerReferences = kept
+}
+
+// createPackageIdempotent creates pkg and reports whether it created a new
+// object. A tapped repository registers its apps on connect, so the Package may
+// already exist; that is treated as done (created=false) rather than an error.
+func createPackageIdempotent(ctx context.Context, k8sClient client.Client, pkg *cozyv1alpha1.Package) (bool, error) {
+	if err := k8sClient.Create(ctx, pkg); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // selectVariantInteractive prompts user to select a variant
@@ -552,23 +641,6 @@ func selectVariantInteractive(ps *cozyv1alpha1.PackageSource) (string, error) {
 
 		return ps.Spec.Variants[choice-1].Name, nil
 	}
-}
-
-// privilegedComponents returns the names of components in the given variant
-// that declare install.privileged: true.
-func privilegedComponents(ps *cozyv1alpha1.PackageSource, variantName string) []string {
-	var names []string
-	for _, v := range ps.Spec.Variants {
-		if v.Name != variantName {
-			continue
-		}
-		for _, c := range v.Components {
-			if c.Install != nil && c.Install.Privileged {
-				names = append(names, c.Name)
-			}
-		}
-	}
-	return names
 }
 
 // confirmPrivileged prompts the operator to confirm installing privileged

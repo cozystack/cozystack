@@ -24,7 +24,9 @@ import (
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/internal/marketplace/naming"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -34,6 +36,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -163,6 +166,28 @@ func (r *PackageSourceReconciler) reconcileArtifactGenerators(ctx context.Contex
 	// Collect all OutputArtifacts
 	outputArtifacts := []sourcewatcherv1beta1.OutputArtifact{}
 
+	// Withhold a tap source's PRIVILEGED component artifacts until the registration
+	// Package is confirmed, so the helm-controller has no privileged content to
+	// upgrade a HelmRelease from. This narrows, but does not fully close, the window
+	// in which a benign component flipped to privileged in a new revision could be
+	// materialised by source-watcher before this reconciler removes it from the
+	// generator (see issue #4359); the Package reconciler's install-site and
+	// cleanup gates are the other best-effort layers. The registration Package
+	// shares the PackageSource's name; `cozypkg add --allow-privileged` sheds the
+	// tap label on it, and a Package watch re-runs this generation. Non-tap
+	// (platform) sources carry no marketplace-tap label and are never gated.
+	privilegedConfirmed := true
+	if packageSource.GetLabels()[tapconst.Label] == "true" {
+		privilegedConfirmed = false
+		var regPkg cozyv1alpha1.Package
+		err := r.Get(ctx, types.NamespacedName{Name: packageSource.Name}, &regPkg)
+		if err == nil {
+			privilegedConfirmed = collision.PrivilegedConfirmed(&regPkg)
+		} else if !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+
 	// Process all variants and their components
 	for _, variant := range packageSource.Spec.Variants {
 		// Build library map for this variant
@@ -190,6 +215,14 @@ func (r *PackageSourceReconciler) reconcileArtifactGenerators(ctx context.Contex
 			}
 
 			logger.V(1).Info("processing component", "packageSource", packageSource.Name, "variant", variant.Name, "component", component.Name, "path", component.Path)
+
+			// Withhold a privileged component's artifact until the registration is
+			// confirmed, so the helm-controller has no content to upgrade a
+			// HelmRelease to. See privilegedConfirmed above.
+			if component.Install != nil && component.Install.Privileged && !privilegedConfirmed {
+				logger.Info("withholding privileged component artifact until registration is confirmed", "packageSource", packageSource.Name, "variant", variant.Name, "component", component.Name)
+				continue
+			}
 
 			// Extract component name from path (last component)
 			componentPathName := r.getPackageNameFromPath(component.Path)
@@ -1011,11 +1044,20 @@ func readRecoveryTracking(ag *sourcewatcherv1beta1.ArtifactGenerator) (attempts 
 	return attempts, lastRecoveryAt
 }
 
+// mapPackageToSource enqueues the PackageSource that shares a Package's name, so
+// confirming a registration (which sheds the marketplace-tap label on the
+// Package) re-runs artifact generation and materialises the now-confirmed
+// privileged components.
+func mapPackageToSource(_ context.Context, obj client.Object) []ctrl.Request {
+	return []ctrl.Request{{NamespacedName: types.NamespacedName{Name: obj.GetName()}}}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *PackageSourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("cozystack-packagesource").
 		For(&cozyv1alpha1.PackageSource{}).
 		Owns(&sourcewatcherv1beta1.ArtifactGenerator{}).
+		Watches(&cozyv1alpha1.Package{}, handler.EnqueueRequestsFromMapFunc(mapPackageToSource)).
 		Complete(r)
 }

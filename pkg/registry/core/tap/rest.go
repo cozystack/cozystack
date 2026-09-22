@@ -26,6 +26,7 @@ import (
 	"k8s.io/klog/v2"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
@@ -255,8 +256,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 				fmt.Errorf("a different repository (%s) is already connected as %q; disconnect it before connecting %s", curURL, target.FluxSourceName, target.URL))
 		}
 		// Update only the fields this API owns (spec, the tap label and name
-		// annotation) on the FETCHED object, so the operator's finalizer and
-		// materialized-revision annotation on the existing source survive.
+		// annotation) on the FETCHED object, so the operator's finalizer survives.
+		// Clear the materialized-revision annotation so a re-connect re-materializes
+		// and recovers a registration Package (or PackageSource) removed out-of-band
+		// since the last materialization, the same recovery `cozypkg tap` performs.
 		cur.Object["spec"] = repo.Object["spec"]
 		labels := cur.GetLabels()
 		if labels == nil {
@@ -269,6 +272,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 			ann = map[string]string{}
 		}
 		ann[tapconst.NameAnnotation] = target.FluxSourceName
+		delete(ann, tapconst.MaterializedRevisionAnnotation)
 		cur.SetAnnotations(ann)
 		if _, err := src.Update(ctx, cur, metav1.UpdateOptions{FieldManager: "cozystack-api", DryRun: createDryRun(opts)}); err != nil {
 			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.FluxSourceName, err))
@@ -316,11 +320,51 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 			fmt.Errorf("%q is not a tapped repository; official sources are protected", name))
 	}
 
-	tap := buildTap(ps, r.appDefIndex(ctx))
+	idx := r.appDefIndex(ctx)
+	tap := buildTap(ps, idx)
 	if deleteValidation != nil {
 		if err := deleteValidation(ctx, &tap); err != nil {
 			return nil, false, err
 		}
+	}
+
+	// Remove the tap-managed registration Package FIRST, so the repository's apps
+	// de-register from the catalog (deleting it garbage-collects the registration
+	// HelmReleases and their ApplicationDefinitions). It is deleted only when it
+	// belongs to THIS source (label AND source annotation): a Package a later tap
+	// created under a reused name, or a foreign Package, is left in place.
+	//
+	// Package before PackageSource is deliberate: if the Package delete fails, the
+	// PackageSource is still present, so a repeat disconnect re-enters this path
+	// and retries; deleting the PackageSource first would drop a repeat disconnect
+	// into deleteOrphanTapSource, which never revisits the Package, stranding it.
+	srcName := ""
+	if ps.Spec.SourceRef != nil {
+		srcName = ps.Spec.SourceRef.Name
+	}
+	if pu, err := r.dyn.Resource(gvrPackages).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		// Delete only a managed registration Package (owned AND still at the auto
+		// default variant), the same predicate the materializer and untap use, so
+		// a user's pinned install is never removed by disconnect.
+		variant, _, _ := unstructured.NestedString(pu.Object, "spec", "variant")
+		if collision.ManagedRegistration(pu, srcName, variant) {
+			// UID + ResourceVersion preconditions: delete only this exact object,
+			// not one the user replaced or pinned in-place between Get and Delete.
+			uid := pu.GetUID()
+			rv := pu.GetResourceVersion()
+			delOpts := metav1.DeleteOptions{DryRun: deleteDryRun(opts), Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv}}
+			// A conflict is tolerated here (unlike the operator's retry loop): the
+			// managed registration Package carries an ownerReference TO its
+			// PackageSource, and disconnect deletes that PackageSource next, so
+			// garbage collection reaps a Package this delete missed; a Package the
+			// user pinned in the gap has shed that ownerRef (pinRegistrationToUser)
+			// and is correctly spared.
+			if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, delOpts); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+				return nil, false, apierrors.NewInternalError(fmt.Errorf("delete registration Package %q: %w", name, err))
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return nil, false, apierrors.NewInternalError(fmt.Errorf("check registration Package %q: %w", name, err))
 	}
 
 	if err := r.dyn.Resource(gvrPackageSources).Delete(ctx, name, metav1.DeleteOptions{DryRun: deleteDryRun(opts)}); err != nil {

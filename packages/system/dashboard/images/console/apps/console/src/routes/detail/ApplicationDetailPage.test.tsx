@@ -5,6 +5,9 @@ import { MemoryRouter, Routes, Route } from "react-router"
 // Drive useK8sGet's result per test; the page's loading/error guards are the unit under test.
 const h = vi.hoisted(() => ({
   get: { data: undefined as unknown, isLoading: true, error: undefined as unknown },
+  appKind: "Postgres",
+  appPlural: "postgreses",
+  tabLabels: [] as string[],
 }))
 
 vi.mock("@cozystack/k8s-client", () => ({
@@ -15,17 +18,32 @@ vi.mock("@cozystack/k8s-client", () => ({
 }))
 vi.mock("../../lib/app-definitions.ts", () => ({
   useApplicationDefinitions: () => ({
-    data: { items: [{ metadata: { name: "postgres" }, spec: { application: { plural: "postgreses", kind: "Postgres" } } }] },
+    data: {
+      items: [
+        {
+          metadata: { name: "app" },
+          spec: { application: { plural: h.appPlural, kind: h.appKind } },
+        },
+      ],
+    },
   }),
-  appDisplayName: () => "Postgres",
+  appDisplayName: () => h.appKind,
   iconDataUrl: () => null,
+  releasePrefix: () => "",
+  isTenantModule: () => false,
 }))
 vi.mock("../../lib/tenant-context.tsx", () => ({
   useTenantContext: () => ({ tenantNamespace: "tenant-test" }),
 }))
 // Stub the tab tree — the loading/error branches return before any tab renders,
 // and these modules pull heavy deps (noVNC, Monaco) we don't want in jsdom.
-vi.mock("./tabs.tsx", () => ({ TabBar: () => null }))
+// The tab bar is the unit under test for ordering, so it records what it is given.
+vi.mock("./tabs.tsx", () => ({
+  TabBar: ({ tabs }: { tabs: { label: string }[] }) => {
+    h.tabLabels = tabs.map((t) => t.label)
+    return null
+  },
+}))
 vi.mock("./OverviewTab.tsx", () => ({ OverviewTab: () => null }))
 vi.mock("./WorkloadsTab.tsx", () => ({ WorkloadsTab: () => null }))
 vi.mock("./ServicesTab.tsx", () => ({ ServicesTab: () => null }))
@@ -33,13 +51,14 @@ vi.mock("./IngressesTab.tsx", () => ({ IngressesTab: () => null }))
 vi.mock("./SecretsTab.tsx", () => ({ SecretsTab: () => null }))
 vi.mock("./EventsTab.tsx", () => ({ EventsTab: () => null }))
 vi.mock("./VncTab.tsx", () => ({ VncTab: () => null }))
+vi.mock("./SerialTab.tsx", () => ({ SerialTab: () => null }))
 vi.mock("./VMPowerControls.tsx", () => ({ VMPowerControls: () => null }))
 
 const { ApplicationDetailPage } = await import("./ApplicationDetailPage.tsx")
 
 function renderPage() {
   return render(
-    <MemoryRouter initialEntries={["/console/postgreses/demo"]}>
+    <MemoryRouter initialEntries={[`/console/${h.appPlural}/demo`]}>
       <Routes>
         <Route path="/console/:plural/:name" element={<ApplicationDetailPage />} />
       </Routes>
@@ -62,5 +81,31 @@ describe("ApplicationDetailPage guards", () => {
     h.get = { data: undefined, isLoading: true, error: undefined }
     renderPage()
     expect(screen.getByText("Loading…")).toBeInTheDocument()
+  })
+})
+
+describe("ApplicationDetailPage tabs for a virtual machine", () => {
+  it("leads with the consoles, serial first", () => {
+    h.appKind = "VMInstance"
+    h.appPlural = "vminstances"
+    h.get = {
+      data: { kind: "VMInstance", metadata: { name: "demo", namespace: "tenant-test" } },
+      isLoading: false,
+      error: undefined,
+    }
+    h.tabLabels = []
+
+    renderPage()
+
+    // Reaching a console is why people open a VM, and serial is the one that
+    // carries text. VNC stays for the cases it cannot reach.
+    expect(h.tabLabels).toEqual([
+      "Overview",
+      "Console",
+      "VNC",
+      "Workloads",
+      "Services",
+      "Events",
+    ])
   })
 })

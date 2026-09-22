@@ -110,12 +110,13 @@ func TestCreateForwardsDryRunWhenSourceAlreadyExists(t *testing.T) {
 }
 
 func TestDeleteForwardsDryRunToBackingDeletes(t *testing.T) {
-	r := fakeREST(tapPsObj("a.b", "tap-a-b"), ociRepoObj("tap-a-b"))
+	r := fakeREST(tapPsObj("a.b", "tap-a-b"), ociRepoObj("tap-a-b"), tapPkgObj("a.b", "tap-a-b"))
 	opts := &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}}
 	if _, _, err := r.Delete(context.Background(), "a.b", nil, opts); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	wantDryRunAll(t, "the backing PackageSource delete", deleteDryRunFor(t, r, gvrPackageSources))
+	wantDryRunAll(t, "the backing Package delete", deleteDryRunFor(t, r, gvrPackages))
 	wantDryRunAll(t, "the backing OCIRepository delete", deleteDryRunFor(t, r, gvrOCIRepos))
 }
 

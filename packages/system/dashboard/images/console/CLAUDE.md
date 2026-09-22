@@ -47,7 +47,9 @@ pnpm build                          # tsc check + vite build into apps/console/d
 
 The Vite dev server proxies `/api`, `/apis`, and `/k8s` (VNC WebSocket prefix)
 to `kubectl proxy`. In production, nginx (see `Containerfile`) proxies the
-same paths to `kubernetes.default.svc` using the pod's service-account token.
+same paths to `kubernetes.default.svc` without touching any credential header,
+so the request carries the user's own `Authorization` from the gatekeeper and
+the apiserver checks that user's RBAC.
 
 ## Code style
 
@@ -133,6 +135,36 @@ packages/
 Containerfile                       # multi-stage build → nginx-unprivileged on :8080
 .github/workflows/                  # test.yaml (typecheck + vitest), build.yaml (multi-arch image to ghcr)
 ```
+
+## Keyboard and clipboard input
+
+Both VM console tabs take keyboard input and a paste, and that surface has a
+history of defects that every local oracle missed. If you touch it, read this
+first.
+
+- **A synthetic event is not an oracle.** `new KeyboardEvent(...)` dispatched
+  from a script does not reach xterm at all, and a `ClipboardEvent` dispatched
+  straight at the paste sink skips the real keyboard entirely. Drive the real
+  thing (`Input.dispatchKeyEvent` over CDP, `press_key` in the chrome-devtools
+  MCP) and confirm the probe can see anything at all by sending a plain letter
+  first. A probe that reports "no defect" without that control has reported
+  nothing.
+- **Say what the lower layer already received.** noVNC sends a modifier down to
+  the guest the moment it is pressed and releases it only on keyup, so a paste
+  that starts while the chord is held types chords rather than characters —
+  under Ctrl an `m` is Return. `typeKeystrokes` releases the host's modifiers
+  before the first character for exactly this reason.
+- **Work the matrix, not one case:** platform × chord × modifiers held before
+  the action. Ctrl+V does not paste on macOS, and xterm turns Ctrl with a
+  letter into a control byte, so "works on my machine" covers one cell of six.
+- **Never type part of a paste.** A character the keymap cannot produce changes
+  what the rest means, and the newline after it still submits:
+  `rm -rf /srv/данные` becomes `rm -rf /srv`. Refuse the whole paste and say so
+  before anything is sent.
+- **A fake with no keyboard state cannot show any of this.** `FakeRFB` in
+  `VncTab.clipboard.test.tsx` tracks which modifiers the guest believes are
+  down and records what it received, chords marked. Assert on that, not on a
+  list of `sendKey` calls.
 
 ## Testing
 

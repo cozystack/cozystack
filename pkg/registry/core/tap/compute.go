@@ -72,6 +72,7 @@ func parseConnectURL(url, tagOverride string) (connectTarget, error) {
 
 var (
 	gvrPackageSources = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "packagesources"}
+	gvrPackages       = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "packages"}
 	gvrAppDefs        = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "applicationdefinitions"}
 	gvrOCIRepos       = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}
 )

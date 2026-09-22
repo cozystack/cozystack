@@ -23,6 +23,7 @@ import (
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/pkg/config"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -203,6 +204,7 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Create HelmReleases for components with Install section
 	helmReleaseCount := 0
+	var skippedPrivileged []string
 	for _, component := range variant.Components {
 		// Skip components without Install section
 		if component.Install == nil {
@@ -215,6 +217,18 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				logger.V(1).Info("skipping disabled component", "package", pkg.Name, "component", component.Name)
 				continue
 			}
+		}
+
+		// Refuse an unconfirmed privileged install here, at the install site,
+		// rather than in the tap materializer where the guard races this
+		// reconciler. A tap auto-registration Package carries the marketplace-tap
+		// label and is created without confirmation; `cozypkg add --allow-privileged`
+		// sheds the label, which is the operator's confirmation. A platform Package
+		// never carries the label and is unaffected.
+		if component.Install.Privileged && !collision.PrivilegedConfirmed(pkg) {
+			logger.Info("skipping unconfirmed privileged component", "package", pkg.Name, "component", component.Name)
+			skippedPrivileged = append(skippedPrivileged, component.Name)
+			continue
 		}
 
 		// Build artifact name: <packagesource>-<variant>-<componentname> (with dots replaced by dashes)
@@ -355,6 +369,19 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// Update status with success message
+	if len(skippedPrivileged) > 0 {
+		meta.SetStatusCondition(&pkg.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "PrivilegedNotConfirmed",
+			Message: fmt.Sprintf("privileged install component(s) %v are not confirmed; register with 'cozypkg add --allow-privileged'", skippedPrivileged),
+		})
+		if err := r.Status().Update(ctx, pkg); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
 	message := fmt.Sprintf("reconciliation succeeded, generated %d helmrelease(s)", helmReleaseCount)
 	meta.SetStatusCondition(&pkg.Status.Conditions, metav1.Condition{
 		Type:    "Ready",
@@ -886,7 +913,10 @@ func (r *PackageReconciler) resolvePrivilegedNamespaces(ctx context.Context, nam
 			if _, relevant := namespaces[component.Install.Namespace]; !relevant {
 				continue
 			}
-			if component.Install.Privileged {
+			// Same confirmation gate as the install loop: an unconfirmed tap
+			// registration's privileged component must not raise its namespace to
+			// the privileged PodSecurity level.
+			if component.Install.Privileged && collision.PrivilegedConfirmed(pkg) {
 				result[component.Install.Namespace] = true
 			}
 		}
@@ -901,6 +931,29 @@ func (r *PackageReconciler) createOrUpdateNamespace(ctx context.Context, namespa
 	return r.Patch(ctx, namespace, client.Apply, client.FieldOwner("cozystack-package-controller"), client.ForceOwnership)
 }
 
+// componentInstallable reports whether a variant component should have a
+// HelmRelease for this Package: it has an Install section, is not disabled via
+// the Package spec, and, if it requests privileged access, the Package has
+// confirmed that privilege (a tap auto-registration has not). This is the same
+// decision the install loop makes before creating a HelmRelease; cleanup must
+// use it too, or a component the install loop refuses stays "desired" and its
+// existing HelmRelease is left for the helm-controller to upgrade to a chart
+// revision that only just became privileged.
+func componentInstallable(pkg *cozyv1alpha1.Package, component cozyv1alpha1.Component) bool {
+	if component.Install == nil {
+		return false
+	}
+	if pkgComponent, ok := pkg.Spec.Components[component.Name]; ok {
+		if pkgComponent.Enabled != nil && !*pkgComponent.Enabled {
+			return false
+		}
+	}
+	if component.Install.Privileged && !collision.PrivilegedConfirmed(pkg) {
+		return false
+	}
+	return true
+}
+
 // cleanupOrphanedHelmReleases removes HelmReleases that are no longer needed
 func (r *PackageReconciler) cleanupOrphanedHelmReleases(ctx context.Context, pkg *cozyv1alpha1.Package, variant *cozyv1alpha1.Variant) error {
 	logger := log.FromContext(ctx)
@@ -908,15 +961,8 @@ func (r *PackageReconciler) cleanupOrphanedHelmReleases(ctx context.Context, pkg
 	// Build map of desired HelmRelease names (from components with Install)
 	desiredReleases := make(map[types.NamespacedName]bool)
 	for _, component := range variant.Components {
-		if component.Install == nil {
+		if !componentInstallable(pkg, component) {
 			continue
-		}
-
-		// Check if component is disabled via Package spec
-		if pkgComponent, ok := pkg.Spec.Components[component.Name]; ok {
-			if pkgComponent.Enabled != nil && !*pkgComponent.Enabled {
-				continue
-			}
 		}
 
 		namespace := component.Install.Namespace
