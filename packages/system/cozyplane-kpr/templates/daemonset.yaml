@@ -66,17 +66,6 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      initContainers:
-        # Ensure bpffs is mounted on the host so the LB map pins are a real
-        # bpffs and outlive the process; Bidirectional propagation pushes it to
-        # the node. Cilium's DaemonSet does the equivalent.
-        - name: mount-bpffs
-          image: busybox:1.36
-          command: ["sh", "-c", "mount | grep -q 'bpf on {{ .Values.bpffsRoot }} ' || mount -t bpf bpf {{ .Values.bpffsRoot }}"]
-          securityContext:
-            privileged: true
-          volumeMounts:
-            - {name: bpffs, mountPath: {{ .Values.bpffsRoot }}, mountPropagation: Bidirectional}
       containers:
         - name: kpr
           image: {{ .Values.image }}
@@ -91,6 +80,12 @@ spec:
           securityContext:
             privileged: true
           volumeMounts:
+            # kpr mounts bpffs here itself at startup if the node has none, and
+            # Bidirectional propagates that to the host so the pins outlive the
+            # process. The check is statfs on the mount point, not the mount's
+            # source name: Talos names its bpffs source "none", and a guard that
+            # matched "bpf" stacked an empty bpffs over the real one, hiding the
+            # agent's pins (kpr/bpffs.go).
             - {name: bpffs, mountPath: {{ .Values.bpffsRoot }}, mountPropagation: Bidirectional}
             - {name: cgroup2, mountPath: {{ .Values.cgroupRoot }}}
       volumes:

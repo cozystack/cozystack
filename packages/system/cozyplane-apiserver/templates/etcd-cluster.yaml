@@ -1,9 +1,6 @@
 {{- /* Operator-managed etcd for the aggregated apiserver (etcd-operator.cozystack.io
-       v1alpha2). MEMORY-BACKED: no PVC, no storageClass — so the aggregated API's
-       etcd comes up without a storage layer and does not create the
-       CNI -> apiserver -> etcd -> storage -> CNI bootstrap cycle. The CNI installs
-       first; a persistent (storageClassName) mode is a follow-up once storage is
-       sequenced after the CNI. Data is not durable across a full-cluster restart.
+       v1alpha2). PVC-backed by default; `etcd.operator.persistent: false` gives a
+       tmpfs member instead, for an install with no storage layer.
        TLS uses the operator's cert-manager integration: the operator emits the
        server / operator-client / peer Certificates itself; we only supply the CA
        issuers and the apiserver's own client cert. Requires cert-manager. The
@@ -114,16 +111,13 @@ spec:
   replicas: {{ $replicas }}
   storage:
     {{- if .Values.etcd.operator.persistent }}
-    # PVC-backed: the aggregated API's objects (VPCs, Ports, policies) are
-    # cluster state. A memory-backed etcd loses every one of them on a
-    # full-cluster restart — which is exactly what a node reboot is.
+    # PVC-backed (the default; see values.yaml `etcd.operator.persistent`).
     medium: ""
     {{- with .Values.etcd.operator.storageClass }}
     storageClassName: {{ . | quote }}
     {{- end }}
     {{- else }}
-    # tmpfs: no storage layer needed, but NOT durable across a full-cluster
-    # restart. `medium` is immutable post-create; size is the tmpfs cap.
+    # tmpfs. `medium` is immutable post-create; size is the tmpfs cap.
     medium: Memory
     {{- end }}
     size: {{ .Values.etcd.operator.size }}

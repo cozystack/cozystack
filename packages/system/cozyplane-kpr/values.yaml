@@ -1,8 +1,10 @@
-# cozyplane-kpr container image. Built and published from
-# github.com/lllamnyp/cozyplane (kpr/); digest-pinned (no floating tag).
+# cozyplane-kpr container image, built from kpr/ in this repository.
+# Digest-pinned (no floating tag); built and pushed by release.yml's kpr-image
+# job for amd64 and arm64, like the cozyplane image. docs/packaging.md has the
+# procedure and how the pin is refreshed.
 # It imports Cilium's LB control plane, so it is a large image and a SEPARATE
 # component from the cozyplane agent — never co-mingled.
-image: ghcr.io/lllamnyp/cozyplane-kpr@sha256:425693919d8a4f24daea9629548180ef5cef72dece4d31bf5b6505a671147766
+image: ghcr.io/lllamnyp/cozyplane-kpr@sha256:93353087eb57f1cb0488e5fe503a376173703a5c626a9c074f0b527a57e4b4b6
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 

@@ -71,9 +71,11 @@ rules:
     verbs: ["get", "list", "watch"]
   # FabricIPs: the CNI plugin claims and releases underlay addresses through
   # this SA (the agent writes its kubeconfig), and the agent watches them.
+  # deletecollection lets a failed ADD's rollback return the pod's claims in one
+  # round trip; it reaches nothing the list+delete above could not.
   - apiGroups: ["local.sdn.cozystack.io"]
     resources: ["fabricips"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
   # HostFirewalls: the agent compiles the objects selecting its node into the
   # hf_allow map and arms enforcement (docs/host-firewall.md).
   - apiGroups: ["sdn.cozystack.io"]

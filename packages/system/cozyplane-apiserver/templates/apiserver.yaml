@@ -77,17 +77,15 @@ rules:
   - apiGroups: ["flowcontrol.apiserver.k8s.io"]
     resources: ["flowschemas", "prioritylevelconfigurations"]
     verbs: ["get", "list", "watch"]
-  # The server registers (or takes over from CRD autoregistration) its own
-  # APIService at startup — a chart manifest can't: the kube-apiserver has
-  # already auto-created the object for the bootstrap CRDs, and Helm refuses
-  # to adopt an object it does not own.
+  # The server registers its own APIService at startup
+  # (--ensure-apiservice-service), rather than the chart shipping the object.
   - apiGroups: ["apiregistration.k8s.io"]
     resources: ["apiservices"]
     verbs: ["get", "create", "patch"]
-  # ...and then removes the bootstrap CRDs it superseded. They are shadowed for
-  # routing but NOT for OpenAPI: while they exist, the group's spec fails to
-  # merge (duplicated paths) and `kubectl apply` of any object in it dies with
-  # "failed to download openapi".
+  # For upgrades from a pre-split install only: --remove-bootstrap-crds (off by
+  # default) deletes the old single-group CRDs, which would otherwise keep the
+  # group's OpenAPI from merging. A fresh install has no CRDs in this group —
+  # see docs/api-groups.md §"Why two groups".
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
     verbs: ["get", "list", "delete"]
@@ -282,8 +280,8 @@ spec:
           args:
             - --serve-sdn
             # Register the group's APIService. Nothing else creates one: the
-            # tenant kinds have no CRDs, so there is no CRD autoregistration to
-            # fight with — the takeover is gone (docs/api-groups.md).
+            # tenant kinds have no CRDs, so no CRD autoregistration competes for
+            # the group (docs/api-groups.md).
             - --ensure-apiservice-service={{ $ns }}/cozyplane-apiserver
             - --ensure-apiservice-ca-injection={{ $ns }}/cozyplane-apiserver-serving
             {{- if .Values.etcd.operator.enabled }}
