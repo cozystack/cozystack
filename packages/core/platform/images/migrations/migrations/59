@@ -1,0 +1,221 @@
+#!/bin/bash
+# Migration 59 --> 60
+# Carry a FoundationDB application's cluster.version over to the version
+# field that replaces it, and record the releases that cannot be carried over.
+#
+# The foundationdb chart used to pass cluster.version, a free-form string, to
+# the operator as the FoundationDB version. It now takes version (v7.4, v7.3,
+# v7.1) and maps it to a tag, and no longer reads cluster.version at all. A
+# cluster that set cluster.version to anything but 7.3.x would otherwise move to
+# the v7.3 default on its first reconcile after the upgrade: an incompatible
+# upgrade from 7.1 with a full cluster bounce, or a downgrade from 7.4.
+#
+# The release line is carried over, not the patch: 7.1.x becomes v7.1, which
+# the chart maps to the one tag it ships for that line.
+#
+# cluster.version is left in place on purpose. This runs as a pre-upgrade hook,
+# so helm-controller reconciles the patched release with the OLD chart first.
+# That chart ignores version but still reads cluster.version; removing it would
+# let the old chart fall back to its own 7.3.63 default in that window, which is
+# the version change this migration exists to prevent. The new chart ignores the
+# leftover key.
+#
+# The release values are patched directly rather than through the apps API:
+# a read through the API fills in the schema defaults, so a cluster that never
+# set cluster.version would look as if it had and get pinned for no reason.
+#
+# Idempotent: a release that already has version is left alone. A patch tests
+# the values it read, so any concurrent edit to them fails the patch instead of
+# being overwritten. It does not test resourceVersion: helm-controller writes
+# the release status all the time, and that alone would abort the upgrade.
+# Fail-closed on any read or patch error (exit 1 before the stamp) so the new
+# chart does not roll out over a cluster whose version was not carried over.
+#
+# What cannot be carried over is recorded on the cozystack-version ConfigMap
+# and does not block the upgrade, because one tenant's release must not hold
+# the fleet:
+#   - a cluster.version outside those three lines, or one the apiserver stored
+#     as something other than a string (spec.values is
+#     x-kubernetes-preserve-unknown-fields, so a direct edit of the HelmRelease
+#     can put a number or a list there);
+#   - a whole spec.values that is not an object, for the same reason;
+#   - a cluster.version whose patch differs from the tag the release will render:
+#     it is carried over and still moves to that tag, which can be a step down.
+#     This is worked out from the values rather than from the patch, so a run
+#     retried after an aborted one, which finds version already written, still
+#     records it;
+#   - an OpenSearch, Kubernetes or KubernetesNodes release that still sets one of
+#     the images.* overrides, which those charts have stopped reading. There is
+#     nothing to carry over there, since an image does not map to a version, so
+#     the list is the point: those releases roll onto the chart's images on the
+#     first reconcile. An air-gapped install serves those through the registry
+#     mirrors configured on its nodes, like every other platform image;
+#   - an OpenSearch release storing version: null, which the old chart rendered
+#     as its v2 default and the new one refuses.
+#
+# FOUNDATIONDB_TAGS repeats packages/apps/foundationdb/files/versions.yaml,
+# because the migrations image carries no charts. The migration always runs
+# from the release being upgraded to, so the copy has to follow that file;
+# hack/migration-59-foundationdb-version.bats fails when the two differ.
+#
+# If another migration 59 lands first, renumber this one and bump
+# migrations.targetVersion; the collision surfaces as a loud add/add conflict on
+# rebase.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+DRY_RUN="${MIGRATION_DRY_RUN:-0}"
+
+FDB_CHART_REF_NAME="cozystack-foundationdb-application-default-foundationdb"
+FDB_INLINE_CHART_NAME="foundationdb"
+OS_CHART_REF_NAME="cozystack-opensearch-application-default-opensearch"
+OS_INLINE_CHART_NAME="opensearch"
+K8S_CHART_REF_NAME="cozystack-kubernetes-application-kubevirt-kubernetes"
+K8S_INLINE_CHART_NAME="kubernetes"
+NODES_CHART_REF_NAME="cozystack-kubernetes-nodes-application-kubevirt-kubernetes-nodes"
+NODES_INLINE_CHART_NAME="kubernetes-nodes"
+
+FOUNDATIONDB_TAGS='{"v7.4": "7.4.1", "v7.3": "7.3.63", "v7.1": "7.1.67"}'
+
+# One JSON line per release that needs attention, carrying the values as read.
+# Releases are matched by the application label or by the chart they install,
+# since the label postdates some releases (see migration 56).
+plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output json | jq -c \
+  --arg fdbchart "$FDB_CHART_REF_NAME" --arg fdbinline "$FDB_INLINE_CHART_NAME" \
+  --arg oschart "$OS_CHART_REF_NAME" --arg osinline "$OS_INLINE_CHART_NAME" \
+  --arg k8schart "$K8S_CHART_REF_NAME" --arg k8sinline "$K8S_INLINE_CHART_NAME" \
+  --arg nodeschart "$NODES_CHART_REF_NAME" --arg nodesinline "$NODES_INLINE_CHART_NAME" \
+  --argjson fdbtags "$FOUNDATIONDB_TAGS" '
+  def installs($chart; $inline): (.spec.chartRef.name == $chart) or (.spec.chart.spec.chart == $inline);
+  def image_overrides:
+    if (.images | type) == "object"
+    then [.images | to_entries[] | select((.value | type) == "string" and .value != "")
+          | "images.\(.key):\(.value)"]
+    else [] end;
+  .items[]
+  | (.metadata.labels["apps.cozystack.io/application.kind"] // "") as $kind
+  | (.spec.values // {}) as $raw
+  | ($raw | if type == "object" then . else {} end) as $v
+  | {ns: .metadata.namespace, name: .metadata.name} as $id
+  | if ($kind == "FoundationDB")
+       or ((.metadata.name | startswith("foundationdb-"))
+           and ((.spec.chartRef.name == $fdbchart) or (.spec.chart.spec.chart == $fdbinline)))
+    then
+      if ($raw | type) != "object" then
+        $id + {action: "malformed", detail: ($raw | tostring)}
+      elif (($v.version | type) == "string" and $v.version != "") then
+        ($v.cluster | if type == "object" then .version else null end) as $cv
+        | $fdbtags[$v.version] as $tag
+        | if ($cv | type) == "string" and $tag != null and $cv != $tag
+          then $id + {action: "drift", version: $v.version, tag: $tag, detail: $cv}
+          else empty end
+      elif (($v.cluster | type) != "object") or ($v.cluster.version == null) then empty
+      elif ($v.cluster.version | type) != "string" then
+        $id + {action: "unmapped", detail: ($v.cluster.version | tostring)}
+      else
+        ($v.cluster.version) as $cv
+        | (($cv | capture("^(?<line>7\\.(1|3|4))\\.[0-9]+$") | .line) // null) as $line
+        | if $line then $id + {action: "carry", version: "v\($line)", tag: $fdbtags["v\($line)"], detail: $cv, values: $v}
+          else $id + {action: "unmapped", detail: $cv} end
+      end
+    else
+      (if ($kind == "OpenSearch")
+          or ((.metadata.name | startswith("opensearch-")) and installs($oschart; $osinline))
+       then "OpenSearch"
+       elif ($kind == "KubernetesNodes")
+          or ((.metadata.name | startswith("kubernetes-nodes-")) and installs($nodeschart; $nodesinline))
+       then "KubernetesNodes"
+       elif ($kind == "Kubernetes")
+          or ((.metadata.name | startswith("kubernetes-")) and installs($k8schart; $k8sinline))
+       then "Kubernetes"
+       else null end) as $app
+      | ($v | image_overrides) as $overrides
+      | (if $app != null and ($overrides | length) > 0
+         then $id + {action: "image", app: $app, detail: ($overrides | join(";"))}
+         else empty end),
+        (if $app == "OpenSearch" and ($v | has("version")) and $v.version == null
+         then $id + {action: "nullversion", app: $app}
+         else empty end)
+    end')
+
+CARRIED=0
+LEFTOVERS=""
+
+record_leftover() {
+  LEFTOVERS="${LEFTOVERS}${LEFTOVERS:+,}$1"
+}
+
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
+  ns=$(printf '%s' "$row" | jq -r '.ns')
+  name=$(printf '%s' "$row" | jq -r '.name')
+  action=$(printf '%s' "$row" | jq -r '.action')
+  detail=$(printf '%s' "$row" | jq -r '.detail')
+  version=$(printf '%s' "$row" | jq -r '.version // ""')
+  tag=$(printf '%s' "$row" | jq -r '.tag // ""')
+  app=$(printf '%s' "$row" | jq -r '.app // ""')
+
+  case "$action" in
+    carry)
+      if [ "$DRY_RUN" = "1" ]; then
+        echo "[dry-run] would set version=$version on FoundationDB $ns/$name (cluster.version $detail)"
+        CARRIED=$((CARRIED + 1))
+        continue
+      fi
+      patch=$(printf '%s' "$row" | jq -c '[
+        {op: "test", path: "/spec/values", value: .values},
+        {op: "add", path: "/spec/values/version", value: .version}
+      ]')
+      kubectl patch helmreleases.helm.toolkit.fluxcd.io --namespace "$ns" "$name" \
+        --type json --patch "$patch" >/dev/null
+      echo "Set version=$version on FoundationDB $ns/$name (cluster.version $detail)"
+      CARRIED=$((CARRIED + 1))
+      if [ "$detail" != "$tag" ]; then
+        echo "WARN: FoundationDB $ns/$name runs $detail, and $version renders $tag after the upgrade" >&2
+        record_leftover "${ns}/${name}=cluster.version:${detail}->${tag}"
+      fi
+      ;;
+    drift)
+      echo "WARN: FoundationDB $ns/$name runs $detail, and $version renders $tag after the upgrade" >&2
+      record_leftover "${ns}/${name}=cluster.version:${detail}->${tag}"
+      ;;
+    nullversion)
+      echo "WARN: $app $ns/$name stores version: null, which the new chart refuses to render; set a version" >&2
+      record_leftover "${ns}/${name}=version:null"
+      ;;
+    unmapped)
+      echo "WARN: FoundationDB $ns/$name has cluster.version $detail, which is not on a supported line (7.1, 7.3, 7.4); it will render the v7.3 default after the upgrade" >&2
+      record_leftover "${ns}/${name}=cluster.version:${detail}"
+      ;;
+    malformed)
+      echo "WARN: FoundationDB $ns/$name has a spec.values that is not an object, so its version cannot be read; it will render the v7.3 default after the upgrade" >&2
+      record_leftover "${ns}/${name}=values-not-an-object"
+      ;;
+    image)
+      echo "WARN: $app $ns/$name still sets $detail, which the chart no longer reads; it will roll onto the chart's image after the upgrade" >&2
+      record_leftover "${ns}/${name}=${detail}"
+      ;;
+  esac
+done <<EOF
+$plan
+EOF
+
+echo "==> Summary: carried=$CARRIED needing attention=${LEFTOVERS:-none}"
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "Dry-run complete; version stamp not advanced"
+  exit 0
+fi
+
+# The record is a diagnostic aid, so failing to write it must not block the
+# upgrade for every tenant.
+if [ -n "$LEFTOVERS" ]; then
+  kubectl annotate configmap --namespace "${NAMESPACE:-cozy-system}" cozystack-version \
+    "cozystack.io/migration-59-needs-attention=$LEFTOVERS" --overwrite >/dev/null \
+    || echo "WARN: failed to record the releases needing attention on cozystack-version" >&2
+fi
+
+stamp_cozystack_version 60

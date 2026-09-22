@@ -1,0 +1,76 @@
+suite: images of the management-cluster helpers
+
+# Every image below runs in the management cluster, in the tenant's namespace:
+# the csr signer beside the tenant apiserver with the Talos CA mounted, and the
+# OIDC Jobs under a service account that can patch the KamajiControlPlane. They
+# come from the bundled tag files, and values cannot replace them. They follow
+# _cluster.images-registry through cozy-lib.image, like the harbor, kafka and
+# mariadb hook images.
+
+values:
+  - values/common.yaml
+  - values/oidc-system.yaml
+
+release:
+  name: test
+  namespace: tenant-test
+
+tests:
+  - it: keeps the bundled talos-csr-signer image when values carry an image override
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    set:
+      images:
+        talosCsrSigner: registry.example.test/talos-csr-signer:6.6.6
+    asserts:
+      - matchRegex:
+          path: spec.deployment.extraContainers[0].image
+          pattern: '^ghcr\.io/cozystack/cozystack/talos-csr-signer:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: routes the talos-csr-signer image through _cluster.images-registry
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    set:
+      _cluster:
+        images-registry: registry.airgap.example.test
+    asserts:
+      - matchRegex:
+          path: spec.deployment.extraContainers[0].image
+          pattern: '^registry\.airgap\.example\.test/ghcr\.io/cozystack/cozystack/talos-csr-signer:'
+
+  # Document order in templates/oidc-rbac-job.yaml: 0 ServiceAccount, 1 Role,
+  # 2 RoleBinding, 3 the bootstrap Job, 4 the cleanup Job. The three named
+  # objects share the bootstrap name, so the Jobs are selected by index.
+  - it: keeps the bundled kubectl image in the OIDC Jobs when values carry an image override
+    template: templates/oidc-rbac-job.yaml
+    set:
+      images:
+        kubectl: registry.example.test/kubectl:6.6.6
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^docker\.io/alpine/k8s:[^@]+@sha256:[0-9a-f]{64}$'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^docker\.io/alpine/k8s:[^@]+@sha256:[0-9a-f]{64}$'
+        documentIndex: 4
+
+  - it: routes the OIDC Jobs' kubectl image through _cluster.images-registry
+    template: templates/oidc-rbac-job.yaml
+    set:
+      _cluster:
+        images-registry: registry.airgap.example.test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^registry\.airgap\.example\.test/docker\.io/alpine/k8s:'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^registry\.airgap\.example\.test/docker\.io/alpine/k8s:'
+        documentIndex: 4

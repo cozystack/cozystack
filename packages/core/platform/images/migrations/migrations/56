@@ -507,11 +507,6 @@ kubectl get helmrelease --all-namespaces \
          + (if (has("maxNodeProvisionTime") and (.maxNodeProvisionTime != null)) then {maxNodeProvisionTime: .maxNodeProvisionTime} else {} end)
          # cluster-level inputs the pool templates consume verbatim
          + pick(.; ["version","talos"])
-         # images: copy only the declared kubectl override, not the whole
-         # parent images map (which carries waitForKubeconfig/talosCsrSigner that
-         # the KubernetesNodes schema does not declare and a dashboard round-trip
-         # would drop).
-         + (if ((.images | type) == "object" and (.images | has("kubectl"))) then {images: {kubectl: .images.kubectl}} else {} end)
         )')
 
       # Adopt the worker objects the parent rendered for this group BEFORE

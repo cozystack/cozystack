@@ -1,0 +1,51 @@
+suite: FoundationDB version map
+
+templates:
+  - templates/cluster.yaml
+
+release:
+  name: foundationdb-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: defaults to 7.3.63
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.3.63"
+
+  - it: maps v7.1 to its tag
+    set:
+      version: v7.1
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.1.67"
+
+  - it: maps v7.4 to its tag
+    set:
+      version: v7.4
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.4.1"
+
+  - it: names the value and the versions on offer when version is null
+    set:
+      version: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "FoundationDB version <nil> is not supported, allowed versions are [v7.1 v7.3 v7.4]"
+
+  - it: ignores a leftover cluster.version
+    set:
+      cluster:
+        version: "7.1.0"
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.3.63"
