@@ -20,3 +20,15 @@ spec:
           install:
             namespace: cozy-system
             releaseName: vm-default-images
+            # Ready only once every image has imported: vm-disk clones from
+            # these volumes and cannot tell an unfinished import from a done
+            # one. Any phase other than Succeeded or Failed matches neither
+            # expression and flux keeps waiting. There is no per-component
+            # timeout, so a slow download outlasts the operator-wide install
+            # window and is retried as an upgrade until it finishes; nothing
+            # is uninstalled in between.
+            healthCheckExprs:
+              - apiVersion: cdi.kubevirt.io/v1beta1
+                kind: DataVolume
+                failed: "has(status.phase) && status.phase == 'Failed'"
+                current: "has(status.phase) && status.phase == 'Succeeded'"

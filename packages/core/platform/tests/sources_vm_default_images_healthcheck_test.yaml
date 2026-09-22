@@ -1,0 +1,27 @@
+suite: vm-default-images waits for its golden images to import
+# Every image is a DataVolume with immediate bind, so the import starts at
+# install. Without healthCheckExprs the HelmRelease goes Ready as soon as helm
+# has applied the DataVolumes, and an image that never imports stays green until
+# a vm-disk cloning from it breaks. current must hold only on Succeeded: a looser
+# expression lets an unfinished import pass.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: gates the vm-default-images component on DataVolume Succeeded
+    documentSelector:
+      path: metadata.name
+      value: cozystack.vm-default-images
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].name
+          value: vm-default-images
+      - equal:
+          path: spec.variants[0].components[0].install.healthCheckExprs
+          value:
+            - apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              failed: "has(status.phase) && status.phase == 'Failed'"
+              current: "has(status.phase) && status.phase == 'Succeeded'"
