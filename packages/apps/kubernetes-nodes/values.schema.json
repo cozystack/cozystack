@@ -73,7 +73,7 @@
       "default": {},
       "properties": {
         "cpu": {
-          "description": "CPU available.",
+          "description": "Number of vCPU cores for each worker VM, as a positive whole number such as `2`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.cores`.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {

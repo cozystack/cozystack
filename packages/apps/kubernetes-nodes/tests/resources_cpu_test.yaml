@@ -1,0 +1,209 @@
+suite: worker pool resources.cpu
+
+# resources.cpu is typed as a quantity, but it lands in the worker VM's
+# domain.cpu.cores, which KubeVirt declares as uint32 and the
+# KubevirtMachineTemplate CRD as an integer. Only a whole number of cores has
+# a meaning there, and the same value decides whether the instancetype matcher
+# is dropped, so anything else has to stop the render rather than reach either.
+
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+tests:
+  - it: renders a quoted whole number as an integer core count
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: renders an unquoted integer as the same core count
+    set:
+      resources:
+        cpu: 4
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 4
+
+  - it: renders a whole float as an integer core count
+    set:
+      resources:
+        cpu: 2.0
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+
+  # The quantity grammar spells one whole number several ways, and each has
+  # always rendered: YAML decodes the emitted value to the integer.
+  - it: renders a quoted whole decimal as the same core count
+    set:
+      resources:
+        cpu: "2.0"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: renders an explicit plus sign as the same core count
+    set:
+      resources:
+        cpu: "+2"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: renders an exponent spelling as the core count it decodes to
+    set:
+      resources:
+        cpu: "1e1"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 10
+
+  - it: refuses a millicore quantity
+    set:
+      resources:
+        cpu: 500m
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(500m\) must be a positive whole number of vCPU cores'
+
+  - it: refuses a millicore spelling of whole cores
+    set:
+      resources:
+        cpu: 2000m
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(2000m\) must be a positive whole number of vCPU cores'
+
+  - it: refuses a fractional core count
+    set:
+      resources:
+        cpu: "1.5"
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(1.5\) must be a positive whole number of vCPU cores'
+
+  # Zero is a value, not an absent field: read by truthiness, an unquoted 0
+  # would silently drop domain.cpu and leave the core count to KubeVirt.
+  - it: refuses an unquoted zero instead of treating it as unset
+    set:
+      resources:
+        cpu: 0
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(0\) must be a positive whole number of vCPU cores'
+
+  - it: refuses a quoted zero
+    set:
+      resources:
+        cpu: "0"
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(0\) must be a positive whole number of vCPU cores'
+
+  # The schema's quantity pattern admits a leading minus.
+  - it: refuses a negative core count
+    set:
+      resources:
+        cpu: "-2"
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(-2\) must be a positive whole number of vCPU cores'
+
+  # YAML decodes 010 as octal 8, not the 10 it looks like.
+  - it: refuses a leading zero
+    set:
+      resources:
+        cpu: "010"
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(010\) must be a positive whole number of vCPU cores'
+
+  - it: leaves domain.cpu out when resources.cpu is unset
+    set:
+      resources:
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu
+
+  - it: lets a whole core count replace the instancetype matcher
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: "2"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.instancetype
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+
+  # The case the precedence rule got wrong: the raw string was truthy, so the
+  # matcher was dropped for a value that cannot size the VM.
+  - it: refuses a millicore quantity beside an instanceType instead of dropping the matcher
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 500m
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(500m\) must be a positive whole number of vCPU cores'
