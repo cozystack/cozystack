@@ -7,6 +7,9 @@ include ../../../hack/package.mk
 METALLB_IAD_REPO ?= https://github.com/cozystack/metallb-iad.git
 METALLB_IAD_REF ?= 7d0017a0f22b2a4579ae01be8a6e4f3870bce7ef
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts tmp-repo
 	git clone --filter=tree:0 --no-checkout $(METALLB_IAD_REPO) tmp-repo
