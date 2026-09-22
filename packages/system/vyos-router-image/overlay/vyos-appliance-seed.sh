@@ -62,12 +62,29 @@ if [ -z "$DIAG" ]; then
 fi
 if [ -n "$DIAG" ] && mount -o ro "$DIAG" "$MNT" 2>/dev/null; then
     if [ -s "$MNT/guest-diag.sh" ] && [ -s "$MNT/guest-diag.cron" ]; then
-        mkdir -p /config/scripts
-        install -m 0755 "$MNT/guest-diag.sh" /config/scripts/cozy-guest-diag.sh
-        # No dot in the installed name: Debian cron silently skips /etc/cron.d
+        # NOT under /config. This unit is ordered Before=vyos-router.service, and
+        # vyos-router mounts the persistent configuration over /config during its
+        # own start — so a file written there beforehand is shadowed the moment
+        # that mount lands, and by the time cron first fires the path is empty.
+        # That is what every run of this feature has hit: the console reported
+        # the install, /etc/cron.d still held the entry, and the script was gone.
+        # Both survivors sit in the root filesystem, so the emitter goes there.
+        # Persistence is not wanted anyway — the seed reinstalls it from this
+        # disk on every boot, which is what keeps a stale copy from outliving
+        # the image it came with.
+        #
+        # No dot in the cron.d name: Debian cron silently skips /etc/cron.d
         # entries containing anything but letters, digits, underscore and hyphen.
-        install -m 0644 "$MNT/guest-diag.cron" /etc/cron.d/cozy-guest-diag
-        log "installed guest diagnostics from $DIAG"
+        if install -m 0755 "$MNT/guest-diag.sh" /usr/local/sbin/cozy-guest-diag.sh &&
+           install -m 0644 "$MNT/guest-diag.cron" /etc/cron.d/cozy-guest-diag; then
+            log "installed guest diagnostics from $DIAG"
+        else
+            # The old unconditional line is what let a failed install read as a
+            # working one for every run this feature has had: the console said
+            # installed, cron had nothing to run, and the silence was blamed on
+            # the emitter.
+            log "E: $DIAG mounted but installing the diagnostics failed"
+        fi
     else
         log "E: $DIAG carries no usable diagnostics payload"
     fi

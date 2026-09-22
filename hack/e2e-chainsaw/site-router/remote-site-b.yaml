@@ -127,7 +127,7 @@ stringData:
   guest-diag.cron: |
     SHELL=/bin/sh
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-    * * * * * root /config/scripts/cozy-guest-diag.sh
+    * * * * * root /usr/local/sbin/cozy-guest-diag.sh
 ---
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine

@@ -14,8 +14,9 @@
 # messages included, so writing here is safe to rely on rather than probe for.
 #
 # WHY CRON DRIVES IT. The appliance seed drops this script and its cron entry
-# late in boot, from the diagnostics disk, and of the ways to get a script
-# started at that point only cron works:
+# from the diagnostics disk after the generators and the boot transaction have
+# already been computed, and of the ways to get a script started from there only
+# cron works:
 #   - /etc/rc.local is decided by systemd-rc-local-generator, which runs in early
 #     boot BEFORE the seed writes anything, so a file dropped later is ignored
 #     for this boot.

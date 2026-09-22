@@ -424,7 +424,7 @@ guest-diag.cron: |
   # Without this every one of those fields would report a bare "not found".
   SHELL=/bin/sh
   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-  * * * * * root /config/scripts/cozy-guest-diag.sh
+  * * * * * root /usr/local/sbin/cozy-guest-diag.sh
 {{- end -}}
 
 {{/*

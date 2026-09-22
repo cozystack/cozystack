@@ -115,10 +115,14 @@ tests:
     # diagnostics change cannot break the config.boot the gateway boots on. The
     # appliance seed installs guest-diag.cron as /etc/cron.d/cozy-guest-diag —
     # a name with no dot, which Debian cron would otherwise skip in silence.
+    #
+    # The path this pins is the chart's half of a pair; the seed owns the other
+    # half and hack/site-router-guest-diag.bats is what holds the two together,
+    # since nothing rendered here can see where the seed writes.
     asserts:
       - matchRegex:
           path: stringData["guest-diag.cron"]
-          pattern: /config/scripts/cozy-guest-diag\.sh
+          pattern: /usr/local/sbin/cozy-guest-diag\.sh
       - matchRegex:
           path: stringData["guest-diag.sh"]
           pattern: (?m)^#!/bin/sh

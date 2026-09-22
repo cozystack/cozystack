@@ -42,18 +42,21 @@ dump() {
 # one where the seed reported installing it — so report the things that decide
 # it rather than inferring from silence again. Two stats and a service check, on
 # a path that already exists for reporting.
+#
+# The script path has to be the one the cron entry names, and the two are set in
+# different files: the seed decides where the file lands, the chart decides what
+# cron runs. hack/site-router-guest-diag.bats reads both out of their sources and
+# fails when they disagree, which is the check this report cannot make from
+# inside the guest — here a MISSING line means the install did not happen, not
+# that the two drifted.
 diag_inventory() {
-    for f in /config/scripts/cozy-guest-diag.sh /etc/cron.d/cozy-guest-diag; do
+    for f in /usr/local/sbin/cozy-guest-diag.sh /etc/cron.d/cozy-guest-diag; do
         if [ -e "$f" ]; then
             log "diag: $f present ($(stat -c '%A %U:%G %s' "$f" 2>/dev/null))"
         else
             log "diag: $f MISSING"
         fi
     done
-    # /config is an alias for the persistent config directory, and vyos-router
-    # touches it during start(), after the seed has written there. Resolve it
-    # rather than trusting the path.
-    log "diag: /config -> $(readlink -f /config 2>/dev/null || echo unresolved)"
     if systemctl is-active --quiet cron 2>/dev/null; then
         log "diag: cron active"
     else

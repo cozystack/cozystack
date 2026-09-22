@@ -45,6 +45,19 @@ REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHART_SRC="$REPO_ROOT/packages/apps/site-router"
 DIAG_SRC="$CHART_SRC/files/guest-diag.sh"
 SUITE_DIR="$REPO_ROOT/hack/e2e-chainsaw/site-router"
+SEED_SRC="$REPO_ROOT/packages/system/vyos-router-image/overlay/vyos-appliance-seed.sh"
+
+# Where the seed actually puts the emitter, read out of the seed rather than
+# written down here. Three files name this path — the seed installs it, the
+# chart's cron entry runs it, remote site B's manifest carries its own copy of
+# that entry — and they drifted apart once already with every render, every unit
+# test and every e2e run staying green: the seed wrote under /config, which
+# vyos-router mounts over during its own start, so cron pointed at a path that
+# was empty by the time it first fired. Deriving the expectation from one source
+# is what makes the other two checkable at all.
+seed_script_path() {
+  grep -oE 'install -m 0755 [^ ]+ (/[^ ]+)' "$SEED_SRC" | head -1 | awk '{print $NF}'
+}
 
 # Same synthetic reference the appliance-ref suite uses: a documentation host
 # (RFC 2606 .example) and a non-zero synthetic digest, so no real registry,
@@ -205,12 +218,28 @@ STUB
   }
   # Scheduled-but-absent is the quiet failure: a cron entry naming a path nothing
   # writes installs cleanly and produces silence. Assert the two agree.
-  yq e '.["guest-diag.cron"]' "$TMP/diag.yaml" | grep -q ' /config/scripts/cozy-guest-diag.sh$' || {
-    echo "the cron entry does not run the path the script is installed to" >&2
+  want=$(seed_script_path)
+  [ -n "$want" ] || { echo "cannot read the install path out of $SEED_SRC" >&2; rm -rf "$TMP"; exit 1; }
+  yq e '.["guest-diag.cron"]' "$TMP/diag.yaml" | grep -q " ${want}\$" || {
+    echo "the cron entry does not run $want, the path the seed installs to" >&2
     yq e '.["guest-diag.cron"]' "$TMP/diag.yaml" >&2
     rm -rf "$TMP"; exit 1
   }
   rm -rf "$TMP"
+}
+
+@test "remote site B runs the same emitter path the seed installs" {
+  # B boots the same appliance, so it is seeded by the same script, but its cron
+  # entry is a literal in a raw manifest rather than a chart render — nothing
+  # else would notice B keeping a path the seed stopped writing to, and B is the
+  # guest whose management API the tunnel step actually talks to.
+  want=$(seed_script_path)
+  [ -n "$want" ] || { echo "cannot read the install path out of $SEED_SRC" >&2; exit 1; }
+  yq e 'select(.kind == "Secret" and .metadata.name == "remote-site-b-diag") | .stringData."guest-diag.cron"' \
+    "$SUITE_DIR/remote-site-b.yaml" | grep -q " ${want}\$" || {
+    echo "remote site B's cron entry does not run $want, the path the seed installs to" >&2
+    exit 1
+  }
 }
 
 @test "the appliance seed installs the emitter where cron will actually read it" {
@@ -219,8 +248,20 @@ STUB
   # entries whose FILENAME carries anything but [A-Za-z0-9_-], and it refuses a
   # group- or world-writable crontab. Neither failure says anything at runtime,
   # so they are pinned here against the seed script that now does the installing.
-  seed=packages/system/vyos-router-image/overlay/vyos-appliance-seed.sh
+  seed=$SEED_SRC
   [ -f "$seed" ] || { echo "appliance seed script missing at $seed" >&2; exit 1; }
+
+  # A third silent rule, and the one that actually bit: the seed is ordered
+  # Before=vyos-router.service, and vyos-router mounts the persistent
+  # configuration over /config while it starts. Anything the seed writes under
+  # that path is shadowed before cron ever reads it, and nothing at runtime says
+  # so — the seed's own log line reported success and the file was gone.
+  script=$(seed_script_path)
+  [ -n "$script" ] || { echo "the seed installs no 0755 script" >&2; exit 1; }
+  case "$script" in
+    /config/*) echo "the seed installs the emitter to $script, which vyos-router mounts over" >&2
+               exit 1 ;;
+  esac
 
   target=$(grep -oE '/etc/cron\.d/[A-Za-z0-9._-]+' "$seed" | head -1)
   [ -n "$target" ] || { echo "the seed installs no /etc/cron.d entry" >&2; exit 1; }
@@ -229,9 +270,17 @@ STUB
          exit 1 ;;
   esac
 
-  grep -qE "install -m 0644 [^ ]+ ${target}\$" "$seed" || {
+  grep -qE "install -m 0644 [^ ]+ ${target}" "$seed" || {
     echo "the seed does not install ${target} mode 0644, which cron requires" >&2
     grep -n 'cron' "$seed" >&2 || true
+    exit 1
+  }
+
+  # An install whose success is logged whether or not it happened is how the
+  # shadowed path survived every run: the console said installed, cron had
+  # nothing to run, and the silence was read as a broken emitter.
+  grep -q 'if install -m 0755' "$seed" || {
+    echo "the seed logs the diagnostics install without checking whether it succeeded" >&2
     exit 1
   }
 }
