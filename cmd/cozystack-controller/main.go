@@ -42,9 +42,11 @@ import (
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 	internalv1alpha1 "github.com/cozystack/cozystack/api/internalapi/v1alpha1"
+	localsdnv1alpha1 "github.com/cozystack/cozystack/api/localsdn/v1alpha1"
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
 	"github.com/cozystack/cozystack/internal/controller/cacert"
+	"github.com/cozystack/cozystack/internal/controller/endpointattachment"
 	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
 	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
@@ -70,6 +72,7 @@ func init() {
 	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(internalv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(localsdnv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
 	utilruntime.Must(gatewayv1alpha2.Install(scheme))
 	utilruntime.Must(gatewayv1beta1.Install(scheme))
@@ -90,6 +93,8 @@ func main() {
 	var telemetryInterval string
 	var quotaBufferPercent int64
 	var seaweedfsMetricsEndpoint string
+	var cozyProxyContractImplemented bool
+	var endpointAttachmentNodePorts bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -113,6 +118,11 @@ func main() {
 		"Base URL of a Prometheus-compatible query API to fetch SeaweedFS bucket size metrics from, e.g. https://vm.example.com/path/to/prometheus (/api/v1/query is appended). "+
 			"Overrides discovery via the namespace.cozystack.io/monitoring label; use when SeaweedFS and the monitoring stack that scrapes it run in a separate cluster. "+
 			"Basic auth may be embedded as userinfo (https://user:pass@host/...). Empty keeps label-based discovery.")
+	flag.BoolVar(&cozyProxyContractImplemented, "cozy-proxy-contract-implemented", false,
+		"Declare that a service proxy answering to the cozy-proxy service-proxy-name is deployed, so EndpointAttachments may render method: WholeIP|PortList Services. "+
+			"Without it such attachments render no Service and report DatapathContractUnavailable: a load balancer would still attract the address while every proxy skipped the Service.")
+	flag.BoolVar(&endpointAttachmentNodePorts, "endpoint-attachment-allocate-node-ports", false,
+		"Allocate node ports on the LoadBalancer Services EndpointAttachments render. Off by default, matching the platform convention; needed only by load balancers that forward through node ports (Hetzner RobotLB).")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -325,6 +335,17 @@ func main() {
 		Recorder: mgr.GetEventRecorderFor("cacert-controller"),
 	}).SetupWithManager(mgr, caSecretCluster.GetCache()); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CACert")
+		os.Exit(1)
+	}
+
+	if err = (&endpointattachment.Reconciler{
+		Client:                        mgr.GetClient(),
+		Scheme:                        mgr.GetScheme(),
+		Recorder:                      mgr.GetEventRecorderFor("endpointattachment-controller"),
+		CozyProxyContractImplemented:  cozyProxyContractImplemented,
+		AllocateLoadBalancerNodePorts: endpointAttachmentNodePorts,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "EndpointAttachment")
 		os.Exit(1)
 	}
 
