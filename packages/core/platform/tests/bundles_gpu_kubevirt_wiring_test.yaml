@@ -386,6 +386,118 @@ tests:
           path: spec.components.kubevirt.values.cpuAllocationRatio
           value: 7
 
+  - it: forwards kubevirt.migrations into the kubevirt component values
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      kubevirt:
+        migrations:
+          bandwidthPerMigration: 625M
+          parallelMigrationsPerCluster: 2
+          parallelOutboundMigrationsPerNode: 1
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: spec.components.kubevirt.values
+          value:
+            cpuAllocationRatio: 10
+            migrations:
+              bandwidthPerMigration: 625M
+              parallelMigrationsPerCluster: 2
+              parallelOutboundMigrationsPerNode: 1
+
+  - it: omits empty kubevirt.migrations
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      kubevirt:
+        migrations: {}
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: spec.components.kubevirt.values
+          value:
+            cpuAllocationRatio: 10
+
+  - it: omits null kubevirt.migrations
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      kubevirt:
+        migrations: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: spec.components.kubevirt.values
+          value:
+            cpuAllocationRatio: 10
+
+  - it: renders the kubevirt Package without a nil-pointer error when the whole kubevirt block is set to null
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      kubevirt: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - notExists:
+          path: spec.components.kubevirt.values.migrations
+
+  - it: preserves false and zero kubevirt.migrations values
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      kubevirt:
+        migrations:
+          allowAutoConverge: false
+          completionTimeoutPerGiB: 0
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: spec.components.kubevirt.values
+          value:
+            cpuAllocationRatio: 10
+            migrations:
+              allowAutoConverge: false
+              completionTimeoutPerGiB: 0
+
   - it: appends user-supplied pciHostDevices in vgpu mode so post-kubevirt#16890 SR-IOV vGPU VFs can be advertised alongside the platform mediated defaults
     set:
       bundles:
