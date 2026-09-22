@@ -186,6 +186,8 @@ The uid-headers list is read without trimming, because the apiserver does not tr
 
 On `v1.31` the chart renders neither flag, and the UID guards above do not run, so a uid-headers or `--feature-gates` entry of yours passes through untouched. The unrelated `--oidc-*` and `--authentication-config` collision guards still apply there as everywhere else. Aggregated API servers cannot see the caller's UID on `v1.31`; move the cluster to `v1.32` or newer if you need them to. Writing `--requestheader-uid-headers` yourself does not work around it — the flag does not exist on `v1.31`, and an unknown flag stops the apiserver from starting.
 
+While a control plane is upgrading off `v1.31`, the caller picks the UID that reaches a tenant extension server: replicas of both versions serve until the roll finishes, the aggregator learns to strip an incoming `X-Remote-Uid` only in `v1.32` (`SetAuthProxyHeaders` in client-go), and a `v1.32` replica publishes `requestheader-uid-headers` that makes the extension server trust the header, so a request landing on a `v1.31` replica reaches the extension server carrying whatever UID its caller wrote. The key comes and goes for as long as both versions serve, because a `v1.31` replica's trust controller rewrites `extension-apiserver-authentication` without it, so one look at the ConfigMap proves nothing either way. The username and groups still come from the serving replica's own authentication, so what is exposed is a tenant running an aggregated API server of its own that authorizes or audits on the UID, and no UID-based decision it takes during the roll can be trusted. Upgrading with `spec.oidc.mode: None` and restoring the mode once the roll has finished closes the window, because the chart renders the flag behind that key only while the mode is not `None`, at the cost of OIDC logins while the mode is off.
+
 ## Users and RBAC
 
 `users[]` is a flat list. Each entry produces a single
@@ -294,6 +296,7 @@ expires.
   mode does NOT get this gate injected — the tenant's own
   AuthenticationConfiguration is authoritative and the tenant is
   responsible for their own claim-side guards.
+- **A caller-chosen UID while a control plane upgrades off `v1.31`** — an aggregated API server inside the tenant is handed the UID its caller wrote, for as long as replicas of both versions serve; see [Aggregated API servers](#aggregated-api-servers).
 - **`kubectl` without the `oidc-login` plugin** — the exec block errors
   out client-side; install the plugin.
 
