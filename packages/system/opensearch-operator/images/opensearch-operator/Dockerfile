@@ -84,7 +84,10 @@ WORKDIR /workspace/opensearch-operator
 # them: the build below compiles main.go, so a test file that had stopped
 # compiling, or stopped asserting, would still produce an image. These two
 # package trees are the ones the patches touch, and both run without a cluster.
-RUN go test ./opensearch-gateway/... ./pkg/reconcilers/...
+# -race is on because the timeout tests run a listener in one goroutine and
+# inspect what it accepted from another: an unsynchronised access there passes
+# the plain run, so nothing else would catch it. The builder has cgo and gcc.
+RUN go test -race ./opensearch-gateway/... ./pkg/reconcilers/...
 
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -a -o manager main.go
 
