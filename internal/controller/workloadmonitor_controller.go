@@ -79,6 +79,11 @@ type WorkloadMonitorReconciler struct {
 	// served, and until then DataVolumes do not count towards Operational.
 	DataVolumeReader client.Reader
 	dataVolumeMu     sync.RWMutex
+	// dataVolumeWatchSyncing is set while the DataVolume watch is started and
+	// its reader is not installed yet. The source replays every DataVolume to
+	// the handler in that window, and a reconcile it queues must be requeued:
+	// nothing queues it again once the reader is in place.
+	dataVolumeWatchSyncing bool
 	// reconciled is closed by the first Reconcile. controller-runtime starts the
 	// workers only after the controller has started its sources
 	// (pkg/internal/controller/controller.go, Controller.Start), so from then on
@@ -95,12 +100,18 @@ const (
 	// A reconcile context has no deadline, so a reader installed on an informer
 	// that never syncs would park every WorkloadMonitor reconcile for good.
 	dataVolumeSyncTimeout = time.Minute
+	dataVolumeSyncRequeue = 5 * time.Second
 )
 
-func (r *WorkloadMonitorReconciler) dataVolumeReader() client.Reader {
+var errDataVolumeWatchSyncing = errors.New("the DataVolume watch has not synced yet")
+
+func (r *WorkloadMonitorReconciler) dataVolumeReader() (client.Reader, error) {
 	r.dataVolumeMu.RLock()
 	defer r.dataVolumeMu.RUnlock()
-	return r.DataVolumeReader
+	if r.DataVolumeReader == nil && r.dataVolumeWatchSyncing {
+		return nil, errDataVolumeWatchSyncing
+	}
+	return r.DataVolumeReader, nil
 }
 
 func (r *WorkloadMonitorReconciler) reconciledCh() chan struct{} {
@@ -110,6 +121,12 @@ func (r *WorkloadMonitorReconciler) reconciledCh() chan struct{} {
 		r.reconciled = make(chan struct{})
 	}
 	return r.reconciled
+}
+
+func (r *WorkloadMonitorReconciler) setDataVolumeWatchSyncing(syncing bool) {
+	r.dataVolumeMu.Lock()
+	defer r.dataVolumeMu.Unlock()
+	r.dataVolumeWatchSyncing = syncing
 }
 
 var dataVolumeGVK = schema.GroupVersionKind{Group: "cdi.kubevirt.io", Version: "v1beta1", Kind: "DataVolume"}
@@ -187,6 +204,8 @@ func (r *WorkloadMonitorReconciler) tryStartDataVolumeWatch(ctx context.Context,
 	dv.SetGroupVersionKind(dataVolumeGVK)
 	src := source.Kind[client.Object](informers, dv,
 		handler.EnqueueRequestsFromMapFunc(mapObjectToMonitor(client.Object(dv), r.Client)))
+	r.setDataVolumeWatchSyncing(true)
+	defer r.setDataVolumeWatchSyncing(false)
 	if err := c.Watch(src); err != nil {
 		return false, fmt.Errorf("watching DataVolumes: %w", err)
 	}
@@ -234,9 +253,9 @@ func (r *WorkloadMonitorReconciler) watchDataVolumes(ctx context.Context, mapper
 // reader counts as no DataVolumes. read is false when the DataVolumes could not
 // be read: no reader yet, or a failed List.
 func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor) (message string, read bool, err error) {
-	reader := r.dataVolumeReader()
+	reader, err := r.dataVolumeReader()
 	if reader == nil {
-		return "", false, nil
+		return "", false, err
 	}
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(dataVolumeGVK.GroupVersion().WithKind(dataVolumeGVK.Kind + "List"))
@@ -911,8 +930,14 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	dataVolumesMessage, dataVolumesRead, dataVolumesErr := r.dataVolumesMessage(ctx, monitor)
+	// The sync window is expected and short; an error here would count as a
+	// reconcile failure for every monitor in the cluster while it lasts.
+	dataVolumeWatchSyncing := errors.Is(dataVolumesErr, errDataVolumeWatchSyncing)
+	if dataVolumeWatchSyncing {
+		dataVolumesErr = nil
+	}
 	if dataVolumesErr != nil {
-		logger.Error(dataVolumesErr, "Unable to list DataVolumes for WorkloadMonitor, keeping the last DataVolume verdict", "monitor", monitor.Name)
+		logger.Error(dataVolumesErr, "Unable to read DataVolumes for WorkloadMonitor, keeping the last DataVolume verdict", "monitor", monitor.Name)
 	}
 
 	// Update WorkloadMonitor status based on observed pods
@@ -960,6 +985,10 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// instead of quietly waiting for the next periodic requeue.
 	if bucketMetricsErr != nil || dataVolumesErr != nil {
 		return ctrl.Result{}, errors.Join(bucketMetricsErr, dataVolumesErr)
+	}
+
+	if dataVolumeWatchSyncing {
+		return ctrl.Result{RequeueAfter: dataVolumeSyncRequeue}, nil
 	}
 
 	// Requeue periodically if there are BucketClaims to keep sizes up to date.
