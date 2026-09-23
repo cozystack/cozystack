@@ -32,7 +32,7 @@ storageClass: replicated
 ##
 
 ## @typedef {struct} Resources - Explicit CPU and memory configuration for a node.
-## @field {quantity} [cpu] - CPU available.
+## @field {quantity} [cpu] - Number of vCPU cores for each worker VM, as a positive whole number such as `2`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.cores`.
 ## @field {quantity} [memory] - Memory (RAM) available.
 
 ## @typedef {struct} GPU - GPU configuration.

@@ -32,6 +32,28 @@
 {{- include "kubernetes-nodes.assertNoForeignPool" . }}
 {{- include "kubernetes-nodes.assertParentVersion" . }}
 {{- $kubevirtmachinetemplateNames := list }}
+{{- /* resources.cpu is schema-typed as a quantity but is emitted verbatim
+       into domain.cpu.cores, a uint32 in KubeVirt, and the same raw value
+       decides below whether the instancetype matcher is dropped. A quantity
+       such as 500m would count as sizing there and then be refused by the
+       KubevirtMachineTemplate CRD, so only a whole core count gets past this
+       point. Presence rather than truth, so that a 0 is refused instead of
+       read as unset.
+
+       The check reads the value the way the object will: the raw spelling
+       is decoded as YAML, exactly as `cores: <raw>` is, so +2, 2.0 or 1e1
+       pass as the integers they decode to. A leading zero is refused
+       outright, because YAML decodes 010 as octal 8. */}}
+{{- $cpuValue := (.Values.resources | default dict).cpu }}
+{{- if not (kindIs "invalid" $cpuValue) }}
+{{-   $cpu := printf "%v" $cpuValue }}
+{{-   $cores := (printf "v: %s" $cpu | fromYaml).v }}
+{{-   $isNumber := or (kindIs "int" $cores) (kindIs "int64" $cores) (kindIs "float64" $cores) }}
+{{-   $whole := and $isNumber (gt (float64 $cores) 0.0) (eq (floor $cores) (float64 $cores)) }}
+{{-   if or (not $whole) (regexMatch "^\\+?0[0-9]" $cpu) }}
+{{-     fail (printf "nodeGroup %s: resources.cpu (%s) must be a positive whole number of vCPU cores, such as 2. It becomes the worker VM's domain.cpu.cores, which KubeVirt declares as an unsigned integer, so a millicore, fractional or zero quantity cannot size the guest. Set a core count, or remove the field." $groupName $cpu) }}
+{{-   end }}
+{{- end }}
 {{- $group := dict
       "minReplicas" .Values.minReplicas
       "maxReplicas" .Values.maxReplicas

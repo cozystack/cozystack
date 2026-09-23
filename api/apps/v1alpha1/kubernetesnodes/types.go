@@ -112,7 +112,7 @@ type Kubelet struct {
 }
 
 type Resources struct {
-	// CPU available.
+	// Number of vCPU cores for each worker VM, as a positive whole number such as `2`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.cores`.
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available.
 	Memory resource.Quantity `json:"memory,omitempty"`
