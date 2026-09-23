@@ -286,7 +286,9 @@ vmagent:
   # Replaces the global promscrape.maxScrapeSize (32MB) for the kube-apiserver
   # job only. Its /metrics grows with the number of CRDs and outgrows 32MB on a
   # full install. vmagent buffers the whole uncompressed response even with
-  # streamParse, so keep this finite. An empty value falls back to the global.
+  # streamParse, so keep this finite. It replaces the global in both
+  # directions: if extraArgs raises promscrape.maxScrapeSize above this value,
+  # raise this one too. An empty value falls back to the global.
   apiserverMaxScrapeSize: 128MB
 
 fluent-bit:
