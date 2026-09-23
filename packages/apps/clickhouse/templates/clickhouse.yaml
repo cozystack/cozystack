@@ -94,11 +94,11 @@ spec:
     zookeeper:
       nodes:
         {{- $replicas := int .Values.clickhouseKeeper.replicas }}
-        {{- $release := .Release.Name }}
+        {{- $keeper := include "clickhouse.keeperName" $ }}
         {{- $namespace := .Release.Namespace }}
         {{- $clusterDomain := .Values.clusterDomain }}
         {{- range $i := until $replicas }}
-        - host: "chk-{{ $release }}-keeper-cluster1-0-{{ $i }}.{{ $namespace }}.svc.{{ $clusterDomain }}"
+        - host: "chk-{{ $keeper }}-cluster1-0-{{ $i }}.{{ $namespace }}.svc.{{ $clusterDomain }}"
           port: 2181
         {{- end }}
     {{- end }}
