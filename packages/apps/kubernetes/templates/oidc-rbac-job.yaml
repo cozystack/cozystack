@@ -214,10 +214,28 @@ spec:
                 # 3. Chart-owned KeycloakClient + audience KeycloakClientScope in
                 #    the cozy realm. These are created by oidc-keycloak.yaml only
                 #    for mode=System; at mode=None they must not linger.
-                if kubectl api-resources --api-group=v1.edp.epam.com >/dev/null 2>&1; then
-                  echo "  deleting chart-owned Keycloak objects"
+                #
+                #    The CRD probe must test the OUTPUT of `kubectl api-resources`,
+                #    not its exit code: for an absent API group the command exits 0
+                #    and merely prints an empty list. Guarding on the exit code let
+                #    the deletes run on clusters without the Keycloak operator,
+                #    where they fail with `the server doesn't have a resource type
+                #    "keycloakclient"` — `--ignore-not-found` covers a missing
+                #    object, not an unknown type. Since this Job is a
+                #    post-install/post-upgrade hook, that failure blocked every
+                #    `kubernetes-<cluster>` Helm upgrade at oidc.mode=None (the
+                #    chart default), a fully supported configuration.
+                #    api-resources hits the discovery endpoint, which
+                #    system:discovery grants to every authenticated principal, so
+                #    the probe needs no cluster-scoped CRD read permission.
+                EDP_RESOURCES=$(kubectl api-resources --api-group=v1.edp.epam.com --output=name 2>/dev/null || true)
+                if echo "$EDP_RESOURCES" | grep -q '^keycloakclients\.'; then
+                  echo "  deleting chart-owned KeycloakClient"
                   kubectl --namespace "$RELEASE_NAMESPACE" delete keycloakclient.v1.edp.epam.com \
                     "$RELEASE_NAMESPACE-$RELEASE" --ignore-not-found
+                fi
+                if echo "$EDP_RESOURCES" | grep -q '^keycloakclientscopes\.'; then
+                  echo "  deleting chart-owned KeycloakClientScope"
                   kubectl --namespace "$RELEASE_NAMESPACE" delete keycloakclientscope.v1.edp.epam.com \
                     "$RELEASE_NAMESPACE-$RELEASE-audience" --ignore-not-found
                 fi

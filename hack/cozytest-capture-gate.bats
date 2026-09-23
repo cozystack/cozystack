@@ -175,9 +175,10 @@ run_fixture() {
 }
 
 @test "a live cluster suite under an e2e directory keeps its captures" {
-  # hack/e2e-apps/ holds suites whose own filenames carry no prefix. Matching
-  # the basename alone disarms them, which takes the captures away from a suite
-  # that runs against a real cluster and therefore has state worth capturing.
+  # A live-cluster suite under hack/e2e-apps/ carries no prefix on its own
+  # filename. Matching the basename alone disarms it, which takes the captures
+  # away from a suite that runs against a real cluster and therefore has state
+  # worth capturing.
   dir=$(make_fixture_dir e2e-apps/plain-named-suite.bats)
   run_fixture "$dir" e2e-apps/plain-named-suite.bats
   grep -qF "$DATAPLANE_MARKER" "$dir/out"
