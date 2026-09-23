@@ -83,7 +83,7 @@ tests:
     asserts:
       - equal:
           path: metadata.name
-          value: test-k8s-bootstrap-token-tenant-fc314f
+          value: test-k8s-bootstrap-token-tenant-24544a
         documentSelector:
           path: kind
           value: Job
@@ -98,14 +98,14 @@ tests:
       images:
         kubectl: example.com/kubectl:v9.9.9
     asserts:
-      # A different exact hash from the default-image render above (fc314f),
+      # A different exact hash from the default-image render above (24544a),
       # proving the hash tracks the rendered spec (the kubectl image is in it),
       # so an image bump lands a fresh Job rather than an immutable-field patch.
-      # Pinned exactly (like the talos-reconcile sibling cases) rather than by
-      # regex, so a hash drift on either render is caught, not silently masked.
+      # Pinned exactly rather than by regex, so a hash drift on either render
+      # is caught, not silently masked.
       - equal:
           path: metadata.name
-          value: test-k8s-bootstrap-token-tenant-dbf53d
+          value: test-k8s-bootstrap-token-tenant-45dfa1
         documentSelector:
           path: kind
           value: Job

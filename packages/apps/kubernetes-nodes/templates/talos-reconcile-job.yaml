@@ -365,13 +365,22 @@ spec:
                               disabled: true
               EOF
               echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${RELEASE}-${GROUP_NAME} applied"
+          {{- /* 512Mi, not 256Mi: this container runs `kubectl apply` against the
+                 management cluster, which loads discovery plus the aggregated
+                 OpenAPI document (several hundred CRDs on Cozystack) into memory
+                 before it can compute a patch. At 256Mi it is OOMKilled at exit
+                 137 part-way through the script, after the KamajiControlPlane
+                 certSANs patch and before the TalosConfigTemplate apply, and
+                 under restartPolicy: OnFailure with backoffLimit: 30 it retries
+                 invisibly while the Job status stays `active`
+                 (cozystack/cozystack#3519). Request stays at 64Mi. */}}
           resources:
             requests:
               cpu: 10m
               memory: 64Mi
             limits:
               cpu: 100m
-              memory: 256Mi
+              memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
