@@ -522,3 +522,62 @@ func TestAppDefHelm_DisableWaitInSyncSkipsUpdate(t *testing.T) {
 		t.Fatalf("release rewritten with nothing to change: %q -> %q", before.ResourceVersion, after.ResourceVersion)
 	}
 }
+
+// TestAppDefHelm_DisableWaitInvalidAnnotationLeavesReleaseAlone pins the
+// invalid-annotation branch. The parser returns false alongside its error, so
+// applying that value would switch the wait back on for every release of the
+// kind; the release must keep what it has instead.
+func TestAppDefHelm_DisableWaitInvalidAnnotationLeavesReleaseAlone(t *testing.T) {
+	yes := true
+	got := reconcileVMInstance(t,
+		vmInstanceAppDef(map[string]string{config.HelmInstallDisableWaitAnnotation: "yes"}),
+		vmInstanceRelease(&yes, &yes))
+
+	if got.Spec.Install == nil || !got.Spec.Install.DisableWait {
+		t.Fatalf("expected Install.DisableWait=true kept, got %+v", got.Spec.Install)
+	}
+	if got.Spec.Upgrade == nil || !got.Spec.Upgrade.DisableWait {
+		t.Fatalf("expected Upgrade.DisableWait=true kept, got %+v", got.Spec.Upgrade)
+	}
+}
+
+// TestAppDefHelm_DisableWaitScopedToKind pins the kind label in the selector:
+// a release of another kind in the same group must not pick up the wait
+// setting of the VMInstance definition.
+func TestAppDefHelm_DisableWaitScopedToKind(t *testing.T) {
+	no := false
+	vm := vmInstanceRelease(&no, &no)
+	other := vmInstanceRelease(&no, &no)
+	other.Name = "harbor-registry"
+	other.Labels["apps.cozystack.io/application.kind"] = "Harbor"
+
+	scheme := newAppDefHelmScheme(t)
+	appDef := vmInstanceAppDef(map[string]string{config.HelmInstallDisableWaitAnnotation: "true"})
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(appDef, vm, other).Build()
+
+	r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
+	if _, err := r.Reconcile(context.TODO(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: appDef.Name},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotVM := &helmv2.HelmRelease{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: vm.Name, Namespace: vm.Namespace}, gotVM); err != nil {
+		t.Fatalf("get VMInstance HR: %v", err)
+	}
+	if gotVM.Spec.Install == nil || !gotVM.Spec.Install.DisableWait {
+		t.Fatalf("expected VMInstance Install.DisableWait=true, got %+v", gotVM.Spec.Install)
+	}
+
+	gotOther := &helmv2.HelmRelease{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: other.Name, Namespace: other.Namespace}, gotOther); err != nil {
+		t.Fatalf("get Harbor HR: %v", err)
+	}
+	if gotOther.Spec.Install == nil || gotOther.Spec.Install.DisableWait {
+		t.Fatalf("expected Harbor Install.DisableWait=false, got %+v", gotOther.Spec.Install)
+	}
+	if gotOther.Spec.Upgrade == nil || gotOther.Spec.Upgrade.DisableWait {
+		t.Fatalf("expected Harbor Upgrade.DisableWait=false, got %+v", gotOther.Spec.Upgrade)
+	}
+}
