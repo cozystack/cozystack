@@ -1379,6 +1379,19 @@ const kubernetesKind = "Kubernetes"
 // workers).
 const maxKubernetesClusterName = maxHelmReleaseName - len("kubernetes-nodes-") - len("-md0")
 
+// kafkaKind is the Application.Kind of a Kafka cluster. Its KRaft controller
+// pods are named "<release>-c-<hash>-<id>" (hash is 8 hex; id is at least one
+// digit for the smallest cluster), and that derived pod hostname must fit the
+// 63-char DNS-1123 label limit. The controller-node suffix beyond the release
+// name — "-c-" (3) + 8 (hash) + "-" (1) + 1 (smallest id) = 13 — is stricter
+// than the 53-char release-name budget, so cap the name at admission. This
+// surfaces the overflow on the Kafka CR the operator is editing instead of at
+// render time on a pod Strimzi can never create (its render guard,
+// kafka.assertNameLength, is the second line of defense and also catches larger
+// clusters whose higher node ids need more digits).
+const kafkaKind = "Kafka"
+const kafkaControllerNodeOverhead = len("-c-") + 8 + len("-") + 1
+
 // maxNamespaceName is the DNS-1123 label limit for Kubernetes namespace names.
 // The tenant Helm chart creates a Namespace whose name is the computed
 // workload namespace (parent namespace + "-" + tenant name), so the total
@@ -1415,6 +1428,20 @@ func (r *REST) validateNameLength(name string) field.ErrorList {
 		if len(name) > maxKubernetesClusterName {
 			allErrs = append(allErrs, field.Invalid(fldPath, name,
 				fmt.Sprintf("must be no more than %d characters so its worker pools (KubernetesNodes releases named \"kubernetes-nodes-<cluster>-<pool>\") fit the %d-character Helm release name limit", maxKubernetesClusterName, maxHelmReleaseName)))
+		}
+		return allErrs
+	}
+
+	// A Kafka cluster's KRaft controller pod hostname "<release>-c-<hash>-<id>"
+	// is a tighter bound than the release-name limit (see kafkaControllerNodeOverhead).
+	if r.kindName == kafkaKind {
+		maxKafkaName := maxNamespaceName - kafkaControllerNodeOverhead - len(r.releaseConfig.Prefix)
+		if maxKafkaName < 0 {
+			maxKafkaName = 0
+		}
+		if len(name) > maxKafkaName {
+			allErrs = append(allErrs, field.Invalid(fldPath, name,
+				fmt.Sprintf("must be no more than %d characters so its KRaft controller pod hostname \"<release>-c-<hash>-<id>\" fits the 63-character DNS-1123 label limit", maxKafkaName)))
 		}
 		return allErrs
 	}
@@ -1667,14 +1694,11 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	//   - HelmUpgradeTimeout (release.cozystack.io/helm-upgrade-timeout)
 	//     then overrides only Upgrade.Timeout, so a kind can carry an
 	//     asymmetric budget (short install, long upgrade or vice versa).
-	// kubernetes-rd and tenant-rd carry helm-install-timeout today: the
-	// Kubernetes Application's parent chart contains CAPI/Kamaji
-	// resources whose admin-kubeconfig Secret is provisioned
-	// asynchronously and Kamaji cold-start routinely exceeds flux's
-	// default wait budget, and the Tenant parent chart bootstraps the
-	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
-	// Any future kind with the same shape can opt in by setting the
-	// same annotation.
+	// Both annotations live on the kind's ApplicationDefinition (for a
+	// kind shipped in this repo, the cozyrds manifest of its -rd
+	// package), so a kind whose chart can legitimately outlast the
+	// global wait budget opts in there rather than raising the default
+	// for every kind.
 	installTimeout := r.releaseConfig.HelmReleaseInstallTimeout
 	upgradeTimeout := r.releaseConfig.HelmReleaseUpgradeTimeout
 	if r.releaseConfig.HelmInstallTimeout > 0 {

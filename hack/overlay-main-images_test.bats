@@ -24,6 +24,41 @@
   echo "$out" | grep -q 'overlaid=1'
 }
 
+@test "overlays an UNSTAMPED .tag placeholder (bare ref, no key and no digest)" {
+  # The shape a newly onboarded first-party image is committed in, before any
+  # build has stamped it. Its one line carries no YAML key and no @sha256, so the
+  # generic classifier reads it as a non-ref change and the drift guard keeps it,
+  # leaving in the tree a reference no registry serves, for every later PR that
+  # does not rebuild that package. No EXIT trap here: see the debt note at the
+  # top of this file; on failure the scratch dir survives for inspection.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/apps/newpkg/images" "$w/main/apps/newpkg/images"
+  echo 'ghcr.io/cozystack/cozystack/newpkg:v0.0.0'       > "$w/packages/apps/newpkg/images/newpkg.tag"
+  echo 'iad.ocir.io/x/cozystack/newpkg:main@sha256:bbbb' > "$w/main/apps/newpkg/images/newpkg.tag"
+  cd "$w"
+  out=$("$root/hack/overlay-main-images.sh" main '[]')
+  grep -q 'newpkg:main@sha256:bbbb' packages/apps/newpkg/images/newpkg.tag
+  echo "$out" | grep -q 'drift=0'
+  cd "$root"; rm -rf "$w"
+}
+
+@test "keeps a .tag whose NON-ref line differs (the bare-ref rule is scoped, not blanket)" {
+  # The bare-ref rule says a whole line that is one ref counts as a ref line in a
+  # .tag file. It must not become "every line in a .tag file is a ref": a line
+  # the classifier cannot read is still drift, there as anywhere else.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/apps/noted/images" "$w/main/apps/noted/images"
+  printf '# pinned by hand, see #1234\nghcr.io/cozystack/cozystack/noted:v1.5.0@sha256:aaaa\n' > "$w/packages/apps/noted/images/noted.tag"
+  printf '# pinned by hand, see #5678\niad.ocir.io/x/cozystack/noted:main@sha256:bbbb\n'       > "$w/main/apps/noted/images/noted.tag"
+  cd "$w"
+  out=$("$root/hack/overlay-main-images.sh" main '[]')
+  grep -q 'noted:v1.5.0@sha256:aaaa' packages/apps/noted/images/noted.tag
+  echo "$out" | grep -q 'drift=1'
+  cd "$root"; rm -rf "$w"
+}
+
 @test "overlays a split-form ref (repository/tag/digest, no @sha256 on those lines)" {
   root=$(pwd)
   w=$(mktemp -d); trap 'rm -rf "$w"' EXIT

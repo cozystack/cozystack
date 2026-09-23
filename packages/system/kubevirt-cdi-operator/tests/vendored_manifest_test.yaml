@@ -1,0 +1,55 @@
+suite: cozy-kubevirt-cdi-operator vendored manifest
+release:
+  name: kubevirt-cdi-operator
+  namespace: cozy-kubevirt-cdi
+tests:
+  # Addressed by kind rather than by index: the vendored file is one long
+  # document stream and an upstream reorder would slide any index off the
+  # Deployment silently. Not by name, which the ServiceAccount and RBAC objects
+  # share. The selector errors on a second match rather than picking one.
+  - it: runs the cdi-operator image from the pinned release
+    template: cdi-operator.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      # The Makefile's grep ties this tag back to RELEASE. This one says the
+      # tag is on the operator Deployment rather than somewhere in the stream.
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/kubevirt/cdi-operator:v1.66.1
+      # cdi-operator deploys the rest of CDI from its env, so an operator image
+      # that moved while these did not runs two releases at once.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPERATOR_VERSION
+            value: v1.66.1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONTROLLER_IMAGE
+            value: quay.io/kubevirt/cdi-controller:v1.66.1
+      - equal:
+          path: metadata.namespace
+          value: cozy-kubevirt-cdi
+      # Carried by patches/, which `update` re-applies to every download.
+      - exists:
+          path: spec.template.spec.containers[0].startupProbe
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: CriticalAddonsOnly
+            operator: Exists
+
+  # `any: true` is load-bearing on a negated containsDocument: without it the
+  # assertion reads "not every document is a Namespace", which is true of any
+  # multi-document template and would pin nothing.
+  - it: drops the Namespace object upstream ships
+    template: cdi-operator.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: v1
+          kind: Namespace
+          any: true
+        not: true

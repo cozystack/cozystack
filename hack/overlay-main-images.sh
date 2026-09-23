@@ -105,6 +105,24 @@ skip=" packages/core/talos packages/core/installer $(echo "$BUILT_JSON" | tr -d 
 # `tag:` and `digest:` legitimately hold values with no slash in them.
 img_line='(@sha256:|^[[:space:]]*(- )?(image|repository|registry|tag|digest):|^[[:space:]]*(- )?[A-Za-z]+[Ii]mage:[[:space:]]*"?[^"[:space:]]*/|--[A-Za-z-]*image=)'
 
+# ...and, in an images/*.tag file only, a bare reference: a whole line that is
+# one ref with no YAML key around it, which is the entire format of that file
+# (hack/lib/image-refs.sh: "a plain file holding one ref"). Every branch above
+# needs either a key or an `@sha256:`, and a .tag file carries neither until a
+# build stamps it, so an unstamped one is classified as a non-ref change, the
+# drift guard keeps the committed ref, and the overlay never replaces the
+# placeholder it exists to replace. 17 of the 19 .tag files in the tree pass on
+# `@sha256:` alone, which is why this went unnoticed; the exception that proves
+# it is packages/extra/seaweedfs/images/seaweedfs-cosi-driver.tag, digest-less
+# but third-party, so build-main never rebuilds it, the artifact copy is
+# byte-identical and this test is never reached.
+#
+# Scoped to *.tag because only there is a whole line known to be a reference and
+# nothing else. An unkeyed line in a values.yaml is genuinely unclassifiable and
+# must keep counting as drift. hack/promote-rewrite-tags.sh carries a second
+# match branch for this same shape and for this same reason.
+bare_ref_line='^[^[:space:]#][^[:space:]]*/[^[:space:]]+$'
+
 overlaid=0
 same=0
 skipped=0
@@ -139,8 +157,11 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
   # behind #4265 it was the entire remaining drift list: core/platform,
   # cozystack-api, dashboard, kubeovn-webhook and linstor-gui each differed
   # from the artifact by one blank line and their own ref, nothing else.
+  line_pat="$img_line"
+  case "$cur" in *.tag) line_pat="($img_line)|($bare_ref_line)" ;; esac
+
   if diff "$cur" "$new" | sed -n 's/^[<>] //p' \
-      | grep -vE '^[[:space:]]*$' | grep -qvE "$img_line"; then
+      | grep -vE '^[[:space:]]*$' | grep -qvE "$line_pat"; then
     echo "drift (non-ref change) in $cur -> keeping committed ref"
     drift=$((drift + 1))
     # Name the PACKAGE, not the directory the file happens to sit in: an

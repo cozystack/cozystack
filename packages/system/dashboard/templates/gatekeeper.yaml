@@ -180,6 +180,12 @@ spec:
             timeoutSeconds: 2
             successThreshold: 1
             failureThreshold: 3
+          # The branding config.json the SPA reads via the kube-api is mounted
+          # here so the pre-auth login page can render the same title and logo.
+          volumeMounts:
+            - name: branding
+              mountPath: /etc/cozystack/branding
+              readOnly: true
         {{- end }}
           ports:
             - name: proxy
@@ -206,3 +212,12 @@ spec:
               type: RuntimeDefault
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
+        {{- if ne $oidcEnabled "true" }}
+      volumes:
+        # optional: the login page degrades to its unbranded default if the
+        # ConfigMap is missing, so a start-up dependency is not worth failing on.
+        - name: branding
+          configMap:
+            name: cozy-dashboard-console-config
+            optional: true
+        {{- end }}

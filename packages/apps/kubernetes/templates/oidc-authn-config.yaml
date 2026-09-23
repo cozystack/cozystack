@@ -12,9 +12,9 @@
   System mode:
     Single JWT entry built from `_cluster.root-host` (the cozy realm
     issuer URL) and the per-cluster audience (kubernetes.oidc.clientId).
-    Username claim is `email`, groups claim is `groups` — matching
-    the realm scope provisioned in oidc-keycloak.yaml and the detailed
-    rationale in the note below (line 32+).
+    Username claim is `email`, groups claim is `groups`, uid claim is
+    `sub` — matching the realm scope provisioned in oidc-keycloak.yaml
+    and the detailed rationale in the note below.
 
   CustomConfig mode:
     The tenant supplies the entire `AuthenticationConfiguration` body.
@@ -49,6 +49,13 @@ with the operator's declared `users[].email` value. Requires the
 issuer to emit `email` — cozy realm (verified) and every conformant
 OIDC provider do.
 
+UID claim: `sub`, not the username claim. The platform realm ships
+with Keycloak's UPDATE_EMAIL required action enabled (see
+packages/system/keycloak-configure), so a user can change the value
+`email` carries; `sub` is the account UUID and survives that, which
+is what an identifier forwarded to an aggregated API server has to
+do. Without any uid mapping upstream returns an empty UID.
+
 claimValidationRules — cross-tenant isolation gate. Without this rule
 any authenticated cozy-realm user (i.e. anyone in the shared platform
 realm) would receive `system:authenticated` on this tenant's
@@ -60,7 +67,7 @@ chart) to be present in the token's `groups` claim. Symmetric with the
 Grafana-side `allowed_groups` gate in the Monitoring chart — see
 docs/oidc-tenant.md and docs/oidc-grafana.md.
 */ -}}
-{{-   $authnConfig := printf "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: %s\n    audiences:\n    - %s\n  claimValidationRules:\n  - expression: '%s'\n    message: \"user is not a member of any %s-{view,use,admin,super-admin} group in the %s realm — this tenant's apiserver only trusts identities the tenant chart has admitted\"\n  claimMappings:\n    username:\n      claim: email\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n" $issuer $audience $groupsExpr .Release.Namespace $realm }}
+{{-   $authnConfig := printf "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: %s\n    audiences:\n    - %s\n  claimValidationRules:\n  - expression: '%s'\n    message: \"user is not a member of any %s-{view,use,admin,super-admin} group in the %s realm — this tenant's apiserver only trusts identities the tenant chart has admitted\"\n  claimMappings:\n    username:\n      claim: email\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n    uid:\n      claim: sub\n" $issuer $audience $groupsExpr .Release.Namespace $realm }}
 ---
 apiVersion: v1
 kind: Secret

@@ -17,7 +17,7 @@
 # with a fully green chart suite, for two different reasons. The
 # ResourceDefinition is rendered, by the nats-rd chart inlining cozyrds/*, but
 # that chart carries neither a tests directory nor the test target
-# hack/helm-unit-tests.sh looks for, and no packages/system/*-rd package does.
+# hack/helm-unit-tests.sh looks for.
 # The dashboard Role is rendered by a chart that has both, and no suite under
 # packages/apps/nats/tests/ asserts on it.
 #

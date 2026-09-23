@@ -8,11 +8,11 @@ global:
   images:
     kubeovn:
       repository: kube-ovn
-      tag: v1.15.10
+      tag: v1.15.26
     natgateway:
       repository: vpc-nat-gateway
       # Falls back to the same tag as kubeovn if empty
-      tag: v1.15.10
+      tag: v1.15.26
 
 image:
   pullPolicy: IfNotPresent
@@ -21,10 +21,45 @@ namespace: kube-system
 MASTER_NODES: ""
 MASTER_NODES_LABEL: "kube-ovn/role=master"
 
+# OVN_CENTRAL_MODE controls how ovn-central is deployed.
+#   cluster: multi-replica raft cluster, one pod per master node (default).
+#   single:  single-replica Deployment backed by a PVC, can drift to another
+#            node when the host fails. Uses ovsdb standalone mode (no raft).
+OVN_CENTRAL_MODE: "cluster"
+
+# installMode controls which slice of the chart this Helm release renders.
+#   full:             all components in one cluster (default, classic install).
+#   controlPlaneOnly: only ovn-central + ovn-nb/ovn-sb/ovn-northd Services and
+#                     their RBAC. Use on the management cluster of a
+#                     split-cluster deployment that hosts ovn-central.
+#   dataPlaneOnly:    CRDs + kube-ovn-controller + kube-ovn-cni + ovs-ovn +
+#                     pinger and their RBAC. Use on tenant data-plane
+#                     clusters that connect back to an external ovn-central via
+#                     externalOvnCentral below. kube-ovn-monitor is intentionally
+#                     skipped: it reads local OVN Unix sockets / DB files and
+#                     does not yet know how to talk to a remote ovn-central.
+installMode: full
+
+# When installMode=dataPlaneOnly, the agents and controller cannot rely on a
+# local ovn-central Service. Set nbEndpoint/sbEndpoint to the addresses that
+# expose the management cluster's ovn-nb / ovn-sb Services.
+externalOvnCentral:
+  nbEndpoint: ""
+  sbEndpoint: ""
+  nbPort: 6641
+  sbPort: 6642
+
 networking:
   # NET_STACK could be dual_stack, ipv4, ipv6
   NET_STACK: ipv4
   ENABLE_SSL: false
+  # Minimum TLS version for OVN NB/SB database server and kube-ovn secure-serving endpoints.
+  TLS_MIN_VERSION: ""
+  # Maximum TLS version for OVN NB/SB database server and kube-ovn secure-serving endpoints.
+  TLS_MAX_VERSION: ""
+  # Go TLS cipher suite names. OVN DB server only supports suites mapped by dist/images/ovn-db-ssl-options.sh.
+  TLS_CIPHER_SUITES: []
+  KUBE_OVN_TLS_ROTATION_INTERVAL: "8760h"
   # network type could be geneve or vlan
   NETWORK_TYPE: geneve
   # tunnel type could be geneve, vxlan or stt
@@ -145,11 +180,33 @@ fullnameOverride: ""
 HYBRID_DPDK: false
 HUGEPAGE_SIZE_TYPE: hugepages-2Mi # Default
 HUGEPAGES: 1Gi
-DPDK_IMAGE_TAG: "v1.15.0-dpdk"
+DPDK_IMAGE_TAG: "v1.15.26-dpdk"
 DPDK_CPU: "1000m" # Default CPU configuration
 DPDK_MEMORY: "2Gi" # Default Memory configuration
 
 ovn-central:
+  tolerations:
+    - effect: NoSchedule
+      operator: Exists
+    - effect: NoExecute
+      operator: Exists
+  nodeSelector:
+    kubernetes.io/os: "linux"
+  hcp:
+    enabled: false
+    namespace: hcp
+    replicas: 3
+    # OVN NB address used by workload clusters, for example tcp:ovn-nb.example.com:6641.
+    nbAddress: ""
+    # OVN SB address used by workload clusters, for example tcp:ovn-sb.example.com:6642.
+    sbAddress: ""
+    service:
+      type: NodePort
+      nbNodePort: 30641
+      sbNodePort: 30642
+    storage:
+      size: 5Gi
+      storageClassName: ""
   requests:
     cpu: "300m"
     memory: "200Mi"
@@ -157,6 +214,34 @@ ovn-central:
     cpu: "3"
     memory: "4Gi"
     ephemeral-storage: 1Gi
+  # Persistent storage for the OVN DB files. Only used when OVN_CENTRAL_MODE=single.
+  # The StorageClass should support cross-node attach (e.g. NFS, Ceph RBD, cloud
+  # block storage with attach/detach) if you want ovn-central to drift between
+  # nodes on host failure.
+  storage:
+    storageClassName: ""
+    size: 10Gi
+    accessModes:
+      - ReadWriteOnce
+    # Set existingClaim to skip in-chart PVC creation and point the
+    # Deployment at a PVC the operator manages out-of-band (e.g. via a
+    # storage operator). The value is the name of the existing PVC; the
+    # Deployment's host-config-ovn volume mounts whatever you set here.
+    # Leaving this empty makes the chart create a PVC named
+    # "ovn-central-data" itself.
+    existingClaim: ""
+  # Service exposure for ovn-nb / ovn-sb / ovn-northd. Default ClusterIP is
+  # only reachable from inside the cluster. Switch to LoadBalancer (or
+  # NodePort) to expose the OVN DB to data-plane components running outside
+  # the management cluster — for example a split-cluster topology where
+  # ovn-controller / kube-ovn-cni / kube-ovn-controller run in a separate
+  # tenant cluster and connect back over a stable VIP.
+  service:
+    type: ClusterIP
+    # Optional, only honoured when type=LoadBalancer; provider-dependent.
+    loadBalancerIP: ""
+    # Optional, only honoured when type=LoadBalancer / NodePort.
+    externalTrafficPolicy: ""
 ovs-ovn:
   requests:
     cpu: "200m"
@@ -166,6 +251,13 @@ ovs-ovn:
     memory: "1000Mi"
     ephemeral-storage: 1Gi
 kube-ovn-controller:
+  leaderElection:
+    # Duration non-leader candidates wait after observing a renewal before attempting to acquire leadership. Empty uses the controller default of 30s.
+    leaseDuration: ""
+    # Duration the acting leader retries refreshing leadership before giving up. Empty uses the controller default of 20s.
+    renewDeadline: ""
+    # Duration leader election clients wait between attempts. Empty uses the controller default of 6s.
+    retryPeriod: ""
   requests:
     cpu: "200m"
     memory: "200Mi"

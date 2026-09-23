@@ -195,7 +195,7 @@ for ver in "${VERSIONS[@]}"; do
 done
 NEW_VERSION_SECTION="${NEW_VERSION_SECTION}
 
-## @param {Version} version - Kubernetes major.minor version to deploy
+## @param {Version} version - Kubernetes major.minor version to deploy. On \`v1.32\` with \`spec.oidc.mode\` other than \`None\` the chart also renders \`--feature-gates=RemoteRequestHeaderUID=true\` next to \`controlPlane.apiServer.extraArgs\`, and an entry of your own there can change what it renders (see that field).
 version: \"${VERSIONS[0]}\""
 
 # Check if version section already exists

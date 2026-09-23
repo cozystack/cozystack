@@ -32,6 +32,15 @@ tests:
       - failedTemplate:
           errorMessage: 'authentication.oidc.realmName "" is invalid: use only letters, digits, ''.'', ''_'' and ''-'' (it is used verbatim as a URL path segment and a shell token)'
 
+  # Every platform client and the cluster-admin role are created in this realm,
+  # and its login page is published wherever the platform realm is published.
+  - it: rejects master as the realm name
+    set:
+      authentication.oidc.realmName: master
+    asserts:
+      - failedTemplate:
+          errorPattern: 'authentication.oidc.realmName must not be master'
+
   - it: propagates a custom realm name onto the _cluster channel
     set:
       authentication.oidc.realmName: acme

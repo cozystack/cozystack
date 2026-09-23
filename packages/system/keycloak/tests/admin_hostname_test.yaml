@@ -93,18 +93,22 @@ tests:
       - documentIndex: 0
         lengthEqual:
           path: spec.rules[0].http.paths
-          count: 3
+          count: 4
       - documentIndex: 0
         equal:
           path: spec.rules[0].http.paths[0].path
-          value: /realms
+          value: /realms/cozy
       - documentIndex: 0
         equal:
           path: spec.rules[0].http.paths[1].path
-          value: /resources
+          value: /realms/cozy/
       - documentIndex: 0
         equal:
           path: spec.rules[0].http.paths[2].path
+          value: /resources
+      - documentIndex: 0
+        equal:
+          path: spec.rules[0].http.paths[3].path
           value: /.well-known
       # doc 1: admin Ingress — full path, dedicated host/secret/class
       - documentIndex: 1
@@ -234,11 +238,11 @@ tests:
       - documentIndex: 0
         lengthEqual:
           path: spec.rules[0].matches
-          count: 3
+          count: 4
       - documentIndex: 0
         equal:
           path: spec.rules[0].matches[0].path.value
-          value: /realms
+          value: /realms/cozy
       # doc 1: admin route — dedicated hostname, default admin namespace
       - documentIndex: 1
         equal:

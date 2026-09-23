@@ -1,0 +1,3 @@
+# `update` fetches, transforms and patches here before moving the result into
+# templates/. A run that dies between those steps leaves the file behind.
+cdi-operator.yaml.download

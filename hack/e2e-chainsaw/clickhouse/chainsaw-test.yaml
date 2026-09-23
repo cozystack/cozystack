@@ -89,10 +89,10 @@ spec:
           status:
             replicas: 1
 ---
-# ClickHouse Altinity backup/restore E2E — the two Tests below, executed in
-# name order after the plain `clickhouse` Test above. Chainsaw port of the
-# intended hack/e2e-apps/backup-clickhouse.bats (cozystack#2600), shaped like
-# the etcd/mariadb/postgres suites:
+# ClickHouse Altinity backup/restore E2E — the two backup Tests below sit in
+# this suite alongside the plain `clickhouse` Test above. Chainsaw port of the
+# intended hack/e2e-apps/backup-clickhouse.bats (cozystack#2600), shaped like the
+# etcd/mariadb/postgres suites:
 #
 #   clickhouse-1-backup-contracts  — deploy a backup-enabled ClickHouse and
 #                                    assert the chart<->Altinity-strategy

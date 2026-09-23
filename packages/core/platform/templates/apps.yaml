@@ -130,6 +130,13 @@ stringData:
       {{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9._-]*$" $realmName) }}
       {{-   fail (printf "authentication.oidc.realmName %q is invalid: use only letters, digits, '.', '_' and '-' (it is used verbatim as a URL path segment and a shell token)" $realmName) }}
       {{- end }}
+      {{- /* master holds the Keycloak super-admin. Naming it here would put
+             every platform client, the cluster-admin role and the users who
+             log in to the dashboard inside that realm, and publish its login
+             page and token endpoint wherever the platform realm is published. */}}
+      {{- if eq $realmName "master" }}
+      {{-   fail "authentication.oidc.realmName must not be master: that realm holds the Keycloak super-admin, so platform clients and end users would share it. Pick any other name, e.g. realmName: \"cozy\"" }}
+      {{- end }}
       oidc-realm-name: {{ $realmName | quote }}
       {{- /* null keycloakInternalUrl derives the in-cluster Service URL for the
              configured realm; "" is the external-discovery escape hatch and an

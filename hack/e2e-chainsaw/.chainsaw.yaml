@@ -45,19 +45,30 @@ spec:
   # Every catch script below carries an explicit `timeout:`. A Chainsaw script
   # op is bounded by `timeouts.exec` (5m above) unless it overrides it, and the
   # inner wall-clock budgets here sum well past that — so without the override
-  # Chainsaw SIGKILLs the whole script partway through and the catch reports
-  # `SCRIPT | ERROR | signal: killed` having collected nothing. That kill is
-  # strictly worse than an inner `timeout` firing: SIGKILL takes out the process
-  # group, so the collector dies mid-write AND every later step in the script is
-  # skipped, whereas an inner `timeout` leaves a partial capture on disk and
-  # lets the remaining steps run. Keep each op's `timeout:` above the sum of the
-  # inner budgets it contains.
+  # the op ceiling fires and the catch reports `SCRIPT | ERROR | signal: killed`
+  # having collected little. That kill is strictly worse than an inner `timeout`
+  # firing, and worse in a way the process tree makes precise: the ceiling
+  # SIGKILLs the shell process alone — Chainsaw runs it under exec.CommandContext
+  # whose default cancel is Process.Kill() on the shell PID, not a process-group
+  # kill — so every later step in the script is skipped, but any collector the
+  # shell already spawned is orphaned rather than killed and keeps running. It
+  # also keeps the script's stdout/stderr pipe open, and cmd.Wait() does not
+  # return until that pipe closes, so the op does not even come back at its
+  # ceiling until the orphan exits on its own (#4268). An inner `timeout` instead
+  # kills that read at a known budget, exits 124, leaves a partial capture on
+  # disk and lets the remaining steps run — which is why every read below is
+  # itself wrapped in `timeout`, not left to the op ceiling. Keep each op's
+  # `timeout:` above the sum of the inner budgets it contains.
   #
   # Accepted tradeoff, so the arithmetic does not have to be rediscovered: this
-  # raises the worst-case catch from ~5m per failed test (the old SIGKILL was the
-  # de-facto cap) to ~19m, tests run sequentially, and the E2E job is capped at
-  # 215 timeout-minutes. A cascade reddening many suites can therefore spend a
-  # large share of the job in diagnostics. That is deliberate — the old ceiling
+  # raises the worst-case catch to ~19m per failed test. The old design had no
+  # inner caps and leaned on the op ceiling, which does not reliably cut a busy
+  # script: it SIGKILLs the shell alone, orphaned children hold the pipe open,
+  # and the op overruns (#4268 measured 606s under a 300s ceiling), so the
+  # nominal ~5m was a figure a busy catch could exceed, not a cap. Tests run
+  # sequentially, and the E2E job is capped at 215 timeout-minutes. A cascade
+  # reddening many suites can therefore spend a large share of the job in
+  # diagnostics. That is deliberate — the old ceiling
   # bought its speed by collecting nothing at all — and it is bounded: both legs
   # only approach their ceilings on a genuinely degraded cluster, a systemic
   # failure usually reds the install gate and skips the E2E step entirely, and
@@ -66,8 +77,10 @@ spec:
   # grace window is consumed by the earlier `Collect report` step, so both
   # cozyreport.tgz and the job log are lost (measured on runs 29557003429 and
   # 29568562337). If this ever does start truncating runs, bound the number of
-  # snapshotted tests rather than shrinking these timeouts back to a size that
-  # guarantees a kill.
+  # snapshotted tests rather than shrinking these timeouts back down: the op
+  # ceiling firing does not cleanly cut a busy script (it SIGKILLs the shell
+  # alone and orphaned children hold the pipe open, so the op overruns), so a
+  # smaller timeout does not guarantee a kill.
   error:
     catch:
     # Ordered cheapest-and-most-decisive first: if anything downstream overruns,

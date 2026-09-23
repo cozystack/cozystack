@@ -62,6 +62,10 @@ tests:
   ###############################################
 
   - it: passes apiServer extraArgs through to the KamajiControlPlane
+    # Runs under the default oidc.mode=None, where the chart injects nothing of
+    # its own and the passthrough is verbatim. The collision guards on
+    # --authentication-config and --requestheader-uid-headers are gated on
+    # oidc.mode != None and are covered in oidc_test.yaml.
     release:
       name: test-k8s
       namespace: tenant-test

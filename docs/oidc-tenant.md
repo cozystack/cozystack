@@ -126,6 +126,68 @@ in CustomConfig mode: the issuer and clientId are inside the
 operator-supplied config and are not knowable to the chart. Distribute
 the OIDC kubeconfig out-of-band.
 
+## Aggregated API servers
+
+Authenticating a user is only half of the path. A call that lands on an aggregated API server — an `APIService` backed by an extension server rather than by the core apiserver — reaches it over the aggregation layer, which forwards the caller's identity in request headers. The UID travels in `X-Remote-Uid`, which the aggregation layer sends whenever the `RemoteRequestHeaderUID` gate is on, and the extension server trusts that header only when the tenant kube-apiserver has published it under `requestheader-uid-headers` in the `extension-apiserver-authentication` ConfigMap. Without that key the extension server ignores the header, and the call is served as if the caller had no UID, even though `kubectl` against the core apiserver works fine. Anything on the far side that reads the UID, an authorizer or an audit record, sees an empty value.
+
+Carrying the UID across that hop is a property of the aggregation layer, not of OIDC: a caller authenticated by any means loses their UID the same way. The chart nonetheless renders these flags only when `spec.oidc.mode` is not `None`, which keeps the blast radius to clusters opting into a new feature. A cluster that has never left `mode: None` therefore still loses the UID at the extension server.
+
+Be clear about who this helps. The flag forwards a UID the caller already has; it does not create one. ServiceAccount tokens carry a UID, and so do other identities that set one, and for those the aggregation hop starts working. An OIDC user gets one only from a claim mapping: in `spec.oidc.mode: System` the AuthenticationConfiguration the chart generates maps `uid` to the `sub` claim, the Keycloak account UUID, so those users reach an aggregated API server under a stable identifier. `sub` rather than the username claim, because the platform realm lets a user change the address `email` carries while the subject stays where it is. In `CustomConfig` mode the configuration is yours: map `uid` and the header carries what you mapped; leave it out and upstream resolves an empty UID (`plugin/pkg/authenticator/token/oidc/oidc.go`, `getUID`, read at v0.35.0), with nothing for the header to carry.
+
+On a cluster that was running before the mapping existed, those users gain a UID where they had none. Tenant RBAC does not notice — a role binding matches a username or a group, never a UID — but an audit record on the tenant apiserver now carries `user.uid`, `kubectl auth whoami` shows it, and an admission webhook or extension server inside the tenant that read the empty value now reads the subject.
+
+Whenever `spec.oidc.mode` is not `None`, the chart renders the flags that publish it, alongside `--authentication-config`:
+
+| `spec.version` | rendered |
+| --- | --- |
+| `v1.31` | nothing — the flag does not exist upstream, and an unknown flag stops the apiserver from starting |
+| `v1.32` | `--requestheader-uid-headers=X-Remote-Uid` plus `--feature-gates=RemoteRequestHeaderUID=true` |
+| `v1.33` and newer | `--requestheader-uid-headers=X-Remote-Uid` |
+
+The gate is rendered on `v1.32` only, where `RemoteRequestHeaderUID` is still alpha and the apiserver rejects the flag while the gate is off. From `v1.33` the gate is beta and on by default, so rendering it would buy nothing and would collide with a gate list of your own.
+
+The version in that table is the effective one, not the image tag. `--emulated-version` in `controlPlane.apiServer.extraArgs` moves it: the gate resolves through the versioned spec at the emulated version, so `--emulated-version=1.32` puts `RemoteRequestHeaderUID` back to alpha-and-off on a `v1.35` cluster, and the chart follows by rendering the gate alongside the header flag. Below `1.32` the gate has no spec at all, `featureGate.Set()` reports it PreAlpha and refuses to enable it, so the chart renders neither flag.
+
+Two values the chart ignores are still not harmless. An element naming another component, `--emulated-version=wardle=1.2`, says nothing about the tenant kube-apiserver, but the apiserver rejects a component it has not registered, `component not registered: wardle`, and does not start. A value whose minor is above your `spec.version` is ignored too, because emulation only moves the effective version down, and there the apiserver checks against a range rather than a ceiling: it rejects one above its own binary or below the floor it still supports, naming the range it accepts. In both cases the control plane will not start whatever the chart renders.
+
+Adding either flag through `controlPlane.apiServer.extraArgs` by hand is no longer necessary, and an existing cluster that does keeps working: the chart skips its own copy when your entry already carries `X-Remote-Uid` or already enables the gate.
+
+Where your entry does not already satisfy the requirement, the chart works around it rather than failing. On `v1.32` a `--feature-gates` entry of yours that says nothing about `RemoteRequestHeaderUID` gets a second entry rendered after it, carrying your terms plus `RemoteRequestHeaderUID=true`. That decides the gate whether the tenant control plane collapses duplicate flags into the last one or hands both to the apiserver, which merges them in the order it reads them; carrying your terms into the merged entry is what makes the first reading safe.
+
+If you turned the gate off on purpose, with `RemoteRequestHeaderUID=false` or a blanket `AllAlpha=false` on `v1.32` and `AllBeta=false` from `v1.33`, the chart renders neither flag and the render is byte-identical to the one before this feature existed. You keep losing the UID at the aggregation layer, which is what the opt-out asks for. On a cluster that is already running, adding the opt-out and removing it again each need one more edit alongside, below.
+
+The running control plane is a separate matter, and on `v1.33` and newer this needs care. The tenant control plane rewrites the apiserver's arguments from scratch only when the *number* of `extraArgs` entries changes. Otherwise it starts from the arguments already on the running Deployment and lays the new list over them, so a flag that has left `extraArgs` stays behind. That is behaviour of the Kamaji build this repo pins in `packages/system/kamaji` rather than a property of Kubernetes, and upstream has since changed it. It bites in both directions:
+
+- Adding the opt-out adds one entry while the chart drops one, so the count does not change, and the `--requestheader-uid-headers=X-Remote-Uid` already on the running Deployment stays there beside your now-disabled gate.
+- Removing the opt-out entry to turn the feature back on drops one entry while the chart adds one. The count again does not change, so your `RemoteRequestHeaderUID=false` or `AllBeta=false` stays on the Deployment beside the header flag the chart now renders, although your CR no longer shows it.
+- `--emulated-version=1.31` has the same shape both ways on `v1.33` and `v1.34`. Adding it leaves the header flag behind at an emulated version where the gate is off; removing it leaves the emulation behind beside the header flag the chart now renders. From `v1.35` that value is below the oldest version the apiserver can emulate, and it refuses to start on it in any case.
+
+The apiserver refuses to start in each of these combinations.
+
+Change the entry count in the same edit to force the rewrite, whichever way you are going: any second flag you were going to add or drop anyway will do, or set `spec.oidc.mode: None`, let it converge, and turn it back on. On `v1.32` the count changes by itself as long as the chart renders the gate too, because it then drops or adds two entries rather than one; where the gate is already yours, the chart renders the header flag alone and the rule above applies as it does on `v1.33`. That migration is the whole mitigation, and it stays necessary for as long as the pinned build keys the rewrite on the entry count; the fix belongs to that pin rather than to this chart, and is tracked in cozystack/cozystack#3541. The paths that need no operator edit are clear: turning the feature on for a default tenant moves the count, and a tenant already carrying the opt-out renders byte-identically before and after.
+
+The render still fails where a uid-headers list of your own describes a kube-apiserver that already refuses to start: a list that omits `X-Remote-Uid`, a list with an element that is empty once trimmed, which a trailing comma leaves behind, and a list alongside a gate setting that turns `RemoteRequestHeaderUID` off. The chart cannot rescue any of them by withholding its own flag, because the flag the apiserver rejects is yours. The error message names the fix, which beats a crash-looping control plane.
+
+Outside those shapes, nothing that renders today stops rendering: these flags are new, so every other `extraArgs` shape reaching this code was rendering before it existed. Setups whose gate is genuinely already on are left alone, whether you named it explicitly or switched it on with a blanket `AllAlpha=true`.
+
+The gate check reads your entry the way the apiserver does.
+
+- An element may name a component, because `--feature-gates` is a colon-separated multimap: `kube:RemoteRequestHeaderUID=false` is the same opinion as `RemoteRequestHeaderUID=false`, while an element naming another component is not about the tenant kube-apiserver and is ignored, on the same terms as an unregistered component in `--emulated-version` above.
+- The chart writes its own term in whichever spelling you used, because the apiserver rejects a value mixing the bare and `kube:` forms.
+- Past that it is one `Name=value` element at a time, spaces trimmed on both sides, and the value resolved the way `strconv.ParseBool` resolves it, so `1`, `t` and `T` mean the same as `true`, and `0`, `f` and `F` the same as `false`.
+- Blanket settings count, because the apiserver applies them to every gate you have not named explicitly. On `v1.32` a `--feature-gates=AllAlpha=true` genuinely switches `RemoteRequestHeaderUID` on, so the chart treats it as yours and leaves it alone; from `v1.33` the mirror image applies, and `AllBeta=false` reads as your opt-out.
+- Naming the gate wins either way: `AllAlpha=true,RemoteRequestHeaderUID=false` is an opt-out on `v1.32`, and `AllBeta=false,RemoteRequestHeaderUID=true` leaves the gate on from `v1.33`, because an explicit entry beats a blanket one whichever order they appear in.
+- Gate names are compared exactly, as the apiserver looks them up, so `remoterequestheaderuid=true` is not an opinion about `RemoteRequestHeaderUID`; the apiserver would reject that spelling as an unrecognized gate anyway.
+- An entry with an empty value is not an entry as far as the chart is concerned: it reads the last entry that carries a value.
+
+Do not rely on an empty value to cancel an earlier entry, and this has nothing to do with OIDC: the tenant control plane collapses `extraArgs` by flag name, again a property of the pinned build rather than of Kubernetes, and writes an empty value back as a bare flag, so a trailing `--requestheader-uid-headers=` reaches the apiserver as `--requestheader-uid-headers`, which it refuses to start on. Drop the entry you do not want instead of emptying it.
+
+Quotes stop the chart from reading your entry at all. `--requestheader-uid-headers` and `--emulated-version` are both CSV-parsed by the apiserver, which strips a surrounding pair of double quotes before it sees the value, and the chart does not reproduce that. Rather than act on a value it may be reading differently, it renders neither flag, exactly as it did before these flags existed. That applies to the entry the chart reads, the last one on that flag that carries a value; quotes on an earlier entry that a later one replaces change nothing. Drop the quotes if you want the chart to read the entry.
+
+The uid-headers list is read without trimming, because the apiserver does not trim it either: `--requestheader-uid-headers=X-Remote-Uid , Other` does not contain `X-Remote-Uid` as far as the apiserver is concerned, and the chart treats it the same way rather than accepting a value the apiserver will reject. The emptiness check is the one that trims, again because the apiserver's does: in `X-Remote-Uid, ` the second element is empty once trimmed, and the apiserver refuses the whole list with `empty value in "requestheader-uid-headers"` although `X-Remote-Uid` is in it.
+
+On `v1.31` the chart renders neither flag, and the UID guards above do not run, so a uid-headers or `--feature-gates` entry of yours passes through untouched. The unrelated `--oidc-*` and `--authentication-config` collision guards still apply there as everywhere else. Aggregated API servers cannot see the caller's UID on `v1.31`; move the cluster to `v1.32` or newer if you need them to. Writing `--requestheader-uid-headers` yourself does not work around it — the flag does not exist on `v1.31`, and an unknown flag stops the apiserver from starting.
+
 ## Users and RBAC
 
 `users[]` is a flat list. Each entry produces a single

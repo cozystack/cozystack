@@ -1,5 +1,5 @@
 # Chainsaw port of hack/e2e-apps/etcd.bats (v1alpha2 etcd-operator era).
-# Two scenarios as separate Tests, executed in name order:
+# Two scenarios as separate Tests:
 #   etcd-1-contracts       — install + the operator runtime contracts the chart
 #                            depends on but the operator owns
 #   etcd-2-backup-roundtrip — S3 backup/restore round-trip, gated out of CI
@@ -21,11 +21,12 @@
 # Each scenario is self-contained (clean-after-each): a single `run` step
 # pre-cleans any leftover etcd + backup artifacts, installs, asserts, and then
 # drains in a `finally` that always runs (the step is always reached, so
-# teardown fires on success and on failure alike). This is deliberate —
-# Chainsaw executes these Tests in name order, not file order, and `finally`
-# has no test-level form in v0.2.15, so the only way to guarantee the last-run
-# scenario is also reclaimed is to tear down inside each scenario. The shared
-# drain lives in _lib/etcd-cleanup.sh.
+# teardown fires on success and on failure alike). This is deliberate: with
+# skipDelete: true opting out of Chainsaw's auto-cleanup and `finally` having no
+# test-level form in v0.2.15, nothing reclaims a scenario unless the scenario
+# reclaims itself. That is true of whichever Test runs last as much as the
+# first, so the teardown does not depend on the order Chainsaw runs them in.
+# The shared drain lives in _lib/etcd-cleanup.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

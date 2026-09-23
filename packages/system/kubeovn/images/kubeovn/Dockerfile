@@ -1,10 +1,10 @@
 # syntax = docker/dockerfile:experimental
-ARG VERSION="1.15.10"
+ARG VERSION="1.15.26"
 ARG BASE_TAG=v$VERSION
 
 FROM golang:1.26-bookworm as builder
 
-ARG TAG="v1.15.10"
+ARG TAG="v1.15.26"
 RUN git clone --branch ${TAG} --depth 1 https://github.com/kubeovn/kube-ovn /source
 
 WORKDIR /source
@@ -26,6 +26,7 @@ COPY --from=builder /source/dist/images/01-kube-ovn.conflist /kube-ovn/01-kube-o
 
 COPY --from=builder /source/dist/images/kube-ovn /kube-ovn/kube-ovn
 COPY --from=builder /source/dist/images/kube-ovn-cmd /kube-ovn/kube-ovn-cmd
+COPY --from=builder /source/dist/images/kube-ovn-bfdd-supervisor /kube-ovn/kube-ovn-bfdd-supervisor
 COPY --from=builder /source/dist/images/kube-ovn-daemon /kube-ovn/kube-ovn-daemon
 COPY --from=builder /source/dist/images/kube-ovn-controller /kube-ovn/kube-ovn-controller
 RUN ln -s /kube-ovn/kube-ovn-cmd /kube-ovn/kube-ovn-monitor && \
