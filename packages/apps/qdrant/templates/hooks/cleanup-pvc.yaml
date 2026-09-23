@@ -10,6 +10,7 @@ metadata:
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  activeDeadlineSeconds: 270
   template:
     metadata:
       labels:
@@ -18,6 +19,7 @@ spec:
     spec:
       serviceAccountName: {{ .Release.Name }}-qdrant-cleanup
       restartPolicy: Never
+      terminationGracePeriodSeconds: 10
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -64,7 +66,7 @@ spec:
               if [ -z "$pvcs" ]; then
                 echo "No data PVCs found for release {{ .Release.Name }}; nothing to delete."
               else
-                echo "$pvcs" | xargs kubectl delete -n {{ .Release.Namespace }} --ignore-not-found \
+                echo "$pvcs" | xargs kubectl delete -n {{ .Release.Namespace }} --ignore-not-found --wait=true --timeout=120s \
                   || echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
               fi
               echo "PVC cleanup complete."
@@ -99,7 +101,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
