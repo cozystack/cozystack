@@ -656,21 +656,49 @@ spec:
               [ -n "$BACKEND_IP" ] || { echo "no backend pod IP"; exit 1; }
               # curl http://$BACKEND_IP:8080/clientip from B, sourced 192.0.2.1,
               # and confirm the returned client IP is in B's site range.
-              # The probe runs with errexit OFF and its status captured, because
-              # the previous revision recorded AFTER it and therefore recorded
+              #
+              # Polled, because the backend reporting Ready does not mean the
+              # return route to B's site is programmed yet. The route annotation
+              # is stamped at pod CREATE and is present the moment the pod
+              # exists, but ovn-controller installs the flow behind it — and
+              # kubelet readiness observes neither. Measured on a three-node
+              # Talos stand by recreating the backend and probing from the
+              # instant it went Ready: first success at 20s, 25s and 21s across
+              # three runs, with every earlier attempt returning curl 28 and an
+              # empty body. A one-shot probe there is a coin flip, and a lost
+              # flip records `rc=28 observed=''`.
+              #
+              # This waits for reachability rather than retrying an assertion:
+              # the moment the probe answers, the answer is checked once and
+              # strictly, so a NAT'd source still fails the step. A probe that
+              # never answers inside the budget fails it too, carrying the last
+              # rc and output. 180s is the budget because the measured window is
+              # an order of magnitude smaller and CI runs on a different
+              # substrate; it is a ceiling, not an expectation.
+              #
+              # errexit is off around the probe and its status captured, because
+              # an earlier revision recorded AFTER it and therefore recorded
               # nothing: under `set -e` a failing command substitution kills the
               # script before the next line, and a probe that cannot reach the
               # backend at all is exactly the case whose output is worth having.
               # stderr is folded in for the same reason.
-              set +e
-              observed=$(probe_from_b_stdout http "$BACKEND_IP" 8080 "/clientip" 2>&1)
-              probe_rc=$?
-              set -e
+              end=$(( $(date +%s) + 180 ))
+              attempts=0
+              while :; do
+                attempts=$((attempts + 1))
+                set +e
+                observed=$(probe_from_b_stdout http "$BACKEND_IP" 8080 "/clientip" 2>&1)
+                probe_rc=$?
+                set -e
+                [ "$probe_rc" -eq 0 ] && [ -n "$observed" ] && break
+                [ "$(date +%s)" -ge "$end" ] && break
+                sleep 5
+              done
               # record, not echo: a failing chainsaw script reports only its
               # wrapper error, so the observed address has to be written where
               # the report collector picks it up or the failure says nothing.
-              record inbound-source "backend=$BACKEND_IP rc=$probe_rc observed='$observed'"
-              [ "$probe_rc" -eq 0 ] || { echo "FAIL: probe itself failed rc=$probe_rc: $observed"; exit 1; }
+              record inbound-source "backend=$BACKEND_IP rc=$probe_rc attempts=$attempts observed='$observed'"
+              [ "$probe_rc" -eq 0 ] && [ -n "$observed" ] || { echo "FAIL: no answer from the backend in 180s; last rc=$probe_rc: $observed"; exit 1; }
               case "$observed" in
                 192.0.2.*) echo "source preserved: backend saw $observed" ;;
                 *) echo "FAIL: backend saw '$observed', expected a 192.0.2.x source (NAT / not routed)"; exit 1 ;;
