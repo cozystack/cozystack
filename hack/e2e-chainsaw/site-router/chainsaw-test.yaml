@@ -245,6 +245,38 @@ spec:
               metadata:
                 name: remote-site-b
               (status.interfaces[0].ipAddress != null): true
+      # B comes from `kubectl apply` in the script above, not from a Chainsaw
+      # apply, so Chainsaw's own cleanup has no record of it: left alone, the VM
+      # keeps running through every suite after this one and into the sandbox
+      # teardown. A step cleanup runs when the test ends, whatever the outcome.
+      # The disk objects are named as well as the VM so the wait covers the
+      # volume rather than handing it to garbage collection after the fact.
+      cleanup:
+        - delete:
+            ref:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              name: remote-site-b
+        - delete:
+            ref:
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: remote-site-b-boot
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              name: remote-site-b-boot
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Secret
+              name: remote-site-b-cloudinit
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Secret
+              name: remote-site-b-diag
 
     # ── 2. A pre-route tenant pod (to prove the PendingRoutes surface) ────────
     - name: create-pending-route-pod
@@ -947,5 +979,5 @@ spec:
               echo "no surviving gateway pod carries a relaxed port_security (D8 restored)"
             check:
               ($error == null): true
-# B (VMDisk/VMInstance), the backend, and the probe pods were all chainsaw-applied
-# and are reclaimed automatically at cleanup — no explicit teardown needed.
+# The backend and the probe pods were chainsaw-applied and are reclaimed by its
+# cleanup. B was not, so step 1 deletes it in a cleanup block of its own.
