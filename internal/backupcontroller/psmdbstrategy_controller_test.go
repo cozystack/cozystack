@@ -1727,7 +1727,10 @@ func TestPsmdbBackupTimedOut(t *testing.T) {
 		want    bool
 	}{
 		{"system-bucket running past deadline: never strand the shared archive", psmdbtypes.StateRunning, past, true, false},
-		{"system-bucket running past the ceiling: a wedged agent cannot pin the job forever", psmdbtypes.StateRunning, &metav1.Time{Time: time.Now().Add(-2 * psmdbRunningCeiling)}, true, true},
+		// The ceiling is 24h, pinned as a boundary pair in absolute terms so a
+		// change to the constant is a deliberate change here too.
+		{"system-bucket running just under the 24h ceiling: left to finish", psmdbtypes.StateRunning, &metav1.Time{Time: time.Now().Add(-(24*time.Hour - time.Minute))}, true, false},
+		{"system-bucket running just past the 24h ceiling: a wedged agent cannot pin the job forever", psmdbtypes.StateRunning, &metav1.Time{Time: time.Now().Add(-(24*time.Hour + time.Minute))}, true, true},
 		{"legacy running past deadline: the pre-existing deadline applies", psmdbtypes.StateRunning, past, false, true},
 		{"waiting past deadline: nothing written, safe to fail", psmdbtypes.StateWaiting, past, true, true},
 		{"requested past deadline", psmdbtypes.StateRequested, past, false, true},
@@ -3112,12 +3115,92 @@ func TestReconcileMongoDB_LegacyRenderIsNotInjectedOver(t *testing.T) {
 // The prune finalizer means "the platform owns this archive", so it must follow
 // where the storage actually points, not the flag: if the apply's merged view
 // carries anything but the strategy's coordinates on the entry (a mutating
-// webhook, a concurrent writer), no CR may be minted against it.
+// webhook, a concurrent writer), no CR may be minted against it. Each term is
+// varied on its own: the credentialsSecret is what tells a tenant's entry from
+// the platform's when a bucket name collides, so a foreign credential on the
+// platform bucket must be refused just as a foreign bucket is.
 func TestReconcileMongoDB_ForeignStorageIsNotOwned(t *testing.T) {
+	cases := []struct {
+		name    string
+		foreign string
+		named   string
+	}{
+		{"foreign bucket, platform credential", `{"type":"s3","s3":{"bucket":"somebody-elses","credentialsSecret":"cozy-backups-creds"}}`, "somebody-elses"},
+		{"platform bucket, foreign credential", `{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"mongodb-app1-s3-creds"}}`, "mongodb-app1-s3-creds"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+			job.Status.StartedAt = &metav1.Time{Time: time.Now()}
+			cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+				"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+			}
+			sch := runtime.NewScheme()
+			_ = scheme.AddToScheme(sch)
+			_ = backupsv1alpha1.AddToScheme(sch)
+			_ = strategyv1alpha1.AddToScheme(sch)
+			_ = psmdbtypes.AddToScheme(sch)
+			_ = mongodbapp.AddToScheme(sch)
+			foreign := runtime.RawExtension{Raw: []byte(tc.foreign)}
+			c := clientfake.NewClientBuilder().WithScheme(sch).WithObjects(job, strategy, app, cluster).
+				WithStatusSubresource(&backupsv1alpha1.BackupJob{}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+						err := cl.Patch(ctx, obj, patch, opts...)
+						if psmdb, ok := obj.(*psmdbtypes.PerconaServerMongoDB); ok && err == nil {
+							psmdb.Spec.Backup.Storages["s3-storage"] = foreign
+						}
+						return err
+					},
+				}).Build()
+			r := &BackupJobReconciler{Client: c, Scheme: sch, Recorder: record.NewFakeRecorder(10)}
+			res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+			if err != nil {
+				t.Fatalf("reconcileMongoDB: %v", err)
+			}
+			if res.RequeueAfter == 0 {
+				t.Fatalf("expected a named wait on the foreign storage, got %+v", res)
+			}
+			list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+			if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+				t.Fatalf("list: %v", err)
+			}
+			if len(list.Items) != 0 {
+				t.Errorf("no operator Backup may be minted against a storage that does not carry the platform coordinates, got %d (finalizers=%v)", len(list.Items), list.Items[0].Finalizers)
+			}
+			p := &backupsv1alpha1.BackupJob{}
+			if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, p); err != nil {
+				t.Fatalf("get job: %v", err)
+			}
+			if cond := apimeta.FindStatusCondition(p.Status.Conditions, "Ready"); cond == nil || cond.Reason != "PerconaServerMongoDBStorageForeign" || !strings.Contains(cond.Message, tc.named) {
+				t.Errorf("expected Ready=False PerconaServerMongoDBStorageForeign naming %q, got %+v", tc.named, cond)
+			}
+		})
+	}
+}
+
+// Once a job has its operator CR the storage that CR names is fixed for the
+// dump, so the polls that follow must not apply anything to the cluster: not
+// over a cluster that re-acquired the chart's tasks and pitr after the mint
+// (the legacy-render hold refuses only before a CR exists), and not at all.
+func TestReconcileMongoDB_ExistingCRIsNotInjectedOver(t *testing.T) {
 	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
 	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
+	// The release rendered back to the legacy flow after the CR was minted: the
+	// tenant's storage, tasks and pitr are on the cluster again.
 	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
-		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"tenant-own","credentialsSecret":"mongodb-app1-s3-creds"}}`)},
+	}
+	cluster.Spec.Backup.Tasks = []runtime.RawExtension{{Raw: []byte(`{"name":"daily-backup","enabled":true,"schedule":"0 2 * * *","storageName":"s3-storage"}`)}}
+	minted := &psmdbtypes.PerconaServerMongoDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "op-minted", Finalizers: []string{psmdbDeleteBackupFinalizer},
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      job.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+			},
+		},
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateRunning},
 	}
 	sch := runtime.NewScheme()
 	_ = scheme.AddToScheme(sch)
@@ -3125,16 +3208,15 @@ func TestReconcileMongoDB_ForeignStorageIsNotOwned(t *testing.T) {
 	_ = strategyv1alpha1.AddToScheme(sch)
 	_ = psmdbtypes.AddToScheme(sch)
 	_ = mongodbapp.AddToScheme(sch)
-	foreign := runtime.RawExtension{Raw: []byte(`{"type":"s3","s3":{"bucket":"somebody-elses","credentialsSecret":"cozy-backups-creds"}}`)}
-	c := clientfake.NewClientBuilder().WithScheme(sch).WithObjects(job, strategy, app, cluster).
+	applies := 0
+	c := clientfake.NewClientBuilder().WithScheme(sch).WithObjects(job, strategy, app, cluster, minted).
 		WithStatusSubresource(&backupsv1alpha1.BackupJob{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-				err := cl.Patch(ctx, obj, patch, opts...)
-				if psmdb, ok := obj.(*psmdbtypes.PerconaServerMongoDB); ok && err == nil {
-					psmdb.Spec.Backup.Storages["s3-storage"] = foreign
+				if _, ok := obj.(*psmdbtypes.PerconaServerMongoDB); ok {
+					applies++
 				}
-				return err
+				return cl.Patch(ctx, obj, patch, opts...)
 			},
 		}).Build()
 	r := &BackupJobReconciler{Client: c, Scheme: sch, Recorder: record.NewFakeRecorder(10)}
@@ -3143,21 +3225,24 @@ func TestReconcileMongoDB_ForeignStorageIsNotOwned(t *testing.T) {
 		t.Fatalf("reconcileMongoDB: %v", err)
 	}
 	if res.RequeueAfter == 0 {
-		t.Fatalf("expected a named wait on the foreign storage, got %+v", res)
+		t.Fatalf("a job with a running CR must keep polling it, got %+v", res)
 	}
-	list := &psmdbtypes.PerconaServerMongoDBBackupList{}
-	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
-		t.Fatalf("list: %v", err)
+	if applies != 0 {
+		t.Errorf("no storage may be applied once the job has its CR, got %d apply patch(es) on the cluster", applies)
 	}
-	if len(list.Items) != 0 {
-		t.Errorf("no operator Backup may be minted against a storage that does not carry the platform coordinates, got %d (finalizers=%v)", len(list.Items), list.Items[0].Finalizers)
+	got := &psmdbtypes.PerconaServerMongoDB{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "mongodb-app1"}, got); err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	if bucket, _ := psmdbStorageS3(got.Spec.Backup.Storages["s3-storage"]); bucket != "tenant-own" {
+		t.Errorf("the tenant's storage under its tasks and pitr was rewritten to %q", bucket)
 	}
 	p := &backupsv1alpha1.BackupJob{}
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, p); err != nil {
 		t.Fatalf("get job: %v", err)
 	}
-	if cond := apimeta.FindStatusCondition(p.Status.Conditions, "Ready"); cond == nil || cond.Reason != "PerconaServerMongoDBStorageForeign" || !strings.Contains(cond.Message, "somebody-elses") {
-		t.Errorf("expected Ready=False PerconaServerMongoDBStorageForeign naming the bucket, got %+v", cond)
+	if p.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("a streaming CR must not be failed by the cluster's render changing under it")
 	}
 }
 
@@ -3416,6 +3501,25 @@ func TestCleanupMongoDBBackup_LegacySnapshotSkipsTheRead(t *testing.T) {
 	if reads != 0 {
 		t.Errorf("a legacy Backup must not read the operator CR at all, got %d reads", reads)
 	}
+
+	// The shortcut is for this driver's own snapshot shape only: a snapshot of
+	// another kind says nothing about the flow, so cleanup must fall through to
+	// the read rather than release on it.
+	t.Run("foreign snapshot kind falls through to the read", func(t *testing.T) {
+		foreign := &runtime.RawExtension{Raw: []byte(`{"kind":"SomethingElse","apiVersion":"v1","useSystemBucket":false}`)}
+		reads = 0
+		other := &backupsv1alpha1.Backup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "foreign-bk"},
+			Spec:       backupsv1alpha1.BackupSpec{DriverMetadata: map[string]string{psmdbBackupNameKey: "op-foreign"}},
+			Status:     backupsv1alpha1.BackupStatus{UnderlyingResources: foreign},
+		}
+		if _, err := r.cleanupMongoDBBackup(context.Background(), other); err == nil {
+			t.Fatalf("a snapshot of another kind must not release without reading the operator CR")
+		}
+		if reads != 1 {
+			t.Errorf("expected the operator CR to be read once for a foreign snapshot kind, got %d reads", reads)
+		}
+	})
 }
 
 // The other direction of the snapshot gate: a Backup whose snapshot records the

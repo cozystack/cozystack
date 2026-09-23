@@ -320,7 +320,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			// a dump the platform does not own.
 			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"the MongoDB strategy %s carried no s3 coordinates to inject for %s after the job started; set spec.template.s3 on it",
+					"the MongoDB strategy %s still carried no s3 coordinates to inject %s after the job started; set spec.template.s3 on it",
 					resolved.StrategyRef.Name, psmdbDefaultBackupDeadline))
 			}
 			return r.requeueMongoDBBackupWaiting(ctx, j, "MongoDBStrategyHasNoS3",
@@ -344,16 +344,22 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 	// re-render of the app never reverts it (mirrors the CNPG driver's
 	// spec.plugins patch). Keyed off the app's useSystemBucket flag, not off
 	// whatever storage is on the live cluster: when the flag is set the apply
-	// runs on every BackupJob so a later change to the strategy coordinates
-	// (endpoint, region, bucket re-provision) catches up rather than being
-	// frozen at the first backup; when it is unset the driver never touches the
-	// cluster, so a legacy app that ships its own static storage is left alone.
-	// The path prefix is deterministic (<namespace>/<application>), so
-	// re-applying the whole entry never splits the archive the way CNPG's
-	// serverName would. Gated additionally on backups being enabled: a cluster
-	// that can never service a backup should not be mutated just to fail the
-	// precondition below on the enabled check anyway.
-	if cluster.Spec.Backup.Enabled && !legacyRender && shouldInjectMongoDBSystemStorage(useSystemBucket, rendered) {
+	// runs once per BackupJob, before its CR is minted, so a later change to
+	// the strategy coordinates (endpoint, region, bucket re-provision) catches
+	// up on the next job rather than being frozen at the first backup; when it
+	// is unset the driver never touches the cluster, so a legacy app that ships
+	// its own static storage is left alone. Once the job has a CR the storage it
+	// names is fixed for that dump, so nothing is applied on the polls that
+	// follow: not the coordinates (rewriting them under a streaming dump would
+	// split it), and not over a cluster that re-acquired the chart's tasks and
+	// pitr since the mint, which the legacy-render hold above only refuses
+	// before a CR exists. The path prefix is deterministic
+	// (<namespace>/<application>), so re-applying the whole entry on the next
+	// job never splits the archive the way CNPG's serverName would. Gated
+	// additionally on backups being enabled: a cluster that can never service a
+	// backup should not be mutated just to fail the precondition below on the
+	// enabled check anyway.
+	if existing == nil && cluster.Spec.Backup.Enabled && shouldInjectMongoDBSystemStorage(useSystemBucket, rendered) {
 		_, storageDeclared := cluster.Spec.Backup.Storages[storageName]
 		injected, err := r.applyMongoDBSystemStorage(ctx, j.Namespace, psmdbName, storageName, rendered.S3)
 		if err != nil {

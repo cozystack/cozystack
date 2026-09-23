@@ -275,15 +275,14 @@ func TestBackupCleanup_FoundationDB_DoesNotFallThroughToVelero(t *testing.T) {
 
 // TestBackupCleanup_MongoDB_DoesNotFallThroughToVelero locks in the same
 // invariant as the Altinity / MariaDB / FoundationDB variants for the MongoDB
-// strategy. The dispatcher must explicitly route MongoDB-strategy Backups to a
-// no-op cleanup rather than fall through to the Velero default — the MongoDB
-// driver does not own the operator-side psmdb.percona.com/PerconaServerMongoDBBackup
-// CR or the S3 archive behind it (rbac.yaml grants no delete verb on
-// psmdb.percona.com/perconaservermongodbbackups for that reason). Without the
-// explicit case a future refactor that incidentally stamps velero.io/backup-name
-// onto MongoDB driverMetadata would silently synthesise a DeleteBackupRequest.
-// The test seeds those keys plus a matching velero.io/Backup; with the explicit
-// branch no DBR is created and the Velero Backup survives.
+// strategy. The dispatcher must route MongoDB-strategy Backups to the MongoDB
+// cleanup (which prunes a system-bucket archive through the operator CR's
+// finalizer and leaves a legacy one alone) rather than fall through to the
+// Velero default. Without the explicit case a future refactor that
+// incidentally stamps velero.io/backup-name onto MongoDB driverMetadata would
+// silently synthesise a DeleteBackupRequest. The test seeds those keys plus a
+// matching velero.io/Backup and no MongoDB metadata; with the explicit branch
+// no DBR is created and the Velero Backup survives.
 func TestBackupCleanup_MongoDB_DoesNotFallThroughToVelero(t *testing.T) {
 	apiGroup := strategyv1alpha1.GroupVersion.Group
 	veleroBk := &velerov1.Backup{
