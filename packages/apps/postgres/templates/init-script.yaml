@@ -48,9 +48,27 @@ stringData:
     {{- if and .Values.users (not (hasKey .Values.users "postgres")) }}
     psql -v ON_ERROR_STOP=1 <<\EOT
     {{- range $user, $u := .Values.users }}
+    {{- if and (default false $u.createRole) (lt (atoi (trimPrefix "v" $.Values.version)) 16) }}
+    {{- fail (printf "SECURITY: users.%s.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance." $user) }}
+    {{- end }}
     SELECT 'CREATE ROLE "{{ $user }}" LOGIN INHERIT;'
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $user }}')\gexec
-    ALTER ROLE "{{ $user }}" WITH PASSWORD '{{ index $passwords $user }}' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }};
+    ALTER ROLE "{{ $user }}" WITH PASSWORD '{{ index $passwords $user }}' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }} {{ ternary "CREATEROLE" "NOCREATEROLE" (default false $u.createRole) }} {{ ternary "BYPASSRLS" "NOBYPASSRLS" (default false $u.bypassRls) }};
+    {{- /*
+      PostgreSQL 16 grants a CREATEROLE holder only ADMIN OPTION on the roles it
+      creates, governed by createrole_self_grant, whose default is empty. ADMIN
+      OPTION alone allows granting the role onward but not SET ROLE to it, and
+      creating an object owned by another role requires SET. Without this the
+      attribute looks functional — CREATE ROLE succeeds — yet the very next
+      statement a tenant writes, CREATE SCHEMA ... AUTHORIZATION <new role>,
+      fails with "must be able to SET ROLE". Set as a role-level default so it
+      applies to every session, and reset when the attribute is withdrawn.
+    */}}
+    {{- if default false $u.createRole }}
+    ALTER ROLE "{{ $user }}" SET createrole_self_grant = 'set, inherit';
+    {{- else }}
+    ALTER ROLE "{{ $user }}" RESET createrole_self_grant;
+    {{- end }}
     COMMENT ON ROLE "{{ $user }}" IS 'user managed by helm';
     {{- end }}
     EOT
