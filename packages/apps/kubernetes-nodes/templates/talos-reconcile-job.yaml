@@ -231,7 +231,15 @@ spec:
               # Apply the TalosConfigTemplate. ownerReference back to the parent
               # KamajiControlPlane makes the standard Kubernetes garbage collector
               # clean it up when the parent cluster is deleted.
-              cat <<EOF | kubectl apply -f -
+              #
+              # Server-side apply keeps the merge in the apiserver. A client-side
+              # apply pulls the full OpenAPI schema down to build the merge patch,
+              # ~290Mi RSS against a management cluster carrying a few hundred
+              # CRDs, over this container's 256Mi limit. Only the merge path pays
+              # that, so a create survives where an update is OOMKilled.
+              # --force-conflicts keeps this Job authoritative over an object an
+              # earlier client-side apply created.
+              cat <<EOF | kubectl apply --server-side --force-conflicts -f -
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
               metadata:
