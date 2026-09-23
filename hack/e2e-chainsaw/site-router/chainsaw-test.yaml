@@ -690,15 +690,16 @@ spec:
               # and confirm the returned client IP is in B's site range.
               #
               # Polled, because the backend reporting Ready does not mean the
-              # return route to B's site is programmed yet. The route annotation
-              # is stamped at pod CREATE and is present the moment the pod
-              # exists, but ovn-controller installs the flow behind it — and
-              # kubelet readiness observes neither. Measured on a three-node
-              # Talos stand by recreating the backend and probing from the
-              # instant it went Ready: first success at 20s, 25s and 21s across
-              # three runs, with every earlier attempt returning curl 28 and an
-              # empty body. A one-shot probe there is a coin flip, and a lost
-              # flip records `rc=28 observed=''`.
+              # gateway forwards to it yet. The guest accepts decrypted traffic
+              # only for destinations the controller has pushed, one /32 per Pod
+              # IP and Service ClusterIP in the namespace, and the controller
+              # picks up a new tenant pod on its next poll rather than through a
+              # watch (runtimePollInterval, 30s, in vyospush.go). Measured on a
+              # three-node Talos stand by recreating the backend and probing from
+              # the instant it went Ready: first success at 20s, 25s and 21s
+              # across three runs, with every earlier attempt returning curl 28
+              # and an empty body. A one-shot probe there is a coin flip, and a
+              # lost flip records `rc=28 observed=''`.
               #
               # This waits for reachability rather than retrying an assertion:
               # the moment the probe answers, the answer is checked once and
