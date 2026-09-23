@@ -1346,7 +1346,7 @@ func TestDataVolumesMessage_DoesNotDependOnListOrder(t *testing.T) {
 	const want = "DataVolume a is ImportInProgress; DataVolume b is Failed"
 	for _, reader := range []client.Reader{fakeClient, reversedReader{fakeClient}} {
 		r := &WorkloadMonitorReconciler{DataVolumeReader: reader}
-		got, err := r.dataVolumesMessage(context.Background(), monitor)
+		got, _, err := r.dataVolumesMessage(context.Background(), monitor)
 		if err != nil || got != want {
 			t.Errorf("message = %q, %v; want %q", got, err, want)
 		}
@@ -1378,15 +1378,26 @@ func TestReconcile_DataVolumeKindNotServedIsNoDataVolumes(t *testing.T) {
 	}
 }
 
-func TestReconcile_DataVolumeListErrorFailsReconcile(t *testing.T) {
+// reconcileWithUnreadableDataVolumes reconciles a monitor that selects one
+// ready pod while every DataVolume List fails, or while withReader is false.
+func reconcileWithUnreadableDataVolumes(t *testing.T, withReader bool, status cozyv1alpha1.WorkloadMonitorStatus) (*cozyv1alpha1.WorkloadMonitor, error) {
+	t.Helper()
 	s := newTestScheme()
+	selector := map[string]string{"app.kubernetes.io/instance": "m"}
 	monitor := &cozyv1alpha1.WorkloadMonitor{
 		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"},
-		Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: map[string]string{"a": "b"}},
+		Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: selector, MinReplicas: ptr.To[int32](1)},
+		Status:     status,
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "m-0", Namespace: "default", Labels: selector},
+		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
+			{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+		}},
 	}
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(monitor).
+		WithObjects(monitor, pod).
 		WithStatusSubresource(monitor).
 		WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
@@ -1397,10 +1408,47 @@ func TestReconcile_DataVolumeListErrorFailsReconcile(t *testing.T) {
 			},
 		}).
 		Build()
-	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s, DataVolumeReader: fakeClient}
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	if withReader {
+		reconciler.DataVolumeReader = fakeClient
+	}
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "m", Namespace: "default"}}
-	if _, err := reconciler.Reconcile(context.TODO(), req); err == nil {
-		t.Fatal("Reconcile returned nil on a DataVolume list failure, want the error")
+	_, err := reconciler.Reconcile(context.TODO(), req)
+	updated := &cozyv1alpha1.WorkloadMonitor{}
+	if gerr := fakeClient.Get(context.TODO(), req.NamespacedName, updated); gerr != nil {
+		t.Fatalf("Failed to get updated WorkloadMonitor: %v", gerr)
+	}
+	return updated, err
+}
+
+func TestReconcile_DataVolumeListErrorStillPublishesStatus(t *testing.T) {
+	got, err := reconcileWithUnreadableDataVolumes(t, true, cozyv1alpha1.WorkloadMonitorStatus{})
+	if err == nil {
+		t.Error("Reconcile returned nil on a DataVolume list failure, want the error so the request is retried")
+	}
+	if got.Status.ObservedReplicas != 1 || got.Status.AvailableReplicas != 1 {
+		t.Errorf("replicas observed=%d available=%d, want 1 and 1", got.Status.ObservedReplicas, got.Status.AvailableReplicas)
+	}
+	if got.Status.Operational == nil || !*got.Status.Operational || got.Status.Message != "" {
+		t.Errorf("Operational=%v Message=%q, want a monitor with no DataVolume verdict to stay operational", got.Status.Operational, got.Status.Message)
+	}
+}
+
+func TestReconcile_UnreadDataVolumesKeepTheLastVerdict(t *testing.T) {
+	const stuck = "DataVolume m is ImportInProgress"
+	for _, withReader := range []bool{true, false} {
+		t.Run(fmt.Sprintf("reader=%v", withReader), func(t *testing.T) {
+			got, _ := reconcileWithUnreadableDataVolumes(t, withReader, cozyv1alpha1.WorkloadMonitorStatus{
+				Operational: ptr.To(false),
+				Message:     stuck,
+			})
+			if got.Status.ObservedReplicas != 1 || got.Status.AvailableReplicas != 1 {
+				t.Errorf("replicas observed=%d available=%d, want 1 and 1", got.Status.ObservedReplicas, got.Status.AvailableReplicas)
+			}
+			if got.Status.Operational == nil || *got.Status.Operational || got.Status.Message != stuck {
+				t.Errorf("Operational=%v Message=%q, want false and %q", got.Status.Operational, got.Status.Message, stuck)
+			}
+		})
 	}
 }
 

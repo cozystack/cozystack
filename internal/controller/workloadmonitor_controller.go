@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -230,11 +231,12 @@ func (r *WorkloadMonitorReconciler) watchDataVolumes(ctx context.Context, mapper
 
 // dataVolumesMessage names every DataVolume the monitor selects that is not
 // ready, with its phase, and is empty when there is none. A NoMatch from the
-// reader counts as no DataVolumes.
-func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor) (string, error) {
+// reader counts as no DataVolumes. read is false when the DataVolumes could not
+// be read: no reader yet, or a failed List.
+func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor) (message string, read bool, err error) {
 	reader := r.dataVolumeReader()
 	if reader == nil {
-		return "", nil
+		return "", false, nil
 	}
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(dataVolumeGVK.GroupVersion().WithKind(dataVolumeGVK.Kind + "List"))
@@ -245,9 +247,9 @@ func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, moni
 		client.MatchingLabels(monitor.Spec.Selector),
 	); err != nil {
 		if meta.IsNoMatchError(err) {
-			return "", nil
+			return "", true, nil
 		}
-		return "", err
+		return "", false, err
 	}
 	var stuck []string
 	for i := range list.Items {
@@ -263,7 +265,7 @@ func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, moni
 		}
 	}
 	sort.Strings(stuck)
-	return strings.Join(stuck, "; "), nil
+	return strings.Join(stuck, "; "), true, nil
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=workloadmonitors,verbs=get;list;watch;create;update;patch;delete
@@ -908,10 +910,9 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	dataVolumesMessage, err := r.dataVolumesMessage(ctx, monitor)
-	if err != nil {
-		logger.Error(err, "Unable to list DataVolumes for WorkloadMonitor", "monitor", monitor.Name)
-		return ctrl.Result{}, err
+	dataVolumesMessage, dataVolumesRead, dataVolumesErr := r.dataVolumesMessage(ctx, monitor)
+	if dataVolumesErr != nil {
+		logger.Error(dataVolumesErr, "Unable to list DataVolumes for WorkloadMonitor, keeping the last DataVolume verdict", "monitor", monitor.Name)
 	}
 
 	// Update WorkloadMonitor status based on observed pods
@@ -934,8 +935,13 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
 			fresh.Status.Operational = pointer.Bool(false)
 		}
-		fresh.Status.Message = dataVolumesMessage
-		if dataVolumesMessage != "" {
+		// Only the DataVolume check writes Message, so the stored one is the last
+		// DataVolume verdict: kept while no reader is installed yet, so a
+		// controller restart does not report a stuck disk as ready.
+		if dataVolumesRead {
+			fresh.Status.Message = dataVolumesMessage
+		}
+		if fresh.Status.Message != "" {
 			fresh.Status.Operational = pointer.Bool(false)
 		}
 		return r.Status().Update(ctx, fresh)
@@ -945,11 +951,11 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// Returning the metrics error makes the failure count in controller-runtime's
-	// reconcile error metrics and retries with backoff instead of quietly waiting
-	// for the next periodic requeue.
-	if bucketMetricsErr != nil {
-		return ctrl.Result{}, bucketMetricsErr
+	// Returning the metrics or DataVolume error makes the failure count in
+	// controller-runtime's reconcile error metrics and retries with backoff
+	// instead of quietly waiting for the next periodic requeue.
+	if bucketMetricsErr != nil || dataVolumesErr != nil {
+		return ctrl.Result{}, errors.Join(bucketMetricsErr, dataVolumesErr)
 	}
 
 	// Requeue periodically if there are BucketClaims to keep sizes up to date.
