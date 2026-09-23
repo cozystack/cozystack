@@ -1158,6 +1158,8 @@ func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
 	tests := []struct {
 		name        string
 		appKind     string
+		targetKind  string // targetApplicationRef.kind; defaults to appKind
+		targetName  string // targetApplicationRef.name; "" omits targetApplicationRef
 		targetNS    string
 		wantPhase   backupsv1alpha1.RestoreJobPhase
 		wantMessage string
@@ -1165,6 +1167,7 @@ func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
 		{
 			name:        "postgres cross-namespace rename is rejected",
 			appKind:     "Postgres",
+			targetName:  "dst",
 			targetNS:    targetNS,
 			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
 			wantMessage: `restoring Postgres "src" under a different name ("dst") is not supported by the Velero strategy`,
@@ -1172,6 +1175,16 @@ func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
 		{
 			name:        "vmdisk cross-namespace rename is rejected",
 			appKind:     vmDiskAppKind,
+			targetName:  "dst",
+			targetNS:    targetNS,
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: `restoring VMDisk "src" under a different name ("dst") is not supported by the Velero strategy`,
+		},
+		{
+			name:        "vmdisk rename is rejected by the backup kind, not the target kind",
+			appKind:     vmDiskAppKind,
+			targetKind:  vmInstanceKind,
+			targetName:  "dst",
 			targetNS:    targetNS,
 			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
 			wantMessage: `restoring VMDisk "src" under a different name ("dst") is not supported by the Velero strategy`,
@@ -1179,14 +1192,29 @@ func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
 		{
 			name:        "postgres same-namespace rename keeps the DataUpload message",
 			appKind:     "Postgres",
+			targetName:  "dst",
 			targetNS:    "",
 			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
 			wantMessage: "restoring to the same namespace with a different application name is not supported",
 		},
 		{
-			name:      "vminstance cross-namespace rename passes the guard",
-			appKind:   vmInstanceKind,
-			targetNS:  targetNS,
+			name:       "vminstance cross-namespace rename passes the guard",
+			appKind:    vmInstanceKind,
+			targetName: "dst",
+			targetNS:   targetNS,
+			wantPhase:  backupsv1alpha1.RestoreJobPhaseRunning,
+		},
+		{
+			name:       "vmdisk cross-namespace copy keeping the source name passes the guard",
+			appKind:    vmDiskAppKind,
+			targetName: "src",
+			targetNS:   targetNS,
+			wantPhase:  backupsv1alpha1.RestoreJobPhaseRunning,
+		},
+		{
+			name:      "vmdisk in-place restore without targetApplicationRef passes the guard",
+			appKind:   vmDiskAppKind,
+			targetNS:  "",
 			wantPhase: backupsv1alpha1.RestoreJobPhaseRunning,
 		},
 	}
@@ -1207,12 +1235,18 @@ func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "src-restore", Namespace: sourceNS},
 				Spec: backupsv1alpha1.RestoreJobSpec{
 					BackupRef: corev1.LocalObjectReference{Name: "src-sb"},
-					TargetApplicationRef: &corev1.TypedLocalObjectReference{
-						APIGroup: stringPtr("apps.cozystack.io"),
-						Kind:     tt.appKind,
-						Name:     "dst",
-					},
 				},
+			}
+			if tt.targetName != "" {
+				targetKind := tt.targetKind
+				if targetKind == "" {
+					targetKind = tt.appKind
+				}
+				restoreJob.Spec.TargetApplicationRef = &corev1.TypedLocalObjectReference{
+					APIGroup: stringPtr("apps.cozystack.io"),
+					Kind:     targetKind,
+					Name:     tt.targetName,
+				}
 			}
 			if tt.targetNS != "" {
 				raw, err := json.Marshal(RestoreOptions{CommonRestoreOptions: CommonRestoreOptions{TargetNamespace: tt.targetNS}})
