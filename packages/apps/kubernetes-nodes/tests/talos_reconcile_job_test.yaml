@@ -1,0 +1,80 @@
+suite: talos-reconcile Job TalosConfigTemplate name
+
+# TalosConfigTemplate.spec is immutable (webhook
+# vtalosconfigtemplate.cluster.x-k8s.io), so the object can only ever be created,
+# never updated: applied under a fixed name it freezes this pool's worker machine
+# config at first creation and every later change is rejected server-side
+# (cozystack/cozystack#3515). The name therefore carries a content hash of the
+# rendered spec.
+#
+# The literal below must stay identical to the MachineDeployment
+# bootstrap.configRef assertion in nodegroup_test.yaml — helm-unittest cannot
+# compare two templates in one assertion, and a divergence leaves CAPI blocked on
+# "templates do not exist" with no worker ever created.
+
+templates:
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+  gpus: []
+  kubelet: {}
+
+tests:
+  - it: applies the TalosConfigTemplate under that same hashed name
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="TCT_NAME")].value
+          value: kubernetes-myk8s-md0-ffdbe1
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: \$\{TCT_NAME\}'
+      # ... and never the fixed <release>-<group> name, which is what the
+      # immutability webhook rejected on every reconcile after the first.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: \$\{RELEASE\}-\$\{GROUP_NAME\}'
+
+  # A GPU node group adds `nodeLabels: {gpu: "on"}` to the machine config, so
+  # the spec — and therefore the name — differs from the pair above. Two things
+  # are pinned here. First, the propagation that was impossible before the fix:
+  # new content lands on a NEW template instead of a rejected mutation, and CAPI
+  # rolls the workers onto it. Second, and the reason the fixture is GPU-shaped
+  # rather than another falsy default: the baseline above renders with
+  # instanceType "", gpus [] and kubelet {}, all falsy, so it cannot tell apart
+  # a group dict that carries those keys from one that omits them. The name is a
+  # hash of the spec these values render, and the Job and the MachineDeployment
+  # must compute it from the same dict — assembling it twice would let a dropped
+  # key diverge the two names invisibly and leave CAPI blocked on "templates do
+  # not exist" with no worker ever created. Truthy `gpus` makes such a
+  # divergence fail here.
+  - it: a machine-config change rotates the name the Job applies
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      gpus:
+        - name: nvidia.com/GH200
+    asserts:
+      # Same literal as the paired test in nodegroup_test.yaml.
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="TCT_NAME")].value
+          value: kubernetes-myk8s-md0-0bbd2a

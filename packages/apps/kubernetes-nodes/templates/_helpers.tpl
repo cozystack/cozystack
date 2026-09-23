@@ -189,3 +189,43 @@ string this admits parses to a positive duration.
 {{- end -}}
 {{- $value -}}
 {{- end -}}
+
+{{/*
+This pool's node group — the SINGLE assembly of the dict that feeds every
+consumer in this chart:
+
+  * nodegroup.yaml, which renders the KubevirtMachineTemplate and the
+    MachineDeployment (and hashes the former into its name);
+  * talos-reconcile-job.yaml, which renders the TalosConfigTemplate spec and
+    hashes it into the name the Job applies it under.
+
+Emitted as YAML and read back with `fromYaml` at each call site. A Helm
+template cannot return a dict and a Helm variable cannot cross a file
+boundary, so this round-trip is what lets one assembly serve two files.
+
+Why it has to be one assembly. The TalosConfigTemplate name is a hash of the
+spec this dict renders, and two templates have to agree on that name: the Job
+creates the object, the MachineDeployment's bootstrap.configRef points at it.
+Assembling the dict twice makes them agree only by coincidence of the keys the
+spec helper happens to read — drop a key on one side (`gpus`, say) and the two
+names diverge, CAPI blocks on "templates do not exist" forever and no worker is
+ever created. Sharing the *rendering* is not enough; the input has to be shared
+too. Every value the pool exposes belongs here, or the consumer that reads
+it hashes a different group than the one that does not.
+*/}}
+{{- define "kubernetes-nodes.group" -}}
+{{- dict
+      "minReplicas" .Values.minReplicas
+      "maxReplicas" .Values.maxReplicas
+      "instanceType" .Values.instanceType
+      "diskSize" .Values.diskSize
+      "storageClass" .Values.storageClass
+      "roles" .Values.roles
+      "resources" .Values.resources
+      "gpus" .Values.gpus
+      "kubelet" .Values.kubelet
+      "logSerialConsole" .Values.logSerialConsole
+      "podCpuLimit" .Values.podCpuLimit
+      "podCpuRequest" .Values.podCpuRequest
+    | toYaml -}}
+{{- end -}}
