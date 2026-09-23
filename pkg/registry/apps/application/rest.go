@@ -1834,6 +1834,7 @@ func (r *REST) buildTableFromApplications(apps []appsv1alpha1.Application) metav
 		ColumnDefinitions: []metav1.TableColumnDefinition{
 			{Name: "NAME", Type: "string", Description: "Name of the Application", Priority: 0},
 			{Name: "READY", Type: "string", Description: "Ready status of the Application", Priority: 0},
+			{Name: "WORKLOADS", Type: "string", Description: "Status of the WorkloadsReady condition, <none> when the Application has no WorkloadMonitor", Priority: 0},
 			{Name: "AGE", Type: "string", Description: "Age of the Application", Priority: 0},
 			{Name: "VERSION", Type: "string", Description: "Version of the Application", Priority: 0},
 		},
@@ -1844,7 +1845,7 @@ func (r *REST) buildTableFromApplications(apps []appsv1alpha1.Application) metav
 	for i := range apps {
 		app := &apps[i]
 		row := metav1.TableRow{
-			Cells:  []any{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+			Cells:  []any{app.GetName(), conditionStatus(app.Status.Conditions, "Ready", "Unknown"), conditionStatus(app.Status.Conditions, "WorkloadsReady", "<none>"), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
 			Object: runtime.RawExtension{Object: app},
 		}
 		table.Rows = append(table.Rows, row)
@@ -1859,6 +1860,7 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 		ColumnDefinitions: []metav1.TableColumnDefinition{
 			{Name: "NAME", Type: "string", Description: "Name of the Application", Priority: 0},
 			{Name: "READY", Type: "string", Description: "Ready status of the Application", Priority: 0},
+			{Name: "WORKLOADS", Type: "string", Description: "Status of the WorkloadsReady condition, <none> when the Application has no WorkloadMonitor", Priority: 0},
 			{Name: "AGE", Type: "string", Description: "Age of the Application", Priority: 0},
 			{Name: "VERSION", Type: "string", Description: "Version of the Application", Priority: 0},
 		},
@@ -1868,7 +1870,7 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 
 	a := app
 	row := metav1.TableRow{
-		Cells:  []any{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+		Cells:  []any{app.GetName(), conditionStatus(app.Status.Conditions, "Ready", "Unknown"), conditionStatus(app.Status.Conditions, "WorkloadsReady", "<none>"), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
 		Object: runtime.RawExtension{Object: &a},
 	}
 	table.Rows = append(table.Rows, row)
@@ -1898,10 +1900,11 @@ func computeAge(creationTime, currentTime time.Time) string {
 	return duration.HumanDuration(ageDuration)
 }
 
-// getReadyStatus returns the ready status based on conditions
-func getReadyStatus(conditions []metav1.Condition) string {
+// conditionStatus returns the status of the condition of the given type, or
+// absent when there is none.
+func conditionStatus(conditions []metav1.Condition, conditionType, absent string) string {
 	for _, condition := range conditions {
-		if condition.Type == "Ready" {
+		if condition.Type == conditionType {
 			switch condition.Status {
 			case metav1.ConditionTrue:
 				return "True"
@@ -1912,7 +1915,7 @@ func getReadyStatus(conditions []metav1.Condition) string {
 			}
 		}
 	}
-	return "Unknown"
+	return absent
 }
 
 // computeTenantNamespace computes the namespace for a Tenant application based on the specified logic
