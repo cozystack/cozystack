@@ -100,7 +100,15 @@ tls: {}
 ## @section Application-specific parameters
 ##
 
+##
+## @enum {string} PreloadLibrary
+## @value pg_stat_statements
+## @value auto_explain
+## @value pgaudit
+## @value pg_prewarm
+
 ## @typedef {struct} PostgreSQL - PostgreSQL server configuration.
+## @field {[]PreloadLibrary} [sharedPreloadLibraries] - Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. Required by modules that allocate shared memory and cannot be loaded per session, `pg_stat_statements` and `auto_explain` among them. Changing the list restarts PostgreSQL.
 ## @field {map[string]intOrString} [parameters] - PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 
 ## @param {PostgreSQL} postgresql - PostgreSQL server configuration.
@@ -119,6 +127,12 @@ postgresql:
 ##   archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command (shell commands),
 ##   dynamic_library_path, local_preload_libraries, session_preload_libraries,
 ##   shared_preload_libraries (arbitrary .so loading)
+##
+## To preload a module, use the `sharedPreloadLibraries` allowlist instead of the
+## blocked `shared_preload_libraries` parameter:
+##   sharedPreloadLibraries:
+##     - pg_stat_statements
+##     - auto_explain
 ##
 ## IMPORTANT: Do NOT override CloudNativePG-managed parameters:
 ##   archive_mode, primary_conninfo, wal_level, max_replication_slots
