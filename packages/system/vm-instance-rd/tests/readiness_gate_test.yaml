@@ -4,11 +4,11 @@ templates:
 
 # A VMInstance is served as a Flux HelmRelease that renders a KubeVirt
 # VirtualMachine. From cozystack v1.5.0 (helm-controller v1.4.3 to v1.5.0) the
-# generated release is health-assessed by the kstatus poller, which for any
-# object carrying status.observedGeneration returns InProgress whenever it
-# trails metadata.generation -- a built-in pre-check in
-# fluxcd/pkg/runtime/cel that runs before (and cannot be overridden by)
-# healthCheckExprs. KubeVirt legitimately runs a VirtualMachine with
+# generated release is health-assessed by the kstatus poller, whose generation
+# check (checkGeneration in fluxcd/cli-utils pkg/kstatus/status/generic.go)
+# returns InProgress for any object whose status.observedGeneration trails
+# metadata.generation. vm-instance sets no healthCheckExprs, so that check is
+# what decides. KubeVirt legitimately runs a VirtualMachine with
 # observedGeneration behind generation (a template change pending a restart, a
 # stopped VM, or kubevirt/kubevirt#18700), so a healthy VM is read as
 # permanently InProgress and the release never converges. Disabling the wait
