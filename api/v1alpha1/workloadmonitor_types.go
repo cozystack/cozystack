@@ -47,6 +47,11 @@ type WorkloadMonitorStatus struct {
 	// ObservedReplicas is the total number of pods observed
 	// +optional
 	ObservedReplicas int32 `json:"observedReplicas"`
+
+	// Message names what keeps the workload from being operational, when the
+	// controller can tell.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // +kubebuilder:object:root=true

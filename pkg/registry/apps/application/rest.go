@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1535,6 +1536,9 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 			// Concrete failure takes priority over unknown/pending state
 			workloadsCondition.Status = metav1.ConditionFalse
 			workloadsCondition.Message = "One or more workloads are not operational"
+			if len(ws.messages) > 0 {
+				workloadsCondition.Message = strings.Join(ws.messages, "; ")
+			}
 		case ws.unknown:
 			workloadsCondition.Status = metav1.ConditionUnknown
 			workloadsCondition.Reason = "Pending"
@@ -1577,6 +1581,9 @@ type workloadsStatus struct {
 	operational bool
 	found       bool
 	unknown     bool // true when at least one monitor has nil Operational (not yet reconciled)
+	// messages are the non-empty status messages of the monitors that are not
+	// operational, sorted so repeated conversions produce identical content.
+	messages []string
 	// transitionTime is the most recent metadata update time across the
 	// matching monitors. Used as WorkloadsReady.LastTransitionTime so that
 	// repeated conversions for the same underlying state produce stable
@@ -1623,19 +1630,24 @@ func (r *REST) getWorkloadsOperational(ctx context.Context, namespace, appName s
 	}
 	operational := true
 	unknown := false
+	var messages []string
 	var latest metav1.Time
 	for _, m := range monitors.Items {
 		if m.Status.Operational == nil {
 			unknown = true
 		} else if !*m.Status.Operational {
 			operational = false
+			if m.Status.Message != "" {
+				messages = append(messages, m.Status.Message)
+			}
 		}
 		// Pick the most recent monitor mtime as a stable transition time.
 		if t := latestMonitorTime(&m); t.After(latest.Time) {
 			latest = t
 		}
 	}
-	return workloadsStatus{operational: operational, found: true, unknown: unknown, transitionTime: latest}, nil
+	sort.Strings(messages)
+	return workloadsStatus{operational: operational, found: true, unknown: unknown, messages: messages, transitionTime: latest}, nil
 }
 
 // latestMonitorTime returns the most recent timestamp associated with a

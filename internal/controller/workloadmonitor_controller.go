@@ -228,12 +228,13 @@ func (r *WorkloadMonitorReconciler) watchDataVolumes(ctx context.Context, mapper
 	})
 }
 
-// dataVolumesReady reports whether every DataVolume the monitor selects is
-// ready. A NoMatch from the reader counts as no DataVolumes.
-func (r *WorkloadMonitorReconciler) dataVolumesReady(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor) (bool, error) {
+// dataVolumesMessage names every DataVolume the monitor selects that is not
+// ready, with its phase, and is empty when there is none. A NoMatch from the
+// reader counts as no DataVolumes.
+func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor) (string, error) {
 	reader := r.dataVolumeReader()
 	if reader == nil {
-		return true, nil
+		return "", nil
 	}
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(dataVolumeGVK.GroupVersion().WithKind(dataVolumeGVK.Kind + "List"))
@@ -244,16 +245,25 @@ func (r *WorkloadMonitorReconciler) dataVolumesReady(ctx context.Context, monito
 		client.MatchingLabels(monitor.Spec.Selector),
 	); err != nil {
 		if meta.IsNoMatchError(err) {
-			return true, nil
+			return "", nil
 		}
-		return false, err
+		return "", err
 	}
+	var stuck []string
 	for i := range list.Items {
-		if !isDataVolumeReady(&list.Items[i]) {
-			return false, nil
+		dv := &list.Items[i]
+		if isDataVolumeReady(dv) {
+			continue
+		}
+		phase, _, _ := unstructured.NestedString(dv.Object, "status", "phase")
+		if phase == "" {
+			stuck = append(stuck, fmt.Sprintf("DataVolume %s has no phase", dv.GetName()))
+		} else {
+			stuck = append(stuck, fmt.Sprintf("DataVolume %s is %s", dv.GetName(), phase))
 		}
 	}
-	return true, nil
+	sort.Strings(stuck)
+	return strings.Join(stuck, "; "), nil
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=workloadmonitors,verbs=get;list;watch;create;update;patch;delete
@@ -898,7 +908,7 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	dataVolumesReady, err := r.dataVolumesReady(ctx, monitor)
+	dataVolumesMessage, err := r.dataVolumesMessage(ctx, monitor)
 	if err != nil {
 		logger.Error(err, "Unable to list DataVolumes for WorkloadMonitor", "monitor", monitor.Name)
 		return ctrl.Result{}, err
@@ -924,7 +934,8 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
 			fresh.Status.Operational = pointer.Bool(false)
 		}
-		if !dataVolumesReady {
+		fresh.Status.Message = dataVolumesMessage
+		if dataVolumesMessage != "" {
 			fresh.Status.Operational = pointer.Bool(false)
 		}
 		return r.Status().Update(ctx, fresh)

@@ -101,6 +101,11 @@ spec:
                 description: AvailableReplicas is the number of ready replicas
                 format: int32
                 type: integer
+              message:
+                description: |-
+                  Message names what keeps the workload from being operational, when the
+                  controller can tell.
+                type: string
               observedReplicas:
                 description: ObservedReplicas is the total number of pods observed
                 format: int32

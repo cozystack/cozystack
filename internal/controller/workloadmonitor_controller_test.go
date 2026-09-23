@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1282,6 +1283,29 @@ func TestReconcile_DataVolumePhaseDecidesOperational(t *testing.T) {
 	}
 }
 
+func TestReconcile_DataVolumeMessageNamesTheDiskAndPhase(t *testing.T) {
+	selected := map[string]string{"app.kubernetes.io/instance": "vm-disk-test"}
+	phase := func(p string) *string { return &p }
+	cases := []struct {
+		name  string
+		phase *string
+		want  string
+	}{
+		{"in flight", phase("ImportInProgress"), "DataVolume vm-disk-test is ImportInProgress"},
+		{"failed", phase("Failed"), "DataVolume vm-disk-test is Failed"},
+		{"no phase", nil, "DataVolume vm-disk-test has no phase"},
+		{"settled", phase("Succeeded"), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reconcileDataVolumeMonitor(t, true, nil, newDataVolume("vm-disk-test", selected, tc.phase))
+			if got.Status.Message != tc.want {
+				t.Errorf("Message = %q, want %q", got.Status.Message, tc.want)
+			}
+		})
+	}
+}
+
 func TestReconcile_OneDataVolumeInFlightOutweighsSettledOnes(t *testing.T) {
 	selected := map[string]string{"app.kubernetes.io/instance": "vm-disk-test"}
 	done, busy := "Succeeded", "ImportInProgress"
@@ -1291,6 +1315,41 @@ func TestReconcile_OneDataVolumeInFlightOutweighsSettledOnes(t *testing.T) {
 	)
 	if *got.Status.Operational {
 		t.Error("Operational = true with one DataVolume still importing, want false")
+	}
+}
+
+// reversedReader lists in reverse, because a cache List guarantees no order.
+type reversedReader struct{ client.Reader }
+
+func (r reversedReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if err := r.Reader.List(ctx, list, opts...); err != nil {
+		return err
+	}
+	items, err := meta.ExtractList(list)
+	if err != nil {
+		return err
+	}
+	slices.Reverse(items)
+	return meta.SetList(list, items)
+}
+
+func TestDataVolumesMessage_DoesNotDependOnListOrder(t *testing.T) {
+	selected := map[string]string{"app.kubernetes.io/instance": "vm-disk-test"}
+	busy, failed := "ImportInProgress", "Failed"
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-test", Namespace: "default"},
+		Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: selected},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(newTestScheme()).
+		WithObjects(newDataVolume("a", selected, &busy), newDataVolume("b", selected, &failed)).
+		Build()
+	const want = "DataVolume a is ImportInProgress; DataVolume b is Failed"
+	for _, reader := range []client.Reader{fakeClient, reversedReader{fakeClient}} {
+		r := &WorkloadMonitorReconciler{DataVolumeReader: reader}
+		got, err := r.dataVolumesMessage(context.Background(), monitor)
+		if err != nil || got != want {
+			t.Errorf("message = %q, %v; want %q", got, err, want)
+		}
 	}
 }
 
