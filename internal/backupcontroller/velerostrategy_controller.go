@@ -609,12 +609,22 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 	// Validate: rename is only implemented for VMInstance. Failing here beats a
 	// Succeeded RestoreJob whose application silently keeps the source name.
 	if target.IsRenamed && !veleroRenameSupported(backup.Spec.ApplicationRef.Kind) {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+		msg := fmt.Sprintf(
 			"restoring %s %q under a different name (%q) is not supported by the Velero strategy: "+
 				"Velero DataUpload always restores volumes under their original names and only a VMInstance "+
-				"can adopt them. Omit targetApplicationRef.name to keep the source name, "+
-				"or use the application's engine-native strategy to restore into a new application",
-			backup.Spec.ApplicationRef.Kind, backup.Spec.ApplicationRef.Name, target.AppName))
+				"can adopt them. Omit targetApplicationRef.name to keep the source name",
+			backup.Spec.ApplicationRef.Kind, backup.Spec.ApplicationRef.Name, target.AppName)
+		if backup.Spec.ApplicationRef.Kind != vmDiskAppKind {
+			msg += ", or use the application's engine-native strategy to restore into a new application"
+		}
+		if restoreJob.Status.StartedAt != nil {
+			// The job predates this check: its Velero Restore may already have
+			// restored the application under the source name.
+			r.cleanupResourceModifierConfigMaps(ctx, restoreJob)
+			msg += fmt.Sprintf(". This RestoreJob was already running, so %q may have been restored into namespace %q under its source name",
+				backup.Spec.ApplicationRef.Name, target.Namespace)
+		}
+		return r.markRestoreJobFailed(ctx, restoreJob, msg)
 	}
 
 	// Step 1: On first reconcile, set startedAt and phase = Running

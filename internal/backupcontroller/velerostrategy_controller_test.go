@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -1163,6 +1164,7 @@ func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
 		targetNS    string
 		wantPhase   backupsv1alpha1.RestoreJobPhase
 		wantMessage string
+		wantMissing string // a remedy the message must not offer for this kind
 	}{
 		{
 			name:        "postgres cross-namespace rename is rejected",
@@ -1173,12 +1175,21 @@ func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
 			wantMessage: `restoring Postgres "src" under a different name ("dst") is not supported by the Velero strategy`,
 		},
 		{
+			name:        "postgres rejection points at the engine-native strategy",
+			appKind:     "Postgres",
+			targetName:  "dst",
+			targetNS:    targetNS,
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: "engine-native strategy",
+		},
+		{
 			name:        "vmdisk cross-namespace rename is rejected",
 			appKind:     vmDiskAppKind,
 			targetName:  "dst",
 			targetNS:    targetNS,
 			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
 			wantMessage: `restoring VMDisk "src" under a different name ("dst") is not supported by the Velero strategy`,
+			wantMissing: "engine-native strategy",
 		},
 		{
 			name:        "vmdisk rename is rejected by the backup kind, not the target kind",
@@ -1271,6 +1282,127 @@ func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
 			}
 			if got.Status.Phase != tt.wantPhase {
 				t.Fatalf("phase = %q, want %q", got.Status.Phase, tt.wantPhase)
+			}
+			if tt.wantMessage == "" {
+				return
+			}
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			if ready == nil {
+				t.Fatalf("Ready condition missing, conditions: %+v", got.Status.Conditions)
+			}
+			if !strings.Contains(ready.Message, tt.wantMessage) {
+				t.Errorf("Ready message = %q, want it to contain %q", ready.Message, tt.wantMessage)
+			}
+			if tt.wantMissing != "" && strings.Contains(ready.Message, tt.wantMissing) {
+				t.Errorf("Ready message = %q, must not offer %q", ready.Message, tt.wantMissing)
+			}
+		})
+	}
+}
+
+// TestReconcileVeleroRestore_RenameGuard_InFlight covers a rename RestoreJob
+// that was already Running when the guard was introduced: its Velero Restore
+// has completed under the source name, so the job must fail with a message
+// saying so and release its resource-modifier ConfigMap instead of waiting
+// for the job's deletion. A VMInstance in the same state still succeeds.
+func TestReconcileVeleroRestore_RenameGuard_InFlight(t *testing.T) {
+	const (
+		sourceNS = "tenant-src"
+		targetNS = "tenant-dst"
+	)
+	tests := []struct {
+		name        string
+		appKind     string
+		wantPhase   backupsv1alpha1.RestoreJobPhase
+		wantMessage string
+	}{
+		{
+			name:        "vmdisk in-flight rename fails and names the source-name copy",
+			appKind:     vmDiskAppKind,
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: `This RestoreJob was already running, so "src" may have been restored into namespace "tenant-dst" under its source name`,
+		},
+		{
+			name:      "vminstance in-flight rename still succeeds",
+			appKind:   vmInstanceKind,
+			wantPhase: backupsv1alpha1.RestoreJobPhaseSucceeded,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			started := metav1.Now()
+			backup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Name: "src-sb", Namespace: sourceNS},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{
+						APIGroup: stringPtr("apps.cozystack.io"),
+						Kind:     tt.appKind,
+						Name:     "src",
+					},
+					StrategyRef:    corev1.TypedLocalObjectReference{Kind: "Velero", Name: "cozy-default-velero"},
+					DriverMetadata: map[string]string{veleroBackupNameMetadataKey: "vb"},
+				},
+			}
+			raw, err := json.Marshal(RestoreOptions{CommonRestoreOptions: CommonRestoreOptions{TargetNamespace: targetNS}})
+			if err != nil {
+				t.Fatalf("marshal options: %v", err)
+			}
+			restoreJob := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "src-restore", Namespace: sourceNS},
+				Spec: backupsv1alpha1.RestoreJobSpec{
+					BackupRef: corev1.LocalObjectReference{Name: "src-sb"},
+					TargetApplicationRef: &corev1.TypedLocalObjectReference{
+						APIGroup: stringPtr("apps.cozystack.io"),
+						Kind:     tt.appKind,
+						Name:     "dst",
+					},
+					Options: &runtime.RawExtension{Raw: raw},
+				},
+				Status: backupsv1alpha1.RestoreJobStatus{
+					Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+					StartedAt: &started,
+				},
+			}
+			owningLabels := map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      restoreJob.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: restoreJob.Namespace,
+			}
+			veleroRestore := &velerov1.Restore{
+				ObjectMeta: metav1.ObjectMeta{Name: "vr", Namespace: veleroNamespace, Labels: owningLabels},
+				Status:     velerov1.RestoreStatus{Phase: velerov1.RestorePhaseCompleted},
+			}
+			modifiers := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "restore-modifiers-tenant-src-src-restore", Namespace: veleroNamespace, Labels: owningLabels},
+			}
+			strategy := &strategyv1alpha1.Velero{ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-velero"}}
+			targetNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
+
+			reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil)
+			testScheme := runtime.NewScheme()
+			_ = scheme.AddToScheme(testScheme)
+			_ = backupsv1alpha1.AddToScheme(testScheme)
+			_ = velerov1.AddToScheme(testScheme)
+			_ = strategyv1alpha1.AddToScheme(testScheme)
+			reconciler.Client = clientfake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(restoreJob, backup, veleroRestore, modifiers, strategy, targetNamespace).
+				WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).
+				Build()
+			ctx := context.Background()
+
+			if _, err := reconciler.reconcileVeleroRestore(ctx, restoreJob, backup); err != nil {
+				t.Fatalf("reconcileVeleroRestore() error = %v", err)
+			}
+
+			got := &backupsv1alpha1.RestoreJob{}
+			if err := reconciler.Get(ctx, client.ObjectKeyFromObject(restoreJob), got); err != nil {
+				t.Fatalf("get RestoreJob: %v", err)
+			}
+			if got.Status.Phase != tt.wantPhase {
+				t.Fatalf("phase = %q, want %q", got.Status.Phase, tt.wantPhase)
+			}
+			if err := reconciler.Get(ctx, client.ObjectKeyFromObject(modifiers), &corev1.ConfigMap{}); !errors.IsNotFound(err) {
+				t.Errorf("resource-modifier ConfigMap should be deleted, get err = %v", err)
 			}
 			if tt.wantMessage == "" {
 				return
