@@ -629,8 +629,13 @@ func (r *SiteRouterReconciler) resolveInputs(ctx context.Context, inst *instance
 		}
 	}
 
+	managementCIDR, err := r.resolveManagementCIDR(ctx)
+	if err != nil {
+		return render.Inputs{}, err
+	}
+
 	in := render.Inputs{
-		ManagementCIDR:     r.resolveManagementCIDR(ctx),
+		ManagementCIDR:     managementCIDR,
 		TunnelDevice:       tunnelDevice,
 		RemoteCIDRs:        remoteCIDRs,
 		TenantNetworkCIDRs: tenantCIDRs,

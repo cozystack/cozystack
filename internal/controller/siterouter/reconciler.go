@@ -995,26 +995,25 @@ func (r *SiteRouterReconciler) clusterNetworks(ctx context.Context) (denyset.Clu
 // than the pod network. --allow-open-management still means no management
 // firewall at all, so it short-circuits discovery rather than being overridden
 // by it.
-func (r *SiteRouterReconciler) resolveManagementCIDR(ctx context.Context) string {
+func (r *SiteRouterReconciler) resolveManagementCIDR(ctx context.Context) (string, error) {
 	if r.ManagementCIDR != "" {
-		return r.ManagementCIDR
+		return r.ManagementCIDR, nil
 	}
 	if r.AllowOpenManagement {
-		return ""
+		return "", nil
 	}
 
 	cm := &corev1.ConfigMap{}
 	key := types.NamespacedName{Namespace: cozystackConfigNamespace, Name: cozystackConfigName}
 	if err := r.reader().Get(ctx, key, cm); err != nil && !apierrors.IsNotFound(err) {
-		// Fall through to the platform default rather than failing the push: the
-		// deny-set discovery reads the same ConfigMap and reports its own errors,
-		// and a transient read failure must not rewrite the management ACL to
-		// something narrower or wider than the chart seeded.
-		log.FromContext(ctx).Info("could not read the cozystack ConfigMap for the management CIDR; using the platform default",
-			"configMap", key.String(), "default", denyset.DefaultPodCIDR, "error", err.Error())
-		return denyset.DefaultPodCIDR
+		// No value is safe to substitute. Whatever this returns is installed by
+		// the push as the only source allowed to reach the management API, and
+		// the platform default on a cluster with another pod CIDR shuts the
+		// controller out for good, since undoing it needs the API it just closed.
+		// Failing the push instead leaves the guest on the ACL it already has.
+		return "", fmt.Errorf("read %s for the management CIDR: %w", key.String(), err)
 	}
-	return denyset.ClusterNetworksFromConfigMap(cm.Data).PodCIDR
+	return denyset.ClusterNetworksFromConfigMap(cm.Data).PodCIDR, nil
 }
 
 // stringSlice coerces a decoded spec.values field (a []interface{} of strings
@@ -1113,8 +1112,9 @@ func (r *SiteRouterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // controller flags: a value that is set must be usable. An empty value is not a
 // configuration error, because it is the normal production setting — the
 // controller then resolves the cluster pod CIDR from the cozystack ConfigMap
-// (resolveManagementCIDR), which is still fail-closed: that path always yields
-// a CIDR, the platform default when the ConfigMap is silent. Only
+// (resolveManagementCIDR), which is still fail-closed: that path yields a CIDR,
+// the platform default when the ConfigMap is absent or silent, or an error that
+// skips the push when the ConfigMap cannot be read, never an empty value. Only
 // --allow-open-management removes the management firewall, and it has to be
 // passed explicitly to do so. Factored out of main so the policy is
 // unit-testable without triggering os.Exit.

@@ -127,7 +127,9 @@ func TestResolveManagementCIDR(t *testing.T) {
 		flag      string
 		allowOpen bool
 		objs      []client.Object
+		reader    client.Reader
 		want      string
+		wantErr   bool
 	}{
 		{
 			name: "a non-default pod CIDR is discovered rather than defaulted",
@@ -155,17 +157,56 @@ func TestResolveManagementCIDR(t *testing.T) {
 			objs: []client.Object{cozystackCM(map[string]string{denyset.ConfigMapKeyServiceCIDR: "10.96.0.0/16"})},
 			want: denyset.DefaultPodCIDR,
 		},
+		{
+			// The default is not a safe stand-in on a cluster whose pod CIDR
+			// differs: the push would install it as the only source allowed to
+			// reach the management API and shut the controller out.
+			name:    "a ConfigMap that cannot be read fails instead of falling back",
+			reader:  failingReader{err: errors.New("etcdserver: request timed out")},
+			wantErr: true,
+		},
+		{
+			name:   "an explicit flag needs no read",
+			flag:   "192.168.0.0/24",
+			reader: failingReader{err: errors.New("etcdserver: request timed out")},
+			want:   "192.168.0.0/24",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newTestReconciler(t, tt.objs...)
 			r.ManagementCIDR = tt.flag
 			r.AllowOpenManagement = tt.allowOpen
-			if got := r.resolveManagementCIDR(context.Background()); got != tt.want {
+			if tt.reader != nil {
+				r.APIReader = tt.reader
+			}
+			got, err := r.resolveManagementCIDR(context.Background())
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveManagementCIDR() = %q, nil; want an error rather than a substituted CIDR", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveManagementCIDR() error = %v", err)
+			}
+			if got != tt.want {
 				t.Fatalf("resolveManagementCIDR() = %q, want %q", got, tt.want)
 			}
 		})
 	}
+}
+
+// failingReader stands in for an apiserver that answers every read with an
+// error, the case a transient outage produces.
+type failingReader struct{ err error }
+
+func (f failingReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return f.err
+}
+
+func (f failingReader) List(context.Context, client.ObjectList, ...client.ListOption) error {
+	return f.err
 }
 
 func newTestReconciler(t *testing.T, objs ...client.Object) *SiteRouterReconciler {
