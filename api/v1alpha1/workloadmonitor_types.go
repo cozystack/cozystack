@@ -34,6 +34,10 @@ type WorkloadMonitorSpec struct {
 	Replicas *int32 `json:"replicas,omitempty"`
 }
 
+// WorkloadMonitorReasonDataVolumeNotReady is the status Reason of a monitor
+// that is not operational because a DataVolume it selects is not ready.
+const WorkloadMonitorReasonDataVolumeNotReady = "DataVolumeNotReady"
+
 // WorkloadMonitorStatus defines the observed state of WorkloadMonitor
 type WorkloadMonitorStatus struct {
 	// Operational indicates if the workload meets all operational requirements
@@ -52,6 +56,11 @@ type WorkloadMonitorStatus struct {
 	// controller can tell.
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// Reason is a machine-readable cause for Message, such as
+	// DataVolumeNotReady.
+	// +optional
+	Reason string `json:"reason,omitempty"`
 }
 
 // +kubebuilder:object:root=true

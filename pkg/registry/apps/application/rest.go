@@ -1539,6 +1539,9 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 			if len(ws.messages) > 0 {
 				workloadsCondition.Message = strings.Join(ws.messages, "; ")
 			}
+			if ws.reason != "" {
+				workloadsCondition.Reason = ws.reason
+			}
 		case ws.unknown:
 			workloadsCondition.Status = metav1.ConditionUnknown
 			workloadsCondition.Reason = "Pending"
@@ -1584,6 +1587,9 @@ type workloadsStatus struct {
 	// messages are the non-empty status messages of the monitors that are not
 	// operational, sorted so repeated conversions produce identical content.
 	messages []string
+	// reason is the status Reason of a monitor that is not operational and
+	// names its cause, such as DataVolumeNotReady; empty when none does.
+	reason string
 	// transitionTime is the most recent metadata update time across the
 	// matching monitors. Used as WorkloadsReady.LastTransitionTime so that
 	// repeated conversions for the same underlying state produce stable
@@ -1630,7 +1636,7 @@ func (r *REST) getWorkloadsOperational(ctx context.Context, namespace, appName s
 	}
 	operational := true
 	unknown := false
-	var messages []string
+	var messages, reasons []string
 	var latest metav1.Time
 	for _, m := range monitors.Items {
 		if m.Status.Operational == nil {
@@ -1640,6 +1646,9 @@ func (r *REST) getWorkloadsOperational(ctx context.Context, namespace, appName s
 			if m.Status.Message != "" {
 				messages = append(messages, m.Status.Message)
 			}
+			if m.Status.Reason != "" {
+				reasons = append(reasons, m.Status.Reason)
+			}
 		}
 		// Pick the most recent monitor mtime as a stable transition time.
 		if t := latestMonitorTime(&m); t.After(latest.Time) {
@@ -1647,7 +1656,12 @@ func (r *REST) getWorkloadsOperational(ctx context.Context, namespace, appName s
 		}
 	}
 	sort.Strings(messages)
-	return workloadsStatus{operational: operational, found: true, unknown: unknown, messages: messages, transitionTime: latest}, nil
+	sort.Strings(reasons)
+	var reason string
+	if len(reasons) > 0 {
+		reason = reasons[0]
+	}
+	return workloadsStatus{operational: operational, found: true, unknown: unknown, messages: messages, reason: reason, transitionTime: latest}, nil
 }
 
 // latestMonitorTime returns the most recent timestamp associated with a

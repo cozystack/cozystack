@@ -1302,7 +1302,46 @@ func TestReconcile_DataVolumeMessageNamesTheDiskAndPhase(t *testing.T) {
 			if got.Status.Message != tc.want {
 				t.Errorf("Message = %q, want %q", got.Status.Message, tc.want)
 			}
+			wantReason := ""
+			if tc.want != "" {
+				wantReason = cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady
+			}
+			if got.Status.Reason != wantReason {
+				t.Errorf("Reason = %q, want %q", got.Status.Reason, wantReason)
+			}
 		})
+	}
+}
+
+func TestReconcile_PopulatedDataVolumeClearsTheLastVerdict(t *testing.T) {
+	s := newTestScheme()
+	selector := map[string]string{"app.kubernetes.io/instance": "vm-disk-test"}
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-test", Namespace: "default"},
+		Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: selector, MinReplicas: ptr.To[int32](0)},
+		Status: cozyv1alpha1.WorkloadMonitorStatus{
+			Operational: ptr.To(false),
+			Message:     "DataVolume vm-disk-test is ImportInProgress",
+			Reason:      cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady,
+		},
+	}
+	done := "Succeeded"
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(monitor, newDataVolume("vm-disk-test", selector, &done)).
+		WithStatusSubresource(monitor).
+		Build()
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s, DataVolumeReader: fakeClient}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: monitor.Name, Namespace: monitor.Namespace}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	got := &cozyv1alpha1.WorkloadMonitor{}
+	if err := fakeClient.Get(context.TODO(), req.NamespacedName, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Operational == nil || !*got.Status.Operational || got.Status.Message != "" || got.Status.Reason != "" {
+		t.Errorf("Operational=%v Message=%q Reason=%q, want true and both cleared", got.Status.Operational, got.Status.Message, got.Status.Reason)
 	}
 }
 
@@ -1441,11 +1480,12 @@ func TestReconcile_UnreadDataVolumesKeepTheLastVerdict(t *testing.T) {
 			got, _ := reconcileWithUnreadableDataVolumes(t, withReader, cozyv1alpha1.WorkloadMonitorStatus{
 				Operational: ptr.To(false),
 				Message:     stuck,
+				Reason:      cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady,
 			})
 			if got.Status.ObservedReplicas != 1 || got.Status.AvailableReplicas != 1 {
 				t.Errorf("replicas observed=%d available=%d, want 1 and 1", got.Status.ObservedReplicas, got.Status.AvailableReplicas)
 			}
-			if got.Status.Operational == nil || *got.Status.Operational || got.Status.Message != stuck {
+			if got.Status.Operational == nil || *got.Status.Operational || got.Status.Message != stuck || got.Status.Reason != cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady {
 				t.Errorf("Operational=%v Message=%q, want false and %q", got.Status.Operational, got.Status.Message, stuck)
 			}
 		})

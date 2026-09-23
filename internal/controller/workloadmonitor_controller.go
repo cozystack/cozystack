@@ -935,11 +935,15 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
 			fresh.Status.Operational = pointer.Bool(false)
 		}
-		// Only the DataVolume check writes Message, so the stored one is the last
-		// DataVolume verdict: kept while no reader is installed yet, so a
+		// Only the DataVolume check writes Message and Reason, so the stored ones
+		// are the last DataVolume verdict: kept while no reader is installed yet, so a
 		// controller restart does not report a stuck disk as ready.
 		if dataVolumesRead {
 			fresh.Status.Message = dataVolumesMessage
+			fresh.Status.Reason = ""
+			if dataVolumesMessage != "" {
+				fresh.Status.Reason = cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady
+			}
 		}
 		if fresh.Status.Message != "" {
 			fresh.Status.Operational = pointer.Bool(false)

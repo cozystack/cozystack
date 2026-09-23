@@ -114,6 +114,11 @@ spec:
                 description: Operational indicates if the workload meets all operational
                   requirements
                 type: boolean
+              reason:
+                description: |-
+                  Reason is a machine-readable cause for Message, such as
+                  DataVolumeNotReady.
+                type: string
             type: object
         type: object
     served: true
