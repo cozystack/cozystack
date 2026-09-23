@@ -606,6 +606,17 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 				"Use options.targetNamespace to restore into a different namespace")
 	}
 
+	// Validate: rename is only implemented for VMInstance. Failing here beats a
+	// Succeeded RestoreJob whose application silently keeps the source name.
+	if target.IsRenamed && !veleroRenameSupported(backup.Spec.ApplicationRef.Kind) {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+			"restoring %s %q under a different name (%q) is not supported by the Velero strategy: "+
+				"Velero DataUpload always restores volumes under their original names and only a VMInstance "+
+				"can adopt them. Omit targetApplicationRef.name to keep the source name, "+
+				"or use the application's engine-native strategy to restore into a new application",
+			backup.Spec.ApplicationRef.Kind, backup.Spec.ApplicationRef.Name, target.AppName))
+	}
+
 	// Step 1: On first reconcile, set startedAt and phase = Running
 	if restoreJob.Status.StartedAt == nil {
 		logger.Debug("setting RestoreJob StartedAt and phase to Running")
@@ -957,6 +968,16 @@ var (
 	vmiGVR            = schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachineinstances"}
 	dataVolumeGVR     = schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "datavolumes"}
 )
+
+// veleroRenameSupported reports whether postRestoreRename can restore the
+// given application kind under a new name. Velero DataUpload writes volumes
+// under their original names, and only a VMInstance re-attaches them after its
+// HelmRelease is renamed: its disks keep their names and CDI adopts the restored
+// PVCs. Every other kind (a standalone VMDisk, a database operator's Cluster)
+// renders fresh volumes for the new name and comes up empty.
+func veleroRenameSupported(appKind string) bool {
+	return appKind == vmInstanceKind
+}
 
 // helmReleaseNameForApp returns the HelmRelease name for the given application
 // kind and name. Returns empty string for unsupported kinds.

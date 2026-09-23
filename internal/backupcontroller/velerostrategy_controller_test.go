@@ -3,6 +3,7 @@ package backupcontroller
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -1117,6 +1118,135 @@ func TestHelmReleaseNameForApp(t *testing.T) {
 			got := helmReleaseNameForApp(tt.kind, tt.name)
 			if got != tt.want {
 				t.Errorf("helmReleaseNameForApp(%q, %q) = %q, want %q", tt.kind, tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestVeleroRenameSupported(t *testing.T) {
+	tests := []struct {
+		kind string
+		want bool
+	}{
+		{vmInstanceKind, true},
+		{vmDiskAppKind, false},
+		{"Postgres", false},
+		{"MariaDB", false},
+		{"ClickHouse", false},
+		{"MongoDB", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			if got := veleroRenameSupported(tt.kind); got != tt.want {
+				t.Errorf("veleroRenameSupported(%q) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReconcileVeleroRestore_RenameGuard covers the fix for a RestoreJob that
+// asked for a new application name via targetApplicationRef.name but whose
+// kind cannot be renamed by postRestoreRename: it used to report Succeeded
+// with the application restored under the source name.
+func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
+	const (
+		sourceNS = "tenant-src"
+		targetNS = "tenant-dst"
+	)
+
+	tests := []struct {
+		name        string
+		appKind     string
+		targetNS    string
+		wantPhase   backupsv1alpha1.RestoreJobPhase
+		wantMessage string
+	}{
+		{
+			name:        "postgres cross-namespace rename is rejected",
+			appKind:     "Postgres",
+			targetNS:    targetNS,
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: `restoring Postgres "src" under a different name ("dst") is not supported by the Velero strategy`,
+		},
+		{
+			name:        "vmdisk cross-namespace rename is rejected",
+			appKind:     vmDiskAppKind,
+			targetNS:    targetNS,
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: `restoring VMDisk "src" under a different name ("dst") is not supported by the Velero strategy`,
+		},
+		{
+			name:        "postgres same-namespace rename keeps the DataUpload message",
+			appKind:     "Postgres",
+			targetNS:    "",
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: "restoring to the same namespace with a different application name is not supported",
+		},
+		{
+			name:      "vminstance cross-namespace rename passes the guard",
+			appKind:   vmInstanceKind,
+			targetNS:  targetNS,
+			wantPhase: backupsv1alpha1.RestoreJobPhaseRunning,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Name: "src-sb", Namespace: sourceNS},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{
+						APIGroup: stringPtr("apps.cozystack.io"),
+						Kind:     tt.appKind,
+						Name:     "src",
+					},
+					StrategyRef: corev1.TypedLocalObjectReference{Kind: "Velero", Name: "cozy-default-velero"},
+				},
+			}
+			restoreJob := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "src-restore", Namespace: sourceNS},
+				Spec: backupsv1alpha1.RestoreJobSpec{
+					BackupRef: corev1.LocalObjectReference{Name: "src-sb"},
+					TargetApplicationRef: &corev1.TypedLocalObjectReference{
+						APIGroup: stringPtr("apps.cozystack.io"),
+						Kind:     tt.appKind,
+						Name:     "dst",
+					},
+				},
+			}
+			if tt.targetNS != "" {
+				raw, err := json.Marshal(RestoreOptions{CommonRestoreOptions: CommonRestoreOptions{TargetNamespace: tt.targetNS}})
+				if err != nil {
+					t.Fatalf("marshal options: %v", err)
+				}
+				restoreJob.Spec.Options = &runtime.RawExtension{Raw: raw}
+			}
+			targetNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
+
+			reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil, restoreJob, backup, targetNamespace)
+			reconciler.Client = newRestoreJobTestClient(t, restoreJob, backup, targetNamespace)
+			ctx := context.Background()
+
+			if _, err := reconciler.reconcileVeleroRestore(ctx, restoreJob, backup); err != nil {
+				t.Fatalf("reconcileVeleroRestore() error = %v", err)
+			}
+
+			got := &backupsv1alpha1.RestoreJob{}
+			if err := reconciler.Get(ctx, client.ObjectKeyFromObject(restoreJob), got); err != nil {
+				t.Fatalf("get RestoreJob: %v", err)
+			}
+			if got.Status.Phase != tt.wantPhase {
+				t.Fatalf("phase = %q, want %q", got.Status.Phase, tt.wantPhase)
+			}
+			if tt.wantMessage == "" {
+				return
+			}
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			if ready == nil {
+				t.Fatalf("Ready condition missing, conditions: %+v", got.Status.Conditions)
+			}
+			if !strings.Contains(ready.Message, tt.wantMessage) {
+				t.Errorf("Ready message = %q, want it to contain %q", ready.Message, tt.wantMessage)
 			}
 		})
 	}
