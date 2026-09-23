@@ -28,6 +28,15 @@ tests:
           path: spec.endpoints[0].max_scrape_size
           value: 512MB
 
+  - it: a byte count renders as a string, as the CRD field requires
+    template: templates/apiserver-scrape.yaml
+    set:
+      vmagent.apiserverMaxScrapeSize: 134217728
+    asserts:
+      - matchRegex:
+          path: spec.endpoints[0].max_scrape_size
+          pattern: ^[0-9.e+]+$
+
   - it: an empty value falls back to the global flag
     template: templates/apiserver-scrape.yaml
     set:
@@ -55,3 +64,6 @@ tests:
       - equal:
           path: spec.groups[0].rules[0].expr
           value: increase(vm_promscrape_max_scrape_size_exceeded_errors_total[10m]) > 0
+      - equal:
+          path: spec.groups[0].rules[0].labels.severity
+          value: warning
