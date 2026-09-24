@@ -122,7 +122,7 @@ func TestInstallPlatformPackageSource_Updates(t *testing.T) {
 // TestInstallPlatformPackageSource_RefusesTapOwned asserts that when a
 // marketplace tap has materialized a PackageSource under a name the platform
 // later ships, the platform refuses to overwrite it, names the conflict, and
-// leaves the object untouched (kvaps' review point).
+// leaves the object untouched.
 func TestInstallPlatformPackageSource_RefusesTapOwned(t *testing.T) {
 	s := newTestScheme()
 	tapOwned := &cozyv1alpha1.PackageSource{

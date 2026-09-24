@@ -356,7 +356,7 @@ A `recoveryTime` **before the earliest base backup** fails differently: PostgreS
 
 ### Discovering the earliest / latest restorable time
 
-CNPG's `Cluster.status.firstRecoverabilityPoint` exists in the status schema but is unreliable under the barman-cloud plugin — it was observed empty on every plugin-backed cluster on the dev7 test cluster (CNPG 1.28.1) — so read the window from the backup catalog instead. Each completed base backup records its WAL range and timestamps on the underlying `cnpg.io/Backup`:
+CNPG's `Cluster.status.firstRecoverabilityPoint` exists in the status schema but is unreliable under the barman-cloud plugin — it was observed empty on every plugin-backed cluster in a test environment (CNPG 1.28.1) — so read the window from the backup catalog instead. Each completed base backup records its WAL range and timestamps on the underlying `cnpg.io/Backup`:
 
 ```bash
 # Completed base backups, oldest first: STOP is the earliest instant that

@@ -102,7 +102,7 @@ tests:
             name: GF_PATHS_CUSTOM_INI
 
   - it: mode=None does NOT render the users-Job (upgrade safety guard)
-    # Regression guard against the dev3 test finding: if the Job were
+    # Regression guard against a test-cluster finding: if the Job were
     # rendered in mode=None, the post-upgrade prune pass would silently
     # delete every non-admin Main-Org member on any monitoring HR
     # reconcile — clobbering users added manually through the Grafana
@@ -247,7 +247,7 @@ tests:
       # groups_attribute_path is REQUIRED alongside allowed_groups on
       # Grafana v11.x+ — without it Grafana leaves the extracted
       # user.Groups slice empty and the allowed_groups gate rejects
-      # every login (verified end-to-end on dev3 with v11.6.15). "groups"
+      # every login (verified end-to-end on a test cluster with v11.6.15). "groups"
       # points at the top-level `groups` array from userinfo — the
       # shape Keycloak's oidc-group-membership-mapper emits.
       - equal:
