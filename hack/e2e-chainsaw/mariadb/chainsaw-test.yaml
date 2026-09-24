@@ -454,18 +454,18 @@ spec:
           NAMESPACE="$NAMESPACE" examples/backups/mariadb/cleanup.sh
         check:
           ($error == null): true
-    # 42m runs the whole documented flow: bucket provisioning, a 2-replica
+    # 48m runs the whole documented flow: bucket provisioning, a 2-replica
     # source MariaDB, the logical dump to S3, an empty 2-replica target, and
     # the to-copy restore + verify (convention 6: justified in-line).
     #
-    # Sized so a failed install at a 660s HelmRelease wait in run-all.sh is
+    # Sized so a failed install at any 660s HelmRelease wait in run-all.sh is
     # reported by the script rather than cut off here, which SIGKILLs the
     # process group and loses the script's error. hack/mariadb-first-boot-waits.bats
     # holds this op against those waits, so raising a wait in run-all.sh means
     # raising this op too. A bound on the whole flow needs a phase budget
     # (docs/agents/e2e-testing.md), not a larger literal.
     - script:
-        timeout: 42m
+        timeout: 48m
         content: |
           set -eu
           cd ../../..

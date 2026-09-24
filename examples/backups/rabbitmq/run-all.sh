@@ -43,7 +43,9 @@ print_header "RabbitMQ definitions backup/restore demo (namespace: $NAMESPACE)"
 # --- Bucket ------------------------------------------------------------------
 print_header "Step 00: Provision Bucket '${BUCKET_NAME}' in ${NAMESPACE}"
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/00-bucket.yaml"
-wait_hr_ready "bucket-${BUCKET_NAME}" 300
+# 660s, above this generated release's 600s install timeout; see "Sizing an
+# HR-Ready budget" in docs/agents/e2e-testing.md.
+wait_hr_ready "bucket-${BUCKET_NAME}" 660
 wait_for_field bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_NAME}" \
     '{.status.bucketReady}' true "$NAMESPACE" 300
 wait_for_field bucketaccesses.objectstorage.k8s.io "bucket-${BUCKET_NAME}-${BUCKET_USER}" \

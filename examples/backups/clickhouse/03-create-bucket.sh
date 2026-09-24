@@ -27,7 +27,9 @@ spec:
 EOF
 
 log_substep "Waiting for bucket HelmRelease to be Ready..."
-wait_hr_ready "bucket-${BUCKET_NAME}" 300
+# 660s, above this generated release's 600s install timeout; see "Sizing an
+# HR-Ready budget" in docs/agents/e2e-testing.md.
+wait_hr_ready "bucket-${BUCKET_NAME}" 660
 kubectl -n "$NAMESPACE" wait bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_NAME}" --for=jsonpath='{.status.bucketReady}'=true --timeout=180s
 # Cozystack's bucket app provisions a BucketAccess named "<bucket-name>-backup"
 # (the "-backup" suffix is the BucketAccessClass name); the BucketInfo Secret

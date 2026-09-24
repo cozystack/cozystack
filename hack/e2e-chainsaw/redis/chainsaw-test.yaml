@@ -702,8 +702,10 @@ spec:
     # Honest round-trip: seed a sentinel key, back it up through this demo's own
     # Bucket, restore it in place, then restore into a copy - asserting the exact
     # bytes survive object storage each time (04 prints the to-copy success).
+    # 36m: sized with the 660s bucket HR wait in run-all.sh (convention 6:
+    # justified in-line).
     - script:
-        timeout: 30m
+        timeout: 36m
         content: |
           set -eu
           cd ../../..
