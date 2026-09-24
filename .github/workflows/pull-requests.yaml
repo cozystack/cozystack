@@ -355,11 +355,13 @@ jobs:
       # installer is built in finalize, but some package image targets shell out
       # to flux; install it if absent (idempotent, cheap).
       - name: Set up build toolchain
+        env:
+          FLUX_VERSION: "2.8.6"
         run: |
-          if ! command -v flux >/dev/null; then
+          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
             install_script="$(mktemp)"
             curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
-            sudo bash "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
             rm -f "$install_script"
           fi
       - name: Set up Docker config
@@ -574,11 +576,13 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - name: Set up build toolchain
+        env:
+          FLUX_VERSION: "2.8.6"
         run: |
-          if ! command -v flux >/dev/null; then
+          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
             install_script="$(mktemp)"
             curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
-            sudo bash "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
             rm -f "$install_script"
           fi
       - name: Download patch fragments
