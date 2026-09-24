@@ -130,6 +130,3 @@ require (
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.2 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 )
-
-// See: issues.k8s.io/135537
-replace k8s.io/apimachinery => github.com/cozystack/apimachinery v0.0.0-20260710062224-763e1451713b

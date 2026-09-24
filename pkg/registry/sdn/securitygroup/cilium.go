@@ -19,8 +19,8 @@ import (
 // CiliumNetworkPolicy resource. It carries only the metadata and the subset of
 // the policy spec that SecurityGroup exposes, so the Cozystack API server can
 // read and write CiliumNetworkPolicy objects through a controller-runtime
-// client without importing the full Cilium module (which pins a Kubernetes
-// version incompatible with this project's apimachinery fork).
+// client without importing the full Cilium module (which would move this
+// project's k8s.io libraries to whatever Kubernetes release Cilium pins).
 type CiliumNetworkPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

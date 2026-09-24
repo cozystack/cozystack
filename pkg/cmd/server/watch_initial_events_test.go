@@ -44,14 +44,16 @@ import (
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
 )
 
+var redisConfig = config.Resource{
+	Application: config.ApplicationConfig{Kind: "Redis", Singular: "redis", Plural: "redises"},
+	Release:     config.ReleaseConfig{Prefix: "redis-"},
+}
+
 // startAppsServer serves the apps group through the real apiserver handler
-// chain, with the application storage backed by a fake client.
-func startAppsServer(t *testing.T) (*httptest.Server, client.Client) {
+// chain, with the application storage backed by a fake client. The kinds are
+// registered on the process-wide apiserver.Scheme.
+func startAppsServer(t *testing.T, rc *config.ResourceConfig) (*httptest.Server, client.Client) {
 	t.Helper()
-	rc := &config.ResourceConfig{Resources: []config.Resource{{
-		Application: config.ApplicationConfig{Kind: "Redis", Singular: "redis", Plural: "redises"},
-		Release:     config.ReleaseConfig{Prefix: "redis-"},
-	}}}
 	if err := appsv1alpha1.RegisterDynamicTypes(apiserver.Scheme, rc); err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +76,9 @@ func startAppsServer(t *testing.T) (*httptest.Server, client.Client) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	storage := map[string]rest.Storage{
-		"redises": applicationstorage.NewREST(cli, cli, &rc.Resources[0]),
+	storage := map[string]rest.Storage{}
+	for i := range rc.Resources {
+		storage[rc.Resources[i].Application.Plural] = applicationstorage.NewREST(cli, cli, &rc.Resources[i])
 	}
 	if err := apiserver.InstallAppsAPIGroup(srv, storage); err != nil {
 		t.Fatal(err)
@@ -144,7 +147,7 @@ func watchStream(t *testing.T, ts *httptest.Server, cli client.Client, query str
 // bookmarks; from k8s.io/apiserver v0.36 the handler panics if the storage
 // answers it with the initial-events-end bookmark, so none may appear.
 func TestWatchHandler_PlainWatchGetsNoInitialEventsEndBookmark(t *testing.T) {
-	ts, cli := startAppsServer(t)
+	ts, cli := startAppsServer(t, &config.ResourceConfig{Resources: []config.Resource{redisConfig}})
 	lines := watchStream(t, ts, cli, "watch=true")
 	sawModified := false
 	for _, l := range lines {
@@ -159,7 +162,7 @@ func TestWatchHandler_PlainWatchGetsNoInitialEventsEndBookmark(t *testing.T) {
 }
 
 func TestWatchHandler_WatchListGetsInitialEventsEndBookmark(t *testing.T) {
-	ts, cli := startAppsServer(t)
+	ts, cli := startAppsServer(t, &config.ResourceConfig{Resources: []config.Resource{redisConfig}})
 	lines := watchStream(t, ts, cli, "watch=true&sendInitialEvents=true&allowWatchBookmarks=true&resourceVersionMatch=NotOlderThan")
 	for _, l := range lines {
 		if strings.Contains(l, `"type":"BOOKMARK"`) && strings.Contains(l, metav1.InitialEventsAnnotationKey) {
