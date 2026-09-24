@@ -197,6 +197,33 @@ spec:
   # roll below always has to get through a yellow cluster.
   - name: make-the-cluster-permanently-yellow
     try:
+    # The bootstrap pod stays cluster-manager after the data node is Ready, and
+    # answers 503 until its own security config loads; once it is gone, the
+    # Ready data node is the manager. The handoff takes seconds; 3m leaves room
+    # for several 10s retire retries, a 30s requeue and the 30s grace period.
+    - error:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: opensearch-test-bootstrap-0
+    # The same Initialized flag also releases any restart that became pending
+    # during first boot, and on one replica it takes the only node down. 6m:
+    # the health steps requeue every 10s, then the pod restarts on an image the
+    # node already has.
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: opensearch-test-nodes
+          (status.observedGeneration == metadata.generation): true
+          status:
+            readyReplicas: 1
+            updatedReplicas: 1
+            (currentRevision == updateRevision): true
     - script:
         # Above the two in-pod budgets below, so one of them is what fires.
         timeout: 3m
