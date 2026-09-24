@@ -388,7 +388,7 @@ EOF
   # endpoints (both Kamaji control-plane pods), so a single apiserver pod restart
   # is routed around transparently. `kubectl port-forward` instead pins to one
   # pod and dies when that pod blips: a lone kube-apiserver restart was observed
-  # leaving localhost refusing connections for the entire 12m node-Ready wait
+  # leaving localhost refusing connections for the entire 18m node-Ready wait
   # while the cluster was in fact healthy (CAPI NodeHealthy=True on both nodes),
   # failing the test on a dead tunnel. The LB endpoint is also stable until
   # teardown, so the failure snapshot can still reach the tenant. Test-scoped and
@@ -441,14 +441,30 @@ EOF
   # two budgets starve each other under load: a slow KubeVirt VM boot consumes
   # the join budget, then the tenant cluster's cilium CNI needs several more
   # minutes to make the freshly-joined nodes Ready — overflowing the fixed 3m
-  # Ready window even though the CNI converges fine. One 12m deadline that polls
+  # Ready window even though the CNI converges fine. One deadline that polls
   # for ">=2 nodes Ready" is robust to wherever the time goes.
-  if ! timeout 12m bash -c '
+  #
+  # 18m, not the earlier 12m: this single budget has to absorb the *entire*
+  # worker bring-up, and the `machinedeployment .status.replicas=2` gate above
+  # clears while the KubeVirt VMs are still only Machine objects — the clock
+  # here starts ~2m before the guest VMIs even exist. Under host storage
+  # pressure that margin evaporates: in run 30260770694 a transient
+  # `drbd.linbit.com/lost-quorum` taint delayed the worker DataVolume imports,
+  # the worker VMIs were created ~2m into this wait, and the guests then had
+  # only ~10m to import Talos, boot, register a kubelet and let cilium turn the
+  # nodes Ready. They did not make it: both kubernetes-latest and
+  # kubernetes-previous failed here at exactly 12m with zero Nodes registered
+  # and the tenant cilium HR still mid-install. A less-loaded fleet run passed
+  # the same suites unchanged, so this is load-induced slowness, not a stuck
+  # bring-up; 18m restores margin and still sits well inside the 40m step
+  # timeout (the downstream LB/NFS/ouroboros checks add ~10-15m on the happy
+  # path).
+  if ! timeout 18m bash -c '
     until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes --no-headers 2>/dev/null | grep -cw Ready)" -ge 2 ]; do
       sleep 5
     done
   '; then
-    # Node-join failed: fewer than 2 tenant nodes became Ready inside the 12m
+    # Node-join failed: fewer than 2 tenant nodes became Ready inside the 18m
     # deadline. Dump scoped diagnostics that split the failure sub-modes, then
     # fail fast — no point running LB/NFS tests without Ready nodes.
     #
@@ -460,7 +476,7 @@ EOF
     # (2b) is the failure mode a follow-up fix has to target, and it cannot be
     # designed without this artifact. Every capture is guarded with `|| true`
     # so a capture failure never masks the real `exit 1`.
-    echo "=== node-join failed: fewer than 2 tenant nodes Ready within 12m — diagnostics follow ==="
+    echo "=== node-join failed: fewer than 2 tenant nodes Ready within 18m — diagnostics follow ==="
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes || true
     kubectl -n tenant-test get hr || true
 
