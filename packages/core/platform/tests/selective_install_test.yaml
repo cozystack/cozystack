@@ -40,6 +40,20 @@ tests:
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.postgres-operator, any: true}
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.victoria-metrics-operator, any: true}
 
+  - it: keeps the postgres backup roundtrip prerequisites
+    template: templates/bundles/system.yaml
+    values:
+      - fixtures/selective-install-postgres-values.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+    asserts:
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backupstrategy-controller, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backup-controller, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.bucket-application, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.objectstorage-controller, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.velero, any: true}
+
   - it: keeps the CAPI and virtualization runtime baseline
     template: templates/bundles/iaas.yaml
     values:
