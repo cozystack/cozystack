@@ -133,20 +133,57 @@ assert_output_graph_error() {
     assert_contains_package "$output" cozystack.gateway-api-crds
 }
 
-@test "etcd closure includes the operator that serves its CRD" {
-    # The other half of the same missing edge. extra/etcd renders kind:
-    # EtcdCluster from etcd-operator.cozystack.io/v1alpha2, so an etcd suite
-    # installed without cozystack.etcd-operator has no CRD to apply against and
-    # fails on `no matches for kind "EtcdCluster"`. The forward walk reaches the
-    # operator only through etcd-application's dependsOn, so this asserts the
-    # operator AND the deps it drags in -- asserting only the app source is what
-    # left the gap invisible.
-    output=$(hack/select-install.sh "etcd")
-    assert_contains_package "$output" cozystack.etcd-application
-    assert_contains_package "$output" cozystack.etcd-operator
-    assert_contains_package "$output" cozystack.cert-manager
-    assert_contains_package "$output" cozystack.vertical-pod-autoscaler
-    assert_contains_package "$output" cozystack.cozystack-engine
+@test "runtime baseline rejects a lost etcd operator dependency edge" {
+    # etcd-application is also a baseline seed, so merely selecting etcd cannot
+    # prove that its operator edge is necessary.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    hack/select-install.sh postgres "$tmp/sources" >/dev/null
+    yq -i '(.spec.variants[].dependsOn) -= ["cozystack.etcd-operator"]' \
+      "$tmp/sources/etcd-application.yaml"
+    for mode in closure disabled; do
+        assert_output_graph_error "$mode" "$tmp/sources" \
+          "runtime baseline dependency closure is missing: cozystack.etcd-operator"
+    done
+    rm -rf "$tmp"
+}
+
+@test "backup suites keep the APIs used by their roundtrip examples" {
+    for suite in clickhouse etcd kafka kafka-metadata mariadb mongodb postgres rabbitmq redis; do
+        keep=$(hack/select-install.sh "$suite")
+        drop=$(hack/select-install.sh --disabled "$suite")
+        for required in cozystack.backupstrategy-controller cozystack.backup-controller \
+            cozystack.bucket-application cozystack.objectstorage-controller cozystack.velero; do
+            assert_contains_package "$keep" "$required"
+            case " $drop " in
+                *" $required "*) echo "suite '$suite' disables backup prerequisite '$required'" >&2; exit 1 ;;
+            esac
+        done
+    done
+    # Suites without backup steps must not acquire the backup stack as baseline.
+    drop=$(hack/select-install.sh --disabled kuberture)
+    assert_contains_package "$drop" cozystack.backupstrategy-controller
+}
+
+@test "suite runtime requirements must resolve in every selector mode" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mkdir -p "$tmp/suites/postgres"
+    : > "$tmp/suites/postgres/chainsaw-test.yaml"
+    hack/select-install.sh --validate "$tmp/sources" "$tmp/suites"
+    mv "$tmp/sources/backupstrategy-controller.yaml" "$tmp/backupstrategy-controller.yaml"
+    hack/select-install.sh kuberture "$tmp/sources" >/dev/null
+    for mode in closure disabled; do
+        assert_output_graph_error "$mode" "$tmp/sources" \
+          "'cozystack.backupstrategy-controller' is not a PackageSource"
+    done
+    if hack/select-install.sh --validate "$tmp/sources" "$tmp/suites" >"$tmp/out" 2>"$tmp/err"; then
+        echo "expected validation to reject a missing suite runtime requirement" >&2
+        exit 1
+    fi
+    [ ! -s "$tmp/out" ]
+    grep -Fq "maps to 'cozystack.backupstrategy-controller', not a PackageSource" "$tmp/err"
+    rm -rf "$tmp"
 }
 
 @test "validate passes on the real source graph and suite mapping" {
@@ -407,9 +444,9 @@ YAML
         echo "closure ($keep) + complement ($drop) = $sum, but there are $total PackageSources" >&2
         exit 1
     fi
-    [ "$total" -eq 101 ]
-    [ "$keep" -eq 33 ]
-    [ "$drop" -eq 68 ]
+    inventory=$(printf '%s\n' "$names" | sort -u)
+    partition=$(printf '%s\n%s\n' "$keep_output" "$drop_output" | tr ' ' '\n' | sort -u)
+    [ "$partition" = "$inventory" ]
 }
 
 @test "disabled mode accepts a valid inventory with an empty complement" {

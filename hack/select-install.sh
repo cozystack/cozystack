@@ -1,7 +1,7 @@
 #!/bin/sh
 # Given the E2E app suite(s) about to run, emit the conservative set of packages
-# that must be INSTALLED for those suites: the suite owners, the baseline needed
-# by the E2E install itself, and their forward PackageSource dependency closure.
+# that must be INSTALLED for those suites: the suite owners and runtime needs,
+# the E2E install baseline, and their forward PackageSource dependency closure.
 # This is the install-side companion to select-e2e.sh:
 # select-e2e.sh picks WHICH Chainsaw suites run (reverse dependency walk);
 # select-install.sh picks WHAT must be up for them (forward dependency walk).
@@ -55,8 +55,8 @@
 #
 # --validate: check the whole graph AND the suite mapping — every dependsOn
 #   target resolves to a real PackageSource, there are no dependency cycles, and
-#   every Chainsaw suite under <suites-dir> resolves via suite_to_source() to
-#   one or more real PackageSources. Exit non-zero on any failure. The graph
+#   every Chainsaw suite under <suites-dir> has real PackageSources for both its
+#   owners and runtime requirements. Exit non-zero on any failure. The graph
 #   is read from the current PackageSource inventory. The hand-maintained suite
 #   mapping can drift independently, so validation checks it against both that
 #   inventory and the current suite directories.
@@ -125,6 +125,16 @@ suite_to_source() {
   for cand in "cozystack.$1-application" "cozystack.$1"; do
     if echo "$NODES" | grep -Fxq "$cand"; then echo "$cand"; return; fi
   done
+}
+
+# Backup examples create Bucket and backup CRs alongside the selected app.
+# These requirements belong to the suites; adding application graph edges
+# would also change reverse test selection.
+suite_runtime_sources() {
+  case "$1" in
+    clickhouse|etcd|kafka|kafka-metadata|mariadb|mongodb|postgres|rabbitmq|redis)
+      echo cozystack.backupstrategy-controller ;;
+  esac
 }
 
 # yq: forward edges — "owner<TAB>dep", one per variant dependsOn entry.
@@ -196,8 +206,6 @@ validate_graph() {
       else
         references[$2] = references[$2] "," $1
       edge[$1, ++degree[$1]] = $2
-      nodes[$1] = 1
-      nodes[$2] = 1
     }
     END {
       rc = 0
@@ -208,8 +216,8 @@ validate_graph() {
           rc = 1
         }
       }
-      for (node in nodes) {
-        if (visit(node)) {
+      for (i = 1; i <= count; i++) {
+        if (visit(known_list[i])) {
           print "select-install: dependency cycle detected involving \047" cycle "\047"
           rc = 1
           break
@@ -261,7 +269,7 @@ if [ "$MODE" = "validate" ]; then
         rc=1
         continue
       fi
-      for src in $owners; do
+      for src in $owners $(suite_runtime_sources "$suite"); do
         if ! echo "$NODES" | grep -Fxq "$src"; then
           echo "select-install: suite '$suite' maps to '$src', not a PackageSource in $SOURCES_DIR" >&2
           rc=1
@@ -287,7 +295,7 @@ for suite in $SUITES; do
     map_rc=1
     continue
   fi
-  for src in $owners; do
+  for src in $owners $(suite_runtime_sources "$suite"); do
     if echo "$NODES" | grep -Fxq "$src"; then
       case " $seeds " in *" $src "*) ;; *) seeds="$seeds $src" ;; esac
     else

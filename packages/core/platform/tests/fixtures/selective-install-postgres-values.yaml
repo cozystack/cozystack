@@ -2,11 +2,8 @@
 # Regenerate after changing the PackageSource inventory or install baseline.
 bundles:
   disabledPackages:
-    - cozystack.backup-controller
-    - cozystack.backupstrategy-controller
     - cozystack.bootbox
     - cozystack.bootbox-application
-    - cozystack.bucket-application
     - cozystack.clickhouse-application
     - cozystack.clickhouse-operator
     - cozystack.cluster-autoscaler-azure
@@ -27,7 +24,6 @@ bundles:
     - cozystack.hami
     - cozystack.harbor-application
     - cozystack.hetzner-robotlb
-    - cozystack.http-cache-application
     - cozystack.ingress-nginx
     - cozystack.kafka-application
     - cozystack.kafka-operator
@@ -36,21 +32,19 @@ bundles:
     - cozystack.kubeovn-webhook
     - cozystack.kubernetes-application
     - cozystack.kubernetes-nodes-application
+    - cozystack.kubernetes-worker-image
     - cozystack.kuberture
     - cozystack.linstor-gui
     - cozystack.linstor-scheduler
     - cozystack.local-ccm
     - cozystack.mariadb-application
     - cozystack.mariadb-operator
-    - cozystack.metrics-server
     - cozystack.mongodb-application
     - cozystack.mongodb-operator
     - cozystack.monitoring
-    - cozystack.monitoring-agents
     - cozystack.multus
     - cozystack.nats-application
     - cozystack.nfs-driver
-    - cozystack.objectstorage-controller
     - cozystack.openbao-application
     - cozystack.opensearch-application
     - cozystack.opensearch-operator
@@ -61,10 +55,10 @@ bundles:
     - cozystack.redis-application
     - cozystack.redis-operator
     - cozystack.securitygroup-controller
+    - cozystack.talos-log-collector
     - cozystack.tcp-balancer-application
     - cozystack.telepresence
     - cozystack.valkey-application
-    - cozystack.velero
     - cozystack.virtualprivatecloud-application
     - cozystack.vm-default-images
     - cozystack.vm-disk-application
