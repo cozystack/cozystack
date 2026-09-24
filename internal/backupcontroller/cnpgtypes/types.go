@@ -241,4 +241,10 @@ type BackupStatus struct {
 	// destroys the source PVCs.
 	BeginWal string `json:"beginWal,omitempty"`
 	EndWal   string `json:"endWal,omitempty"`
+	// BackupID is barman's identifier for the base backup, the value
+	// bootstrap.recovery.recoveryTarget.backupID selects it by. StoppedAt is
+	// when it ended, truncated to the second where barman records the
+	// microsecond.
+	BackupID  string       `json:"backupId,omitempty"`
+	StoppedAt *metav1.Time `json:"stoppedAt,omitempty"`
 }

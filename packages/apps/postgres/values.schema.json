@@ -417,6 +417,11 @@
         "oldName"
       ],
       "properties": {
+        "backupID": {
+          "description": "Barman ID of the base backup to recover from, passed as `recoveryTarget.backupID`. Empty lets the barman-cloud plugin pick one: the newest backup when `recoveryTime` is empty, otherwise the newest one ending at or before it, on any timeline. The CNPG backup driver sets this on restore.",
+          "type": "string",
+          "default": ""
+        },
         "enabled": {
           "description": "Whether to restore from a backup.",
           "type": "boolean",

@@ -64,6 +64,8 @@ const (
 	cnpgEndpointURLKey     = "cnpg.io/endpoint-url"
 	cnpgClusterNameKey     = "cnpg.io/cluster-name"
 	cnpgS3SecretRefKey     = "cnpg.io/s3-secret-ref"
+	cnpgBackupIDKey        = "cnpg.io/backup-id"
+	cnpgBackupStoppedAtKey = "cnpg.io/backup-stopped-at"
 
 	// Polling cadence for the CNPG backup/restore lifecycle. Mirrors the
 	// Velero strategy's defaults so behaviour is uniform across drivers.
@@ -601,6 +603,14 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 	if rendered.BarmanObjectStore.S3Credentials != nil {
 		driverMD[cnpgS3SecretRefKey] = rendered.BarmanObjectStore.S3Credentials.SecretRef.Name
 	}
+	// Recorded here because the cnpg.io/Backup does not outlive every
+	// artifact, and a restore needs both to pin the backup it starts from.
+	if cnpgBackup.Status.BackupID != "" {
+		driverMD[cnpgBackupIDKey] = cnpgBackup.Status.BackupID
+	}
+	if cnpgBackup.Status.StoppedAt != nil && !cnpgBackup.Status.StoppedAt.IsZero() {
+		driverMD[cnpgBackupStoppedAtKey] = cnpgBackup.Status.StoppedAt.UTC().Format(time.RFC3339)
+	}
 
 	underlyingResources, err := marshalCNPGBackupSnapshot(sourceApp, resolved.Parameters)
 	if err != nil {
@@ -864,6 +874,15 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		// reconciling, we patch + purge in peace, and only resume once
 		// the Cluster + PVCs are fully gone so the next render lands
 		// bootstrap.recovery on an empty namespace.
+		sourceBackupID, sourceStoppedAt, err := r.cnpgBackupIdentity(ctx, backup)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		backupID := cnpgRestoreBackupID(sourceBackupID, sourceStoppedAt, options.RecoveryTime)
+		if backupID == "" {
+			logger.Info("restore does not pin its base backup; the barman-cloud plugin picks one from the catalog",
+				"backup", backup.Name, "backupID", sourceBackupID, "recoveryTime", options.RecoveryTime)
+		}
 		hrName := postgresAppPrefix + target.AppName
 		if err := r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, true); err != nil {
 			return ctrl.Result{}, err
@@ -877,7 +896,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			logger.Info("restored WAL-archive serverName collided with the recovery source",
 				"cluster", clusterName, "serverName", newServerName)
 		}
-		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA, sourceDatabases, sourceUsers); err != nil {
+		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, backupID, rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA, sourceDatabases, sourceUsers); err != nil {
 			// Resume HR before terminal failure so an operator deleting
 			// the failed RestoreJob does not leave the HR stuck.
 			_ = r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, false)
@@ -1076,13 +1095,13 @@ func (r *RestoreJobReconciler) resolveCNPGRestoreTarget(restoreJob *backupsv1alp
 func (r *RestoreJobReconciler) patchPostgresAppForRestore(
 	ctx context.Context,
 	app *postgresapp.Postgres,
-	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
+	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID string,
 	credsRef *strategyv1alpha1.S3CredentialsTemplate,
 	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
 	sourceUsers map[string]postgresapp.User,
 ) error {
-	patched := buildPostgresAppRestorePatch(app, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, credsRef, caRef, sourceDatabases, sourceUsers)
+	patched := buildPostgresAppRestorePatch(app, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID, credsRef, caRef, sourceDatabases, sourceUsers)
 	return r.Patch(ctx, patched, client.MergeFrom(app), client.FieldOwner(cnpgFieldManager))
 }
 
@@ -1112,7 +1131,7 @@ func restoredServerName(clusterName string, uid types.UID) string {
 // anything not in spec) must see the source's exact map.
 func buildPostgresAppRestorePatch(
 	app *postgresapp.Postgres,
-	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
+	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID string,
 	credsRef *strategyv1alpha1.S3CredentialsTemplate,
 	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
@@ -1126,6 +1145,7 @@ func buildPostgresAppRestorePatch(
 	// in-place restore fails barman-cloud-check-wal-archive ("Expected empty archive").
 	patched.Spec.Bootstrap.NewServerName = newServerName
 	patched.Spec.Bootstrap.RecoveryTime = recoveryTime
+	patched.Spec.Bootstrap.BackupID = backupID
 
 	patched.Spec.Backup.DestinationPath = sourceDestinationPath
 	patched.Spec.Backup.EndpointURL = sourceEndpointURL
@@ -1383,6 +1403,70 @@ func (r *RestoreJobReconciler) cnpgBackupWALArchived(ctx context.Context, backup
 		return false, fmt.Sprintf("cnpg.io/Backup %s/%s has phase=completed but has not recorded status.endWal yet", backup.Namespace, backupName), nil
 	}
 	return true, fmt.Sprintf("cnpg.io/Backup %s/%s phase=completed, endWal=%q", backup.Namespace, backupName, cnpgBackup.Status.EndWal), nil
+}
+
+// cnpgBackupIdentity returns barman's backupId for the base backup behind a
+// Backup artifact, and when that backup ended. Artifacts record both; older
+// ones are resolved through their cnpg.io/Backup, and an artifact whose
+// cnpg.io/Backup is gone yields neither.
+func (r *RestoreJobReconciler) cnpgBackupIdentity(ctx context.Context, backup *backupsv1alpha1.Backup) (string, *time.Time, error) {
+	md := backup.Spec.DriverMetadata
+	if id := md[cnpgBackupIDKey]; id != "" {
+		if stopped, err := time.Parse(time.RFC3339, md[cnpgBackupStoppedAtKey]); err == nil {
+			return id, &stopped, nil
+		}
+		return id, nil, nil
+	}
+	name := md[cnpgBackupNameKey]
+	if name == "" {
+		return "", nil, nil
+	}
+	cnpgBackup := &cnpgtypes.Backup{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: name}, cnpgBackup); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil, nil
+		}
+		return "", nil, err
+	}
+	if cnpgBackup.Status.StoppedAt == nil || cnpgBackup.Status.StoppedAt.IsZero() {
+		return cnpgBackup.Status.BackupID, nil, nil
+	}
+	stopped := cnpgBackup.Status.StoppedAt.Time
+	return cnpgBackup.Status.BackupID, &stopped, nil
+}
+
+// cnpgRestoreBackupID decides whether a restore pins the base backup it
+// starts from, and returns the backupID to set in
+// bootstrap.recovery.recoveryTarget, or "" to leave the choice to the
+// barman-cloud plugin.
+//
+// Left to itself the plugin starts from the newest backup in the catalog
+// when no recoveryTime is set, whichever backup the RestoreJob names, and
+// otherwise from the newest one ending at or before recoveryTime, on any
+// timeline (barman-cloud pkg/catalog FindBackupInfo). On a stream holding
+// several timelines either can start from another branch of the history
+// and bring back other data than the backup asked for.
+//
+// A backup cannot serve a recoveryTime before it ended: recovery would stop
+// before it is consistent. Such a request keeps the plugin's choice, which
+// can find an older backup. stoppedAt is truncated to the second while the
+// catalog compares barman's end time to the microsecond, so a backup is
+// pinned only once recoveryTime is a full second past stoppedAt.
+func cnpgRestoreBackupID(backupID string, stoppedAt *time.Time, recoveryTime string) string {
+	if backupID == "" {
+		return ""
+	}
+	if recoveryTime == "" {
+		return backupID
+	}
+	if stoppedAt == nil {
+		return ""
+	}
+	target, err := time.Parse(time.RFC3339Nano, recoveryTime)
+	if err != nil || target.Before(stoppedAt.Add(time.Second)) {
+		return ""
+	}
+	return backupID
 }
 
 // cnpgClusterHealthy returns true once the named cnpg.io Cluster reports its

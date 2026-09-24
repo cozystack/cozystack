@@ -130,6 +130,9 @@ type Backup struct {
 }
 
 type Bootstrap struct {
+	// Barman ID of the base backup to recover from, passed as `recoveryTarget.backupID`. Empty lets the barman-cloud plugin pick one: the newest backup when `recoveryTime` is empty, otherwise the newest one ending at or before it, on any timeline. The CNPG backup driver sets this on restore.
+	// +kubebuilder:default:=""
+	BackupID string `json:"backupID,omitempty"`
 	// Whether to restore from a backup.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`

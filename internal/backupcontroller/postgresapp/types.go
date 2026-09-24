@@ -76,6 +76,7 @@ type Bootstrap struct {
 	ServerName    string `json:"serverName,omitempty"`
 	NewServerName string `json:"newServerName,omitempty"`
 	RecoveryTime  string `json:"recoveryTime,omitempty"`
+	BackupID      string `json:"backupID,omitempty"`
 }
 
 type Backup struct {

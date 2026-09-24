@@ -221,9 +221,14 @@ spec:
   bootstrap:
     recovery:
       source: {{ .Values.bootstrap.oldName }}
-      {{- if .Values.bootstrap.recoveryTime }}
+      {{- if or .Values.bootstrap.recoveryTime .Values.bootstrap.backupID }}
       recoveryTarget:
-        targetTime: {{ .Values.bootstrap.recoveryTime }}
+        {{- with .Values.bootstrap.backupID }}
+        backupID: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.bootstrap.recoveryTime }}
+        targetTime: {{ . }}
+        {{- end }}
       {{- end }}
   externalClusters:
     - name: {{ .Values.bootstrap.oldName }}
