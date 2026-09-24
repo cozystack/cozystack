@@ -88,6 +88,122 @@ kubectl() { printf '%s\n' "$*"; }
   fi
 }
 
+@test "container mode deletes drbd-logger from the effective satellite DaemonSet" {
+  manifest=$(render_linstor_no_drbd_satellite_config)
+  kind=$(printf '%s\n' "$manifest" | yq '.kind')
+  name=$(printf '%s\n' "$manifest" | yq '.metadata.name')
+  target=$(printf '%s\n' "$manifest" | yq '.spec.patches[0].target | [.group, .version, .kind, .name] | join("/")')
+  patch=$(printf '%s\n' "$manifest" | yq '.spec.patches[0].patch')
+  container=$(printf '%s\n' "$patch" | yq '.spec.template.spec.containers[0].name')
+  directive=$(printf '%s\n' "$patch" | yq '.spec.template.spec.containers[0]."$patch"')
+  containers=$(printf '%s\n' "$patch" | yq '.spec.template.spec.containers | length')
+
+  if [ "$kind" != LinstorSatelliteConfiguration ] || [ "$name" != e2e-no-drbd ]; then
+    echo "unexpected satellite configuration: kind=$kind name=$name" >&2
+    return 1
+  fi
+  if [ "$target" != apps/v1/DaemonSet/linstor-satellite ]; then
+    echo "the patch does not target the satellite DaemonSet: $target" >&2
+    return 1
+  fi
+  if [ "$container" != drbd-logger ] || [ "$directive" != delete ] || [ "$containers" != 1 ]; then
+    echo "the patch does not delete exactly drbd-logger: container=$container directive=$directive count=$containers" >&2
+    return 1
+  fi
+}
+
+@test "the drbd-logger delete merges after every chart satellite configuration" {
+  own=$(render_linstor_no_drbd_satellite_config | yq '.metadata.name')
+  chart_names=$(helm template packages/system/linstor \
+    | yq -N 'select(.kind == "LinstorSatelliteConfiguration") | .metadata.name')
+
+  if [ -z "$chart_names" ]; then
+    echo "the linstor chart rendered no satellite configuration to order against" >&2
+    return 1
+  fi
+  last=$(printf '%s\n%s\n' "$chart_names" "$own" | LC_ALL=C sort | tail -n 1)
+  if [ "$last" != "$own" ]; then
+    echo "$own merges before $last, so a podTemplate applied after it can re-add drbd-logger" >&2
+    return 1
+  fi
+}
+
+@test "QEMU mode leaves the satellites untouched" {
+  unset COZY_LINSTOR_DRBD_ENABLED
+  calls=$(mktemp)
+  wait_for_linstor() { printf 'wait %s\n' "$*" >>"$calls"; }
+  kubectl() { printf 'kubectl %s\n' "$*" >>"$calls"; }
+
+  apply_linstor_no_drbd_satellite_config
+  recorded=$(cat "$calls")
+  rm -f "$calls"
+
+  if [ -n "$recorded" ]; then
+    echo "QEMU mode touched the cluster: $recorded" >&2
+    return 1
+  fi
+}
+
+@test "container mode applies the satellite configuration once its CRD is Established" {
+  COZY_LINSTOR_DRBD_ENABLED=false
+  calls=$(mktemp)
+  applied=$(mktemp)
+  wait_for_linstor() { printf 'wait %s\n' "$*" >>"$calls"; }
+  kubectl() { printf 'kubectl %s\n' "$*" >>"$calls"; cat >"$applied"; }
+
+  apply_linstor_no_drbd_satellite_config >/dev/null
+  recorded=$(cat "$calls")
+  applied_name=$(yq '.metadata.name' "$applied")
+  rm -f "$calls" "$applied"
+
+  expected=$(printf '%s\n' \
+    'wait LinstorSatelliteConfiguration CRD to be Established crd/linstorsatelliteconfigurations.piraeus.io --for=condition=Established' \
+    'kubectl apply -f -')
+  if [ "$recorded" != "$expected" ]; then
+    echo "unexpected cluster calls: $recorded" >&2
+    return 1
+  fi
+  if [ "$applied_name" != e2e-no-drbd ]; then
+    echo "applied an unexpected manifest: $applied_name" >&2
+    return 1
+  fi
+}
+
+@test "the satellite configuration lands before prep waits on the linstor release" {
+  apply_line=$(grep -n '^apply_linstor_no_drbd_satellite_config$' "$POST_PREP" | cut -d: -f1)
+  release_line=$(grep -nF 'wait_for_linstor "linstor HelmRelease to be Ready"' "$POST_PREP" | cut -d: -f1)
+
+  if [ -z "$apply_line" ] || [ -z "$release_line" ] || [ "$apply_line" -ge "$release_line" ]; then
+    echo "the drbd-logger removal must precede the linstor release wait: apply=$apply_line release=$release_line" >&2
+    return 1
+  fi
+}
+
+@test "the drbd-logger check passes only on satellites observed without it" {
+  clean=$(printf '%s\n' \
+    'linstor-csi-node linstor-csi csi-node-driver-registrar csi-livenessprobe' \
+    'linstor-satellite.srv1 linstor-satellite plunger' \
+    'linstor-satellite.srv2 linstor-satellite plunger')
+  leftover=$(printf '%s\n' \
+    'linstor-satellite.srv1 linstor-satellite plunger' \
+    'linstor-satellite.srv2 linstor-satellite plunger drbd-logger')
+  no_satellites='linstor-csi-node linstor-csi csi-node-driver-registrar csi-livenessprobe'
+
+  linstor_satellites_lack_drbd_logger "$clean"
+  if linstor_satellites_lack_drbd_logger "$leftover"; then
+    echo "a satellite still carrying drbd-logger passed" >&2
+    return 1
+  fi
+  if linstor_satellites_lack_drbd_logger "$no_satellites"; then
+    echo "a capture with no satellite DaemonSet passed" >&2
+    return 1
+  fi
+  if linstor_satellites_lack_drbd_logger ""; then
+    echo "an empty capture passed" >&2
+    return 1
+  fi
+}
+
 @test "tenant Kubernetes storage defaults to replicated and accepts local only explicitly" {
   # Sourcing inside the test keeps run-kubernetes.sh's live-cluster
   # cozy_cleanup helper out of cozytest.sh's file-level cleanup discovery.

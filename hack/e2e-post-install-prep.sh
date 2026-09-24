@@ -124,6 +124,86 @@ patch_local_cdi_storage_profile() {
     -p '{"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Block"}]}}'
 }
 
+# The linstor chart always adds a drbd-logger sidecar to every satellite, and on
+# a kernel without DRBD it exits at once. The satellite pod is then never Ready,
+# piraeus never registers the node, LINSTOR reports no nodes and every PVC stays
+# Pending -- so without DRBD this is the difference between storage and none.
+# The chart carries no value that drops the sidecar, so the container lane adds
+# a satellite configuration of its own. The two DRBD-only initContainers
+# piraeus-operator contributes are already deleted by the chart's
+# satellites-talos.yaml, which talos.enabled keeps on.
+#
+# A patch rather than a podTemplate entry: podTemplate is a sparse
+# strategic-merge input, and omitting a container there does not delete one
+# another configuration contributes.
+#
+# The name is load-bearing. piraeus-operator merges configurations in name
+# order, each one's podTemplate before its patches, so this delete has to sort
+# after the chart's cozystack-plunger, whose podTemplate is what adds the
+# sidecar; sorting first, it would delete nothing and be re-added after.
+render_linstor_no_drbd_satellite_config() {
+  cat <<'EOF'
+apiVersion: piraeus.io/v1
+kind: LinstorSatelliteConfiguration
+metadata:
+  name: e2e-no-drbd
+spec:
+  patches:
+  - target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+      name: linstor-satellite
+    patch: |
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: linstor-satellite
+      spec:
+        template:
+          spec:
+            containers:
+            - name: drbd-logger
+              $patch: delete
+EOF
+}
+
+apply_linstor_no_drbd_satellite_config() {
+  if [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" != false ]; then
+    return 0
+  fi
+  # piraeus-operator installs the CRD, and it lands ahead of the linstor
+  # release that the satellites come from.
+  wait_for_linstor "LinstorSatelliteConfiguration CRD to be Established" \
+    crd/linstorsatelliteconfigurations.piraeus.io --for=condition=Established
+  echo "[post-install-prep] removing the DRBD-only drbd-logger sidecar from the satellites"
+  render_linstor_no_drbd_satellite_config | kubectl apply -f -
+}
+
+# linstor_satellites_lack_drbd_logger <capture>
+# The capture is one "<daemonset> <container...>" row per DaemonSet in
+# cozy-linstor. Satellite DaemonSets are the rows carrying a linstor-satellite
+# container; at least one must exist and none may still carry drbd-logger. An
+# empty or satellite-less capture fails, so a read that returned nothing cannot
+# pass for a clean one.
+linstor_satellites_lack_drbd_logger() {
+  printf '%s\n' "$1" | awk '
+    {
+      satellite = 0
+      logger = 0
+      for (i = 2; i <= NF; i++) {
+        if ($i == "linstor-satellite") satellite = 1
+        if ($i == "drbd-logger") logger = 1
+      }
+      if (satellite) {
+        seen = 1
+        if (logger) bad = 1
+      }
+    }
+    END { exit (seen && !bad) ? 0 : 1 }
+  '
+}
+
 # Unit tests source the pure helpers above without reaching a cluster.
 if [ "${E2E_POST_INSTALL_PREP_LIB:-false}" = true ]; then
   return 0 2>/dev/null || exit 0
@@ -201,6 +281,8 @@ controller_reachable() {
     -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)" ]
 }
 
+apply_linstor_no_drbd_satellite_config
+
 wait_for_linstor "linstor HelmRelease to be Ready" \
   helmrelease/linstor -n cozy-linstor --for=condition=Ready
 wait_for_linstor "linstor-controller Deployment to be Available" \
@@ -232,6 +314,17 @@ until controller_reachable \
   fi
   sleep 2
 done
+
+if [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" = false ]; then
+  echo "[post-install-prep] checking that no satellite DaemonSet still carries drbd-logger"
+  satellite_containers=$(kubectl get daemonsets -n cozy-linstor \
+    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.template.spec.containers[*].name}{"\n"}{end}')
+  if ! linstor_satellites_lack_drbd_logger "$satellite_containers"; then
+    echo "[post-install-prep] the e2e-no-drbd satellite configuration did not take effect:" >&2
+    printf '%s\n' "${satellite_containers:-<no DaemonSets in cozy-linstor>}" | sed 's/^/  /' >&2
+    exit 1
+  fi
+fi
 
 echo "[post-install-prep] creating LINSTOR storage pools (parallel across nodes)"
 created_pools=$(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor sp l -s data --pastable | awk '$2 == "data" {printf " " $4} END{printf " "}')

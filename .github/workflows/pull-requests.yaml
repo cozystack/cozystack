@@ -774,7 +774,7 @@ jobs:
           # in for the QEMU lane's 192.168.123.10.
           COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
           # Talos containers share the runner kernel and cannot load DRBD, so the
-          # harness suppresses DRBD-dependent chart content, registers the host's
+          # harness removes the DRBD-only satellite sidecar, registers the host's
           # pre-created zpools and keeps LINSTOR's local ZFS path.
           COZY_LINSTOR_DRBD_ENABLED: "false"
           # Root monitoring is the one install-time workload whose chart selects
