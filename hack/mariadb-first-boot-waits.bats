@@ -4,9 +4,7 @@
 # allow less than that release can legitimately take. The backup walkthroughs
 # of the suites in MBW_SUITES carry such waits, and each suite is checked on
 # its own; for mariadb the chainsaw suite's HR-Ready asserts are checked too.
-# The other suites' HR-Ready asserts sit under the floor by per-suite choice
-# (item 6 of the reviewer checklist in docs/agents/e2e-testing.md) and are
-# left out.
+# The other suites' HR-Ready asserts are not checked here.
 #
 # A wait has two floors and must beat the larger one by MBW_START_MARGIN. The
 # margin is a policy value, not a measurement: it stands for the time the
@@ -1141,12 +1139,12 @@ ${mbw_why}: got '${mbw_got}', expected ${mbw_want}"
     #
     # What is pinned is the REMAINDER, not the sum. "The op exceeds the ceilings
     # up to and including the source wait" is the obvious form and it is vacuous here: at
-    # 2520 against 1650 it holds, and it still holds after the waits go to 960s
-    # (2520 against 1950) -- which is exactly the case that must not pass. The
-    # remainder is what the flow spends on everything the ceilings do not name,
+    # 2880 against 2010 it holds, and it still holds after the source wait goes
+    # to 960s (2880 against 2310) -- which is exactly the case that must not
+    # pass. The remainder is what the flow spends on everything the ceilings do not name,
     # and a raise paid out of it is precisely the silent breach.
     #
-    # The slack is zero today: 2520 - 1650 is exactly MBW_OP_REMAINDER, so the
+    # The slack is zero today: 2880 - 2010 is exactly MBW_OP_REMAINDER, so the
     # next raise anywhere in the prefix reds this immediately. That is the
     # intent, not an accident of the numbers.
     #
@@ -1478,9 +1476,8 @@ an op with no timeout was not refused: '${mbw_got}'" ;; esac
     # bucket wait, as a ceiling the op has to contain. The reason is scope, not
     # the floor: packages/system/bucket-rd sets neither helm-install-timeout
     # nor helm-install-disable-wait, so the bucket release carries the same
-    # 600s floor and its 300s wait is under it. Holding it to the floor would
-    # report a real under-budget, but one that belongs to whoever raises the
-    # bucket waits, and keeping it out keeps a floor failure naming one cause.
+    # 600s floor, and its wait clears it. Keeping it out of the floor check
+    # keeps a floor failure naming one cause, the database release.
     mbw_all=$(mbw_all_waits "$MBW_SCRIPT")
     printf '%s\n' "$mbw_all" | grep -q '^"bucket-' || {
         echo "expected $MBW_SCRIPT to wait for a bucket release; the fixture this test reasons about is gone" >&2
