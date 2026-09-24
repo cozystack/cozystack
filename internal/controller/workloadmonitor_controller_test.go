@@ -1386,7 +1386,7 @@ func TestDataVolumesMessage_DoesNotDependOnListOrder(t *testing.T) {
 	const want = "DataVolume a is ImportInProgress; DataVolume b is Failed"
 	for _, reader := range []client.Reader{fakeClient, reversedReader{fakeClient}} {
 		r := &WorkloadMonitorReconciler{DataVolumeReader: reader}
-		got, _, err := r.dataVolumesMessage(context.Background(), monitor)
+		got, _, _, err := r.dataVolumesMessage(context.Background(), monitor)
 		if err != nil || got != want {
 			t.Errorf("message = %q, %v; want %q", got, err, want)
 		}
@@ -1727,7 +1727,7 @@ func TestTryStartDataVolumeWatch_ReconcileBeforeTheReaderIsRetried(t *testing.T)
 			monitor := &cozyv1alpha1.WorkloadMonitor{ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"}}
 			var errDuringWatch error
 			w := &startingWatcher{onWatch: func() {
-				_, _, errDuringWatch = r.dataVolumesMessage(context.Background(), monitor)
+				_, _, _, errDuringWatch = r.dataVolumesMessage(context.Background(), monitor)
 			}}
 			_, _ = r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, 50*time.Millisecond)
 			if errDuringWatch == nil {
@@ -1735,7 +1735,7 @@ func TestTryStartDataVolumeWatch_ReconcileBeforeTheReaderIsRetried(t *testing.T)
 			}
 			// The started source keeps delivering events after a sync timeout,
 			// so a reconcile between attempts has to be retried as well.
-			if _, _, err := r.dataVolumesMessage(context.Background(), monitor); !synced && !errors.Is(err, errDataVolumeWatchSyncing) {
+			if _, _, _, err := r.dataVolumesMessage(context.Background(), monitor); !synced && !errors.Is(err, errDataVolumeWatchSyncing) {
 				t.Errorf("after a sync timeout: %v, want errDataVolumeWatchSyncing until the reader is installed", err)
 			}
 		})
@@ -1807,6 +1807,75 @@ func TestReconcile_UnchangedStatusIsNotWritten(t *testing.T) {
 			}
 			if writes != tc.writes {
 				t.Errorf("got %d status writes, want %d", writes, tc.writes)
+			}
+		})
+	}
+}
+
+// CDI copies the DataVolume labels onto the PVC it creates and makes the
+// DataVolume its controller, so the monitor also publishes a Workload for the
+// PVC. Bound alone would read it operational mid-import.
+func TestReconcile_PVCOfANotReadyDataVolumeIsNotOperational(t *testing.T) {
+	selector := map[string]string{"app.kubernetes.io/instance": "vm-disk-test"}
+	for _, tc := range []struct {
+		name       string
+		phase      string
+		reader     bool
+		stored     *bool
+		controlled bool
+		// ownerGVK replaces the DataVolume GVK in the PVC's controller reference.
+		ownerGVK *schema.GroupVersionKind
+		want     bool
+	}{
+		{name: "importing", phase: "ImportInProgress", reader: true, controlled: true, want: false},
+		{name: "populated", phase: "Succeeded", reader: true, controlled: true, want: true},
+		{name: "not owned by the DataVolume", phase: "ImportInProgress", reader: true, want: true},
+		{name: "controller of another kind", phase: "ImportInProgress", reader: true, controlled: true, ownerGVK: &schema.GroupVersionKind{Group: dataVolumeGVK.Group, Version: dataVolumeGVK.Version, Kind: "DataSource"}, want: true},
+		{name: "DataVolume kind of another group", phase: "ImportInProgress", reader: true, controlled: true, ownerGVK: &schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: dataVolumeGVK.Kind}, want: true},
+		{name: "unread keeps the stored verdict", phase: "Succeeded", stored: ptr.To(false), controlled: true, want: false},
+		{name: "unread and new reads bind state", phase: "ImportInProgress", controlled: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestScheme()
+			monitor := &cozyv1alpha1.WorkloadMonitor{
+				ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-test", Namespace: "default"},
+				Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: selector, MinReplicas: ptr.To[int32](0)},
+			}
+			dv := newDataVolume("vm-disk-test", selector, &tc.phase)
+			dv.SetUID("dv-uid")
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-test", Namespace: "default", Labels: selector},
+				Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: ptr.To("replicated")},
+				Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+			}
+			if tc.controlled {
+				gvk := dataVolumeGVK
+				if tc.ownerGVK != nil {
+					gvk = *tc.ownerGVK
+				}
+				pvc.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(dv, gvk)}
+			}
+			objs := []client.Object{monitor, dv, pvc}
+			if tc.stored != nil {
+				objs = append(objs, &cozyv1alpha1.Workload{
+					ObjectMeta: metav1.ObjectMeta{Name: "pvc-vm-disk-test", Namespace: "default"},
+					Status:     cozyv1alpha1.WorkloadStatus{Operational: *tc.stored},
+				})
+			}
+			fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(monitor).Build()
+			r := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+			if tc.reader {
+				r.DataVolumeReader = fakeClient
+			}
+			if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "vm-disk-test", Namespace: "default"}}); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			workload := &cozyv1alpha1.Workload{}
+			if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: "pvc-vm-disk-test", Namespace: "default"}, workload); err != nil {
+				t.Fatalf("Failed to get the PVC Workload: %v", err)
+			}
+			if workload.Status.Operational != tc.want {
+				t.Errorf("PVC Workload Operational = %v, want %v", workload.Status.Operational, tc.want)
 			}
 		})
 	}

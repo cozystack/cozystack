@@ -263,13 +263,13 @@ func (r *WorkloadMonitorReconciler) watchDataVolumes(ctx context.Context, mapper
 }
 
 // dataVolumesMessage names every DataVolume the monitor selects that is not
-// ready, with its phase, and is empty when there is none. A NoMatch from the
-// reader counts as no DataVolumes. read is false when the DataVolumes could not
-// be read: no reader yet, or a failed List.
-func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor) (message string, read bool, err error) {
+// ready, with its phase, and is empty when there is none; notReady holds their
+// names. A NoMatch from the reader counts as no DataVolumes. read is false when
+// the DataVolumes could not be read: no reader yet, or a failed List.
+func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor) (message string, notReady map[string]bool, read bool, err error) {
 	reader, err := r.dataVolumeReader()
 	if reader == nil {
-		return "", false, err
+		return "", nil, false, err
 	}
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(dataVolumeGVK.GroupVersion().WithKind(dataVolumeGVK.Kind + "List"))
@@ -280,16 +280,18 @@ func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, moni
 		client.MatchingLabels(monitor.Spec.Selector),
 	); err != nil {
 		if meta.IsNoMatchError(err) {
-			return "", true, nil
+			return "", nil, true, nil
 		}
-		return "", false, err
+		return "", nil, false, err
 	}
 	var stuck []string
+	notReady = map[string]bool{}
 	for i := range list.Items {
 		dv := &list.Items[i]
 		if isDataVolumeReady(dv) {
 			continue
 		}
+		notReady[dv.GetName()] = true
 		phase, _, _ := unstructured.NestedString(dv.Object, "status", "phase")
 		if phase == "" {
 			stuck = append(stuck, fmt.Sprintf("DataVolume %s has no phase", dv.GetName()))
@@ -298,7 +300,7 @@ func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, moni
 		}
 	}
 	sort.Strings(stuck)
-	return strings.Join(stuck, "; "), true, nil
+	return strings.Join(stuck, "; "), notReady, true, nil
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=workloadmonitors,verbs=get;list;watch;create;update;patch;delete
@@ -670,10 +672,15 @@ func (r *WorkloadMonitorReconciler) reconcileServiceForMonitor(
 }
 
 // reconcilePVCForMonitor creates or updates a Workload object for the given PVC and WorkloadMonitor.
+// A PVC whose controller is a DataVolume in notReadyDataVolumes is not
+// operational however it is bound; when the DataVolumes could not be read,
+// such a PVC keeps the verdict its Workload already carries.
 func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 	ctx context.Context,
 	monitor *cozyv1alpha1.WorkloadMonitor,
 	pvc corev1.PersistentVolumeClaim,
+	notReadyDataVolumes map[string]bool,
+	dataVolumesRead bool,
 ) error {
 	logger := log.FromContext(ctx)
 	workload := &cozyv1alpha1.Workload{
@@ -716,7 +723,18 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 		workload.Status.Kind = monitor.Spec.Kind
 		workload.Status.Type = monitor.Spec.Type
 		workload.Status.Resources = resources
-		workload.Status.Operational = r.isPVCReady(&pvc)
+		operational := r.isPVCReady(&pvc)
+		if owner := metav1.GetControllerOf(&pvc); owner != nil && owner.Kind == dataVolumeGVK.Kind && owner.APIVersion == dataVolumeGVK.GroupVersion().String() {
+			switch {
+			case !dataVolumesRead:
+				if workload.ResourceVersion != "" {
+					operational = workload.Status.Operational
+				}
+			case notReadyDataVolumes[owner.Name]:
+				operational = false
+			}
+		}
+		workload.Status.Operational = operational
 
 		return nil
 	})
@@ -860,6 +878,21 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	dataVolumesMessage, notReadyDataVolumes, dataVolumesRead, dataVolumesErr := r.dataVolumesMessage(ctx, monitor)
+	// The sync window is expected; an error here would count as a
+	// reconcile failure for every monitor in the cluster while it lasts.
+	dataVolumeWatchSyncing := errors.Is(dataVolumesErr, errDataVolumeWatchSyncing)
+	if dataVolumeWatchSyncing {
+		dataVolumesErr = nil
+	}
+	if dataVolumesErr != nil {
+		logger.Error(dataVolumesErr, "Unable to read DataVolumes for WorkloadMonitor, keeping the last DataVolume verdict", "monitor", monitor.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "DataVolumesUnavailable",
+				"Failed to read DataVolumes, keeping the last DataVolume verdict: %v", dataVolumesErr)
+		}
+	}
+
 	pvcList := &corev1.PersistentVolumeClaimList{}
 	if err := r.List(
 		ctx,
@@ -872,7 +905,7 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	for _, pvc := range pvcList.Items {
-		if err := r.reconcilePVCForMonitor(ctx, monitor, pvc); err != nil {
+		if err := r.reconcilePVCForMonitor(ctx, monitor, pvc, notReadyDataVolumes, dataVolumesRead); err != nil {
 			logger.Error(err, "Failed to reconcile Workload for PVC", "PVC", pvc.Name)
 			continue
 		}
@@ -940,21 +973,6 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				logger.Error(err, "Failed to reconcile Workload for BucketClaim", "BucketClaim", bc.Name)
 				continue
 			}
-		}
-	}
-
-	dataVolumesMessage, dataVolumesRead, dataVolumesErr := r.dataVolumesMessage(ctx, monitor)
-	// The sync window is expected and short; an error here would count as a
-	// reconcile failure for every monitor in the cluster while it lasts.
-	dataVolumeWatchSyncing := errors.Is(dataVolumesErr, errDataVolumeWatchSyncing)
-	if dataVolumeWatchSyncing {
-		dataVolumesErr = nil
-	}
-	if dataVolumesErr != nil {
-		logger.Error(dataVolumesErr, "Unable to read DataVolumes for WorkloadMonitor, keeping the last DataVolume verdict", "monitor", monitor.Name)
-		if r.Recorder != nil {
-			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "DataVolumesUnavailable",
-				"Failed to read DataVolumes, keeping the last DataVolume verdict: %v", dataVolumesErr)
 		}
 	}
 
