@@ -13,6 +13,19 @@ nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 {{- if not $gateway }}
+{{- /* ingress-nginx reads an empty whitelist-source-range as no annotation
+       and serves the portal to everyone, and one unparseable entry turns the
+       whole location into a 503. The values schema cannot validate list
+       items, so the check lives here. IPv6 is matched by character set only;
+       a malformed IPv6 entry still fails closed in the controller. */}}
+{{- $octet := "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])" }}
+{{- $ipv4 := printf "^%s(\\.%s){3}(/(3[0-2]|[12]?[0-9]))?$" $octet $octet }}
+{{- $ipv6 := "^[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(/(12[0-8]|1[01][0-9]|[1-9]?[0-9]))?$" }}
+{{- range .Values.managementWhitelist }}
+{{- if not (or (regexMatch $ipv4 (toString .)) (regexMatch $ipv6 (toString .))) }}
+{{- fail (printf "managementWhitelist entry %q is not an IP address or CIDR range" (toString .)) }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

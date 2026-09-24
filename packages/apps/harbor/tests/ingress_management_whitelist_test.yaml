@@ -91,6 +91,87 @@ tests:
                   port:
                     number: 80
 
+  - it: accepts bare addresses and ranges of both families
+    template: templates/ingress.yaml
+    documentSelector:
+      path: metadata.name
+      value: harbor-ingress
+    set:
+      managementWhitelist:
+        - 203.0.113.9
+        - 0.0.0.0/0
+        - 2001:db8::1
+        - 2001:db8::/32
+        - ::ffff:192.0.2.1/128
+    asserts:
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/whitelist-source-range"]
+          value: 203.0.113.9,0.0.0.0/0,2001:db8::1,2001:db8::/32,::ffff:192.0.2.1/128
+
+  - it: refuses an empty entry, which ingress-nginx would read as no restriction
+    template: templates/ingress.yaml
+    set:
+      managementWhitelist:
+        - ""
+    asserts:
+      - failedTemplate:
+          errorPattern: 'managementWhitelist entry "" is not an IP address or CIDR range'
+
+  - it: refuses a whitespace-only entry
+    template: templates/ingress.yaml
+    set:
+      managementWhitelist:
+        - " "
+    asserts:
+      - failedTemplate:
+          errorPattern: 'managementWhitelist entry " " is not'
+
+  - it: refuses a prefix length out of range
+    template: templates/ingress.yaml
+    set:
+      managementWhitelist:
+        - 10.0.0.0/99
+    asserts:
+      - failedTemplate:
+          errorPattern: 'managementWhitelist entry "10.0.0.0/99" is not'
+
+  - it: refuses an IPv4 octet out of range
+    template: templates/ingress.yaml
+    set:
+      managementWhitelist:
+        - 192.0.2.256
+    asserts:
+      - failedTemplate:
+          errorPattern: 'managementWhitelist entry "192.0.2.256" is not'
+
+  - it: refuses a hostname
+    template: templates/ingress.yaml
+    set:
+      managementWhitelist:
+        - not-an-ip
+    asserts:
+      - failedTemplate:
+          errorPattern: 'managementWhitelist entry "not-an-ip" is not'
+
+  - it: refuses two ranges packed into one entry
+    template: templates/ingress.yaml
+    set:
+      managementWhitelist:
+        - 192.0.2.0/24,198.51.100.0/24
+    asserts:
+      - failedTemplate:
+          errorPattern: 'managementWhitelist entry "192.0.2.0/24,198.51.100.0/24" is not'
+
+  - it: refuses a bad entry mixed with good ones
+    template: templates/ingress.yaml
+    set:
+      managementWhitelist:
+        - 192.0.2.0/24
+        - 2001:db8::/129
+    asserts:
+      - failedTemplate:
+          errorPattern: 'managementWhitelist entry "2001:db8::/129" is not'
+
   - it: serves the registry API and token endpoint from an unrestricted Ingress on the same host and certificate
     template: templates/ingress.yaml
     documentSelector:
