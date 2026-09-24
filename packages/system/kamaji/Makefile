@@ -14,6 +14,8 @@ update:
 	# `make update` stays reproducible. Mirrors the pattern used by
 	# packages/system/ingress-nginx.
 	patch --no-backup-if-mismatch -p1 < patches/1.diff
+	# cozy-kamaji declares no dependencies, so Helm's processDependencyEnabled never evaluates kamaji-etcd.deploy and any subchart here always renders.
+	rm -rf charts/kamaji/charts
 
 image:
 	docker buildx build images/kamaji \
