@@ -1,0 +1,111 @@
+#!/bin/sh
+# Migration 59 --> 60
+# Copy VMI-only hotplugged volumes into their VM spec before declarative
+# hotplug takes over.
+#
+# The upgrade drops the KubeVirt HotplugVolumes gate, which switches
+# DeclarativeHotplugVolumes on. From then on virt-controller rebuilds each
+# running VMI's hotplug volumes from VM.spec and removes every hotpluggable
+# VMI volume the VM spec does not list (pkg/storage/hotplug/hotplug.go,
+# filterHotplugVMIVolumes, v1.9.0). kubevirt-csi attached tenant volumes
+# through the VMI subresource until mid-2025, and live migration carries such
+# a VMI across KubeVirt updates, so a tenant node that was never recreated can
+# still hold a mounted disk only its VMI knows about. Without this migration
+# the first reconcile after the upgrade unplugs it under the workload.
+#
+# The fix is to write each such volume, with its disk, into the VM template as
+# it already is on the VMI. Hotplug volume changes are a valid live update, so
+# the VM does not become RestartRequired, and the declarative reconcile then
+# finds VM.spec and the VMI in agreement.
+#
+# Ordering: this runs as the platform chart's pre-upgrade hook, before the
+# upgrade re-points cozystack-packages. The kubevirt package, which renders the
+# KubeVirt CR, and the tenant kubernetes charts, which pass kubevirt-csi its
+# fallback flag, both render from that source, so on a variant that runs
+# migrations neither change reaches the cluster before this has run. The
+# default variant renders no migration hook, and a cluster there that installed
+# KubeVirt by hand gets the new charts without this step.
+#
+# Fail-closed like migration 58: migrations never re-run, so a swallowed error
+# would stamp the version past a VM that still needs the copy.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+# --ignore-not-found separates a cluster without KubeVirt (no output, rc 0)
+# from an API error, which aborts under set -e.
+crd=$(kubectl get crd virtualmachines.kubevirt.io --ignore-not-found -o name)
+if [ -z "$crd" ]; then
+  echo "KubeVirt is not installed; no VM to update"
+  stamp_cozystack_version 60
+  exit 0
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+kubectl get virtualmachines.kubevirt.io --all-namespaces -o json > "$work/vms.json"
+kubectl get virtualmachineinstances.kubevirt.io --all-namespaces -o json > "$work/vmis.json"
+
+# One line per VM that needs the copy. The predicate is the one virt-controller
+# removes by (storagetypes.IsDeclarativeHotplugVolume): a DataVolume or PVC
+# volume marked hotpluggable. virt-api gives every VMI-level addvolume that
+# shape, so an ephemeral hotplug made by anything else (virtctl addvolume
+# without --persist, before virtctl ignored that flag) matches too and becomes
+# permanent; leaving it out would not keep it ephemeral, the first reconcile
+# would unplug it. Only a Running VMI is considered, as in
+# patchHotplugVolumes: any other one is not reconciled, and its next start
+# builds the VMI from the VM spec. A disk already named in the VM spec is left
+# out so the patch cannot introduce a duplicate.
+jq -c --slurpfile vms "$work/vms.json" '
+  ($vms[0].items | map({key: "\(.metadata.namespace)/\(.metadata.name)", value: .}) | from_entries) as $byname
+  | .items[]
+  | select(.status.phase == "Running")
+  | ([.metadata.ownerReferences[]?
+      | select(.controller == true and .kind == "VirtualMachine" and (.apiVersion | startswith("kubevirt.io/")))
+      | .name][0]) as $owner
+  | select($owner != null)
+  | $byname["\(.metadata.namespace)/\($owner)"] as $vm
+  | select($vm != null)
+  | ($vm.spec.template.spec.volumes // []) as $vols
+  | ($vm.spec.template.spec.domain.devices.disks // []) as $disks
+  | ($vols | map(.name)) as $have
+  | ($disks | map(.name)) as $haveDisks
+  | [.spec.volumes[]?
+      | select(.dataVolume.hotpluggable == true or .persistentVolumeClaim.hotpluggable == true)
+      | .name as $n | select($have | index($n) | not)] as $missing
+  | select($missing | length > 0)
+  | ($missing | map(.name)) as $names
+  | {
+      namespace: $vm.metadata.namespace,
+      name: $vm.metadata.name,
+      names: $names,
+      patch: [
+        {op: "test", path: "/metadata/resourceVersion", value: $vm.metadata.resourceVersion},
+        {op: "add", path: "/spec/template/spec/volumes", value: ($vols + $missing)},
+        {op: "add", path: "/spec/template/spec/domain/devices/disks",
+         value: ($disks + [.spec.domain.devices.disks[]?
+           | .name as $n | select(($names | index($n)) and ($haveDisks | index($n) | not))])}
+      ]
+    }' "$work/vmis.json" > "$work/patches"
+
+if [ ! -s "$work/patches" ]; then
+  echo "No VM has a VMI-only hotplugged volume; nothing to update"
+  stamp_cozystack_version 60
+  exit 0
+fi
+
+while read -r line; do
+  ns=$(printf '%s' "$line" | jq -r '.namespace')
+  name=$(printf '%s' "$line" | jq -r '.name')
+  names=$(printf '%s' "$line" | jq -r '.names | join(",")')
+  echo "VM $ns/$name: adding hotplugged volumes $names to the VM spec"
+  # The resourceVersion test makes a VM changed since the read fail the patch
+  # instead of losing that change.
+  kubectl -n "$ns" patch virtualmachines.kubevirt.io "$name" --type=json \
+    -p "$(printf '%s' "$line" | jq -c '.patch')"
+done < "$work/patches"
+
+stamp_cozystack_version 60
