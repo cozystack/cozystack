@@ -4,7 +4,6 @@ package cnpgtypes
 
 import (
 	"testing"
-
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,10 +35,12 @@ func TestBackupStatusDeepCopyStoppedAt(t *testing.T) {
 	stopped := metav1.NewTime(time.Date(2026, 9, 21, 6, 27, 23, 0, time.UTC))
 	original := &Backup{Status: BackupStatus{BackupID: "20260921T062713", StoppedAt: &stopped}}
 
+	want := stopped.Time
+
 	copied := original.DeepCopy()
 	copied.Status.StoppedAt.Time = copied.Status.StoppedAt.Add(time.Hour)
 
-	if !original.Status.StoppedAt.Equal(&stopped) {
+	if !original.Status.StoppedAt.Time.Equal(want) {
 		t.Fatalf("mutating the copy's stoppedAt changed the original: %v", original.Status.StoppedAt)
 	}
 }
