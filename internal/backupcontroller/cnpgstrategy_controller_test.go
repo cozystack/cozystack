@@ -2584,11 +2584,11 @@ func newCNPGStrategyTestClient(t *testing.T, objs ...client.Object) client.Clien
 // the stream (no recoveryTime) or the newest one ending by recoveryTime, on
 // any timeline, which is not necessarily the backup the RestoreJob names.
 func TestCNPGRestoreBackupID(t *testing.T) {
-	stopped := time.Date(2026, 9, 21, 6, 27, 23, 0, time.UTC)
+	stopped := metav1.NewTime(time.Date(2026, 9, 21, 6, 27, 23, 0, time.UTC))
 	cases := []struct {
 		name         string
 		backupID     string
-		stoppedAt    *time.Time
+		stoppedAt    *metav1.Time
 		recoveryTime string
 		want         string
 	}{
@@ -2604,11 +2604,17 @@ func TestCNPGRestoreBackupID(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := cnpgRestoreBackupID(tc.backupID, tc.stoppedAt, tc.recoveryTime); got != tc.want {
+			source := &cnpgtypes.Backup{Status: cnpgtypes.BackupStatus{BackupID: tc.backupID, StoppedAt: tc.stoppedAt}}
+			if got := cnpgRestoreBackupID(source, tc.recoveryTime); got != tc.want {
 				t.Errorf("cnpgRestoreBackupID(%q, %v, %q) = %q, want %q", tc.backupID, tc.stoppedAt, tc.recoveryTime, got, tc.want)
 			}
 		})
 	}
+	t.Run("a cnpg.io/Backup that is gone pins nothing", func(t *testing.T) {
+		if got := cnpgRestoreBackupID(nil, ""); got != "" {
+			t.Errorf("cnpgRestoreBackupID(nil, \"\") = %q, want none", got)
+		}
+	})
 }
 
 // TestBuildPostgresAppRestorePatch_ReplacesBackupID guards against a
@@ -2628,8 +2634,10 @@ func TestBuildPostgresAppRestorePatch_ReplacesBackupID(t *testing.T) {
 
 // TestReconcileCNPGRestore_PinsTheRequestedBackup drives a restore through the
 // purge step and reads back what the target Postgres app is patched with: the
-// barman backupId of the backup the RestoreJob names, taken from the artifact,
-// or from its cnpg.io/Backup for an artifact that predates recording it.
+// barman backupId of the backup the RestoreJob names, read from its
+// cnpg.io/Backup. Retention deletes that cnpg.io/Backup together with the base
+// backup, and pinning an id the catalog has lost fails the recovery after the
+// purge, so a cnpg.io/Backup that is gone leaves the choice to the plugin.
 func TestReconcileCNPGRestore_PinsTheRequestedBackup(t *testing.T) {
 	const (
 		ns          = "tenant"
@@ -2644,7 +2652,7 @@ func TestReconcileCNPGRestore_PinsTheRequestedBackup(t *testing.T) {
 	startedAt := metav1.NewTime(time.Now())
 	stoppedAt := metav1.NewTime(time.Date(2026, 9, 21, 6, 27, 23, 0, time.UTC))
 
-	mkBackupArtifact := func(t *testing.T, md map[string]string) *backupsv1alpha1.Backup {
+	mkBackupArtifact := func(t *testing.T) *backupsv1alpha1.Backup {
 		t.Helper()
 		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
 		if err != nil {
@@ -2654,9 +2662,6 @@ func TestReconcileCNPGRestore_PinsTheRequestedBackup(t *testing.T) {
 			cnpgServerNameKey:      appName,
 			cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
 			cnpgBackupNameKey:      cnpgBkName,
-		}
-		for k, v := range md {
-			driverMD[k] = v
 		}
 		return &backupsv1alpha1.Backup{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
@@ -2698,10 +2703,16 @@ func TestReconcileCNPGRestore_PinsTheRequestedBackup(t *testing.T) {
 		}
 		return rj
 	}
-	restoredBootstrap := func(t *testing.T, backup *backupsv1alpha1.Backup, cnpgBackup *cnpgtypes.Backup, recoveryTime string) postgresapp.Bootstrap {
+	restoredBootstrap := func(t *testing.T, cnpgBackup *cnpgtypes.Backup, recoveryTime string) (postgresapp.Bootstrap, *record.FakeRecorder) {
 		t.Helper()
-		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(recoveryTime), strategy, cnpgBackup, newPostgresApp(appName, ns))
-		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+		backup := mkBackupArtifact(t)
+		objs := []client.Object{backup, mkRestoreJob(recoveryTime), strategy, newPostgresApp(appName, ns)}
+		if cnpgBackup != nil {
+			objs = append(objs, cnpgBackup)
+		}
+		c := newCNPGStrategyTestClient(t, objs...)
+		recorder := record.NewFakeRecorder(10)
+		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: recorder}
 		rj := &backupsv1alpha1.RestoreJob{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
 			t.Fatalf("get seeded RestoreJob: %v", err)
@@ -2716,73 +2727,42 @@ func TestReconcileCNPGRestore_PinsTheRequestedBackup(t *testing.T) {
 		if !app.Spec.Bootstrap.Enabled {
 			t.Fatalf("the reconcile did not reach the restore patch")
 		}
-		return app.Spec.Bootstrap
+		return app.Spec.Bootstrap, recorder
 	}
 
 	t.Run("without recoveryTime the requested backup is pinned", func(t *testing.T) {
-		md := map[string]string{cnpgBackupIDKey: backupID, cnpgBackupStoppedAtKey: stoppedAt.UTC().Format(time.RFC3339)}
-		if got := restoredBootstrap(t, mkBackupArtifact(t, md), mkCNPGBackup(backupID), "").BackupID; got != backupID {
-			t.Errorf("bootstrap.backupID: got %q want %q", got, backupID)
+		if b, _ := restoredBootstrap(t, mkCNPGBackup(backupID), ""); b.BackupID != backupID {
+			t.Errorf("bootstrap.backupID: got %q want %q", b.BackupID, backupID)
 		}
 	})
 
 	t.Run("a recoveryTime after the backup ended pins it", func(t *testing.T) {
-		md := map[string]string{cnpgBackupIDKey: backupID, cnpgBackupStoppedAtKey: stoppedAt.UTC().Format(time.RFC3339)}
-		b := restoredBootstrap(t, mkBackupArtifact(t, md), mkCNPGBackup(backupID), "2026-09-22T10:00:00Z")
+		b, _ := restoredBootstrap(t, mkCNPGBackup(backupID), "2026-09-22T10:00:00Z")
 		if b.BackupID != backupID || b.RecoveryTime != "2026-09-22T10:00:00Z" {
 			t.Errorf("bootstrap: got backupID %q recoveryTime %q, want %q and the requested instant", b.BackupID, b.RecoveryTime, backupID)
 		}
 	})
 
 	t.Run("a recoveryTime before the backup ended leaves the choice to the plugin", func(t *testing.T) {
-		md := map[string]string{cnpgBackupIDKey: backupID, cnpgBackupStoppedAtKey: stoppedAt.UTC().Format(time.RFC3339)}
-		if got := restoredBootstrap(t, mkBackupArtifact(t, md), mkCNPGBackup(backupID), "2026-09-21T05:00:00Z").BackupID; got != "" {
-			t.Errorf("bootstrap.backupID: got %q, want none: the backup cannot serve an instant before its end", got)
+		if b, _ := restoredBootstrap(t, mkCNPGBackup(backupID), "2026-09-21T05:00:00Z"); b.BackupID != "" {
+			t.Errorf("bootstrap.backupID: got %q, want none: the backup cannot serve an instant before its end", b.BackupID)
 		}
 	})
 
-	t.Run("an artifact without the recorded id falls back to its cnpg.io/Backup", func(t *testing.T) {
-		if got := restoredBootstrap(t, mkBackupArtifact(t, nil), mkCNPGBackup(backupID), "").BackupID; got != backupID {
-			t.Errorf("bootstrap.backupID: got %q want %q", got, backupID)
-		}
-	})
-}
-
-// TestCreateCNPGBackupArtifact_RecordsBackupIdentity: a restore pins the
-// backup it starts from by barman's backupId, and must be able to after the
-// cnpg.io/Backup is gone, so the artifact carries it and the backup's end.
-func TestCreateCNPGBackupArtifact_RecordsBackupIdentity(t *testing.T) {
-	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
-	strategyGroup := strategyv1alpha1.GroupVersion.Group
-	c := newCNPGStrategyTestClient(t)
-	r := &BackupJobReconciler{Client: c}
-
-	j := &backupsv1alpha1.BackupJob{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
-		Spec: backupsv1alpha1.BackupJobSpec{
-			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
-		},
-	}
-	resolved := &ResolvedBackupConfig{
-		StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "strat"},
-	}
-	stopped := metav1.NewTime(time.Date(2026, 9, 21, 6, 27, 23, 0, time.UTC))
-	cnpgBk := &cnpgtypes.Backup{
-		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"},
-		Status:     cnpgtypes.BackupStatus{BackupID: "20260921T062713", StoppedAt: &stopped},
-	}
-	rendered := &strategyv1alpha1.CNPGTemplate{
-		BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"},
-	}
-
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", rendered, newPostgresApp("pg", "tenant"))
-	if err != nil {
-		t.Fatalf("createCNPGBackupArtifact: %v", err)
-	}
-	if id := got.Spec.DriverMetadata[cnpgBackupIDKey]; id != "20260921T062713" {
-		t.Errorf("driverMetadata[%s]: got %q", cnpgBackupIDKey, id)
-	}
-	if at := got.Spec.DriverMetadata[cnpgBackupStoppedAtKey]; at != "2026-09-21T06:27:23Z" {
-		t.Errorf("driverMetadata[%s]: got %q", cnpgBackupStoppedAtKey, at)
+	for _, recoveryTime := range []string{"", "2026-09-22T10:00:00Z"} {
+		t.Run("a cnpg.io/Backup removed by retention leaves the choice to the plugin, recoveryTime="+recoveryTime, func(t *testing.T) {
+			b, recorder := restoredBootstrap(t, nil, recoveryTime)
+			if b.BackupID != "" {
+				t.Errorf("bootstrap.backupID: got %q, want none: the catalog no longer holds that base backup", b.BackupID)
+			}
+			select {
+			case ev := <-recorder.Events:
+				if !strings.Contains(ev, "Warning BaseBackupGone") {
+					t.Errorf("event: got %q, want a BaseBackupGone warning", ev)
+				}
+			default:
+				t.Errorf("no event: a restore that cannot start from the backup it names must say so")
+			}
+		})
 	}
 }
