@@ -8,6 +8,20 @@
   gateway virt-launcher pod via the KubeVirt-managed vm.kubevirt.io/name label.
 */ -}}
 {{- $loadBalancerClass := (index (.Values._cluster | default dict) "load-balancer-class") | default "" }}
+{{- /*
+  spec.loadBalancerClass is immutable once a Service is type LoadBalancer: the
+  API rejects setting, changing or clearing it, so a later change of
+  publishing.loadBalancerClass would wedge every installed instance's upgrade on
+  an opaque "may not change once set". Fail early with the way out instead, the
+  same guard extra/ingress carries for the same platform value. lookup returns
+  nothing on a fresh install, a dry-run or in CI, so the Service is born with the
+  requested class there.
+*/ -}}
+{{- $tunnelSvcName := printf "%s-tunnel" .Release.Name }}
+{{- $existingTunnelSvc := lookup "v1" "Service" .Release.Namespace $tunnelSvcName }}
+{{- if and $existingTunnelSvc (eq (dig "spec" "type" "" $existingTunnelSvc) "LoadBalancer") (ne (dig "spec" "loadBalancerClass" "" $existingTunnelSvc) $loadBalancerClass) }}
+{{- fail (printf "publishing.loadBalancerClass cannot be changed on the existing tunnel Service %s/%s: spec.loadBalancerClass is immutable once the Service is type LoadBalancer (existing: %q, requested: %q). Delete the Service once so Flux recreates it with the new setting; its external address is allocated again and may change, so the remote peer may need the new one: kubectl -n %s delete service %s" .Release.Namespace $tunnelSvcName (dig "spec" "loadBalancerClass" "" $existingTunnelSvc) $loadBalancerClass .Release.Namespace $tunnelSvcName) }}
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:

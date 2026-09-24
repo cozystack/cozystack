@@ -86,3 +86,83 @@ tests:
       - equal:
           path: spec.selector["vm.kubevirt.io/name"]
           value: site-router-test
+
+  # spec.loadBalancerClass is immutable once the Service is type LoadBalancer, so
+  # setting, changing or clearing it on an installed instance must fail early with
+  # the recreate command instead of wedging the upgrade on the API's rejection.
+  - it: fails when the class is set on an installed tunnel Service that has none
+    kubernetesProvider:
+      scheme: &svcscheme
+        "v1/Service":
+          gvr:
+            version: v1
+            resource: services
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: site-router-test-tunnel
+            namespace: tenant-test
+          spec:
+            type: LoadBalancer
+    asserts:
+      - failedTemplate:
+          errorPattern: "spec\\.loadBalancerClass is immutable once the Service is type LoadBalancer"
+      - failedTemplate:
+          errorPattern: "kubectl -n tenant-test delete service site-router-test-tunnel"
+
+  - it: fails when the class changes on an installed tunnel Service
+    kubernetesProvider:
+      scheme: *svcscheme
+      objects:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: site-router-test-tunnel
+            namespace: tenant-test
+          spec:
+            type: LoadBalancer
+            loadBalancerClass: cilium.io/l2-announcer
+    asserts:
+      - failedTemplate:
+          errorPattern: 'existing: "cilium.io/l2-announcer", requested: "metallb.io/metallb"'
+
+  - it: fails when the class is cleared on an installed tunnel Service that carries one
+    set:
+      _cluster:
+        load-balancer-class: ""
+    kubernetesProvider:
+      scheme: *svcscheme
+      objects:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: site-router-test-tunnel
+            namespace: tenant-test
+          spec:
+            type: LoadBalancer
+            loadBalancerClass: metallb.io/metallb
+    asserts:
+      - failedTemplate:
+          errorPattern: 'existing: "metallb.io/metallb", requested: ""'
+
+  - it: renders when the installed tunnel Service already has the requested class
+    kubernetesProvider:
+      scheme: *svcscheme
+      objects:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: site-router-test-tunnel
+            namespace: tenant-test
+          spec:
+            type: LoadBalancer
+            loadBalancerClass: metallb.io/metallb
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.loadBalancerClass
+          value: metallb.io/metallb
