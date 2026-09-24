@@ -107,7 +107,12 @@ describe("StorageClassUsagePage", () => {
     )
     renderPage(client, "replicated")
     const link = await screen.findByRole("link", { name: "demo-vm" })
-    expect(link).toHaveAttribute("href", "/console/vminstances/demo-vm/workloads")
+    // Same cross-namespace listing as the cluster drill-down, same need to
+    // carry the tenant rather than rely on the click handler.
+    expect(link).toHaveAttribute(
+      "href",
+      "/console/vminstances/demo-vm/workloads?tenant=root",
+    )
   })
 
   it("shows an empty state when nothing uses the class", async () => {
