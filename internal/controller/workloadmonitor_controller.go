@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/pointer"
@@ -84,6 +85,10 @@ type WorkloadMonitorReconciler struct {
 	// the handler in that window, and a reconcile it queues must be requeued:
 	// nothing queues it again once the reader is in place.
 	dataVolumeWatchSyncing bool
+	// dataVolumeWatchStarted is set once Watch has started the DataVolume
+	// source. A started Kind source adds an event handler to the informer and
+	// never removes it, so a retry waits for the sync instead of watching again.
+	dataVolumeWatchStarted bool
 	// reconciled is closed by the first Reconcile. controller-runtime starts the
 	// workers only after the controller has started its sources
 	// (pkg/internal/controller/controller.go, Controller.Start), so from then on
@@ -192,9 +197,10 @@ type sourceWatcher interface {
 
 // tryStartDataVolumeWatch registers the DataVolume watch and reader once the
 // kind is served, and reports whether it did. The reader is set only after the
-// source has synced: the cache blocks a List on an unsynced informer until the
-// caller's context ends. A source that does not sync in time is cancelled by
-// WaitForSync, and the next call starts a fresh one.
+// informer has synced: the cache blocks a List on an unsynced informer until
+// the caller's context ends. The source is started once, on the manager's
+// context, and a call that times out leaves it running for the next call to
+// wait on.
 func (r *WorkloadMonitorReconciler) tryStartDataVolumeWatch(ctx context.Context, mapper meta.RESTMapper, c sourceWatcher, informers cache.Cache, syncTimeout time.Duration) (bool, error) {
 	served, err := dataVolumeAPIServed(mapper)
 	if err != nil || !served {
@@ -202,27 +208,34 @@ func (r *WorkloadMonitorReconciler) tryStartDataVolumeWatch(ctx context.Context,
 	}
 	dv := &unstructured.Unstructured{}
 	dv.SetGroupVersionKind(dataVolumeGVK)
-	src := source.Kind[client.Object](informers, dv,
-		handler.EnqueueRequestsFromMapFunc(mapObjectToMonitor(client.Object(dv), r.Client)))
-	r.setDataVolumeWatchSyncing(true)
-	defer r.setDataVolumeWatchSyncing(false)
-	if err := c.Watch(src); err != nil {
-		return false, fmt.Errorf("watching DataVolumes: %w", err)
+	if !r.dataVolumeWatchStarted {
+		src := source.Kind[client.Object](informers, dv,
+			handler.EnqueueRequestsFromMapFunc(mapObjectToMonitor(client.Object(dv), r.Client)))
+		r.setDataVolumeWatchSyncing(true)
+		if err := c.Watch(src); err != nil {
+			r.setDataVolumeWatchSyncing(false)
+			return false, fmt.Errorf("watching DataVolumes: %w", err)
+		}
+		r.dataVolumeWatchStarted = true
 	}
 	syncCtx, cancel := context.WithTimeout(ctx, syncTimeout)
 	defer cancel()
-	if err := src.WaitForSync(syncCtx); err != nil {
-		return false, fmt.Errorf("waiting for the DataVolume informer to sync: %w", err)
+	informer, err := informers.GetInformer(syncCtx, dv)
+	if err == nil && !toolscache.WaitForCacheSync(syncCtx.Done(), informer.HasSynced) {
+		err = syncCtx.Err()
 	}
-	// WaitForSync returns nil when ctx itself is cancelled.
-	if err := ctx.Err(); err != nil {
-		return false, err
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if err != nil {
+		return false, fmt.Errorf("waiting for the DataVolume informer to sync: %w", err)
 	}
 	r.dataVolumeMu.Lock()
 	defer r.dataVolumeMu.Unlock()
 	// The manager's client reads unstructured objects straight from the API
 	// server; the cache shares the informer the watch above starts.
 	r.DataVolumeReader = informers
+	r.dataVolumeWatchSyncing = false
 	return true, nil
 }
 

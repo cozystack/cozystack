@@ -1583,6 +1583,8 @@ func servedMapper() meta.RESTMapper {
 	return mapper
 }
 
+// fakeDataVolumeInformer also fills the lazily built fields of FakeInformers,
+// which is not safe for concurrent use while the source reads them.
 func fakeDataVolumeInformer(t *testing.T, informers *informertest.FakeInformers) *controllertest.FakeInformer {
 	t.Helper()
 	dv := &unstructured.Unstructured{}
@@ -1599,6 +1601,7 @@ func TestTryStartDataVolumeWatch_WaitsUntilTheKindIsServed(t *testing.T) {
 	w := &startingWatcher{}
 	mapper := meta.NewDefaultRESTMapper(nil)
 	informers := &informertest.FakeInformers{}
+	fakeDataVolumeInformer(t, informers)
 
 	done, err := r.tryStartDataVolumeWatch(context.Background(), mapper, w, informers, time.Second)
 	if err != nil || done {
@@ -1619,8 +1622,7 @@ func TestTryStartDataVolumeWatch_WaitsUntilTheKindIsServed(t *testing.T) {
 }
 
 // Before the controller has started its sources, Watch only queues a source,
-// and WaitForSync on a source nobody started cannot report anything, so the
-// watch waits for the first reconcile. It starts right after it rather than on
+// so the watch waits for the first reconcile. It starts right after it rather than on
 // the next discovery poll, so a disk created just after a restart is not read
 // as populated for a whole poll interval.
 func TestWatchDataVolumes_StartsOnTheFirstReconcile(t *testing.T) {
@@ -1659,26 +1661,29 @@ func TestTryStartDataVolumeWatch_UnsyncedSourceLeavesNoReaderAndRetries(t *testi
 	fi := fakeDataVolumeInformer(t, informers)
 	fi.Synced = false
 
-	done, err := r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, 50*time.Millisecond)
-	if err == nil || done || readerOf(r) != nil {
-		t.Fatalf("informer never synced: done=%v err=%v reader=%v, want an error, not done, no reader", done, err, readerOf(r))
+	for attempt := 0; attempt < 3; attempt++ {
+		done, err := r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, 50*time.Millisecond)
+		if err == nil || done || readerOf(r) != nil {
+			t.Fatalf("informer never synced: done=%v err=%v reader=%v, want an error, not done, no reader", done, err, readerOf(r))
+		}
 	}
 
 	fi.SyncedLock.Lock()
 	fi.Synced = true
 	fi.SyncedLock.Unlock()
 
-	done, err = r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, time.Second)
+	done, err := r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, time.Second)
 	if err != nil || !done || readerOf(r) == nil {
 		t.Fatalf("retry after sync: done=%v err=%v reader=%v, want done and a reader", done, err, readerOf(r))
 	}
-	if len(w.sources) != 2 {
-		t.Fatalf("got %d watches, want a fresh source on the retry", len(w.sources))
+	// Every started source adds an event handler to the informer for good, so
+	// a retry must wait on the source it already has.
+	if len(w.sources) != 1 {
+		t.Fatalf("got %d watches over four attempts, want the first source reused", len(w.sources))
 	}
 }
 
-// WaitForSync returns nil once the caller's own context is cancelled, which
-// says nothing about the informer.
+// A stopping manager ends the sync wait, which says nothing about the informer.
 func TestTryStartDataVolumeWatch_StoppingManagerLeavesNoReader(t *testing.T) {
 	r := &WorkloadMonitorReconciler{}
 	informers := &informertest.FakeInformers{}
@@ -1712,8 +1717,10 @@ func TestTryStartDataVolumeWatch_ReconcileBeforeTheReaderIsRetried(t *testing.T)
 			if errDuringWatch == nil {
 				t.Error("reading DataVolumes while the watch syncs returned no error, want one so the reconcile is retried")
 			}
-			if _, _, err := r.dataVolumesMessage(context.Background(), monitor); err != nil && !synced {
-				t.Errorf("after a sync timeout: %v, want no error so reconciles stop failing until the next attempt", err)
+			// The started source keeps delivering events after a sync timeout,
+			// so a reconcile between attempts has to be retried as well.
+			if _, _, err := r.dataVolumesMessage(context.Background(), monitor); !synced && !errors.Is(err, errDataVolumeWatchSyncing) {
+				t.Errorf("after a sync timeout: %v, want errDataVolumeWatchSyncing until the reader is installed", err)
 			}
 		})
 	}
