@@ -104,6 +104,94 @@ cozy_wait_tenant_drained() {
   done
 }
 
+# Pure predicate for ONE node row of the capture cozy_has_schedulable_node
+# scans. Encodes the scheduler's own admission rule for a Pod that tolerates
+# nothing: the NodeUnschedulable plugin rejects a node whose
+# .spec.unschedulable is set (what `kubectl get nodes` renders as
+# SchedulingDisabled), and the TaintToleration plugin rejects one carrying any
+# taint with effect NoSchedule or NoExecute. PreferNoSchedule only lowers the
+# node's score, so it is deliberately not treated as blocking. Ready is checked
+# explicitly rather than left to the not-ready taint, so the gate does not
+# depend on how promptly the node-lifecycle controller applies that taint.
+#
+# The backend Pod is not literally toleration-free: DefaultTolerationSeconds
+# admission gives every Pod a 300s NoExecute toleration for
+# node.kubernetes.io/not-ready and node.kubernetes.io/unreachable. So for those
+# two taints this predicate is stricter than the scheduler and would keep
+# waiting where the Pod could in fact be placed. That errs toward waiting,
+# never toward releasing the gate early, and requiring Ready makes the case
+# nearly unreachable anyway.
+cozy_node_accepts_pods() {
+  # $1 Ready condition status, $2 .spec.unschedulable, $3 taint effects
+  if [ "$1" != True ]; then
+    return 1
+  fi
+  case "$2" in
+    true | True) return 1 ;;
+  esac
+  case ",$3," in
+    *,NoSchedule,* | *,NoExecute,*) return 1 ;;
+  esac
+  return 0
+}
+
+# Pure exit-condition for the tenant scheduling gate
+# (cozy_wait_schedulable_node). The single argument is the capture of a
+# `kubectl get nodes --no-headers -o custom-columns=NAME,READY,UNSCHEDULABLE,TAINTS`,
+# one whitespace-separated row per node. custom-columns renders an absent field
+# as the literal "<none>" and joins several taint effects with a comma, so both
+# are matched as text. Returns 0 as soon as one row describes a node that would
+# accept a Pod that tolerates nothing. A failed probe leaves the capture empty,
+# which reports not-schedulable rather than schedulable, so an API blip can
+# never release the gate (same guard as cozy_tenant_drained). The scan runs in
+# the subshell on the right of the pipeline, so its `exit` ends that subshell
+# and becomes the function's status -- it never leaves the caller. Pure text
+# logic, unit-tested in hack/run-kubernetes-schedulable_test.bats.
+cozy_has_schedulable_node() {
+  printf '%s\n' "$1" | {
+    while read -r _name _ready _unschedulable _taints _rest; do
+      if [ -z "$_name" ]; then
+        continue
+      fi
+      if cozy_node_accepts_pods "$_ready" "$_unschedulable" "$_taints"; then
+        exit 0
+      fi
+    done
+    exit 1
+  }
+}
+
+# Block until the tenant cluster has at least one node that actually accepts a
+# Pod, then print the node table it decided on (the same table the failure path
+# prints, so the two outcomes are read the same way). The node-join gate in
+# run_kubernetes_test establishes that two nodes are Ready, which is a weaker
+# guarantee: a Ready node still carries `node.cilium.io/agent-not-ready` until
+# the tenant's cilium agent claims it, and a node the bringup has not finished
+# with is Ready,SchedulingDisabled.
+# Scheduling against such a set is not stuck, only slow, and the time it takes
+# is variable -- so it belongs in a budget of its own rather than inside the
+# workload's readiness budget, where it is indistinguishable from a slow image
+# pull or a failing probe.
+cozy_wait_schedulable_node() {
+  _kc="$1"
+  _timeout="${2:-300}"
+  _deadline=$(( $(date +%s) + _timeout ))
+  while :; do
+    _nodes=$(kubectl --kubeconfig "$_kc" get nodes --no-headers -o custom-columns='NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,UNSCHEDULABLE:.spec.unschedulable,TAINTS:.spec.taints[*].effect' 2>/dev/null) || _nodes=""
+    if cozy_has_schedulable_node "$_nodes"; then
+      echo "» tenant has a node that accepts Pods:"
+      printf '%s\n' "$_nodes" | sed 's/^/  node: /'
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$_deadline" ]; then
+      echo "» no tenant node became schedulable (Ready, not cordoned, no NoSchedule/NoExecute taint) within ${_timeout}s" >&2
+      printf '%s\n' "${_nodes:-<the node probe returned nothing>}" | sed 's/^/  node: /' >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
 # Block until every ZFS storage pool on every LINSTOR satellite reports at
 # least _min_free_gib of FreeCapacity. Motivation is proven from a
 # cozyreport artefact captured by hack/cozyreport.sh (see PR #3044 run
@@ -575,7 +663,43 @@ EOF
   kubectl delete service --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
     -n tenant-test --ignore-not-found --timeout=60s || true
 
+  # Start the workload's clock from a node that accepts Pods, not from a node
+  # that is merely Ready. Both instances of run 31020254620 spent 2m18s and
+  # 1m57s of the 300s readiness budget below on FailedScheduling, against nodes
+  # that were Ready but carried `node.cilium.io/agent-not-ready` or were
+  # SchedulingDisabled, and then ran out while the image was still being
+  # pulled. This gate is not extra waiting on the happy path: it spends the
+  # seconds the Pod would otherwise spend Pending (plus at most one 5s poll
+  # interval) and moves them out of a budget that has a different job. 300s is
+  # more than twice the longest scheduling delay observed, and the gate prints
+  # the node table on both outcomes so a timeout names the taint that held it.
+  # The two budgets do stack on a failing run: one that spends the full 300s
+  # here and then overruns the readiness wait gives up at ~600s where it used
+  # to give up at 300s. That sits inside the enclosing 40m Chainsaw script op,
+  # which the kubernetes-* suites document as a ~25m bringup.
+  if ! cozy_wait_schedulable_node "tenantkubeconfig-${test_name}" 300; then
+    echo "=== tenant scheduling gate failed: no node became schedulable within 300s — diagnostics follow ==="
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes || true
+    kubectl -n tenant-test get hr || true
+    exit 1
+  fi
+
   # Backend 1
+  #
+  # nginx is pinned by digest. The tenant workers reach no registry mirror --
+  # hack/e2e-talos-image-cache.yaml serves the Talos worker OS disk image over
+  # HTTP and is not one, and nothing else in the tree mirrors container images
+  # for a tenant -- so this is pulled from Docker Hub on every run either way.
+  # The digest does not remove that pull, it fixes what the pull returns: a
+  # floating `nginx:alpine` silently changes size and layer count under the
+  # readiness budget below, and supplies whatever content the tag points at on
+  # the day. The digest is the OCI index, not a per-architecture manifest, so
+  # the kubelet still selects the image for the worker's own architecture.
+  # Nothing will bump it: renovate's enabledManagers are gomod, dockerfile,
+  # github-actions and custom.regex, and both custom managers match packages/
+  # paths only, so no manager reads this file. That is the intent rather than an
+  # oversight -- the point of the pin is that the bytes stay the same run to
+  # run, and this is a throwaway test workload, not an image the platform ships.
   kubectl apply --kubeconfig "tenantkubeconfig-${test_name}" -f- <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -596,7 +720,7 @@ spec:
     spec:
       containers:
       - name: nginx
-        image: nginx:alpine
+        image: nginx:1.31.3-alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
         ports:
         - containerPort: 80
         readinessProbe:
@@ -624,8 +748,20 @@ spec:
     targetPort: 80
 EOF
 
-  # Wait for pods readiness
-  kubectl wait deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test --for=condition=Available --timeout=300s
+  # Wait for pods readiness. With scheduling gated above, these 300s start from
+  # a node that accepts Pods, so they cover placement, sandbox setup, the image
+  # pull and the probe -- and no longer the wait for a node to stop rejecting
+  # the Pod, which now has a budget and a message of its own. The events in the
+  # diagnostics below tell the remaining consumers apart. The number is
+  # unchanged from when it also had to absorb scheduling; the pull alone
+  # measured 1m42s in run 31020254620.
+  if ! kubectl wait deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test --for=condition=Available --timeout=300s; then
+    echo "=== backend readiness failed: the Pod was schedulable but did not become Available within 300s — diagnostics follow ==="
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n tenant-test describe deployment "${test_name}-backend" || true
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n tenant-test describe pods -l "backend=${test_name}-backend" || true
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n tenant-test get events --sort-by=.lastTimestamp || true
+    exit 1
+  fi
 
   # Wait for LoadBalancer to be provisioned (IP or hostname)
   timeout 90 sh -ec "
