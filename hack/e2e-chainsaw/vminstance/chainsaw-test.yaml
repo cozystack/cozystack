@@ -20,8 +20,10 @@ spec:
         file: vmdisk.yaml
   - name: wait-vmdisk-ready
     try:
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -70,8 +72,9 @@ spec:
     try:
     - apply:
         file: vmdisk-vmi.yaml
+    # Same 11m as vm-disk-test above.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -103,6 +106,8 @@ spec:
     try:
     - apply:
         file: vminstance.yaml
+    # No install-timeout floor to clear: vm-instance-rd disables the install
+    # wait, so this release goes Ready once helm has applied.
     - assert:
         timeout: 6m
         resource:
