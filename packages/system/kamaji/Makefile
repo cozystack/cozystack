@@ -4,6 +4,9 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/clastix/kamaji | grep -E 'refs/tags/[0-9]+\.[0-9]+\.[0-9]+-edge$$' | awk -F/ 'END{print $$NF}') && \
