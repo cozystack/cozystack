@@ -353,12 +353,12 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       # installer is built in finalize, but some package image targets shell out
-      # to flux; install it if absent (idempotent, cheap).
+      # to flux; install the pinned version when it is not already present.
       - name: Set up build toolchain
         env:
           FLUX_VERSION: "2.8.6"
         run: |
-          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
             install_script="$(mktemp)"
             curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
             sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
@@ -579,7 +579,7 @@ jobs:
         env:
           FLUX_VERSION: "2.8.6"
         run: |
-          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
             install_script="$(mktemp)"
             curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
             sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"

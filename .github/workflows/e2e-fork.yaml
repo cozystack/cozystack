@@ -359,7 +359,7 @@ jobs:
           FLUX_VERSION: "2.8.6"
         run: |
           command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
-          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
             s="$(mktemp)"
             curl -fsSL https://fluxcd.io/install.sh -o "$s"
             sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$s"
