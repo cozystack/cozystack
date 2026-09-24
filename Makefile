@@ -110,7 +110,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -136,6 +136,16 @@ migrations-target-check:
 # from their generator workflows.
 go-unit-tests:
 	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/...
+
+# The nested Go modules (image sources and the published API types) are
+# outside ./... of the root module, so no other target reaches their tests.
+# git ls-files, not find: gitignored checkouts such as .claude/worktrees
+# hold whole copies of this repository.
+go-module-tests:
+	@for mod in $$(git ls-files '*/go.mod' | xargs -n1 dirname); do \
+		echo "--- go test $$mod ---"; \
+		(cd "$$mod" && go test -count=1 ./...) || exit 1; \
+	done
 
 # Go tests for the controllers and supporting packages under ./internal.
 # Excludes ./pkg/... and ./cmd/... — those are run separately by
