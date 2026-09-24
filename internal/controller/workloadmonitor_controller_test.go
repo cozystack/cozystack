@@ -1166,3 +1166,77 @@ func TestReconcileRetainsLastKnownSizesWhenBucketMissingFromResult(t *testing.T)
 		t.Errorf("expected last known s3-storage-bytes=4096 retained when series is absent, got %v (present=%v)", q.Value(), ok)
 	}
 }
+
+func TestGetWorkloadMetadata(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		expected    map[string]string
+	}{
+		{
+			name:        "nil annotations returns empty map",
+			annotations: nil,
+			expected:    map[string]string{},
+		},
+		{
+			// KubeVirt stamps the VM preference (which carries the guest OS
+			// profile, e.g. Windows) under kubevirt.io/cluster-preference-name.
+			// This value is taken verbatim from a real Windows VMInstance
+			// virt-launcher pod on a live cluster.
+			name: "instance profile from cluster-preference-name annotation",
+			annotations: map[string]string{
+				"kubevirt.io/cluster-preference-name": "windows.2k22.virtio",
+			},
+			expected: map[string]string{
+				"workloads.cozystack.io/kubevirt-vmi-instance-profile": "windows.2k22.virtio",
+			},
+		},
+		{
+			name: "instance type from cluster-instancetype-name annotation",
+			annotations: map[string]string{
+				"kubevirt.io/cluster-instancetype-name": "cx1.large",
+			},
+			expected: map[string]string{
+				"workloads.cozystack.io/kubevirt-vmi-instance-type": "cx1.large",
+			},
+		},
+		{
+			name: "both instance type and profile propagate",
+			annotations: map[string]string{
+				"kubevirt.io/cluster-instancetype-name": "cx1.large",
+				"kubevirt.io/cluster-preference-name":   "windows.2k22.virtio",
+			},
+			expected: map[string]string{
+				"workloads.cozystack.io/kubevirt-vmi-instance-type":    "cx1.large",
+				"workloads.cozystack.io/kubevirt-vmi-instance-profile": "windows.2k22.virtio",
+			},
+		},
+		{
+			// KubeVirt never stamps kubevirt.io/cluster-instanceprofile-name, so
+			// reading it must not yield a profile label.
+			name: "nonexistent cluster-instanceprofile-name annotation is ignored",
+			annotations: map[string]string{
+				"kubevirt.io/cluster-instanceprofile-name": "windows.2k22.virtio",
+			},
+			expected: map[string]string{},
+		},
+	}
+
+	r := &WorkloadMonitorReconciler{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: tc.annotations},
+			}
+			got := r.getWorkloadMetadata(pod)
+			if len(got) != len(tc.expected) {
+				t.Fatalf("expected %d labels, got %d (%v)", len(tc.expected), len(got), got)
+			}
+			for k, v := range tc.expected {
+				if gv, ok := got[k]; !ok || gv != v {
+					t.Errorf("expected label %q=%q, got %q", k, v, gv)
+				}
+			}
+		})
+	}
+}
