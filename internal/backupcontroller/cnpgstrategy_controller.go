@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -446,6 +447,15 @@ func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStar
 // hard validation error (CNPG's Cluster CRD has many required fields the
 // driver does not set), so we surface the precondition explicitly and let
 // the caller treat it as a retryable wait.
+// cnpgClusterGVR reads Clusters through the dynamic client. The typed client
+// this controller carries is the manager's cached one, and a Cluster is not
+// among the kinds it watches.
+var cnpgClusterGVR = schema.GroupVersionResource{
+	Group:    cnpgtypes.GroupName,
+	Version:  cnpgtypes.Version,
+	Resource: "clusters",
+}
+
 // applyClusterPluginBackup returns the serverName the Cluster effectively
 // archives under. A live Cluster that already has the barman-cloud plugin
 // attached (chart-rendered, or a previous BackupJob) keeps its current
@@ -455,9 +465,24 @@ func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStar
 // land under the old prefix while the base backup indexes under the new one,
 // and the eventual restore fails with "WAL not found".
 func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, namespace, clusterName string, t *strategyv1alpha1.CNPGTemplate, serverName string) (string, error) {
+	// Read through the dynamic client rather than the manager's cached one.
+	// This controller watches BackupJob and nothing else, so a Cluster reaches
+	// the cache through a lazily started informer with no resync tied to the
+	// Cluster's own changes. An in-place RestoreJob deletes the Cluster and the
+	// chart re-renders it within seconds, and both values read below are
+	// invalidated by that: the serverName carries bootstrap.newServerName, and
+	// the UID identifies a different object. Preserving a serverName read
+	// before the re-render puts the restored cluster back on the source's WAL
+	// prefix, which is the failure the newServerName mechanism exists to
+	// prevent, and a stale UID owns the ObjectStore to an object that no longer
+	// exists, so it is garbage-collected as soon as it is written.
 	existing := &cnpgtypes.Cluster{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: clusterName}, existing); err != nil {
+	live, err := r.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, clusterName, metav1.GetOptions{})
+	if err != nil {
 		return "", err
+	}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(live.Object, existing); err != nil {
+		return "", fmt.Errorf("decode Cluster %s/%s: %w", namespace, clusterName, err)
 	}
 	if live := currentBarmanServerName(existing); live != "" {
 		serverName = live
