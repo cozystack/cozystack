@@ -615,6 +615,19 @@ cozy_csi_strict_topology_patch() {
 EOF
 }
 
+# CDI's own 600M worker memory ceiling was seen to OOM the decompress+convert of
+# a tenant worker disk near 100% on the container lane, after which CDI retries
+# from scratch and the DataVolume cycles forever instead of failing. The same
+# import completes at 600M on QEMU nodes, so the substrate needs the headroom
+# and the chart default stays. Merged into the CDI CR rather than CDIConfig:
+# the operator reconciles CDIConfig.spec from the CR, so a direct CDIConfig
+# patch is reverted. It applies to every worker pod CDI creates, not only the
+# importer. The CPU ceiling stays at CDI's default, because the failure was
+# memory.
+cozy_cdi_worker_resources_patch() {
+  printf '%s\n' '{"spec":{"config":{"podResourceRequirements":{"requests":{"cpu":"100m","memory":"256Mi"},"limits":{"cpu":"750m","memory":"4Gi"}}}}}'
+}
+
 # The override lives only in the live LinstorCluster, and a linstor upgrade
 # re-renders that object from a chart that does not carry it. Called before
 # every suite that imports onto `local`, so an override that went missing

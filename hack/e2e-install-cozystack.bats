@@ -621,4 +621,14 @@ EOF
   fi
   kubectl -n cozy-linstor rollout status deployment/linstor-csi-controller --timeout=5m
   cozy_check_csi_strict_topology
+
+  kubectl patch cdi cdi --type merge -p "$(cozy_cdi_worker_resources_patch)"
+  # CDIConfig status is what CDI hands its worker pods, and the operator only
+  # gets there by reconciling the CR, so a CR that took the patch is not yet
+  # evidence of anything.
+  if ! timeout 300 sh -ec 'until [ "$(kubectl get cdiconfig config -o jsonpath="{.status.defaultPodResourceRequirements.limits.memory}")" = 4Gi ]; do sleep 2; done'; then
+    echo "CDI did not publish the raised worker memory ceiling within 5m" >&2
+    kubectl get cdiconfig config -o yaml >&2 || true
+    return 1
+  fi
 }

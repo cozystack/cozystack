@@ -423,6 +423,35 @@ kubectl() { printf '%s\n' "$*"; }
   fi
 }
 
+@test "container lane raises CDI's worker memory ceiling through the CDI CR" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  install_suite=hack/e2e-install-cozystack.bats
+  resources=$(cozy_cdi_worker_resources_patch | jq -r '.spec.config.podResourceRequirements | [.limits.cpu, .limits.memory, .requests.cpu, .requests.memory] | join(" ")')
+  last_test_line=$(grep -n '^@test ' "$install_suite" | tail -n 1 | cut -d: -f1)
+  patch_line=$(grep -nF 'kubectl patch cdi cdi --type merge -p "$(cozy_cdi_worker_resources_patch)"' "$install_suite" | cut -d: -f1)
+
+  # The CPU ceiling stays at CDI's own 750m: the failure the raise answers was
+  # memory, and moving CPU too would be a second, unmeasured change.
+  if [ "$resources" != "750m 4Gi 100m 256Mi" ]; then
+    echo "unexpected CDI worker resources: $resources" >&2
+    return 1
+  fi
+  if [ -z "$patch_line" ] || [ -z "$last_test_line" ] || [ "$patch_line" -le "$last_test_line" ]; then
+    echo "the CDI CR is not patched from the last install test: patch=$patch_line last-test=$last_test_line" >&2
+    return 1
+  fi
+  # The operator reconciles CDIConfig.spec from the CR and reverts a direct edit.
+  if grep -Fq 'kubectl patch cdiconfig' "$install_suite"; then
+    echo "the install patches CDIConfig directly, which the CDI operator reverts" >&2
+    return 1
+  fi
+  if ! grep -Fq '.status.defaultPodResourceRequirements.limits.memory}")" = 4Gi' "$install_suite"; then
+    echo "the install does not wait for CDIConfig to publish the raised ceiling" >&2
+    return 1
+  fi
+}
+
 @test "the container-lane CSI override is applied last and re-checked before disk imports" {
   install_suite=hack/e2e-install-cozystack.bats
   last_test=$(grep -n '^@test ' "$install_suite" | tail -n 1)
