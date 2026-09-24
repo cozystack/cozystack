@@ -54,7 +54,7 @@ The controller is cheap because the identity it needs already lands on every man
 
 ### 3.4 Why an in-tree CiliumNetworkPolicy mirror
 
-Neither `cozystack-api` nor the controller imports the `github.com/cilium/cilium` Go module: the current Cilium release pins a Kubernetes minor version newer than this project's `k8s.io/apimachinery` fork supports. The storage uses a minimal in-tree mirror (`CiliumNetworkPolicy` with a concrete `endpointSelector` and Cilium-shaped ingress/egress rules) registered at GroupVersion `cilium.io/v2`; the controller uses an even smaller metadata-only mirror (it never reads or writes the spec, so its mirror omits it and changes finalizers through merge patches that never carry a spec). Because the field names and JSON tags match the CiliumNetworkPolicy CRD exactly, marshalling produces wire-compatible objects.
+Neither `cozystack-api` nor the controller imports the `github.com/cilium/cilium` Go module: importing it would tie this project's `k8s.io` libraries to Cilium's. Go builds with the higher of the two required versions, so a Cilium release built on a newer Kubernetes would drag them forward, and one built on an older Kubernetes would have to compile against ours. The storage uses a minimal in-tree mirror (`CiliumNetworkPolicy` with a concrete `endpointSelector` and Cilium-shaped ingress/egress rules) registered at GroupVersion `cilium.io/v2`; the controller uses an even smaller metadata-only mirror (it never reads or writes the spec, so its mirror omits it and changes finalizers through merge patches that never carry a spec). Because the field names and JSON tags match the CiliumNetworkPolicy CRD exactly, marshalling produces wire-compatible objects.
 
 ### 3.5 Liveness of `fromSG`/`toSG`
 
