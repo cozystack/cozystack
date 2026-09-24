@@ -1,0 +1,51 @@
+suite: harbor-system HelmRelease readiness gate
+templates:
+  - templates/harbor.yaml
+
+release:
+  name: harbor
+  namespace: tenant-root
+
+set:
+  _namespace:
+    host: example.org
+    ingress: nginx
+    gateway: ""
+    seaweedfs: seaweedfs
+  _cluster:
+    solver: http01
+
+tests:
+  - it: uses the poller waitStrategy so healthCheckExprs are evaluated
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.waitStrategy.name
+          value: poller
+
+  - it: gates readiness on the backing CNPG Cluster
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[0].apiVersion
+          value: postgresql.cnpg.io/v1
+      - equal:
+          path: spec.healthCheckExprs[0].kind
+          value: Cluster
+      - equal:
+          path: spec.healthCheckExprs[0].current
+          value: "has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')"
+      - notExists:
+          path: spec.healthCheckExprs[0].inProgress
+      - notExists:
+          path: spec.healthCheckExprs[0].failed
+
+  - it: retries both actions without uninstalling the storage-owning release
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure

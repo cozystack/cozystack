@@ -1,0 +1,65 @@
+suite: tenant child HelmRelease readiness gates (etcd + gateway)
+templates:
+  - templates/etcd.yaml
+  - templates/gateway.yaml
+
+release:
+  name: tenant-alice
+  namespace: tenant-alice
+
+tests:
+  - it: etcd child evaluates health without an inProgress override
+    template: templates/etcd.yaml
+    set:
+      etcd: true
+    asserts:
+      - equal:
+          path: spec.waitStrategy.name
+          value: poller
+      - equal:
+          path: spec.healthCheckExprs[0].apiVersion
+          value: etcd-operator.cozystack.io/v1alpha2
+      - equal:
+          path: spec.healthCheckExprs[0].kind
+          value: EtcdCluster
+      - exists:
+          path: spec.healthCheckExprs[0].current
+      - exists:
+          path: spec.healthCheckExprs[0].failed
+      - notExists:
+          path: spec.healthCheckExprs[0].inProgress
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure
+
+  - it: gateway child gates on the TenantGateway Ready condition
+    template: templates/gateway.yaml
+    set:
+      gateway: true
+      gatewayClass: shared-edge
+      host: ""
+    asserts:
+      - equal:
+          path: spec.waitStrategy.name
+          value: poller
+      - equal:
+          path: spec.healthCheckExprs[0].apiVersion
+          value: gateway.cozystack.io/v1alpha1
+      - equal:
+          path: spec.healthCheckExprs[0].kind
+          value: TenantGateway
+      - equal:
+          path: spec.healthCheckExprs[0].current
+          value: "has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')"
+      - equal:
+          path: spec.values.gatewayClassName
+          value: shared-edge
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure

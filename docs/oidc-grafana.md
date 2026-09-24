@@ -39,10 +39,7 @@ spec:
 
 Three modes:
 
-- **None** — the only user-facing path is the `grafana-admin-password`
-  Secret, exposed to the tenant through
-  `packages/system/monitoring-rd`. This is the default; existing
-  instances render byte-identical to before.
+- **None** — the only user-facing authentication path is the `grafana-admin-password` Secret, exposed to the tenant through `packages/system/monitoring-rd`. This is the default; existing instances keep their authentication configuration. The readiness hook runs in every mode.
 - **System** — the Grafana instance trusts the platform `cozy` Keycloak
   realm via a per-instance confidential client. Users are the ones a
   platform admin already provisioned in `cozy`; the tenant does not
@@ -255,34 +252,15 @@ API:
    break-glass `grafana-admin-password` login is removed. Removing
    an entry from `users:` and re-reconciling revokes access.
 
-The Job renders only when **both** `mode != None` and
-`spec.oidc.users` is non-empty. Three empty-users states all resolve
-to the same hands-off contract — the chart owns nothing in Grafana
-orgs:
+The Job always waits for the desired Grafana Deployment rollout and HTTP health. Admin API calls and pruning run only when **both** `mode != None` and `spec.oidc.users` is non-empty. Three states keep org membership outside the chart's control:
 
-- `mode: None` — OIDC is off, no chart-managed org membership at
-  all. This matters on upgrade: existing tenants who ran the
-  pre-PR Monitoring chart may have added users to Grafana manually
-  through the UI; if the Job ran in `mode: None` its prune pass
-  would silently delete those accounts on the next Flux reconcile.
-- `customConfig.secretRef` — the users-map is forbidden by the
-  render-time assert; the operator's mounted `auth.ini` fragment is
-  authoritative.
-- `mode: System | CustomConfig-inline` with `users:` unset — the
-  operator opted into OIDC but not into the chart-managed users-map;
-  they manage org membership themselves.
+- `mode: None` — OIDC is off. Manually added users survive upgrades, even if a valid ignored users list remains in the configuration.
+- `customConfig.secretRef` — the users-map is forbidden by the render-time assertion; the supplied auth.ini fragment remains authoritative.
+- `mode: System | CustomConfig-inline` with `users: []` or unset — OIDC is enabled but the operator manages org membership themselves.
 
-Setting `users: [...]` on the CR means the chart owns Main-Org
-membership — anything added by hand (Grafana UI, admin API, other
-tooling) gets pruned on the next reconcile. The reverse edge is
-worth calling out: taking `users:` back to `[]` (or unsetting it)
-does NOT prune the last entry — the chart stops managing membership
-and any accounts the Job provisioned are left in place. Operators
-who want to clean up OIDC-provisioned accounts after switching
-`System | CustomConfig → None` (or after emptying `users:`) do it
-themselves through the Grafana UI or admin API. The
-`activeDeadlineSeconds` and `ttlSecondsAfterFinished` notes below
-only apply when the Job actually renders.
+Setting `users: [...]` means the chart owns Main-Org membership: members added by hand and absent from that list are pruned. Taking the list back to `[]`, unsetting it, or switching to None stops membership management and leaves existing accounts in place. Clean up any remaining accounts through the Grafana UI or admin API if needed. Health-only runs do not mount admin credentials or call the admin API.
+
+The hook uses a dedicated ServiceAccount with only named GET access to the `grafana` CR and `grafana-deployment` in its namespace. A hash of the chart's desired Grafana spec must appear in the real Deployment Pod template, with the current owner UID, observed generation and complete rollout, before HTTP health can pass. This prevents an old healthy Pod from hiding a broken upgrade. Identical spec retries keep the same marker. External Secret contents are not read or hashed; this readiness check does not validate OAuth login or continuously monitor later out-of-band changes.
 
 While the users-map is active, users NOT listed in `spec.oidc.users`
 who try to log in through OIDC are rejected at the door
@@ -357,18 +335,7 @@ work — useful when Keycloak is down or misconfigured.
   is missing from `spec.oidc.users` — no org role was assigned.
   Add the entry and re-apply the CR; the users-Job runs on the
   next helm-upgrade and grants access.
-- **users-Job fails.** The Job caps at `activeDeadlineSeconds: 900`
-  and `backoffLimit: 6`. Common causes: Grafana never becomes
-  ready (check `kubectl -n <ns> get pods -l app=grafana`), or the
-  `grafana-admin-password` Secret is missing its `user`/`password`
-  keys. `ttlSecondsAfterFinished: 3600` keeps the failed hook Job
-  (and its Pod's logs) around for **one hour** after the terminal
-  Failed condition — check its logs with
-  `kubectl -n <ns> logs job/<release>-oidc-users` inside that window.
-  After 1h the Kubernetes TTL controller garbage-collects the Job
-  and the Pod together, so grab the logs quickly; if you missed
-  the window, re-trigger the hook with `helm upgrade` on the
-  release and reproduce.
+- **Readiness/users Job fails.** The Job caps all attempts at `activeDeadlineSeconds: 900` and `backoffLimit: 6`; each script attempt shares a 600-second budget across rollout and HTTP health. Check `kubectl -n <ns> get deployment grafana-deployment`, the desired-spec marker and observed generation, and the named GET permissions for `<release>-grafana-readiness`. API errors do not fall back to HTTP-only success. When the users map is active, also check the admin Secret's `user`/`password` keys. `ttlSecondsAfterFinished: 3600` retains the completed or failed Job and logs for one hour; inspect `kubectl -n <ns> logs job/<release>-oidc-users` within that window. A subsequent Helm upgrade recreates the hook. Monitoring retries failed Helm actions in place so an unhealthy component does not uninstall the CNPG databases.
 - **`emailVerified` on Keycloak users is a prescriptive requirement,
   not a chart-enforced one.** The chart does not emit any
   `claimValidationRules` — the layered guarantees you rely on
