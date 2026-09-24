@@ -19,6 +19,13 @@ spec:
     try:
     - script:
         # ~25m Kamaji bringup + worker join + LB/NFS/ouroboros assertions.
+        #
+        # The OIDC lifecycle folded onto this cluster by the 5th argument adds up
+        # to 1m of job wait, a 600s cozy_wait_helmrelease_upgrade and another 1m
+        # of job wait, all on the passing path. This op does not price them, any
+        # more than it prices the bringup's own waits in run_kubernetes_test,
+        # whose ceilings alone already sum past it: it binds only once something
+        # is already hung.
         timeout: 40m
         # Co-locate the tenant crust-gather snapshot (captured by
         # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as
@@ -30,9 +37,10 @@ spec:
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-          # 4th arg "true" folds the ouroboros hairpin-NAT assertions onto this
-          # cluster instead of a second ~25m bringup.
-          run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true'
+          # 4th arg folds the ouroboros hairpin-NAT assertions onto this cluster;
+          # the 5th folds the System -> CustomConfig OIDC lifecycle onto the same
+          # ready workers. Neither feature needs another tenant-cluster bringup.
+          run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true' 'true'
         check:
           ($error == null): true
     finally:
@@ -42,12 +50,17 @@ spec:
     # On success run_kubernetes_test already tore it down, so this is a no-op then.
     - description: tear down the tenant Kubernetes cluster
       script:
-        timeout: 10m
+        # 5m parent delete + 5m compute/PVC drain + 5m LINSTOR reclamation =
+        # 15m of inner bounds, and each wait's last in-loop probe can start just
+        # under its deadline. Keep the op above that so an inner timeout reports
+        # its stage instead of a Chainsaw SIGKILL hiding it; normal cleanup
+        # returns in seconds.
+        timeout: 22m
         content: |
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-          cozy_cleanup
+          cozy_cleanup test-latest-version
 ---
 # Version-independent regression guard for PR #2872 B1 (runs once, here, not
 # in kubernetes-previous): with the `replicated` StorageClass absent on the

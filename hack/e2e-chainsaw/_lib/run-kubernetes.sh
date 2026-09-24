@@ -3,6 +3,20 @@
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
 . hack/e2e-chainsaw/_lib/talos-image-cache.sh
 
+# The QEMU lane exercises replicated DRBD storage. The container lane cannot
+# represent three DRBD nodes on one shared kernel, so its otherwise-identical
+# suites use the production local class instead. Keep the accepted values
+# narrow because this result is interpolated into Kubernetes YAML below.
+cozy_e2e_storage_class() {
+  case "${COZY_E2E_STORAGE_CLASS:-replicated}" in
+    local | replicated) printf '%s\n' "${COZY_E2E_STORAGE_CLASS:-replicated}" ;;
+    *)
+      echo "COZY_E2E_STORAGE_CLASS must be local or replicated, got '${COZY_E2E_STORAGE_CLASS}'" >&2
+      return 1
+      ;;
+  esac
+}
+
 # kubectl_wait_retry: wraps `kubectl wait` with retries against transient
 # management-cluster apiserver/etcd errors.
 #
@@ -47,6 +61,176 @@ kubectl_wait_retry() {
   return 1
 }
 
+# Wait for a HelmRelease upgrade that has not started yet at the call site.
+# `kubectl wait --for=condition=Ready` alone is unsafe here: the old Ready=True
+# condition remains visible until helm-controller observes the changed spec, so
+# it can return before the upgrade even begins. Require a newer generation and
+# require status.observedGeneration to catch up to it before accepting Ready.
+# A terminal Stalled condition fails immediately instead of burning the whole
+# timeout on work Flux has already declared impossible.
+cozy_wait_helmrelease_upgrade() {
+  local namespace="$1"
+  local name="$2"
+  local previous_generation="$3"
+  local timeout_seconds="${4:-600}"
+  local deadline=$(( $(date +%s) + timeout_seconds ))
+  local state generation observed ready stalled
+
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    state=$(kubectl -n "${namespace}" get helmrelease "${name}" \
+      -o 'jsonpath={.metadata.generation}{"|"}{.status.observedGeneration}{"|"}{.status.conditions[?(@.type=="Ready")].status}{"|"}{.status.conditions[?(@.type=="Stalled")].status}' \
+      2>/dev/null) || state=
+    IFS='|' read -r generation observed ready stalled <<EOF
+${state}
+EOF
+
+    if [ "${stalled}" = True ]; then
+      echo "HelmRelease ${namespace}/${name} stalled while applying generation ${generation:-<unknown>}" >&2
+      if ! kubectl -n "${namespace}" describe helmrelease "${name}" >&2; then
+        echo "The HelmRelease failure diagnostic could not be collected" >&2
+      fi
+      return 1
+    fi
+    case "${generation}:${observed}" in
+      *[!0-9:]* | :* | *:) ;;
+      *)
+        if [ "${generation}" -gt "${previous_generation}" ] \
+          && [ "${observed}" -eq "${generation}" ] \
+          && [ "${ready}" = True ]; then
+          echo "HelmRelease ${namespace}/${name} reconciled generation ${generation}"
+          return 0
+        fi
+        ;;
+    esac
+    sleep 5
+  done
+
+  echo "HelmRelease ${namespace}/${name} did not reconcile a generation newer than ${previous_generation} within ${timeout_seconds}s" >&2
+  if ! kubectl -n "${namespace}" describe helmrelease "${name}" >&2; then
+    echo "The HelmRelease timeout diagnostic could not be collected" >&2
+  fi
+  return 1
+}
+
+cozy_oidc_bindings() {
+  local test_name="$1"
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" get clusterrolebindings \
+    --selector="app.kubernetes.io/managed-by=cozystack-oidc,app.kubernetes.io/instance=kubernetes-${test_name}" \
+    -o 'jsonpath={range .items[*]}{.subjects[0].name}{"\t"}{.roleRef.name}{"\n"}{end}' |
+    sort
+}
+
+cozy_assert_oidc_system() {
+  local test_name="$1"
+  local release="kubernetes-${test_name}"
+  local audience="tenant-test-${release}"
+  local authn_config oidc_kubeconfig bindings
+
+  kubectl -n tenant-test wait job "${release}-oidc-bootstrap" \
+    --for=condition=complete --timeout=1m
+
+  kubectl -n tenant-test get kamajicontrolplane "${release}" \
+    -o jsonpath='{.spec.apiServer.extraArgs}' |
+    grep -qF -- '--authentication-config=/etc/kubernetes/authentication-config/config.yaml'
+
+  authn_config=$(kubectl -n tenant-test get secret "${release}-oidc-authn-config" \
+    -o jsonpath='{.data.config\.yaml}' | base64 -d)
+  printf '%s\n' "${authn_config}" | grep -qE 'url: https://keycloak\.[^/]+/realms/cozy'
+  printf '%s\n' "${authn_config}" | grep -qF -- "- ${audience}"
+
+  [ "$(kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${audience}" \
+    -o jsonpath='{.spec.public}')" = true ]
+  [ "$(kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "${audience}-audience" \
+    -o jsonpath='{.spec.protocolMappers[0].protocolMapper}')" = oidc-audience-mapper ]
+
+  oidc_kubeconfig=$(kubectl -n tenant-test get secret "${release}-oidc-kubeconfig" \
+    -o jsonpath='{.data.kubeconfig}' | base64 -d)
+  printf '%s\n' "${oidc_kubeconfig}" | grep -qF -- '- oidc-login'
+  printf '%s\n' "${oidc_kubeconfig}" | grep -qF -- "--oidc-client-id=${audience}"
+
+  bindings=$(cozy_oidc_bindings "${test_name}")
+  [ "${bindings}" = "$(printf 'e2e-admin@example.test\tcluster-admin\ne2e-viewer@example.test\tview\n' | sort)" ]
+}
+
+cozy_switch_and_assert_oidc_custom_config() {
+  local test_name="$1"
+  local probe=
+  local release="kubernetes-${test_name}"
+  local audience="cozystack-byo-${test_name}"
+  local previous_generation authn_config bindings
+
+  previous_generation=$(kubectl -n tenant-test get helmrelease "${release}" \
+    -o jsonpath='{.metadata.generation}')
+  kubectl -n tenant-test patch kuberneteses.apps.cozystack.io "${test_name}" \
+    --type=merge --patch "$(printf '%s' '{
+      "spec": {
+        "oidc": {
+          "mode": "CustomConfig",
+          "customConfig": {
+            "config": "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: https://idp.byo.example.test\n    audiences:\n    - '"${audience}"'\n  claimMappings:\n    username:\n      claim: preferred_username\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n"
+          },
+          "users": [
+            {"email": "byo-admin@example.test", "role": "admin"}
+          ]
+        }
+      }
+    }')"
+
+  cozy_wait_helmrelease_upgrade tenant-test "${release}" \
+    "${previous_generation}" 600
+  kubectl -n tenant-test wait job "${release}-oidc-bootstrap" \
+    --for=condition=complete --timeout=1m
+
+  kubectl -n tenant-test get kamajicontrolplane "${release}" \
+    -o jsonpath='{.spec.apiServer.extraArgs}' |
+    grep -qF -- '--authentication-config=/etc/kubernetes/authentication-config/config.yaml'
+
+  authn_config=$(kubectl -n tenant-test get secret "${release}-oidc-authn-config" \
+    -o jsonpath='{.data.config\.yaml}' | base64 -d)
+  printf '%s\n' "${authn_config}" | grep -qF 'url: https://idp.byo.example.test'
+  printf '%s\n' "${authn_config}" | grep -qF -- "- ${audience}"
+  if printf '%s\n' "${authn_config}" | grep -qE 'url: https://keycloak\.[^/]+/realms/cozy'; then
+    echo "CustomConfig AuthenticationConfiguration still carries the System issuer" >&2
+    return 1
+  fi
+
+  bindings=$(cozy_oidc_bindings "${test_name}")
+  [ "${bindings}" = "$(printf 'byo-admin@example.test\tcluster-admin')" ]
+
+  # `--ignore-not-found` is what separates "the object is gone" from "could not
+  # ask": absent is exit 0 with empty output, while an RBAC denial, a timeout or
+  # a missing CRD is still non-zero. A bare `if kubectl get ... >/dev/null 2>&1`
+  # reads all of those as gone, so the teardown assertions used to report
+  # success for never having observed anything.
+  if ! probe=$(kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "tenant-test-${release}" \
+    --ignore-not-found -o name); then
+    echo "could not determine whether the System-mode KeycloakClient is gone" >&2
+    return 1
+  fi
+  if [ -n "${probe}" ]; then
+    echo "System-mode KeycloakClient survived the CustomConfig upgrade" >&2
+    return 1
+  fi
+  if ! probe=$(kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "tenant-test-${release}-audience" \
+    --ignore-not-found -o name); then
+    echo "could not determine whether the System-mode KeycloakClientScope is gone" >&2
+    return 1
+  fi
+  if [ -n "${probe}" ]; then
+    echo "System-mode KeycloakClientScope survived the CustomConfig upgrade" >&2
+    return 1
+  fi
+  if ! probe=$(kubectl -n tenant-test get secret "${release}-oidc-kubeconfig" \
+    --ignore-not-found -o name); then
+    echo "could not determine whether the System-mode OIDC kubeconfig is gone" >&2
+    return 1
+  fi
+  if [ -n "${probe}" ]; then
+    echo "System-mode OIDC kubeconfig survived the CustomConfig upgrade" >&2
+    return 1
+  fi
+}
+
 # Pure exit-condition for the inter-test drain loop (cozy_wait_tenant_drained).
 # Each argument is one resource-probe capture: the stdout of a
 # `kubectl get -o name` (empty once the resource is gone) or the literal "err"
@@ -65,7 +249,17 @@ cozy_tenant_drained() {
   return 0
 }
 
-# Block until the tenant cluster's KubeVirt compute and storage are actually
+# Keep only PVC resource names that belong to one Kubernetes worker pool. The
+# worker-disk PVCs carry no cluster label, but CDI preserves the owning
+# MachineDeployment name inside every one of their generated names.
+cozy_filter_cluster_pvcs() {
+  local test_name="$1"
+  local capture="$2"
+  printf '%s\n' "${capture}" |
+    awk -v cluster="kubernetes-${test_name}-md0" 'index($0, cluster) != 0'
+}
+
+# Block until one tenant cluster's KubeVirt compute and storage are actually
 # released, not merely triggered for deletion. Deleting the Kubernetes CR
 # returns as soon as its finalizers clear, but that only TRIGGERS teardown of
 # the CAPK worker VMs and their DataVolume-backed disk PVCs. The virt-launcher
@@ -74,30 +268,37 @@ cozy_tenant_drained() {
 # the previous tenant has not yet vacated -> memory starvation -> a worker VM
 # misses the node-join budget and the test flakes on worker-node-join.
 #
-# Bounded and best-effort: cozytest runs cozy_cleanup wrapped in `|| true`, and
-# this returns (loudly) on timeout, so a stuck teardown can never hang the job
-# past the deadline -- it just leaves the sandbox no worse than before this
-# wait existed. tenant-test is provisioned with etcd/monitoring/seaweedfs
-# disabled (see the Tenant in hack/e2e-install-cozystack.bats), so it carries no
-# baseline PVCs, and the e2e apps run sequentially each cleaning up after
-# itself; at cleanup time the only VMs/VMIs/PVCs in the namespace belong to the
-# tenant cluster being torn down, so a plain namespace-scoped probe is both safe
-# and accurate (the worker-disk PVCs carry no cluster-scoping label to select on).
+# Bounded and loud: on timeout this returns non-zero and names what is left, and
+# each caller decides whether that stops the run. Other suites use the same
+# tenant-test namespace and can legitimately leave their own PVCs there while
+# this runs; VM/VMI probes therefore select the CAPI cluster label, and the
+# unlabeled worker-disk PVCs are filtered by their MachineDeployment name
+# component.
 cozy_wait_tenant_drained() {
-  _ns=tenant-test
-  _timeout="${1:-300}"
-  _deadline=$(( $(date +%s) + _timeout ))
+  local _test_name="$1"
+  local _ns=tenant-test
+  local _timeout="${2:-300}"
+  local _deadline=$(( $(date +%s) + _timeout ))
+  local _cluster="kubernetes-${_test_name}"
+  local _vm _vmi _pvc _pvc_all
   while :; do
-    _vm=$(kubectl -n "$_ns" get virtualmachines.kubevirt.io -o name 2>/dev/null) || _vm=err
-    _vmi=$(kubectl -n "$_ns" get virtualmachineinstances.kubevirt.io -o name 2>/dev/null) || _vmi=err
-    _pvc=$(kubectl -n "$_ns" get pvc -o name 2>/dev/null) || _pvc=err
+    _vm=$(kubectl -n "$_ns" get virtualmachines.kubevirt.io \
+      -l "cluster.x-k8s.io/cluster-name=${_cluster}" -o name 2>/dev/null) || _vm=err
+    _vmi=$(kubectl -n "$_ns" get virtualmachineinstances.kubevirt.io \
+      -l "cluster.x-k8s.io/cluster-name=${_cluster}" -o name 2>/dev/null) || _vmi=err
+    if _pvc_all=$(kubectl -n "$_ns" get pvc -o name 2>/dev/null); then
+      _pvc=$(cozy_filter_cluster_pvcs "$_test_name" "$_pvc_all")
+    else
+      _pvc=err
+    fi
     if cozy_tenant_drained "$_vm" "$_vmi" "$_pvc"; then
-      echo "» tenant VMs/VMIs/PVCs drained from $_ns"
+      echo "» ${_cluster} VMs/VMIs/PVCs drained from $_ns"
       return 0
     fi
     if [ "$(date +%s)" -ge "$_deadline" ]; then
-      echo "» WARNING: tenant teardown did not drain within ${_timeout}s; continuing (next test may face memory/storage pressure)" >&2
-      kubectl -n "$_ns" get virtualmachines.kubevirt.io,virtualmachineinstances.kubevirt.io,pvc 2>&1 | sed 's/^/  drain-leftover: /' >&2 || true
+      echo "» WARNING: ${_cluster} teardown did not drain within ${_timeout}s (next test may face memory/storage pressure)" >&2
+      printf '%s\n' "$_vm" "$_vmi" "$_pvc" |
+        awk 'NF { print "  drain-leftover: " $0 }' >&2
       return 1
     fi
     sleep 5
@@ -254,6 +455,113 @@ cozy_wait_linstor_pool_free() {
   done
 }
 
+# Capture the local lane's per-node free-capacity baseline after stale tenant
+# cleanup and before creating this suite's workers. Chainsaw executes `try` and
+# `finally` in separate shells, so the small state file is the hand-off between
+# them. An absolute threshold cannot describe this lane: persistent platform
+# PVCs legitimately leave one pool far below 90 GiB, while all three sparse
+# pools also share one runner filesystem beneath ZFS.
+cozy_capture_linstor_pool_baseline() {
+  _baseline_file="${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
+  _baseline_dir=${_baseline_file%/*}
+  [ "$_baseline_dir" != "$_baseline_file" ] || _baseline_dir=.
+  mkdir -p "$_baseline_dir"
+  : >"$_baseline_file"
+
+  _baseline=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
+    linstor --machine-readable sp l 2>/dev/null |
+    jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.node_name):\(.free_capacity)\"" |
+    sort
+  ' 2>/dev/null) || _baseline=""
+  if [ -z "$_baseline" ]; then
+    echo "» ERROR: could not record the local LINSTOR pool baseline; physical ZFS reclamation would be unverifiable" >&2
+    return 1
+  fi
+  _baseline_nodes=$(printf '%s\n' "$_baseline" | awk -F: 'NF == 2 { print $1 }' | sort | tr '\n' ' ')
+  if [ "$_baseline_nodes" != "srv1 srv2 srv3 " ] \
+      || ! cozy_linstor_pools_at_baseline "$_baseline" "$_baseline" 0; then
+    echo "» ERROR: local LINSTOR pool baseline is incomplete or malformed (expected numeric rows for srv1, srv2 and srv3): ${_baseline:-<empty>}" >&2
+    return 1
+  fi
+  printf '%s\n' "$_baseline" >"$_baseline_file"
+  echo "» local LINSTOR pool baseline recorded:"
+  printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /'
+}
+
+# Pure comparison used by the local-pool reclamation loop. Both captures contain
+# `node:free_capacity_kib` rows. Every node present in the baseline must still be
+# present and may fall short only by the small caller-provided metadata tolerance.
+# The 512 MiB default covers the ~0.27 GiB free-capacity drift measured between
+# two otherwise-clean container suites, while still rejecting the smallest known
+# leaked test volume (the 1 GiB ClickHouse keeper PVC).
+cozy_linstor_pools_at_baseline() {
+  _baseline_rows="$1"
+  _current_rows="$2"
+  _tolerance_kib="${3:-524288}"
+  [ -n "$_baseline_rows" ] && [ -n "$_current_rows" ] || return 1
+  case "$_tolerance_kib" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+
+  while IFS=: read -r _baseline_node _baseline_kib; do
+    [ -n "$_baseline_node" ] && [ -n "$_baseline_kib" ] || return 1
+    _current_kib=$(printf '%s\n' "$_current_rows" | awk -F: -v node="$_baseline_node" '$1 == node { print $2; exit }')
+    [ -n "$_current_kib" ] || return 1
+    case "$_baseline_kib" in '' | *[!0-9]*) return 1 ;; esac
+    case "$_current_kib" in '' | *[!0-9]*) return 1 ;; esac
+    if [ "$(( _current_kib + _tolerance_kib ))" -lt "$_baseline_kib" ]; then
+      return 1
+    fi
+  done <<EOF
+$_baseline_rows
+EOF
+  return 0
+}
+
+cozy_wait_linstor_pool_baseline() {
+  _timeout="${1:-300}"
+  _tolerance_kib="${2:-524288}"
+  _baseline_file="${COZY_LINSTOR_POOL_BASELINE_FILE:-_out/e2e-kubernetes-linstor-pool-baseline}"
+  if [ ! -s "$_baseline_file" ]; then
+    echo "» ERROR: no local LINSTOR pool baseline was recorded; physical ZFS reclamation is unknown" >&2
+    return 1
+  fi
+  _baseline=$(cat "$_baseline_file")
+  _deadline=$(( $(date +%s) + _timeout ))
+  _current=""
+  while :; do
+    _current=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
+      linstor --machine-readable sp l 2>/dev/null |
+      jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.node_name):\(.free_capacity)\"" |
+      sort
+    ' 2>/dev/null) || _current=""
+    if cozy_linstor_pools_at_baseline "$_baseline" "$_current" "$_tolerance_kib"; then
+      echo "» local LINSTOR pools returned to their pre-suite baseline"
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$_deadline" ]; then
+      echo "» ERROR: local LINSTOR pools did not return to their pre-suite baseline within ${_timeout}s; a worker or CDI scratch volume may still occupy ZFS space" >&2
+      printf '%s\n' "$_baseline" | sed 's/^/  baseline-free-kib: /' >&2
+      printf '%s\n' "${_current:-<the LINSTOR pool probe returned nothing>}" | sed 's/^/  current-free-kib: /' >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+# The absolute 90 GiB threshold describes only the replicated lane's DRBD
+# teardown. The local lane instead waits for the exact capacity it had before
+# this Kubernetes suite, which detects its own leaked worker/scratch volumes
+# without requiring persistent platform volumes to disappear.
+cozy_wait_linstor_pool_reclaimed() {
+  _storage_class=$(cozy_e2e_storage_class) || return 1
+  if [ "$_storage_class" = local ]; then
+    cozy_wait_linstor_pool_baseline "${2:-300}" 524288
+    return $?
+  fi
+  cozy_wait_linstor_pool_free "${1:-90}" "${2:-300}"
+}
+
 # Unconditional cleanup hook, invoked from the kubernetes-* tests' Chainsaw
 # `finally` block (which always runs, after any crust-gather `catch`). The tenant
 # Kubernetes CR is applied imperatively (kubectl) inside run_kubernetes_test, so
@@ -263,6 +571,7 @@ cozy_wait_linstor_pool_free() {
 # cascade-failing every storage-heavy suite that runs afterwards. Best-effort
 # (each delete is `|| true`) so a slow teardown never flips a passing test red.
 cozy_cleanup() {
+  local test_name="${1:-}"
   # Delete any test-scoped tenant API LoadBalancer Services left by a failed run
   # so they don't leak MetalLB IPs from the shared host pool. Labeled by the
   # test so a single selector reaps them all.
@@ -272,12 +581,93 @@ cozy_cleanup() {
   # The CR delete above finalizes once the Kubernetes CR is gone, which only
   # TRIGGERS KubeVirt VM teardown + PVC release. Block until the worker VMs,
   # VMIs (guest RAM) and disk PVCs are actually gone so the next tenant test
-  # starts on a freed sandbox -- the root cause of the node-join flake.
-  cozy_wait_tenant_drained 300 || true
+  # starts on a freed sandbox -- the root cause of the node-join flake. Scoped to
+  # this suite's cluster, so without its name there is nothing to wait for.
+  if [ -n "${test_name}" ]; then
+    cozy_wait_tenant_drained "${test_name}" 300 || true
+  else
+    echo "» WARNING: cozy_cleanup was given no test name; the tenant drain was skipped" >&2
+  fi
   # PVC removal at the API level does not imply the satellite ZFS pool has
   # reclaimed the space (see comment on cozy_wait_linstor_pool_free above);
-  # wait for FreeCapacity to return before yielding to the next tenant test.
-  cozy_wait_linstor_pool_free 90 300 || true
+  # wait for it to return before yielding to the next tenant test. The local
+  # lane compares against the baseline this suite recorded instead of the
+  # replicated lane's absolute threshold.
+  cozy_wait_linstor_pool_reclaimed 90 300 || true
+}
+
+# Without --strict-topology, external-provisioner passes every topology segment
+# as `requisite` and only prefers the node the scheduler chose, so linstor-csi
+# may place a node-pinned volume elsewhere when that node is full. A CDI
+# importer mounts two such volumes on `local`, and the scratch one is created
+# only after the pod is scheduled, so it can land on another node and leave the
+# importer unschedulable forever against a node-affinity conflict. The linstor
+# chart has no switch for the flag, so the container lane patches it onto the
+# live LinstorCluster at the end of install (hack/e2e-install-cozystack.bats).
+#
+# `args` has no patchMergeKey, so the operator's strategic merge replaces the
+# list rather than appending to it: the whole list is restated as
+# piraeus-operator v2.10.2 renders it, and must be re-checked when that
+# operator is bumped or an upstream flag is silently dropped.
+cozy_csi_strict_topology_patch() {
+  cat <<'EOF'
+[{"op":"add","path":"/spec/csiController/podTemplate/spec/containers/-","value":{"name":"csi-provisioner","args":["--v=$(VERBOSE)","--csi-address=$(ADDRESS)","--timeout=$(TIMEOUT)","--leader-election=$(LEADER_ELECTION)","--leader-election-namespace=$(NAMESPACE)","--worker-threads=$(WORKER_THREADS)","--http-endpoint=$(HTTP_ENDPOINT)","--default-fstype=$(DEFAULT_FS_TYPE)","--enable-capacity=$(ENABLE_CAPACITY)","--extra-create-metadata=$(EXTRA_CREATE_METADATA)","--capacity-ownerref-level=$(CAPACITY_OWNERREF_LEVEL)","--strict-topology"]}}]
+EOF
+}
+
+# CDI's own 600M worker memory ceiling was seen to OOM the decompress+convert of
+# a tenant worker disk near 100% on the container lane, after which CDI retries
+# from scratch and the DataVolume cycles forever instead of failing. The same
+# import completes at 600M on QEMU nodes, so the substrate needs the headroom
+# and the chart default stays. Merged into the CDI CR rather than CDIConfig:
+# the operator reconciles CDIConfig.spec from the CR, so a direct CDIConfig
+# patch is reverted. It applies to every worker pod CDI creates, not only the
+# importer. The CPU ceiling stays at CDI's default, because the failure was
+# memory.
+cozy_cdi_worker_resources_patch() {
+  printf '%s\n' '{"spec":{"config":{"podResourceRequirements":{"requests":{"cpu":"100m","memory":"256Mi"},"limits":{"cpu":"750m","memory":"4Gi"}}}}}'
+}
+
+# A VMDisk is populated before any VM consumes it, and on a WaitForFirstConsumer
+# class such as `local` CDI starts no worker for it until something asks for
+# immediate binding: the DataVolume sits in PendingPopulation and nothing says
+# so. The vm-disk chart asks only for upload sources, so on the container lane
+# the suite adds the request to the DataVolume and its claim once CDI has
+# created both. CDI reads the annotation by presence, so its value is empty,
+# as the chart writes it for uploads.
+cozy_request_immediate_binding() {
+  local namespace="$1"
+  local name="$2"
+  local deadline=$(( $(date +%s) + 180 ))
+  until kubectl -n "$namespace" get datavolume "$name" --request-timeout=20s >/dev/null 2>&1 \
+    && kubectl -n "$namespace" get pvc "$name" --request-timeout=20s >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "» ERROR: DataVolume and PVC ${namespace}/${name} did not both appear within 180s" >&2
+      kubectl -n "$namespace" get datavolume,pvc --request-timeout=20s 2>&1 | sed 's/^/  /' >&2 || true
+      return 1
+    fi
+    sleep 2
+  done
+  kubectl -n "$namespace" annotate datavolume,pvc "$name" \
+    cdi.kubevirt.io/storage.bind.immediate.requested= --overwrite
+}
+
+# The override lives only in the live LinstorCluster, and a linstor upgrade
+# re-renders that object from a chart that does not carry it. Called before
+# every suite that imports onto `local`, so an override that went missing
+# fails there, by name, instead of as an importer stuck at ImportScheduled.
+cozy_check_csi_strict_topology() {
+  local args
+  if ! args=$(kubectl -n cozy-linstor get deployment linstor-csi-controller \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="csi-provisioner")].args}'); then
+    echo "» ERROR: could not read the linstor-csi-controller csi-provisioner arguments" >&2
+    return 1
+  fi
+  case "${args}" in
+    *--strict-topology*) return 0 ;;
+  esac
+  echo "» ERROR: linstor-csi-controller's csi-provisioner runs without --strict-topology (args: ${args:-<none>}); the LinstorCluster override applied at install is gone" >&2
+  return 1
 }
 
 # Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
@@ -330,12 +720,38 @@ run_kubernetes_test() {
     # to flip one addon flag — kubernetes-latest passes "true", kubernetes-
     # previous leaves it empty.
     local enable_ouroboros="${4:-}"
+    # Optional: exercise both OIDC modes on the already-running latest cluster.
+    # The previous-version suite leaves it empty because OIDC is feature
+    # coverage, not a compatibility matrix that justifies another upgrade.
+    local enable_oidc="${5:-}"
+    local storage_class
+    storage_class=$(cozy_e2e_storage_class) || return 1
+    if [ "$storage_class" = local ]; then
+      cozy_check_csi_strict_topology || return 1
+    fi
     local k8s_version
     k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
   # Clean up stale resources from a previous failed retry
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "${test_name}" --for=delete --timeout=2m 2>/dev/null || true
+
+  # The local lane cannot use the replicated lane's absolute free-capacity
+  # threshold because persistent platform volumes already put one pool below it.
+  # Save the post-stale-cleanup state for the separate Chainsaw `finally` shell;
+  # cleanup later verifies that this suite returned every node to these figures.
+  # A baseline taken while old workers still own their disks would bless the
+  # leftover capacity as the new normal, so the drain is required first.
+  if [ "$storage_class" = local ]; then
+    if ! cozy_wait_tenant_drained "${test_name}" 300; then
+      echo "stale tenant compute or storage remains for ${test_name}" >&2
+      return 1
+    fi
+    if ! cozy_capture_linstor_pool_baseline; then
+      echo "cannot verify local LINSTOR reclamation without a complete baseline" >&2
+      return 1
+    fi
+  fi
 
   # Compose the optional ouroboros addon block. Indentation matches the
   # surrounding addons map (4 spaces).
@@ -355,6 +771,20 @@ YAML
 )
   fi
 
+  local oidc_block=""
+  if [ "${enable_oidc}" = "true" ]; then
+    oidc_block=$(cat <<'YAML'
+  oidc:
+    mode: System
+    users:
+    - email: e2e-admin@example.test
+      role: admin
+    - email: e2e-viewer@example.test
+      role: view
+YAML
+)
+  fi
+
   # Point worker DataVolume imports at the in-sandbox Talos image cache when it
   # is up (falls back to the public factory otherwise). Emitted right under spec:
   # as `talos: { imageFactoryURL: ... }`, or an empty line when the default applies.
@@ -369,6 +799,7 @@ metadata:
   namespace: tenant-test
 spec:
 ${talos_block}
+${oidc_block}
   addons:
     certManager:
       enabled: false
@@ -426,7 +857,7 @@ ${ouroboros_addon}
       resources: {}
       roles:
       - ingress-nginx
-  storageClass: replicated
+  storageClass: "${storage_class}"
   version: "${k8s_version}"
 EOF
   # Wait for the tenant-test namespace to be active
@@ -812,6 +1243,9 @@ EOF
   # the 5m pod-Succeeded budget when containerd's CreateContainer stalls.
   kubectl wait hr -n tenant-test "kubernetes-${test_name}-csi" --timeout=10m --for=condition=ready
 
+  if [ "$storage_class" = local ]; then
+    echo "Skipping remote StorageClass propagation and RWX NFS assertions for local-only E2E storage"
+  else
   # ----------------------------------------------------------------------
   # StorageClass propagation (issue #2094). Remote-accessible LINSTOR infra
   # classes propagate to the tenant under the same name; node-local classes
@@ -923,6 +1357,7 @@ EOF
   # Cleanup NFS test resources in tenant cluster
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod -n tenant-test --wait
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc -n tenant-test
+  fi
 
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
@@ -1149,6 +1584,19 @@ EOF
   # Ready.
   kubectl wait hr -n tenant-test "kubernetes-${test_name}" --timeout=5m --for=condition=ready
 
+  # The two old OIDC suites created control-plane-only clusters whose useful
+  # assertions took seconds and whose pre-delete hooks then spent two full
+  # 120s waits trying to uninstall child releases without a worker. Reuse the
+  # real latest-version cluster instead: prove System mode after its bootstrap
+  # hook has reached the tenant API, then exercise an actual System ->
+  # CustomConfig upgrade and prove the System-only objects are reaped.
+  if [ "${enable_oidc}" = "true" ]; then
+    echo "Verifying OIDC System mode on the running tenant cluster..."
+    cozy_assert_oidc_system "${test_name}"
+    echo "Switching the running tenant cluster to OIDC CustomConfig mode..."
+    cozy_switch_and_assert_oidc_custom_config "${test_name}"
+  fi
+
   # Guard: parent HelmRelease must not have entered an install/upgrade remediation cycle.
   # A non-zero installFailures/upgradeFailures indicates the helm-wait budget expired while
   # admin-kubeconfig was still being provisioned, which would trigger uninstall remediation
@@ -1209,6 +1657,9 @@ EOF
 verify_storageclass_fallback_default() {
   echo "Verifying tenant default StorageClass selection with no 'replicated' class (PR #2872 B1 regression)..."
 
+  local storage_class
+  storage_class=$(cozy_e2e_storage_class) || return 1
+
   # Pre-cleanup: drop probe classes leaked by a previous failed run.
   kubectl delete sc nvme ssd --ignore-not-found
 
@@ -1247,17 +1698,23 @@ EOF
   # the management-cluster state is always restored before any assertion exits.
   # The release namespace must be a valid tenant identifier (the chart's
   # dashboard-resourcemap template enforces this), so render under tenant-test.
-  local raw rc
+  #
+  # `|| rc=$?` rather than a bare assignment followed by `rc=$?`: the caller runs
+  # under `set -e`, so a failed render would exit the function on the assignment
+  # itself -- before rc is read and before the restore below puts `replicated`
+  # back, leaving the management cluster with no default StorageClass for every
+  # later suite. That is the opposite of what the restore comment promises.
+  local raw rc=0
   raw=$(timeout 120 helm install scprobe packages/apps/kubernetes \
     --dry-run=server -n tenant-test \
-    -f packages/apps/kubernetes/tests/values/common.yaml -o json 2>/tmp/sc-fallback-render.err)
-  rc=$?
+    -f packages/apps/kubernetes/tests/values/common.yaml -o json 2>/tmp/sc-fallback-render.err) || rc=$?
 
-  # Restore management-cluster StorageClasses (inline, unconditional). This MUST
-  # run before any assertion `exit 1` below, so no EXIT/RETURN trap is used
-  # (per docs/agents/e2e-testing.md). The "replicated" manifest mirrors
-  # hack/e2e-post-install-prep.sh.
-  kubectl apply -f - <<'EOF'
+  # Restore the QEMU lane's management-cluster StorageClass inline before any
+  # assertion exit. The local-only container lane had no replicated class to
+  # restore. No EXIT/RETURN trap is used (docs/agents/e2e-testing.md), and the
+  # manifest mirrors hack/e2e-post-install-prep.sh.
+  if [ "$storage_class" = replicated ]; then
+    kubectl apply -f - <<'EOF'
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -1275,6 +1732,7 @@ parameters:
 volumeBindingMode: Immediate
 allowVolumeExpansion: true
 EOF
+  fi
   kubectl delete sc nvme ssd --ignore-not-found
 
   if [ "$rc" -ne 0 ] || [ -z "$raw" ]; then

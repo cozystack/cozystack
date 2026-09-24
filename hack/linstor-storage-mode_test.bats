@@ -1,0 +1,657 @@
+#!/usr/bin/env bats
+# Unit coverage for the lane-specific E2E storage contract: LINSTOR pool
+# registration, management StorageClasses, and downstream Chainsaw fixtures.
+# The library guard keeps this suite cluster-free under hack/cozytest.sh.
+
+HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
+POST_PREP="$HACK_DIR/e2e-post-install-prep.sh"
+# shellcheck source=/dev/null
+E2E_POST_INSTALL_PREP_LIB=true . "$POST_PREP"
+
+kubectl() { printf '%s\n' "$*"; }
+
+@test "QEMU mode creates data from the satellite block device" {
+  unset COZY_LINSTOR_DRBD_ENABLED
+  command=$(create_linstor_storage_pool srv2)
+  expected='exec -n cozy-linstor deploy/linstor-controller -- linstor physical-storage create-device-pool zfs srv2 /dev/vdc --pool-name data --storage-pool data'
+
+  if [ "$command" != "$expected" ]; then
+    echo "unexpected QEMU pool command: $command" >&2
+    return 1
+  fi
+}
+
+@test "container mode registers the node-specific pre-created zpool" {
+  COZY_LINSTOR_DRBD_ENABLED=false
+  command=$(create_linstor_storage_pool srv2)
+  expected='exec -n cozy-linstor deploy/linstor-controller -- linstor storage-pool create zfs srv2 data data-srv2'
+
+  if [ "$command" != "$expected" ]; then
+    echo "unexpected container pool command: $command" >&2
+    return 1
+  fi
+}
+
+@test "QEMU mode renders local and replicated StorageClasses" {
+  unset COZY_LINSTOR_DRBD_ENABLED
+  manifest=$(render_linstor_storageclasses)
+  names=$(printf '%s\n' "$manifest" | yq -N '.metadata.name')
+  expected_names=$(printf '%s\n' local replicated)
+  replicated_layers=$(printf '%s\n' "$manifest" | yq 'select(.metadata.name == "replicated") | .parameters."linstor.csi.linbit.com/layerList"')
+
+  if [ "$names" != "$expected_names" ]; then
+    echo "unexpected QEMU StorageClasses: $names" >&2
+    return 1
+  fi
+  if [ "$replicated_layers" != "drbd storage" ]; then
+    echo "replicated StorageClass lost its DRBD layer: $replicated_layers" >&2
+    return 1
+  fi
+}
+
+@test "container mode renders only the production local StorageClass" {
+  COZY_LINSTOR_DRBD_ENABLED=false
+  manifest=$(render_linstor_storageclasses)
+  names=$(printf '%s\n' "$manifest" | yq -N '.metadata.name')
+  local_layers=$(printf '%s\n' "$manifest" | yq '.parameters."linstor.csi.linbit.com/layerList"')
+  remote=$(printf '%s\n' "$manifest" | yq '.parameters."linstor.csi.linbit.com/allowRemoteVolumeAccess"')
+
+  if [ "$names" != "local" ]; then
+    echo "container mode emitted unexpected StorageClasses: $names" >&2
+    return 1
+  fi
+  if [ "$local_layers" != "storage" ] || [ "$remote" != "false" ]; then
+    echo "container local StorageClass has unexpected parameters: layerList=$local_layers allowRemoteVolumeAccess=$remote" >&2
+    return 1
+  fi
+}
+
+@test "container mode pins CDI local StorageProfile to RWO Block" {
+  command=$(patch_local_cdi_storage_profile)
+  expected='patch storageprofile local --type merge -p {"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Block"}]}}'
+
+  if [ "$command" != "$expected" ]; then
+    echo "unexpected CDI StorageProfile patch: $command" >&2
+    return 1
+  fi
+  if ! grep -Fq 'timeout 600 sh -ec '\''until kubectl get storageprofile local' "$POST_PREP"; then
+    echo "container prep does not wait for CDI to create StorageProfile/local" >&2
+    return 1
+  fi
+}
+
+@test "invalid DRBD mode is rejected before cluster access" {
+  COZY_LINSTOR_DRBD_ENABLED=unsupported
+  if validate_linstor_storage_mode; then
+    echo "invalid DRBD mode unexpectedly passed validation" >&2
+    return 1
+  fi
+}
+
+@test "container mode deletes drbd-logger from the effective satellite DaemonSet" {
+  manifest=$(render_linstor_no_drbd_satellite_config)
+  kind=$(printf '%s\n' "$manifest" | yq '.kind')
+  name=$(printf '%s\n' "$manifest" | yq '.metadata.name')
+  target=$(printf '%s\n' "$manifest" | yq '.spec.patches[0].target | [.group, .version, .kind, .name] | join("/")')
+  patch=$(printf '%s\n' "$manifest" | yq '.spec.patches[0].patch')
+  container=$(printf '%s\n' "$patch" | yq '.spec.template.spec.containers[0].name')
+  directive=$(printf '%s\n' "$patch" | yq '.spec.template.spec.containers[0]."$patch"')
+  containers=$(printf '%s\n' "$patch" | yq '.spec.template.spec.containers | length')
+
+  if [ "$kind" != LinstorSatelliteConfiguration ] || [ "$name" != e2e-no-drbd ]; then
+    echo "unexpected satellite configuration: kind=$kind name=$name" >&2
+    return 1
+  fi
+  if [ "$target" != apps/v1/DaemonSet/linstor-satellite ]; then
+    echo "the patch does not target the satellite DaemonSet: $target" >&2
+    return 1
+  fi
+  if [ "$container" != drbd-logger ] || [ "$directive" != delete ] || [ "$containers" != 1 ]; then
+    echo "the patch does not delete exactly drbd-logger: container=$container directive=$directive count=$containers" >&2
+    return 1
+  fi
+}
+
+@test "the drbd-logger delete merges after every chart satellite configuration" {
+  own=$(render_linstor_no_drbd_satellite_config | yq '.metadata.name')
+  chart_names=$(helm template packages/system/linstor \
+    | yq -N 'select(.kind == "LinstorSatelliteConfiguration") | .metadata.name')
+
+  if [ -z "$chart_names" ]; then
+    echo "the linstor chart rendered no satellite configuration to order against" >&2
+    return 1
+  fi
+  last=$(printf '%s\n%s\n' "$chart_names" "$own" | LC_ALL=C sort | tail -n 1)
+  if [ "$last" != "$own" ]; then
+    echo "$own merges before $last, so a podTemplate applied after it can re-add drbd-logger" >&2
+    return 1
+  fi
+}
+
+@test "QEMU mode leaves the satellites untouched" {
+  unset COZY_LINSTOR_DRBD_ENABLED
+  calls=$(mktemp)
+  wait_for_linstor() { printf 'wait %s\n' "$*" >>"$calls"; }
+  kubectl() { printf 'kubectl %s\n' "$*" >>"$calls"; }
+
+  apply_linstor_no_drbd_satellite_config
+  recorded=$(cat "$calls")
+  rm -f "$calls"
+
+  if [ -n "$recorded" ]; then
+    echo "QEMU mode touched the cluster: $recorded" >&2
+    return 1
+  fi
+}
+
+@test "container mode applies the satellite configuration once its CRD is Established" {
+  COZY_LINSTOR_DRBD_ENABLED=false
+  calls=$(mktemp)
+  applied=$(mktemp)
+  wait_for_linstor() { printf 'wait %s\n' "$*" >>"$calls"; }
+  kubectl() { printf 'kubectl %s\n' "$*" >>"$calls"; cat >"$applied"; }
+
+  apply_linstor_no_drbd_satellite_config >/dev/null
+  recorded=$(cat "$calls")
+  applied_name=$(yq '.metadata.name' "$applied")
+  rm -f "$calls" "$applied"
+
+  expected=$(printf '%s\n' \
+    'wait LinstorSatelliteConfiguration CRD to be Established crd/linstorsatelliteconfigurations.piraeus.io --for=condition=Established' \
+    'kubectl apply -f -')
+  if [ "$recorded" != "$expected" ]; then
+    echo "unexpected cluster calls: $recorded" >&2
+    return 1
+  fi
+  if [ "$applied_name" != e2e-no-drbd ]; then
+    echo "applied an unexpected manifest: $applied_name" >&2
+    return 1
+  fi
+}
+
+@test "the satellite configuration lands before prep waits on the linstor release" {
+  apply_line=$(grep -n '^apply_linstor_no_drbd_satellite_config$' "$POST_PREP" | cut -d: -f1)
+  release_line=$(grep -nF 'wait_for_linstor "linstor HelmRelease to be Ready"' "$POST_PREP" | cut -d: -f1)
+
+  if [ -z "$apply_line" ] || [ -z "$release_line" ] || [ "$apply_line" -ge "$release_line" ]; then
+    echo "the drbd-logger removal must precede the linstor release wait: apply=$apply_line release=$release_line" >&2
+    return 1
+  fi
+}
+
+@test "the drbd-logger check passes only on satellites observed without it" {
+  clean=$(printf '%s\n' \
+    'linstor-csi-node linstor-csi csi-node-driver-registrar csi-livenessprobe' \
+    'linstor-satellite.srv1 linstor-satellite plunger' \
+    'linstor-satellite.srv2 linstor-satellite plunger')
+  leftover=$(printf '%s\n' \
+    'linstor-satellite.srv1 linstor-satellite plunger' \
+    'linstor-satellite.srv2 linstor-satellite plunger drbd-logger')
+  no_satellites='linstor-csi-node linstor-csi csi-node-driver-registrar csi-livenessprobe'
+
+  linstor_satellites_lack_drbd_logger "$clean"
+  if linstor_satellites_lack_drbd_logger "$leftover"; then
+    echo "a satellite still carrying drbd-logger passed" >&2
+    return 1
+  fi
+  if linstor_satellites_lack_drbd_logger "$no_satellites"; then
+    echo "a capture with no satellite DaemonSet passed" >&2
+    return 1
+  fi
+  if linstor_satellites_lack_drbd_logger ""; then
+    echo "an empty capture passed" >&2
+    return 1
+  fi
+}
+
+@test "tenant Kubernetes storage defaults to replicated and accepts local only explicitly" {
+  # Sourcing inside the test keeps run-kubernetes.sh's live-cluster
+  # cozy_cleanup helper out of cozytest.sh's file-level cleanup discovery.
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  unset COZY_E2E_STORAGE_CLASS
+  default_class=$(cozy_e2e_storage_class)
+  COZY_E2E_STORAGE_CLASS=local
+  container_class=$(cozy_e2e_storage_class)
+
+  if [ "$default_class" != replicated ] || [ "$container_class" != local ]; then
+    echo "unexpected tenant storage classes: default=$default_class container=$container_class" >&2
+    return 1
+  fi
+
+  COZY_E2E_STORAGE_CLASS=unsupported
+  if cozy_e2e_storage_class; then
+    echo "invalid tenant storage class unexpectedly passed validation" >&2
+    return 1
+  fi
+}
+
+@test "local storage uses its saved LINSTOR pool baseline" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=local
+  cozy_wait_linstor_pool_free() { printf 'unexpected pool wait\n'; return 99; }
+  cozy_wait_linstor_pool_baseline() { printf 'baseline-wait:%s:%s\n' "$1" "$2"; }
+
+  output=$(cozy_wait_linstor_pool_reclaimed 90 300)
+
+  if printf '%s\n' "$output" | grep -Fq 'unexpected pool wait'; then
+    echo "local storage entered the replicated-capacity wait" >&2
+    return 1
+  fi
+  [ "$output" = 'baseline-wait:300:524288' ]
+}
+
+@test "replicated storage retains the LINSTOR free-capacity barrier" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=replicated
+  cozy_wait_linstor_pool_free() { printf 'pool-wait:%s:%s\n' "$1" "$2"; }
+
+  output=$(cozy_wait_linstor_pool_reclaimed 91 17)
+
+  [ "$output" = 'pool-wait:91:17' ]
+}
+
+@test "local pool baseline comparison is per-node and tolerates only metadata drift" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  baseline=$(printf 'srv1:67108864\nsrv2:20787200\nsrv3:60817408')
+  within_tolerance=$(printf 'srv1:67108864\nsrv2:20262912\nsrv3:60817408')
+  leaked_worker=$(printf 'srv1:67108864\nsrv2:20787200\nsrv3:39845888')
+  missing_node=$(printf 'srv1:67108864\nsrv3:60817408')
+
+  cozy_linstor_pools_at_baseline "$baseline" "$within_tolerance" 524288
+  if cozy_linstor_pools_at_baseline "$baseline" "$leaked_worker" 524288; then
+    echo "a 20 GiB worker leak passed the local-pool baseline" >&2
+    return 1
+  fi
+  if cozy_linstor_pools_at_baseline "$baseline" "$missing_node" 524288; then
+    echo "a missing LINSTOR node passed the local-pool baseline" >&2
+    return 1
+  fi
+}
+
+@test "local pool baseline capture persists all three numeric satellite rows" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_LINSTOR_POOL_BASELINE_FILE="_out/tmp/linstor-baseline-$$"
+  kubectl() { printf 'srv3:60817408\nsrv1:67108864\nsrv2:20787200\n'; }
+
+  output=$(cozy_capture_linstor_pool_baseline)
+  captured=$(cat "$COZY_LINSTOR_POOL_BASELINE_FILE")
+  rm -f "$COZY_LINSTOR_POOL_BASELINE_FILE"
+
+  [ "$captured" = "$(printf 'srv3:60817408\nsrv1:67108864\nsrv2:20787200')" ]
+  printf '%s\n' "$output" | grep -Fq 'local LINSTOR pool baseline recorded'
+}
+
+@test "Kubernetes cleanup drains its own cluster and waits on the lane's reclamation barrier" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  calls=$(mktemp)
+  kubectl() { return 0; }
+  cozy_wait_tenant_drained() { printf 'drain:%s:%s\n' "$1" "$2" >>"$calls"; }
+  cozy_wait_linstor_pool_reclaimed() { printf 'reclaim:%s:%s\n' "$1" "$2" >>"$calls"; }
+
+  cozy_cleanup test-latest-version
+  got=$(cat "$calls")
+  rm -f "$calls"
+
+  if [ "$got" != "$(printf 'drain:test-latest-version:300\nreclaim:90:300')" ]; then
+    echo "cleanup skipped a barrier or lost the suite's cluster name: $got" >&2
+    return 1
+  fi
+}
+
+@test "local Kubernetes suite cannot start without a LINSTOR baseline" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=local
+  calls=$(mktemp)
+  yq() { printf 'v1.33.12\n'; }
+  # The first `kubectl apply` creates the tenant cluster. Reaching it means the
+  # suite went on past the baseline, and the subshell below keeps the exit from
+  # ending the test itself.
+  kubectl() {
+    if [ "$1" = apply ]; then printf 'applied\n' >>"$calls"; exit 7; fi
+    return 0
+  }
+  cozy_check_csi_strict_topology() { return 0; }
+  cozy_wait_tenant_drained() { return 0; }
+  cozy_capture_linstor_pool_baseline() { return 42; }
+
+  rc=0
+  ( run_kubernetes_test '.' test-latest-version 59991 ) >/dev/null 2>&1 || rc=$?
+  continued=$(cat "$calls")
+  rm -f "$calls"
+
+  if [ "$rc" -eq 0 ]; then
+    echo "suite accepted a failed local LINSTOR baseline capture" >&2
+    return 1
+  fi
+  if [ -n "$continued" ]; then
+    echo "suite went on to create the tenant cluster after the baseline capture failed" >&2
+    return 1
+  fi
+}
+
+@test "local Kubernetes suite refuses to start without CSI strict topology" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=local
+  calls=$(mktemp)
+  yq() { printf 'v1.33.12\n'; }
+  kubectl() { printf 'kubectl %s\n' "$*" >>"$calls"; exit 7; }
+  cozy_check_csi_strict_topology() { return 42; }
+
+  rc=0
+  ( run_kubernetes_test '.' test-latest-version 59991 ) >/dev/null 2>&1 || rc=$?
+  touched=$(cat "$calls")
+  rm -f "$calls"
+
+  if [ "$rc" -ne 1 ]; then
+    echo "suite did not stop on a provisioner without --strict-topology (rc=$rc)" >&2
+    return 1
+  fi
+  if [ -n "$touched" ]; then
+    echo "suite touched the cluster before the topology check failed: $touched" >&2
+    return 1
+  fi
+}
+
+@test "replicated Kubernetes suites do not depend on the container-lane CSI override" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=replicated
+  calls=$(mktemp)
+  yq() { printf 'v1.33.12\n'; }
+  kubectl() { exit 7; }
+  cozy_check_csi_strict_topology() { printf 'checked\n' >>"$calls"; return 0; }
+
+  ( run_kubernetes_test '.' test-latest-version 59991 ) >/dev/null 2>&1 || true
+  checked=$(cat "$calls")
+  rm -f "$calls"
+
+  if [ -n "$checked" ]; then
+    echo "the QEMU lane consulted the container-lane CSI override" >&2
+    return 1
+  fi
+}
+
+@test "the strict-topology patch restates the provisioner arguments and appends the flag" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  patch=$(cozy_csi_strict_topology_patch)
+
+  [ "$(printf '%s\n' "$patch" | jq -r 'length')" = 1 ]
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].op')" = add ]
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].path')" = /spec/csiController/podTemplate/spec/containers/- ]
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].value.name')" = csi-provisioner ]
+  # Eleven flags as piraeus-operator v2.10.2 renders them, plus the one this
+  # exists for. The count catches an edit to this list, not an upstream flag
+  # added on an operator bump: nothing in-tree carries the operator defaults.
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].value.args | length')" = 12 ]
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].value.args[-1]')" = --strict-topology ]
+  printf '%s\n' "$patch" | jq -e '.[0].value.args | index("--enable-capacity=$(ENABLE_CAPACITY)")' >/dev/null
+  # The only key besides the name, so the operator's strategic merge replaces
+  # the arguments and leaves the rest of the upstream container alone.
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].value | keys | join(",")')" = args,name ]
+}
+
+@test "the CSI topology re-check passes only on a provisioner observed with the flag" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  kubectl() { printf '%s' "$STUB_ARGS"; return "$STUB_RC"; }
+
+  STUB_RC=0 STUB_ARGS='["--v=$(VERBOSE)","--strict-topology"]'
+  cozy_check_csi_strict_topology 2>/dev/null
+  STUB_RC=0 STUB_ARGS='["--v=$(VERBOSE)","--csi-address=$(ADDRESS)"]'
+  if cozy_check_csi_strict_topology 2>/dev/null; then
+    echo "a provisioner without --strict-topology passed" >&2
+    return 1
+  fi
+  STUB_RC=0 STUB_ARGS=''
+  if cozy_check_csi_strict_topology 2>/dev/null; then
+    echo "a provisioner with no argument override passed" >&2
+    return 1
+  fi
+  STUB_RC=1 STUB_ARGS='["--strict-topology"]'
+  if cozy_check_csi_strict_topology 2>/dev/null; then
+    echo "a failed read passed" >&2
+    return 1
+  fi
+}
+
+@test "container lane raises CDI's worker memory ceiling through the CDI CR" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  install_suite=hack/e2e-install-cozystack.bats
+  resources=$(cozy_cdi_worker_resources_patch | jq -r '.spec.config.podResourceRequirements | [.limits.cpu, .limits.memory, .requests.cpu, .requests.memory] | join(" ")')
+  last_test_line=$(grep -n '^@test ' "$install_suite" | tail -n 1 | cut -d: -f1)
+  patch_line=$(grep -nF 'kubectl patch cdi cdi --type merge -p "$(cozy_cdi_worker_resources_patch)"' "$install_suite" | cut -d: -f1)
+
+  # The CPU ceiling stays at CDI's own 750m: the failure the raise answers was
+  # memory, and moving CPU too would be a second, unmeasured change.
+  if [ "$resources" != "750m 4Gi 100m 256Mi" ]; then
+    echo "unexpected CDI worker resources: $resources" >&2
+    return 1
+  fi
+  if [ -z "$patch_line" ] || [ -z "$last_test_line" ] || [ "$patch_line" -le "$last_test_line" ]; then
+    echo "the CDI CR is not patched from the last install test: patch=$patch_line last-test=$last_test_line" >&2
+    return 1
+  fi
+  # The operator reconciles CDIConfig.spec from the CR and reverts a direct edit.
+  if grep -Fq 'kubectl patch cdiconfig' "$install_suite"; then
+    echo "the install patches CDIConfig directly, which the CDI operator reverts" >&2
+    return 1
+  fi
+  if ! grep -Fq '.status.defaultPodResourceRequirements.limits.memory}")" = 4Gi' "$install_suite"; then
+    echo "the install does not wait for CDIConfig to publish the raised ceiling" >&2
+    return 1
+  fi
+}
+
+@test "immediate binding is requested on the DataVolume and its claim once both exist" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  calls=$(mktemp)
+  gets=$(mktemp)
+  printf '0\n' >"$gets"
+  sleep() { :; }
+  # The claim shows up two polls after the DataVolume, as CDI creates it.
+  kubectl() {
+    case "$*" in
+      *" get datavolume "*) return 0 ;;
+      *" get pvc "*)
+        n=$(( $(cat "$gets") + 1 ))
+        printf '%s\n' "$n" >"$gets"
+        [ "$n" -ge 3 ]
+        ;;
+      *" annotate "*) printf '%s\n' "$*" >>"$calls" ;;
+      *) return 1 ;;
+    esac
+  }
+
+  cozy_request_immediate_binding tenant-test vm-disk-test
+  annotated=$(cat "$calls")
+  polls=$(cat "$gets")
+  rm -f "$calls" "$gets"
+
+  if [ "$annotated" != '-n tenant-test annotate datavolume,pvc vm-disk-test cdi.kubevirt.io/storage.bind.immediate.requested= --overwrite' ]; then
+    echo "unexpected annotate call: $annotated" >&2
+    return 1
+  fi
+  if [ "$polls" != 3 ]; then
+    echo "annotated before the claim existed (claim polls: $polls)" >&2
+    return 1
+  fi
+}
+
+@test "immediate binding gives up when the claim never appears" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  calls=$(mktemp)
+  clock=$(mktemp)
+  printf '1000\n' >"$clock"
+  date() { cat "$clock"; }
+  sleep() { printf '%s\n' "$(( $(cat "$clock") + 60 ))" >"$clock"; }
+  kubectl() {
+    case "$*" in
+      *" get datavolume vm-disk-test "*) return 0 ;;
+      *" get pvc vm-disk-test "*) return 1 ;;
+      *" annotate "*) printf '%s\n' "$*" >>"$calls" ;;
+      *) return 0 ;;
+    esac
+  }
+
+  rc=0
+  cozy_request_immediate_binding tenant-test vm-disk-test 2>/dev/null || rc=$?
+  annotated=$(cat "$calls")
+  rm -f "$calls" "$clock"
+
+  if [ "$rc" -eq 0 ] || [ -n "$annotated" ]; then
+    echo "gave up without failing, or annotated anyway: rc=$rc annotated=$annotated" >&2
+    return 1
+  fi
+}
+
+@test "each vminstance disk requests immediate binding for the DataVolume its Test waits on" {
+  suite=hack/e2e-chainsaw/vminstance/chainsaw-test.yaml
+  for test_name in vmdisk vminstance; do
+    requested=$(yq "select(.metadata.name == \"$test_name\") | .spec.steps[] | select(.name == \"create-vmdisk\") | .try[] | select(has(\"script\")) | .script.env[] | select(.name == \"DISK\") | .value" "$suite")
+    asserted=$(yq "select(.metadata.name == \"$test_name\") | .spec.steps[].try[] | select(.assert.resource.kind == \"DataVolume\") | .assert.resource.metadata.name" "$suite")
+    if [ -z "$requested" ] || [ "$requested" != "$asserted" ]; then
+      echo "$test_name requests immediate binding for '$requested' but waits on DataVolume '$asserted'" >&2
+      return 1
+    fi
+  done
+}
+
+@test "the container-lane CSI override is applied last and re-checked before disk imports" {
+  install_suite=hack/e2e-install-cozystack.bats
+  last_test=$(grep -n '^@test ' "$install_suite" | tail -n 1)
+  oidc_line=$(grep -n '^@test "Keycloak OIDC stack is healthy"' "$install_suite" | cut -d: -f1)
+
+  case "$last_test" in
+    *'"Container lane: apply the storage settings the charts do not carry"'*) ;;
+    *)
+      echo "the container-lane storage settings are not the last install test: $last_test" >&2
+      return 1
+      ;;
+  esac
+  if [ -z "$oidc_line" ] || [ "$oidc_line" -ge "${last_test%%:*}" ]; then
+    echo "the storage settings must follow the last platform-values change: oidc=$oidc_line last=$last_test" >&2
+    return 1
+  fi
+  for test_name in vmdisk vminstance; do
+    first_step=$(yq "select(.metadata.name == \"$test_name\") | .spec.steps[0].name" hack/e2e-chainsaw/vminstance/chainsaw-test.yaml)
+    if [ "$first_step" != container-lane-csi-topology ]; then
+      echo "the $test_name Test does not re-check CSI strict topology first: $first_step" >&2
+      return 1
+    fi
+  done
+}
+
+@test "Kubernetes cleanup operations outlive their bounded reclamation stages" {
+  for suite in latest previous; do
+    timeout=$(yq "select(.metadata.name == \"kubernetes-${suite}\") | .spec.steps[0].finally[0].script.timeout" "hack/e2e-chainsaw/kubernetes-${suite}/chainsaw-test.yaml")
+    if [ "$timeout" != 22m ]; then
+      echo "kubernetes-${suite} cleanup timeout is $timeout, expected 22m" >&2
+      return 1
+    fi
+  done
+}
+
+@test "the merge-gating lane forwards local storage through install and Chainsaw" {
+  # A lane that installs on `local` while templating Chainsaw with `replicated`
+  # fails deep inside a suite rather than at the mismatch.
+  install_command=$(make -n -C packages/core/testing SANDBOX_NAME=test COZY_E2E_STORAGE_CLASS=local install-cozystack)
+  make_command=$(make -n -C packages/core/testing SANDBOX_NAME=test COZY_E2E_STORAGE_CLASS=local CHAINSAW_SUITES=vminstance test-chainsaw)
+
+  wf=.github/workflows/pull-requests.yaml
+  install_value=$(yq '.jobs.e2e.steps[] | select(.name == "Install Cozystack into sandbox") | .env.COZY_E2E_STORAGE_CLASS' "$wf")
+  run_value=$(yq '.jobs.e2e.steps[] | select(.name == "Run E2E tests") | .env.COZY_E2E_STORAGE_CLASS' "$wf")
+  if [ "$install_value" != local ] || [ "$run_value" != local ]; then
+    echo "unexpected storage modes in $wf: install=$install_value chainsaw=$run_value" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$install_command" | grep -Fq -- '-e COZY_E2E_STORAGE_CLASS="local"'; then
+    echo "testing Makefile does not forward COZY_E2E_STORAGE_CLASS into installation" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$make_command" | grep -Fq -- '-e COZY_E2E_STORAGE_CLASS="local"'; then
+    echo "testing Makefile does not forward COZY_E2E_STORAGE_CLASS into the sandbox" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$make_command" | grep -Fq -- '--set-string storageClass="${COZY_E2E_STORAGE_CLASS:-replicated}" vminstance'; then
+    echo "testing Makefile does not pass the lane storage class to Chainsaw values" >&2
+    return 1
+  fi
+}
+
+@test "container install supplies VictoriaLogs local storage before monitoring exists" {
+  install_suite=hack/e2e-install-cozystack.bats
+
+  if ! grep -Fq 'storage_class="${COZY_E2E_STORAGE_CLASS:-replicated}"' "$install_suite"; then
+    echo "install suite does not retain the replicated QEMU default" >&2
+    return 1
+  fi
+  if ! grep -Fq 'kubectl patch secret cozystack-values -n tenant-root --type merge --patch-file "$root_values_patch_file"' "$install_suite"; then
+    echo "install suite does not put the monitoring override in root values" >&2
+    return 1
+  fi
+  if grep -Fq 'kubectl patch hr/monitoring' "$install_suite"; then
+    echo "install suite still races monitoring reconciliation with a HelmRelease patch" >&2
+    return 1
+  fi
+  if ! grep -Fq '.logsStorages = [{"name":"generic","retentionPeriod":"1","storage":"10Gi","storageClassName":strenv(COZY_E2E_STORAGE_CLASS)}]' "$install_suite"; then
+    echo "monitoring override does not preserve the required VictoriaLogs values" >&2
+    return 1
+  fi
+
+  secret_patch_line=$(grep -nF 'kubectl patch secret cozystack-values' "$install_suite" | cut -d: -f1)
+  tenant_patch_line=$(grep -nF 'kubectl patch tenants/root' "$install_suite" | cut -d: -f1)
+  if [ -z "$secret_patch_line" ] || [ -z "$tenant_patch_line" ] || [ "$secret_patch_line" -ge "$tenant_patch_line" ]; then
+    echo "root values must be patched before monitoring is enabled: secret=$secret_patch_line tenant=$tenant_patch_line" >&2
+    return 1
+  fi
+
+  rendered=$(mktemp)
+  helm template monitoring packages/extra/monitoring --namespace tenant-root \
+    --set-string 'logsStorages[0].name=generic' \
+    --set-string 'logsStorages[0].retentionPeriod=1' \
+    --set-string 'logsStorages[0].storage=10Gi' \
+    --set-string 'logsStorages[0].storageClassName=local' > "$rendered"
+  rendered_class=$(yq 'select(.kind == "HelmRelease" and .metadata.name == "monitoring-system") | .spec.values.logsStorages[0].storageClassName' "$rendered")
+  rm -f "$rendered"
+  if [ "$rendered_class" != local ]; then
+    echo "monitoring chart did not carry the root values override into its child release: $rendered_class" >&2
+    return 1
+  fi
+}
+
+@test "DRBD-dependent fixtures and Kubernetes checks consume the lane storage mode" {
+  for manifest in hack/e2e-chainsaw/vminstance/vmdisk.yaml hack/e2e-chainsaw/vminstance/vmdisk-vmi.yaml; do
+    storage_class=$(yq '.spec.storageClass' "$manifest")
+    if [ "$storage_class" != '($values.storageClass)' ]; then
+      echo "$manifest does not consume the Chainsaw storageClass value: $storage_class" >&2
+      return 1
+    fi
+  done
+
+  kubernetes_script=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  rendered_uses=$(grep -Fc 'storageClass: "${storage_class}"' "$kubernetes_script")
+  if [ "$rendered_uses" -ne 1 ]; then
+    echo "expected the tenant Kubernetes resource to consume storage_class once, found $rendered_uses" >&2
+    return 1
+  fi
+  if ! grep -Fq 'if [ "$storage_class" = local ]; then' "$kubernetes_script"; then
+    echo "local-only Kubernetes suites do not omit DRBD/RWX assertions" >&2
+    return 1
+  fi
+  if ! grep -Fq 'if [ "$storage_class" = replicated ]; then' "$kubernetes_script"; then
+    echo "fallback regression does not limit replicated StorageClass restoration to QEMU" >&2
+    return 1
+  fi
+}

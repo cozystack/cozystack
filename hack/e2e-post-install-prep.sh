@@ -41,6 +41,178 @@
 # MetalLB wait below, and still well inside the timeout the job carries.
 set -eu
 
+# The QEMU lane gives every satellite a private /dev/vdc and lets LINSTOR
+# create the zpool. Container nodes share the runner kernel, where zpools are
+# global, so hack/e2e-container-up.sh creates one node-distinct pool ahead of
+# time and the satellite must register that existing pool instead.
+validate_linstor_storage_mode() {
+  case "${COZY_LINSTOR_DRBD_ENABLED:-true}" in
+    true | false) return 0 ;;
+    *)
+      echo "[post-install-prep] COZY_LINSTOR_DRBD_ENABLED must be true or false, got '${COZY_LINSTOR_DRBD_ENABLED}'" >&2
+      return 1
+      ;;
+  esac
+}
+
+create_linstor_storage_pool() {
+  e2e_linstor_node=$1
+  case "${COZY_LINSTOR_DRBD_ENABLED:-true}" in
+    true)
+      kubectl exec -n cozy-linstor deploy/linstor-controller -- \
+        linstor physical-storage create-device-pool zfs "$e2e_linstor_node" /dev/vdc \
+        --pool-name data --storage-pool data
+      ;;
+    false)
+      kubectl exec -n cozy-linstor deploy/linstor-controller -- \
+        linstor storage-pool create zfs "$e2e_linstor_node" data "data-$e2e_linstor_node"
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+render_linstor_storageclasses() {
+  cat <<'EOF'
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/layerList: "storage"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+EOF
+
+  if [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" = false ]; then
+    return 0
+  fi
+
+  cat <<'EOF'
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: replicated
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/autoPlace: "3"
+  linstor.csi.linbit.com/layerList: "drbd storage"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+  property.linstor.csi.linbit.com/DrbdOptions/auto-quorum: suspend-io
+  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-no-data-accessible: suspend-io
+  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-suspended-primary-outdated: force-secondary
+  property.linstor.csi.linbit.com/DrbdOptions/Net/rr-conflict: retry-connect
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+EOF
+}
+
+# CDI infers ReadWriteMany/Block first for the LINSTOR provisioner because it
+# assumes a DRBD-capable StorageClass. The container lane deliberately exposes
+# only LINSTOR's local storage layer, and linstor-csi rejects RWX without DRBD.
+# Pin the one class used by that lane to the RWO/Block combination phase-0
+# proved before any DataVolume can consume the inferred default.
+patch_local_cdi_storage_profile() {
+  kubectl patch storageprofile local --type merge \
+    -p '{"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Block"}]}}'
+}
+
+# The linstor chart always adds a drbd-logger sidecar to every satellite, and on
+# a kernel without DRBD it exits at once. The satellite pod is then never Ready,
+# piraeus never registers the node, LINSTOR reports no nodes and every PVC stays
+# Pending -- so without DRBD this is the difference between storage and none.
+# The chart carries no value that drops the sidecar, so the container lane adds
+# a satellite configuration of its own. The two DRBD-only initContainers
+# piraeus-operator contributes are already deleted by the chart's
+# satellites-talos.yaml, which talos.enabled keeps on.
+#
+# A patch rather than a podTemplate entry: podTemplate is a sparse
+# strategic-merge input, and omitting a container there does not delete one
+# another configuration contributes.
+#
+# The name is load-bearing. piraeus-operator merges configurations in name
+# order, each one's podTemplate before its patches, so this delete has to sort
+# after the chart's cozystack-plunger, whose podTemplate is what adds the
+# sidecar; sorting first, it would delete nothing and be re-added after.
+render_linstor_no_drbd_satellite_config() {
+  cat <<'EOF'
+apiVersion: piraeus.io/v1
+kind: LinstorSatelliteConfiguration
+metadata:
+  name: e2e-no-drbd
+spec:
+  patches:
+  - target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+      name: linstor-satellite
+    patch: |
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: linstor-satellite
+      spec:
+        template:
+          spec:
+            containers:
+            - name: drbd-logger
+              $patch: delete
+EOF
+}
+
+apply_linstor_no_drbd_satellite_config() {
+  if [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" != false ]; then
+    return 0
+  fi
+  # piraeus-operator installs the CRD, and it lands ahead of the linstor
+  # release that the satellites come from.
+  wait_for_linstor "LinstorSatelliteConfiguration CRD to be Established" \
+    crd/linstorsatelliteconfigurations.piraeus.io --for=condition=Established
+  echo "[post-install-prep] removing the DRBD-only drbd-logger sidecar from the satellites"
+  render_linstor_no_drbd_satellite_config | kubectl apply -f -
+}
+
+# linstor_satellites_lack_drbd_logger <capture>
+# The capture is one "<daemonset> <container...>" row per DaemonSet in
+# cozy-linstor. Satellite DaemonSets are the rows carrying a linstor-satellite
+# container; at least one must exist and none may still carry drbd-logger. An
+# empty or satellite-less capture fails, so a read that returned nothing cannot
+# pass for a clean one.
+linstor_satellites_lack_drbd_logger() {
+  printf '%s\n' "$1" | awk '
+    {
+      satellite = 0
+      logger = 0
+      for (i = 2; i <= NF; i++) {
+        if ($i == "linstor-satellite") satellite = 1
+        if ($i == "drbd-logger") logger = 1
+      }
+      if (satellite) {
+        seen = 1
+        if (logger) bad = 1
+      }
+    }
+    END { exit (seen && !bad) ? 0 : 1 }
+  '
+}
+
+# Unit tests source the pure helpers above without reaching a cluster.
+if [ "${E2E_POST_INSTALL_PREP_LIB:-false}" = true ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+if ! validate_linstor_storage_mode; then
+  exit 2
+fi
+
 # Per-link budget in seconds, applied by wait_for_linstor to each link separately.
 LINK_BUDGET=900
 
@@ -109,6 +281,8 @@ controller_reachable() {
     -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)" ]
 }
 
+apply_linstor_no_drbd_satellite_config
+
 wait_for_linstor "linstor HelmRelease to be Ready" \
   helmrelease/linstor -n cozy-linstor --for=condition=Ready
 wait_for_linstor "linstor-controller Deployment to be Available" \
@@ -141,6 +315,17 @@ until controller_reachable \
   sleep 2
 done
 
+if [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" = false ]; then
+  echo "[post-install-prep] checking that no satellite DaemonSet still carries drbd-logger"
+  satellite_containers=$(kubectl get daemonsets -n cozy-linstor \
+    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.template.spec.containers[*].name}{"\n"}{end}')
+  if ! linstor_satellites_lack_drbd_logger "$satellite_containers"; then
+    echo "[post-install-prep] the e2e-no-drbd satellite configuration did not take effect:" >&2
+    printf '%s\n' "${satellite_containers:-<no DaemonSets in cozy-linstor>}" | sed 's/^/  /' >&2
+    exit 1
+  fi
+fi
+
 echo "[post-install-prep] creating LINSTOR storage pools (parallel across nodes)"
 created_pools=$(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor sp l -s data --pastable | awk '$2 == "data" {printf " " $4} END{printf " "}')
 pids=""
@@ -148,7 +333,7 @@ for node in srv1 srv2 srv3; do
   case $created_pools in
     *" $node "*) echo "  pool 'data' already exists on $node"; continue;;
   esac
-  kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor ps cdp zfs ${node} /dev/vdc --pool-name data --storage-pool data &
+  create_linstor_storage_pool "$node" &
   pids="$pids $!"
 done
 for pid in $pids; do
@@ -156,39 +341,14 @@ for pid in $pids; do
 done
 
 echo "[post-install-prep] applying StorageClasses"
-kubectl apply -f - <<'EOF'
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: local
-  annotations:
-    storageclass.kubernetes.io/is-default-class: "true"
-provisioner: linstor.csi.linbit.com
-parameters:
-  linstor.csi.linbit.com/storagePool: "data"
-  linstor.csi.linbit.com/layerList: "storage"
-  linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"
-volumeBindingMode: WaitForFirstConsumer
-allowVolumeExpansion: true
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: replicated
-provisioner: linstor.csi.linbit.com
-parameters:
-  linstor.csi.linbit.com/storagePool: "data"
-  linstor.csi.linbit.com/autoPlace: "3"
-  linstor.csi.linbit.com/layerList: "drbd storage"
-  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
-  property.linstor.csi.linbit.com/DrbdOptions/auto-quorum: suspend-io
-  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-no-data-accessible: suspend-io
-  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-suspended-primary-outdated: force-secondary
-  property.linstor.csi.linbit.com/DrbdOptions/Net/rr-conflict: retry-connect
-volumeBindingMode: Immediate
-allowVolumeExpansion: true
-EOF
+render_linstor_storageclasses | kubectl apply -f -
+
+if [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" = false ]; then
+  echo "[post-install-prep] waiting for CDI StorageProfile/local"
+  timeout 600 sh -ec 'until kubectl get storageprofile local >/dev/null 2>&1; do sleep 2; done'
+  echo "[post-install-prep] forcing CDI StorageProfile/local to RWO/Block"
+  patch_local_cdi_storage_profile
+fi
 
 echo "[post-install-prep] waiting for MetalLB CRDs"
 timeout 300 sh -ec 'until kubectl get crd ipaddresspools.metallb.io l2advertisements.metallb.io >/dev/null 2>&1; do sleep 2; done'

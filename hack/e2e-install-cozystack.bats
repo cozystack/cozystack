@@ -86,6 +86,13 @@
   # actually pulls (skips configmap fields and CRD examples that happen to
   # contain an `image:` key). Add a chart here when a new peer-sensitive
   # workload is found.
+  #
+  # `select(. != null)` drops container entries that carry no image. The pod
+  # templates embedded in a LinstorCluster CR are strategic-merge fragments,
+  # so one that overrides only `args` has no image of its own to pull.
+  # Without the filter yq emits a bare `null`, which reaches the prepull
+  # DaemonSet as a container with an empty image and fails apply with a
+  # message naming a container index rather than the chart behind it.
   # Stage each render AND the yq filter through tmp files instead of
   # piping. Two constraints stack here: `set -x` would expand any
   # `var=$(helm ...)` capture into the trace and balloon CI logs, and
@@ -103,8 +110,8 @@
   helm template packages/system/linstor > "$linstor_yaml"
   helm template packages/system/cert-manager > "$certmanager_yaml"
   yq -N '
-      (..|select(has("containers"))|.containers[]|.image),
-      (..|select(has("initContainers"))|.initContainers[]|.image)
+      (..|select(has("containers"))|.containers[]|.image|select(. != null)),
+      (..|select(has("initContainers"))|.initContainers[]|.image|select(. != null))
     ' "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" > "$images_list"
   hack/e2e-prepull-images.sh < "$images_list"
   rm -f "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" "$images_list"
@@ -138,72 +145,38 @@
   # Wait for operator to create the platform PackageSource
   timeout 120 sh -ec 'until kubectl get packagesource cozystack.cozystack-platform >/dev/null 2>&1; do sleep 2; done'
 
-  # Create platform Package with isp-full variant
-  kubectl apply -f - <<EOF
-apiVersion: cozystack.io/v1alpha1
-kind: Package
-metadata:
-  name: cozystack.cozystack-platform
-spec:
-  variant: isp-full
-  components:
-    platform:
-      values:
-        networking:
-          podCIDR: "10.244.0.0/16"
-          podGateway: "10.244.0.1"
-          serviceCIDR: "10.96.0.0/16"
-          joinCIDR: "100.64.0.0/16"
-        publishing:
-          host: "example.org"
-          apiServerEndpoint: "https://192.168.123.10:6443"
-        bundles:
-          enabledPackages:
-            - cozystack.external-dns-application
-EOF
+  # Stage the generated manifest instead of piping it into kubectl: cozytest
+  # runs under /bin/sh without pipefail, so a generator failure in a pipeline
+  # could be hidden by kubectl successfully applying empty input.
+  local platform_packages
+  platform_packages=$(mktemp)
+  hack/e2e-platform-packages.sh > "$platform_packages"
+  kubectl apply -f "$platform_packages"
+  rm -f "$platform_packages"
 
-  # Launch storage + LB configuration in the background. It waits for its
-  # own prerequisites (linstor-controller deploy, MetalLB CRDs) and finishes
-  # while the parallel HR wait below is still running, so the cost overlaps
-  # with the platform reconcile instead of compounding it.
+  # Launch storage + LB configuration in the background. It waits for its own
+  # prerequisites while the platform controllers reconcile HelmReleases, so
+  # the costs overlap even though the authoritative readiness gate starts only
+  # after prep has finished.
   hack/e2e-post-install-prep.sh > /tmp/post-install-prep.log 2>&1 &
   POST_PREP_PID=$!
 
-  # Wait until HelmReleases appear & reconcile them
-  timeout 180 sh -ec 'until [ $(kubectl get hr -A --no-headers 2>/dev/null | wc -l) -gt 10 ]; do sleep 1; done'
-  # TODO(e2e-replace-fixed-timeouts): genuine sleep. The threshold of 10 is a
-  # heuristic for "enough HRs visible to start waiting"; the snapshot below
-  # uses whatever HRs have appeared by then. There is no objective k8s API
-  # signal for "all platform HRs have been emitted" without hard-coding the
-  # expected list, so the 5s pad lets a few late-arrivals join the snapshot.
-  sleep 5
-  # Pacing only: names every HR that timed out in the trace; the authoritative
-  # gate re-lists below, covering HRs created after this snapshot (#2822).
-  kubectl wait hr --all -A --timeout=15m --for=condition=ready || true
-
   echo "Waiting for post-install-prep to complete"
-  if ! wait $POST_PREP_PID; then
+  if ! wait "$POST_PREP_PID"; then
     cat /tmp/post-install-prep.log >&2
     echo "post-install-prep failed" >&2
     exit 1
   fi
   cat /tmp/post-install-prep.log
 
-  # Fail the test if any HelmRelease is not Ready. Wait again on a fresh
-  # listing so HelmReleases created after the snapshot above are gated too;
-  # the window absorbs momentary Unknown flaps from drift reconciles.
-  if ! kubectl wait hr --all -A --timeout=15m --for=condition=ready; then
-    kubectl get hr -A || true
-    # kubectl's STATUS column truncates long messages; dump the full Ready
-    # condition per non-ready HR so the real error (e.g. a rejected CRD) is
-    # visible in the test output instead of only inside the cozyreport.
-    kubectl get hr -A --no-headers | awk '$4 != "True"' | while read -r ns name _; do
-      echo "--- Non-ready HelmRelease: $ns/$name" >&2
-      kubectl get hr -n "$ns" "$name" -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' >&2 || true
-    done
-    echo "Some HelmReleases failed to reconcile" >&2
-    exit 1
-  fi
+  # One authoritative gate, on fresh lists. A bare `kubectl wait --all` takes
+  # one snapshot and can miss releases created a moment later; it also waits
+  # the full timeout after Flux has already declared Stalled=True. The helper
+  # re-lists, requires the all-Ready name set to stay stable for 5s, and fails
+  # immediately on Stalled. The 11-release floor preserves the old >10
+  # existence backstop without the masked pacing wait.
+  . hack/e2e-wait-helmreleases.sh
+  cozy_wait_all_helmreleases_ready 900 11 5 2
 }
 
 @test "Wait for Cluster‑API provider deployments" {
@@ -219,6 +192,39 @@ EOF
 
 @test "Configure Tenant and wait for applications" {
   # Patch root tenant and wait for its releases
+
+  local storage_class
+  storage_class="${COZY_E2E_STORAGE_CLASS:-replicated}"
+  case "$storage_class" in
+    replicated) ;;
+    local)
+      # VictoriaLogs is the only root-tenant install workload that explicitly
+      # defaults to replicated instead of inheriting the cluster's default
+      # StorageClass. The container lane has no DRBD and intentionally exposes
+      # only local. Put the override in the values Secret BEFORE monitoring is
+      # enabled, so the monitoring HelmRelease's first render creates local
+      # claims. Patching that HelmRelease after creation races the operator: a
+      # replicated PVC can be created first, and storageClassName is immutable.
+      # Flux drift detection is disabled, so the owning cozystack-basics release
+      # does not rewrite this E2E-only live override on its ordinary interval.
+      local root_values_b64_file root_values_file root_values_patch_file
+      root_values_b64_file=$(mktemp)
+      root_values_file=$(mktemp)
+      root_values_patch_file=$(mktemp)
+      kubectl get secret cozystack-values -n tenant-root -o jsonpath='{.data.values\.yaml}' > "$root_values_b64_file"
+      base64 -d "$root_values_b64_file" > "$root_values_file"
+      COZY_E2E_STORAGE_CLASS="$storage_class" yq -i \
+        '.logsStorages = [{"name":"generic","retentionPeriod":"1","storage":"10Gi","storageClassName":strenv(COZY_E2E_STORAGE_CLASS)}]' \
+        "$root_values_file"
+      jq -Rs '{"stringData":{"values.yaml":.}}' < "$root_values_file" > "$root_values_patch_file"
+      kubectl patch secret cozystack-values -n tenant-root --type merge --patch-file "$root_values_patch_file"
+      rm -f "$root_values_b64_file" "$root_values_file" "$root_values_patch_file"
+      ;;
+    *)
+      echo "COZY_E2E_STORAGE_CLASS must be local or replicated, got '$storage_class'" >&2
+      return 1
+      ;;
+  esac
 
   kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
 
@@ -338,8 +344,8 @@ EOF
 
   # Enabling OIDC swaps the dashboard's token-proxy container for oauth2-proxy,
   # so the dashboard is the consumer that proves the internal-URL default works.
-  # The install-time `kubectl wait hr --all -A` ran before this test flipped the
-  # flag and only ever saw the token-proxy shape, so nothing has re-checked the
+  # The install-time all-HelmRelease gate ran before this test flipped the flag
+  # and only ever saw the token-proxy shape, so nothing has re-checked the
   # dashboard on the OIDC path.
   #
   # Waiting on hr/dashboard directly would be vacuous: it is still Ready=True
@@ -566,4 +572,63 @@ metadata:
 data:
   version: "${version}"
 EOF
+}
+
+@test "Container lane: apply the storage settings the charts do not carry" {
+  # Last on purpose. The earlier tests that change platform values (tenant
+  # configuration, Keycloak OIDC) upgrade every release, linstor and
+  # kubevirt-cdi included, and an upgrade re-renders the objects patched here
+  # from charts that do not carry these settings. Nothing after this file
+  # changes platform values, and the tenant suites re-check the CSI flag before
+  # they import.
+  local storage_class
+  storage_class="${COZY_E2E_STORAGE_CLASS:-replicated}"
+  case "$storage_class" in
+    replicated)
+      echo "QEMU lane: the charts' own storage settings stay in force"
+      return 0
+      ;;
+    local) ;;
+    *)
+      echo "COZY_E2E_STORAGE_CLASS must be local or replicated, got '$storage_class'" >&2
+      return 1
+      ;;
+  esac
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+
+  local provisioner_args
+  provisioner_args=$(kubectl get linstorcluster linstorcluster \
+    -o jsonpath='{.spec.csiController.podTemplate.spec.containers[?(@.name=="csi-provisioner")].args}')
+  case "$provisioner_args" in
+    *--strict-topology*)
+      echo "LinstorCluster already constrains CSI provisioning to the scheduler's node"
+      ;;
+    '')
+      kubectl patch linstorcluster linstorcluster --type json -p "$(cozy_csi_strict_topology_patch)"
+      ;;
+    *)
+      echo "LinstorCluster overrides csi-provisioner arguments without --strict-topology: $provisioner_args" >&2
+      return 1
+      ;;
+  esac
+  # piraeus-operator re-derives the Deployment from the LinstorCluster on its own
+  # schedule, and until it does `rollout status` passes against the old
+  # template.
+  if ! timeout 300 sh -ec 'until kubectl -n cozy-linstor get deployment linstor-csi-controller -o jsonpath="{.spec.template.spec.containers[?(@.name==\"csi-provisioner\")].args}" | grep -q -- --strict-topology; do sleep 2; done'; then
+    echo "piraeus-operator did not carry --strict-topology into linstor-csi-controller within 5m" >&2
+    kubectl -n cozy-linstor get deployment linstor-csi-controller -o yaml >&2 || true
+    return 1
+  fi
+  kubectl -n cozy-linstor rollout status deployment/linstor-csi-controller --timeout=5m
+  cozy_check_csi_strict_topology
+
+  kubectl patch cdi cdi --type merge -p "$(cozy_cdi_worker_resources_patch)"
+  # CDIConfig status is what CDI hands its worker pods, and the operator only
+  # gets there by reconciling the CR, so a CR that took the patch is not yet
+  # evidence of anything.
+  if ! timeout 300 sh -ec 'until [ "$(kubectl get cdiconfig config -o jsonpath="{.status.defaultPodResourceRequirements.limits.memory}")" = 4Gi ]; do sleep 2; done'; then
+    echo "CDI did not publish the raised worker memory ceiling within 5m" >&2
+    kubectl get cdiconfig config -o yaml >&2 || true
+    return 1
+  fi
 }

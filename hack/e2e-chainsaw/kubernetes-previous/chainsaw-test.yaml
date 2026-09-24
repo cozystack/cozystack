@@ -34,9 +34,14 @@ spec:
     # On success run_kubernetes_test already tore it down, so this is a no-op then.
     - description: tear down the tenant Kubernetes cluster
       script:
-        timeout: 10m
+        # 5m parent delete + 5m compute/PVC drain + 5m LINSTOR reclamation =
+        # 15m of inner bounds, and each wait's last in-loop probe can start just
+        # under its deadline. Keep the op above that so an inner timeout reports
+        # its stage instead of a Chainsaw SIGKILL hiding it; normal cleanup
+        # returns in seconds.
+        timeout: 22m
         content: |
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-          cozy_cleanup
+          cozy_cleanup test-previous-version

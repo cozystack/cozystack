@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test-controllers preflight
+.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -180,6 +180,12 @@ preflight:
 prepare-env:
 	make -C packages/core/testing apply
 	make -C packages/core/testing prepare-cluster
+
+# Container-lane sibling of prepare-env. Same sandbox, Talos nodes as containers
+# instead of QEMU guests, so no nocloud asset is copied in.
+prepare-env-container:
+	make -C packages/core/testing apply
+	make -C packages/core/testing prepare-cluster-container
 
 generate:
 	hack/update-codegen.sh
