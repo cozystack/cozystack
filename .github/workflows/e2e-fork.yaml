@@ -353,13 +353,13 @@ jobs:
         env:
           # Pin the flux CLI instead of install.sh's rolling latest. This is the
           # one privileged job that runs a remote installer as root right before
-          # the OCIR token is loaded, so it pins where the rest of CI does not;
+          # the OCIR token is loaded, where a pinned installer matters most;
           # keep it in step with the flux distro cozystack ships
-          # (packages/system/fluxcd, 2.8.x).
+          # (internal/fluxinstall/manifests/fluxcd.yaml, v2.8.0).
           FLUX_VERSION: "2.8.6"
         run: |
           command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
-          if ! command -v flux >/dev/null; then
+          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
             s="$(mktemp)"
             curl -fsSL https://fluxcd.io/install.sh -o "$s"
             sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$s"
